@@ -63,6 +63,13 @@ namespace Horo::Application::Internal {
         PFN_xrGetInstanceProcAddr getProc{};
     };
 
+    /** @brief Signed product selection of an existing digital action for one aimed World UI pointer. */
+    struct OpenXRWorldUiPointerBinding final {
+        Input::ActionId action;
+        XR::XRTrackedDeviceRole role;
+        float maximumDistanceMeters;
+    };
+
     /** @brief Installer-owned immutable bindings, distinct from signature/native-code admission and dynamic Input policy.
      * @details Own the value through a shared_ptr<const ...> in the explicit installer services. Construction is inert;
      * Prepare joins these declarations to InputRouter::Actions and queries actual runtime profiles only after attachment.
@@ -76,6 +83,7 @@ namespace Horo::Application::Internal {
         std::vector<OpenXRApplicationSetLabel> setLabels;
         std::vector<OpenXRApplicationPose> poses;
         std::vector<OpenXRApplicationHaptic> haptics;
+        std::optional<OpenXRWorldUiPointerBinding> worldUiPointer;
 
         /** @brief Counts reserved scalar, pose and unique baseline vibration actions. @return Cold native preparation budget. */
         [[nodiscard]] std::size_t PreparedActionCount() const noexcept;

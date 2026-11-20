@@ -86,7 +86,6 @@ namespace Horo::Application::Internal {
     /** @brief Bounded input submitted by the owner of an already admitted World pointer context. */
     struct RuntimeUiPaintWorldPointerBatch final {
         Runtime::Ui::UiPointerInteraction &interaction;
-        Runtime::Ui::UiEventDispatcher &dispatcher;
         std::span<const Runtime::Ui::UiPointerSample> samples;
         std::uint64_t milliseconds;
         std::uint64_t &nextSequence;
@@ -292,6 +291,37 @@ namespace Horo::Application::Internal {
         explicit RuntimeUiPaintPort(std::shared_ptr<Detail::RuntimeUiPaintHostState> state) noexcept : state_(std::move(state)) {}
 
         std::shared_ptr<Detail::RuntimeUiPaintHostState> state_;
+    };
+
+    /** @brief Owns one World ray's bounded gestures for the exact current presentation. */
+    class RuntimeUiPaintWorldPointer final {
+    public:
+        /** @brief Converts one admitted source sample into a move, press or release on the presented canvas.
+         * @param port Actual paint owner. @param scene Exact active scene. @param target Actual presented canvas.
+         * @param ray Current source ray. @param down Current physical button state. @param milliseconds Owner clock.
+         * @param observer Routed event observer. @return Shared UI outcome or typed failure.
+         * @post A new presentation lineage starts disarmed until the input reaches neutral.
+         */
+        [[nodiscard]] Result<Runtime::Ui::UiPointerInteractionResult> Update(const RuntimeUiPaintPort &port, Runtime::SceneRuntimeId scene,
+                                                                             const RuntimeUiPaintPresentedWorldCanvas &target,
+                                                                             const Math::Ray &ray, bool down, std::uint64_t milliseconds,
+                                                                             Runtime::Ui::UiEventHandler &observer);
+
+        /** @brief Releases all held state and requires a fresh press before another activation.
+         * @param port Actual paint owner. @return Cleanup result.
+         */
+        [[nodiscard]] Result<void> Cancel(const RuntimeUiPaintPort &port);
+
+    private:
+        /** @brief Reuses the current binding or replaces it after cleaning up capture. */
+        [[nodiscard]] Result<void> Bind(const RuntimeUiPaintPort &port, const RuntimeUiPaintPresentedWorldCanvas &target);
+
+        std::optional<Runtime::Ui::UiPointerInteraction> interaction_;
+        std::array<Runtime::Ui::UiControlDefaultAction, Runtime::Ui::MaximumUiInteractionSamples + 1> defaults_{};
+        std::uint64_t sequence_{1};
+        std::uint32_t written_{};
+        bool armed_{};
+        bool down_{};
     };
 
     /** @brief Fixed participant registered before RuntimeHost startup and before the editor frame consumer. */

@@ -216,6 +216,17 @@ namespace Horo::Input {
         return Result<bool>::Success(true);
     }
 
+    /** @copydoc InputActionCollection::RoutingEligible */
+    bool InputActionCollection::RoutingEligible() const noexcept {
+        const auto owner = owner_.lock();
+        if (!owner || owner->thread != std::this_thread::get_id() || !owner->router)
+            return false;
+        const auto &router = *owner->router;
+        return configuration_ == router.impl_->configurationRevision && owner->AssignmentCurrent(assignment_) &&
+               (!device_ || (router.Snapshot().FindGamepad(*device_) && router.PlayerForGamepad(*device_) == player_)) &&
+               !router.impl_->bindingCaptureTerminal && router.impl_->ContextEligible(context_);
+    }
+
     /** @copydoc InputActionCollection::RegisterSource */
     Result<InputActionSourceToken> InputActionCollection::RegisterSource(const std::span<const ActionDescriptor> actions) const {
         const auto owner = owner_.lock();

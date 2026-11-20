@@ -829,6 +829,14 @@ consumer-selected, registered digital action from one committed tracking cutoff.
 The action must come from the exact controller that supplied the ray. An
 inactive action or lost tracking invalidates the source rather than supplying
 a normal release. The UI composition still owns routing, edges and cancellation.
+The signed OpenXR binding document may opt in with
+`worldUiPointer` containing `action` and `maximumDistanceMeters`. The action must
+already be a declared digital controller action. With an assigned local Play
+player, the editor routes that controller's aimed ray through the presented
+World UI only while its Input context is eligible. Loss or replacement of the
+controller, scene, binding, origin, or eligible presentation cancels capture
+and requires a neutral button sample before another press. The World canvas
+reserves dispatch storage during scene preparation, including for a replacement.
 
 ### Semantic audio and haptic feedback
 

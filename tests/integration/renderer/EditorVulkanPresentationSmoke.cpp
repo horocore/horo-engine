@@ -631,37 +631,28 @@ namespace Horo::Tests::VulkanEditor {
         using Presented = Application::Internal::RuntimeUiPaintPresentedWorldCanvas;
 
         void Press(const Port &port, Runtime::SceneRuntimeId scene, const Presented &target, const Math::Ray &ray) {
-            using namespace Runtime::Ui;
-            const auto &hit = target.hit.Descriptor();
-            const auto view = target.presentation.view;
-            interaction_.emplace(Render::Test::UiRequire(UiPointerInteraction::Create({{{view.ownership, view.slot, view.generation},
-                                                                                        view,
-                                                                                        target.instance,
-                                                                                        hit.canvas,
-                                                                                        hit.document,
-                                                                                        hit.tree,
-                                                                                        hit.interaction},
-                                                                                       std::nullopt},
-                                                                                      {})));
-            dispatcher_.emplace(
-                Render::Test::UiRequire(UiEventDispatcher::Create({target.instance, hit.canvas, hit.document, MaximumUiTreeDepth})));
-            const UiPointerSample press{.pointer = Render::Test::UiRequire(UiPointerId::Create(1)),
-                                        .edge = UiPointerEdge::Press,
-                                        .modality = UiPointerModality::WorldRay,
-                                        .worldRay = ray};
-            const auto applied = Render::Test::UiRequire(
-                port.PumpWorldPointers(scene, {*interaction_, *dispatcher_, std::span{&press, 1}, 1, sequence_, defaults_, written_},
-                                       *this));
-            CHECK(applied.activePointers == 1);
+            const auto update = [&](bool down, std::uint64_t time) {
+                const auto result = pointer_.Update(port, scene, target, ray, down, time, *this);
+                Check(result, "World pointer");
+                return result.Value().activePointers;
+            };
+            REQUIRE(update(true, 1) == 0);
+            CHECK(update(false, 2) == 0);
+            CHECK(update(true, 3) == 1);
+            Check(pointer_.Cancel(port));
+            CHECK(update(true, 4) == 0);
+            CHECK(update(false, 5) == 0);
+            CHECK(update(true, 6) == 1);
             CHECK(pressed_);
+            CHECK(pressCount_ == 2);
+            lastRay_ = ray;
         }
 
-        void VerifyUnavailable(const Port &port, Runtime::SceneRuntimeId scene) {
-            const auto blocked = port.PumpWorldPointers(scene, {*interaction_, *dispatcher_, {}, 2, sequence_, defaults_, written_}, *this);
+        void VerifyUnavailable(const Port &port, Runtime::SceneRuntimeId scene, const Presented &previous) {
+            const auto blocked = pointer_.Update(port, scene, previous, lastRay_, true, 7, *this);
             REQUIRE(blocked.HasError());
             CHECK(blocked.ErrorValue().code.Value() == Runtime::Ui::UiErrors::HitTestNotPresented.code.Value());
-            CHECK(std::ranges::none_of(interaction_->TargetsInFlight(), &Runtime::Ui::UiElementHandle::IsValid));
-            Check(port.CancelWorldPointers(*interaction_, sequence_));
+            Check(pointer_.Cancel(port));
         }
 
         [[nodiscard]] bool Pressed() const noexcept {
@@ -670,8 +661,10 @@ namespace Horo::Tests::VulkanEditor {
 
         Result<Runtime::Ui::UiEventResponse> Handle(Runtime::Ui::UiElementHandle, const Runtime::Ui::UiEventPhase phase,
                                                     const Runtime::Ui::UiRoutedEvent &event) override {
-            if (phase == Runtime::Ui::UiEventPhase::Target && event.gesture && event.gesture->kind == Runtime::Ui::UiGestureKind::Press)
+            if (phase == Runtime::Ui::UiEventPhase::Target && event.gesture && event.gesture->kind == Runtime::Ui::UiGestureKind::Press) {
                 pressed_ = true;
+                ++pressCount_;
+            }
             return Result<Runtime::Ui::UiEventResponse>::Success({});
         }
 
@@ -680,11 +673,9 @@ namespace Horo::Tests::VulkanEditor {
         }
 
     private:
-        std::optional<Runtime::Ui::UiPointerInteraction> interaction_;
-        std::optional<Runtime::Ui::UiEventDispatcher> dispatcher_;
-        std::array<Runtime::Ui::UiControlDefaultAction, Runtime::Ui::MaximumUiInteractionSamples + 1> defaults_;
-        std::uint64_t sequence_{1};
-        std::uint32_t written_{};
+        Application::Internal::RuntimeUiPaintWorldPointer pointer_;
+        Math::Ray lastRay_{};
+        std::uint32_t pressCount_{};
         bool pressed_{};
     };
 
@@ -724,6 +715,7 @@ namespace Horo::Tests::VulkanEditor {
         bool verifyInitialAdmission = true;
         bool headsetProjected = true;
         const auto worldPointer = std::make_unique<AuthoredWorldPointer>();
+        std::optional<RuntimeUiPaintPresentedWorldCanvas> previousWorld;
         Check(runtime->AddParticipant(std::make_unique<AuthoredCanvasRenderer>([&](const std::uint64_t number) {
             std::optional<RuntimeUiPaintHeadsetCanvasReceipt> headsetReceipt;
             RuntimeUiInstanceId headsetInstance;
@@ -804,8 +796,10 @@ namespace Horo::Tests::VulkanEditor {
                     CHECK(targeted->logicalPosition.x == hit->hit.Descriptor().logicalExtent.width / 2);
                     if (!worldPointer->Pressed())
                         worldPointer->Press(port, sceneId, *hit, ray);
-                } else if (worldPointer->Pressed()) {
-                    worldPointer->VerifyUnavailable(port, sceneId);
+                    previousWorld = hit;
+                } else if (previousWorld) {
+                    worldPointer->VerifyUnavailable(port, sceneId, *previousWorld);
+                    previousWorld.reset();
                 }
             }
         })));

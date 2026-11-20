@@ -1746,6 +1746,7 @@ namespace Horo::Tests::OpenXRApplication {
               "[xr][application][interaction]") {
         using enum XR::XRProjectFeaturePolicy;
         auto document = OpenXRProduct::Json::parse(OpenXRProduct::InstalledProductFixture::BindingDocument());
+        document["worldUiPointer"] = {{"action", document["actions"][0]["id"]}, {"maximumDistanceMeters", 6.0F}};
         document["poses"].push_back({{"profile", 1},
                                      {"set", 1},
                                      {"role", static_cast<unsigned>(XR::XRTrackedDeviceRole::LeftController)},
@@ -1807,6 +1808,17 @@ namespace Horo::Tests::OpenXRApplication {
         const auto pressed = RequireValue(fixture.play->ReadControllerPointer(sources.Scope(), pointer));
         CHECK(pressed.selectDown);
         CHECK(pressed.ray.maximumDistance == 6.0F);
+        const auto worldUi = fixture.play->ReadWorldUiPointer(player);
+        REQUIRE(worldUi);
+        CHECK(worldUi->source.device == controller);
+        CHECK(worldUi->source.scene == sources.Scope().scene);
+        CHECK(worldUi->sample.selectDown);
+        CHECK(worldUi->sample.ray.maximumDistance == 6.0F);
+        CHECK_FALSE(fixture.play->ReadWorldUiPointer(2));
+        {
+            const auto modal = fixture.router.PushContext(Input::InputContextId{"test-modal"}, Input::InputContextKind::ModalRoot);
+            CHECK_FALSE(fixture.play->ReadWorldUiPointer(player));
+        }
         const auto wrongDevice =
             fixture.play->ReadControllerPointer(sources.Scope(), {hand, selection, pointer.pose, pointer.ray, pointer.minimumConfidence});
         REQUIRE(wrongDevice.HasError());
@@ -1817,6 +1829,8 @@ namespace Horo::Tests::OpenXRApplication {
         REQUIRE(wrongAction.HasError());
         CHECK(wrongAction.ErrorValue().code.Value() == XR::XRErrors::OperationUnsupported.code.Value());
         CHECK(fixture.script.actions.syncs == syncs);
+        sample();
+        CHECK(fixture.play->ReadWorldUiPointer(player));
 
         fixture.script.actions.sample.boolean = XR_FALSE;
         sample();
@@ -1834,6 +1848,7 @@ namespace Horo::Tests::OpenXRApplication {
         fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
         RequireValue(fixture.play->PollEvents());
         CHECK(fixture.play->ReadInteractionSources(player).HasError());
+        CHECK_FALSE(fixture.play->ReadWorldUiPointer(player));
         CHECK(fixture.play->ReadInteractionCandidates(newer.Scope(), probes).HasError());
         CHECK(fixture.play->ReadControllerPointer(inactive.Scope(), pointer).HasError());
         fixture.scheduler->Shutdown();

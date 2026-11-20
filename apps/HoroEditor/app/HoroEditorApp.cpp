@@ -1892,6 +1892,54 @@ namespace Horo::Editor {
             const std::function<void()> &pollLocalAgent;
         };
 
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+        /** @brief Composes the selected XR input source with the shared World UI route. */
+        class EditorXrWorldUiPointer final : private Runtime::Ui::UiEventHandler {
+        public:
+            /** @brief Delivers one current pointer or cancels the outgoing source when admission is lost. */
+            [[nodiscard]] Result<void> Update(const Application::Internal::OpenXRPlayHost &host, const Input::PlayerId player,
+                                              const Application::Internal::RuntimeUiPaintPort &port, std::uint64_t milliseconds) {
+                const auto frame = host.ReadWorldUiPointer(player);
+                if (!frame)
+                    return Cancel(port);
+                const auto target = port.ReadPresentedWorldCanvas(frame->source.scene);
+                if (target.HasError())
+                    return Result<void>::Failure(target.ErrorValue());
+                if (!target.Value())
+                    return Cancel(port);
+                if (current_ != frame->source) {
+                    if (const auto cancelled = Cancel(port); cancelled.HasError())
+                        return cancelled;
+                    current_ = frame->source;
+                }
+                const auto applied = pointer_.Update(port, frame->source.scene, *target.Value(), frame->sample.ray,
+                                                     frame->sample.selectDown, milliseconds, *this);
+                return applied.HasError() ? Result<void>::Failure(applied.ErrorValue()) : Result<void>::Success();
+            }
+
+            /** @brief Neutralizes the existing gesture before focus, presentation or source ownership changes. */
+            [[nodiscard]] Result<void> Cancel(const Application::Internal::RuntimeUiPaintPort &port) {
+                if (!current_)
+                    return Result<void>::Success();
+                current_.reset();
+                return pointer_.Cancel(port);
+            }
+
+        private:
+            Result<Runtime::Ui::UiEventResponse> Handle(Runtime::Ui::UiElementHandle, Runtime::Ui::UiEventPhase,
+                                                        const Runtime::Ui::UiRoutedEvent &) override {
+                return Result<Runtime::Ui::UiEventResponse>::Success({});
+            }
+
+            Result<void> ApplyDefault(Runtime::Ui::UiElementHandle, const Runtime::Ui::UiRoutedEvent &) override {
+                return Result<void>::Success();
+            }
+
+            Application::Internal::RuntimeUiPaintWorldPointer pointer_;
+            std::optional<Application::Internal::OpenXRWorldUiPointerSource> current_;
+        };
+#endif
+
         /** @brief Value-owned prepared viewport/GUI workload and the mesh generation used to assemble it. */
         struct EditorPreparedPasses final {
             std::array<Render::RenderPassDescriptor, 2> descriptors{};
@@ -2222,6 +2270,10 @@ namespace Horo::Editor {
                     const auto canceled = CancelPreparedXrFrame();
                     if (canceled.HasError())
                         LOG_ERROR("editor.xr", "XR shutdown retains retirement debt: %s", canceled.ErrorValue().message.c_str());
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+                    if (const auto pointer = xrWorldUiPointer_.Cancel(authorities_.ui); pointer.HasError())
+                        LOG_ERROR("editor.xr", "XR World UI pointer shutdown: %s", pointer.ErrorValue().message.c_str());
+#endif
                 } catch (...) {
                     // Keep the app-owned XR/device parents for checked presentation teardown; never fake retirement here.
                     frameState_.frame.reset();
@@ -2395,8 +2447,11 @@ namespace Horo::Editor {
                 }
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
                 else if (composition.xrPlay) {
-                    if (auto built = composition.xrPlay->BuildInputSnapshot(context, raw); built.HasError())
+                    if (auto built = composition.xrPlay->BuildInputSnapshot(context, raw); built.HasError()) {
+                        if (const auto cancelled = xrWorldUiPointer_.Cancel(authorities_.ui); cancelled.HasError())
+                            return Result<void>::Failure(WithCause(built.ErrorValue(), cancelled.ErrorValue()));
                         return built;
+                    }
                 }
 #endif
                 else
@@ -2411,6 +2466,14 @@ namespace Horo::Editor {
                 if (consoleView_)
                     consoleView_->SynchronizeFocus(ConsolePresentationBlocked());
                 screenHost_->OnInputSnapshot();
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+                if (composition.xrPlay && p_->options.xrInputPlayer) {
+                    constexpr auto nanosecondsPerMillisecond = 1'000'000;
+                    const auto milliseconds =
+                        static_cast<std::uint64_t>(context.presentationAdmittedDuration.ToNanoseconds() / nanosecondsPerMillisecond);
+                    return xrWorldUiPointer_.Update(*composition.xrPlay, p_->options.xrInputPlayer->player, authorities_.ui, milliseconds);
+                }
+#endif
                 return Result<void>::Success();
             }
 
@@ -3309,6 +3372,9 @@ namespace Horo::Editor {
             };
 
             FrameState frameState_;
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+            EditorXrWorldUiPointer xrWorldUiPointer_;
+#endif
             bool nativeMenuInstalled_{false};
         };
 

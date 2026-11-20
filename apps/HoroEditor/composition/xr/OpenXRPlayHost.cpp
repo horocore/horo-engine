@@ -417,6 +417,32 @@ namespace Horo::Application::Internal {
         return Outcome::Success({std::get<Math::Ray>(geometry.Value().Candidates().front().shape), select->x != 0.0F});
     }
 
+    /** @copydoc OpenXRPlayHost::ReadWorldUiPointer */
+    std::optional<OpenXRWorldUiPointerFrame> OpenXRPlayHost::ReadWorldUiPointer(const Input::PlayerId player) const {
+        const auto &selected = composition_.bindings->worldUiPointer;
+        if (!selected || !input_.port || !input_.port->RoutingEligible())
+            return std::nullopt;
+        const auto current = ReadInteractionSources(player);
+        if (current.HasError())
+            return std::nullopt;
+        const auto &sources = current.Value();
+        const auto devices = sources.Devices();
+        const auto device = std::ranges::find(devices, selected->role, &XRTrackedDeviceRecord::role);
+        if (device == devices.end())
+            return std::nullopt;
+        const auto &scope = sources.Scope();
+        // OpenXR Aim points along its negative local Z axis.
+        const auto sample = ReadControllerPointer(scope, {device->id,
+                                                          selected->action,
+                                                          XRControllerInteractionPose::Aim,
+                                                          {{0, 0, -1}, selected->maximumDistanceMeters},
+                                                          XRTrackingConfidence::High});
+        if (sample.HasError())
+            return std::nullopt;
+        return OpenXRWorldUiPointerFrame{{device->id, scope.cutoff.origin, scope.cutoff.bindingRevision, scope.scene, scope.player},
+                                         sample.Value()};
+    }
+
     /** @copydoc OpenXRPlayHost::BuildInputSnapshot */
     Result<void> OpenXRPlayHost::BuildInputSnapshot(const Runtime::FrameContext &context, const Input::RawInputSnapshot &raw) {
         if (auto lane = Lane(); lane.HasError())

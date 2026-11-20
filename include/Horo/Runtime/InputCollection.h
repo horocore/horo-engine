@@ -90,6 +90,11 @@ namespace Horo::Input {
          * @return Move-only transaction or typed stale/owner-thread/sequence denial. */
         [[nodiscard]] Result<InputCollectionFrame> Begin(const RawInputSnapshot &raw) const;
 
+        /** @brief Observes whether the exact collection context can currently route input.
+         * @return False after focus, modal, assignment or ownership loss. Does not consume input.
+         */
+        [[nodiscard]] bool RoutingEligible() const noexcept;
+
         /** @brief Copies the port's assigned player. @return Empty for unscoped ports. Callers still validate currentness. */
         [[nodiscard]] std::optional<PlayerId> AssignedPlayer() const noexcept {
             return player_;

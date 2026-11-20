@@ -325,6 +325,13 @@ namespace Horo::Application::Internal {
         auto prototype = candidate.projection->ExtractPrototype(*pin.Get(), baseline.Value());
         if (prototype.HasError())
             return Result<void>::Failure(prototype.ErrorValue());
+        if (candidate.worldCanvas) {
+            const auto &source = prototype.Value().Descriptor();
+            auto dispatcher = UiEventDispatcher::Create({source.instance, source.canvas, source.document, MaximumUiTreeDepth});
+            if (dispatcher.HasError())
+                return Result<void>::Failure(dispatcher.ErrorValue());
+            candidate.worldDispatcher.emplace(std::move(dispatcher).Value());
+        }
         if (!candidate.sceneCanvas) {
             auto program = Render::UiPaintProgram::Create(*state_->frontend, candidate.programs.policy, prototype.Value(),
                                                           candidate.textures, candidate.programs.kernel, cancellation);

@@ -95,6 +95,23 @@ namespace Horo::Application::Internal {
         bool selectDown{};
     };
 
+    /** @brief Exact controller lineage used to cancel UI input before a source replacement. */
+    struct OpenXRWorldUiPointerSource final {
+        XR::XRDeviceId device;
+        XR::XRWorldOriginRevision origin;
+        std::uint64_t bindingRevision;
+        Runtime::SceneRuntimeId scene;
+        Input::PlayerId player;
+
+        bool operator==(const OpenXRWorldUiPointerSource &) const noexcept = default;
+    };
+
+    /** @brief Admitted product-selected World UI controller evidence for the current frame. */
+    struct OpenXRWorldUiPointerFrame final {
+        OpenXRWorldUiPointerSource source;
+        OpenXRPlayControllerPointerSample sample;
+    };
+
     /** @brief Current controller/hand source identities for a synchronous query, without raw tracking. */
     class OpenXRPlayInteractionSources final {
     public:
@@ -313,6 +330,10 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<OpenXRPlayControllerPointerSample> ReadControllerPointer(
             const OpenXRPlayInteractionScope &scope, const OpenXRPlayControllerPointerRequest &request) const;
+        /** @brief Observes the installed World UI action within the exact active player context.
+         * @param player Current Play assignment. @return Empty when disabled, blocked or no current ray/selection is available.
+         */
+        [[nodiscard]] std::optional<OpenXRWorldUiPointerFrame> ReadWorldUiPointer(Input::PlayerId player) const;
         /** @brief Copies current reference identity and bounds from the selected Play session.
          * @param session Exact published session.
          * @return Immutable-by-copy evidence or typed stale/unavailable error.

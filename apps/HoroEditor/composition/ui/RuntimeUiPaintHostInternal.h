@@ -80,6 +80,7 @@ namespace Horo::Application::Internal::Detail {
         RuntimeUiPaintOutput output;
         std::optional<Runtime::SceneRuntimeId> scene;
         std::optional<RuntimeUiPaintWorldCanvas> worldCanvas;
+        std::optional<Runtime::Ui::UiEventDispatcher> worldDispatcher; /**< Reserved once before the World source publishes. */
         std::optional<RuntimeUiPaintPresentedWorldCanvas> presentedWorld;
         bool sceneCanvas{};
         bool retiring{};

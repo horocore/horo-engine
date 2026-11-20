@@ -2,6 +2,8 @@
 
 #include "JsonUtils.h"
 
+#include <algorithm>
+#include <cmath>
 #include <limits>
 #include <ranges>
 #include <span>
@@ -34,7 +36,7 @@ namespace Horo::Application::Internal {
             if (!Foundation::HasAllowedFields(root,
                                               {"schemaVersion", "genericFallback", "profiles", "sets", "actions", "controls", "suggestions",
                                                "poses"},
-                                              {"haptics"}) ||
+                                              {"haptics", "worldUiPointer"}) ||
                 !root.at("schemaVersion").is_number_unsigned() || root.at("schemaVersion") != 1 ||
                 !Number(root.at("genericFallback"), std::numeric_limits<std::uint32_t>::max(), true))
                 return false;
@@ -165,6 +167,25 @@ namespace Horo::Application::Internal {
             }
             return Result<void>::Success();
         }
+
+        /** @brief Selects a declared digital controller action without creating a registration. */
+        Result<void> WorldUiPointer(const Json &root, OpenXRApplicationBindings &output) {
+            const auto entry = root.find("worldUiPointer");
+            if (entry == root.end())
+                return Result<void>::Success();
+            if (!Foundation::HasAllowedFields(*entry, {"action", "maximumDistanceMeters"}) ||
+                !Text(entry->at("action"), XR::XRActionBindingLimits::MaximumNameBytes) || !entry->at("maximumDistanceMeters").is_number())
+                return Result<void>::Failure(InvalidBindings());
+            const auto limit = entry->at("maximumDistanceMeters").get<float>();
+            if (!std::isfinite(limit) || limit <= 0)
+                return Result<void>::Failure(InvalidBindings());
+            const Input::ActionId action{entry->at("action").get<std::string>()};
+            const auto declaration = std::ranges::find(output.schema.actions, action, &XR::XRActionDeclaration::action);
+            if (declaration == output.schema.actions.end() || declaration->valueType != Input::ActionValueType::Digital)
+                return Result<void>::Failure(InvalidBindings());
+            output.worldUiPointer.emplace(action, declaration->role, limit);
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc ReadInstalledOpenXRBindings */
@@ -196,6 +217,8 @@ namespace Horo::Application::Internal {
                 return Outcome::Failure(poses.ErrorValue());
             if (auto haptics = Haptics(root, *output); haptics.HasError())
                 return Outcome::Failure(haptics.ErrorValue());
+            if (auto pointer = WorldUiPointer(root, *output); pointer.HasError())
+                return Outcome::Failure(pointer.ErrorValue());
             return Outcome::Success(std::move(output));
         } catch (const Foundation::Json::exception &) {
             return Outcome::Failure(InvalidBindings());

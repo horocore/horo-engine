@@ -188,7 +188,7 @@ namespace Horo::Application::Internal {
             batch.interaction.CancelTransient();
             return Outcome::Failure(MakeError(UiErrors::HitTestSourceStale));
         }
-        if (!source->worldCanvas || !scene.IsValid() || source->scene != scene)
+        if (!source->worldDispatcher || !scene.IsValid() || source->scene != scene)
             return Outcome::Failure(MakeError(UiErrors::HitTestSourceStale));
         const WorldPointerDispatch guard{state->dispatching};
         if (const auto admitted = AdmitWorldPointer(*source, batch); admitted.HasError())
@@ -196,7 +196,7 @@ namespace Horo::Application::Internal {
         const auto hit = source->presentedWorld->hit;  // Shutdown in an observer can clear the source's copy.
         return source->animation->PumpPointers({owner.view,
                                                 batch.interaction,
-                                                batch.dispatcher,
+                                                *source->worldDispatcher,
                                                 hit,
                                                 {},
                                                 batch.samples,
@@ -217,6 +217,65 @@ namespace Horo::Application::Internal {
         }
         interaction.CancelTransient();
         return Result<void>::Success();
+    }
+
+    /** @copydoc RuntimeUiPaintWorldPointer::Bind */
+    Result<void> RuntimeUiPaintWorldPointer::Bind(const RuntimeUiPaintPort &port, const RuntimeUiPaintPresentedWorldCanvas &target) {
+        const auto *descriptor = target.hit.TryDescriptor();
+        if (!descriptor)
+            return Result<void>::Failure(MakeError(UiErrors::HitTestSourceStale));
+        const auto &hit = *descriptor;
+        const auto view = target.presentation.view;
+        if (interaction_) {
+            if (const auto &bound = interaction_->Owner(); bound.view == view && bound.instance == target.instance &&
+                                                           bound.canvas == hit.canvas && bound.tree == hit.tree &&
+                                                           bound.document == hit.document && bound.interaction == hit.interaction)
+                return Result<void>::Success();
+            if (const auto cancelled = Cancel(port); cancelled.HasError())
+                return cancelled;
+        }
+        const UiPointerCaptureContext
+            owner{{view.ownership, view.slot, view.generation}, view, target.instance, hit.canvas, hit.document, hit.tree, hit.interaction};
+        auto recognizer = UiPointerInteraction::Create({owner, std::nullopt}, {});
+        if (recognizer.HasError())
+            return Result<void>::Failure(recognizer.ErrorValue());
+        interaction_.emplace(std::move(recognizer).Value());
+        return Result<void>::Success();
+    }
+
+    /** @copydoc RuntimeUiPaintWorldPointer::Update */
+    Result<UiPointerInteractionResult> RuntimeUiPaintWorldPointer::Update(const RuntimeUiPaintPort &port,
+                                                                          const Runtime::SceneRuntimeId scene,
+                                                                          const RuntimeUiPaintPresentedWorldCanvas &target,
+                                                                          const Math::Ray &ray, const bool down,
+                                                                          const std::uint64_t milliseconds, UiEventHandler &observer) {
+        using Outcome = Result<UiPointerInteractionResult>;
+        if (const auto bound = Bind(port, target); bound.HasError())
+            return Outcome::Failure(bound.ErrorValue());
+        const auto pointer = UiPointerId::Create(1);
+        HORO_INVARIANT(pointer.HasValue());
+        const bool active = armed_ && down;
+        auto edge = UiPointerEdge::Move;
+        if (active != down_)
+            edge = active ? UiPointerEdge::Press : UiPointerEdge::Release;
+        const UiPointerSample sample{.pointer = pointer.Value(), .edge = edge, .modality = UiPointerModality::WorldRay, .worldRay = ray};
+        auto applied =
+            port.PumpWorldPointers(scene, {*interaction_, std::span{&sample, 1}, milliseconds, sequence_, defaults_, written_}, observer);
+        if (applied.HasError()) {
+            if (const auto cancelled = Cancel(port); cancelled.HasError())
+                return Outcome::Failure(WithCause(applied.ErrorValue(), cancelled.ErrorValue()));
+            return applied;
+        }
+        down_ = active;
+        armed_ |= !down;
+        return applied;
+    }
+
+    /** @copydoc RuntimeUiPaintWorldPointer::Cancel */
+    Result<void> RuntimeUiPaintWorldPointer::Cancel(const RuntimeUiPaintPort &port) {
+        armed_ = false;
+        down_ = false;
+        return interaction_ ? port.CancelWorldPointers(*interaction_, sequence_) : Result<void>::Success();
     }
 
     /** @copydoc RuntimeUiPaintPort::ReadSceneCanvasFrame */
