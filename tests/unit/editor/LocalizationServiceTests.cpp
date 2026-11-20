@@ -817,9 +817,32 @@ TEST_CASE("Local model panel copy resolves in both shipped locales", "[unit][edi
         REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json"), &error));
         REQUIRE(service.Prepare(LocaleTag{locale}, &error));
         REQUIRE(service.ActivatePrepared(&error));
-        for (const auto key :
-             {"title", "endpoint", "discover", "model", "prompt", "ask", "stop", "working", "invalid", "unavailable", "timeout",
-              "cancelled", "failed", "no_models", "empty_response", "scene_count", "ask_with_scene_count", "tools_unsupported"}) {
+        for (const auto key : {"title",
+                               "endpoint",
+                               "discover",
+                               "model",
+                               "prompt",
+                               "ask",
+                               "stop",
+                               "working",
+                               "invalid",
+                               "unavailable",
+                               "timeout",
+                               "cancelled",
+                               "failed",
+                               "no_models",
+                               "empty_response",
+                               "scene_count",
+                               "ask_with_scene_count",
+                               "tools_unsupported",
+                               "history_review",
+                               "history_save",
+                               "history_saving",
+                               "history_saved",
+                               "history_write_error",
+                               "history_latest",
+                               "history_title",
+                               "history_unavailable"}) {
             INFO(locale);
             INFO(key);
             const auto &value = panel.Text(service, key);

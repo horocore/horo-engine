@@ -28,16 +28,19 @@ namespace Horo::Agent {
 
         using MutationResult = Result<std::optional<AgentHistoryStartedTurn>>;
 
-        struct BeginTurnWork final {
+        struct TurnWork final {
             std::optional<AgentConversationId> conversation;
             std::string title;
             std::string userText;
             std::vector<AgentHistoryReference> references;
             std::uint64_t now;
+            std::optional<std::string> answer;
+            AgentHistoryUsage usage;
 
             /** @brief Commits the user prompt and reserves the exact assistant response together. */
             [[nodiscard]] MutationResult operator()(AgentConversationStore &store) const {
-                auto started = store.BeginTurn({conversation, title, userText, references, now});
+                const AgentHistoryTurnRequest request{conversation, title, userText, references, now};
+                auto started = answer ? store.RecordCompleted(request, {*answer, usage}) : store.BeginTurn(request);
                 if (started.HasError())
                     return MutationResult::Failure(std::move(started).ErrorValue());
                 return MutationResult::Success(std::move(started).Value());
@@ -211,6 +214,34 @@ namespace Horo::Agent {
             flight.emplace(std::move(submitted).Value(), desired, std::move(result), operation);
             return Output::Success(operation);
         }
+
+        /** @brief Admits one bounded, owned prompt and optional completed answer. */
+        [[nodiscard]] Result<AgentHistoryOperationId> SubmitTurn(const AgentHistoryProjectRevision project,
+                                                                 const AgentHistoryTurnRequest &request,
+                                                                 const std::optional<AgentHistoryCompletedText> answer) {
+            using Output = Result<AgentHistoryOperationId>;
+            const auto admission = CheckMutation(project);
+            if (admission.HasError())
+                return Output::Failure(admission.ErrorValue());
+            const auto &limits = worker->limits;
+            const auto title = request.conversation ? std::string_view{} : request.title;
+            if (title.size() > AgentHistoryLimits::MaximumTitleBytes || request.userText.size() > limits.textBytesPerMessage ||
+                request.references.size() > limits.referencesPerMessage ||
+                (answer && answer->assistant.size() > limits.textBytesPerMessage))
+                return Output::Failure(MakeError(AgentHistoryErrors::Capacity));
+            TurnWork work{request.conversation,
+                          std::string{title},
+                          std::string{request.userText},
+                          {request.references.begin(), request.references.end()},
+                          request.now,
+                          {},
+                          {}};
+            if (answer) {
+                work.answer.emplace(answer->assistant);
+                work.usage = answer->usage;
+            }
+            return SubmitMutation(std::move(work));
+        }
     };
 
     /** @copydoc AgentHistorySession::AgentHistorySession */
@@ -263,20 +294,14 @@ namespace Horo::Agent {
     /** @copydoc AgentHistorySession::BeginTurn */
     Result<AgentHistoryOperationId> AgentHistorySession::BeginTurn(const AgentHistoryProjectRevision project,
                                                                    const AgentHistoryTurnRequest &request) {
-        using Output = Result<AgentHistoryOperationId>;
-        const auto admission = state_->CheckMutation(project);
-        if (admission.HasError())
-            return Output::Failure(admission.ErrorValue());
-        const auto &limits = state_->worker->limits;
-        const auto title = request.conversation ? std::string_view{} : request.title;
-        if (title.size() > AgentHistoryLimits::MaximumTitleBytes || request.userText.size() > limits.textBytesPerMessage ||
-            request.references.size() > limits.referencesPerMessage)
-            return Output::Failure(MakeError(AgentHistoryErrors::Capacity));
-        return state_->SubmitMutation(BeginTurnWork{request.conversation,
-                                                    std::string{title},
-                                                    std::string{request.userText},
-                                                    {request.references.begin(), request.references.end()},
-                                                    request.now});
+        return state_->SubmitTurn(project, request, std::nullopt);
+    }
+
+    /** @copydoc AgentHistorySession::RecordCompleted */
+    Result<AgentHistoryOperationId> AgentHistorySession::RecordCompleted(const AgentHistoryProjectRevision project,
+                                                                         const AgentHistoryTurnRequest &request,
+                                                                         const AgentHistoryCompletedText &answer) {
+        return state_->SubmitTurn(project, request, answer);
     }
 
     /** @copydoc AgentHistorySession::Checkpoint */

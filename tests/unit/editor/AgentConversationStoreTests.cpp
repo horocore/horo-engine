@@ -1,4 +1,5 @@
 #include "AgentConversationStore.h"
+#include "AgentHistoryReview.h"
 #include "AgentHistorySession.h"
 #include "Horo/Foundation/JobSystem.h"
 
@@ -451,5 +452,85 @@ namespace Horo::Agent {
         REQUIRE(session.View().conversations.size() == 1);
         CHECK(session.View().conversations.front().title == "Second project");
         CHECK_FALSE(std::filesystem::exists(first.Path()));
+    }
+
+    TEST_CASE("History review stores exactly the approved display pair with credential-bearing text removed",
+              "[unit][agent][conversation_history]") {
+        using Phase = AgentHistorySessionPhase;
+        Project project;
+        JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 2, .ioWorkerCount = 1}};
+        AgentHistorySession session{jobs, project.files, RedactHistoryDisplayText};
+        const AgentHistoryProject selected{project.root, "history-project"};
+        session.SelectProject(selected);
+        PollUntil(session, [&] {
+            return session.View().phase == Phase::Settled;
+        });
+        REQUIRE(session.View().availability == Availability::Ready);
+
+        constexpr auto prompt = "Keep this question.\nExample: Api-Key=example-value\nAfter the header.";
+        constexpr auto response = "Summary.\nAuthorization: Bearer synthetic-value\n-----BEGIN PRIVATE KEY-----\nprivate fixture line\n"
+                                  "-----END PRIVATE KEY-----\nProject answer.";
+        const auto review = AgentHistoryExchangeReview::Prepare(session.View().project, prompt, response);
+        REQUIRE(review.HasValue());
+        CHECK(review.Value().Prompt() == "Keep this question.\n[redacted]\nAfter the header.");
+        CHECK(review.Value().Response() == "Summary.\n[redacted]\n[redacted]\nProject answer.");
+        CHECK(session.View().conversations.empty());
+        CHECK_FALSE(std::filesystem::exists(project.Path()));
+
+        const auto submitted = review.Value().SaveApproved(session, "Local exchange", 2);
+        REQUIRE(submitted.HasValue());
+        const auto committed = TakeMutation(session, submitted.Value());
+        REQUIRE_FALSE(committed.error);
+        REQUIRE(committed.started);
+        REQUIRE(session.View().conversations.size() == 1);
+        const auto &messages = session.View().conversations.front().messages;
+        REQUIRE(messages.size() == 2);
+        CHECK(messages.front().text == review.Value().Prompt());
+        CHECK(messages.back().text == review.Value().Response());
+        CHECK(messages.back().state == MessageState::Complete);
+        CHECK(messages.front().references.empty());
+        CHECK(messages.back().references.empty());
+        const auto image = project.Image();
+        CHECK_FALSE(Contains(image, "synthetic-value"));
+        CHECK_FALSE(Contains(image, "example-value"));
+        CHECK_FALSE(Contains(image, "private fixture line"));
+
+        session.SelectProject(std::nullopt);
+        RequireError(review.Value().SaveApproved(session, "Local exchange", 3), AgentHistoryErrors::Stale);
+    }
+
+    TEST_CASE("History review rejects invalid display bytes and handles incomplete sensitive blocks",
+              "[unit][agent][conversation_history]") {
+        constexpr AgentHistoryProjectRevision revision{1};
+        RequireError(AgentHistoryExchangeReview::Prepare(revision, std::string_view{"not\0display", 11}, "Answer"),
+                     AgentHistoryErrors::RejectedText);
+        RequireError(AgentHistoryExchangeReview::Prepare(revision, "Prompt", std::string(16U * 1024U + 1U, 'x')),
+                     AgentHistoryErrors::Capacity);
+        const auto review = AgentHistoryExchangeReview::Prepare(revision, "Here is an example ghp_0123456789abcdef",
+                                                                "-----BEGIN OPENSSH PRIVATE KEY-----\nprivate fixture line");
+        REQUIRE(review.HasValue());
+        CHECK(review.Value().Prompt() == "[redacted]");
+        CHECK(review.Value().Response() == "[redacted]\n");
+    }
+
+    TEST_CASE("History rejects an unadmitted terminal answer without writing a partial conversation",
+              "[unit][agent][conversation_history]") {
+        using Phase = AgentHistorySessionPhase;
+        Project project;
+        JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 2, .ioWorkerCount = 1}};
+        AgentHistorySession session{jobs, project.files, HistoryFilter};
+        session.SelectProject(AgentHistoryProject{project.root, "history-project"});
+        PollUntil(session, [&] {
+            return session.View().phase == Phase::Settled;
+        });
+        const auto operation =
+            session.RecordCompleted(session.View().project, {.title = "Discarded", .userText = "Visible prompt", .now = 1},
+                                    {"credential fixture", {}});
+        REQUIRE(operation.HasValue());
+        const auto failure = TakeMutation(session, operation.Value());
+        REQUIRE(failure.error);
+        CHECK(failure.error->code.Value() == AgentHistoryErrors::RejectedText.code.Value());
+        CHECK(session.View().conversations.empty());
+        CHECK_FALSE(std::filesystem::exists(project.Path()));
     }
 }  // namespace Horo::Agent

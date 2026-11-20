@@ -102,7 +102,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     }  // namespace
 
     /** @copydoc EditorWorkspaceScreen::AttachWorkspacePanels */
-    void EditorWorkspaceScreen::AttachWorkspacePanels() {
+    void EditorWorkspaceScreen::AttachWorkspacePanels(std::string_view projectIdentity) {
         PanelContext panelContext{
             .dataBus = controller_->DataBus(),
             .guiRenderer = panelServices_.guiRenderer,
@@ -133,6 +133,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 return std::nullopt;
             return model.objects.size();
         },
+            .projectIdentity = projectIdentity,
+            .projectFileRoot = &controller_->ProjectRoot(),
         };
         contributions_.panels.AttachAll(panelContext);
     }

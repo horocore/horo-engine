@@ -89,7 +89,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         publishedRevisions_.viewportScene = controller_->CurrentViewportSceneRevision();
         LOG_INFO("editor.workspace", "EditorWorkspaceScreen entered for '%s'", controller_->ViewModel().projectRoot.c_str());
 
-        AttachWorkspacePanels();
+        const auto &surfaces = activation.Candidate().surfaces;
+        AttachWorkspacePanels(surfaces.settings ? std::string_view{surfaces.settings->Input().projectId} : std::string_view{});
         UpdateStatusItems();
         const auto platformSources = activation.Candidate().platformServices;
         if (auto committed = activation.Commit(); committed.HasError()) {

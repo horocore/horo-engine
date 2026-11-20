@@ -70,6 +70,12 @@ namespace Horo::Agent {
         AgentHistoryMessageId response;
     };
 
+    /** @brief Visible terminal assistant text and optional bounded numeric usage. */
+    struct AgentHistoryCompletedText final {
+        std::string_view assistant;
+        AgentHistoryUsage usage;
+    };
+
     /** @brief Sanitized history projection. This type grants no tool or provider authority. */
     struct AgentHistoryMessage final {
         AgentHistoryMessageId id;
@@ -182,6 +188,13 @@ namespace Horo::Agent {
          * @return Durable conversation and response IDs, or a typed failure without a partial conversation.
          */
         [[nodiscard]] Result<AgentHistoryStartedTurn> BeginTurn(const AgentHistoryTurnRequest &request);
+        /** @brief Publish an explicitly reviewed prompt/response pair in one durable commit.
+         * @param request Visible user input and exact existing conversation or new title.
+         * @param answer Visible terminal response. Both strings pass through the store's admission filter.
+         * @return Durable conversation and message IDs or a typed denial without a partial turn.
+         */
+        [[nodiscard]] Result<AgentHistoryStartedTurn> RecordCompleted(const AgentHistoryTurnRequest &request,
+                                                                      const AgentHistoryCompletedText &answer);
         /** @brief Replace the visible response checkpoint or settle the active response.
          * @param conversation Exact owning conversation.
          * @param response Exact streaming assistant message returned by BeginTurn.
@@ -200,6 +213,8 @@ namespace Horo::Agent {
     private:
         struct State;
         explicit AgentConversationStore(std::unique_ptr<State> state) noexcept;
+        [[nodiscard]] Result<AgentHistoryStartedTurn> RecordTurn(const AgentHistoryTurnRequest &request,
+                                                                 std::optional<AgentHistoryCompletedText> answer);
         std::unique_ptr<State> state_;
     };
 }  // namespace Horo::Agent

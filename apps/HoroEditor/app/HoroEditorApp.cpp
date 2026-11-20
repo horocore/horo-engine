@@ -1885,6 +1885,7 @@ namespace Horo::Editor {
             Runtime::RuntimeSceneService *scene;
             std::shared_ptr<const Application::INetworkDebuggerQuery> network;
             std::shared_ptr<Application::Internal::EditorMountedWorldViewport> mountedViewport;
+            const std::function<void()> &pollLocalAgent;
         };
 
         /** @brief Value-owned prepared viewport/GUI workload and the mesh generation used to assemble it. */
@@ -2575,6 +2576,8 @@ namespace Horo::Editor {
                     return console;
                 p_->modalHost.OnUpdate(deltaSeconds);
                 screenHost_->OnUpdate(deltaSeconds);
+                if (authorities_.pollLocalAgent)
+                    authorities_.pollLocalAgent();
                 // Independent owner pumping continues after modal closure or project route departure.
                 static_cast<void>(authorities_.packages->Pump(Packages::PackageActivationBoundary::Running));
                 authorities_.navigation->Pump();
@@ -3610,6 +3613,7 @@ namespace Horo::Editor {
             std::optional<UpdateExperienceSession> &updateSession;
             std::shared_ptr<const Application::INetworkDebuggerQuery> network;
             std::shared_ptr<Application::Internal::EditorMountedWorldViewport> mountedViewport;
+            const std::function<void()> &pollLocalAgent;
 
             /** @brief Transfers the sole Scene/UI participants into the RuntimeHost and retains every borrowed authority through shutdown.
              */
@@ -3638,7 +3642,7 @@ namespace Horo::Editor {
                                                                rendererRestart, clock,
                                                                EditorRuntimeAuthorities{nullptr, packages, &navigationBakes,
                                                                                         runtimeSources.Value(), sceneInspection, network,
-                                                                                        mountedViewport});
+                                                                                        mountedViewport, pollLocalAgent});
                 participant->BindHost(*runtime);
                 EditorRuntimeParticipant *pacingParticipant = participant.get();
                 Result<void> startup = runtime->AddParticipant(std::move(participant));
@@ -3798,8 +3802,10 @@ namespace Horo::Editor {
             WorkspacePanelRegistry workspacePanelRegistry;
             RegisterInspectionWorkspacePanels(workspacePanelRegistry, p.presentation.renderFrontend);
             RegisterNavigationWorkspacePanel(workspacePanelRegistry, navigationBakeAccess, p.modalHost);
-            if (p.options.localAgent)
-                workspacePanelRegistry.RegisterPanel(MakeEditorLocalAgentPanel());
+            const auto localAgent =
+                p.options.localAgent ? MakeEditorLocalAgentPanel(p.background.jobs, durableFiles) : EditorLocalAgentPanelHost{};
+            if (localAgent.panel)
+                workspacePanelRegistry.RegisterPanel(localAgent.panel);
             EditorExtensionSources extensionSources{p.background.jobs};
             PfdNativeDialogs nativeDialogs;
             auto networkDebugger = std::make_shared<Application::NetworkDebuggerService>();
@@ -3932,8 +3938,8 @@ namespace Horo::Editor {
             screenHost.Services().Register<Application::NetworkDebuggerService>(*networkDebugger);
             screenHost.Services().RegisterConst<Application::INetworkDebuggerQuery>(*networkDebugger);
             screenHost.Services().Register<Application::INetworkDebuggerControl>(*networkDebugger);
-            EditorRuntimeSession session{p,        screenHost,      viewportSceneState, settingsSnapshot, liveGui,        clock,
-                                         packages, navigationBakes, updateSession,      networkDebugger,  mountedViewport};
+            EditorRuntimeSession session{p,        screenHost,      viewportSceneState, settingsSnapshot, liveGui,         clock,
+                                         packages, navigationBakes, updateSession,      networkDebugger,  mountedViewport, localAgent.poll};
             return session.Run(std::move(createdRuntime).Value(), std::move(runtimeScene), std::move(preparedUi->paint));
         }
     }  // namespace

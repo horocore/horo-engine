@@ -1,5 +1,7 @@
 #include "EditorLocalAgentPanel.h"
 
+#include "AgentHistoryReview.h"
+#include "AgentHistorySession.h"
 #include "AgentLocalSceneTurn.h"
 #include "AgentTurn.h"
 #include "Horo/Agent/ReferenceModelProviders.h"
@@ -13,6 +15,7 @@
 #include <future>
 #include <optional>
 #include <stop_token>
+#include <thread>
 #include <variant>
 
 namespace Horo::Editor {
@@ -24,7 +27,7 @@ namespace Horo::Editor {
         Reply RunLocalOperation(std::string endpoint, std::optional<ModelRequest> request, std::optional<std::size_t> sceneCount,
                                 std::uint64_t turn, std::stop_token stop) {
             ModelProviderConfig config{.endpoint = std::move(endpoint)};
-            if (request && sceneCount)
+            if (request && sceneCount.has_value())
                 return RunApprovedLocalSceneTurn(std::move(config), std::move(*request), turn, *sceneCount,
                                                  Platform::CreateNativeSecureRandomSource(), stop);
             auto provider = CreateOllamaModelProvider(std::move(config));
@@ -51,10 +54,11 @@ namespace Horo::Editor {
         /** @brief Owns one optional asynchronous request; workspace callbacks remain on the editor lane. */
         class LocalAgentPanel final : public IWorkspacePanel {
         public:
-            LocalAgentPanel() : IWorkspacePanel("workspace.local_agent") {}
+            LocalAgentPanel(const JobSystem &jobs, DurableFileSystem &files)
+                : IWorkspacePanel("workspace.local_agent"), history_(jobs, files, RedactHistoryDisplayText) {}
 
             ~LocalAgentPanel() override {
-                stop_.request_stop();
+                worker_.request_stop();
             }
 
             std::string GetId() const override {
@@ -75,15 +79,38 @@ namespace Horo::Editor {
 
             void OnAttach(PanelContext &context) override {
                 sceneCount_ = context.sceneObjectCount;
+                if (context.projectFileRoot && !context.projectIdentity.empty())
+                    attachedProject_.emplace(*context.projectFileRoot, std::string{context.projectIdentity});
             }
 
             void OnDetach() override {
-                stop_.request_stop();
+                worker_.request_stop();
                 discard_ = true;
                 prompt_.clear();
                 response_.clear();
                 sceneCount_ = {};
+                attachedProject_.reset();
+                history_.SelectProject(std::nullopt);
+                historyStatus_ = nullptr;
+                pendingSave_.reset();
+                review_.reset();
+                submittedPrompt_.reset();
+                showLatestHistory_ = false;
                 status_ = nullptr;
+            }
+
+            /** @brief Advances result publication and project storage after the workspace's runtime update. */
+            void Poll() {
+                if (attachedProject_) {
+                    history_.SelectProject(std::move(attachedProject_));
+                    attachedProject_.reset();
+                }
+                history_.Poll();
+                if (const auto completed = history_.TakeMutation(); completed && completed->operation == pendingSave_) {
+                    historyStatus_ = completed->error ? "history_write_error" : "history_saved";
+                    pendingSave_.reset();
+                }
+                PollReply();
             }
 
             void DrawIcon(ImDrawList *draw, const ImVec2 &position, const ImVec2 &size, ImU32 color) override {
@@ -95,7 +122,6 @@ namespace Horo::Editor {
 
             void DrawPanel(const ImVec2 &, const ImVec2 &size, const EditorWorkspaceViewModel &, EditorWorkspaceViewCommandData &,
                            const EditorGuiContext &context) override {
-                Poll();
                 const auto &locale = context.localization;
                 const auto &fonts = context.theme.fonts;
                 ImGui::BeginChild("##LocalAgent", size, false, ImGuiWindowFlags_NoSavedSettings);
@@ -103,16 +129,68 @@ namespace Horo::Editor {
                 ImGui::TextUnformatted(LocalizedText(locale, "prompt").c_str());
                 static_cast<void>(Ui::InputTextControl("##Prompt", prompt_, 4096, fonts));
                 DrawSendActions(locale);
-                if (Busy() && Button(locale, "stop", !stop_.stop_requested()))
-                    stop_.request_stop();
+                if (Busy() && Button(locale, "stop", !worker_.get_stop_token().stop_requested()))
+                    worker_.request_stop();
                 if (status_)
                     ImGui::TextWrapped("%s", LocalizedText(locale, status_).c_str());
                 if (!response_.empty())
                     ImGui::TextWrapped("%s", response_.c_str());
+                DrawHistory(locale);
                 ImGui::EndChild();
             }
 
         private:
+            [[nodiscard]] static bool CanSave(const AgentHistorySessionView &view) {
+                using enum AgentHistoryAvailability;
+                return view.availability == Ready || view.availability == Recovered || view.availability == DurabilityUnconfirmed;
+            }
+
+            /** @brief Displays owned review bytes exactly as they would be written by explicit approval. */
+            static void DrawHistoryText(std::string_view text) {
+                if (text.empty())
+                    return;
+                ImGui::PushTextWrapPos(0);
+                ImGui::TextUnformatted(text.data(), text.data() + text.size());
+                ImGui::PopTextWrapPos();
+            }
+
+            void DrawHistory(const ILocalizationService &locale) {
+                const auto view = history_.View();
+                if (review_) {
+                    ImGui::TextUnformatted(LocalizedText(locale, "history_review").c_str());
+                    DrawHistoryText(review_->Prompt());
+                    DrawHistoryText(review_->Response());
+                    if (Button(locale, "history_save", CanSave(view) && !pendingSave_))
+                        SaveReview(locale);
+                    if (view.phase == AgentHistorySessionPhase::Settled && !CanSave(view))
+                        ImGui::TextWrapped("%s", LocalizedText(locale, "history_unavailable").c_str());
+                }
+                if (historyStatus_)
+                    ImGui::TextWrapped("%s", LocalizedText(locale, historyStatus_).c_str());
+                if (!view.conversations.empty() && Button(locale, "history_latest", true))
+                    showLatestHistory_ = !showLatestHistory_;
+                if (showLatestHistory_ && !view.conversations.empty()) {
+                    const auto &messages = view.conversations.back().messages;
+                    for (const auto &message : std::span{messages}.last(std::min(messages.size(), std::size_t{2})))
+                        DrawHistoryText(message.text);
+                }
+            }
+
+            /** @brief Schedules the exact reviewed exchange without waiting on persistence. */
+            void SaveReview(const ILocalizationService &locale) {
+                const auto seconds =
+                    std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
+                const auto result = review_->SaveApproved(history_, LocalizedText(locale, "history_title"),
+                                                          seconds > 0 ? static_cast<std::uint64_t>(seconds) : 0);
+                if (result.HasError()) {
+                    historyStatus_ = "history_write_error";
+                    return;
+                }
+                pendingSave_ = result.Value();
+                review_.reset();
+                historyStatus_ = "history_saving";
+            }
+
             [[nodiscard]] bool Busy() const {
                 return reply_.valid();
             }
@@ -158,7 +236,7 @@ namespace Horo::Editor {
                     return;
                 }
                 const auto count = sceneCount_ ? sceneCount_() : std::nullopt;
-                if (count) {
+                if (count.has_value()) {
                     ImGui::Text("%s %zu", LocalizedText(locale, "scene_count").c_str(), *count);
                     if (Button(locale, "ask_with_scene_count", ready))
                         Send(count);
@@ -169,30 +247,41 @@ namespace Horo::Editor {
                 ModelRequest request;
                 request.model = model_;
                 request.messages.push_back({.role = ModelRole::User, .text = prompt_});
+                review_.reset();
+                submittedPrompt_ = sceneCount.has_value() ? std::nullopt : std::optional{prompt_};
+                submittedProject_ = history_.View().project;
                 Start(std::move(request), sceneCount);
             }
 
             void Start(std::optional<ModelRequest> request, std::optional<std::size_t> sceneCount = {}) {
                 try {
-                    stop_ = std::stop_source{};
-                    reply_ = std::async(std::launch::async, RunLocalOperation, endpoint_, std::move(request), sceneCount, ++turn_,
-                                        stop_.get_token());
+                    std::packaged_task<Reply(std::stop_token)> task{
+                        [endpoint = endpoint_, request = std::move(request), sceneCount, turn = ++turn_](std::stop_token stop) mutable {
+                        return RunLocalOperation(std::move(endpoint), std::move(request), sceneCount, turn, stop);
+                    }};
+                    auto pending = task.get_future();
+                    worker_ = std::jthread{[task = std::move(task)](std::stop_token stop) mutable {
+                        task(stop);
+                    }};
+                    reply_ = std::move(pending);
                     discard_ = false;
                     status_ = "working";
                     response_.clear();
-                } catch (const std::exception &) {
+                } catch (const std::bad_alloc &) {
+                    status_ = "failed";
+                } catch (const std::system_error &) {
                     status_ = "failed";
                 }
             }
 
-            void Poll() {
+            void PollReply() {
                 if (!Busy() || reply_.wait_for(std::chrono::seconds::zero()) != std::future_status::ready)
                     return;
                 try {
                     auto reply = reply_.get();
                     if (discard_)
                         status_ = nullptr;
-                    else if (stop_.stop_requested())
+                    else if (worker_.get_stop_token().stop_requested())
                         status_ = "cancelled";
                     else
                         std::visit([this](auto &result) {
@@ -201,6 +290,7 @@ namespace Horo::Editor {
                 } catch (const std::exception &) {
                     status_ = discard_ ? nullptr : "failed";
                 }
+                submittedPrompt_.reset();
             }
 
             void Adopt(ProviderDiscovery &discovery) {
@@ -222,6 +312,12 @@ namespace Horo::Editor {
                 if (result.status == AgentTurnStatus::Completed && !result.messages.empty()) {
                     response_ = std::move(result.messages.back().text);
                     status_ = response_.empty() ? "empty_response" : nullptr;
+                    if (!response_.empty() && submittedPrompt_ && submittedProject_.value != 0 &&
+                        submittedProject_ == history_.View().project) {
+                        auto prepared = AgentHistoryExchangeReview::Prepare(submittedProject_, *submittedPrompt_, response_);
+                        if (prepared.HasValue())
+                            review_.emplace(std::move(prepared).Value());
+                    }
                     return;
                 }
                 status_ = result.status == AgentTurnStatus::TimedOut ? "timeout" : FailureKey(result.providerError);
@@ -233,17 +329,29 @@ namespace Horo::Editor {
             std::string response_;
             std::vector<ModelDescriptor> models_;
             std::function<std::optional<std::size_t>()> sceneCount_;
+            AgentHistorySession history_;
+            std::optional<AgentHistoryProject> attachedProject_;
+            std::optional<AgentHistoryExchangeReview> review_;
+            std::optional<AgentHistoryOperationId> pendingSave_;
+            std::optional<std::string> submittedPrompt_;
+            AgentHistoryProjectRevision submittedProject_;
+            const char *historyStatus_{};
+            bool showLatestHistory_{};
             int selection_{-1};
             const char *status_{};
             std::uint64_t turn_{};
             bool discard_{};
-            std::stop_source stop_;
+            std::jthread worker_;
             std::future<Reply> reply_;
         };
     }  // namespace
 
     /** @copydoc MakeEditorLocalAgentPanel */
-    std::shared_ptr<IWorkspacePanel> MakeEditorLocalAgentPanel() {
-        return std::make_shared<LocalAgentPanel>();
+    EditorLocalAgentPanelHost MakeEditorLocalAgentPanel(const JobSystem &jobs, DurableFileSystem &files) {
+        auto panel = std::make_shared<LocalAgentPanel>(jobs, files);
+        return {panel, [owner = std::weak_ptr{panel}] {
+            if (const auto current = owner.lock())
+                current->Poll();
+        }};
     }
 }  // namespace Horo::Editor

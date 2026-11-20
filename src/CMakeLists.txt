@@ -225,12 +225,14 @@ target_include_directories(HoroEditorAgentTurnInternal INTERFACE "${_horo_agent_
 target_link_libraries(HoroEditorAgentTurnInternal PUBLIC HoroEngine::ModelProvider HoroEngine::ProjectCodeQuery HoroEngine::Security)
 
 if(HORO_BUILD_EDITOR_GUI OR BUILD_TESTING)
-    add_library(HoroEditorAgentHistoryInternal STATIC editor/agent/AgentConversationStore.cpp editor/agent/AgentHistorySession.cpp)
+    add_library(HoroEditorAgentHistoryInternal STATIC
+        editor/agent/AgentConversationStore.cpp editor/agent/AgentHistorySession.cpp editor/agent/AgentHistoryReview.cpp)
     target_compile_features(HoroEditorAgentHistoryInternal PUBLIC cxx_std_20)
     set(_horo_agent_history_headers "${CMAKE_CURRENT_BINARY_DIR}/editor_agent_history_headers")
     file(MAKE_DIRECTORY "${_horo_agent_history_headers}")
     configure_file(editor/agent/AgentConversationStore.h "${_horo_agent_history_headers}/AgentConversationStore.h" COPYONLY)
     configure_file(editor/agent/AgentHistorySession.h "${_horo_agent_history_headers}/AgentHistorySession.h" COPYONLY)
+    configure_file(editor/agent/AgentHistoryReview.h "${_horo_agent_history_headers}/AgentHistoryReview.h" COPYONLY)
     target_include_directories(HoroEditorAgentHistoryInternal INTERFACE "${_horo_agent_history_headers}")
     target_link_libraries(HoroEditorAgentHistoryInternal
         PUBLIC HoroEngine::Foundation HoroEngine::Security

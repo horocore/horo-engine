@@ -202,7 +202,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         /** @brief Validates captured leave consent against each independently owned document group. */
         Result<void> ValidateLeaveCapture() const;
         /** @brief Attaches built-in panels before session publication. */
-        void AttachWorkspacePanels();
+        void AttachWorkspacePanels(std::string_view projectIdentity);
         /** @brief Owns the project path and application closure across asynchronous Play preparation. */
         EditorPlaySceneFactory BindPlayFactory(const std::filesystem::path &projectRoot) const;
         /** @brief Binds the explicit authoring stage capability to this authorized project. */

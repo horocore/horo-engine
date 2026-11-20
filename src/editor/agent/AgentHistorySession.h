@@ -46,7 +46,7 @@ namespace Horo::Agent {
         std::uint64_t now{};
     };
 
-    /** @brief One settled write. A successful BeginTurn also returns its new durable IDs. */
+    /** @brief One settled write. A successfully recorded turn also returns its durable IDs. */
     struct AgentHistoryMutationCompletion final {
         AgentHistoryProjectRevision project;
         AgentHistoryOperationId operation;
@@ -102,6 +102,16 @@ namespace Horo::Agent {
          */
         [[nodiscard]] Result<AgentHistoryOperationId> BeginTurn(AgentHistoryProjectRevision project,
                                                                 const AgentHistoryTurnRequest &request);
+
+        /** @brief Queue one reviewed visible dialogue pair against the exact open project and settle it atomically.
+         * @param project Project revision captured with the reviewed preview.
+         * @param request Visible prompt and existing conversation or new title.
+         * @param answer Visible terminal response.
+         * @return Exact accepted operation ID, or typed synchronous denial.
+         */
+        [[nodiscard]] Result<AgentHistoryOperationId> RecordCompleted(AgentHistoryProjectRevision project,
+                                                                      const AgentHistoryTurnRequest &request,
+                                                                      const AgentHistoryCompletedText &answer);
 
         /** @brief Admit a bounded response update for the exact open project.
          * @param project Current settled view's project revision.

@@ -7,6 +7,7 @@
 #include "Horo/Runtime/Input.h"
 
 #include <cstddef>
+#include <filesystem>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -79,6 +80,8 @@ namespace Horo::Editor {
         XRSimulatorModel *xrSimulator{}; /**< Explicit application model; invalidated when panel detaches. */
         PlatformServices::IPlatformDiagnostics *platformDiagnostics{};  /**< Host-owned owner-lane diagnostics capability. */
         std::function<std::optional<std::size_t>()> sceneObjectCount{}; /**< Narrow owner-lane authoring observation. */
+        std::string_view projectIdentity{};                             /**< Validated project identity borrowed during attachment. */
+        const std::filesystem::path *projectFileRoot{};                 /**< Exact native root borrowed during attachment. */
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */

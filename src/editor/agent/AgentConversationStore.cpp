@@ -437,6 +437,19 @@ namespace Horo::Agent {
             next.conversations.emplace_back(id, std::move(admitted).Value(), now);
             return Output::Success(id);
         }
+
+        /** @brief Builds a streaming placeholder or a fully admitted terminal answer before any mutation. */
+        [[nodiscard]] Result<AgentHistoryMessage> MakeResponse(const std::optional<AgentHistoryCompletedText> answer) const {
+            using Output = Result<AgentHistoryMessage>;
+            if (!answer)
+                return Output::Success({{}, Role::Assistant, MessageState::Streaming, {}, {}, {}});
+            if (!ValidUsage(answer->usage))
+                return Output::Failure(MakeError(AgentHistoryErrors::Invalid));
+            auto admitted = Admit(AgentHistoryTextKind::AssistantMessage, answer->assistant, limits.textBytesPerMessage, true);
+            if (admitted.HasError())
+                return Output::Failure(std::move(admitted).ErrorValue());
+            return Output::Success({{}, Role::Assistant, MessageState::Complete, std::move(admitted).Value(), {}, answer->usage});
+        }
     };
 
     AgentConversationStore::AgentConversationStore(std::unique_ptr<State> state) noexcept : state_(std::move(state)) {}
@@ -625,6 +638,18 @@ namespace Horo::Agent {
 
     /** @copydoc AgentConversationStore::BeginTurn(const AgentHistoryTurnRequest &) */
     Result<AgentHistoryStartedTurn> AgentConversationStore::BeginTurn(const AgentHistoryTurnRequest &request) {
+        return RecordTurn(request, std::nullopt);
+    }
+
+    /** @copydoc AgentConversationStore::RecordCompleted */
+    Result<AgentHistoryStartedTurn> AgentConversationStore::RecordCompleted(const AgentHistoryTurnRequest &request,
+                                                                            const AgentHistoryCompletedText &answer) {
+        return RecordTurn(request, answer);
+    }
+
+    /** @brief Validates and publishes one complete candidate with an admitted streaming or terminal response. */
+    Result<AgentHistoryStartedTurn> AgentConversationStore::RecordTurn(const AgentHistoryTurnRequest &request,
+                                                                       const std::optional<AgentHistoryCompletedText> answer) {
         using Output = Result<AgentHistoryStartedTurn>;
         if (!state_ || !state_->Writable())
             return Output::Failure(MakeError(AgentHistoryErrors::Unavailable));
@@ -634,6 +659,9 @@ namespace Horo::Agent {
         auto admitted = state_->Admit(AgentHistoryTextKind::UserMessage, userText, state_->limits.textBytesPerMessage, true);
         if (admitted.HasError())
             return Output::Failure(admitted.ErrorValue());
+        auto preparedResponse = state_->MakeResponse(answer);
+        if (preparedResponse.HasError())
+            return Output::Failure(std::move(preparedResponse).ErrorValue());
         auto next = *state_->history;
         const auto conversation = existing ? Result<AgentConversationId>::Success(*existing) : state_->AddConversation(next, title, now);
         if (conversation.HasError())
@@ -648,7 +676,9 @@ namespace Horo::Agent {
         const AgentHistoryMessageId response{next.nextMessage++};
         found->messages.push_back(
             {prompt, Role::User, MessageState::Complete, std::move(admitted).Value(), {references.begin(), references.end()}, {}});
-        found->messages.push_back({response, Role::Assistant, MessageState::Streaming, {}, {}, {}});
+        auto message = std::move(preparedResponse).Value();
+        message.id = response;
+        found->messages.push_back(std::move(message));
         found->updatedUnixSeconds = now;
         const auto committed = state_->Commit(std::move(next));
         return committed.HasValue() ? Output::Success({conversation.Value(), response}) : Output::Failure(committed.ErrorValue());
