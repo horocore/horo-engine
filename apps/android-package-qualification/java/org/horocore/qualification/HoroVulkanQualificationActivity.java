@@ -1,5 +1,7 @@
 package org.horocore.qualification;
 
+import android.app.ActivityManager;
+import android.content.ComponentCallbacks2;
 import android.content.Context;
 import android.os.PowerManager;
 import android.util.Log;
@@ -8,21 +10,89 @@ import org.horocore.platform.HoroInputActivity;
 /** The Android Vulkan profile observes platform thermal status independently of frame attempts. */
 public class HoroVulkanQualificationActivity extends HoroInputActivity {
     private static ThermalObservation thermal;
+    private static final MemoryObservation memory = new MemoryObservation();
 
     @Override public void onResume() {
         super.onResume();
         if (thermal == null) thermal = new ThermalObservation(getApplicationContext());
         thermal.resume(this);
+        memory.resume(this);
     }
 
     @Override public void onPause() {
         if (thermal != null) thermal.pause(this);
+        memory.pause(this);
         super.onPause();
     }
 
     @Override public void onDestroy() {
         if (thermal != null) thermal.pause(this);
+        memory.pause(this);
         super.onDestroy();
+    }
+
+    @Override public void onTrimMemory(int level) {
+        super.onTrimMemory(level);
+        memory.trim(this, level);
+    }
+
+    /** Samples only at resume or from a severity-bearing callback on the main Activity lane. */
+    private static final class MemoryObservation {
+        private enum State {
+            INACTIVE("inactive"), UNSUPPORTED("unsupported"), UNAVAILABLE("unavailable"),
+            NORMAL("normal"), MODERATE("moderate"), LOW("low"), CRITICAL("critical");
+
+            final String diagnostic;
+
+            State(String diagnostic) {
+                this.diagnostic = diagnostic;
+            }
+        }
+
+        private Object owner;
+        private State previous;
+        private long revision;
+
+        void resume(HoroVulkanQualificationActivity activity) {
+            if (owner == activity) return;
+            owner = activity;
+            publish(sample(activity));
+        }
+
+        void pause(Object activity) {
+            if (owner != activity) return;
+            owner = null;
+            publish(State.INACTIVE);
+        }
+
+        @SuppressWarnings("deprecation")
+        void trim(Object activity, int level) {
+            if (owner != activity || level < ComponentCallbacks2.TRIM_MEMORY_RUNNING_MODERATE ||
+                    level >= ComponentCallbacks2.TRIM_MEMORY_UI_HIDDEN) return;
+            if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) {
+                publish(State.CRITICAL);
+            } else {
+                publish(level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW ? State.LOW : State.MODERATE);
+            }
+        }
+
+        private static State sample(Context context) {
+            try {
+                ActivityManager manager = context.getSystemService(ActivityManager.class);
+                if (manager == null) return State.UNSUPPORTED;
+                ActivityManager.MemoryInfo info = new ActivityManager.MemoryInfo();
+                manager.getMemoryInfo(info);
+                return info.lowMemory ? State.LOW : State.NORMAL;
+            } catch (RuntimeException unavailable) {
+                return State.UNAVAILABLE;
+            }
+        }
+
+        private void publish(State state) {
+            if (state == previous || revision == Long.MAX_VALUE) return;
+            previous = state;
+            Log.i("HoroPackageQualification", "host-memory revision=" + ++revision + " state=" + state.diagnostic);
+        }
     }
 
     /** Lifecycle, listener callbacks and revision publication are serialized by the main executor. */

@@ -433,6 +433,20 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual((status, report["status"]), (0, "complete"))
         self.assertEqual(report["observed"]["thermal"], {"revision": 2, "state": "inactive"})
 
+    def test_vulkan_capture_preserves_independent_memory_pressure_evidence(self):
+        first = log_line(LIFECYCLE) + log_line("host-memory revision=2 state=critical")
+        first += log_line("host-thermal revision=2 state=severe")
+        first += log_line("host-memory revision=3 state=hidden")
+        first += log_line("host-memory revision=4 state=low raw=private")
+        first += log_line("host-memory revision=5 state=low", uid="10200")
+        second = log_line(FRAME) + log_line("host-memory revision=1 state=normal")
+        second += log_line("host-thermal revision=3 state=none")
+        status, report, _ = self.execute({LOGCAT: [first, second]}, profile_name=VULKAN_PROFILE)
+        self.assertEqual((status, report["status"]), (0, "complete"))
+        self.assertEqual(report["observed"]["memory"], {"revision": 2, "state": "critical"})
+        self.assertEqual(report["observed"]["thermal"], {"revision": 3, "state": "none"})
+        self.assertNotIn("raw=private", json.dumps(report))
+
     def test_device_clock_discontinuity_or_malformed_clock_cannot_supply_evidence(self):
         for final, expected in ((START, "device_log_clock_changed"),
                                 ("1795000000.111000001", "device_log_clock_changed"),

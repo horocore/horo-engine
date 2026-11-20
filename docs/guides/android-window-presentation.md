@@ -71,6 +71,14 @@ Missing service or registration failure is reported as `unsupported` or
 `unavailable`. The observer reports state changes only, and it leaves frame
 cadence and authored settings to their existing owners.
 
+At resume, the Activity samples Android's system low-memory state once.
+While resumed, Android's legacy running trim levels can publish
+`moderate`, `low`, or `critical`. UI-hidden events describe visibility
+and background trim levels describe the process's reclaim priority.
+Android 14 and later use the resume snapshot alone because the platform
+omits the legacy running levels. The deployment report contains the typed
+state and its process-local revision.
+
 ## Nonblocking acquisition and retirement
 
 Availability polling observes the native output and advances retirement. It does
