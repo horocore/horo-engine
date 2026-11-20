@@ -181,6 +181,95 @@ namespace Horo::AI {
             CHECK(fixture.probe.cleanups == 1);
         }
 
+        TEST_CASE("Scene decision replacement fences the old image and preserves the Blackboard across a clean restart",
+                  "[unit][ai][scene][decision_reservation][scheduler]") {
+            Fixture old;
+            Fixture next;
+            Fixture failed;
+            old.probe.succeedTick = 100;
+            next.probe.succeedTick = 100;
+            next.schema = old.schema;
+            failed.schema = old.schema;
+            auto oldSource = TaskTree(11);
+            oldSource.executionTask = MakeIdentity<TaskId>(9000);
+            const auto previous = old.Compile(std::span{&oldSource, 1}, 11);
+            auto newSource = Tree(11, {TreeNode(1, DecisionControlKind::Root), TreeNode(3, DecisionControlKind::Task)}, {Edge(1, 1, 3)});
+            newSource.executionTask = oldSource.executionTask;
+            const auto replacement = next.Compile(std::span{&newSource, 1}, 11);
+
+            auto failing = Registration(failed.probe);
+            failing.factory.create = [](void *, std::span<const BehaviorTreeProperty>) -> IBehaviorTreeExecutor * {
+                return nullptr;
+            };
+            auto generation = DecisionNodeGeneration::Capture({&failing, 1}, failed.admission);
+            REQUIRE(generation.HasValue());
+            failed.providers = std::move(generation).Value();
+            const auto rejected = failed.Compile(std::span{&newSource, 1}, 11);
+
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            auto runtime = AiSceneRuntime::Create({}, AiSceneCookedDecisionExecution{jobs, {}, {}}).Value();
+            auto scene = SceneFixture(old, *previous);
+            scene.descriptor.cookedPlan = previous;
+            auto publication = TestSupport::Publish(runtime, scene);
+            const auto agent = runtime.Snapshot().Value().Agents().front().handle;
+            auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();
+            const auto capability = runtime.CapabilityAtSafePoint();
+            auto write = capability.BeginBlackboardWrite(agent);
+            REQUIRE(write.HasValue());
+            const auto key = MakeIdentity<BlackboardKeyId>(1);
+            auto batch = std::move(write).Value();
+            REQUIRE(batch.Stage({key, BlackboardScalarValue{false}}).HasValue());
+            REQUIRE(capability.CommitBlackboardWrite(agent, std::move(batch)).HasValue());
+            const auto retained = runtime.CaptureDecisionSnapshotAtSafePoint(agent);
+            REQUIRE(retained.HasValue());
+
+            REQUIRE(scheduler->EvaluateAtDecision(1).HasValue());
+            CHECK(old.probe.starts == 1);
+            TestSupport::ExpectError(runtime.ReplaceCookedDecisionAtSafePoint(agent, previous, replacement),
+                                     AIErrors::SchedulerPhaseInvalid);
+            CHECK(next.probe.factories == 0);
+            CHECK(old.probe.aborts == 0);
+            REQUIRE(scheduler->CommitAtIntentDispatch(1).HasValue());
+            TestSupport::ExpectError(runtime.ReplaceCookedDecisionAtSafePoint(agent, rejected, replacement),
+                                     AIErrors::DecisionAssetActivationInvalid);
+            TestSupport::ExpectError(runtime.ReplaceCookedDecisionAtSafePoint(agent, previous, rejected), AIErrors::RuntimeUnavailable);
+            CHECK(old.probe.aborts == 0);
+            REQUIRE(scheduler->EvaluateAtDecision(2).HasValue());
+            CHECK(old.probe.resumes == 1);
+            REQUIRE(scheduler->CommitAtIntentDispatch(2).HasValue());
+
+            bool evaluationDuringAbortRejected{};
+            old.probe.onAbort = [&] {
+                evaluationDuringAbortRejected = scheduler->EvaluateAtDecision(3).HasError();
+            };
+            REQUIRE(runtime.ReplaceCookedDecisionAtSafePoint(agent, previous, replacement).HasValue());
+            CHECK(evaluationDuringAbortRejected);
+            REQUIRE(old.probe.abortReasons.size() == 1);
+            CHECK(old.probe.abortReasons.front() == AiTaskCancellationReason::PlanReplaced);
+            CHECK(old.probe.cleanups == 1);
+            CHECK(next.probe.starts == 0);
+            TestSupport::ExpectError(runtime.ReplaceCookedDecisionAtSafePoint(agent, previous, rejected),
+                                     AIErrors::DecisionAssetActivationInvalid);
+            TestSupport::ExpectError(scheduler->EvaluateAtDecision(2), AIErrors::SchedulerPhaseInvalid);
+
+            const auto current = runtime.CaptureDecisionSnapshotAtSafePoint(agent);
+            REQUIRE(current.HasValue());
+            CHECK(current.Value().Binding() == retained.Value().Binding());
+            REQUIRE(current.Value().Revision().HasValue());
+            REQUIRE(retained.Value().Revision().HasValue());
+            CHECK(current.Value().Revision().Value() == retained.Value().Revision().Value());
+            const BlackboardValue preserved{BlackboardScalarValue{false}};
+            CHECK(current.Value().Read(key).Value() == std::optional{preserved});
+            CHECK(retained.Value().Read(key).Value() == std::optional{preserved});
+            REQUIRE(scheduler->EvaluateAtDecision(3).HasValue());
+            REQUIRE(scheduler->CommitAtIntentDispatch(3).HasValue());
+            REQUIRE(old.probe.tasks.size() == 1);
+            REQUIRE(next.probe.tasks.size() == 1);
+            CHECK(next.probe.tasks.front().slot.index == old.probe.tasks.front().slot.index + previous->Storage().taskSlots + 1);
+            CHECK(old.probe.aborts == 1);
+            CHECK(old.probe.cleanups == 1);
+        }
+
         TEST_CASE("Cooked Scene reports raw task callback errors without failing a successful Selector fallback",
                   "[unit][ai][scene][decision_reservation][scheduler]") {
             Fixture fixture;

@@ -98,6 +98,8 @@ namespace Horo::AI {
         std::vector<std::size_t> removals;
         std::vector<std::pair<std::size_t, Entry>> additions;
         std::vector<Entry> retired;
+        bool decisionReplacement{};
+        AiTaskScheduler *retirementOwner{};
 
         /** @brief Resolves known exact retiring generations without mutating scheduler state. */
         [[nodiscard]] Result<void> PrepareRemovals(AiTaskScheduler &scheduler, std::span<const AgentHandle> requested) {
@@ -115,8 +117,8 @@ namespace Horo::AI {
         }
 
         /** @brief Resolves final capacity, uniqueness and deterministic allowances before staging any admission. */
-        [[nodiscard]] Result<void> PrepareAdditions(AiTaskScheduler &scheduler,
-                                                    std::span<const AiScheduledDecisionRegistration> requested) {
+        [[nodiscard]] Result<void> PrepareAdditions(AiTaskScheduler &scheduler, std::span<const AiScheduledDecisionRegistration> requested,
+                                                    const Entry *predecessor = nullptr) {
             if (requested.empty())
                 return Result<void>::Success();
 
@@ -148,7 +150,7 @@ namespace Horo::AI {
             for (const auto &input : requested) {
                 if (!scheduler.ValidRegistration(input))
                     return Result<void>::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
-                if (scheduler.Find(input.agent))  // A replacement must carry a new exact generation.
+                if (const auto *active = scheduler.Find(input.agent); active && active != predecessor)
                     return Result<void>::Failure(MakeError(AIErrors::DescriptorConflict));
                 if (deterministic && !allowance.Reserve(input.policy))
                     return Result<void>::Failure(MakeError(AIErrors::SchedulerBudgetExhausted));
@@ -197,6 +199,10 @@ namespace Horo::AI {
     void AiTaskScheduler::PopulationChange::Publish() noexcept {
         if (!scheduler_)
             return;
+        if (storage_->decisionReplacement) {
+            storage_->retirementOwner = scheduler_;
+            scheduler_->inPhase_ = true;
+        }
         for (const auto index : storage_->removals)
             storage_->retired.push_back(scheduler_->Detach(scheduler_->entries_[index]));
         for (auto &[index, entry] : storage_->additions)
@@ -207,8 +213,17 @@ namespace Horo::AI {
     /** @copydoc AiTaskScheduler::PopulationChange::FinishRetirements */
     void AiTaskScheduler::PopulationChange::FinishRetirements() noexcept {
         auto retired = std::exchange(storage_->retired, {});
-        for (auto &entry : retired)
-            entry.executor->Cancel();
+        if (auto *owner = std::exchange(storage_->retirementOwner, nullptr)) {
+            for (auto &entry : retired)
+                entry.executor->CancelForReplacement();
+            retired.clear();
+            owner->inPhase_ = false;
+            if (owner->closed_)
+                owner->Shutdown();
+        } else {
+            for (auto &entry : retired)
+                entry.executor->Cancel();
+        }
     }
 
     /** @copydoc AiWorkBudget::Consume */
@@ -355,6 +370,41 @@ namespace Horo::AI {
                 return Prepared::Failure(prepared.ErrorValue());
             if (auto prepared = candidate->storage_->PrepareAdditions(*this, additions); prepared.HasError())
                 return Prepared::Failure(prepared.ErrorValue());
+            return Prepared::Success(std::move(candidate));
+        } catch (const std::bad_alloc &) {
+            return Prepared::Failure(MakeError(AIErrors::BehaviorTreeStorageUnavailable));
+        }
+    }
+
+    /** @copydoc AiTaskScheduler::ValidateDecisionReplacement */
+    Result<void> AiTaskScheduler::ValidateDecisionReplacement(const AgentHandle agent, const std::shared_ptr<const void> &previousImage) {
+        if (!CanChangePopulation(true) || settings_.mode != AiSchedulingMode::Deterministic ||
+            report_.tick == std::numeric_limits<std::uint64_t>::max())
+            return Result<void>::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
+        const auto *entry = Find(agent);
+        if (!entry || !previousImage || entry->image != previousImage || entry->image.owner_before(previousImage) ||
+            previousImage.owner_before(entry->image) || entry->cancellation.IsCancellationRequested())
+            return Result<void>::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc AiTaskScheduler::PrepareDecisionReplacement */
+    Result<std::unique_ptr<AiTaskScheduler::PopulationChange>> AiTaskScheduler::PrepareDecisionReplacement(
+        const AiScheduledDecisionRegistration &replacement, const std::shared_ptr<const void> &previousImage) {
+        using Prepared = Result<std::unique_ptr<PopulationChange>>;
+        if (auto valid = ValidateDecisionReplacement(replacement.agent, previousImage); valid.HasError())
+            return Prepared::Failure(valid.ErrorValue());
+        const auto *old = Find(replacement.agent);
+        if (old->identity != replacement.identity || old->image == replacement.image || old->executor == replacement.executor)
+            return Prepared::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
+        try {
+            std::unique_ptr<PopulationChange> candidate(new PopulationChange(*this));
+            auto &storage = *candidate->storage_;
+            if (auto removed = storage.PrepareRemovals(*this, std::span{&replacement.agent, 1}); removed.HasError())
+                return Prepared::Failure(removed.ErrorValue());
+            if (auto added = storage.PrepareAdditions(*this, std::span{&replacement, 1}, old); added.HasError())
+                return Prepared::Failure(added.ErrorValue());
+            storage.decisionReplacement = true;
             return Prepared::Success(std::move(candidate));
         } catch (const std::bad_alloc &) {
             return Prepared::Failure(MakeError(AIErrors::BehaviorTreeStorageUnavailable));

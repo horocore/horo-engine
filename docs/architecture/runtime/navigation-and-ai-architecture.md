@@ -2657,6 +2657,13 @@ same storage transaction; it always restarts opaque provider state. These tree
 invariants do not establish composed BT/HSM/Utility state or schema migration;
 the complete closure replacement transaction remains required by GAI-003.11.
 
+For an active Scene agent in deterministic scheduling, the Scene owner can
+replace a flat cooked tree at a completed tick boundary. Admission checks the
+exact previous plan, the same root and Blackboard schema, and the fresh task
+interval before either owner publishes. The existing Blackboard values and read
+leases remain valid. After publication the previous tree retires with
+`PlanReplaced` and the new tree starts from its root on the next tick.
+
 Scene-owned graph composition acquires its exclusive physical task range through
 `AiSceneRuntime::ReserveDecisionTaskSlotsAtSafePoint`. Compiler occurrence offsets
 are relative to that range; they cannot establish ownership of live Scene task

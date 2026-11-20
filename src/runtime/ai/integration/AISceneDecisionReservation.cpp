@@ -61,6 +61,11 @@ namespace Horo::AI {
                 static_cast<void>(decision_->Cancel(AiTaskCancellationReason::AgentGenerationRetired));
             }
 
+            void CancelForReplacement() noexcept override {
+                providerFailure_.reset();
+                static_cast<void>(decision_->Cancel(AiTaskCancellationReason::PlanReplaced));
+            }
+
         private:
             std::weak_ptr<Detail::AiSceneRuntimeState> state_;
             std::unique_ptr<DecisionGraphInstance> decision_;
@@ -129,6 +134,48 @@ namespace Horo::AI {
         return task.CommitOutput(tick, scene, *selected.Value()->blackboard);
     }
 
+    /** @copydoc AiSceneRuntime::PrepareCookedDecisionRegistration */
+    Result<AiScheduledDecisionRegistration> AiSceneRuntime::PrepareCookedDecisionRegistration(
+        const std::shared_ptr<Detail::AiSceneRuntimeState> &state, const Detail::AgentRuntimeState &agent,
+        const std::shared_ptr<const CookedDecisionPlan> &plan, std::uint32_t &nextTaskSlot) const {
+        using Output = Result<AiScheduledDecisionRegistration>;
+        auto bounded = decisionExecution_->agent;
+        const auto limit = plan->MaximumDecisionWorkUnits();
+        if (!limit)
+            return Output::Failure(MakeError(AIErrors::CapabilityUnavailable, "Scene scheduler requires a flat cooked Behavior Tree."));
+        if (*limit > bounded.workUnitsPerTick)
+            return Output::Failure(MakeError(AIErrors::SchedulerBudgetExhausted));
+        const auto &root = plan->Graphs()[plan->Occurrences().front().plan];
+        if (!root.executionTask.IsValid())
+            return Output::Failure(
+                MakeError(AIErrors::TaskContextInvalid, "Scheduled cooked decisions require an authored execution task."));
+
+        constexpr auto End = Horo::Handle<TaskHandleTag>::InvalidIndex;
+        const auto taskSlots = plan->Storage().taskSlots;
+        if (taskSlots >= End - nextTaskSlot)
+            return Output::Failure(MakeError(AIErrors::TaskCapacityExceeded));
+        const auto count = static_cast<std::uint32_t>(taskSlots);
+        const auto handle = agent.record.handle;
+        const auto identity = agent.record.agent.agent;
+        const auto cancellation = agent.cancellation.Token();
+        const AiTaskOperationContext operation{.taskDefinition = root.executionTask,
+                                               .task = {handle.incarnation, {nextTaskSlot, 1}},
+                                               .agent = handle,
+                                               .cancellation = cancellation};
+        try {
+            AiDecisionTaskReservation reservation{agent.blackboardBinding, agent.schema, nextTaskSlot + 1, count, cancellation};
+            auto decision = DecisionGraphInstance::Create(plan, std::move(reservation), operation, decisionExecution_->queryTasks);
+            if (decision.HasError())
+                return Output::Failure(decision.ErrorValue());
+            bounded.workUnitsPerTick = *limit;
+            auto executor = std::make_shared<ScheduledCookedDecision>(state, std::move(decision).Value());
+            nextTaskSlot += count + 1;
+            return Output::Success({handle, identity, bounded, plan, std::move(executor), cancellation});
+        } catch (const std::bad_alloc &) {
+            return Output::Failure(MakeError(AIErrors::DecisionAssetStorageUnavailable));
+        }
+    }
+
     /** @copydoc AiSceneRuntime::PrepareCookedDecisionRegistrations */
     Result<std::vector<AiScheduledDecisionRegistration>> AiSceneRuntime::PrepareCookedDecisionRegistrations(
         const std::shared_ptr<Detail::AiSceneRuntimeState> &state, const std::span<const Detail::AgentRuntimeState> agents,
@@ -136,7 +183,6 @@ namespace Horo::AI {
         using Output = Result<std::vector<AiScheduledDecisionRegistration>>;
         if (!decisionExecution_)
             return Output::Success({});
-        const auto &policy = decisionExecution_->agent;
         auto cursor = nextTaskSlot;
         try {
             std::vector<AiScheduledDecisionRegistration> registrations;
@@ -144,44 +190,70 @@ namespace Horo::AI {
                 const auto &plan = agent.cookedPlan;
                 if (!plan)
                     continue;
-                auto limit = plan->MaximumDecisionWorkUnits();
-                if (!limit)
-                    return Output::Failure(
-                        MakeError(AIErrors::CapabilityUnavailable, "Scene scheduler requires a flat cooked Behavior Tree."));
-                if (*limit > policy.workUnitsPerTick)
-                    return Output::Failure(MakeError(AIErrors::SchedulerBudgetExhausted));
-                const auto &root = plan->Graphs()[plan->Occurrences().front().plan];
-                if (!root.executionTask.IsValid())
-                    return Output::Failure(
-                        MakeError(AIErrors::TaskContextInvalid, "Scheduled cooked decisions require an authored execution task."));
-
-                constexpr auto End = Horo::Handle<TaskHandleTag>::InvalidIndex;
-                const auto taskSlots = plan->Storage().taskSlots;
-                if (taskSlots >= End - cursor)
-                    return Output::Failure(MakeError(AIErrors::TaskCapacityExceeded));
-                const auto count = static_cast<std::uint32_t>(taskSlots);
-                const auto handle = agent.record.handle;
-                const auto cancellation = agent.cancellation.Token();
-                const AiTaskOperationContext operation{.taskDefinition = root.executionTask,
-                                                       .task = {handle.incarnation, {cursor, 1}},
-                                                       .agent = handle,
-                                                       .cancellation = cancellation};
-                AiDecisionTaskReservation reservation{agent.blackboardBinding, agent.schema, cursor + 1, count, cancellation};
-                auto decision = DecisionGraphInstance::Create(plan, std::move(reservation), operation, decisionExecution_->queryTasks);
-                if (decision.HasError())
-                    return Output::Failure(decision.ErrorValue());
-
-                auto bounded = policy;
-                bounded.workUnitsPerTick = *limit;
-                registrations.push_back({handle, agent.record.agent.agent, bounded, plan,
-                                         std::make_shared<ScheduledCookedDecision>(state, std::move(decision).Value()), cancellation});
-                cursor += count + 1;
+                auto registration = PrepareCookedDecisionRegistration(state, agent, plan, cursor);
+                if (registration.HasError())
+                    return Output::Failure(registration.ErrorValue());
+                registrations.push_back(std::move(registration).Value());
             }
             nextTaskSlot = cursor;
             return Output::Success(std::move(registrations));
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(AIErrors::DecisionAssetStorageUnavailable));
         }
+    }
+
+    /** @copydoc AiSceneRuntime::ReplaceCookedDecisionAtSafePoint */
+    Result<void> AiSceneRuntime::ReplaceCookedDecisionAtSafePoint(const AgentHandle agent,
+                                                                  const std::shared_ptr<const CookedDecisionPlan> previous,
+                                                                  std::shared_ptr<const CookedDecisionPlan> replacement) {
+        using Outcome = Result<void>;
+        if (auto owner = CapabilityAtSafePoint().ValidateAtSafePoint(); owner.HasError())
+            return owner;
+        const auto state = active_;
+        auto *scheduler = state->scheduler.get();
+        if (!decisionExecution_ || !scheduler)
+            return Outcome::Failure(MakeError(AIErrors::RuntimeUnavailable));
+        const auto selected = DecisionAgent(*state, agent);
+        if (selected.HasError())
+            return Outcome::Failure(selected.ErrorValue());
+        auto &slot = *selected.Value();
+        if (!previous || slot.cookedPlan != previous || !replacement || replacement == previous ||
+            replacement->Root() != previous->Root() || !replacement->IsCurrent() ||
+            state->revision == std::numeric_limits<std::uint64_t>::max())
+            return Outcome::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
+        if ((replacement->Capabilities().bits & ~previous->Capabilities().bits) != 0)
+            return Outcome::Failure(MakeError(AIErrors::CapabilityUnavailable));
+        if (auto valid = scheduler->ValidateDecisionReplacement(agent, previous); valid.HasError())
+            return valid;
+
+        const auto sceneRevision = state->revision;
+        const auto scheduleRevision = scheduler->populationRevision_;
+        const auto tick = scheduler->report_.tick;
+        auto cursor = state->nextTaskSlot;
+        auto registration = PrepareCookedDecisionRegistration(state, slot, replacement, cursor);
+        if (registration.HasError())
+            return Outcome::Failure(registration.ErrorValue());
+        // Provider construction can call out. Reacquire the slot only after validating the original publication.
+        if (active_ != state || state->closed || state->revision != sceneRevision || state->scheduler.get() != scheduler ||
+            scheduler->populationRevision_ != scheduleRevision || scheduler->report_.tick != tick || !replacement->IsCurrent())
+            return Outcome::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
+        const auto current = DecisionAgent(*state, agent);
+        if (current.HasError() || current.Value()->cookedPlan != previous)
+            return Outcome::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
+        auto staged = scheduler->PrepareDecisionReplacement(registration.Value(), previous);
+        if (staged.HasError())
+            return Outcome::Failure(staged.ErrorValue());
+        if (auto valid = staged.Value()->ValidatePublication(); valid.HasError())
+            return valid;
+        if (!replacement->IsCurrent())
+            return Outcome::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
+        // No callbacks intervene between either publication and the cursor update.
+        staged.Value()->Publish();
+        current.Value()->cookedPlan = std::move(replacement);
+        state->nextTaskSlot = cursor;
+        ++state->revision;
+        staged.Value()->FinishRetirements();
+        return Outcome::Success();
     }
 
     /** @copydoc AiSceneRuntime::PrepareCookedDecisionScheduler */

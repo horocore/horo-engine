@@ -161,6 +161,11 @@ namespace Horo::AI {
          * @details A relevance-profile executor can be evaluated again after cancellation. Discard only optional work,
          * retire any of its pending callback generations and keep the canonical controller and blackboard state. */
         virtual void Cancel() noexcept = 0;
+
+        /** @brief Retires the exact previous plan after a committed safe-point replacement. */
+        virtual void CancelForReplacement() noexcept {
+            Cancel();
+        }
     };
 
     /** @brief Lowerable per-agent frequency, work, command and worker-admission policy. */
@@ -340,6 +345,12 @@ namespace Horo::AI {
         AiTaskScheduler &operator=(const AiTaskScheduler &) = delete;
 
     private:
+        friend class AiSceneRuntime;
+        /** @brief Rejects a noncommitted tick or a different registered plan image before Scene candidate construction. */
+        [[nodiscard]] Result<void> ValidateDecisionReplacement(AgentHandle agent, const std::shared_ptr<const void> &previousImage);
+        /** @brief Reserves one exact same-agent decision replacement for the Scene owner's aggregate commit. */
+        [[nodiscard]] Result<std::unique_ptr<PopulationChange>> PrepareDecisionReplacement(
+            const AiScheduledDecisionRegistration &replacement, const std::shared_ptr<const void> &previousImage);
         struct Entry;
         /** @brief Locates an exact handle in the active registration index, including the insertion point. */
         [[nodiscard]] std::vector<std::size_t>::iterator HandlePosition(AgentHandle agent) noexcept;

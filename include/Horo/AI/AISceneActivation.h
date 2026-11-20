@@ -399,6 +399,17 @@ namespace Horo::AI {
          */
         [[nodiscard]] Result<void> ActivateCookedDecisionsAtSafePoint(AiSceneCookedDecisionExecution execution);
 
+        /** @brief Replaces one flat cooked decision at the owner's completed tick boundary and restarts from its root.
+         * @param agent Exact active Scene agent generation.
+         * @param previous Exact currently published cooked plan and image owner.
+         * @param replacement Current compiled revision of the same root and exact admitted Blackboard schema.
+         * @return Success or a typed rejection preserving the prior decision, Blackboard and task range.
+         * @details The same Blackboard instance retains its values and read leases. A change may retire active nodes with
+         * PlanReplaced. New callbacks first run on the next tick. Composed decisions and schema migration are not admitted.
+         * @pre Actual Scene owner lane, before the first evaluation or after the current intent dispatch. */
+        [[nodiscard]] Result<void> ReplaceCookedDecisionAtSafePoint(AgentHandle agent, std::shared_ptr<const CookedDecisionPlan> previous,
+                                                                    std::shared_ptr<const CookedDecisionPlan> replacement);
+
         /** @brief Runs one admitted query task's BlackboardSync against its exact Scene-owned destination.
          * @param task Existing owner-bound query task. @param scene Current view for output revalidation.
          * @param tick Exact simulation tick before that agent's next decision.
@@ -510,6 +521,11 @@ namespace Horo::AI {
         friend class Detail::AiSceneStructuralParticipant;
 
         explicit AiSceneRuntime(AiSceneRuntimeSettings settings, std::optional<AiSceneCookedDecisionExecution> execution) noexcept;
+
+        /** @brief Stages one exact Scene-owned execution and exclusive task interval without publishing the cursor. */
+        [[nodiscard]] Result<AiScheduledDecisionRegistration> PrepareCookedDecisionRegistration(
+            const std::shared_ptr<Detail::AiSceneRuntimeState> &state, const Detail::AgentRuntimeState &agent,
+            const std::shared_ptr<const CookedDecisionPlan> &plan, std::uint32_t &nextTaskSlot) const;
 
         /** @brief Prepares decisions and exact task ranges in detached storage for a scene or structural transaction. */
         [[nodiscard]] Result<std::vector<AiScheduledDecisionRegistration>> PrepareCookedDecisionRegistrations(

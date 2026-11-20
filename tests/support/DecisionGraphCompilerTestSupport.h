@@ -36,6 +36,7 @@ namespace Horo::AI::DecisionGraphTestSupport {
         std::vector<std::string> calls;
         std::vector<TaskHandle> tasks;
         std::vector<TaskHandle> abortedTasks;
+        std::vector<AiTaskCancellationReason> abortReasons;
         std::uint64_t succeedTick{2};
         std::size_t factories{};
         std::size_t starts{};
@@ -43,6 +44,7 @@ namespace Horo::AI::DecisionGraphTestSupport {
         std::size_t aborts{};
         std::size_t cleanups{};
         std::function<void()> onStart;
+        std::function<void()> onAbort;
         std::optional<Result<AiTaskState>> startOutcome;
         std::optional<Result<AiTaskState>> resumeOutcome;
     };
@@ -71,10 +73,13 @@ namespace Horo::AI::DecisionGraphTestSupport {
                                                                                                    : AiTaskState::Running);
         }
 
-        void Abort(const AiTaskOperationContext &operation, AiTaskCancellationReason) noexcept override {
+        void Abort(const AiTaskOperationContext &operation, AiTaskCancellationReason reason) noexcept override {
             ++probe_.aborts;
             probe_.abortedTasks.push_back(operation.task);
+            probe_.abortReasons.push_back(reason);
             probe_.calls.push_back("abort");
+            if (probe_.onAbort)
+                probe_.onAbort();
         }
 
         void Cleanup(const AiTaskOperationContext &, const AiTaskTerminalResult &) noexcept override {
