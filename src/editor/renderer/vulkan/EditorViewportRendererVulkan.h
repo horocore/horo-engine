@@ -145,8 +145,10 @@ namespace Horo::Editor {
                                                   const Render::RenderGraphLogicalState &acquired,
                                                   const Render::RenderGraphLogicalState &requiredFinal, bool retainPreviousDepth = false,
                                                   const EditorVulkanXrViewportAccess::AuxiliaryPlan *auxiliary = nullptr,
-                                                  std::size_t coverageDrawCapacity = 0,
-                                                  const EditorVulkanXrViewportAccess::CanvasPreparation *canvas = nullptr);
+                                                  std::size_t coverageDrawCapacity = 0);
+        /** @brief Admits a canvas variant at a cold boundary for the prepared ordinary projection. */
+        [[nodiscard]] Result<bool> PrepareXrCanvas(std::span<const EditorViewportMeshResourceView> meshes,
+                                                   const EditorVulkanXrViewportAccess::CanvasPreparation &canvas);
         /** @brief Binds a fresh native eye acquisition to the cold graph before the SAME RenderFrameScope begins.
          * @param color Fresh imported acquisition. @param eyeViews Exact current per-layer frontend views.
          * @param publication Canonical Scene/frame/origin/view and actual device/capability evidence.

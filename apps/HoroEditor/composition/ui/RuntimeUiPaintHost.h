@@ -159,11 +159,12 @@ namespace Horo::Application::Internal {
         /** @brief Observes the one extracted Camera or World source for synchronous consumer preparation.
          * @param frameNumber Exact Runtime extraction frame.
          * @param scene Exact selected viewport scene.
+         * @param mode Optional consumer-specific filter for the authored canvas render mode.
          * @return Empty when the scene owns no extracted viewport source, or original owner/extraction failure.
          * @details Borrows expire on the next extraction, source transition, retirement or shutdown. Do not retain them.
          */
-        [[nodiscard]] Result<std::optional<RuntimeUiPaintSceneCanvasFrame>> ReadSceneCanvasFrame(std::uint64_t frameNumber,
-                                                                                                 Runtime::SceneRuntimeId scene) const;
+        [[nodiscard]] Result<std::optional<RuntimeUiPaintSceneCanvasFrame>> ReadSceneCanvasFrame(
+            std::uint64_t frameNumber, Runtime::SceneRuntimeId scene, std::optional<Runtime::Ui::UiRenderMode> mode = std::nullopt) const;
         /** @brief Transfers the exact extracted paint submission once and binds the renderer's actual SceneCanvas slot.
          * @param instance Exact active viewport source. @param frameNumber Exact Runtime extraction frame.
          * @param program Selected SceneCanvas program. @param slot Slot chosen by the viewport graph.
@@ -180,6 +181,22 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<void> SceneCanvasEncoded(Runtime::Ui::RuntimeUiInstanceId instance, std::uint64_t frameNumber,
                                                       std::optional<Runtime::Ui::UiWorldCanvasProjection> plane) const;
+        /** @brief Transfers the encoded world canvas receipt to the headset presentation owner.
+         * @param instance Exact active viewport source.
+         * @param frameNumber Exact Runtime extraction frame.
+         * @param plane The same world geometry used by the encoded eye draws.
+         * @return Matching interaction receipt or a typed stale/invalid-source error.
+         */
+        [[nodiscard]] Result<Runtime::Ui::UiPresentationReceipt> DetachHeadsetCanvas(
+            Runtime::Ui::RuntimeUiInstanceId instance, std::uint64_t frameNumber, const Runtime::Ui::UiWorldCanvasProjection &plane) const;
+        /** @brief Applies the detached receipt only after the matching headset frame ends.
+         * @param instance Exact original canvas owner.
+         * @param receipt Receipt returned by DetachHeadsetCanvas.
+         * @param presented Whether the native compositor accepted the drawn projection.
+         * @return Success for an applied or retired receipt, or the original interaction error.
+         */
+        [[nodiscard]] Result<void> HeadsetCanvasPresented(Runtime::Ui::RuntimeUiInstanceId instance,
+                                                          Runtime::Ui::UiPresentationReceipt receipt, bool presented) const;
         /** @brief Applies a receipt only for UI actually encoded in that same native frame; presentation never retires GPU claims. */
         [[nodiscard]] Result<void> Presented(std::uint64_t frameNumber, bool nativePresentSucceeded) const;
         /** @brief Pins the actual current derived frame for host inspection; its lifetime participates in the existing drain fence. */

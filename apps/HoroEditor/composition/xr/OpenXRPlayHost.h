@@ -213,13 +213,38 @@ namespace Horo::Application::Internal {
          * @return Unobserved for stale identities, unsupported paths or absent completion. Does not admit a compositor provider.
          */
         [[nodiscard]] OpenXRPlayCoverageStatus CoverageState(const XR::XRFrameId &frame) const noexcept;
-        /** @brief Prepares one actual native prediction/acquisition and binds cold graph storage before the SAME App scope.
-         * @param frameNumber SAME RuntimeHost frame number, never a second counter.
-         * @return True for a complete bound acquisition, false while actual retirement/wait is pending; original errors persist.
+
+        /** @brief Current authored world canvas supplied by the App for this frame, borrowed synchronously. */
+        struct WorldCanvasFrame final {
+            Editor::EditorVulkanXrViewportAccess::CanvasPreparation preparation;
+            Math::Mat4 worldFromCanvas;
+        };
+
+        /** @brief Borrows the identity of the currently published XR Play scene on the owner lane. */
+        [[nodiscard]] Runtime::SceneRuntimeId CanvasScene() const noexcept;
+        /** @brief Prepares one native prediction/acquisition and binds cold graph storage before the App render scope.
+         * @param frameNumber Exact RuntimeHost frame number.
+         * @param canvas Optional authored world canvas borrowed for this call.
+         * @return True for a bound acquisition, false while retirement or acquisition is pending, or the original error.
          */
-        [[nodiscard]] Result<bool> PrepareRenderFrame(std::uint64_t frameNumber);
-        /** @brief Executes the prepared actual acquired-eye graph through the SAME App frame. */
-        [[nodiscard]] Result<void> ExecuteRenderFrame(Render::RenderFrameScope &frame, const Render::PrimaryOutputAttachment &output);
+        [[nodiscard]] Result<bool> PrepareRenderFrame(std::uint64_t frameNumber, const WorldCanvasFrame *canvas = nullptr);
+        /** @brief Executes the prepared acquired-eye graph through the same App frame.
+         * @param frame Exact enclosing App render scope.
+         * @param output Mirror output owned by that scope.
+         * @param canvas Optional source callback required when the bound graph includes a world canvas.
+         * @return Encoding result. A successful encoding alone cannot confirm native presentation.
+         */
+        [[nodiscard]] Result<void> ExecuteRenderFrame(Render::RenderFrameScope &frame, const Render::PrimaryOutputAttachment &output,
+                                                      const Editor::EditorVulkanXrViewportAccess::CanvasSource *canvas = nullptr);
+
+        /** @brief Exact encoded canvas outcome after the corresponding native frame ends or is retired. */
+        struct WorldCanvasCompletion final {
+            std::uint64_t frameNumber;
+            bool presented;
+        };
+
+        /** @brief Takes the pending canvas outcome on the owner lane before the next canvas submission. */
+        [[nodiscard]] std::optional<WorldCanvasCompletion> TakeCanvasCompletion() noexcept;
         /** @brief Records actual GUI encoding acceptance or cancels this exact prepared frame before scene submission.
          * @param accepted Exact ComposeGui success, or false on GUI/native-Begin/scene-encoding failure. True requires
          * actual scene submission; false also closes a prepared acquisition which could not enter the App scope.
@@ -330,7 +355,12 @@ namespace Horo::Application::Internal {
         [[nodiscard]] bool HasPassthrough(XR::XRPassthroughScope scope) const noexcept;
         [[nodiscard]] Result<void> ProgressTail();
         [[nodiscard]] Result<void> AbortRenderFrame();
-        [[nodiscard]] Result<void> BindRenderFrame(std::uint64_t frameNumber);
+        /** @brief Prepares the canvas variant when the selected projection supports it. */
+        [[nodiscard]] Result<const WorldCanvasFrame *> PrepareCanvasSource(const WorldCanvasFrame *canvas) const;
+        [[nodiscard]] Result<void> BindRenderFrame(std::uint64_t frameNumber, const WorldCanvasFrame *canvas);
+        /** @brief Acquires the optional reprojection pair after the ordinary projection is bound. */
+        [[nodiscard]] std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages> AcquireAuxiliaryProjection(
+            const XR::XRFrameId &frame, const XR::XRViewRenderPlan &plan);
 
         /** @brief Holds one selected geometry authority and never switches basis after preparation. */
         struct SceneGeometry final {
@@ -489,6 +519,7 @@ namespace Horo::Application::Internal {
         std::uint64_t nextPassthroughGrant_{};
         std::optional<XR::XRPassthroughGrant> passthroughArmed_;
         std::optional<XR::XRPassthroughScope> passthroughScope_; /**< Retained until the native owner confirms retirement. */
+        std::optional<WorldCanvasCompletion> canvasCompletion_;
         XR::XRCapabilityState passthroughState_{XR::XRCapabilityState::Unavailable};
 
         struct InputState final {

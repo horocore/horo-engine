@@ -110,12 +110,13 @@ namespace Horo::Application::Internal {
 
     /** @copydoc RuntimeUiPaintPort::ReadSceneCanvasFrame */
     Result<std::optional<RuntimeUiPaintSceneCanvasFrame>> RuntimeUiPaintPort::ReadSceneCanvasFrame(
-        const std::uint64_t frameNumber, const Runtime::SceneRuntimeId scene) const {
+        const std::uint64_t frameNumber, const Runtime::SceneRuntimeId scene, const std::optional<UiRenderMode> mode) const {
         using Read = Result<std::optional<RuntimeUiPaintSceneCanvasFrame>>;
         if (!state_ || !state_->Available() || state_->dispatching)
             return Read::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         for (const auto *source : state_->Sources())
-            if (source && source->sceneCanvas && source->scene == scene && source->frame.extractedFrame == frameNumber)
+            if (source && source->sceneCanvas && source->scene == scene && source->frame.extractedFrame == frameNumber &&
+                (!mode || source->output.canvas.renderMode == *mode))
                 return Read::Success(RuntimeUiPaintSceneCanvasFrame{source->instance, scene,
                                                                     source->worldCanvas ? &*source->worldCanvas : nullptr,
                                                                     &*source->frame.snapshot, &source->programs.policy,
@@ -150,6 +151,48 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(UiErrors::CanvasSpaceInvalid));
         source->frame.encodedPlane = plane;
         source->frame.sceneEncoded = true;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc RuntimeUiPaintPort::DetachHeadsetCanvas */
+    Result<UiPresentationReceipt> RuntimeUiPaintPort::DetachHeadsetCanvas(const RuntimeUiInstanceId instance, std::uint64_t frameNumber,
+                                                                          const UiWorldCanvasProjection &plane) const {
+        using Outcome = Result<UiPresentationReceipt>;
+        auto *source = state_ ? state_->ActiveSource(instance) : nullptr;
+        if (!source || !source->worldCanvas || source->frame.extractedFrame != frameNumber || !source->frame.sceneSubmissionTaken ||
+            source->frame.sceneEncoded)
+            return Outcome::Failure(MakeError(UiErrors::RevisionStale));
+        if (!plane.IsValid())
+            return Outcome::Failure(MakeError(UiErrors::CanvasSpaceInvalid));
+        const auto &snapshot = source->frame.snapshot->Descriptor();
+        const UiPresentationReceipt receipt{snapshot.view,
+                                            snapshot.canvas,
+                                            snapshot.interactionRevision,
+                                            snapshot.snapshotRevision,
+                                            UiPresentationOutcome::Presented,
+                                            UiPresentationReason::None,
+                                            plane};
+        source->frame.extractedFrame.reset();
+        return Outcome::Success(receipt);
+    }
+
+    /** @copydoc RuntimeUiPaintPort::HeadsetCanvasPresented */
+    Result<void> RuntimeUiPaintPort::HeadsetCanvasPresented(const RuntimeUiInstanceId instance, UiPresentationReceipt receipt,
+                                                            const bool presented) const {
+        auto *source = state_ ? state_->ActiveSource(instance) : nullptr;
+        if (!source || !source->worldCanvas)
+            return Result<void>::Success();
+        receipt.outcome = presented ? UiPresentationOutcome::Presented : UiPresentationOutcome::Failed;
+        receipt.reason = presented ? UiPresentationReason::None : UiPresentationReason::ExecutionFailure;
+        if (!presented)
+            receipt.worldProjection.reset();
+        if (const auto applied = source->animation->ApplyPresentation(receipt); applied.HasError()) {
+            if (const auto code = applied.ErrorValue().code.Value();
+                code == UiErrors::RevisionStale.code.Value() || code == UiErrors::RenderPresentationStale.code.Value())
+                return Result<void>::Success();
+            return Result<void>::Failure(applied.ErrorValue());
+        }
+        source->output.awaitingPresentation = !presented;
         return Result<void>::Success();
     }
 

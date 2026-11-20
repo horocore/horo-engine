@@ -530,8 +530,13 @@ namespace Horo::Application::Internal {
         return Result<void>::Success();
     }
 
+    /** @copydoc OpenXRPlayHost::CanvasScene */
+    Runtime::SceneRuntimeId OpenXRPlayHost::CanvasScene() const noexcept {
+        return std::this_thread::get_id() == lane_ && UsesXrScene() ? scene_->scene : Runtime::SceneRuntimeId{};
+    }
+
     /** @copydoc OpenXRPlayHost::PrepareRenderFrame */
-    Result<bool> OpenXRPlayHost::PrepareRenderFrame(const std::uint64_t frameNumber) {
+    Result<bool> OpenXRPlayHost::PrepareRenderFrame(const std::uint64_t frameNumber, const WorldCanvasFrame *canvas) {
         using Output = Result<bool>;
         if (auto lane = Lane(); lane.HasError())
             return Output::Failure(lane.ErrorValue());
@@ -544,9 +549,12 @@ namespace Horo::Application::Internal {
             return Output::Failure(valid.ErrorValue());
         if (auto tail = ProgressTail(); tail.HasError())
             return Output::Failure(tail.ErrorValue());
-        auto state = frames_.Snapshot();
-        if (state.phase != XRFramePhase::Idle && (render_->encoded || render_->guiFinished))
+        const auto state = frames_.Snapshot();
+        if (canvasCompletion_ || (state.phase != XRFramePhase::Idle && (render_->encoded || render_->guiFinished)))
             return Output::Success(false);
+        const auto admittedCanvas = PrepareCanvasSource(canvas);
+        if (admittedCanvas.HasError())
+            return Output::Failure(admittedCanvas.ErrorValue());
         if (state.phase == XRFramePhase::Idle) {
             render_->coverageFrame.reset();
             const auto started = render_->StartPrediction();
@@ -564,9 +572,21 @@ namespace Horo::Application::Internal {
             return render_->Fail(acquired.ErrorValue());
         if (!acquired.Value())
             return Output::Success(false);
-        if (auto bound = BindRenderFrame(frameNumber); bound.HasError())
+        if (auto bound = BindRenderFrame(frameNumber, admittedCanvas.Value()); bound.HasError())
             return render_->Fail(bound.ErrorValue());
         return Output::Success(true);
+    }
+
+    /** @copydoc OpenXRPlayHost::PrepareCanvasSource */
+    Result<const OpenXRPlayHost::WorldCanvasFrame *> OpenXRPlayHost::PrepareCanvasSource(const WorldCanvasFrame *canvas) const {
+        using Outcome = Result<const WorldCanvasFrame *>;
+        if (!canvas || render_->writer || WantsMotionHistory(scene_->projection->plan))
+            return Outcome::Success(nullptr);
+        const auto prepared =
+            Editor::EditorVulkanXrViewportAccess::PrepareCanvas(composition_.viewport, scene_->geometry->Resources(), canvas->preparation);
+        if (prepared.HasError())
+            return Outcome::Failure(prepared.ErrorValue());
+        return Outcome::Success(prepared.Value() ? canvas : nullptr);
     }
 
     /** @copydoc OpenXRPlayHost::WantsMotionHistory */
@@ -578,8 +598,41 @@ namespace Horo::Application::Internal {
                (decision.state == XRFeatureDecisionState::BaselineProjection && decision.observed == XRCapabilityState::DependencyMissing);
     }
 
+    /** @copydoc OpenXRPlayHost::AcquireAuxiliaryProjection */
+    std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages> OpenXRPlayHost::AcquireAuxiliaryProjection(
+        const XRFrameId &frame, const XRViewRenderPlan &plan) {
+        if (!render_->writer || !scene_->projection->writer || !Editor::EditorVulkanXrViewportAccess::PreviousDepth(composition_.viewport))
+            return std::nullopt;
+        auto &writer = *render_->writer;
+        if (writer.coordinated && (render_->passthrough || !frames_.ObserveReprojectionHistory(frame, plan)))
+            return std::nullopt;
+        auto pair = writer.coordinated ? writer.AcquireCoordinated(composition_.frontend, frame, render_->acquisition->image)
+                                       : writer.Acquire(composition_.frontend, frame, *scene_->projection->writer);
+        // Incomplete optional images retain their own cleanup. The baseline binding stays usable.
+        return pair.HasValue() ? std::move(pair).Value() : std::nullopt;
+    }
+
+    namespace {
+        /** @brief Resolves the same eye transforms and minimum raster span for both acquired layers. */
+        Result<std::optional<Editor::EditorVulkanXrViewportAccess::CanvasPlacement>> ProjectCanvasPlacement(
+            const OpenXRPlayHost::WorldCanvasFrame *canvas, const XRMultiviewScene &scene, const XRMultiviewOwnerState &owner) {
+            using Viewport = Editor::EditorVulkanXrViewportAccess;
+            using Outcome = Result<std::optional<Viewport::CanvasPlacement>>;
+            if (!canvas)
+                return Outcome::Success(std::nullopt);
+            constexpr float minimumRasterSpanPixels = 1.0F;
+            const auto projected = scene.ProjectWorldCanvas({canvas->worldFromCanvas, minimumRasterSpanPixels}, owner);
+            if (projected.HasError())
+                return Outcome::Failure(projected.ErrorValue());
+            if (!projected.Value().drawable)
+                return Outcome::Success(std::nullopt);
+            const auto &eyes = projected.Value().views;
+            return Outcome::Success(Viewport::CanvasPlacement{owner.renderer, {eyes.front().canvasToClip, eyes.back().canvasToClip}});
+        }
+    }  // namespace
+
     /** @copydoc OpenXRPlayHost::BindRenderFrame */
-    Result<void> OpenXRPlayHost::BindRenderFrame(const std::uint64_t frameNumber) {
+    Result<void> OpenXRPlayHost::BindRenderFrame(const std::uint64_t frameNumber, const WorldCanvasFrame *canvas) {
         if (!scene_ || !scene_->projection || !render_->views || !render_->acquisition)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         const auto frame = frames_.Snapshot();
@@ -614,6 +667,18 @@ namespace Horo::Application::Internal {
             render_->passthrough.emplace(*scope, publication, reference.Value());
         const auto alpha = render_->passthrough ? Editor::EditorXrProjectionAlpha::Premultiplied : Editor::EditorXrProjectionAlpha::Opaque;
         using Viewport = Editor::EditorVulkanXrViewportAccess;
+        const std::array images{render_->acquisition->image};
+        const XRMultiviewOwnerState owner{render_->session,
+                                          configuration,
+                                          revision.Value(),
+                                          input_.origin,
+                                          images,
+                                          publication,
+                                          Render::ResolveMultiviewCapabilities(support)};
+        const auto projected = ProjectCanvasPlacement(canvas, converted.Value(), owner);
+        if (projected.HasError())
+            return Result<void>::Failure(projected.ErrorValue());
+        const auto &placement = projected.Value();
         std::array<Render::MultiviewRenderRectangle, 2> rectangles;
         std::ranges::transform(plan.Value().Targets(), rectangles.begin(), [](const XRExternalRenderTargetDescriptor &target) {
             const auto &region = target.renderRectangle;
@@ -622,37 +687,31 @@ namespace Horo::Application::Internal {
         const auto bind = [&](const Viewport::AuxiliaryImages *auxiliary) {
             return Viewport::Bind(composition_.viewport, render_->acquisition->texture, render_->eyeViews, publication,
                                   converted.Value().Scene().Views(), scene_->geometry->Instances(), prepareMotion ? &motion : nullptr,
-                                  alpha, auxiliary, nullptr, &rectangles);
+                                  alpha, auxiliary, nullptr, &rectangles, placement ? &*placement : nullptr);
         };
         if (auto baseline = bind(nullptr); baseline.HasError())
             return baseline;
-        if (render_->writer && scene_->projection->writer && Viewport::PreviousDepth(composition_.viewport)) {
-            auto &writer = *render_->writer;
-            if (!writer.coordinated || (!render_->passthrough && frames_.ObserveReprojectionHistory(frame.frame, plan.Value()))) {
-                const auto pair = writer.coordinated
-                                      ? writer.AcquireCoordinated(composition_.frontend, frame.frame, render_->acquisition->image)
-                                      : writer.Acquire(composition_.frontend, frame.frame, *scene_->projection->writer);
-                // Incomplete optional images retain their own cleanup. The baseline binding stays usable.
-                if (pair.HasValue() && pair.Value() && bind(&*pair.Value()).HasError())
-                    if (auto baseline = bind(nullptr); baseline.HasError())
-                        return baseline;
-            }
-        }
+        if (const auto pair = AcquireAuxiliaryProjection(frame.frame, plan.Value()); pair && bind(&*pair).HasError())
+            if (auto baseline = bind(nullptr); baseline.HasError())
+                return baseline;
         if (prepareMotion)
             render_->motionFrame = motion.frame;
         render_->plan.emplace(std::move(plan).Value());
         render_->hostFrameNumber = frameNumber;
+        render_->canvasBound = placement.has_value();
         return Result<void>::Success();
     }
 
     /** @copydoc OpenXRPlayHost::ExecuteRenderFrame */
-    Result<void> OpenXRPlayHost::ExecuteRenderFrame(Render::RenderFrameScope &frame, const Render::PrimaryOutputAttachment &output) {
+    Result<void> OpenXRPlayHost::ExecuteRenderFrame(Render::RenderFrameScope &frame, const Render::PrimaryOutputAttachment &output,
+                                                    const Editor::EditorVulkanXrViewportAccess::CanvasSource *canvas) {
         if (auto lane = Lane(); lane.HasError())
             return lane;
         if (!UsesXrScene() || !render_ || !render_->plan || !render_->acquisition || render_->encoded)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         const Operation operation{*this};
-        auto executed = Editor::EditorVulkanXrViewportAccess::Execute(composition_.viewport, frame, output);
+        auto executed =
+            Editor::EditorVulkanXrViewportAccess::Execute(composition_.viewport, frame, output, render_->canvasBound ? canvas : nullptr);
         if (executed.HasError()) {
             const auto aborted = AbortRenderFrame();
             (void)aborted;
@@ -660,6 +719,13 @@ namespace Horo::Application::Internal {
         }
         render_->encoded = std::move(executed).Value();
         return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRPlayHost::TakeCanvasCompletion */
+    std::optional<OpenXRPlayHost::WorldCanvasCompletion> OpenXRPlayHost::TakeCanvasCompletion() noexcept {
+        if (std::this_thread::get_id() != lane_ || busy_)
+            return std::nullopt;
+        return std::exchange(canvasCompletion_, std::nullopt);
     }
 
     /** @copydoc OpenXRPlayHost::ReadTrackedReference */
@@ -769,6 +835,8 @@ namespace Horo::Application::Internal {
             render_->writer->nativeSubmitted = false;
             render_->writer->frame = {};
         }
+        if (std::exchange(render_->canvasBound, false))
+            canvasCompletion_ = WorldCanvasCompletion{render_->hostFrameNumber, projected};
         render_->encoded.reset();
         render_->acquisition.reset();
         render_->plan.reset();
@@ -1012,6 +1080,8 @@ namespace Horo::Application::Internal {
         eventsBound_ = false;
         eventsPending_ = false;
         events_.reset();
+        if (render_ && render_->canvasBound)
+            canvasCompletion_ = WorldCanvasCompletion{render_->hostFrameNumber, false};
         render_.reset();
         passthroughScope_.reset();
         return Result<void>::Success();

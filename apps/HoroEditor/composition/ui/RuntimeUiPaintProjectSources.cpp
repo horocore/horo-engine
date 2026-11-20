@@ -394,7 +394,8 @@ namespace Horo::Application::Internal {
                                                                                              const Runtime::RuntimeSceneView &scene) const {
         using Projected = Result<ProjectCanvasProjection>;
         if (canvas.renderMode != UiRenderMode::WorldSpace) {
-            const bool camera = canvas.renderMode == UiRenderMode::ScreenSpaceCamera && policy.vulkanSceneCanvasAssets.has_value();
+            const bool camera = canvas.renderMode == UiRenderMode::ScreenSpaceCamera && policy.enableVulkanCameraCanvas &&
+                                policy.vulkanSceneCanvasAssets.has_value();
             auto evidence = camera && host->cameraOutput ? *host->cameraOutput : *host->output;
             if (camera)
                 evidence.safeAreaInsets = {};

@@ -62,6 +62,7 @@ namespace Horo::Application::Internal {
         std::uint32_t previousInstanceSlot{};
         std::uint32_t previousCanvasSlot{};
         std::optional<std::filesystem::path> vulkanSceneCanvasAssets; /**< Exact package root admitted by the selected viewport. */
+        bool enableVulkanCameraCanvas{true};                          /**< Whether the viewport can draw an authored camera canvas. */
     };
 
     /** @brief One application source namespace, shared by real preview/Play factories and pinned through source retirement.

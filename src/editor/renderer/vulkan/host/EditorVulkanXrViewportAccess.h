@@ -136,7 +136,6 @@ namespace Horo::Editor {
          * @param retainPreviousDepth Current optional policy admits retaining sampled predecessor depth.
          * @param auxiliary Exact optional producer tuple; absent keeps the ordinary graph.
          * @param coverageDrawCapacity Initial scene instance bound for cold coverage descriptors; zero disables coverage.
-         * @param canvas Optional sampled world canvas recipe for ordinary XR projection.
          * @return Original owner/resource/graph error or successful preparation before interactive admission.
          */
         [[nodiscard]] static Result<void> Prepare(EditorViewportRendererVulkan &viewport,
@@ -144,8 +143,11 @@ namespace Horo::Editor {
                                                   const Render::RenderTextureDescriptor &color,
                                                   const Render::RenderGraphLogicalState &acquired,
                                                   const Render::RenderGraphLogicalState &requiredFinal, bool retainPreviousDepth,
-                                                  const AuxiliaryPlan *auxiliary = nullptr, std::size_t coverageDrawCapacity = 0,
-                                                  const CanvasPreparation *canvas = nullptr);
+                                                  const AuxiliaryPlan *auxiliary = nullptr, std::size_t coverageDrawCapacity = 0);
+        /** @brief Prepares current authored UI after ordinary projection setup, before native acquisition. */
+        [[nodiscard]] static Result<bool> PrepareCanvas(EditorViewportRendererVulkan &viewport,
+                                                        std::span<const Render::RenderMeshResourceView> meshes,
+                                                        const CanvasPreparation &canvas);
         /** @brief Bind one real acquisition before BeginFrame, using fixed owner storage and exact live publications.
          * @param viewport Existing owner. @param color Fresh native import. @param views Exact layer views.
          * @param publication Current Scene/frame/origin/device evidence. @param cameras Actual native view matrices.

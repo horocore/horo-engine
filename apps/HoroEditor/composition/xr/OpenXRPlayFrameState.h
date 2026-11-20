@@ -97,6 +97,7 @@ namespace Horo::Application::Internal {
         std::optional<XR::OpenXRInternal::NativePresentationViews> views;
         std::optional<Editor::EditorVulkanXrViewportAccess::ProjectionSubmission> encoded;
         std::uint64_t hostFrameNumber{}; /**< Exact successful bind receipt, not another frame issuer. */
+        bool canvasBound{};
         bool guiFinished{};
         bool acquisitionRecorded{};
         bool rendered{};

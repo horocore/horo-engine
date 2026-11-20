@@ -491,7 +491,8 @@ namespace Horo::Tests::VulkanEditor {
         const UiResolvedScreenCanvas projection{.logicalExtent = {4096, 2048}, .pixelExtent = {64, 32}, .pixelsPerDip = {1, 1}};
         const UiPaintProgramDescriptor paint{projection, {32, 64, 4}, 1, 32};
         const Viewport::CanvasPreparation canvas{paint, snapshot, {}, *writer, consumer};
-        Check(Viewport::Prepare(*host.viewport, scene.meshResources, color, acquire, release, false, nullptr, 0, &canvas));
+        Check(Viewport::Prepare(*host.viewport, scene.meshResources, color, acquire, release, false));
+        REQUIRE(UiRequire(Viewport::PrepareCanvas(*host.viewport, scene.meshResources, canvas)));
         Check(Viewport::Retire(*host.viewport));
         CHECK(host.Drain());
     }
@@ -609,7 +610,10 @@ namespace Horo::Tests::VulkanEditor {
         if (!root || !std::getenv("HORO_EDITOR_VULKAN_ASSET_ROOT"))
             SKIP("Supply locked native Vulkan viewport and canvas shader packages.");
         const auto consumer = UiRequire(LoadPackagedVulkanWorldCanvasShader(root));
-        const auto mode = GENERATE(UiRenderMode::ScreenSpaceCamera, UiRenderMode::WorldSpace);
+        using CanvasRoute = std::tuple<UiRenderMode, bool>;
+        const auto [mode, deferHeadsetReceipt] = GENERATE(
+            table<UiRenderMode, bool>({CanvasRoute{UiRenderMode::ScreenSpaceCamera, false}, CanvasRoute{UiRenderMode::WorldSpace, false},
+                                       CanvasRoute{UiRenderMode::WorldSpace, true}}));
         const CameraViewportFixture fixture;
         Host host{false, true};
         DeterministicClock clock;
@@ -629,14 +633,19 @@ namespace Horo::Tests::VulkanEditor {
         Check(runtime->AddParticipant(std::move(paint.participant)));
         UiRenderViewId view;
         bool draw = true;
+        bool verifyInitialAdmission = true;
+        bool headsetProjected = true;
         Check(runtime->AddParticipant(std::make_unique<AuthoredCanvasRenderer>([&](const std::uint64_t number) {
+            std::optional<UiPresentationReceipt> headsetReceipt;
+            RuntimeUiInstanceId headsetInstance;
             const auto pass = host.ViewportPass(scene);
             host.PrepareScene(scene);
             if (draw) {
                 const auto source = UiRequire(port.ReadSceneCanvasFrame(number, sceneId));
                 REQUIRE(source);
                 view = source->prototype->Descriptor().view;
-                CHECK_FALSE(port.InputEligible(view));
+                if (verifyInitialAdmission)
+                    CHECK_FALSE(port.InputEligible(view));
                 const auto space = source->worldCanvas ? UiRenderCompositionSpace::World : UiRenderCompositionSpace::Camera;
                 std::optional<UiWorldCanvasProjection> plane;
                 std::optional<Math::Mat4> transform;
@@ -661,8 +670,15 @@ namespace Horo::Tests::VulkanEditor {
                 Check(host.viewport->ExecutePreparedCanvasFrame(frame, passes, transform, [&](const auto &program, std::uint32_t slot) {
                     return port.TakeSceneCanvasSubmission(source->instance, number, program, slot);
                 }));
-                Check(port.SceneCanvasEncoded(source->instance, number, plane));
-                CHECK_FALSE(port.InputEligible(view));
+                if (deferHeadsetReceipt) {
+                    REQUIRE(plane);
+                    headsetInstance = source->instance;
+                    headsetReceipt = UiRequire(port.DetachHeadsetCanvas(headsetInstance, number, *plane));
+                } else {
+                    Check(port.SceneCanvasEncoded(source->instance, number, plane));
+                }
+                if (verifyInitialAdmission)
+                    CHECK_FALSE(port.InputEligible(view));
                 const auto output = host.viewport->TextureView();
                 host.ComposeGui(frame, &output);
                 Check(frame.Present());
@@ -672,6 +688,11 @@ namespace Horo::Tests::VulkanEditor {
                 Check(frame.Present());
             }
             Check(port.Presented(number, true));
+            if (headsetReceipt) {
+                if (verifyInitialAdmission)
+                    CHECK_FALSE(port.InputEligible(view));
+                Check(port.HeadsetCanvasPresented(headsetInstance, *headsetReceipt, headsetProjected));
+            }
         })));
         Check(runtime->Startup());
         clock.Advance(Duration::FromMilliseconds(16));
@@ -683,6 +704,19 @@ namespace Horo::Tests::VulkanEditor {
         const auto center = (pass.extent.height / 2 * pass.extent.width + pass.extent.width / 2) * 4;
         REQUIRE(center + 2 < pixels.size());
         CHECK(pixels[center + 1] > 240);
+
+        if (deferHeadsetReceipt) {
+            verifyInitialAdmission = false;
+            clock.Advance(Duration::FromMilliseconds(16));
+            Check(runtime->RunFrame());
+            CHECK(port.InputEligible(view));
+            headsetProjected = false;
+            clock.Advance(Duration::FromMilliseconds(16));
+            Check(runtime->RunFrame());
+            CHECK_FALSE(port.InputEligible(view));
+            verifyInitialAdmission = true;
+            headsetProjected = true;
+        }
 
         if (mode == UiRenderMode::WorldSpace) {
             const auto retired = view;

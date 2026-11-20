@@ -1190,7 +1190,7 @@ namespace Horo::Editor {
             std::unique_ptr<SdlVulkanPresentationPort> vulkanPresentationPort;
             std::unique_ptr<Render::Detail::VulkanEditorGraphicsBridge> vulkanGraphicsBridge;
             EditorViewportRendererVulkan *desktopCanvasViewport{}; /**< Borrows the installed base Vulkan viewport. */
-            std::optional<EditorVulkanWorldCanvasCook> desktopCanvasConsumer;
+            std::optional<EditorVulkanWorldCanvasCook> sceneCanvasConsumer;
 #endif
             std::unique_ptr<Render::RenderFrontend> frontend;
             std::unique_ptr<IEditorGuiRenderer> guiRenderer;
@@ -2295,9 +2295,10 @@ namespace Horo::Editor {
             Result<void> EndRuntimeFrame(const Runtime::FrameContext &context) {
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
                 if (auto *xr = p_->presentation.composition.xrPlay.get()) {
-                    const auto tail = xr->ProgressRenderTail();
-                    if (tail.HasError())
-                        return Result<void>::Failure(tail.ErrorValue());
+                    if (const auto tail = xr->ProgressRenderTail(); tail.HasError())
+                        return tail;
+                    if (const auto applied = ApplyXrCanvasCompletion(*xr); applied.HasError())
+                        return applied;
                 }
 #endif
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
@@ -2898,7 +2899,7 @@ namespace Horo::Editor {
                 frameState_.sceneCanvas.reset();
                 const auto &composition = p_->presentation.composition;
                 auto *viewport = composition.desktopCanvasViewport;
-                if (!viewport || !composition.desktopCanvasConsumer)
+                if (!viewport || !composition.sceneCanvasConsumer)
                     return Result<void>::Success();
                 const auto &passes = frameState_.preparedPasses;
                 if (UsesXrPresentation() || passes.world.owner.IsValid() || passes.count != 2 || !passes.descriptors.front().staticMesh ||
@@ -2932,7 +2933,7 @@ namespace Horo::Editor {
                                                                                       *canvas.prototype,
                                                                                       canvas.textures,
                                                                                       *canvas.kernel,
-                                                                                      *composition.desktopCanvasConsumer,
+                                                                                      *composition.sceneCanvasConsumer,
                                                                                       space,
                                                                                       limits};
                 if (const auto prepared = viewport->PrepareViewportCanvas(pass, request, context.cancellation); prepared.HasError())
@@ -3009,7 +3010,7 @@ namespace Horo::Editor {
                 if (prepared.Value().has_value()) {
                     p_->presentation.viewportTarget = *prepared.Value();
 #if defined(HORO_HAS_RENDER_VULKAN)
-                    if (p_->presentation.composition.desktopCanvasConsumer && !frameState_.preparedPasses.world.owner.IsValid()) {
+                    if (p_->presentation.composition.sceneCanvasConsumer && !frameState_.preparedPasses.world.owner.IsValid()) {
                         const auto extent = p_->presentation.viewportRenderer.RequestedExtent();
                         if (extent.IsValid())
                             return authorities_.ui.UpdateCameraOutput({extent.width, extent.height});
@@ -3048,16 +3049,81 @@ namespace Horo::Editor {
                 return Result<void>::Failure(canceled.HasError() ? WithCause(error, canceled.ErrorValue()) : error);
             }
 
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+            struct XrCanvasFrame final {
+                Runtime::Ui::RuntimeUiInstanceId instance;
+                Runtime::Ui::UiWorldCanvasProjection plane;
+                Application::Internal::OpenXRPlayHost::WorldCanvasFrame canvas;
+            };
+
+            struct PendingXrCanvasReceipt final {
+                std::uint64_t frameNumber;
+                Runtime::Ui::RuntimeUiInstanceId instance;
+                Runtime::Ui::UiPresentationReceipt receipt;
+            };
+
+            /** @brief Applies the headset result to the exact submitted application-side UI receipt. */
+            Result<void> ApplyXrCanvasCompletion(Application::Internal::OpenXRPlayHost &xr) {
+                const auto completed = xr.TakeCanvasCompletion();
+                if (!completed || !frameState_.xrCanvasReceipt)
+                    return Result<void>::Success();
+                const auto &pending = *frameState_.xrCanvasReceipt;
+                if (pending.frameNumber != completed->frameNumber)
+                    return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::RevisionStale));
+                const auto applied = authorities_.ui.HeadsetCanvasPresented(pending.instance, pending.receipt, completed->presented);
+                frameState_.xrCanvasReceipt.reset();
+                return applied;
+            }
+
+            /** @brief Borrows the current authored world canvas before the OpenXR frame acquires its images. */
+            Result<std::optional<XrCanvasFrame>> ReadXrCanvas(const Runtime::FrameContext &context) const {
+                using Outcome = Result<std::optional<XrCanvasFrame>>;
+                const auto &composition = p_->presentation.composition;
+                const auto scene = composition.xrPlay->CanvasScene();
+                if (!scene.IsValid() || !composition.sceneCanvasConsumer)
+                    return Outcome::Success(std::nullopt);
+                const auto source = authorities_.ui.ReadSceneCanvasFrame(context.frameNumber, scene, Runtime::Ui::UiRenderMode::WorldSpace);
+                if (source.HasError())
+                    return Outcome::Failure(source.ErrorValue());
+                if (!source.Value())
+                    return Outcome::Success(std::nullopt);
+                const auto &canvas = *source.Value();
+                PreparedSceneCanvas placement{.instance = canvas.instance};
+                const auto placed = PlaceWorldCanvas(canvas, placement);
+                if (placed.HasError())
+                    return Outcome::Failure(placed.ErrorValue());
+                if (!placed.Value())
+                    return Outcome::Success(std::nullopt);
+                return Outcome::Success(
+                    XrCanvasFrame{canvas.instance,
+                                  *placement.plane,
+                                  { {*canvas.program, *canvas.prototype, canvas.textures, *canvas.kernel, *composition.sceneCanvasConsumer},
+                                    *placement.transform }});
+            }
+#endif
+
             Result<void> ExecuteFrame(const Runtime::FrameContext &context) {
                 const bool extracted = std::exchange(frameState_.extractedFrameReady, false);
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+                std::optional<XrCanvasFrame> xrCanvas;
                 if (UsesXrPresentation()) {
                     auto &xr = *p_->presentation.composition.xrPlay;
+                    if (const auto applied = ApplyXrCanvasCompletion(xr); applied.HasError())
+                        return applied;
                     if (xr.PresentationState() != Application::Internal::OpenXRPlayPresentation::FrameAdmitted)
                         return Result<void>::Success();  // Preparation/retirement/native Idle is never a desktop camera fallback.
-                    const auto prepared = xr.PrepareRenderFrame(context.frameNumber);
+                    if (extracted) {
+                        auto current = ReadXrCanvas(context);
+                        if (current.HasError())
+                            return Result<void>::Failure(current.ErrorValue());
+                        if (current.Value())
+                            xrCanvas.emplace(*current.Value());
+                    }
+                    const auto prepared = xr.PrepareRenderFrame(context.frameNumber, xrCanvas ? &xrCanvas->canvas : nullptr);
                     if (prepared.HasError())
                         return Result<void>::Failure(prepared.ErrorValue());
+                    if (const auto applied = ApplyXrCanvasCompletion(xr); applied.HasError())
+                        return applied;
                     if (!prepared.Value())
                         return Result<void>::Success();
                     frameState_.xrFramePrepared = true;
@@ -3080,10 +3146,25 @@ namespace Horo::Editor {
                         !frameState_.preparedPasses.descriptors[frameState_.preparedPasses.count - 1].primaryOutput)
                         return FailRenderFrame(MakeEditorRendererError("editor.xr.output_unavailable",
                                                                        "The selected XR mirror has no admitted primary output."));
-                    scene = p_->presentation.composition.xrPlay->ExecuteRenderFrame(*frameState_.frame,
-                                                                                    *frameState_.preparedPasses
-                                                                                         .descriptors[frameState_.preparedPasses.count - 1]
-                                                                                         .primaryOutput);
+                    bool canvasTaken = false;
+                    const auto takeSource = [this, &xrCanvas, &context, &canvasTaken](const Render::UiPaintProgram &program,
+                                                                                      const std::uint32_t slot) {
+                        auto submission = authorities_.ui.TakeSceneCanvasSubmission(xrCanvas->instance, context.frameNumber, program, slot);
+                        canvasTaken = submission.HasValue();
+                        return submission;
+                    };
+                    const Editor::EditorVulkanXrViewportAccess::CanvasSource source = std::cref(takeSource);
+                    auto &xr = *p_->presentation.composition.xrPlay;
+                    scene =
+                        xr.ExecuteRenderFrame(*frameState_.frame,
+                                              *frameState_.preparedPasses.descriptors[frameState_.preparedPasses.count - 1].primaryOutput,
+                                              xrCanvas ? &source : nullptr);
+                    if (scene.HasValue() && canvasTaken) {
+                        auto receipt = authorities_.ui.DetachHeadsetCanvas(xrCanvas->instance, context.frameNumber, xrCanvas->plane);
+                        if (receipt.HasError())
+                            return FailRenderFrame(receipt.ErrorValue());
+                        frameState_.xrCanvasReceipt.emplace(context.frameNumber, xrCanvas->instance, std::move(receipt).Value());
+                    }
                 } else
 #endif
                 {
@@ -3219,6 +3300,9 @@ namespace Horo::Editor {
                 EditorPreparedPasses preparedPasses;
 #if defined(HORO_HAS_RENDER_VULKAN)
                 std::optional<PreparedSceneCanvas> sceneCanvas;
+#endif
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+                std::optional<PendingXrCanvasReceipt> xrCanvasReceipt;
 #endif
                 std::optional<Render::RenderFrameScope> frame;
             };
@@ -3645,11 +3729,19 @@ namespace Horo::Editor {
                 return std::nullopt;
             Application::Internal::RuntimeUiPaintProjectPolicy uiPolicy;
 #if defined(HORO_HAS_RENDER_VULKAN)
-            if (const auto *viewport = p.presentation.composition.desktopCanvasViewport; viewport && viewport->SupportsViewportCanvas()) {
+            const auto *viewport = p.presentation.composition.desktopCanvasViewport;
+            const bool supportsDesktopCanvas = viewport && viewport->SupportsViewportCanvas();
+            bool supportsSceneCanvas = supportsDesktopCanvas;
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+            supportsSceneCanvas = supportsSceneCanvas || (p.presentation.composition.xrPlay &&
+                                                          p.presentation.renderFrontend.Capabilities().supportsMaterialRasterGraph);
+#endif
+            if (supportsSceneCanvas) {
                 auto consumer = LoadPackagedVulkanWorldCanvasShader(EditorAssetRoot());
                 if (consumer.HasValue()) {
-                    p.presentation.composition.desktopCanvasConsumer.emplace(std::move(consumer).Value());
+                    p.presentation.composition.sceneCanvasConsumer.emplace(std::move(consumer).Value());
                     uiPolicy.vulkanSceneCanvasAssets = EditorAssetRoot();
+                    uiPolicy.enableVulkanCameraCanvas = supportsDesktopCanvas;
                 }
             }
 #endif
@@ -4791,7 +4883,7 @@ namespace Horo::Editor {
             (void)composition.frontend->ReleaseOffscreenTarget(composition.viewportTarget);
 #if defined(HORO_HAS_RENDER_VULKAN)
         composition.desktopCanvasViewport = nullptr;
-        composition.desktopCanvasConsumer.reset();
+        composition.sceneCanvasConsumer.reset();
 #endif
         composition.viewportRenderer.reset();
         composition.guiRenderer.reset();

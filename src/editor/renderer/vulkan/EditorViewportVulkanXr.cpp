@@ -70,10 +70,15 @@ namespace Horo::Editor {
                                                        std::span<const RenderMeshResourceView> meshes, const RenderTextureDescriptor &color,
                                                        const RenderGraphLogicalState &acquired,
                                                        const RenderGraphLogicalState &requiredFinal, const bool retainPreviousDepth,
-                                                       const AuxiliaryPlan *auxiliary, const std::size_t coverageDrawCapacity,
-                                                       const CanvasPreparation *canvas) {
-        return viewport.PrepareXrGraph(meshes, color, acquired, requiredFinal, retainPreviousDepth, auxiliary, coverageDrawCapacity,
-                                       canvas);
+                                                       const AuxiliaryPlan *auxiliary, const std::size_t coverageDrawCapacity) {
+        return viewport.PrepareXrGraph(meshes, color, acquired, requiredFinal, retainPreviousDepth, auxiliary, coverageDrawCapacity);
+    }
+
+    /** @copydoc EditorVulkanXrViewportAccess::PrepareCanvas */
+    Result<bool> EditorVulkanXrViewportAccess::PrepareCanvas(EditorViewportRendererVulkan &viewport,
+                                                             std::span<const RenderMeshResourceView> meshes,
+                                                             const CanvasPreparation &canvas) {
+        return viewport.PrepareXrCanvas(meshes, canvas);
     }
 
     /** @copydoc EditorVulkanXrViewportAccess::Bind */
@@ -221,6 +226,8 @@ namespace Horo::Editor {
                 std::unique_ptr<CanvasQuadProgram> quad;
                 std::unique_ptr<UiPaintProgram> paint;
                 std::array<CanvasEye, CanvasQuadProgram::StereoViews> eyes;
+                Sha256Digest writer;
+                RenderTextureFormat stencil{};
             };
 
             std::optional<CanvasGraph> canvas;
@@ -724,6 +731,7 @@ namespace Horo::Editor {
         const Projection::Topology *active{};
         std::unique_ptr<Projection::Topology> canvas;
         std::optional<EditorVulkanXrViewportAccess::CanvasPlacement> canvasPlacement;
+        EditorVulkanXrViewportAccess::AuxiliaryTexture allocation;
         const CompiledRenderGraphExecution *lastCanvasVariant{}; /**< Ordinary or canvas execution borrowing shared scene scratch. */
 
         /** @brief Records the canvas raster and both eye draws in the same native submission as the projection. */
@@ -740,14 +748,25 @@ namespace Horo::Editor {
         /** @brief Cold-prepares the one ordinary XR projection plus its sampled canvas, using the same owned depth. */
         Result<void> PrepareCanvas(EditorViewportRendererVulkan &owner, const Projection::Topology::ScenePreparation &sceneInputs,
                                    const EditorVulkanXrViewportAccess::CanvasPreparation &request) {
+            auto paint = request.paint;
+            paint.frameSlots = 1;
+            const auto writer = request.writer.artifact.reflection->cookedArtifactKey;
+            if (canvas && canvas->canvas->writer == writer && canvas->canvas->stencil == request.writer.stencilFormat &&
+                canvas->canvas->quad->shader.metadata.cookedArtifactKey == request.consumer.metadata.cookedArtifactKey &&
+                canvas->geometry.size() == sceneInputs.meshes.size() &&
+                std::ranges::all_of(sceneInputs.meshes,
+                                    [this](const auto &mesh) {
+                return std::ranges::find(canvas->geometry, mesh.handle, &Projection::Geometry::sourceGeneration) != canvas->geometry.end();
+            }) &&
+                Detail::RenderFrontendResourceAccess::MatchesSceneCanvas(*canvas->canvas->paint, paint, request.prototype,
+                                                                         request.textures))
+                return Result<void>::Success();
             auto candidate = std::make_unique<Projection::Topology>();
             auto quad = owner.CreateCanvasQuadProgram(request.consumer, UiRenderCompositionSpace::World,
                                                       sceneInputs.color.allocation.format, CanvasQuadProgram::StereoViews);
             if (quad.HasError())
                 return Result<void>::Failure(quad.ErrorValue());
             candidate->canvas.emplace().quad = std::move(quad).Value();
-            auto paint = request.paint;
-            paint.frameSlots = 1;
             const RenderGraphLimits limits{paint.maximumPasses, RenderGraphLimits::HardMaxResources, RenderGraphLimits::HardMaxUsages,
                                            RenderGraphLimits::HardMaxDependencies};
             const Detail::UiPaintSceneCanvasRecipe recipe{limits, sceneInputs.color.acquired.queue,
@@ -774,6 +793,9 @@ namespace Horo::Editor {
             if (auto ready = program.Value()->ValidatePreparation(); ready.HasError())
                 return ready;
             candidate->canvas->paint = std::move(program).Value();
+            candidate->canvas->writer = writer;
+            candidate->canvas->stencil = request.writer.stencilFormat;
+            lastCanvasVariant = nullptr;
             canvas = std::move(candidate);
             return Result<void>::Success();
         }
@@ -1414,8 +1436,7 @@ namespace Horo::Editor {
                                                               const RenderTextureDescriptor &color, const RenderGraphLogicalState &acquired,
                                                               const RenderGraphLogicalState &requiredFinal, const bool retainPreviousDepth,
                                                               const EditorVulkanXrViewportAccess::AuxiliaryPlan *auxiliary,
-                                                              const std::size_t coverageDrawCapacity,
-                                                              const EditorVulkanXrViewportAccess::CanvasPreparation *canvas) {
+                                                              const std::size_t coverageDrawCapacity) {
         if (owner_ != std::this_thread::get_id() || !initialized_ || !xrShader_.pipeline.IsValid() || xrGraph_ ||
             meshes.size() > RenderMaterialPass::MaximumDraws || !color.IsValid() || color.dimension != RenderTextureDimension::TwoD ||
             color.format != RenderTextureFormat::Rgba8Unorm || color.layerCount != 2 || color.mipCount != 1 || color.sampleCount != 1 ||
@@ -1424,9 +1445,6 @@ namespace Horo::Editor {
             acquired.layout != RenderGraphTextureLayout::ColorAttachment ||
             requiredFinal.layout != RenderGraphTextureLayout::ColorAttachment)
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
-        if (canvas && (auxiliary || retainPreviousDepth))
-            return Result<void>::Failure(
-                MakeError(RendererErrors::ViewportInvalidScene, "XR canvas preparation requires the ordinary projection allocation."));
         if (auxiliary && (!retainPreviousDepth ||
                           xrMotionFormats_ != std::pair{auxiliary->motion.allocation.format, auxiliary->depth.allocation.format} ||
                           !xrMotionShader_.pipeline.IsValid() || !ValidAuxiliaryPlan(*auxiliary, acquired.queue)))
@@ -1443,6 +1461,7 @@ namespace Horo::Editor {
         xrGraph_ = std::make_shared<XrGraph>();
         auto &storage = *xrGraph_;
         storage.extent = color.extent;
+        storage.allocation = {color, acquired, requiredFinal};
         const auto prepare = [&](XrGraph::Projection &target, const bool sampled) {
             return target.Prepare(frontend_, meshes, resources_, xrDrawSlots_[0], color, acquired, requiredFinal, sampled, auxiliary,
                                   xrMotionDrawSlots_);
@@ -1478,16 +1497,30 @@ namespace Horo::Editor {
             }
             (void)first.RetireDepth(frontend_);
         }
-        if (const auto ordinary = prepare(storage.baseline, false); ordinary.HasError() || !canvas)
-            return ordinary;
+        return prepare(storage.baseline, false);
+    }
 
+    /** @copydoc EditorViewportRendererVulkan::PrepareXrCanvas */
+    Result<bool> EditorViewportRendererVulkan::PrepareXrCanvas(std::span<const EditorViewportMeshResourceView> meshes,
+                                                               const EditorVulkanXrViewportAccess::CanvasPreparation &canvas) {
+        using Outcome = Result<bool>;
+        if (const auto owner = Detail::RenderFrontendResourceAccess::RequirePreparationBoundary(frontend_); owner.HasError())
+            return Outcome::Failure(owner.ErrorValue());
+        if (!initialized_ || !xrGraph_ || xrGraph_->retiring || !canvas.writer.artifact.reflection)
+            return Outcome::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+        auto &storage = *xrGraph_;
+        if (storage.historyEnabled || storage.bound ||
+            (storage.lastCanvasVariant && Detail::PreparedRenderGraphTemplate::InFlight(*storage.lastCanvasVariant)))
+            return Outcome::Success(false);
         const XrGraph::Projection::Topology::ScenePreparation scene{frontend_,
                                                                     resources_,
                                                                     meshes,
                                                                     xrDrawSlots_[0],
-                                                                    {color, acquired, requiredFinal},
-                                                                    storage.baseline.depthTexture.handle};
-        return storage.PrepareCanvas(*this, scene, *canvas);
+                                                                    storage.allocation,
+                                                                    storage.single->depthTexture.handle};
+        if (const auto ready = storage.PrepareCanvas(*this, scene, canvas); ready.HasError())
+            return Outcome::Failure(ready.ErrorValue());
+        return Outcome::Success(true);
     }
 
     /** @copydoc EditorViewportRendererVulkan::BindXrFrame */
