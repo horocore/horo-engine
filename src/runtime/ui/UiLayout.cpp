@@ -232,6 +232,8 @@ namespace Horo::Runtime::Ui {
                 return candidateTree.nodes[index].element;
             });
 
+            // Children writes only its returned prefix. Size the writable scratch once for the whole traversal.
+            childHandleScratch.resize(traversalScratch.size());
             for (std::uint32_t index = 0; index < candidateTree.nodes.size(); ++index) {
                 const auto record = tree.Get(candidateTree.nodes[index].element);
                 if (record.HasError())
@@ -243,14 +245,12 @@ namespace Horo::Runtime::Ui {
                     candidateTree.nodes[index].parent = parent;
                 }
 
-                childHandleScratch.resize(descriptor.elementCapacity);
                 const auto children = tree.Children(candidateTree.nodes[index].element, childHandleScratch);
                 if (children.HasError())
                     return Result<void>::Failure(children.ErrorValue());
-                childHandleScratch.resize(children.Value());
                 candidateTree.nodes[index].firstChild = static_cast<std::uint32_t>(candidateTree.children.size());
                 candidateTree.nodes[index].childCount = static_cast<std::uint32_t>(children.Value());
-                for (const auto child : childHandleScratch) {
+                for (const auto child : std::span<const UiElementHandle>{childHandleScratch}.first(children.Value())) {
                     const auto childIndex = FindCandidate(child);
                     if (childIndex == NoParent)
                         return Failure(UiErrors::ElementTreeInvalid);
