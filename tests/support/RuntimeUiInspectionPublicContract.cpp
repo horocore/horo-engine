@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Ui/RuntimeUiService.h"
 #include "Horo/Runtime/Ui/UiCpuWorkStatistics.h"
 #include "Horo/Runtime/Ui/UiHotReload.h"
 #include "Horo/Runtime/Ui/UiLayoutInspector.h"
@@ -28,3 +29,6 @@ static_assert(std::is_trivially_copyable_v<Horo::Runtime::Ui::UiCpuWorkStatistic
 static_assert(requires(const Horo::Runtime::Ui::UiRenderGeometryPlan &plan) { plan.Inspect(16); });
 static_assert(requires(const Horo::Runtime::Ui::UiHotReload &publisher, const Horo::Runtime::Ui::UiReloadLease &lease,
                        Horo::Runtime::Ui::UiCanvasId canvas) { publisher.Inspect(lease, canvas); });
+static_assert(requires(const Horo::Runtime::Ui::RuntimeUiService &service, Horo::Runtime::Ui::RuntimeUiInstanceId instance,
+                       const Horo::Runtime::Ui::UiReloadLease &lease,
+                       Horo::Runtime::Ui::UiCanvasId canvas) { service.Inspect(instance, lease, canvas); });

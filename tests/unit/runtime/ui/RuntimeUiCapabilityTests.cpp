@@ -93,6 +93,50 @@ namespace Horo::Tests::UiAccess {
         CHECK(client->Validate().HasError());
     }
 
+    TEST_CASE("Runtime UI host can inspect only the current canvas publication it owns", "[runtime-ui][inspection]") {
+        Fixture fixture{false, true};
+        const auto canvas = Stable<UiCanvasId>(2);
+        const auto lease = Take(fixture.service.Acquire(Instance()));
+        const auto captured = Take(fixture.service.Inspect(Instance(), lease, canvas));
+        REQUIRE(captured.bindings);
+        REQUIRE(captured.bindings->providers.size() == 1);
+        REQUIRE(captured.bindings->bindings.size() == 1);
+        REQUIRE(captured.actions);
+        CHECK(captured.bindings->providers.front().active);
+        CHECK(captured.bindings->providers.front().instance == Fixture::Provider());
+        CHECK(captured.bindings->bindings.front().value == UiBindingValue{std::string{"initial"}});
+
+        const auto overBudget = fixture.service.Inspect(Instance(), lease, canvas, {.providers = 0});
+        REQUIRE(overBudget.HasError());
+        CHECK(overBudget.ErrorValue().code.Value() == UiErrors::BindingCapacityExceeded.code.Value());
+
+        Fixture foreign;
+        const auto foreignLease = Take(foreign.service.Acquire(Instance()));
+        const auto foreignCapture = fixture.service.Inspect(Instance(), foreignLease, canvas);
+        REQUIRE(foreignCapture.HasError());
+        CHECK(foreignCapture.ErrorValue().code.Value() == UiErrors::RevisionStale.code.Value());
+
+        bool wrongThread{};
+        std::thread worker{[&] {
+            const auto result = fixture.service.Inspect(Instance(), lease, canvas);
+            wrongThread = result.HasError() && result.ErrorValue().code.Value() == UiErrors::CapabilityWrongThread.code.Value();
+        }};
+        worker.join();
+        CHECK(wrongThread);
+
+        REQUIRE(fixture.service.Reload(Instance(), fixture.Make(2), Lifecycle).HasValue());
+        const auto stale = fixture.service.Inspect(Instance(), lease, canvas);
+        REQUIRE(stale.HasError());
+        CHECK(stale.ErrorValue().code.Value() == UiErrors::RevisionStale.code.Value());
+        const auto current = Take(fixture.service.Acquire(Instance()));
+        CHECK(Take(fixture.service.Inspect(Instance(), current, canvas)).tree != captured.tree);
+        fixture.service.Shutdown();
+        const auto stopped = fixture.service.Inspect(Instance(), current, canvas);
+        REQUIRE(stopped.HasError());
+        CHECK(stopped.ErrorValue().code.Value() == UiErrors::CapabilityRevoked.code.Value());
+        CHECK(captured.bindings->providers.front().active);
+    }
+
     TEST_CASE("Runtime UI child revocation isolates siblings and bounds delegation", "[runtime-ui][lifetime]") {
         Fixture fixture;
         auto root = fixture.Client();

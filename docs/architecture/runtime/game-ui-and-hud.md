@@ -1412,6 +1412,12 @@ exceeding a row budget fails before exposing a result. Replaced leases and
 stopped publishers reject new captures, and records already captured remain
 readable. Regular frame work never captures these diagnostics.
 
+Application tools call `RuntimeUiService::Inspect` with the exact game instance
+and a generation obtained through `Acquire`. The service checks its owner lane
+and current publication before forwarding to the same diagnostic projection.
+Reloaded and revoked services reject earlier selections. The host receives
+copied records and retains no access to the mutable canvas publisher.
+
 The new provider capability's `Prepare` boundary is exception-free (`noexcept`),
 matching the Foundation public engine module policy. The owned adapter converts
 private standard/third-party exceptions into its typed `Result` before returning;
