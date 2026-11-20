@@ -5,6 +5,7 @@
 #include "EditorLocalAgentContext.h"
 #include "EditorLocalAgentHistory.h"
 #include "Horo/Agent/ReferenceModelProviders.h"
+#include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/IWorkspacePanel.h"
 #include "Horo/Platform/SecureRandom.h"
@@ -63,7 +64,7 @@ namespace Horo::Editor {
                 : IWorkspacePanel("workspace.local_agent"), history_(jobs, files) {}
 
             ~LocalAgentPanel() override {
-                RevokeSourceContext();
+                RevokeContext();
                 worker_.request_stop();
             }
 
@@ -85,9 +86,13 @@ namespace Horo::Editor {
 
             void OnAttach(PanelContext &context) override {
                 sceneCount_ = context.sceneObjectCount;
-                RevokeSourceContext();
+                RevokeContext();
                 activeSource_ = context.activeSourceSnapshot;
                 activeSourceRange_ = context.activeSourceRange;
+                buildOutput_ = context.buildOutputQuery;
+                gameplayBuilds_ = context.gameplayBuilds;
+                if (context.projectFileRoot)
+                    buildRoot_ = *context.projectFileRoot;
                 contextProject_ = context.projectIdentity;
                 contextLifetime_.emplace();
                 ++contextGeneration_;
@@ -101,7 +106,7 @@ namespace Horo::Editor {
                 prompt_.clear();
                 response_.clear();
                 sceneCount_ = {};
-                RevokeSourceContext();
+                RevokeContext();
                 history_.Detach();
                 awaitingCheckpoint_ = false;
                 submittedPrompt_.reset();
@@ -135,7 +140,7 @@ namespace Horo::Editor {
                 ImGui::BeginChild("##LocalAgent", size, false, ImGuiWindowFlags_NoSavedSettings);
                 DrawProvider(locale, fonts);
                 ImGui::TextUnformatted(LocalizedText(locale, "prompt").c_str());
-                ImGui::BeginDisabled(awaitingCheckpoint_ || sourcePreview_);
+                ImGui::BeginDisabled(awaitingCheckpoint_ || contextPreview_);
                 static_cast<void>(Ui::InputTextControl("##Prompt", prompt_, 4096, fonts));
                 ImGui::EndDisabled();
                 DrawSendActions(locale);
@@ -154,13 +159,16 @@ namespace Horo::Editor {
                 return reply_.valid();
             }
 
-            void RevokeSourceContext() noexcept {
+            void RevokeContext() noexcept {
                 if (contextLifetime_)
                     contextLifetime_->RequestCancellation();
                 contextLifetime_.reset();
-                sourcePreview_.reset();
+                contextPreview_.reset();
                 activeSource_ = {};
                 activeSourceRange_ = {};
+                buildOutput_ = nullptr;
+                gameplayBuilds_ = nullptr;
+                buildRoot_.clear();
                 contextProject_.clear();
             }
 
@@ -171,7 +179,7 @@ namespace Horo::Editor {
 
             void DrawProvider(const ILocalizationService &locale, const Theme::Fonts &fonts) {
                 ImGui::TextUnformatted(LocalizedText(locale, "endpoint").c_str());
-                ImGui::BeginDisabled(Busy() || awaitingCheckpoint_ || history_.HasRecovery() || sourcePreview_);
+                ImGui::BeginDisabled(Busy() || awaitingCheckpoint_ || history_.HasRecovery() || contextPreview_);
                 if (Ui::InputTextControl("##Endpoint", endpoint_, 256, fonts)) {
                     models_.clear();
                     selection_ = -1;
@@ -199,8 +207,8 @@ namespace Horo::Editor {
             }
 
             void DrawSendActions(const ILocalizationService &locale) {
-                if (sourcePreview_) {
-                    DrawSourceReview(locale);
+                if (contextPreview_) {
+                    DrawContextReview(locale);
                     return;
                 }
                 const bool ready =
@@ -219,6 +227,12 @@ namespace Horo::Editor {
                 }
                 if (Button(locale, "context_range_offer", ready && activeSourceRange_ && contextLifetime_ && !contextProject_.empty())) {
                     PrepareSourceReview(true);
+                    return;
+                }
+                if (Button(locale, "context_build_offer",
+                           ready && buildOutput_ && gameplayBuilds_ && !buildRoot_.empty() && contextLifetime_ &&
+                               !contextProject_.empty())) {
+                    PrepareBuildReview();
                     return;
                 }
                 const auto count = sceneCount_ ? sceneCount_() : std::nullopt;
@@ -244,37 +258,71 @@ namespace Horo::Editor {
                     status_ = "context_unavailable";
                     return;
                 }
-                sourcePreview_.emplace(std::move(prepared).Value());
+                contextPreview_.emplace(std::move(prepared).Value());
+                status_ = nullptr;
+            }
+
+            /** @brief Uses only the existing gameplay service's exact active-project operation. */
+            std::optional<OperationId> ActiveBuildOperation() const {
+                const auto build = gameplayBuilds_->QueryActiveProject(buildRoot_);
+                return build ? build->operationId : std::nullopt;
+            }
+
+            void PrepareBuildReview() {
+                constexpr std::size_t Records = 8;
+                constexpr std::size_t Bytes = (3U << 10U) - Records;  // Leave room for framing each selected in-memory message.
+                const auto operation = ActiveBuildOperation();
+                auto tail = operation ? buildOutput_->CaptureOperationTail(*operation, Records, Bytes) : std::nullopt;
+                if (!tail) {
+                    status_ = "context_build_unavailable";
+                    return;
+                }
+                auto prepared = EditorLocalAgentContext::PrepareBuildOutput(std::move(*tail), contextProject_, contextGeneration_,
+                                                                            contextLifetime_->Token(), turn_ + 1);
+                if (prepared.HasError()) {
+                    status_ = "context_build_unavailable";
+                    return;
+                }
+                contextPreview_.emplace(std::move(prepared).Value());
                 status_ = nullptr;
             }
 
             /** @brief Rechecks widget byte offsets only on approval, avoiding whole-document scans during preview drawing. */
             bool ReviewSelectionCurrent() const {
-                const auto expected = sourcePreview_->Selection();
+                if (const auto operation = contextPreview_->BuildOperation())
+                    return ActiveBuildOperation() == operation;
+                const auto expected = contextPreview_->Selection();
                 if (!expected)
                     return true;
                 SourceDocumentSnapshot active;
                 SourceContextRange range;
-                return activeSourceRange_(active, range) && sourcePreview_->Matches(active) && range == *expected;
+                return activeSourceRange_(active, range) && contextPreview_->Matches(active) && range == *expected;
             }
 
-            void DrawSourceReview(const ILocalizationService &locale) {
+            /** @brief Validates the active tab for source previews or the exact operation's witness for output. */
+            bool ContextReviewCurrent() const {
+                if (contextPreview_->BuildOperation())
+                    return contextPreview_->IsCurrent();
                 SourceDocumentSnapshot active;
-                if (!activeSource_(active) || !sourcePreview_->Matches(active)) {
-                    sourcePreview_.reset();
+                return activeSource_(active) && contextPreview_->Matches(active);
+            }
+
+            void DrawContextReview(const ILocalizationService &locale) {
+                if (!ContextReviewCurrent()) {
+                    contextPreview_.reset();
                     status_ = "context_stale";
                     return;
                 }
                 ImGui::TextWrapped("%s", LocalizedText(locale, "context_review").c_str());
                 ImGui::PushTextWrapPos(0);
-                for (const auto &item : sourcePreview_->Items()) {
+                for (const auto &item : contextPreview_->Items()) {
                     const auto &payload = item.candidate.text;
                     ImGui::TextUnformatted(payload.data(), payload.data() + payload.size());
                 }
                 ImGui::PopTextWrapPos();
                 if (Button(locale, "context_approve", !Busy())) {
                     const bool selected = ReviewSelectionCurrent();
-                    auto approved = std::exchange(sourcePreview_, std::nullopt);
+                    auto approved = std::exchange(contextPreview_, std::nullopt);
                     if (selected && approved->Approve())
                         Send({}, false, std::move(approved));
                     else
@@ -283,7 +331,7 @@ namespace Horo::Editor {
                 }
                 ImGui::SameLine();
                 if (Button(locale, "context_cancel", true))
-                    sourcePreview_.reset();
+                    contextPreview_.reset();
             }
 
             void Send(std::optional<std::size_t> sceneCount, bool recoverable = false, std::optional<EditorLocalAgentContext> source = {}) {
@@ -384,10 +432,13 @@ namespace Horo::Editor {
             std::function<std::optional<std::size_t>()> sceneCount_;
             std::function<bool(SourceDocumentSnapshot &)> activeSource_;
             std::function<bool(SourceDocumentSnapshot &, SourceContextRange &)> activeSourceRange_;
+            const IBuildOutputQuery *buildOutput_{};
+            const Application::GameplayBuildService *gameplayBuilds_{};
+            std::filesystem::path buildRoot_;
             std::string contextProject_;
             std::uint64_t contextGeneration_{};
             std::optional<CancellationSource> contextLifetime_;
-            std::optional<EditorLocalAgentContext> sourcePreview_;
+            std::optional<EditorLocalAgentContext> contextPreview_;
             EditorLocalAgentHistory history_;
             std::optional<std::string> submittedPrompt_;
             AgentHistoryProjectRevision submittedProject_;

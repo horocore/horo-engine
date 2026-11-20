@@ -864,6 +864,12 @@ Source edits, close, and workspace
 detachment invalidate the preview before provider dispatch. This request and
 its reply are excluded from conversation history.
 
+The panel can also preview the recent output of the active gameplay build
+for the current project. It reads only the retained output for that build
+operation, marks omitted output, and redacts the text before review.
+Changes to the selected operation's output invalidate its approval. Other
+builds and process logs have no effect while the selected output is retained.
+
 Users can explicitly add context to a prompt:
 
 - **Selection**: "Use the selected object" — current selection is injected

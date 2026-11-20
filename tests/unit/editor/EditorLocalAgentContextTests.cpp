@@ -155,4 +155,103 @@ namespace Horo::Editor {
         REQUIRE(beyond.HasError());
         CHECK(beyond.ErrorValue().code.Value() == Application::CodeQueryErrors::Invalid.code.Value());
     }
+
+    TEST_CASE("Build output witnesses follow only their operation and its retained records", "[unit][agent][context][build_output]") {
+        constexpr OperationId selected = 17;
+        constexpr OperationId other = 23;
+        BuildOutputOperationWitness afterDestruction;
+        {
+            BuildOutputStore output{3};
+            output.Append({.operationId = selected, .message = "First selected result"});
+            output.Append({.operationId = other, .message = "Other operation"});
+            CHECK_FALSE(output.CaptureOperationTail(99, 2, 128));
+            const auto initial = output.CaptureOperationTail(selected, 2, 128);
+            REQUIRE(initial);
+            REQUIRE(initial->messages == std::vector<std::string>{"First selected result"});
+            CHECK(initial->witness.IsCurrent());
+            output.Append({.operationId = other, .message = "New unrelated output"});
+            CHECK(initial->witness.IsCurrent());
+            output.Append({.operationId = selected, .message = "New selected result"});
+            CHECK_FALSE(initial->witness.IsCurrent());
+            const auto refreshed = output.CaptureOperationTail(selected, 2, 128);
+            REQUIRE(refreshed);
+            afterDestruction = refreshed->witness;
+            REQUIRE(afterDestruction.IsCurrent());
+            output.Append({.operationId = other, .message = "Evict other output"});
+            CHECK(afterDestruction.IsCurrent());
+        }
+        CHECK_FALSE(afterDestruction.IsCurrent());
+
+        BuildOutputStore evicting{2};
+        evicting.Append({.operationId = selected, .message = "Selected for eviction"});
+        evicting.Append({.operationId = other, .message = "Unrelated"});
+        const auto retained = evicting.CaptureOperationTail(selected, 1, 128);
+        REQUIRE(retained);
+        evicting.Append({.operationId = other, .message = "Evicts selected output"});
+        CHECK_FALSE(retained->witness.IsCurrent());
+    }
+
+    TEST_CASE("Local panel build context sends the explicitly approved bounded project operation output without history",
+              "[unit][agent][context][build_output]") {
+        constexpr OperationId selected = 31;
+        constexpr OperationId other = 32;
+        BuildOutputStore output{12};
+        output.Append({.operationId = selected, .message = "Omitted earlier selected detail"});
+        output.Append({.operationId = other, .message = "Other project's build output"});
+        output.Append({.operationId = selected, .message = "Visible compiler finding"});
+        output.Append({.operationId = selected, .message = "Authorization: Bearer synthetic-build-value"});
+        auto tail = output.CaptureOperationTail(selected, 2, 256);
+        REQUIRE(tail);
+        CHECK(tail->truncated);
+        CancellationSource workspace;
+        auto captured = EditorLocalAgentContext::PrepareBuildOutput(std::move(*tail), "project", 3, workspace.Token(), 51);
+        REQUIRE(captured.HasValue());
+        auto context = std::move(captured).Value();
+        CHECK(context.BuildOperation() == selected);
+        REQUIRE(context.Items().size() == 1);
+        const auto &item = context.Items().front();
+        REQUIRE(item.provenance.kind == AgentContextKind::BuildOutput);
+        CHECK(item.provenance.truncated);
+        const auto consented = item.candidate.text;
+        CHECK(consented.find("Visible compiler finding") != std::string::npos);
+        CHECK(consented.find("[redacted]") != std::string::npos);
+        CHECK(consented.find("synthetic-build-value") == std::string::npos);
+        CHECK(consented.find("Other project's") == std::string::npos);
+        CHECK(consented.find("Omitted earlier selected detail") == std::string::npos);
+        bool shouldSend{};
+
+        SECTION("A preview without explicit consent cannot dispatch") {}
+        SECTION("New output for the exact operation revokes dispatch even after consent") {
+            REQUIRE(context.Approve());
+            output.Append({.operationId = selected, .message = "New selected output"});
+        }
+        SECTION("Workspace detachment revokes approved output") {
+            REQUIRE(context.Approve());
+            workspace.RequestCancellation();
+        }
+        SECTION("Other operation output cannot change the exact approved evidence") {
+            REQUIRE(context.Approve());
+            output.Append({.operationId = other, .message = "Unrelated output after capture"});
+            CHECK(context.IsCurrent());
+            shouldSend = true;
+        }
+        RecordingModel provider;
+        auto worker = std::async(std::launch::async, [context = std::move(context), &provider]() mutable {
+            const auto dispatch = context.Dispatch();
+            AgentTurnRuntime runtime;
+            return runtime.Run(provider, nullptr, 51, {.model = "local", .messages = {{.role = ModelRole::User, .text = "Explain build"}}},
+                               {}, {}, &dispatch);
+        });
+        const auto result = worker.get();
+        if (!shouldSend) {
+            CHECK(result.status == AgentTurnStatus::ContextDenied);
+            CHECK(provider.sent.empty());
+            return;
+        }
+        REQUIRE(result.status == AgentTurnStatus::Completed);
+        REQUIRE(provider.sent.size() == 2);
+        CHECK(provider.sent.front().text == consented);
+        REQUIRE(result.messages.size() == 2);
+        CHECK(result.messages.front().text == "Explain build");
+    }
 }  // namespace Horo::Editor

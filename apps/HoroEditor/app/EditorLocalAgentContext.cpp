@@ -2,7 +2,6 @@
 
 #include "AgentHistoryReview.h"
 
-#include <array>
 #include <format>
 
 namespace Horo::Editor {
@@ -11,20 +10,46 @@ namespace Horo::Editor {
         constexpr auto PreviewLifetime = std::chrono::minutes{5};
 
         /** @brief Reuses the host's bounded plain-display redaction without passing any raw data into history. */
-        Result<std::string> RedactSource(const Agent::AgentContextProvenance &, const std::string_view text) {
+        Result<std::string> RedactEvidence(const Agent::AgentContextProvenance &, const std::string_view text) {
             auto admitted = Agent::RedactHistoryDisplayText(Agent::AgentHistoryTextKind::UserMessage, text);
             if (!admitted.admittedText)
                 return Result<std::string>::Failure(MakeError(Application::CodeQueryErrors::Invalid));
             return Result<std::string>::Success(std::move(*admitted.admittedText));
+        }
+
+        /** @brief Builds a bounded project fence shared by explicit source and build evidence. */
+        Platform::ProjectReadContext ProjectContext(std::string identity, const std::uint64_t generation, CancellationToken lifetime) {
+            return {std::move(identity), generation, std::move(lifetime), std::chrono::steady_clock::now() + PreviewLifetime};
         }
     }  // namespace
 
     EditorLocalAgentContext::EditorLocalAgentContext(SourceDocumentSnapshot source, Platform::ProjectReadContext project,
                                                      std::unique_ptr<Security::AgentPolicy> policy, Agent::AgentContextPreview preview,
                                                      std::function<bool(const Agent::AgentContextProvenance &)> current,
-                                                     const std::optional<SourceContextRange> selection)
+                                                     const std::optional<SourceContextRange> selection,
+                                                     const std::optional<OperationId> buildOperation)
         : source_(std::move(source)), project_(std::move(project)), policy_(std::move(policy)), preview_(std::move(preview)),
-          current_(std::move(current)), selection_(selection) {}
+          current_(std::move(current)), selection_(selection), buildOperation_(buildOperation) {}
+
+    /** @brief Creates one exclusive policy and preview without granting consent or transferring any source owners. */
+    Result<EditorLocalAgentContext> EditorLocalAgentContext::Capture(const Agent::AgentContextSelection &selected,
+                                                                     Agent::AgentContextReaders readers,
+                                                                     Platform::ProjectReadContext project, const std::uint64_t requestId,
+                                                                     SourceDocumentSnapshot source,
+                                                                     const std::optional<SourceContextRange> range,
+                                                                     const std::optional<OperationId> buildOperation) {
+        using Output = Result<EditorLocalAgentContext>;
+        auto policy = std::make_unique<Security::AgentPolicy>();
+        // Local evidence consent grants no project trust and no tool capability.
+        if (!policy->SetProjectTrust(false, project.projectGeneration))
+            return Output::Failure(MakeError(Application::CodeQueryErrors::Invalid));
+        auto preview =
+            Agent::AgentContextPreview::Capture(std::span{&selected, 1}, readers, project, Residence, requestId, project.projectGeneration);
+        if (preview.HasError())
+            return Output::Failure(std::move(preview).ErrorValue());
+        return Output::Success(EditorLocalAgentContext{std::move(source), std::move(project), std::move(policy), std::move(preview).Value(),
+                                                       std::move(readers.isCurrent), range, buildOperation});
+    }
 
     /** @copydoc EditorLocalAgentContext::Prepare */
     Result<EditorLocalAgentContext> EditorLocalAgentContext::Prepare(SourceDocumentSnapshot source, std::string projectIdentity,
@@ -45,13 +70,6 @@ namespace Horo::Editor {
         const auto identity = source.Identity();
         const auto &path = identity.key.source.Value();
         const auto revision = std::format("source:{}:{}", identity.instance.Value(), source.Revision());
-        Platform::ProjectReadContext project{std::move(projectIdentity), workspaceGeneration, std::move(lifetime),
-                                             std::chrono::steady_clock::now() + PreviewLifetime};
-        auto policy = std::make_unique<Security::AgentPolicy>();
-        // The panel does not mint project trust or authorize any non-read-only tool.
-        if (!policy->SetProjectTrust(false, workspaceGeneration))
-            return Output::Failure(MakeError(Application::CodeQueryErrors::Invalid));
-
         auto current = [source, path, revision](const AgentContextProvenance &provenance) {
             return source.IsCurrent() && provenance.origin == path && provenance.revision == revision;
         };
@@ -65,18 +83,45 @@ namespace Horo::Editor {
                 Platform::ProjectReadTextSnapshot{context.projectIdentity, context.projectGeneration, path, revision, source.TextLease()});
         }, .redact = [sensitive](const AgentContextProvenance &provenance, const std::string_view payload) {
             if (!sensitive)
-                return RedactSource(provenance, payload);
+                return RedactEvidence(provenance, payload);
             const std::string framed = std::string{payload.substr(0, payload.size() - provenance.capturedBytes)} + "[redacted]";
-            return RedactSource(provenance, framed);
+            return RedactEvidence(provenance, framed);
         }, .isCurrent = current};
-        const std::array<AgentContextSelection, 1> selected{
+        const AgentContextSelection selected =
             AgentContextTextRequest{selection ? AgentContextKind::SourceRange : AgentContextKind::File, path, revision,
-                                    selection ? selection->offset : 0, selection ? selection->length : 0}};
-        auto preview = AgentContextPreview::Capture(selected, readers, project, Residence, requestId, workspaceGeneration);
-        if (preview.HasError())
-            return Output::Failure(std::move(preview).ErrorValue());
-        return Output::Success(EditorLocalAgentContext{std::move(source), std::move(project), std::move(policy), std::move(preview).Value(),
-                                                       std::move(current), selection});
+                                    selection ? selection->offset : 0, selection ? selection->length : 0};
+        return Capture(selected, readers, ProjectContext(std::move(projectIdentity), workspaceGeneration, std::move(lifetime)), requestId,
+                       source, selection, {});
+    }
+
+    /** @copydoc EditorLocalAgentContext::PrepareBuildOutput */
+    Result<EditorLocalAgentContext> EditorLocalAgentContext::PrepareBuildOutput(BuildOutputOperationTail tail, std::string projectIdentity,
+                                                                                const std::uint64_t workspaceGeneration,
+                                                                                CancellationToken lifetime, const std::uint64_t requestId) {
+        using Output = Result<EditorLocalAgentContext>;
+        using namespace Agent;
+        if (!tail.witness.IsCurrent() || lifetime.IsCancellationRequested())
+            return Output::Failure(MakeError(Application::CodeQueryErrors::Stale));
+        if (!tail.operation || !tail.lastSequence || tail.messages.empty() || tail.messages.size() > 16)
+            return Output::Failure(MakeError(Application::CodeQueryErrors::Invalid));
+        constexpr std::size_t MaximumBytes = 3U << 10U;
+        std::string text;
+        for (const auto &message : tail.messages) {
+            if (text.size() == MaximumBytes || message.size() > MaximumBytes - text.size() - 1)
+                return Output::Failure(MakeError(Application::CodeQueryErrors::Capacity));
+            text.append(message);
+            text.push_back('\n');
+        }
+        const auto origin = std::format("gameplay build {}", tail.operation);
+        const auto revision = std::format("output:{}", tail.lastSequence);
+        auto current = [witness = std::move(tail.witness), origin, revision](const AgentContextProvenance &provenance) {
+            return witness.IsCurrent() && provenance.origin == origin && provenance.revision == revision;
+        };
+        const AgentContextSelection selected =
+            AgentContextAttachment{AgentContextAttachmentKind::BuildOutput, origin, revision, std::move(text), tail.truncated};
+        AgentContextReaders readers{.redact = RedactEvidence, .isCurrent = std::move(current)};
+        return Capture(selected, std::move(readers), ProjectContext(std::move(projectIdentity), workspaceGeneration, std::move(lifetime)),
+                       requestId, {}, {}, tail.operation);
     }
 
     /** @copydoc EditorLocalAgentContext::Matches */
@@ -85,9 +130,14 @@ namespace Horo::Editor {
                std::chrono::steady_clock::now() < project_.deadline;
     }
 
+    /** @copydoc EditorLocalAgentContext::IsCurrent */
+    bool EditorLocalAgentContext::IsCurrent() const {
+        return preview_.IsCurrent(*policy_, project_, current_);
+    }
+
     /** @copydoc EditorLocalAgentContext::Approve */
     bool EditorLocalAgentContext::Approve() {
-        return preview_.IsCurrent(*policy_, project_, current_) && preview_.Grant(*policy_).Allowed();
+        return IsCurrent() && preview_.Grant(*policy_).Allowed();
     }
 
     /** @copydoc EditorLocalAgentContext::Dispatch */

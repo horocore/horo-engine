@@ -4,6 +4,7 @@
 
 #include "AgentTurn.h"
 #include "Horo/Editor/SourceDocumentService.h"
+#include "Horo/Foundation/BuildOutputStore.h"
 
 namespace Horo::Editor {
     /** @brief Owns one source preview and its exclusive policy until the approved request moves to the worker.
@@ -26,6 +27,14 @@ namespace Horo::Editor {
                                                                      std::uint64_t requestId,
                                                                      std::optional<SourceContextRange> selection = {});
 
+        /** @brief Prepares only the bounded, already-correlated build messages selected by the workspace.
+         * @details The tail must have been acquired from the project's exact active gameplay operation.
+         * The worker receives a revocation witness and redacted bytes, never the process output query.
+         */
+        [[nodiscard]] static Result<EditorLocalAgentContext> PrepareBuildOutput(BuildOutputOperationTail tail, std::string projectIdentity,
+                                                                                std::uint64_t workspaceGeneration,
+                                                                                CancellationToken lifetime, std::uint64_t requestId);
+
         /** @brief Observe the exact bytes to present before asking for consent. */
         [[nodiscard]] std::span<const Agent::AgentContextPreviewItem> Items() const noexcept {
             return preview_.Items();
@@ -33,6 +42,13 @@ namespace Horo::Editor {
 
         /** @brief Check that this same edition of the same document is still selected in the workspace. */
         [[nodiscard]] bool Matches(const SourceDocumentSnapshot &active) const noexcept;
+        /** @brief Checks the captured authority without accessing any editor or output owner. */
+        [[nodiscard]] bool IsCurrent() const;
+
+        /** @brief Identifies the exact build operation when this is a build-output preview. */
+        [[nodiscard]] std::optional<OperationId> BuildOperation() const noexcept {
+            return buildOperation_;
+        }
 
         /** @brief Reports the captured explicit selection, when reviewing a range. */
         [[nodiscard]] std::optional<SourceContextRange> Selection() const noexcept {
@@ -49,7 +65,12 @@ namespace Horo::Editor {
         EditorLocalAgentContext(SourceDocumentSnapshot source, Platform::ProjectReadContext project,
                                 std::unique_ptr<Security::AgentPolicy> policy, Agent::AgentContextPreview preview,
                                 std::function<bool(const Agent::AgentContextProvenance &)> current,
-                                std::optional<SourceContextRange> selection);
+                                std::optional<SourceContextRange> selection, std::optional<OperationId> buildOperation);
+        [[nodiscard]] static Result<EditorLocalAgentContext> Capture(const Agent::AgentContextSelection &selected,
+                                                                     Agent::AgentContextReaders readers,
+                                                                     Platform::ProjectReadContext project, std::uint64_t requestId,
+                                                                     SourceDocumentSnapshot source, std::optional<SourceContextRange> range,
+                                                                     std::optional<OperationId> buildOperation);
 
         SourceDocumentSnapshot source_;
         Platform::ProjectReadContext project_;
@@ -57,5 +78,6 @@ namespace Horo::Editor {
         Agent::AgentContextPreview preview_;
         std::function<bool(const Agent::AgentContextProvenance &)> current_;
         std::optional<SourceContextRange> selection_;
+        std::optional<OperationId> buildOperation_;
     };
 }  // namespace Horo::Editor

@@ -8,6 +8,7 @@
  * @brief Bounded thread-safe typed build diagnostics and source locations.
  */
 
+#include <atomic>
 #include <chrono>
 #include <compare>
 #include <cstddef>
@@ -85,6 +86,31 @@ namespace Horo {
         std::vector<BuildOutputRecord> records;
     };
 
+    /** @brief Read-only freshness witness for the retained output of one exact operation. */
+    class BuildOutputOperationWitness final {
+    public:
+        /** @brief An inert witness has no producer authority. */
+        BuildOutputOperationWitness() = default;
+        /** @brief Checks the selected operation without accessing or retaining the output store. */
+        [[nodiscard]] bool IsCurrent() const noexcept;
+
+    private:
+        friend class BuildOutputStore;
+
+        explicit BuildOutputOperationWitness(std::shared_ptr<const std::atomic<bool>> current) : current_(std::move(current)) {}
+
+        std::shared_ptr<const std::atomic<bool>> current_;
+    };
+
+    /** @brief Raw in-memory message tail with no diagnostics paths, commands, or unrelated operation records. */
+    struct BuildOutputOperationTail final {
+        OperationId operation{};
+        std::uint64_t lastSequence{};
+        bool truncated{}; /**< The capture cut off earlier records or the store has reported retention loss. */
+        std::vector<std::string> messages;
+        BuildOutputOperationWitness witness;
+    };
+
     /** @brief Read-only build-output capability exposed to presentation surfaces. */
     class IBuildOutputQuery {
     public:
@@ -95,6 +121,16 @@ namespace Horo {
          * @return An owned immutable-by-convention copy, or no value when unchanged.
          */
         [[nodiscard]] virtual std::optional<BuildOutputSnapshot> SnapshotIfChanged(std::uint64_t knownRevision) const = 0;
+
+        /** @brief Copies a bounded, exact-operation tail without copying or opening unrelated output.
+         * @param operation Nonzero operation correlated by an authorized caller.
+         * @param maximumRecords Positive cap, at most 16 raw messages.
+         * @param maximumBytes Positive raw message cap, at most 32 KiB.
+         * @return A nonempty chronological tail, or no value when unsupported, absent, or at witness capacity.
+         */
+        [[nodiscard]] virtual std::optional<BuildOutputOperationTail> CaptureOperationTail(OperationId operation,
+                                                                                           std::size_t maximumRecords,
+                                                                                           std::size_t maximumBytes) const;
     };
 
     /**
@@ -111,6 +147,7 @@ namespace Horo {
          * @param capacity Maximum retained record count.
          */
         explicit BuildOutputStore(std::size_t capacity);
+        ~BuildOutputStore() override;
 
         /**
          * @brief Allocates one deterministic non-zero session identity.
@@ -127,11 +164,24 @@ namespace Horo {
 
         /** @copydoc IBuildOutputQuery::SnapshotIfChanged */
         [[nodiscard]] std::optional<BuildOutputSnapshot> SnapshotIfChanged(std::uint64_t knownRevision) const override;
+        /** @copydoc IBuildOutputQuery::CaptureOperationTail */
+        [[nodiscard]] std::optional<BuildOutputOperationTail> CaptureOperationTail(OperationId operation, std::size_t maximumRecords,
+                                                                                   std::size_t maximumBytes) const override;
 
     private:
+        struct OperationObserver {
+            OperationId operation;
+            std::weak_ptr<std::atomic<bool>> current;
+        };
+
+        /** @brief Revoke selected observers on record publication or eviction. Requires the store lock. */
+        void RevokeOperation(std::optional<OperationId> operation) noexcept;
         const std::size_t capacity_;
         mutable std::mutex mutex_;
         std::deque<BuildOutputRecord> records_;
+        // This bounded registry shares the same lock as records. Only the store invalidates observers. Worker reads
+        // touch the atomic value alone, and the store revokes all extant observers before destruction.
+        mutable std::vector<OperationObserver> operationObservers_;
         std::uint64_t nextSessionValue_{1};
         std::uint64_t nextSequence_{1};
         std::uint64_t revision_{};

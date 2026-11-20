@@ -51,6 +51,7 @@ namespace Horo::Agent {
         std::string origin;
         std::string revision;
         std::string text;
+        bool truncated{}; /**< This selected projection explicitly omits source evidence. */
     };
 
     /** @brief One explicitly selected source, in the order displayed to the user. */

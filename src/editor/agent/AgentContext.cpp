@@ -149,8 +149,9 @@ namespace Horo::Agent {
             if (!IsText(attachment.text))
                 return CaptureResult::Failure(MakeError(CodeQueryErrors::Binary));
             const auto dataClass = *kind == AgentContextKind::Selection ? AgentDataClass::SceneData : AgentDataClass::SensitiveProjectData;
-            return CaptureResult::Success(
-                {{*kind, attachment.origin, attachment.revision, 0, attachment.text.size()}, dataClass, attachment.text});
+            return CaptureResult::Success({{*kind, attachment.origin, attachment.revision, 0, attachment.text.size(), attachment.truncated},
+                                           dataClass,
+                                           attachment.text});
         }
 
         /** @brief Stable labels used in the exact rendered context payload. */
