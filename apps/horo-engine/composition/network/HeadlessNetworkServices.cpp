@@ -13,10 +13,74 @@
 #include <array>
 #include <exception>
 #include <limits>
+#include <new>
 #include <optional>
 #include <utility>
 
 namespace Horo::Application::Internal {
+    namespace {
+        using ReplayEntity = Result<AI::AiSavedEntityReference>;
+
+        /** @brief Resolves the exact current root authored entity; raw runtime references never enter the encoded record. */
+        ReplayEntity ProjectReplayEntity(const HeadlessNetworkDetail::ReplayAuthoredScene &authored, const Runtime::RuntimeSceneView &scene,
+                                         const AI::BlackboardStoredEntityReference &stored) {
+            const Runtime::EntityRef reference{{stored.sceneIncarnation}, {stored.slot, stored.generation}};
+            auto entity = scene.Get(reference);
+            if (entity.HasError())
+                return ReplayEntity::Failure(std::move(entity).ErrorValue());
+            if (!scene.SameIncarnation(authored.initialScene) || stored.slot >= authored.slots.size() ||
+                authored.slots[stored.slot] != reference.entity || !entity.Value().authoredObject)
+                return ReplayEntity::Failure(
+                    MakeError(AI::AIErrors::CanonicalStateInvalid, "AI replay requires an original root authored entity reference."));
+
+            // The original authored incarnation is independent of transient slot generations and addresses.
+            AI::AiSavedEntityReference projected{.generation = 1};
+            constexpr auto width = sizeof(std::uint64_t);
+            for (std::size_t byte = 0; byte < width; ++byte) {
+                const auto shift = (width - 1 - byte) * 8;
+                projected.identity[byte] = static_cast<std::uint8_t>(scene.DefinitionId().value >> shift);
+                projected.identity[width + byte] = static_cast<std::uint8_t>(entity.Value().authoredObject->value >> shift);
+            }
+            return ReplayEntity::Success(projected);
+        }
+
+        /** @brief Detaches canonical reference bytes while the fixed owner still holds the exact Scene borrow. */
+        HeadlessDecisionReplay::Capture EncodeReplayCapture(AI::AiSceneDecisionReplayCapture evidence,
+                                                            const HeadlessNetworkDetail::ReplayAuthoredScene &authored,
+                                                            const Runtime::RuntimeSceneView &scene) {
+            auto encoded = AI::EncodeAiCanonicalStateRecord(evidence.canonical, HeadlessDecisionReplay::CanonicalBudget,
+                                                            [&](const AI::BlackboardStoredEntityReference &stored) {
+                return ProjectReplayEntity(authored, scene, stored);
+            });
+            if (encoded.HasError())
+                return HeadlessDecisionReplay::Capture::Failure(std::move(encoded).ErrorValue());
+            return HeadlessDecisionReplay::Capture::Success({std::move(evidence), std::move(encoded).Value()});
+        }
+    }  // namespace
+
+    /** @copydoc HeadlessDecisionReplay::BindAuthoredScene */
+    Result<void> HeadlessDecisionReplay::BindAuthoredScene(HeadlessNetworkDetail::WorldRecord &world) {
+        const auto scene = world.scenes->ActiveScene();
+        if (!scene || scene->RuntimeId() != world.request.scene || !scene->DefinitionId().IsValid())
+            return Result<void>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+        const auto slots = scene->SlotCount();
+        if (slots > CanonicalBudget / sizeof(Runtime::EntityId))
+            return Result<void>::Failure(
+                MakeError(AI::AIErrors::CanonicalStateInvalid, "Root Scene exceeds the replay identity inventory limit."));
+        try {
+            HeadlessNetworkDetail::ReplayAuthoredScene authored{*scene, std::vector<Runtime::EntityId>(slots)};
+            for (std::size_t slot = 0; slot < authored.slots.size(); ++slot) {
+                const auto entity = scene->EntityAt(slot);
+                if (entity && entity->authoredObject)
+                    authored.slots[slot] = entity->entity.entity;
+            }
+            world.replayAuthoredScene.emplace(std::move(authored));
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetStorageUnavailable));
+        }
+    }
+
     /** @copydoc HeadlessDecisionReplay::TakeCommitted */
     std::optional<HeadlessDecisionReplay::Capture> HeadlessDecisionReplay::TakeCommitted() noexcept {
         return owner_ == std::this_thread::get_id() ? std::exchange(committed_, std::nullopt) : std::nullopt;
@@ -44,12 +108,16 @@ namespace Horo::Application::Internal {
             selection_.tick != context.simulationTick)
             return;
         const auto scene = world.closeRequested ? std::nullopt : world.scenes->ActiveScene();
-        pending_ = scene ? world.ai->CaptureDecisionReplayAtSafePoint(*scene, selection_.tick, CanonicalBudget)
-                         : Capture::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
-        if (pending_->HasError())
+        auto evidence = scene && world.replayAuthoredScene
+                            ? world.ai->CaptureDecisionReplayAtSafePoint(*scene, selection_.tick, CanonicalBudget)
+                            : Result<AI::AiSceneDecisionReplayCapture>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+        if (evidence.HasError()) {
+            pending_ = Capture::Failure(std::move(evidence).ErrorValue());
             DiscardArm();
-        else
-            armedAgent_ = {};
+            return;
+        }
+        armedAgent_ = {};
+        pending_ = EncodeReplayCapture(std::move(evidence).Value(), *world.replayAuthoredScene, *scene);
     }
 
     void HeadlessDecisionReplay::Commit(const Runtime::FixedStepContext &context) noexcept {

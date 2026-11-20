@@ -40,6 +40,12 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         std::optional<Result<void>> sample;
     };
 
+    /** @brief Slot-indexed original authored entities scoped to an exact root Scene incarnation. */
+    struct ReplayAuthoredScene final {
+        Runtime::RuntimeSceneView initialScene;
+        std::vector<Runtime::EntityId> slots;
+    };
+
     /** @brief One generation-owned Scene/Physics pair; equal Scene IDs never imply shared storage. */
     struct WorldRecord final {
         explicit WorldRecord(const Network::NetworkModeServiceRequest &input) : request(input), native({input.scene, input.scene}) {}
@@ -60,6 +66,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         std::unique_ptr<AI::AiSceneRuntime> ai;
         std::shared_ptr<Network::SceneReplicationCommitSource> publicTransforms;
         std::optional<InitialTransformCapture> initialTransformCapture;
+        std::optional<ReplayAuthoredScene> replayAuthoredScene;
         std::shared_ptr<HeadlessDecisionQueries> decisionQueries; /**< Keeps task binding and phase inventory scoped to this world. */
         AI::PerceptionSpatialBroadphase perception;
         std::unique_ptr<ProjectSceneNavigationWorld> navigation;

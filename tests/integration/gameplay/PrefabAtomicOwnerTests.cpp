@@ -28,7 +28,8 @@ namespace Horo::Application::PrefabAtomicTest {
 
     /** @brief Drives the actual headless fixed lifecycle through its replay publication or abort boundary. */
     void ExpectDecisionReplay(std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition,
-                              Internal::HeadlessSceneActivationInput input, AI::AgentId agent, const Sha256Digest &planDigest, bool abort);
+                              Internal::HeadlessSceneActivationInput input, AI::AgentId agent, const Sha256Digest &planDigest, bool abort,
+                              std::optional<std::uint32_t> referenceGeneration);
 
     namespace {
         /** @brief Captures a declared registry for both real host and prefab admission. */
@@ -1011,6 +1012,7 @@ namespace Horo::Application::PrefabAtomicTest {
             bool runTerminal = false;
             bool captureReplay = false;
             bool abortReplay = false;
+            std::optional<std::uint32_t> replayReferenceGeneration;
             bool selectNativePerception = false;
             std::optional<AI::PerceptionSenseContract> nativeSense;
             bool prefabOnly = false;
@@ -1026,6 +1028,16 @@ namespace Horo::Application::PrefabAtomicTest {
                 executionBudget = 100;
                 captureReplay = true;
                 abortReplay = true;
+            }
+            SECTION("standalone replay encodes a live authored Blackboard entity by its stable identity") {
+                executionBudget = 100;
+                captureReplay = true;
+                replayReferenceGeneration = 1;
+            }
+            SECTION("standalone replay rejects a Blackboard entity with a stale slot generation") {
+                executionBudget = 100;
+                captureReplay = true;
+                replayReferenceGeneration = 2;
             }
             SECTION("degraded prefab preserves a missing child controller while only its registered sibling obtains a native task") {
                 prepareNative = true;
@@ -1188,6 +1200,16 @@ namespace Horo::Application::PrefabAtomicTest {
             const auto queryKey = Decisions::MakeIdentity<AI::BlackboardKeyId>(QueryKeyValue);
             std::shared_ptr<const AI::QuerySchemaRegistry> queryRegistry;
             std::vector<std::uint8_t> queryBytes;
+            if (replayReferenceGeneration) {
+                const std::array keys{
+                    AI::BlackboardKeyDescriptor{.key = Decisions::MakeIdentity<AI::BlackboardKeyId>(1),
+                                                .kind = AI::BlackboardValueKind::EntityReference,
+                                                .defaultValue = AI::BlackboardScalarValue{
+                                                    AI::BlackboardStoredEntityReference{7, 1, *replayReferenceGeneration}}}};
+                auto schema = AI::BlackboardSchema::Capture({.identity = Decisions::SchemaId(), .keys = keys});
+                REQUIRE(schema.HasValue());
+                ai.schema = std::make_shared<const AI::BlackboardSchema>(std::move(schema).Value());
+            }
             if (prefabQuery) {
                 auto registry = AI::CaptureBuiltinQuerySchema();
                 REQUIRE(registry.HasValue());
@@ -1334,6 +1356,8 @@ namespace Horo::Application::PrefabAtomicTest {
             } else {
                 source.Add({.object = {1}, .components = {.aiAgent = controller.agent.agent, .aiController = controller.agent.controller}});
             }
+            if (replayReferenceGeneration)
+                source.Add({.object = {2}});
             if (selectNativePerception) {
                 auto peer = controller.agent.agent;
                 peer.agent = Decisions::MakeIdentity<AI::AgentId>(2);
@@ -1496,7 +1520,8 @@ namespace Horo::Application::PrefabAtomicTest {
             }
             auto scene = std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(definition).Value());
             if (captureReplay) {
-                ExpectDecisionReplay(std::move(scene), std::move(input), controller.agent.agent.agent, plan->Digest(), abortReplay);
+                ExpectDecisionReplay(std::move(scene), std::move(input), controller.agent.agent.agent, plan->Digest(), abortReplay,
+                                     replayReferenceGeneration);
                 return;
             }
             const auto composed = Internal::ComposeHeadlessSceneNetworkServices(std::move(scene), std::move(input), {}, gameplay);

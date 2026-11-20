@@ -3291,6 +3291,14 @@ it only when that fixed attempt commits. After the run, the command reports
 the selected trace identity and the canonical AI state hash. A selection that
 produces no committed evidence is reported as an error.
 
+The headless digest uses the reference-capable canonical AI record. The opted-in
+host records the original root Scene entity bindings at activation. A Blackboard
+entity reference must match the current Scene incarnation and a live original
+binding. Its encoded identity is the authored Scene definition ID followed by
+the authored object ID, both unsigned 64-bit big-endian values, with generation
+one for the original authored occurrence. References to stale, gameplay-spawned,
+or mounted entities fail capture until those owners can supply stable identities.
+
 ### Scene decision scheduling tiers
 
 Hosts can compose an `AiDecisionSimulationProfile` through

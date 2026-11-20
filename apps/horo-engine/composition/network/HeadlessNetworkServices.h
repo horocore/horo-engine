@@ -18,6 +18,7 @@
 #include <memory>
 #include <optional>
 #include <thread>
+#include <vector>
 
 namespace Horo::Render {
     class RenderOriginSceneAdapter;
@@ -68,11 +69,17 @@ namespace Horo::Application::Internal {
         }
     };
 
+    /** @brief Original decision evidence and its reference-aware canonical encoding owned after fixed commit. */
+    struct HeadlessDecisionReplayData final {
+        AI::AiSceneDecisionReplayCapture evidence;
+        std::vector<std::uint8_t> canonicalRecord;
+    };
+
     /** @brief Product-owned mailbox for one exact committed tick; no concurrent access or file storage. */
     class HeadlessDecisionReplay final {
     public:
         static constexpr std::size_t CanonicalBudget = 1U << 20U;
-        using Capture = Result<AI::AiSceneDecisionReplayCapture>;
+        using Capture = Result<HeadlessDecisionReplayData>;
 
         explicit HeadlessDecisionReplay(HeadlessDecisionReplaySelection selection) noexcept : selection_(selection) {}
 
@@ -89,6 +96,9 @@ namespace Horo::Application::Internal {
 
     private:
         friend class HeadlessNetworkDetail::HeadlessFixedParticipant;
+        friend class HeadlessNetworkDetail::WorldService;
+        /** @brief Captures the exact original root Scene bindings before mounted or gameplay entities materialize. */
+        static Result<void> BindAuthoredScene(HeadlessNetworkDetail::WorldRecord &world);
         void Arm(HeadlessNetworkDetail::WorldRecord &world, const Runtime::FixedStepContext &context);
         void Prepare(const HeadlessNetworkDetail::WorldRecord &world, const Runtime::FixedStepContext &context);
         void Commit(const Runtime::FixedStepContext &context) noexcept;

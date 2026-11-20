@@ -395,6 +395,10 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return vfx;
             if (auto prepared = PrepareHeadlessSceneAtLoadBoundary(*record_->scenes, *owners_->definition, boundary); prepared.HasError())
                 return Result<void>::Failure(prepared.ErrorValue());
+            if (input.decisionReplay && request_.world == Network::NetworkModeWorldKind::Standalone) {
+                if (auto bound = HeadlessDecisionReplay::BindAuthoredScene(*record_); bound.HasError())
+                    return bound;
+            }
             if (auto templates = PrepareConfiguredTemplates(); templates.HasError())
                 return templates;
             if (auto replica = BindReplicaPrefabs(); replica.HasError())

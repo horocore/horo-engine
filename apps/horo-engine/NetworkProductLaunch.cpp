@@ -3,8 +3,8 @@
 #include "HeadlessInitialStateAuthority.h"
 #include "HeadlessNetworkServices.h"
 #include "HeadlessProjectScene.h"
-#include "Horo/AI/AiReplayEvidence.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
+#include "Horo/Foundation/Sha256.h"
 #include "Horo/Network/NetworkAddress.h"
 #include "Horo/Network/NetworkErrors.h"
 #include "Horo/Network/NetworkTransport.h"
@@ -596,13 +596,12 @@ namespace Horo::Application::Internal {
                     MakeError(Net::NetworkErrors::NetworkModeUnavailable, "Selected AI replay tick did not commit."));
             if (captured->HasError())
                 return Result<void>::Failure(std::move(*captured).ErrorValue());
-            const auto &capture = captured->Value();
-            auto hash = AI::HashAiReplayCanonicalState(capture.canonical, HeadlessDecisionReplay::CanonicalBudget);
-            if (hash.HasError())
-                return Result<void>::Failure(std::move(hash).ErrorValue());
+            const auto &data = captured->Value();
+            const auto &capture = data.evidence;
+            const auto hash = ComputeSha256(std::as_bytes(std::span{data.canonicalRecord}));
             std::cout << "AI replay scene " << capture.scene.value << " tick " << capture.tick << " agent " << capture.subject.Value()
                       << " blackboard-revision " << capture.blackboardRevision << " plan "
-                      << FormatSha256(capture.trace->Header().planDigest) << " canonical-ai-state " << FormatSha256(hash.Value()) << '\n';
+                      << FormatSha256(capture.trace->Header().planDigest) << " canonical-ai-state " << FormatSha256(hash) << '\n';
             return Result<void>::Success();
         }
 

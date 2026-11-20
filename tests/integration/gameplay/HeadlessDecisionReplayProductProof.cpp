@@ -1,5 +1,6 @@
 #include "HeadlessNetworkServices.h"
-#include "Horo/AI/AiReplayEvidence.h"
+#include "Horo/AI/AICanonicalState.h"
+#include "Horo/AI/AIErrors.h"
 #include "Horo/Network/NetworkErrors.h"
 #include "NetworkProductHost.h"
 
@@ -49,8 +50,10 @@ namespace Horo::Application::PrefabAtomicTest {
 
     /** @copydoc ExpectDecisionReplay */
     void ExpectDecisionReplay(std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition,
-                              Internal::HeadlessSceneActivationInput input, AI::AgentId agent, const Sha256Digest &planDigest, bool abort) {
+                              Internal::HeadlessSceneActivationInput input, AI::AgentId agent, const Sha256Digest &planDigest, bool abort,
+                              std::optional<std::uint32_t> referenceGeneration) {
         using namespace Network;
+        const auto definitionId = definition->Id();
         const auto replay = std::make_shared<Internal::HeadlessDecisionReplay>(Internal::HeadlessDecisionReplaySelection{agent, 1});
         input.decisionReplay = replay;
         auto configured = Internal::ComposeHeadlessSceneNetworkServices(std::move(definition), std::move(input));
@@ -122,14 +125,37 @@ namespace Horo::Application::PrefabAtomicTest {
         REQUIRE(fixed.HasValue());
         auto captured = replay->TakeCommitted();
         REQUIRE(captured);
+        if (referenceGeneration && *referenceGeneration != 1) {
+            REQUIRE(captured->HasError());
+            CHECK(captured->ErrorValue().code.Value() == AI::AIErrors::CanonicalRestoreStale.code.Value());
+            CHECK_FALSE(replay->TakeCommitted());
+            return;
+        }
         INFO((captured->HasError() ? captured->ErrorValue().message : "success"));
         REQUIRE(captured->HasValue());
-        const auto &evidence = captured->Value();
+        const auto &data = captured->Value();
+        const auto &evidence = data.evidence;
         CHECK(evidence.tick == 1);
         CHECK(evidence.subject == agent);
         REQUIRE(evidence.trace);
         CHECK(evidence.trace->Header().planDigest == planDigest);
-        CHECK(AI::HashAiReplayCanonicalState(evidence.canonical, Internal::HeadlessDecisionReplay::CanonicalBudget).HasValue());
+        std::size_t references{};
+        auto decoded = AI::DecodeAiCanonicalStateRecord(data.canonicalRecord, Internal::HeadlessDecisionReplay::CanonicalBudget,
+                                                        [&](const AI::AiSavedEntityReference &reference) {
+            ++references;
+            std::uint64_t encodedScene{}, encodedObject{};
+            for (std::size_t byte = 0; byte < sizeof(encodedScene); ++byte) {
+                encodedScene = (encodedScene << 8) | reference.identity[byte];
+                encodedObject = (encodedObject << 8) | reference.identity[sizeof(encodedScene) + byte];
+            }
+            CHECK(encodedScene == definitionId.value);
+            CHECK(encodedObject == 2);
+            CHECK(reference.generation == 1);
+            return Result<AI::BlackboardStoredEntityReference>::Success({7, 1, 1});
+        });
+        REQUIRE(decoded.HasValue());
+        CHECK(decoded.Value() == evidence.canonical);
+        CHECK(references == (referenceGeneration ? 1 : 0));
         CHECK_FALSE(replay->TakeCommitted());
         host.Value()->Shutdown();
     }
