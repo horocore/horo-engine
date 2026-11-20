@@ -7,27 +7,31 @@ import android.os.PowerManager;
 import android.util.Log;
 import org.horocore.platform.HoroInputActivity;
 
-/** The Android Vulkan profile observes platform thermal status independently of frame attempts. */
+/** The Android Vulkan profile observes platform conditions independently of frame attempts. */
 public class HoroVulkanQualificationActivity extends HoroInputActivity {
     private static ThermalObservation thermal;
     private static final MemoryObservation memory = new MemoryObservation();
+    private static final PowerSaveObservation power = new PowerSaveObservation();
 
     @Override public void onResume() {
         super.onResume();
         if (thermal == null) thermal = new ThermalObservation(getApplicationContext());
         thermal.resume(this);
         memory.resume(this);
+        power.resume(this);
     }
 
     @Override public void onPause() {
         if (thermal != null) thermal.pause(this);
         memory.pause(this);
+        power.pause(this);
         super.onPause();
     }
 
     @Override public void onDestroy() {
         if (thermal != null) thermal.pause(this);
         memory.pause(this);
+        power.pause(this);
         super.onDestroy();
     }
 

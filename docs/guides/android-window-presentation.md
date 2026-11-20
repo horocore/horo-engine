@@ -79,6 +79,12 @@ Android 14 and later use the resume snapshot alone because the platform
 omits the legacy running levels. The deployment report contains the typed
 state and its process-local revision.
 
+The resumed Vulkan Activity reads Android Battery Saver on entry and whenever
+the protected power-mode broadcast arrives. The observer reads the current
+value from Android's PowerManager and publishes only state transitions. The
+deployment report carries `enabled`, `disabled`, `inactive`, `unsupported`,
+or `unavailable`. Battery charge level and charging state are separate signals.
+
 ## Nonblocking acquisition and retirement
 
 Availability polling observes the native output and advances retirement. It does

@@ -636,10 +636,11 @@ def apk_write_project(stage: Path, tools: dict, profile: dict, abis: list[str], 
     java_root.mkdir(parents=True)
     activity_base = "org.horocore.platform.HoroInputActivity"
     if profile["renderer"] == "vulkan-android":
-        thermal = Path("org/horocore/qualification/HoroVulkanQualificationActivity.java")
-        thermal_destination = stage / "java" / thermal
-        thermal_destination.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(ROOT / "apps/android-package-qualification/java" / thermal, thermal_destination)
+        package = Path("org/horocore/qualification")
+        destination = stage / "java" / package
+        destination.mkdir(parents=True, exist_ok=True)
+        for source_name in ("HoroVulkanQualificationActivity.java", "PowerSaveObservation.java"):
+            shutil.copyfile(ROOT / "apps/android-package-qualification/java" / package / source_name, destination / source_name)
         activity_base = "org.horocore.qualification.HoroVulkanQualificationActivity"
     source = (f"package {profile['applicationId']};\n"
               f"public final class PackageActivity extends {activity_base} {{\n"
@@ -1179,6 +1180,9 @@ PRESSURE_LINES = {
     "memory": re.compile(
         r"host-memory revision=(?P<revision>[1-9][0-9]{0,18}) "
         r"state=(?P<state>inactive|unsupported|unavailable|normal|moderate|low|critical)"),
+    "power": re.compile(
+        r"host-power revision=(?P<revision>[1-9][0-9]{0,18}) "
+        r"state=(?P<state>inactive|unsupported|unavailable|enabled|disabled)"),
 }
 OPENXR_LINE = re.compile(
     r"host-openxr abi=(arm64-v8a|x86_64) stage=(host-application|bundled-loader|loader-dispatch|loader-initialization|extension-admission|"

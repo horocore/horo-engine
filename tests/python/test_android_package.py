@@ -737,11 +737,11 @@ class AndroidAssemblyTests(unittest.TestCase):
         self.assertIn(android_package.DEPLOY_LAUNCH_MARKER, source)
         self.assertIn("android.permission.ACTIVITY_RECOGNITION", (stage / "AndroidManifest.xml").read_text())
 
-    def test_staged_thermal_activity_is_private_to_the_vulkan_profile(self):
+    def test_staged_platform_observation_is_private_to_the_vulkan_profile(self):
         arguments = self.arguments()
         tools = self.prepare(arguments)
-        thermal = Path("java/org/horocore/qualification/HoroVulkanQualificationActivity.java")
-        source = android_package.ROOT / "apps/android-package-qualification" / thermal
+        paths = [Path("java/org/horocore/qualification") / name for name in
+                 ("HoroVulkanQualificationActivity.java", "PowerSaveObservation.java")]
         for renderer_profile in ("qualification-vulkan-development", android_package.OPENXR_DEVELOPMENT_PROFILE):
             with self.subTest(profile=renderer_profile):
                 _, profile = load_contract(renderer_profile, ["arm64-v8a"])
@@ -750,10 +750,12 @@ class AndroidAssemblyTests(unittest.TestCase):
                 android_package.apk_write_project(stage, tools, profile, ["arm64-v8a"], arguments.game_activity)
                 entry = stage / "java" / Path(*profile["applicationId"].split(".")) / "PackageActivity.java"
                 if profile["renderer"] == "vulkan-android":
-                    self.assertEqual((stage / thermal).read_bytes(), source.read_bytes())
+                    for path in paths:
+                        source = android_package.ROOT / "apps/android-package-qualification" / path
+                        self.assertEqual((stage / path).read_bytes(), source.read_bytes())
                     self.assertIn("extends org.horocore.qualification.HoroVulkanQualificationActivity", entry.read_text())
                 else:
-                    self.assertFalse((stage / thermal).exists())
+                    self.assertTrue(all(not (stage / path).exists() for path in paths))
                     self.assertIn("extends org.horocore.platform.HoroInputActivity", entry.read_text())
 
 

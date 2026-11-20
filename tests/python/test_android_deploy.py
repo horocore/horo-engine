@@ -447,6 +447,18 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual(report["observed"]["thermal"], {"revision": 3, "state": "none"})
         self.assertNotIn("raw=private", json.dumps(report))
 
+    def test_vulkan_capture_reports_power_saver_from_the_attributed_process(self):
+        for revision, state in enumerate(("disabled", "enabled", "unavailable", "unsupported", "inactive"), start=1):
+            with self.subTest(state=state):
+                log = log_line(LIFECYCLE) + log_line(FRAME)
+                log += log_line(f"host-power revision={revision} state={state}")
+                log += log_line("host-power revision=6 state=enabled", uid="10200")
+                log += log_line("host-power revision=7 state=enabled raw=private")
+                status, report, _ = self.execute({LOGCAT: log}, profile_name=VULKAN_PROFILE)
+                self.assertEqual((status, report["status"]), (0, "complete"))
+                self.assertEqual(report["observed"]["power"], {"revision": revision, "state": state})
+                self.assertNotIn("raw=private", json.dumps(report))
+
     def test_device_clock_discontinuity_or_malformed_clock_cannot_supply_evidence(self):
         for final, expected in ((START, "device_log_clock_changed"),
                                 ("1795000000.111000001", "device_log_clock_changed"),
