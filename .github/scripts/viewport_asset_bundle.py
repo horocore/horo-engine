@@ -11,7 +11,11 @@ REFLECTION = 'shaders/editor/viewport-vulkan.reflection.json'
 SHADOW_PAYLOAD = 'shaders/editor/viewport-shadow-vulkan.horoshdr'
 SHADOW_REFLECTION = 'shaders/editor/viewport-shadow-vulkan.reflection.json'
 CATALOG_SOURCE = 'src/runtime/renderer/toolchain/ShaderCompilerToolchainCatalog.cpp'
-FILES = (PAYLOAD, REFLECTION, SHADOW_PAYLOAD, SHADOW_REFLECTION, 'catalog.tsv')
+CANVAS_PREFIXES = ('shaders/editor/viewport-world-canvas-vulkan', 'shaders/runtime/ui-paint-vulkan')
+REFLECTIONS = (REFLECTION, SHADOW_REFLECTION, *(f'{prefix}.reflection.json' for prefix in CANVAS_PREFIXES))
+PAYLOADS = (PAYLOAD, SHADOW_PAYLOAD, *(f'{prefix}.horoshdr' for prefix in CANVAS_PREFIXES))
+FILES = (*PAYLOADS, *REFLECTIONS, 'catalog.tsv')
+SCHEMA = 3
 
 
 def digest(path):
@@ -58,18 +62,18 @@ def inspect(root, source):
     expected = set(FILES) | {'provenance.json'}
     actual = bundle_entries(root)
     if not set(FILES) <= actual or actual - expected:
-        raise ValueError('Bundle must contain only viewport/shadow payloads, reflection, catalog and provenance')
+        raise ValueError('Bundle must contain only the required viewport and canvas artifacts, catalog and provenance')
     hashes = {name: digest(root / name) for name in FILES}
     if (root / 'catalog.tsv').read_text(encoding='utf-8') != canonical_catalog(source):
         raise ValueError('Bundle catalog differs from checkout canonical lock')
-    json.loads((root / REFLECTION).read_text(encoding='utf-8'))
-    json.loads((root / SHADOW_REFLECTION).read_text(encoding='utf-8'))
+    for reflection in REFLECTIONS:
+        json.loads((root / reflection).read_text(encoding='utf-8'))
     return hashes
 
 
 def create(root, source, expected):
     hashes = inspect(root, source)
-    (root / 'provenance.json').write_text(json.dumps({'schema': 2, 'identity': expected, 'sha256': hashes},
+    (root / 'provenance.json').write_text(json.dumps({'schema': SCHEMA, 'identity': expected, 'sha256': hashes},
                                                    indent=2) + '\n', encoding='utf-8')
 
 
@@ -77,7 +81,7 @@ def verify(root, source, expected):
     hashes = inspect(root, source)
     digest(root / 'provenance.json')
     actual = json.loads((root / 'provenance.json').read_text(encoding='utf-8'))
-    if actual != {'schema': 2, 'identity': expected, 'sha256': hashes}:
+    if actual != {'schema': SCHEMA, 'identity': expected, 'sha256': hashes}:
         raise ValueError('Stale source/run identity or bundle digest mismatch')
 
 

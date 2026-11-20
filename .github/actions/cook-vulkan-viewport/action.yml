@@ -53,6 +53,13 @@ runs:
         "$COOK_BUILD_DIR/apps/HoroEditorVulkanShaderCook" assets/shaders/editor/viewport_shadow.hlsl \
           "$asset_root/shaders/editor/viewport-shadow-vulkan" "$RUNNER_TEMP/viewport-shadow-cook-scratch" \
           "${executables[0]}" "${executables[1]}" "${executables[2]}" --shadow
+        mkdir -p "$asset_root/shaders/runtime"
+        "$COOK_BUILD_DIR/apps/HoroEditorVulkanShaderCook" assets/shaders/editor/viewport_world_canvas.hlsl \
+          "$asset_root/shaders/editor/viewport-world-canvas-vulkan" "$RUNNER_TEMP/viewport-world-canvas-cook-scratch" \
+          "${executables[0]}" "${executables[1]}" "${executables[2]}" --world-canvas
+        "$COOK_BUILD_DIR/apps/HoroEditorVulkanShaderCook" assets/shaders/runtime/ui_paint.hlsl \
+          "$asset_root/shaders/runtime/ui-paint-vulkan" "$RUNNER_TEMP/runtime-ui-paint-cook-scratch" \
+          "${executables[0]}" "${executables[1]}" "${executables[2]}" --runtime-ui-paint
         if [[ -n "$COOK_QUALIFICATION_ROOT" ]]; then
           mkdir -p "$COOK_QUALIFICATION_ROOT"
           "$COOK_BUILD_DIR/apps/HoroEditorVulkanShaderCook" assets/shaders/runtime/multiview_mesh.hlsl \
@@ -70,13 +77,6 @@ runs:
           "$COOK_BUILD_DIR/apps/HoroEditorVulkanShaderCook" assets/shaders/editor/viewport_cross_fade.hlsl \
             "$COOK_QUALIFICATION_ROOT/viewport-cross-fade-vulkan" "$RUNNER_TEMP/viewport-cross-fade-cook-scratch" \
             "${executables[0]}" "${executables[1]}" "${executables[2]}" --camera-cross-fade
-          mkdir -p "$COOK_QUALIFICATION_ROOT/shaders/editor" "$COOK_QUALIFICATION_ROOT/shaders/runtime"
-          "$COOK_BUILD_DIR/apps/HoroEditorVulkanShaderCook" assets/shaders/editor/viewport_world_canvas.hlsl \
-            "$COOK_QUALIFICATION_ROOT/shaders/editor/viewport-world-canvas-vulkan" "$RUNNER_TEMP/viewport-world-canvas-cook-scratch" \
-            "${executables[0]}" "${executables[1]}" "${executables[2]}" --world-canvas
-          "$COOK_BUILD_DIR/apps/HoroEditorVulkanShaderCook" assets/shaders/runtime/ui_paint.hlsl \
-            "$COOK_QUALIFICATION_ROOT/shaders/runtime/ui-paint-vulkan" "$RUNNER_TEMP/runtime-ui-paint-cook-scratch" \
-            "${executables[0]}" "${executables[1]}" "${executables[2]}" --runtime-ui-paint
         fi
         cp "$tool_root/catalog.tsv" "$asset_root/catalog.tsv"
         [[ "$(git rev-parse HEAD)" == "$GITHUB_SHA" ]]

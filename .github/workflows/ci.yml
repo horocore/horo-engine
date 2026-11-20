@@ -219,7 +219,7 @@ jobs:
       - name: Verify packaged Vulkan canvas shader interfaces
         if: runner.os == 'Linux'
         run: >-
-          env HORO_VULKAN_UI_PAINT_ASSET_ROOT="$RUNNER_TEMP/viewport-qualification"
+          env HORO_VULKAN_UI_PAINT_ASSET_ROOT="$GITHUB_WORKSPACE/build/ci/native-editor-assets"
           ctest --test-dir build/ci --no-tests=error --output-on-failure
           -R '(Packaged Vulkan sampled canvas binds|Application Vulkan UI package binds)'
       - name: Retain same-run UI Metal qualification inputs
@@ -306,7 +306,7 @@ jobs:
           mkdir -p build/ci/vulkan-editor-evidence
           vulkaninfo --summary > build/ci/vulkan-editor-evidence/driver.txt
           cp "$RUNNER_TEMP/viewport-cook-tools/catalog.tsv" build/ci/vulkan-editor-evidence/
-          export HORO_VULKAN_UI_PAINT_ASSET_ROOT="$RUNNER_TEMP/viewport-qualification"
+          export HORO_VULKAN_UI_PAINT_ASSET_ROOT="$HORO_EDITOR_VULKAN_ASSET_ROOT"
           xvfb-run -a ctest --test-dir build/ci --no-tests=error --verbose --parallel 1 --timeout 30 \
             -R '^(HoroEditorVulkanPresentationSmoke::|HoroShaderReflectionCookTests::)' \
             --output-junit vulkan-editor.xml 2>&1 | tee build/ci/vulkan-editor-evidence/native.log

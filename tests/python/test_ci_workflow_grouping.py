@@ -584,7 +584,7 @@ def test_shader_job_keeps_vulkan_native_commands_in_the_same_build() -> None:
     assert "--no-tests=error" in canvas
     assert "Packaged Vulkan sampled canvas binds|Application Vulkan UI package binds" in canvas
     editor = workflow_step(native_job, "Qualify the real Vulkan GUI and WSI pair")
-    assert 'HORO_VULKAN_UI_PAINT_ASSET_ROOT="$RUNNER_TEMP/viewport-qualification"' in editor
+    assert 'HORO_VULKAN_UI_PAINT_ASSET_ROOT="$HORO_EDITOR_VULKAN_ASSET_ROOT"' in editor
     assert "HoroEditorVulkanPresentationSmoke::" in editor
     assert "continue-on-error" not in shader_qualification_steps(native_job)
     tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
