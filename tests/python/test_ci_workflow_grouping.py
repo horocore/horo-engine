@@ -20,6 +20,12 @@ def workflow_job(name: str) -> str:
     return match.group(1)
 
 
+def workflow_step(job: str, name: str) -> str:
+    match = re.search(rf"^      - name: {re.escape(name)}\n.*?(?=^      - name:|\Z)", job, re.M | re.S)
+    assert match, f"Missing workflow step: {name}"
+    return match.group()
+
+
 def shader_qualification_steps(shader_job: str) -> str:
     publisher = re.search(r"      - name: Publish main shader compiler checkpoint\n.*?(?=\n      - name:)",
                           shader_job, re.S)
@@ -558,7 +564,8 @@ def test_shader_job_keeps_vulkan_native_commands_in_the_same_build() -> None:
     assert "VK_DRIVER_FILES=%s" in native_job
     assert "lvp_icd.x86_64.json" not in native_job
     assert "--output-junit" in native_job
-    selection = re.search(r"-R '([^']+)'", native_job)
+    regression = workflow_step(native_job, "Run Vulkan native-call and lifecycle regressions")
+    selection = re.search(r"-R '([^']+)'", regression)
     assert selection is not None
     selected = re.compile(selection.group(1))
     for target in ("HoroRenderVulkanTests", "HoroRenderGraphTests", "HoroRenderFrontendTests",
@@ -572,6 +579,10 @@ def test_shader_job_keeps_vulkan_native_commands_in_the_same_build() -> None:
     assert smoke_selected.fullmatch("HoroVulkanVfxGpuParity")
     assert not smoke_selected.fullmatch("HoroVulkanVfxGpuBudget")
     assert not selected.search("UnrelatedTests::case")
+    canvas = workflow_step(native_job, "Verify packaged Vulkan canvas shader interfaces")
+    assert "HORO_VULKAN_UI_PAINT_ASSET_ROOT" in canvas
+    assert "--no-tests=error" in canvas
+    assert "Packaged Vulkan sampled canvas binds|Application Vulkan UI package binds" in canvas
     assert "continue-on-error" not in shader_qualification_steps(native_job)
     tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
     assert "add_test(NAME HoroVulkanCommandExecutionSmoke COMMAND HoroVulkanCommandExecutionSmoke)" in tests_cmake
@@ -777,7 +788,8 @@ def test_vulkan_shader_qualification_keeps_material_packing_and_native_transform
     expected_targets |= {"HoroRenderGraphTests", "HoroRenderFrontendTests", "HoroRenderBackendRegistryTests",
                          "HoroXROpenXRHostInterfaceConsumer"}
     assert set(build_targets.group(1).split()) == expected_targets
-    test_selection = re.search(r"ctest --test-dir build/ci .*?\s+-R '([^']+)'", shader_workflow, re.S)
+    regression = workflow_step(shader_workflow, "Run Vulkan native-call and lifecycle regressions")
+    test_selection = re.search(r"ctest --test-dir build/ci .*?\s+-R '([^']+)'", regression, re.S)
     assert test_selection is not None
     selected = re.compile(test_selection.group(1))
     for target in expected_targets - flat_targets - {"HoroXROpenXRHostInterfaceConsumer"}:
@@ -864,7 +876,7 @@ def test_windows_parallel_tests_require_native_fixture_isolation_qualification()
     assert "pytest==9.0.3" in qualification
     assert "tests/python/test_ci_case_isolation.py" in qualification
     assert "-k 'test_generated_suite_properties_preserve_contracts_and_control_concurrency or test_case_' -q" in qualification
-    assert "timeout-minutes: 2" in qualification
+    assert "timeout-minutes: 5" in qualification
     assert "continue-on-error" not in qualification
     assert native.index(marker) < native.index("- name: Configure Debug") < native.index("- name: Test Debug")
 
