@@ -142,7 +142,8 @@ namespace Horo::XR {
         if (projected.ambient || projected.directional) {
             const auto gap = timestamp.Nanoseconds() - lastSample_.Nanoseconds();
             const auto smoothing = policy_.smoothingWindow.ToNanoseconds();
-            if (previous && gap <= policy_.maximumAge.ToNanoseconds() && gap < smoothing)
+            if (const auto previousAge = now.Nanoseconds() - lastSample_.Nanoseconds();
+                previous && previousAge <= policy_.maximumAge.ToNanoseconds() && gap < smoothing)
                 Smooth(projected, *previous, static_cast<float>(static_cast<double>(gap) / static_cast<double>(smoothing)));
             current_ = projected;
         }

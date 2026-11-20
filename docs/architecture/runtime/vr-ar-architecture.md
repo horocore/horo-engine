@@ -1055,8 +1055,9 @@ The portable XR projection validates an explicit source color interpretation,
 relative scene scale, maximum channel value, and directional convention. It
 produces ACEScg ambient color and a renderer `RenderLight` in the calibrated
 World axes. The application supplies the directional identity from its scene
-lighting domain. Consecutive fresh samples may blend, while missing lobes,
-withdrawal and replaced grants discard the corresponding contribution. Keeping
+lighting domain. Consecutive samples may blend while both remain fresh at the
+current presentation cutoff. Missing lobes, withdrawal and replaced grants
+discard the corresponding contribution. Keeping
 the same native timestamp cannot extend the age of a contribution. These values
 are presentation inputs and do not mutate authored lights or exposure. The
 [Android directional-light structure](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrDirectionalLightANDROID.html)

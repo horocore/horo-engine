@@ -75,6 +75,33 @@ namespace Horo::XR {
         CHECK_FALSE(repeated.Value()->directional);
     }
 
+    TEST_CASE("XR lighting blends delayed samples only while their prior contribution is fresh at presentation", "[xr][lighting]") {
+        const auto scope = Scope();
+        auto created = XRLightProjection::Create(scope, Policy());
+        REQUIRE(created.HasValue());
+        auto projection = std::move(created).Value();
+        const auto previous = Estimate(scope, 100);
+        REQUIRE(projection.Update(scope, Make<XRRuntimeTime>(101), &previous).Value());
+
+        auto sample = Estimate(scope, 105);
+        sample.ambient->relativeRgb.x = 0.75F;
+        sample.directional->intensity.relativeRgb.x = 2.0F;
+        SECTION("At the age limit the two observations still blend") {
+            const auto current = projection.Update(scope, Make<XRRuntimeTime>(130), &sample);
+            REQUIRE(current.HasValue());
+            REQUIRE(current.Value());
+            CHECK(current.Value()->ambient->x == 0.75F);
+            CHECK(current.Value()->directional->color.x == 0.4375F);
+        }
+        SECTION("An expired observation contributes neither ambient nor directional lighting") {
+            const auto current = projection.Update(scope, Make<XRRuntimeTime>(131), &sample);
+            REQUIRE(current.HasValue());
+            REQUIRE(current.Value());
+            CHECK(current.Value()->ambient->x == 1.5F);
+            CHECK(current.Value()->directional->color.x == 1.0F);
+        }
+    }
+
     TEST_CASE("XR light projection withdraws stale observations and fences replaced grants", "[xr][lighting]") {
         const auto scope = Scope();
         auto created = XRLightProjection::Create(scope, Policy());
