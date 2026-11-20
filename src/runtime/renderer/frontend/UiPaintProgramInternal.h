@@ -2,6 +2,8 @@
 
 #include "Horo/Runtime/Render/RenderGraphSynchronization.h"
 #include "Horo/Runtime/Render/UiPaintProgram.h"
+#include "RenderFrontendResourceAccess.h"
+#include "RenderGraphTemplate.h"
 #include "UiPaintFrontendState.h"
 #include "UiPaintOwnerRetirement.h"
 #include "UiRenderSubmissionRetention.h"
@@ -120,6 +122,10 @@ namespace Horo::Render {
             std::vector<RenderGraphResourceId> textures;
             std::vector<std::vector<RenderGraphResourceId>> sampled;
             std::optional<CompiledRenderGraphExecution> graph;
+            std::optional<PreparedRenderGraphTemplate> sceneTemplate;
+            const CompiledRenderGraphExecution *boundScene{}; /**< Borrowed from this slot's template until execution or rebind. */
+            std::uint64_t paintRevisionAtBind{};
+            UiPaintProgramInventory inventory;
             std::vector<RenderGraphPassWorkload> workloads;
             std::vector<RenderGraphPassWorkload> sceneExecution; /**< Combined execution inventory reserved at preparation. */
             bool sceneExecuting{}; /**< Owner-lane fence protecting borrowed workload storage during recording. */
@@ -127,6 +133,16 @@ namespace Horo::Render {
             std::array<UiPaintCpuFrame, 2> frames;
             std::uint32_t accepted{};
             std::uint64_t revision{};
+
+            /** @brief Requires the preallocated template and excludes borrowed paint or execution scratch. */
+            [[nodiscard]] bool CanBindScene() const noexcept {
+                return sceneTemplate.has_value() && !preparing && !sceneExecuting;
+            }
+
+            /** @brief Obtains the executable slot, or null until the current external inputs are bound. */
+            [[nodiscard]] const CompiledRenderGraphExecution *Graph() const noexcept {
+                return graph ? &*graph : boundScene;
+            }
 
             /** @brief Borrows only variable paint draws, excluding a cold-authored neutral initialization pass. */
             [[nodiscard]] std::span<RenderGraphPassWorkload> PaintWorkloads() noexcept {
@@ -177,9 +193,9 @@ namespace Horo::Render {
         [[nodiscard]] Result<std::uint32_t> AddMaskScope(std::uint32_t leaf, std::uint32_t boundary, std::uint32_t depth = 0);
         [[nodiscard]] bool IsMaskAncestor(std::uint32_t ancestor, std::uint32_t leaf) const noexcept;
         [[nodiscard]] Result<void> CreateSlot(RenderFrontend &renderer, std::uint32_t slot, const UiPaintFrameBuffers &buffers,
-                                              RenderTextureFormat stencilFormat, const UiPaintSceneCanvasGraph *scene);
+                                              RenderTextureFormat stencilFormat, const Detail::UiPaintSceneCanvasRecipe *scene);
         [[nodiscard]] Result<void> CompileSlot(std::uint32_t slot, const UiPaintFrameBuffers &buffers,
-                                               const UiPaintSceneCanvasGraph *scene);
+                                               const Detail::UiPaintSceneCanvasRecipe *scene);
         [[nodiscard]] Result<void> ValidateSource(const UiRenderSubmission &submission) const;
         /** @brief Tests only the retained source's structural roles, independent of one frame's geometry or outcome. */
         [[nodiscard]] bool MatchesSource(const Runtime::Ui::UiRenderSnapshot &snapshot) const noexcept;

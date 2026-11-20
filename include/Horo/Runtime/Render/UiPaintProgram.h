@@ -14,6 +14,7 @@ namespace Horo::Render {
 
     namespace Detail {
         class RenderFrontendResourceAccess;
+        struct UiPaintSceneCanvasRecipe;
         struct UiPaintProgramIdentity;
         enum class UiPaintRootTarget : std::uint8_t;
     }  // namespace Detail
@@ -237,7 +238,7 @@ namespace Horo::Render {
         [[nodiscard]] static Result<std::unique_ptr<UiPaintProgram>> CreateForTarget(
             RenderFrontend &frontend, const UiPaintProgramDescriptor &descriptor, const Runtime::Ui::UiRenderSnapshot &prototype,
             std::span<const RenderTextureHandle> textures, const CookedUiPaintKernel &kernel, const CancellationToken &cancellation,
-            Detail::UiPaintRootTarget target, const UiPaintSceneCanvasGraph *scene = nullptr);
+            Detail::UiPaintRootTarget target, const Detail::UiPaintSceneCanvasRecipe *scene = nullptr);
         /** @brief Requires exact immutable slot/source correspondence before any batch member reaches the native frame. */
         [[nodiscard]] Result<UiPaintGraphComposition> ValidateSubmission(const UiPaintPreparedFrame &prepared, UiRenderSubmission source);
         /** @brief Realizes finite native residents under the factory candidate's rollback ownership.
@@ -246,7 +247,7 @@ namespace Horo::Render {
          * @param scene Optional cold author, borrowed for scene preparation only.
          * @return Complete native preparation or original failure. */
         [[nodiscard]] Result<void> PrepareNative(RenderFrontend &frontend, const CookedUiPaintKernel &kernel,
-                                                 const CancellationToken &cancellation, const UiPaintSceneCanvasGraph *scene);
+                                                 const CancellationToken &cancellation, const Detail::UiPaintSceneCanvasRecipe *scene);
         std::unique_ptr<Storage> storage_;
     };
 }  // namespace Horo::Render

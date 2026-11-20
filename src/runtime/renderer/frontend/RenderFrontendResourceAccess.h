@@ -3,18 +3,55 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Render/RenderSubmission.h"
 
+#include <functional>
+
 namespace Horo::Render {
     struct UiPaintProgramDescriptor;
-}
+    struct UiPaintSceneCanvasSource;
+    struct CookedUiPaintKernel;
+}  // namespace Horo::Render
 
 namespace Horo::Runtime::Ui {
     class UiRenderSnapshot;
 }
 
 namespace Horo::Render::Detail {
+    struct RenderGraphExternalTextureSlot;
+    struct RenderGraphExternalTextureBinding;
+    struct RenderGraphOptionalRead;
+
+    /** @brief Cold authoring of a sampled canvas scene, including its optionally acquired attachments. */
+    struct UiPaintSceneCanvasRecipe final {
+        RenderGraphLimits limits;
+        RenderQueueId graphicsQueue;
+        std::function<Result<RenderGraphPassRef>(RenderGraphBuilder &, const UiPaintSceneCanvasSource &,
+                                                 std::vector<RenderGraphImportedState> &, std::vector<RenderGraphExternalTextureSlot> &,
+                                                 std::vector<RenderGraphOptionalRead> &)>
+            author;
+    };
+
     /** @brief Internal adapter used by matching integrations without publishing native resource identity. */
     class RenderFrontendResourceAccess final {
     public:
+        /** @brief Prepares the writer and its consumer with one graph per resident paint slot.
+         * @param frontend Live renderer owner. @param descriptor Paint projection and capacities.
+         * @param prototype Canonical source roles. @param textures Current sampled generations.
+         * @param kernel Cooked paint interface. @param scene Cold scene recipe, including any external slots.
+         * @param cancellation Preparation fence. @return Prepared owner or the original preparation failure.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<UiPaintProgram>> CreateSceneCanvas(
+            RenderFrontend &frontend, const UiPaintProgramDescriptor &descriptor, const Runtime::Ui::UiRenderSnapshot &prototype,
+            std::span<const RenderTextureHandle> textures, const CookedUiPaintKernel &kernel, const UiPaintSceneCanvasRecipe &scene,
+            const CancellationToken &cancellation = {});
+        /** @brief Binds the current acquired inputs before the frame. The ordinary graph lease consumes the binding on execution.
+         * @param program Prepared owner. @param slot Retired paint slot for the upcoming frame.
+         * @param bindings Complete external acquisitions in declaration order. @param reads Exact subset of optional buffer reads.
+         * @return Borrowed bound execution for inspecting pass order until execution or rebind, or a typed failure.
+         * @post Paint must be prepared after each bind. The binding cannot be used for a second execution.
+         */
+        [[nodiscard]] static Result<const CompiledRenderGraphExecution *> BindExternalSceneCanvas(
+            UiPaintProgram &program, std::uint32_t slot, std::span<const RenderGraphExternalTextureBinding> bindings,
+            std::span<const RenderGraphOptionalRead> reads);
         /** @brief Checks whether a live SceneCanvas program can admit the same paint roles and resource generations without rebuilding. */
         [[nodiscard]] static bool MatchesSceneCanvas(const UiPaintProgram &program, const UiPaintProgramDescriptor &policy,
                                                      const Runtime::Ui::UiRenderSnapshot &prototype,

@@ -121,17 +121,62 @@ namespace Horo::Render {
         RenderFrontend &renderer, const UiPaintProgramDescriptor &descriptor, const Runtime::Ui::UiRenderSnapshot &prototype,
         std::span<const RenderTextureHandle> textures, const CookedUiPaintKernel &kernel, const UiPaintSceneCanvasGraph &scene,
         const CancellationToken &cancellation) {
+        if (!scene.author)
+            return Result<std::unique_ptr<UiPaintProgram>>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
+        try {
+            const Detail::UiPaintSceneCanvasRecipe recipe{scene.limits, scene.graphicsQueue,
+                                                          [&scene](RenderGraphBuilder &builder, const UiPaintSceneCanvasSource &source,
+                                                                   std::vector<RenderGraphImportedState> &initial, auto &, auto &) {
+                return scene.author(builder, source, initial);
+            }};
+            return Detail::RenderFrontendResourceAccess::CreateSceneCanvas(renderer, descriptor, prototype, textures, kernel, recipe,
+                                                                           cancellation);
+        } catch (const std::bad_alloc &) {
+            return Result<std::unique_ptr<UiPaintProgram>>::Failure(MakeError(UiPaintProgramErrors::Capacity));
+        }
+    }
+
+    /** @copydoc Detail::RenderFrontendResourceAccess::CreateSceneCanvas */
+    Result<std::unique_ptr<UiPaintProgram>> Detail::RenderFrontendResourceAccess::CreateSceneCanvas(
+        RenderFrontend &renderer, const UiPaintProgramDescriptor &descriptor, const Runtime::Ui::UiRenderSnapshot &prototype,
+        std::span<const RenderTextureHandle> textures, const CookedUiPaintKernel &kernel, const UiPaintSceneCanvasRecipe &scene,
+        const CancellationToken &cancellation) {
         if (!scene.author || !scene.graphicsQueue.IsValid() || !scene.limits.IsValid() || scene.limits.maxPasses > descriptor.maximumPasses)
             return Result<std::unique_ptr<UiPaintProgram>>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
-        return CreateForTarget(renderer, descriptor, prototype, textures, kernel, cancellation, Detail::UiPaintRootTarget::SceneCanvas,
-                               &scene);
+        return UiPaintProgram::CreateForTarget(renderer, descriptor, prototype, textures, kernel, cancellation,
+                                               UiPaintRootTarget::SceneCanvas, &scene);
+    }
+
+    /** @copydoc Detail::RenderFrontendResourceAccess::BindExternalSceneCanvas */
+    Result<const CompiledRenderGraphExecution *> Detail::RenderFrontendResourceAccess::BindExternalSceneCanvas(
+        UiPaintProgram &program, const std::uint32_t index, const std::span<const RenderGraphExternalTextureBinding> bindings,
+        const std::span<const RenderGraphOptionalRead> reads) {
+        using Outcome = Result<const CompiledRenderGraphExecution *>;
+        auto &state = *program.storage_;
+        if (state.owner != std::this_thread::get_id() || state.closed || index >= state.native.slots.size())
+            return Outcome::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
+        const auto owner = state.frontend.lock();
+        if (!owner || !owner->frontend)
+            return Outcome::Failure(MakeError(UiPaintFrameErrors::Unavailable));
+        if (const auto boundary = RequirePreparationBoundary(*owner->frontend); boundary.HasError())
+            return Outcome::Failure(boundary.ErrorValue());
+        auto &slot = state.native.slots[index];
+        if (!slot.CanBindScene())
+            return Outcome::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
+        slot.boundScene = nullptr;
+        auto bound = slot.sceneTemplate->Bind(*owner->frontend, 0, bindings, reads);
+        if (bound.HasValue()) {
+            slot.boundScene = bound.Value();
+            slot.paintRevisionAtBind = slot.revision;
+        }
+        return bound;
     }
 
     /** @copydoc UiPaintProgram::CreateForTarget */
     Result<std::unique_ptr<UiPaintProgram>> UiPaintProgram::CreateForTarget(
         RenderFrontend &renderer, const UiPaintProgramDescriptor &descriptor, const Runtime::Ui::UiRenderSnapshot &prototype,
         std::span<const RenderTextureHandle> textures, const CookedUiPaintKernel &kernel, const CancellationToken &cancellation,
-        const Detail::UiPaintRootTarget target, const UiPaintSceneCanvasGraph *scene) {
+        const Detail::UiPaintRootTarget target, const Detail::UiPaintSceneCanvasRecipe *scene) {
         using Creation = Result<std::unique_ptr<UiPaintProgram>>;
         if (const auto admitted = renderer.RequireOpenOwner(); admitted.HasError())
             return Creation::Failure(admitted.ErrorValue());
@@ -163,7 +208,7 @@ namespace Horo::Render {
 
     /** @copydoc UiPaintProgram::PrepareNative */
     Result<void> UiPaintProgram::PrepareNative(RenderFrontend &renderer, const CookedUiPaintKernel &kernel,
-                                               const CancellationToken &cancellation, const UiPaintSceneCanvasGraph *scene) {
+                                               const CancellationToken &cancellation, const Detail::UiPaintSceneCanvasRecipe *scene) {
         auto &prepared = *storage_;
         auto &native = prepared.native;
         const auto &descriptor = prepared.descriptor;
@@ -233,11 +278,11 @@ namespace Horo::Render {
 
     /** @copydoc UiPaintProgram::Inventory */
     UiPaintProgramInventory UiPaintProgram::Inventory() const noexcept {
-        if (std::this_thread::get_id() != storage_->owner || storage_->closed || storage_->native.slots.empty() ||
-            !storage_->native.slots.front().graph)
+        if (std::this_thread::get_id() != storage_->owner || storage_->closed || storage_->native.slots.empty())
             return {};
-        const auto &graph = *storage_->native.slots.front().graph;
-        return {graph.Passes().size(), graph.Resources().size(), storage_->descriptor.capacity.parameters};
+        auto inventory = storage_->native.slots.front().inventory;
+        inventory.draws = storage_->descriptor.capacity.parameters;
+        return inventory;
     }
 
     /** @copydoc UiPaintProgram::ValidatePreparation */
@@ -321,7 +366,10 @@ namespace Horo::Render {
         auto &slot = state.native.slots[slotIndex];
         if (slot.preparing || slot.sceneExecuting)
             return Preparation::Failure(MakeError(UiPaintFrameErrors::Pending));
-        if (const auto validated = state.validation.Validate(source, slot.graph->Resources()); validated.HasError())
+        const auto *graph = slot.Graph();
+        if (!graph)
+            return Preparation::Failure(MakeError(UiPaintProgramErrors::PreparationRequired));
+        if (const auto validated = state.validation.Validate(source, graph->Resources()); validated.HasError())
             return Preparation::Failure(validated.ErrorValue());
         for (const auto &surface : slot.surfaces)
             if (const auto ready = owner->frontend->ResourceOperationResult(surface.operation); ready.HasError())
@@ -376,9 +424,12 @@ namespace Horo::Render {
             return Result<UiPaintGraphComposition>::Failure(MakeError(UiPaintProgramErrors::PreparationRequired));
         if (const auto valid = state.ValidateSource(source); valid.HasError())
             return Result<UiPaintGraphComposition>::Failure(valid.ErrorValue());
-        if (const auto valid = state.validation.Validate(source, slot.graph->Resources()); valid.HasError())
+        const auto *graph = slot.Graph();
+        if (!graph || (slot.sceneTemplate && slot.paintRevisionAtBind == prepared.revision_))
+            return Result<UiPaintGraphComposition>::Failure(MakeError(UiPaintProgramErrors::PreparationRequired));
+        if (const auto valid = state.validation.Validate(source, graph->Resources()); valid.HasError())
             return Result<UiPaintGraphComposition>::Failure(valid.ErrorValue());
-        return Result<UiPaintGraphComposition>::Success({&*slot.graph, slot.workloads, std::move(source), {}});
+        return Result<UiPaintGraphComposition>::Success({graph, slot.workloads, std::move(source), {}});
     }
 
     /** @copydoc UiPaintProgram::Submit */
@@ -432,6 +483,7 @@ namespace Horo::Render {
         std::ranges::copy(sceneWorkloads, afterPaint);
         const auto submissions =
             submission ? std::span<const RenderGraphQueueSubmission>{&*submission, 1} : std::span<const RenderGraphQueueSubmission>{};
+        slot.boundScene = nullptr;
         return frame.ExecuteGraphInternal(*accepted.graph, slot.sceneExecution, &accepted.source, {}, submissions);
     }
 

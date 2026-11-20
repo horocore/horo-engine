@@ -1,5 +1,8 @@
 #include "Horo/Runtime/Render/RenderGraphSynchronization.h"
 #include "Horo/Runtime/Render/UiPaintProgram.h"
+#include "RenderExternalImages.h"
+#include "RenderFrontendResourceAccess.h"
+#include "RenderGraphTemplate.h"
 #include "UiPaintProgramTestSupport.h"
 
 #include <catch2/generators/catch_generators.hpp>
@@ -11,6 +14,42 @@ namespace {
     using namespace Horo::Render;
     using namespace Horo::Tests::RenderFrontendTesting;
     using namespace Horo::Tests::UiPaintProgramTesting;
+
+    /** @brief Acquired attachment with the fake frontend's exact graphics state and device. */
+    class CanvasAcquisition final : public Detail::IRenderExternalTextureSource {
+    public:
+        explicit CanvasAcquisition(std::uint64_t device) : device_(device) {}
+
+        Result<void> Validate() const override {
+            return Result<void>::Success();
+        }
+
+        std::uint64_t DeviceIncarnation() const noexcept override {
+            return device_;
+        }
+
+        const RenderTextureDescriptor &Descriptor() const noexcept override {
+            return descriptor_;
+        }
+
+        RenderGraphLogicalState AcquiredState() const noexcept override {
+            return {RenderGraphSynchronizationAccess::ReadWrite,
+                    RenderGraphSynchronizationOperation::ColorAttachment,
+                    RenderGraphPipelineScope::Graphics,
+                    RenderGraphTextureLayout::ColorAttachment,
+                    {1}};
+        }
+
+        RenderGraphLogicalState RequiredFinalState() const noexcept override {
+            auto released = AcquiredState();
+            released.scope = RenderGraphPipelineScope::External;
+            return released;
+        }
+
+    private:
+        std::uint64_t device_;
+        RenderTextureDescriptor descriptor_{.extent = {640, 480}, .usage = RenderTextureUsage::RenderAttachment};
+    };
 }  // namespace
 
 TEST_CASE("Canvas surface paints an exact sampleable offscreen root through the existing UI graph",
@@ -66,6 +105,7 @@ TEST_CASE("Canvas surface paints an exact sampleable offscreen root through the 
 TEST_CASE("Scene graph consumes the exact prepared sampleable canvas in one frame lease", "[renderer][ui-paint][program][canvas-surface]") {
     const bool explicitSubmissions = GENERATE(false, true);
     const bool neutralRequired = GENERATE(false, true);
+    const bool externalOutput = GENERATE(false, true);
     ProgramFixture fixture{explicitSubmissions, !neutralRequired};
     lifecycleState.uiPaint.requireGraphNeutralSample = neutralRequired;
     const auto geometry = fixture.Extract();
@@ -85,6 +125,7 @@ TEST_CASE("Scene graph consumes the exact prepared sampleable canvas in one fram
         std::array<RenderGraphResourceId, 3> buffers;
         std::array<RenderGraphResourceId, 1> sampled;
         RenderTextureHandle canvas;
+        RenderGraphResourceId output;
     };
 
     std::array<ConsumingPass, 2> consumers{};
@@ -121,8 +162,24 @@ TEST_CASE("Scene graph consumes the exact prepared sampleable canvas in one fram
         return;
     }
 
-    auto program = UiRequire(UiPaintProgram::CreateSceneCanvas(*fixture.frontend, descriptor, geometry.SourceSnapshot(), textures,
-                                                               CookedUiPaintKernel{}, recipe));
+    const auto acquired = std::make_shared<CanvasAcquisition>(fixture.frontend->Capabilities().support.deviceIncarnation);
+    const Detail::UiPaintSceneCanvasRecipe externalRecipe{recipe.limits, recipe.graphicsQueue,
+                                                          [&recipe, &acquired, &consumers](auto &builder, const auto &source, auto &initial,
+                                                                                           auto &slots, auto &) {
+        auto consumer = recipe.author(builder, source, initial);
+        auto slot =
+            UiRequire(Detail::PreparedRenderGraphTemplate::DeclareTexture(builder, acquired->Descriptor(), acquired->AcquiredState(),
+                                                                          acquired->RequiredFinalState(), acquired->DeviceIncarnation()));
+        consumers[source.slot].output = slot.resource;
+        slots.push_back(slot);
+        REQUIRE(builder.AddUsage({consumer.Value(), slot.resource, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment})
+                    .HasValue());
+        return consumer;
+    }};
+    auto program = UiRequire(
+        externalOutput ? Detail::RenderFrontendResourceAccess::CreateSceneCanvas(*fixture.frontend, descriptor, geometry.SourceSnapshot(),
+                                                                                 textures, {}, externalRecipe)
+                       : UiPaintProgram::CreateSceneCanvas(*fixture.frontend, descriptor, geometry.SourceSnapshot(), textures, {}, recipe));
     CHECK(fixture.frontend->Capabilities().support.features.Supports(RenderCapability::UiPaint) == !neutralRequired);
     if (neutralRequired)
         CHECK(UiPaintFrameBufferPool::Create(*fixture.frontend, descriptor.capacity, descriptor.frameSlots).HasError());
@@ -133,6 +190,17 @@ TEST_CASE("Scene graph consumes the exact prepared sampleable canvas in one fram
     REQUIRE(program->Inventory().passes == (neutralRequired ? 7 : 6));
     REQUIRE(consumers[0].canvas != consumers[1].canvas);
     std::array<UiRenderImageBinding, 1> bindings;
+    std::array<Detail::RenderGraphExternalTextureBinding, 1> acquiredBindings{};
+    if (externalOutput) {
+        CHECK(program->Prepare(0, fixture.Submission(*program, geometry, bindings)).HasError());
+        const auto output = UiRequire(Detail::RenderExternalTextureAccess::Import(*fixture.frontend, acquired));
+        acquiredBindings.front() = {consumers.front().output, output};
+        CHECK(Detail::RenderFrontendResourceAccess::BindExternalSceneCanvas(*program, 1, acquiredBindings, {}).HasError());
+        const auto bound = UiRequire(Detail::RenderFrontendResourceAccess::BindExternalSceneCanvas(*program, 0, acquiredBindings, {}));
+        CHECK(std::get<RenderTextureHandle>(bound->Resources()[consumers.front().output.value - 1].binding) == output);
+        REQUIRE(bound->ExternalReleases().size() == 1);
+        CHECK(bound->ExternalReleases().front().newState == acquired->RequiredFinalState());
+    }
     const auto stale = UiRequire(program->Prepare(0, fixture.Submission(*program, geometry, bindings)));
     UiPaintPreparedFrame prepared;
     if (!neutralRequired)
@@ -142,7 +210,8 @@ TEST_CASE("Scene graph consumes the exact prepared sampleable canvas in one fram
                                            .scissor = {0, 0, extent.width, extent.height},
                                            .sampling = UiPaintSampling::Premultiplied,
                                            .sampled = 0}};
-    const std::array workloads{RenderGraphPassWorkload{consumer.pass, RenderGraphUiPaint{.vertices = consumer.buffers[0],
+    const std::array workloads{RenderGraphPassWorkload{consumer.pass, RenderGraphUiPaint{.color = consumer.output,
+                                                                                         .vertices = consumer.buffers[0],
                                                                                          .indices = consumer.buffers[1],
                                                                                          .parameters = consumer.buffers[2],
                                                                                          .sampledResources = consumer.sampled,
@@ -151,8 +220,11 @@ TEST_CASE("Scene graph consumes the exact prepared sampleable canvas in one fram
                                                                                          .indexCount = 3,
                                                                                          .draws = draws,
                                                                                          .kernel = std::move(kernel),
+                                                                                         .clearColor = externalOutput,
                                                                                          .frameRevision = 1}}};
     auto frame = UiRequire(fixture.frontend->BeginFrame({.frameNumber = fixture.frameNumber++, .outputExtent = extent}));
+    if (externalOutput)
+        CHECK(Detail::RenderFrontendResourceAccess::BindExternalSceneCanvas(*program, 0, acquiredBindings, {}).HasError());
     if (neutralRequired) {
         auto &upload = lifecycleState.uiPaint;
         const auto before = upload.updates;
@@ -232,7 +304,14 @@ TEST_CASE("Scene graph consumes the exact prepared sampleable canvas in one fram
         CHECK(lifecycleState.graphResources.size() == program->Inventory().resources);
     REQUIRE(frame.Present().HasValue());
     CHECK(lifecycleState.presentCount == 1);
-    if (neutralRequired) {
+    if (externalOutput) {
+        const auto replacement = std::make_shared<CanvasAcquisition>(fixture.frontend->Capabilities().support.deviceIncarnation);
+        acquiredBindings.front().texture = UiRequire(Detail::RenderExternalTextureAccess::Import(*fixture.frontend, replacement));
+        const auto rebound = UiRequire(Detail::RenderFrontendResourceAccess::BindExternalSceneCanvas(*program, 0, acquiredBindings, {}));
+        CHECK(std::get<RenderTextureHandle>(rebound->Resources()[consumers.front().output.value - 1].binding) ==
+              acquiredBindings.front().texture);
+    }
+    if (neutralRequired || externalOutput) {
         auto later = UiRequire(fixture.frontend->BeginFrame({.frameNumber = fixture.frameNumber++, .outputExtent = extent}));
         CHECK(UiRequire(program->CanvasSurface(prepared)).color == consumers[0].canvas);
         CHECK(program->ExecuteSceneCanvas(later, prepared, fixture.Submission(*program, geometry, bindings), workloads).HasError());

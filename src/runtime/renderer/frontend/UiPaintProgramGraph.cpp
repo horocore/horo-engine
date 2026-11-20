@@ -24,7 +24,7 @@ namespace Horo::Render {
                 : slot_(slot), external_(external), masks_(masks), groups_(groups), buffers_(target.buffers), extent_(target.extent),
                   target_(target.target), primary_(std::move(primary)), offscreen_(std::move(offscreen)) {}
 
-            Result<void> Build(const std::uint32_t slotIndex, const UiPaintSceneCanvasGraph *scene) {
+            Result<void> Build(const std::uint32_t slotIndex, const UiPaintSceneCanvasRecipe *scene) {
                 if (scene)
                     queue_ = scene->graphicsQueue;
                 const auto paintPasses = masks_.size() + groups_.size() + 1;
@@ -83,12 +83,12 @@ namespace Horo::Render {
 
             /** @brief Adds the scene's cold recipe after the same graph's resident canvas writer. */
             Result<RenderGraphPassRef> AddScene(RenderGraphBuilder &builder, const std::uint32_t slotIndex,
-                                                const UiPaintSceneCanvasGraph *scene) {
+                                                const UiPaintSceneCanvasRecipe *scene) {
                 if (!scene)
                     return Result<RenderGraphPassRef>::Success({});
                 std::vector<RenderGraphImportedState> sceneInitial;
-                auto consumer =
-                    scene->author(builder, {slotIndex, {slot_.surfaces.back().handle, extent_}, slot_.textures.back()}, sceneInitial);
+                auto consumer = scene->author(builder, {slotIndex, {slot_.surfaces.back().handle, extent_}, slot_.textures.back()},
+                                              sceneInitial, externalSlots_, optionalReads_);
                 if (consumer.HasValue())
                     initial_.insert(initial_.end(), sceneInitial.begin(), sceneInitial.end());
                 return consumer;
@@ -131,6 +131,17 @@ namespace Horo::Render {
                     slot_.sceneExecution.resize(ordered.size());
                 }
                 const std::array queues{RenderQueueAssignment{RenderQueueRole::Graphics, queue_}};
+                slot_.inventory = {schedule.Value().OrderedPasses().size(), graph.Value().Resources().size(), 0};
+                if (!externalSlots_.empty()) {
+                    auto prepared =
+                        PreparedRenderGraphTemplate::Prepare(std::move(graph).Value(), externalSlots_, initial_, queues, 1, optionalReads_);
+                    if (prepared.HasError())
+                        return Result<void>::Failure(prepared.ErrorValue());
+                    slot_.sceneTemplate.emplace(std::move(prepared).Value());
+                    return Result<void>::Success();
+                }
+                if (!optionalReads_.empty())
+                    return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
                 auto synchronization = SynthesizeRenderGraphSynchronization(graph.Value(), schedule.Value(), queues, initial_);
                 if (synchronization.HasError())
                     return Result<void>::Failure(synchronization.ErrorValue());
@@ -271,12 +282,14 @@ namespace Horo::Render {
             RenderGraphResourceId stencil_;
             RenderGraphResourceId neutralSample_;
             std::vector<RenderGraphImportedState> initial_;
+            std::vector<RenderGraphExternalTextureSlot> externalSlots_;
+            std::vector<RenderGraphOptionalRead> optionalReads_;
         };
     }  // namespace
 
     /** @copydoc UiPaintProgram::Storage::CreateSlot */
     Result<void> UiPaintProgram::Storage::CreateSlot(RenderFrontend &renderer, std::uint32_t index, const UiPaintFrameBuffers &buffers,
-                                                     RenderTextureFormat stencilFormat, const UiPaintSceneCanvasGraph *scene) {
+                                                     RenderTextureFormat stencilFormat, const Detail::UiPaintSceneCanvasRecipe *scene) {
         auto &slot = native.slots[index];
         const FramebufferExtent extent{descriptor.projection.pixelExtent.width, descriptor.projection.pixelExtent.height};
         const bool dedicated = target != Detail::UiPaintRootTarget::PrimaryOutput;
@@ -324,7 +337,7 @@ namespace Horo::Render {
 
     /** @copydoc UiPaintProgram::Storage::CompileSlot */
     Result<void> UiPaintProgram::Storage::CompileSlot(std::uint32_t index, const UiPaintFrameBuffers &buffers,
-                                                      const UiPaintSceneCanvasGraph *scene) {
+                                                      const Detail::UiPaintSceneCanvasRecipe *scene) {
         const FramebufferExtent extent{descriptor.projection.pixelExtent.width, descriptor.projection.pixelExtent.height};
         ProgramGraph graph{native.slots[index],       source.external, source.masks,    source.prototype.Groups(),
                            {buffers, extent, target}, native.primary,  native.offscreen};
