@@ -1,9 +1,60 @@
 #include "RuntimeUiPaintHostInternal.h"
 
 #include <algorithm>
+#include <utility>
 
 namespace Horo::Application::Internal {
     using namespace Runtime::Ui;
+
+    namespace {
+        /** @brief Prevents source replacement while a synchronous pointer observer borrows the admitted owners. */
+        class WorldPointerDispatch final {
+        public:
+            explicit WorldPointerDispatch(bool &active) noexcept : active_(active), previous_(std::exchange(active, true)) {}
+
+            ~WorldPointerDispatch() {
+                active_ = previous_;
+            }
+
+            WorldPointerDispatch(const WorldPointerDispatch &) = delete;
+            WorldPointerDispatch &operator=(const WorldPointerDispatch &) = delete;
+            WorldPointerDispatch(WorldPointerDispatch &&) = delete;
+            WorldPointerDispatch &operator=(WorldPointerDispatch &&) = delete;
+
+        private:
+            bool &active_;
+            const bool previous_;
+        };
+
+        /** @brief Checks native presentation and the current derived owner at the same boundary. */
+        bool WorldInputReady(const Detail::RuntimeUiPaintSource &source) noexcept {
+            return source.presentedWorld && !source.output.pending && !source.output.awaitingPresentation &&
+                   source.animation->InputEligible(source.presentedWorld->presentation.view);
+        }
+
+        /** @brief Validates the bounded batch before forwarding samples to the shared recognizer. */
+        Result<void> ValidateWorldPointerSamples(const std::span<const UiPointerSample> samples) {
+            if (samples.size() > MaximumUiInteractionSamples)
+                return Result<void>::Failure(MakeError(UiErrors::EventDispatchCapacityExceeded));
+            if (!std::ranges::all_of(samples, [](const auto &sample) {
+                return sample.modality == UiPointerModality::WorldRay;
+            }))
+                return Result<void>::Failure(MakeError(UiErrors::EventDispatchInvalid));
+            return Result<void>::Success();
+        }
+
+        /** @brief Rejects an unpresented or mismatched owner and releases any previously admitted contacts. */
+        Result<void> AdmitWorldPointer(const Detail::RuntimeUiPaintSource &source, const RuntimeUiPaintWorldPointerBatch &batch) {
+            const auto &owner = batch.interaction.Owner();
+            if (const bool presented = WorldInputReady(source);
+                !presented || owner.view != source.presentedWorld->presentation.view || !source.animation->PointerInputEligible(owner)) {
+                if (const auto cancelled = source.animation->CancelPointers(batch.interaction, batch.nextSequence); cancelled.HasError())
+                    return cancelled;
+                return Result<void>::Failure(MakeError(presented ? UiErrors::HitTestSourceStale : UiErrors::HitTestNotPresented));
+            }
+            return ValidateWorldPointerSamples(batch.samples);
+        }
+    }  // namespace
 
     /** @copydoc Detail::RuntimeUiPaintHostState::ActiveSource */
     Detail::RuntimeUiPaintSource *Detail::RuntimeUiPaintHostState::ActiveSource(const RuntimeUiInstanceId instance) noexcept {
@@ -117,10 +168,55 @@ namespace Horo::Application::Internal {
         if (!scene.IsValid())
             return Read::Failure(MakeError(UiErrors::HandleMalformed));
         for (const auto *source : state_->Sources())
-            if (source && source->scene == scene && source->presentedWorld && !source->output.pending &&
-                !source->output.awaitingPresentation && source->animation->InputEligible(source->presentedWorld->presentation.view))
+            if (source && source->scene == scene && WorldInputReady(*source))
                 return Read::Success(source->presentedWorld);
         return Read::Success(std::nullopt);
+    }
+
+    /** @copydoc RuntimeUiPaintPort::PumpWorldPointers */
+    Result<UiPointerInteractionResult> RuntimeUiPaintPort::PumpWorldPointers(const Runtime::SceneRuntimeId scene,
+                                                                             const RuntimeUiPaintWorldPointerBatch &batch,
+                                                                             UiEventHandler &observer) const {
+        using Outcome = Result<UiPointerInteractionResult>;
+        batch.writtenDefaults = 0;
+        const auto state = state_;
+        if (!state || !state->Available() || state->dispatching)
+            return Outcome::Failure(MakeError(UiErrors::EventDispatchLifecycleUnavailable));
+        const auto &owner = batch.interaction.Owner();
+        auto *source = state->ActiveSource(owner.instance);
+        if (!source) {
+            batch.interaction.CancelTransient();
+            return Outcome::Failure(MakeError(UiErrors::HitTestSourceStale));
+        }
+        if (!source->worldCanvas || !scene.IsValid() || source->scene != scene)
+            return Outcome::Failure(MakeError(UiErrors::HitTestSourceStale));
+        const WorldPointerDispatch guard{state->dispatching};
+        if (const auto admitted = AdmitWorldPointer(*source, batch); admitted.HasError())
+            return Outcome::Failure(admitted.ErrorValue());
+        const auto hit = source->presentedWorld->hit;  // Shutdown in an observer can clear the source's copy.
+        return source->animation->PumpPointers({owner.view,
+                                                batch.interaction,
+                                                batch.dispatcher,
+                                                hit,
+                                                {},
+                                                batch.samples,
+                                                batch.milliseconds,
+                                                batch.nextSequence,
+                                                batch.defaults,
+                                                batch.writtenDefaults},
+                                               observer);
+    }
+
+    /** @copydoc RuntimeUiPaintPort::CancelWorldPointers */
+    Result<void> RuntimeUiPaintPort::CancelWorldPointers(UiPointerInteraction &interaction, std::uint64_t &nextSequence) const {
+        if (!state_ || !state_->Available() || state_->dispatching)
+            return Result<void>::Failure(MakeError(UiErrors::EventDispatchLifecycleUnavailable));
+        if (auto *source = state_->ActiveSource(interaction.Owner().instance); source && source->worldCanvas) {
+            const WorldPointerDispatch guard{state_->dispatching};
+            return source->animation->CancelPointers(interaction, nextSequence);
+        }
+        interaction.CancelTransient();
+        return Result<void>::Success();
     }
 
     /** @copydoc RuntimeUiPaintPort::ReadSceneCanvasFrame */

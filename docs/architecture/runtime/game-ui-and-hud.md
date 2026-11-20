@@ -416,6 +416,10 @@ gestures. A ray that crosses the plane outside the canvas can still move a
 captured contact. A tracking-loss cancellation can release it without geometry.
 World samples use the presented plane and share the same gesture dispatch and
 control defaults as viewport pointers.
+The application World pointer port routes an admitted context through the
+canvas's focus graph and capture store. Losing its presented geometry
+neutralizes the active capture. The input adapter owns focus and session loss
+notifications and cancels through the same port.
 
 A Scene entity can reference one canvas through its `uiCanvas` component. The
 reference names the registry asset, document, canvas and minimum document

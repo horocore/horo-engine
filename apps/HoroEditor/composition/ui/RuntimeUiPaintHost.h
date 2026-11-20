@@ -83,6 +83,17 @@ namespace Horo::Application::Internal {
         Runtime::Ui::UiHitTestSnapshot hit;
     };
 
+    /** @brief Bounded input submitted by the owner of an already admitted World pointer context. */
+    struct RuntimeUiPaintWorldPointerBatch final {
+        Runtime::Ui::UiPointerInteraction &interaction;
+        Runtime::Ui::UiEventDispatcher &dispatcher;
+        std::span<const Runtime::Ui::UiPointerSample> samples;
+        std::uint64_t milliseconds;
+        std::uint64_t &nextSequence;
+        std::span<Runtime::Ui::UiControlDefaultAction> defaults;
+        std::uint32_t &writtenDefaults;
+    };
+
     /** @brief One headset submission's presentation and hit geometry, retained until the matching native frame completes. */
     class RuntimeUiPaintHeadsetCanvasReceipt final {
         friend class RuntimeUiPaintPort;
@@ -222,6 +233,20 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<std::optional<RuntimeUiPaintPresentedWorldCanvas>> ReadPresentedWorldCanvas(
             Runtime::SceneRuntimeId scene) const;
+        /** @brief Routes admitted World rays through the source's exact presented geometry and shared UI owners.
+         * @param scene Exact active scene. @param batch Caller-owned input and ordered default output.
+         * @param observer Synchronous gesture observer.
+         * @return Applied result, or the original stale, unavailable, capacity or dispatch error.
+         * @post An unavailable presentation neutralizes this recognizer's capture.
+         */
+        [[nodiscard]] Result<Runtime::Ui::UiPointerInteractionResult> PumpWorldPointers(Runtime::SceneRuntimeId scene,
+                                                                                        const RuntimeUiPaintWorldPointerBatch &batch,
+                                                                                        Runtime::Ui::UiEventHandler &observer) const;
+        /** @brief Cancels the context's captured World pointers on focus, session or source loss.
+         * @param interaction Exact owning recognizer. @param nextSequence Shared ordered UI event sequence.
+         * @return Cleanup result. A retired source still releases the caller's transient leases.
+         */
+        [[nodiscard]] Result<void> CancelWorldPointers(Runtime::Ui::UiPointerInteraction &interaction, std::uint64_t &nextSequence) const;
         /** @brief Applies a receipt only for UI actually encoded in that same native frame; presentation never retires GPU claims. */
         [[nodiscard]] Result<void> Presented(std::uint64_t frameNumber, bool nativePresentSucceeded) const;
         /** @brief Pins the actual current derived frame for host inspection; its lifetime participates in the existing drain fence. */

@@ -624,6 +624,70 @@ namespace Horo::Tests::VulkanEditor {
         std::function<void(std::uint64_t)> draw_;
     };
 
+    /** @brief Drives admitted ray samples through the exact application World pointer port. */
+    class AuthoredWorldPointer final : public Runtime::Ui::UiEventHandler {
+    public:
+        using Port = Application::Internal::RuntimeUiPaintPort;
+        using Presented = Application::Internal::RuntimeUiPaintPresentedWorldCanvas;
+
+        void Press(const Port &port, Runtime::SceneRuntimeId scene, const Presented &target, const Math::Ray &ray) {
+            using namespace Runtime::Ui;
+            const auto &hit = target.hit.Descriptor();
+            const auto view = target.presentation.view;
+            interaction_.emplace(Render::Test::UiRequire(UiPointerInteraction::Create({{{view.ownership, view.slot, view.generation},
+                                                                                        view,
+                                                                                        target.instance,
+                                                                                        hit.canvas,
+                                                                                        hit.document,
+                                                                                        hit.tree,
+                                                                                        hit.interaction},
+                                                                                       std::nullopt},
+                                                                                      {})));
+            dispatcher_.emplace(
+                Render::Test::UiRequire(UiEventDispatcher::Create({target.instance, hit.canvas, hit.document, MaximumUiTreeDepth})));
+            const UiPointerSample press{.pointer = Render::Test::UiRequire(UiPointerId::Create(1)),
+                                        .edge = UiPointerEdge::Press,
+                                        .modality = UiPointerModality::WorldRay,
+                                        .worldRay = ray};
+            const auto applied = Render::Test::UiRequire(
+                port.PumpWorldPointers(scene, {*interaction_, *dispatcher_, std::span{&press, 1}, 1, sequence_, defaults_, written_},
+                                       *this));
+            CHECK(applied.activePointers == 1);
+            CHECK(pressed_);
+        }
+
+        void VerifyUnavailable(const Port &port, Runtime::SceneRuntimeId scene) {
+            const auto blocked = port.PumpWorldPointers(scene, {*interaction_, *dispatcher_, {}, 2, sequence_, defaults_, written_}, *this);
+            REQUIRE(blocked.HasError());
+            CHECK(blocked.ErrorValue().code.Value() == Runtime::Ui::UiErrors::HitTestNotPresented.code.Value());
+            CHECK(std::ranges::none_of(interaction_->TargetsInFlight(), &Runtime::Ui::UiElementHandle::IsValid));
+            Check(port.CancelWorldPointers(*interaction_, sequence_));
+        }
+
+        [[nodiscard]] bool Pressed() const noexcept {
+            return pressed_;
+        }
+
+        Result<Runtime::Ui::UiEventResponse> Handle(Runtime::Ui::UiElementHandle, const Runtime::Ui::UiEventPhase phase,
+                                                    const Runtime::Ui::UiRoutedEvent &event) override {
+            if (phase == Runtime::Ui::UiEventPhase::Target && event.gesture && event.gesture->kind == Runtime::Ui::UiGestureKind::Press)
+                pressed_ = true;
+            return Result<Runtime::Ui::UiEventResponse>::Success({});
+        }
+
+        Result<void> ApplyDefault(Runtime::Ui::UiElementHandle, const Runtime::Ui::UiRoutedEvent &) override {
+            return Result<void>::Success();
+        }
+
+    private:
+        std::optional<Runtime::Ui::UiPointerInteraction> interaction_;
+        std::optional<Runtime::Ui::UiEventDispatcher> dispatcher_;
+        std::array<Runtime::Ui::UiControlDefaultAction, Runtime::Ui::MaximumUiInteractionSamples + 1> defaults_;
+        std::uint64_t sequence_{1};
+        std::uint32_t written_{};
+        bool pressed_{};
+    };
+
     TEST_CASE("Native Vulkan presents an authored project canvas before admitting its interaction",
               "[native-smoke][vulkan][gui][viewport][authored-canvas]") {
         using namespace Runtime::Ui;
@@ -659,6 +723,7 @@ namespace Horo::Tests::VulkanEditor {
         bool draw = true;
         bool verifyInitialAdmission = true;
         bool headsetProjected = true;
+        const auto worldPointer = std::make_unique<AuthoredWorldPointer>();
         Check(runtime->AddParticipant(std::make_unique<AuthoredCanvasRenderer>([&](const std::uint64_t number) {
             std::optional<RuntimeUiPaintHeadsetCanvasReceipt> headsetReceipt;
             RuntimeUiInstanceId headsetInstance;
@@ -668,6 +733,11 @@ namespace Horo::Tests::VulkanEditor {
                 const auto source = UiRequire(port.ReadSceneCanvasFrame(number, sceneId));
                 REQUIRE(source);
                 view = source->prototype->Descriptor().view;
+                if (deferHeadsetReceipt && worldPointer->Pressed() && headsetProjected && !verifyInitialAdmission)
+                    CHECK(std::ranges::any_of(source->prototype->Commands(), [](const UiDrawCommand &command) {
+                        const auto *cue = std::get_if<UiVisualIndicatorDraw>(&command.payload);
+                        return cue && cue->state.Contains(UiVisualStateMask{UiVisualState::Focused});
+                    }));
                 if (verifyInitialAdmission)
                     CHECK_FALSE(port.InputEligible(view));
                 const auto space = source->worldCanvas ? UiRenderCompositionSpace::World : UiRenderCompositionSpace::Camera;
@@ -732,6 +802,10 @@ namespace Horo::Tests::VulkanEditor {
                     const auto targeted = UiRequire(hit->hit.HitTestWorld({view, hit->presentation.canvas, ray}, presented));
                     REQUIRE(targeted);
                     CHECK(targeted->logicalPosition.x == hit->hit.Descriptor().logicalExtent.width / 2);
+                    if (!worldPointer->Pressed())
+                        worldPointer->Press(port, sceneId, *hit, ray);
+                } else if (worldPointer->Pressed()) {
+                    worldPointer->VerifyUnavailable(port, sceneId);
                 }
             }
         })));

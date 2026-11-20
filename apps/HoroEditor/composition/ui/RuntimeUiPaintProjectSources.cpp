@@ -206,10 +206,53 @@ namespace Horo::Application::Internal {
             UiRenderGeometryArenaDescriptor geometry;
         };
 
+        /** @brief Prepares the shared focus and capture authorities for one authored World canvas. */
+        Result<void> PrepareWorldInput(UiReloadCanvas &canvas, const CookedUiDocument &document, const UiRenderViewId view) {
+            std::vector<UiFocusNodeDescriptor> nodes;
+            nodes.reserve(canvas.tree.Size());
+            for (const auto &element : document.Elements()) {
+                const auto handle = canvas.tree.Find(element.id);
+                if (handle.HasError())
+                    continue;
+                const auto *state = element.presentation ? &element.presentation->state : nullptr;
+                nodes.push_back({handle.Value(),
+                                 element.id,
+                                 element.parent,
+                                 {},
+                                 UiFocusBringIntoViewPolicy::Nearest,
+                                 state && state->focusable,
+                                 !state || state->enabled,
+                                 !state || state->visible});
+            }
+            const auto &layout = canvas.layout->Descriptor();
+            const UiFocusOwnerContext owner{layout.instance,
+                                            layout.canvas,
+                                            layout.document,
+                                            layout.sources.document,
+                                            layout.sources.tree,
+                                            layout.interaction,
+                                            {{}, {view.ownership, view.slot, view.generation}}};
+            auto focus = UiFocusGraph::Create({owner,
+                                               {},
+                                               UiFocusRecoveryPolicy::Clear,
+                                               static_cast<std::uint32_t>(nodes.size()),
+                                               MaximumUiFocusModalDepth,
+                                               MaximumUiFocusRestorationDepth},
+                                              nodes);
+            if (focus.HasError())
+                return Result<void>::Failure(focus.ErrorValue());
+            auto captures = UiPointerCaptureStore::Create({view.ownership, MaximumUiInteractionPointers});
+            if (captures.HasError())
+                return Result<void>::Failure(captures.ErrorValue());
+            canvas.focus.emplace(std::move(focus).Value());
+            canvas.captures.emplace(std::move(captures).Value());
+            return Result<void>::Success();
+        }
+
         /** @brief Prepares canonical layout, cascade and a registered inactive view without publishing input or native receipts. */
         Result<PreparedPaintCanvas> PrepareCanvas(UiReloadCanvas &canvas, const CookedUiDocument &document,
                                                   const RuntimeStyleRegistry &registry, const UiResolvedScreenCanvas &resolved,
-                                                  const UiOwnershipGeneration ownership) {
+                                                  const UiOwnershipGeneration ownership, const bool world) {
             if (const auto layout = Layout(canvas, document, resolved); layout.HasError())
                 return Result<PreparedPaintCanvas>::Failure(layout.ErrorValue());
             auto definition = Definition(document, canvas);
@@ -222,6 +265,9 @@ namespace Horo::Application::Internal {
             if (styles.HasError())
                 return Result<PreparedPaintCanvas>::Failure(styles.ErrorValue());
             const UiRenderViewId view{ownership, canvas.tree.Canvas().slot, 1};
+            if (world)
+                if (const auto input = PrepareWorldInput(canvas, document, view); input.HasError())
+                    return Result<PreparedPaintCanvas>::Failure(input.ErrorValue());
             auto presentation = UiPresentedInteractionState::Create(view, canvas.tree.Canvas());
             if (presentation.HasError())
                 return Result<PreparedPaintCanvas>::Failure(presentation.ErrorValue());
@@ -450,7 +496,7 @@ namespace Horo::Application::Internal {
         const auto &kernel = projection.sceneCanvas ? sceneKernel : policy.kernel;
         auto selectedCanvas = std::ranges::find(canvases, reference.canvas, &UiReloadCanvas::id);
         auto &canvas = *selectedCanvas;
-        auto preparation = PrepareCanvas(canvas, loaded.document, registry, resolved, allocator->Ownership());
+        auto preparation = PrepareCanvas(canvas, loaded.document, registry, resolved, allocator->Ownership(), projection.world.has_value());
         if (preparation.HasError())
             return Built::Failure(preparation.ErrorValue());
         auto prepared = std::move(preparation).Value();
