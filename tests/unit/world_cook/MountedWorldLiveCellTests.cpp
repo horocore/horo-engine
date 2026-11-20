@@ -146,11 +146,11 @@ namespace Horo::WorldCook {
                 Check(WithdrawHeadlessWorldCell(*scene_));
             }
 
-            void RequestSibling() {
+            void RequestSibling() const {
                 Check(RequestHeadlessWorldCell(*scene_, sibling_));
             }
 
-            void WithdrawFirstOccurrence() {
+            void WithdrawFirstOccurrence() const {
                 Check(WithdrawHeadlessWorldCell(*scene_, demand_.occurrence));
             }
 
@@ -487,7 +487,9 @@ namespace Horo::WorldCook {
             --limits.maximumCellAssetBytes;
             expectCapacity = true;
         }
-        SECTION("Both live cells share the complete envelope through exact native detach receipts") {}
+        SECTION("Both live cells share the complete envelope through exact native detach receipts") {
+            // The configured budget and reader lifetime are used as-is for the normal detach sequence.
+        }
         SECTION("A remaining payload pin delays budget credit after the last native detach") {
             retainReader = true;
         }

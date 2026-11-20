@@ -19,6 +19,7 @@
 #include <charconv>
 #include <initializer_list>
 #include <limits>
+#include <memory>
 #include <new>
 #include <optional>
 #include <thread>
@@ -423,7 +424,7 @@ namespace Horo::Application::Internal {
             /** @brief Look up the exact retained allocation in this immutable cook generation. */
             [[nodiscard]] const Entry *Find(const Assets::AssetId id) const {
                 const auto entry = std::ranges::lower_bound(entries_, id, {}, &Entry::id);
-                return entry != entries_.end() && entry->id == id ? &*entry : nullptr;
+                return entry != entries_.end() && entry->id == id ? std::to_address(entry) : nullptr;
             }
 
             /** @brief Project the physically retained CPU payload budget, including retiring allocations. */
@@ -460,7 +461,7 @@ namespace Horo::Application::Internal {
                     if (claimed.HasError())
                         return Result<void>::Failure(claimed.ErrorValue());
                     if (!existing)
-                        entries_.insert(entry, Entry{id, resource.artifact, *bytes});
+                        entries_.emplace(entry, id, resource.artifact, *bytes);
                     claims.push_back(std::move(claimed).Value());
                 }
                 return Result<void>::Success();
@@ -470,8 +471,7 @@ namespace Horo::Application::Internal {
             [[nodiscard]] Result<void> Release(std::vector<WS::SharedAssetLease> &claims) {
                 while (!claims.empty()) {
                     const auto claim = claims.back();
-                    const auto released = ledger_.Release(claim);
-                    if (released.HasError())
+                    if (const auto released = ledger_.Release(claim); released.HasError())
                         return released;
                     claims.pop_back();
                     auto retiring = ledger_.BeginRetire(claim.key, claim.charge);
@@ -502,8 +502,7 @@ namespace Horo::Application::Internal {
                         ++entry;
                         continue;
                     }
-                    const auto retired = ledger_.AcknowledgeRetired(*entry->retiring);
-                    if (retired.HasError())
+                    if (const auto retired = ledger_.AcknowledgeRetired(*entry->retiring); retired.HasError())
                         return retired;
                     entry = entries_.erase(entry);
                     --retiring_;
@@ -517,6 +516,33 @@ namespace Horo::Application::Internal {
             std::vector<Entry> entries_;
             std::size_t retiring_{};
         };
+
+        /** @brief Validates an exact cooked envelope and reserves its retained bytes in the uncharged pool. */
+        Result<void> PrepareDetachedCellAsset(const MountedCellAsset &asset, const Runtime::SceneAssetDependency &dependency,
+                                              const Assets::AssetCookTargetId &target, PreparedCellAssets &prepared,
+                                              std::size_t &remainingPool) {
+            if (asset.envelope.size() > remainingPool)
+                return Result<void>::Failure(MakeError(Runtime::SceneCellPayloadErrors::CapacityExceeded));
+            const auto decoded = Assets::DecodeCookedArtifact(asset.envelope, CookLimits);
+            if (decoded.HasError())
+                return Result<void>::Failure(decoded.ErrorValue());
+            const auto &header = decoded.Value();
+            if (header.target != target || header.type != dependency.expectedType || header.id != dependency.id)
+                return Result<void>::Failure(
+                    MakeError(WS::WorldArtifactErrors::Invalid, "A mounted cell asset does not match the World target."));
+            // An exact one-allocation cache provides a retirement observation without pinning its payload.
+            const auto cache = Assets::AssetPayloadCache::Create(1, remainingPool);
+            if (cache.HasError())
+                return Result<void>::Failure(cache.ErrorValue());
+            auto lease = cache.Value()->Admit(std::as_bytes(std::span{asset.envelope}));
+            if (lease.HasError())
+                return Result<void>::Failure(lease.ErrorValue());
+            auto bytes = cache.Value()->ObserveRetainedPayloadBytes();
+            remainingPool -= bytes.Bytes();
+            prepared.resources.emplace_back(dependency, std::move(lease).Value());
+            prepared.newAllocations.emplace_back(dependency.id, std::move(bytes));
+            return Result<void>::Success();
+        }
 
         /** @brief Resolves every declared dependency against the pinned registry and the exact committed World envelopes. */
         Result<PreparedCellAssets> PrepareCellAssets(std::span<const Runtime::SceneAssetDependency> dependencies,
@@ -554,26 +580,9 @@ namespace Horo::Application::Internal {
                     prepared.resources.emplace_back(dependency, existing->pin);
                     continue;
                 }
-                if (found->envelope.size() > remainingPool)
-                    return Output::Failure(MakeError(Runtime::SceneCellPayloadErrors::CapacityExceeded));
-                auto decoded = Assets::DecodeCookedArtifact(found->envelope, CookLimits);
-                if (decoded.HasError())
-                    return Output::Failure(decoded.ErrorValue());
-                if (decoded.Value().target != target || decoded.Value().type != dependency.expectedType ||
-                    decoded.Value().id != dependency.id)
-                    return Output::Failure(
-                        MakeError(WS::WorldArtifactErrors::Invalid, "A mounted cell asset does not match the World target."));
-                // A single-allocation cache reuses the Assets owner and yields an exact, non-pinning retirement observation.
-                auto cache = Assets::AssetPayloadCache::Create(1, remainingPool);
-                if (cache.HasError())
-                    return Output::Failure(cache.ErrorValue());
-                auto lease = cache.Value()->Admit(std::as_bytes(std::span{found->envelope}));
-                if (lease.HasError())
-                    return Output::Failure(lease.ErrorValue());
-                auto bytes = cache.Value()->ObserveRetainedPayloadBytes();
-                remainingPool -= bytes.Bytes();
-                prepared.resources.emplace_back(dependency, std::move(lease).Value());
-                prepared.newAllocations.emplace_back(dependency.id, std::move(bytes));
+                if (const auto detached = PrepareDetachedCellAsset(*found, dependency, target, prepared, remainingPool);
+                    detached.HasError())
+                    return Output::Failure(detached.ErrorValue());
             }
             return Output::Success(std::move(prepared));
         }
@@ -799,7 +808,7 @@ namespace Horo::Application::Internal {
 
             /** @brief Returns the in-flight retirement or the next withdrawn live occurrence. */
             [[nodiscard]] std::optional<std::size_t> RetirementCandidate() const noexcept {
-                if (retiring)
+                if (retiring.has_value())
                     return retiring;
                 const auto found = std::ranges::find_if(residents, [](const LiveResident &resident) {
                     return resident.demand.IsWithdrawn();
@@ -1509,7 +1518,7 @@ namespace Horo::Application::Internal {
             scene.Shutdown();
         if (live->demand)
             static_cast<void>(RejectLive(MakeError(WS::WorldArtifactErrors::Cancelled)));
-        if (live->retiring)
+        if (live->retiring.has_value())
             static_cast<void>(SettleLiveReservation(WS::StreamingCellOperationTransition::AcknowledgeRetirement));
         for (std::size_t index = 0; index < live->residents.size(); ++index) {
             auto &resident = live->residents[index];
@@ -1562,7 +1571,7 @@ namespace Horo::Application::Internal {
         if (cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Cancelled));
         auto &live = *state_->live;
-        if (live.demand || live.RetirementCandidate() || live.residents.size() == live.limits.maximumResidentCells)
+        if (live.demand || live.RetirementCandidate().has_value() || live.residents.size() == live.limits.maximumResidentCells)
             return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Invalid));
         if (std::ranges::any_of(live.residents, [&](const State::LiveResident &resident) {
             const auto &current = resident.demand.selected;
@@ -1622,7 +1631,7 @@ namespace Horo::Application::Internal {
             return Loading;
         if (live->demand)
             return Requested;
-        if (live->RetirementCandidate())
+        if (live->RetirementCandidate().has_value())
             return Retiring;
         return live->residents.empty() ? Idle : Active;
     }
@@ -1692,8 +1701,8 @@ namespace Horo::Application::Internal {
         const auto *active = state_->ImplicitActiveCell();
         if (!parent.IsCurrent() || !active)
             return {};
-        const auto current = state_->scene.ActiveScene();
-        if (!current || !parent.SameIncarnation(*current) ||
+        if (const auto current = state_->scene.ActiveScene();
+            !current || !parent.SameIncarnation(*current) ||
             !Runtime::FindStreamedSceneInstance(parent, active->address, active->identity, active->fence.epoch))
             return {};
         return active->anchors;
