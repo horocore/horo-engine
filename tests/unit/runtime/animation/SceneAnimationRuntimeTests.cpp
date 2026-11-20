@@ -265,7 +265,21 @@ namespace Horo::Animation {
         CHECK(pose[0].translation.x == 10.0F);
         Runtime::SceneCommandBuffer destroy;
         destroy.Destroy(added);
-        REQUIRE(fixture.Structural(std::move(destroy))->ResultValue());
+        SECTION("a removed actor leaves its slot vacant") {
+            REQUIRE(fixture.Structural(std::move(destroy))->ResultValue());
+        }
+        SECTION("a replacement takes the slot without inheriting its pose") {
+            REQUIRE(destroy.Create(create).IsValid());
+            const auto replaced = fixture.Structural(std::move(destroy));
+            REQUIRE(replaced->ResultValue());
+            REQUIRE(replaced->ResultValue()->created.size() == 1);
+            const auto replacement = replaced->ResultValue()->created.front().entity;
+            const auto fresh = Test::Cook::Take(fixture.forward->adapter->Query(replacement));
+            CHECK(fresh.instance.slot.index == other.instance.slot.index);
+            CHECK(fresh.instance.slot.generation > other.instance.slot.generation);
+            CHECK_FALSE(fresh.component);
+            CHECK(fixture.forward->adapter->CopyPose(replacement, other.component->currentPose, pose).HasError());
+        }
         CHECK(fixture.forward->adapter->Query(added).HasError());
         REQUIRE(fixture.Tick().HasValue());
         CHECK(fixture.PoseX() == Catch::Approx(30.0F).epsilon(0).margin(0.00001F));

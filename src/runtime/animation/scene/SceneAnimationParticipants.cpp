@@ -1,6 +1,5 @@
 #include "SceneAnimationState.h"
 
-#include <algorithm>
 #include <exception>
 
 namespace Horo::Runtime {
@@ -98,14 +97,14 @@ namespace Horo::Runtime {
         void Publish() noexcept override {
             if (!owner_->OnOwner() || owner_->attempting || owner_->active != scope_ || scope_->revision != revision_ || !next_)
                 std::terminate();
-            // No actor generation is shared with a replacement; unchanged actors remain exact same owners.
+            // Preparation copies the slot table and assigns new actors only to free slots.
             next_.swap(scope_->current);
             ++scope_->revision;
-            for (const auto &old : next_->actors) {
-                if (!old)
-                    continue;
-                const bool retained = std::ranges::find(scope_->current->actors, old) != scope_->current->actors.end();
-                if (!retained && old->graph.Shutdown().HasError())
+            const auto &retired = next_->actors;
+            const auto &current = scope_->current->actors;
+            for (std::size_t slot = 0; slot < retired.size(); ++slot) {
+                const auto &old = retired[slot];
+                if (old && old != current[slot] && old->graph.Shutdown().HasError())
                     std::terminate();
             }
             published_ = true;
