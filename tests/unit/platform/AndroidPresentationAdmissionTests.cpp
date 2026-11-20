@@ -234,7 +234,7 @@ namespace Horo::AndroidQualification::Tests {
         CHECK(pacing.TryAdmit(replacement, start + 1min + 16ms));
     }
 
-    TEST_CASE("Android thermal conservation changes only the next admitted presentation attempt",
+    TEST_CASE("Android resource conservation changes only the next admitted presentation attempt",
               "[platform][android][presentation][pacing]") {
         using namespace std::chrono_literals;
         using enum FramePacing::Mode;
@@ -247,7 +247,7 @@ namespace Horo::AndroidQualification::Tests {
         Accepted(fixture.admission.Reconcile(fixture.Facts(), true));
         const auto foreground = fixture.State();
         REQUIRE(pacing.TryAdmit(foreground, start));
-        CHECK_FALSE(pacing.TryAdmit(foreground, start + 16ms, ThermalConservation));
+        CHECK_FALSE(pacing.TryAdmit(foreground, start + 16ms, PowerConservation));
         REQUIRE(pacing.TryAdmit(foreground, start + 32ms, ThermalConservation));
         CHECK_FALSE(pacing.TryAdmit(foreground, start + 47ms));
         REQUIRE(pacing.TryAdmit(foreground, start + 48ms));
@@ -269,31 +269,34 @@ namespace Horo::AndroidQualification::Tests {
         CHECK(pacing.TryAdmit(fixture.State(), start + 1min + 16ms));
     }
 
-    TEST_CASE("Android thermal publication ignores a withdrawn token after replacement", "[platform][android][presentation][pacing]") {
+    TEST_CASE("Android pacing publication ignores a withdrawn token after replacement", "[platform][android][presentation][pacing]") {
         using enum FramePacing::Mode;
-        ThermalPacingMailbox mailbox;
+        FramePacingMailbox mailbox;
         const auto first = mailbox.Acquire();
         REQUIRE(first != 0);
         CHECK(mailbox.Acquire() == 0);
-        mailbox.Publish(first, true);
+        mailbox.Publish(first, ThermalConservation);
         CHECK(mailbox.Read(first) == ThermalConservation);
         mailbox.Revoke(first);
         const auto replacement = mailbox.Acquire();
         REQUIRE(replacement > first);
         std::thread late{[&] {
-            mailbox.Publish(first, true);
-            mailbox.Publish(0, true);
+            mailbox.Publish(first, ThermalConservation);
+            mailbox.Publish(0, ThermalConservation);
         }};
         late.join();
         CHECK(mailbox.Read(first) == Baseline);
         CHECK(mailbox.Read(replacement) == Baseline);
-        mailbox.Publish(replacement, true);
+        mailbox.Publish(replacement, PowerConservation);
+        mailbox.Publish(replacement, static_cast<FramePacing::Mode>(3));
+        CHECK(mailbox.Read(replacement) == PowerConservation);
+        mailbox.Publish(replacement, ThermalConservation);
         mailbox.Revoke(first);
         CHECK(mailbox.Read(replacement) == ThermalConservation);
-        mailbox.Publish(replacement, false);
+        mailbox.Publish(replacement, Baseline);
         CHECK(mailbox.Read(replacement) == Baseline);
         mailbox.Revoke(replacement);
-        mailbox.Publish(replacement, true);
+        mailbox.Publish(replacement, PowerConservation);
         CHECK(mailbox.Read(replacement) == Baseline);
         CHECK(mailbox.Acquire() > replacement);
     }

@@ -59,11 +59,12 @@ while readiness remains true. Presentation readiness and Activity permission are
 separate: frame execution additionally requires Running and Resumed states.
 
 The qualification host enforces a 16 ms baseline interval between frame
-attempts on its monotonic clock. Android's severe, critical, emergency and
-shutdown thermal states select a 32 ms interval while that observation is
-active. Recovery or an unavailable observation restores the baseline from
-the last actual attempt. Pause and presentation loss stop attempts, and
-resume starts without a backlog. The policy gates frame attempts after input
+attempts on its monotonic clock. Android Battery Saver and severe-or-higher
+thermal pressure each select a 32 ms interval. The thermal reason takes
+precedence while both apply. The host returns to the baseline from the last
+actual attempt once neither active signal requests conservation. Pause and
+presentation loss stop attempts, and resume starts without a backlog. The
+policy gates frame attempts after input
 commit and leaves display refresh, simulation scheduling and authored
 settings to their existing owners.
 The deployment report can carry the native owner's selected pacing mode

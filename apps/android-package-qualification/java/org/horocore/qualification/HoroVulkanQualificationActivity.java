@@ -13,27 +13,62 @@ public class HoroVulkanQualificationActivity extends HoroInputActivity {
     private static final MemoryObservation memory = new MemoryObservation();
     private static final PowerObservation power = new PowerObservation();
     private static final DisplayRefreshObservation refresh = new DisplayRefreshObservation();
-    private long thermalPacingToken;
-    private boolean conserveThermalPacing;
+    private enum PacingMode {
+        BASELINE(0), POWER_CONSERVATION(1), THERMAL_CONSERVATION(2);
 
-    private native void horoThermalPacingEvent(long token, boolean conserve);
+        final int wireValue;
+
+        PacingMode(int wireValue) {
+            this.wireValue = wireValue;
+        }
+    }
+
+    private long pacingToken;
+    private boolean conserveThermalPacing;
+    private boolean conservePowerPacing;
+    private PacingMode pacingMode = PacingMode.BASELINE;
+
+    private native void horoPacingEvent(long token, int mode);
 
     /** The native owner binds once and gets the latest Activity-local state under the callback gate. */
-    private synchronized boolean horoBindThermalPacing(long token) {
-        if (token <= thermalPacingToken) return false;
-        thermalPacingToken = token;
-        horoThermalPacingEvent(token, conserveThermalPacing);
+    private synchronized boolean horoBindPacing(long token) {
+        if (token <= pacingToken) return false;
+        pacingToken = token;
+        horoPacingEvent(token, pacingMode.wireValue);
         return true;
     }
 
-    private synchronized void horoDetachThermalPacing(long token) {
-        if (thermalPacingToken == token) thermalPacingToken = 0;
+    private synchronized void horoDetachPacing(long token) {
+        if (pacingToken == token) pacingToken = 0;
     }
 
     private synchronized void updateThermalPacing(boolean conserve) {
-        if (conserveThermalPacing == conserve) return;
         conserveThermalPacing = conserve;
-        if (thermalPacingToken != 0) horoThermalPacingEvent(thermalPacingToken, conserve);
+        updatePacingMode();
+    }
+
+    synchronized void updatePowerPacing(boolean conserve) {
+        conservePowerPacing = conserve;
+        updatePacingMode();
+    }
+
+    private synchronized void clearPacing() {
+        conserveThermalPacing = false;
+        conservePowerPacing = false;
+        updatePacingMode();
+    }
+
+    /** Both observations are reduced while the Activity's native callback monitor is held. */
+    private void updatePacingMode() {
+        PacingMode selected = PacingMode.BASELINE;
+        if (conserveThermalPacing) {
+            selected = PacingMode.THERMAL_CONSERVATION;
+        } else if (conservePowerPacing) {
+            selected = PacingMode.POWER_CONSERVATION;
+        }
+        if (selected == pacingMode) return;
+        pacingMode = selected;
+        if (pacingToken != 0) horoPacingEvent(pacingToken, selected.wireValue);
     }
 
     @Override public void onResume() {
@@ -46,6 +81,7 @@ public class HoroVulkanQualificationActivity extends HoroInputActivity {
     }
 
     @Override public void onPause() {
+        clearPacing();
         refresh.pause(this);
         if (thermal != null) thermal.pause(this);
         memory.pause(this);
@@ -54,6 +90,7 @@ public class HoroVulkanQualificationActivity extends HoroInputActivity {
     }
 
     @Override public void onDestroy() {
+        clearPacing();
         refresh.pause(this);
         if (thermal != null) thermal.pause(this);
         memory.pause(this);

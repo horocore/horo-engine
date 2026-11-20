@@ -11,7 +11,7 @@ namespace Horo::AndroidQualification {
     class QualificationHost final {
     public:
         /** @brief Activates the explicit renderer before any native window is admitted.
-         * @param app GameActivity that owns optional thermal pacing observations.
+         * @param app GameActivity that owns optional pacing observations.
          * @return Host or original typed platform/renderer admission failure. */
         [[nodiscard]] static Result<std::unique_ptr<QualificationHost>> Create(android_app &app);
         /** @brief Requires completed native drain before owner destruction. */

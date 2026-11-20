@@ -99,15 +99,16 @@ namespace Horo::AndroidQualification {
         if (minimumInterval_ <= Clock::duration::zero() || state.queuedObservationCount != 0 || !state.hasPresentation ||
             state.process != Platform::AndroidProcessState::Running || state.activity != Platform::AndroidActivityState::Resumed)
             return false;
-        const auto interval = mode == Mode::ThermalConservation ? conservationInterval_ : minimumInterval_;
+        const bool conserving = mode == Mode::PowerConservation || mode == Mode::ThermalConservation;
+        const auto interval = conserving ? conservationInterval_ : minimumInterval_;
         if (lastAttempt_ && (now < *lastAttempt_ || now - *lastAttempt_ < interval))
             return false;
         lastAttempt_ = now;
         return true;
     }
 
-    /** @copydoc ThermalPacingMailbox::Acquire */
-    ThermalPacingMailbox::Token ThermalPacingMailbox::Acquire() noexcept {
+    /** @copydoc FramePacingMailbox::Acquire */
+    FramePacingMailbox::Token FramePacingMailbox::Acquire() noexcept {
         auto previous = state_.load(std::memory_order_acquire);
         constexpr Token maximumGeneration = static_cast<Token>(std::numeric_limits<std::int64_t>::max()) & ~Flags;
         if ((previous & Active) || previous >= maximumGeneration)
@@ -116,26 +117,26 @@ namespace Horo::AndroidQualification {
         return state_.compare_exchange_strong(previous, token, std::memory_order_acq_rel) ? token : 0;
     }
 
-    /** @copydoc ThermalPacingMailbox::Revoke */
-    void ThermalPacingMailbox::Revoke(const Token token) noexcept {
+    /** @copydoc FramePacingMailbox::Revoke */
+    void FramePacingMailbox::Revoke(const Token token) noexcept {
         // No replacement can acquire while Active remains set, and only this lease's owner revokes it.
-        if (token && (state_.load(std::memory_order_acquire) & ~Conserving) == token)
+        if (token && (state_.load(std::memory_order_acquire) & ~ModeBits) == token)
             state_.fetch_and(~Flags, std::memory_order_acq_rel);
     }
 
-    /** @copydoc ThermalPacingMailbox::Publish */
-    void ThermalPacingMailbox::Publish(const Token token, const bool conserve) noexcept {
+    /** @copydoc FramePacingMailbox::Publish */
+    void FramePacingMailbox::Publish(const Token token, const FramePacing::Mode mode) noexcept {
         auto previous = state_.load(std::memory_order_acquire);
-        if ((token & Flags) != Active || (previous & ~Conserving) != token)
+        if ((token & Flags) != Active || (previous & ~ModeBits) != token || mode > FramePacing::Mode::ThermalConservation)
             return;
         // Callbacks for one token are serialized. CAS failure means this owner was withdrawn.
-        static_cast<void>(state_.compare_exchange_strong(previous, token | (conserve ? Conserving : 0), std::memory_order_acq_rel));
+        static_cast<void>(state_.compare_exchange_strong(previous, token | static_cast<Token>(mode), std::memory_order_acq_rel));
     }
 
-    /** @copydoc ThermalPacingMailbox::Read */
-    FramePacing::Mode ThermalPacingMailbox::Read(const Token token) const noexcept {
-        return (token & Flags) == Active && state_.load(std::memory_order_acquire) == (token | Conserving)
-                   ? FramePacing::Mode::ThermalConservation
-                   : FramePacing::Mode::Baseline;
+    /** @copydoc FramePacingMailbox::Read */
+    FramePacing::Mode FramePacingMailbox::Read(const Token token) const noexcept {
+        const auto state = state_.load(std::memory_order_acquire);
+        return (token & Flags) == Active && (state & ~ModeBits) == token ? static_cast<FramePacing::Mode>(state & ModeBits)
+                                                                         : FramePacing::Mode::Baseline;
     }
 }  // namespace Horo::AndroidQualification

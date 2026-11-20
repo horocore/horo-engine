@@ -40,14 +40,15 @@ namespace Horo::AndroidQualification {
     class FramePacing final {
     public:
         using Clock = std::chrono::steady_clock;
-        enum class Mode {
-            Baseline,
-            ThermalConservation
+        enum class Mode : std::uint8_t {
+            Baseline = 0,
+            PowerConservation = 1,
+            ThermalConservation = 2
         };
 
         /** @brief Sets the baseline and optional thermal cadence for the host's render attempts.
          * @param minimumInterval Baseline minimum time between attempts.
-         * @param conservationInterval Optional longer delay under valid severe thermal pressure. */
+         * @param conservationInterval Optional longer delay when the current Activity requests conservation. */
         explicit FramePacing(Clock::duration minimumInterval, Clock::duration conservationInterval = {}) noexcept;
 
         /** @brief Consumes at most one attempt for a committed foreground presentation.
@@ -64,8 +65,8 @@ namespace Horo::AndroidQualification {
         std::optional<Clock::time_point> lastAttempt_;
     };
 
-    /** @brief One process-lifetime slot for the exact thermal producer and native frame owner. */
-    class ThermalPacingMailbox final {
+    /** @brief One process-lifetime slot for the exact Activity producer and native frame owner. */
+    class FramePacingMailbox final {
     public:
         using Token = std::uint64_t;
 
@@ -74,15 +75,15 @@ namespace Horo::AndroidQualification {
         /** @brief The sole native owner revokes its token on its owner lane before best-effort Java detach. */
         void Revoke(Token token) noexcept;
         /** @brief The serialized Java producer can publish only while its exact token remains active. */
-        void Publish(Token token, bool conserve) noexcept;
+        void Publish(Token token, FramePacing::Mode mode) noexcept;
         /** @brief Reads the selected mode for the exact active owner, or baseline if unavailable. */
         [[nodiscard]] FramePacing::Mode Read(Token token) const noexcept;
 
     private:
-        static constexpr Token Conserving = 1;
-        static constexpr Token Active = 2;
-        static constexpr Token Flags = Conserving | Active;
+        static constexpr Token ModeBits = 3;
+        static constexpr Token Active = 4;
+        static constexpr Token Flags = ModeBits | Active;
         static_assert(std::atomic<Token>::is_always_lock_free);
-        std::atomic<Token> state_{}; /**< Non-reusable generation and both flags are atomically replaced. */
+        std::atomic<Token> state_{}; /**< Non-reusable generation, active bit and pacing mode are atomically replaced. */
     };
 }  // namespace Horo::AndroidQualification

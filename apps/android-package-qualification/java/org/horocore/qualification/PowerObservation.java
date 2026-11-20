@@ -43,7 +43,7 @@ final class PowerObservation {
         }
     }
 
-    private Context owner;
+    private HoroVulkanQualificationActivity owner;
     private Receiver retained;
     private boolean accepting;
     private State previous;
@@ -52,8 +52,9 @@ final class PowerObservation {
     private int previousPercent;
     private long batteryRevision;
 
-    void resume(Context activity) {
+    void resume(HoroVulkanQualificationActivity activity) {
         if (owner == activity) return;
+        if (owner != null) owner.updatePowerPacing(false);
         owner = activity;
         accepting = false;
         if (!retireReceiver()) {
@@ -84,6 +85,7 @@ final class PowerObservation {
 
     void pause(Context activity) {
         if (owner != activity) return;
+        owner.updatePowerPacing(false);
         owner = null;
         accepting = false;
         retireReceiver();
@@ -145,6 +147,7 @@ final class PowerObservation {
     }
 
     private void publish(State state) {
+        if (owner != null) owner.updatePowerPacing(state == State.ENABLED);
         if (state == previous || revision == Long.MAX_VALUE) return;
         previous = state;
         Log.i("HoroPackageQualification", "host-power revision=" + ++revision + " state=" + state.diagnostic);
