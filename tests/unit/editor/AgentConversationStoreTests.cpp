@@ -1,8 +1,12 @@
 #include "AgentConversationStore.h"
+#include "AgentHistorySession.h"
+#include "Horo/Foundation/JobSystem.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <future>
+#include <thread>
 
 namespace Horo::Agent {
     namespace {
@@ -64,6 +68,54 @@ namespace Horo::Agent {
         bool Contains(const std::vector<std::uint8_t> &bytes, const std::string_view value) {
             return std::string_view{reinterpret_cast<const char *>(bytes.data()), bytes.size()}.find(value) != std::string_view::npos;
         }
+
+        /** @brief Waits outside production lanes while polling the exact lifecycle projection. */
+        void PollUntil(AgentHistorySession &session, const auto &complete) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+            do {
+                session.Poll();
+                if (complete())
+                    return;
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            } while (std::chrono::steady_clock::now() < deadline);
+            FAIL("History worker did not reach the expected lifecycle state");
+        }
+
+        /** @brief Writes one printable record through production storage and releases its native lease. */
+        void Seed(Project &project, const std::string_view title) {
+            auto store = project.Open();
+            REQUIRE(store.Create(title, 1).HasValue());
+        }
+
+        /** @brief Parks the test scheduler's only I/O worker until the scope or explicit release. */
+        class PauseHistoryIo final {
+        public:
+            explicit PauseHistoryIo(const JobSystem &jobs) {
+                auto wait = released_.get_future().share();
+                auto queued = jobs.Submit({.resource = JobResource::Io}, [wait = std::move(wait)](const CancellationToken &) {
+                    wait.wait();
+                });
+                REQUIRE(queued.HasValue());
+                job_ = std::move(queued).Value();
+            }
+
+            ~PauseHistoryIo() {
+                Release();
+            }
+
+            void Release() {
+                if (releasedOnce_)
+                    return;
+                releasedOnce_ = true;
+                released_.set_value();
+                static_cast<void>(job_.Wait());
+            }
+
+        private:
+            std::promise<void> released_;
+            JobHandle job_;
+            bool releasedOnce_{};
+        };
     }  // namespace
 
     TEST_CASE("Agent history recovers an interrupted turn with stable identities and safe references",
@@ -196,5 +248,79 @@ namespace Horo::Agent {
         CHECK(store.Conversations().empty());
         RequireError(store.Create("New", 1), AgentHistoryErrors::Unavailable);
         CHECK(project.Image() == image);
+    }
+
+    TEST_CASE("Editor history switches committed projects on its I/O lane without publishing stale history",
+              "[unit][agent][conversation_history]") {
+        using Phase = AgentHistorySessionPhase;
+        Project first;
+        Project second;
+        Seed(first, "First history");
+        Seed(second, "Second history");
+        JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4, .ioWorkerCount = 1}};
+        AgentHistorySession session{jobs, first.files, HistoryFilter};
+        const auto settled = [&] {
+            return session.View().phase == Phase::Settled;
+        };
+        const AgentHistoryProject a{first.root, "history-project"};
+        const AgentHistoryProject b{second.root, "history-project"};
+        REQUIRE(session.View().phase == Phase::NoProject);
+
+        SECTION("Rapid project changes coalesce while the I/O lane is unavailable") {
+            PauseHistoryIo pause{jobs};
+            session.SelectProject(a);
+            CHECK(session.View().phase == Phase::Opening);
+            session.SelectProject(b);
+            CHECK(session.View().phase == Phase::Opening);
+            CHECK(session.View().conversations.empty());
+            pause.Release();
+        }
+
+        SECTION("Switching hides the open project immediately and releases its lease on the worker") {
+            session.SelectProject(a);
+            PollUntil(session, settled);
+            REQUIRE(session.View().availability == Availability::Ready);
+            REQUIRE(session.View().conversations.size() == 1);
+            CHECK(session.View().conversations.front().title == "First history");
+            CHECK(first.Open().Availability() == Availability::Unavailable);
+
+            session.SelectProject(b);
+            CHECK(session.View().phase == Phase::Opening);
+            CHECK(session.View().conversations.empty());
+        }
+
+        PollUntil(session, settled);
+        REQUIRE(session.View().availability == Availability::Ready);
+        REQUIRE(session.View().conversations.size() == 1);
+        CHECK(session.View().conversations.front().title == "Second history");
+        CHECK(first.Open().Availability() == Availability::Ready);
+        CHECK(second.Open().Availability() == Availability::Unavailable);
+        session.SelectProject(std::nullopt);
+        CHECK(session.View().phase == Phase::NoProject);
+        CHECK(session.View().conversations.empty());
+        PollUntil(session, [&] {
+            return second.Open().Availability() == Availability::Ready;
+        });
+    }
+
+    TEST_CASE("Editor history startup remains available when history cannot open", "[unit][agent][conversation_history]") {
+        using Phase = AgentHistorySessionPhase;
+        Project project;
+        const std::array invalidImage{std::byte{1}, std::byte{2}};
+        REQUIRE(project.files.WriteDurable(project.Path(), invalidImage).HasValue());
+        JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4, .ioWorkerCount = 1}};
+        AgentHistorySession session{jobs, project.files, HistoryFilter};
+        session.SelectProject(AgentHistoryProject{project.root, "history-project"});
+        REQUIRE(session.View().phase == Phase::Opening);
+        CHECK(session.View().conversations.empty());
+        PollUntil(session, [&] {
+            return session.View().phase == Phase::Settled;
+        });
+        CHECK(session.View().availability == Availability::Corrupt);
+        CHECK(session.View().conversations.empty());
+
+        session.Shutdown();
+        session.SelectProject(AgentHistoryProject{project.root, "history-project"});
+        CHECK(session.View().phase == Phase::NoProject);
     }
 }  // namespace Horo::Agent
