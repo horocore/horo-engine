@@ -67,6 +67,41 @@ namespace Horo::AI {
                    view.Get({view.RuntimeId(), {source.slot, source.generation}}).HasValue();
         }
 
+        /** @brief Suspends sensing for one recipient when its native provider fails in a current Scene window. */
+        [[nodiscard]] Result<void> PollRecipient(const Runtime::RuntimeSceneView &scene, const PerceptionSpatialBroadphase &spatial,
+                                                 const PerceptionSenseGeneration &generation, Detail::SceneAgentPerception &sensing,
+                                                 const std::uint64_t tick, AiWorkBudget &global) {
+            AiWorkBudget budget{sensing.workUnits};
+            for (auto &sense : sensing.senses) {
+                auto polled = Detail::PollSceneSense(scene, spatial, *sense.instance, sense.query, tick, sensing.memory, {budget, global});
+                if (polled.HasError())
+                    return Result<void>::Failure(std::move(polled).ErrorValue());
+                auto fault = std::move(polled).Value().providerFailure;
+                if (!fault)
+                    continue;
+                if (!generation.CanAdmit() || sense.instance->Binding().cancellation.IsCancellationRequested())
+                    return Result<void>::Failure(std::move(*fault));
+                sensing.suspension = std::move(fault);
+                break;
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Visits admitted recipients once under the common Scene budget. */
+        [[nodiscard]] Result<void> PollRecipients(const Runtime::RuntimeSceneView &scene, const PerceptionSpatialBroadphase &spatial,
+                                                  const AiScenePerceptionExecution &policy, std::span<Detail::AgentRuntimeState> agents,
+                                                  const std::uint64_t tick) {
+            AiWorkBudget global{policy.workUnitsPerTick};
+            for (auto &agent : agents) {
+                if (!agent.sensing || agent.sensing->suspension)
+                    continue;
+                auto polled = PollRecipient(scene, spatial, *policy.generation, *agent.sensing, tick, global);
+                if (polled.HasError())
+                    return polled;
+            }
+            return Result<void>::Success();
+        }
+
         /** @brief Appends one fully admitted endpoint using exact host-captured coordinates. */
         void AppendEndpoints(const Detail::AgentRuntimeState &agent, const Math::WorldCoordinate64 position,
                              std::vector<PerceptionSpatialListener> &listeners, std::vector<PerceptionSpatialSource> &sources) {
@@ -392,22 +427,10 @@ namespace Horo::AI {
             return active_->perceptionPollFailure ? Result<void>::Failure(*active_->perceptionPollFailure) : Result<void>::Success();
         active_->lastPerceptionTick = tick;
         active_->perceptionPollFailure.reset();
-        AiWorkBudget global{policy->workUnitsPerTick};
-        for (auto &agent : active_->agents) {
-            if (!agent.sensing)
-                continue;
-            auto &sensing = *agent.sensing;
-            AiWorkBudget budget{sensing.workUnits};
-            for (auto &sense : sensing.senses) {
-                if (const auto polled =
-                        RunPerceptionSenseAtSensePoll(scene, spatial, *sense.instance, sense.query, tick, sensing.memory, budget, global);
-                    polled.HasError()) {
-                    active_->perceptionPollFailure = polled.ErrorValue();
-                    return Result<void>::Failure(*active_->perceptionPollFailure);
-                }
-            }
-        }
-        return Result<void>::Success();
+        auto polled = PollRecipients(scene, spatial, *policy, active_->agents, tick);
+        if (polled.HasError())
+            active_->perceptionPollFailure = polled.ErrorValue();
+        return polled;
     }
 
     /** @copydoc AiSceneRuntime::ReadPerceptionAtSafePoint */
@@ -432,6 +455,8 @@ namespace Horo::AI {
         }
         if (!sensing)
             return Snapshot::Failure(MakeError(AIErrors::RuntimeUnavailable));
+        if (sensing->suspension)
+            return Snapshot::Failure(*sensing->suspension);
         auto current = scene;
         return sensing->memory.Snapshot(active_->lastPerceptionTick, {&current, ViewSourceAlive});
     }

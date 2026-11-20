@@ -469,8 +469,14 @@ namespace Horo::Application::PrefabAtomicTest {
             std::array<std::uint32_t, 3> decision{};
             std::array<std::uint32_t, 4> module{};
 
+            void FailPerceptionFor(Runtime::EntityRef recipient) const {
+                void (*fail)(std::uint32_t) noexcept {};
+                ReadObserver("HoroTestFailPerceptionRecipient", fail);
+                fail(recipient.entity.index);
+            }
+
         private:
-            template <typename Observer> void ReadObserver(const char *name, Observer &observer) {
+            template <typename Observer> void ReadObserver(const char *name, Observer &observer) const {
                 auto *symbol = image_->GetSymbol(name);
                 REQUIRE(symbol);
                 static_assert(sizeof(Observer) == sizeof(symbol));
@@ -573,6 +579,25 @@ namespace Horo::Application::PrefabAtomicTest {
                    std::to_string(endpoints.sources.front().Value()) + "],\"layers\":1,\"mask\":1}]}";
         }
 
+        /** @brief Exercises recipient-local failure and verifies that healthy sensing still advances. */
+        void RequirePerceptionFaultIsolation(Network::INetworkModeService &physics, NativeCookedDecisionProbe &probe,
+                                             Runtime::EntityRef failedRecipient, Runtime::EntityRef healthyRecipient, Duration quantum,
+                                             const CancellationToken &cancellation) {
+            probe.FailPerceptionFor(failedRecipient);
+            REQUIRE(physics.RunFixedTick({2, quantum, cancellation}).HasValue());
+            CHECK(probe.module[1] == 4);
+            REQUIRE(physics.RunFixedTick({3, quantum, cancellation}).HasValue());
+            CHECK(probe.module[1] == 5);
+            const auto failed = Internal::InspectHeadlessPerceptionMemory(physics, failedRecipient);
+            REQUIRE(failed.HasError());
+            CHECK(failed.ErrorValue().code.Value() == AI::AIErrors::PerceptionProviderFailed.code.Value());
+            const auto healthy = Internal::InspectHeadlessPerceptionMemory(physics, healthyRecipient);
+            REQUIRE(healthy.HasValue());
+            REQUIRE(healthy.Value().count == 1);
+            CHECK(healthy.Value().entries.front().key.source == AI::ProjectPerceptionSource(failedRecipient));
+            CHECK(healthy.Value().entries.front().lastSensedTick == 3);
+        }
+
         TEST_CASE("Configured authoritative headless ticks poll the admitted native producer over its actual Scene",
                   "[prefab][integration][ai][perception][host]") {
             using namespace Network;
@@ -613,7 +638,11 @@ namespace Horo::Application::PrefabAtomicTest {
             auto world = NetworkModeWorldKind::Standalone;
             bool seatsAdmitted = true;
             bool usesAuthoredCoordinates = false;
+            bool isolateFault = false;
             SECTION("bounded fixed dispatch and paired shutdown") {}
+            SECTION("a provider exception suspends its recipient while the other recipient and fixed tick continue") {
+                isolateFault = true;
+            }
             SECTION("durable endpoint selectors and parented coordinates reach actual fixed dispatch") {
                 const auto asset = Assets::AssetId::Parse("5c881920-450f-4ca7-b938-d151696ea419").Value();
                 const auto source = ProjectPerceptionSource(asset, definition.Value().Revision().value, controller.descriptor);
@@ -683,6 +712,8 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(memory.Value().entries.front().lastSensedTick == 1);
             if (usesAuthoredCoordinates)
                 CHECK(memory.Value().entries.front().lastKnownPosition == Math::WorldCoordinate64::FromMillimeters(1100, 200, -300));
+            if (isolateFault)
+                RequirePerceptionFaultIsolation(*physics.Value(), native.probe, *observer, *source, quantum, cancellation.Token());
             sceneService.Value()->Shutdown();
             CHECK(Internal::InspectHeadlessPerceptionMemory(*physics.Value(), *observer).HasError());
             CHECK(native.probe.module[2] == 2);

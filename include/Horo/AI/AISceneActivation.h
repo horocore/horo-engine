@@ -398,7 +398,9 @@ namespace Horo::AI {
         /** @brief Advances admitted native senses on the exact committed owner lane.
          * @param scene Current Scene and endpoint lifetime fence. @param spatial Current Scene's admitted spatial owner.
          * @param tick Authoritative simulation tick. @param fixedStep Exact host quantum.
-         * @return Success or original scene, provider, or policy error. Repeated calls never replay the same tick.
+         * @return Success or a Scene/policy failure. Repeated calls never replay the same tick.
+         * @details A provider fault in a current Scene suspends that recipient's sensing until its activation is replaced.
+         * Other recipients continue within their admitted budgets.
          */
         [[nodiscard]] Result<void> PollPerceptionAtSensePoll(const Runtime::RuntimeSceneView &scene,
                                                              const PerceptionSpatialBroadphase &spatial, std::uint64_t tick,
@@ -406,7 +408,7 @@ namespace Horo::AI {
 
         /** @brief Reads owned memory for one exact existing recipient, filtering stale subjects and emitters.
          * @param scene Current Scene publication. @param recipient Exact recipient entity generation.
-         * @return Bounded snapshot or a typed unavailable/stale error.
+         * @return Bounded snapshot, the original provider error for a suspended recipient, or a typed unavailable/stale error.
          */
         [[nodiscard]] Result<PerceptionMemorySnapshot> ReadPerceptionAtSafePoint(const Runtime::RuntimeSceneView &scene,
                                                                                  Runtime::EntityRef recipient);

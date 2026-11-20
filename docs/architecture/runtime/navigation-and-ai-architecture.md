@@ -3167,6 +3167,7 @@ following variable-rate presentation bridge.
 1. **`PerceptionSensePoll`**:
    - Gathers bounded spatial candidates and admitted Gameplay hearing, damage, touch/proximity and team deliveries into staged per-agent stimulus buffers. Team topology and relay selection remain Gameplay-owned.
    - Operates as a read-only pass over current spatial/Physics evidence and captured Gameplay event batches; Audio-renderer queues do not authorize hearing or team observations.
+   - A native sense provider fault in a current Scene suspends that recipient's sensing until its activation is replaced. Other recipients continue within their own budgets. Queries of the suspended recipient return the original fault so callers can select a fallback. Scene or policy failures still fail the poll.
    - Invariant: Does NOT mutate agent blackboard state, behavior tree node states, or world transforms.
 2. **`BlackboardSync`**:
    - Ingests staged stimulus buffers into each agent's `BlackboardState`.

@@ -4,6 +4,7 @@
 #include "Horo/Gameplay/NativePerceptionSense.h"
 
 #include <memory>
+#include <optional>
 #include <stdexcept>
 #include <vector>
 
@@ -162,6 +163,11 @@ namespace {
     std::uint32_t *perceptionLifecycleCounters{};
     bool perceptionMetadataFailure{};
 
+    class FixturePerceptionFailure final : public std::runtime_error {
+    public:
+        using std::runtime_error::runtime_error;
+    };
+
     /** @brief Real module-owned bounded sense used to observe construction, invocation and destruction across retirement. */
     class FixturePerceptionSense final : public Horo::AI::IPerceptionSenseProvider {
     public:
@@ -189,12 +195,18 @@ namespace {
                 ++perceptionLifecycleCounters[2];
         }
 
+        static void FailRecipient(std::optional<std::uint32_t> slot) noexcept {
+            failedRecipient_ = slot;
+        }
+
         /** @copydoc Horo::AI::IPerceptionSenseProvider::Evaluate */
         Horo::Result<std::size_t> Evaluate(const Horo::AI::PerceptionSenseInput &input,
                                            const std::span<Horo::AI::PerceptionSenseSample> output,
                                            Horo::AI::AiWorkBudget &budget) override {
             if (perceptionLifecycleCounters)
                 ++perceptionLifecycleCounters[1];
+            if (failedRecipient_ == input.listener.slot)
+                throw FixturePerceptionFailure("fixture recipient sense failure");
             for (std::size_t index = 0; index < input.candidates.size(); ++index) {
                 if (!budget.Consume())
                     return Horo::Result<std::size_t>::Failure(Horo::MakeError(Horo::AI::AIErrors::SchedulerBudgetExhausted));
@@ -202,6 +214,9 @@ namespace {
             }
             return Horo::Result<std::size_t>::Success(input.candidates.size());
         }
+
+    private:
+        inline static std::optional<std::uint32_t> failedRecipient_;
     };
 }  // namespace
 HORO_AI_SENSE(FixturePerceptionSense, "102")
@@ -210,6 +225,12 @@ HORO_AI_SENSE(FixturePerceptionSense, "102")
 extern "C" HORO_GAME_EXPORT void HoroTestObservePerceptionSenseLifecycle(std::uint32_t *counters, const bool failMetadata) noexcept {
     perceptionLifecycleCounters = counters;
     perceptionMetadataFailure = failMetadata;
+    FixturePerceptionSense::FailRecipient(std::nullopt);
+}
+
+/** @brief Selects one fixture recipient to fail without changing the other providers. */
+extern "C" HORO_GAME_EXPORT void HoroTestFailPerceptionRecipient(const std::uint32_t slot) noexcept {
+    FixturePerceptionSense::FailRecipient(slot);
 }
 
 extern "C" HORO_GAME_EXPORT void HoroTestObserveDecisionNodeLifecycle(std::uint32_t *counters) noexcept {

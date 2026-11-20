@@ -1,5 +1,6 @@
 #include "Horo/AI/PerceptionSenseScene.h"
 
+#include "AISceneRuntimeDetail.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/AIScenePerceptionSource.h"
 
@@ -99,26 +100,27 @@ namespace Horo::AI {
         }
     }  // namespace
 
-    /** @copydoc RunPerceptionSenseAtSensePoll */
-    Result<PerceptionSenseSceneResult> RunPerceptionSenseAtSensePoll(const Runtime::RuntimeSceneView &scene,
-                                                                     const PerceptionSpatialBroadphase &spatial,
-                                                                     PerceptionSenseInstance &instance, const PerceptionSpatialQuery &query,
-                                                                     const std::uint64_t tick, AIPerceptionMemory &memory,
-                                                                     AiWorkBudget &agentBudget, AiWorkBudget &globalBudget) {
+    /** @copydoc Detail::PollSceneSense */
+    Result<Detail::SceneSensePollOutcome> Detail::PollSceneSense(const Runtime::RuntimeSceneView &scene,
+                                                                 const PerceptionSpatialBroadphase &spatial,
+                                                                 PerceptionSenseInstance &instance, const PerceptionSpatialQuery &query,
+                                                                 const std::uint64_t tick, AIPerceptionMemory &memory,
+                                                                 SceneSensePollBudget budget) {
+        using Output = Result<SceneSensePollOutcome>;
         const auto admitted = AdmitScene(scene, spatial, instance, query, memory);
         if (admitted.HasError())
-            return Result<PerceptionSenseSceneResult>::Failure(admitted.ErrorValue());
+            return Output::Failure(admitted.ErrorValue());
         const auto &binding = instance.Binding();
         const auto &contract = instance.Contract();
         const auto &snapshot = admitted.Value();
-        if (!ReserveQuery(contract, agentBudget, globalBudget))
-            return Result<PerceptionSenseSceneResult>::Failure(MakeError(AIErrors::SchedulerBudgetExhausted));
+        if (!ReserveQuery(contract, budget.agent, budget.global))
+            return Output::Failure(MakeError(AIErrors::SchedulerBudgetExhausted));
         const auto gathered = Gather(scene, *snapshot, query);
         if (gathered.HasError())
-            return Result<PerceptionSenseSceneResult>::Failure(gathered.ErrorValue());
+            return Output::Failure(gathered.ErrorValue());
         const auto position = snapshot->ListenerPosition(query.listener);
         if (position.HasError())
-            return Result<PerceptionSenseSceneResult>::Failure(position.ErrorValue());
+            return Output::Failure(position.ErrorValue());
         std::array<PerceptionSenseCandidate, PerceptionSenseResult::MaximumCandidates> facts{};
         for (std::size_t index = 0; index < gathered.Value().count; ++index) {
             const auto &source = gathered.Value().candidates[index];
@@ -131,13 +133,29 @@ namespace Horo::AI {
                                          snapshot->Revision(),
                                          std::span{facts}.first(gathered.Value().count),
                                          {}};
-        const auto result = instance.Evaluate(input, agentBudget, globalBudget);
-        if (result.HasError())
-            return Result<PerceptionSenseSceneResult>::Failure(result.ErrorValue());
+        auto result = instance.Evaluate(input, budget.agent, budget.global);
         if (!CurrentWindow(scene, spatial, snapshot, query, gathered.Value()))
-            return Result<PerceptionSenseSceneResult>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
+            return Output::Failure(MakeError(AIErrors::PerceptionSpatialStale));
+        if (result.HasError())
+            return Output::Success({.providerFailure = std::move(result).ErrorValue()});
         if (const auto staged = Stage(memory, binding, contract, input, result.Value()); staged.HasError())
-            return Result<PerceptionSenseSceneResult>::Failure(staged.ErrorValue());
-        return Result<PerceptionSenseSceneResult>::Success({gathered.Value().count, result.Value().count, gathered.Value().truncated});
+            return Output::Failure(staged.ErrorValue());
+        return Output::Success({{gathered.Value().count, result.Value().count, gathered.Value().truncated}, std::nullopt});
+    }
+
+    /** @copydoc RunPerceptionSenseAtSensePoll */
+    Result<PerceptionSenseSceneResult> RunPerceptionSenseAtSensePoll(const Runtime::RuntimeSceneView &scene,
+                                                                     const PerceptionSpatialBroadphase &spatial,
+                                                                     PerceptionSenseInstance &instance, const PerceptionSpatialQuery &query,
+                                                                     const std::uint64_t tick, AIPerceptionMemory &memory,
+                                                                     AiWorkBudget &agentBudget, AiWorkBudget &globalBudget) {
+        using Output = Result<PerceptionSenseSceneResult>;
+        auto polled = Detail::PollSceneSense(scene, spatial, instance, query, tick, memory, {agentBudget, globalBudget});
+        if (polled.HasError())
+            return Output::Failure(std::move(polled).ErrorValue());
+        auto outcome = std::move(polled).Value();
+        if (auto &failure = outcome.providerFailure)
+            return Output::Failure(std::move(*failure));
+        return Output::Success(outcome.observation);
     }
 }  // namespace Horo::AI

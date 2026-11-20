@@ -19,7 +19,26 @@ namespace Horo::AI::Detail {
         AIPerceptionMemory memory;
         std::vector<ScenePerceptionSense> senses;
         std::size_t workUnits{};
+        std::optional<Error> suspension; /**< First provider fault for this recipient's lifetime. */
     };
+
+    /** @brief Separates a provider fault from a failure of the Scene's sensing window. */
+    struct SceneSensePollOutcome final {
+        PerceptionSenseSceneResult observation;
+        std::optional<Error> providerFailure;
+    };
+
+    /** @brief The two allowances charged by one Scene sense. */
+    struct SceneSensePollBudget final {
+        AiWorkBudget &agent;
+        AiWorkBudget &global;
+    };
+
+    /** @brief Stages one sense under its exact Scene window and retains the original local provider failure. */
+    [[nodiscard]] Result<SceneSensePollOutcome> PollSceneSense(const Runtime::RuntimeSceneView &scene,
+                                                               const PerceptionSpatialBroadphase &spatial,
+                                                               PerceptionSenseInstance &instance, const PerceptionSpatialQuery &query,
+                                                               std::uint64_t tick, AIPerceptionMemory &memory, SceneSensePollBudget budget);
 
     /** @brief Scene-owner storage; transient work is deliberately outside canonical snapshots. */
     struct AgentRuntimeState final {
