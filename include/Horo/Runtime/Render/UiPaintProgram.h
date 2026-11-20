@@ -241,6 +241,10 @@ namespace Horo::Render {
             Detail::UiPaintRootTarget target, const Detail::UiPaintSceneCanvasRecipe *scene = nullptr);
         /** @brief Requires exact immutable slot/source correspondence before any batch member reaches the native frame. */
         [[nodiscard]] Result<UiPaintGraphComposition> ValidateSubmission(const UiPaintPreparedFrame &prepared, UiRenderSubmission source);
+        /** @brief Records the current combined graph, optionally returning its explicit submission signal on success. */
+        [[nodiscard]] Result<void> RecordSceneCanvas(RenderFrameScope &frame, const UiPaintPreparedFrame &prepared,
+                                                     UiRenderSubmission source, std::span<const RenderGraphPassWorkload> sceneWorkloads,
+                                                     RenderTimelinePoint *signal);
         /** @brief Realizes finite native residents under the factory candidate's rollback ownership.
          * @param frontend Actual selected owner. @param kernel Exact cooked interface and formats.
          * @param cancellation Source preparation fence.

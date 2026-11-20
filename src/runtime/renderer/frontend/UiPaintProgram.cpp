@@ -442,6 +442,24 @@ namespace Horo::Render {
     Result<void> UiPaintProgram::ExecuteSceneCanvas(RenderFrameScope &frame, const UiPaintPreparedFrame &prepared,
                                                     UiRenderSubmission source,
                                                     const std::span<const RenderGraphPassWorkload> sceneWorkloads) {
+        return RecordSceneCanvas(frame, prepared, std::move(source), sceneWorkloads, nullptr);
+    }
+
+    /** @copydoc Detail::RenderFrontendResourceAccess::RecordSubmittedSceneCanvas */
+    Result<RenderTimelinePoint> Detail::RenderFrontendResourceAccess::RecordSubmittedSceneCanvas(
+        UiPaintProgram &program, RenderFrameScope &frame, const UiPaintPreparedFrame &prepared, UiRenderSubmission source,
+        const std::span<const RenderGraphPassWorkload> sceneWorkloads) {
+        RenderTimelinePoint signal;
+        if (const auto recorded = program.RecordSceneCanvas(frame, prepared, std::move(source), sceneWorkloads, &signal);
+            recorded.HasError())
+            return Result<RenderTimelinePoint>::Failure(recorded.ErrorValue());
+        return Result<RenderTimelinePoint>::Success(signal);
+    }
+
+    /** @copydoc UiPaintProgram::RecordSceneCanvas */
+    Result<void> UiPaintProgram::RecordSceneCanvas(RenderFrameScope &frame, const UiPaintPreparedFrame &prepared, UiRenderSubmission source,
+                                                   const std::span<const RenderGraphPassWorkload> sceneWorkloads,
+                                                   RenderTimelinePoint *signal) {
         if (storage_->target != Detail::UiPaintRootTarget::SceneCanvas || (prepared.frame_.IsValid() && prepared.frame_ != frame.Token()))
             return Result<void>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
         auto valid = ValidateSubmission(prepared, std::move(source));
@@ -458,8 +476,11 @@ namespace Horo::Render {
         if (slot.sceneExecuting || !std::ranges::equal(sceneWorkloads, scenePasses, std::ranges::equal_to{}, &RenderGraphPassWorkload::pass,
                                                        &RenderGraphExecutionPass::pass))
             return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph));
+        const bool explicitSubmissions = owner->frontend->Capabilities().supportsExplicitGraphSubmissions;
+        if (signal && !explicitSubmissions)
+            return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
         std::optional<RenderGraphQueueSubmission> submission;
-        if (owner->frontend->Capabilities().supportsExplicitGraphSubmissions) {
+        if (explicitSubmissions) {
             auto reserved = frame.ReserveSubmission(RenderQueueRole::Graphics);
             if (reserved.HasError())
                 return Result<void>::Failure(reserved.ErrorValue());
@@ -484,7 +505,10 @@ namespace Horo::Render {
         const auto submissions =
             submission ? std::span<const RenderGraphQueueSubmission>{&*submission, 1} : std::span<const RenderGraphQueueSubmission>{};
         slot.boundScene = nullptr;
-        return frame.ExecuteGraphInternal(*accepted.graph, slot.sceneExecution, &accepted.source, {}, submissions);
+        const auto recorded = frame.ExecuteGraphInternal(*accepted.graph, slot.sceneExecution, &accepted.source, {}, submissions);
+        if (recorded.HasValue() && signal)
+            *signal = submission->submission.signal;
+        return recorded;
     }
 
     /** @copydoc UiPaintProgram::SubmitBatch */

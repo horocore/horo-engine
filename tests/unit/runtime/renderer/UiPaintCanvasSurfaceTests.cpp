@@ -287,7 +287,17 @@ TEST_CASE("Scene graph consumes the exact prepared sampleable canvas in one fram
             CHECK(firstPaint.firstParameter == 0);
         };
     }
-    REQUIRE(program->ExecuteSceneCanvas(frame, prepared, fixture.Submission(*program, geometry, bindings), workloads).HasValue());
+    RenderTimelinePoint recordedSignal;
+    if (explicitSubmissions) {
+        recordedSignal = UiRequire(
+            Detail::RenderFrontendResourceAccess::RecordSubmittedSceneCanvas(*program, frame, prepared,
+                                                                             fixture.Submission(*program, geometry, bindings), workloads));
+    } else {
+        CHECK(Detail::RenderFrontendResourceAccess::RecordSubmittedSceneCanvas(*program, frame, prepared,
+                                                                               fixture.Submission(*program, geometry, bindings), workloads)
+                  .HasError());
+        REQUIRE(program->ExecuteSceneCanvas(frame, prepared, fixture.Submission(*program, geometry, bindings), workloads).HasValue());
+    }
     lifecycleState.uiPaint.inspectGraph = {};
     CHECK(program->ExecuteSceneCanvas(frame, prepared, fixture.Submission(*program, geometry, bindings), workloads).HasError());
     const auto uploads = lifecycleState.uiPaint.updates;
@@ -298,6 +308,7 @@ TEST_CASE("Scene graph consumes the exact prepared sampleable canvas in one fram
         REQUIRE(lifecycleState.reconstruction.recorded.size() == 1);
         const auto signal = lifecycleState.reconstruction.recorded.front();
         CHECK(signal.IsValid());
+        CHECK(recordedSignal == signal);
         CHECK(signal.queue == queue);
         CHECK(lifecycleState.graphLease != nullptr);
     } else

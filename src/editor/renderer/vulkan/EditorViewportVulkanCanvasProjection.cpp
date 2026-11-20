@@ -2,9 +2,14 @@
 
 #include "editor/renderer/EditorRendererErrors.h"
 
-#include <utility>
-
 namespace Horo::Editor {
+    /** @copydoc FlipVulkanCanvasClipY */
+    Math::Mat4 FlipVulkanCanvasClipY(Math::Mat4 clip) noexcept {
+        for (std::size_t column = 0; column < 4; ++column)
+            clip.values[column * 4 + 1] *= -1.0F;
+        return clip;
+    }
+
     /** @copydoc BuildVulkanEditorCanvasMvp */
     Result<Math::Mat4> BuildVulkanEditorCanvasMvp(const Render::UiRenderCompositionSpace space,
                                                   const std::optional<Math::Mat4> &worldFromCanvas, const Render::RenderCameraView &camera,
@@ -26,9 +31,6 @@ namespace Horo::Editor {
         auto clip = BuildRenderMvp(camera, *worldFromCanvas, aspect, Math::ClipDepthRange::ZeroToOne);
         if (clip.HasError())
             return clip;
-        auto vulkanClip = std::move(clip).Value();
-        for (std::size_t column = 0; column < 4; ++column)
-            vulkanClip.values[column * 4 + 1] *= -1.0F;
-        return Outcome::Success(vulkanClip);
+        return Outcome::Success(FlipVulkanCanvasClipY(clip.Value()));
     }
 }  // namespace Horo::Editor

@@ -566,7 +566,8 @@ namespace Horo::Editor {
                 auto &program = *candidate->quad;
                 if (const auto bound = BindCanvasQuadSource(program, source.slot, source.surface.color); bound.HasError())
                     return Result<RenderGraphPassRef>::Failure(bound.ErrorValue());
-                const ViewportRasterGraphs::CanvasSample sample{program.slots[source.slot], source.color, program.sampledViews[source.slot],
+                const ViewportRasterGraphs::CanvasSample sample{program.slots[source.slot].front(), source.color,
+                                                                program.sampledViews[source.slot],
                                                                 program.space == UiRenderCompositionSpace::World};
                 return Result<RenderGraphPassRef>::Success(candidate->topology->BuildCanvas(candidate->slots[source.slot], builder, initial,
                                                                                             slots_[source.slot], device_.graphicsIdentity,

@@ -323,7 +323,8 @@ namespace Horo::Editor {
 
         /** @brief Owns one immutable canvas consumer and its slot-local mesh bindings. */
         struct CanvasQuadProgram final {
-            explicit CanvasQuadProgram(EditorViewportRendererVulkan &viewport);
+            static constexpr std::size_t StereoViews = 2;
+            explicit CanvasQuadProgram(EditorViewportRendererVulkan &viewport, std::uint32_t viewCount);
             ~CanvasQuadProgram();
             CanvasQuadProgram(const CanvasQuadProgram &) = delete;
             CanvasQuadProgram &operator=(const CanvasQuadProgram &) = delete;
@@ -333,21 +334,29 @@ namespace Horo::Editor {
             Render::RenderSamplerHandle sampler;
             Render::RenderMeshHandle mesh;
             Render::RenderBufferHandle vertices, indices;
-            std::array<OverlaySlot, std::tuple_size_v<FrameSlots>> slots;
+            std::array<std::array<OverlaySlot, StereoViews>, std::tuple_size_v<FrameSlots>> slots;
             std::array<Render::RenderTextureViewHandle, std::tuple_size_v<FrameSlots>> sampledViews;
             Render::UiRenderCompositionSpace space{};
+            const std::uint32_t viewCount;
         };
 
         /** @brief Creates the closed color/depth pipeline and immutable quad outside frame recording. */
         [[nodiscard]] Result<std::unique_ptr<CanvasQuadProgram>> CreateCanvasQuadProgram(const EditorVulkanWorldCanvasCook &cook,
                                                                                          Render::UiRenderCompositionSpace space,
-                                                                                         Render::RenderTextureFormat colorFormat);
+                                                                                         Render::RenderTextureFormat colorFormat,
+                                                                                         std::uint32_t viewCount = 1);
         /** @brief Admits one distinct producer surface and frozen material for this graph slot. */
         [[nodiscard]] Result<void> BindCanvasQuadSource(CanvasQuadProgram &program, std::uint32_t slot, Render::RenderTextureHandle canvas);
         /** @brief Uploads the current camera/World matrix to the exact acquired frame's pre-bound slot. */
         [[nodiscard]] Result<void> WriteCanvasQuad(Render::FrameToken frame, const CanvasQuadProgram &program, std::uint32_t slot,
                                                    const Render::StaticMeshPassDescriptor &pass,
                                                    const std::optional<Math::Mat4> &placement) const;
+        /** @brief Uploads exact Vulkan clip matrices into distinct material bindings that share the slot's sampled surface. */
+        [[nodiscard]] Result<void> WriteCanvasQuadViews(Render::FrameToken frame, const CanvasQuadProgram &program, std::uint32_t slot,
+                                                        std::span<const Math::Mat4> clips) const;
+        /** @brief Packs one finite clip-from-canvas matrix into the already admitted native binding. */
+        [[nodiscard]] Result<void> WriteCanvasQuadClip(Render::FrameToken frame, const ShaderResources &program, const DrawSlot &draw,
+                                                       const Math::Mat4 &clip) const;
         /** @brief Creates the closed top-left UV quad shared by all program slots. */
         [[nodiscard]] Result<void> CreateCanvasQuadMesh(CanvasQuadProgram &program);
 

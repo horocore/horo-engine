@@ -40,4 +40,30 @@ namespace Horo::Tests {
         CHECK(Editor::BuildVulkanEditorCanvasMvp(Camera, degenerate, camera, extent).HasError());
         CHECK(Editor::BuildVulkanEditorCanvasMvp(Camera, std::nullopt, camera, {}).HasError());
     }
+
+    TEST_CASE("Vulkan canvas clip adaptation agrees with both asymmetric XR viewports", "[unit][editor][vulkan][canvas]") {
+        struct Eye {
+            Math::Mat4 clip;
+            float y;
+            float height;
+        };
+
+        constexpr std::array eyes{Eye{Math::Mat4{{1.2F, 0.1F, 0, 0, 0, 1.4F, 0, 0, 0.1F, -0.1F, 1, -1, -0.15F, 0.1F, 0.7F, 1.4F}}, 8, 940},
+                                  Eye{Math::Mat4{{1.1F, -0.1F, 0, 0, 0, 1.2F, 0, 0, -0.15F, 0.2F, 1, -1, 0.18F, -0.1F, 0.75F, 1.5F}}, 20,
+                                      876}};
+        constexpr std::array corners{Math::Vec4{-0.5F, 0.5F, 0, 1}, Math::Vec4{0.5F, -0.5F, 0, 1}};
+        for (const auto &eye : eyes) {
+            const auto adapted = Editor::FlipVulkanCanvasClipY(eye.clip);
+            for (const auto corner : corners) {
+                const auto scene = Math::TransformHomogeneous(eye.clip, corner);
+                const auto canvas = Math::TransformHomogeneous(adapted, corner);
+                const auto scenePixel = eye.y + (1.0F - scene.y / scene.w) * eye.height * 0.5F;
+                const auto canvasPixel = eye.y + (1.0F + canvas.y / canvas.w) * eye.height * 0.5F;
+                CHECK(canvasPixel == scenePixel);
+                CHECK(canvas.x == scene.x);
+                CHECK(canvas.z == scene.z);
+                CHECK(canvas.w == scene.w);
+            }
+        }
+    }
 }  // namespace Horo::Tests

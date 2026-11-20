@@ -8,6 +8,7 @@
 namespace Horo::Render {
     struct UiPaintProgramDescriptor;
     struct UiPaintSceneCanvasSource;
+    class UiPaintPreparedFrame;
     struct CookedUiPaintKernel;
 }  // namespace Horo::Render
 
@@ -52,6 +53,14 @@ namespace Horo::Render::Detail {
         [[nodiscard]] static Result<const CompiledRenderGraphExecution *> BindExternalSceneCanvas(
             UiPaintProgram &program, std::uint32_t slot, std::span<const RenderGraphExternalTextureBinding> bindings,
             std::span<const RenderGraphOptionalRead> reads);
+        /** @brief Records a sampled scene and returns the exact signal reserved for its single graph submission.
+         * @param program Prepared owner. @param frame Acquired renderer frame. @param prepared Current slot publication.
+         * @param source Matching canvas geometry and textures. @param sceneWorkloads Cold-declared scene passes in compiled order.
+         * @return Signal of recorded work or a typed failure. The host still verifies queue acceptance and completion.
+         */
+        [[nodiscard]] static Result<RenderTimelinePoint> RecordSubmittedSceneCanvas(
+            UiPaintProgram &program, RenderFrameScope &frame, const UiPaintPreparedFrame &prepared, UiRenderSubmission source,
+            std::span<const RenderGraphPassWorkload> sceneWorkloads);
         /** @brief Checks whether a live SceneCanvas program can admit the same paint roles and resource generations without rebuilding. */
         [[nodiscard]] static bool MatchesSceneCanvas(const UiPaintProgram &program, const UiPaintProgramDescriptor &policy,
                                                      const Runtime::Ui::UiRenderSnapshot &prototype,

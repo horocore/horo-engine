@@ -7,6 +7,9 @@
 #include <optional>
 
 namespace Horo::Editor {
+    /** @brief Adapts upward clip Y to the material raster pass's positive Vulkan viewport height. */
+    [[nodiscard]] Math::Mat4 FlipVulkanCanvasClipY(Math::Mat4 clip) noexcept;
+
     /** @brief Projects a centered unit XY sampled canvas with top-left UVs into the actual acquired Vulkan viewport.
      * @param space Selected scene composition role, World or Camera.
      * @param worldFromCanvas World placement in the camera's coordinate frame, with upper-left at (-0.5,+0.5,0) in quad space.
