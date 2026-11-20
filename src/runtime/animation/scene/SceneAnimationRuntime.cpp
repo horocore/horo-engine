@@ -48,6 +48,8 @@ namespace Horo::Runtime {
             return Return::Failure(MakeError(A::AnimationErrors::GraphAdmissionRejected));
         if (!ValidStoragePolicy(config.limits) || !ValidWorkPolicy(config.limits))
             return Return::Failure(MakeError(A::AnimationAssetErrors::Capacity));
+        if (config.parallelEvaluation && config.parallelEvaluation->deadline <= Duration{})
+            return Return::Failure(MakeError(A::AnimationErrors::GraphAdmissionRejected));
         if (config.ownerCancellation.IsCancellationRequested())
             return Return::Failure(MakeError(A::AnimationAssetErrors::Cancelled));
         try {

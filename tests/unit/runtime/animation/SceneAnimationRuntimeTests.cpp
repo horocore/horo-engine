@@ -23,12 +23,20 @@ namespace Horo::Animation {
         };
 
         auto inputs = std::make_shared<Inputs>();
+        JobSystem jobs{{2, 8}};
+        std::optional<Runtime::SceneAnimationParallelEvaluation> parallel;
+        SECTION("serial evaluation remains allocation free") {
+            // The absent policy selects the owner-only path.
+        }
+        SECTION("dedicated evaluation joins actual CPU jobs") {
+            parallel.emplace(jobs, Duration::FromMilliseconds(1000));
+        }
         Test::Scene::Fixture fixture(false, true, [](Test::Cook::Fixture &cook) -> std::optional<AnimationAuthoringComponent> {
             const auto graph = Test::Instance::Blended();
             const Test::Instance::Prepared prepared{graph};
             cook.Replace(*prepared.skeleton, prepared.compileClips, graph);
             return std::nullopt;
-        }, inputs);
+        }, inputs, parallel);
         inputs->first = fixture.entity;
         Runtime::RuntimeEntityCreateInfo create;
         create.components.animation = fixture.Binding();
@@ -52,13 +60,46 @@ namespace Horo::Animation {
             measured = window.Snapshot();
         }
         REQUIRE(tick.HasValue());
-        CHECK(measured.requests == 0);
+        if (parallel) {
+            const auto completed = jobs.SnapshotIfChanged(0);
+            REQUIRE(completed);
+            REQUIRE(completed->jobs.size() == 2);
+            for (const auto &job : completed->jobs)
+                CHECK(job.state == JobState::Succeeded);
+        } else {
+            CHECK(measured.requests == 0);
+        }
         CHECK(fixture.PoseX() == 10.0F);
         const auto other = Test::Cook::Take(fixture.forward->adapter->Query(second));
         REQUIRE(other.component);
         std::array<Math::Transform, 1> pose;
         REQUIRE(fixture.forward->adapter->CopyPose(second, other.component->currentPose, pose).HasValue());
         CHECK(pose[0].translation.x == 110.0F);
+
+        if (parallel) {
+            const auto committed = fixture.Observation().component->currentPose;
+            fixture.peer->failUpdate = true;
+            REQUIRE(fixture.Tick().HasError());
+            CHECK(fixture.Observation().component->currentPose == committed);
+            REQUIRE(fixture.scheduler->RunFrame(fixture.lifecycle, fixture.token, false).HasValue());
+            CHECK(fixture.PoseX() == 20.0F);
+            fixture.Activate(2);
+            REQUIRE(fixture.forward->adapter->Query(second).HasError());
+            inputs->first = fixture.entity;
+            Runtime::SceneCommandBuffer replacement;
+            REQUIRE(replacement.Create(create).IsValid());
+            REQUIRE(fixture.Structural(std::move(replacement))->ResultValue());
+            REQUIRE(fixture.Tick().HasValue());
+            CHECK(fixture.PoseX() == 10.0F);
+
+            const auto replacementPose = fixture.Observation().component->currentPose;
+            fixture.peer->cancelDuringPrepare = &fixture.lifetime;
+            REQUIRE(fixture.Tick().HasError());
+            REQUIRE(fixture.forward->adapter->CopyPose(fixture.entity, replacementPose, pose).HasValue());
+            CHECK(pose[0].translation.x == 10.0F);
+            fixture.forward->adapter->Shutdown();
+            CHECK(fixture.forward->adapter->CopyPose(fixture.entity, replacementPose, pose).HasError());
+        }
     }
 
     TEST_CASE("Scene action slots expose committed authority state and preserve old pose observations", "[animation][scene][actions]") {

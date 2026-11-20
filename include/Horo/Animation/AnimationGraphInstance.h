@@ -601,6 +601,9 @@ namespace Horo::Animation {
 
     private:
         friend struct Detail::GraphSceneCommitAccess;
+        /** @brief Evaluates with exclusive access granted by the Scene owner for the lifetime of one joined batch. */
+        [[nodiscard]] GraphInstanceOutcome EvaluateExclusive(const GraphEvaluationInput &input,
+                                                             const CancellationToken &publicationCancellation);
         /** @brief Performs every fallible admission before a Scene-owned global fixed-tick fence. */
         [[nodiscard]] GraphInstanceOutcome PrepareCommit(AnimationTickId tick);
         /** @brief Publishes one exclusively owned armed candidate; caller has committed the actual tick. */

@@ -32,13 +32,16 @@ namespace Horo::Application::Internal {
         std::optional<CommittedWorldSelection> world; /**< Explicit independent committed World selection. */
         std::string perceptionPolicyPath;             /**< Explicit project-relative source for one selected committed Scene. */
         bool captureNetworkSettings{};                /**< Authenticated network gameplay selects the existing project settings. */
+        std::size_t cpuWorkerCount{1};                /**< Explicit process CPU worker allocation selected before preparation. */
     };
 
     /** @brief Owns all borrowed assets/jobs/project captures until every world service has retired.
      * @details Its operation boundary may be replaced only before an entire owner-lane Startup/Travel call.
      */
     struct HeadlessProjectSceneResources final {
-        JobSystem jobs{JobSystemConfig{1, 128}};
+        explicit HeadlessProjectSceneResources(std::size_t cpuWorkerCount) : jobs(JobSystemConfig{cpuWorkerCount, 128}) {}
+
+        JobSystem jobs;
         Assets::AssetRegistry registry;
         std::unique_ptr<CommittedSceneAssets> committed;
         Assets::MemoryAssetProvider empty;

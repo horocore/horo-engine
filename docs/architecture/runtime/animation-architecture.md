@@ -543,6 +543,17 @@ its admitted graph, charged to the same instance storage limit. Capture copies a
 source's borrowed span immediately, so a source may reuse scratch storage for the
 next actor. An oversized snapshot rejects the attempt before graph work begins.
 
+Dedicated headless authority can select the process CPU job owner and a finite
+join deadline. The fixed step partitions playing actors into stable contiguous
+slot ranges, bounded by the CPU worker count. Each range exclusively stages its
+graphs and their already allocated pose buffers. Workers consume frozen input
+and job cancellation, with no Scene callbacks. The Scene retains its own
+publication cancellation token, joins all submitted ranges, and publishes in
+slot order after the scheduler fence. Failed submission or a missed deadline
+cancels and drains accepted work before rollback can touch the same buffers.
+Foundation job records allocate on this selected path. Serial evaluation keeps
+its allocation-free contract. Rebuild users of the appended Scene runtime policy.
+
 `Evaluate` stages privately. The enclosing tick owner calls `Commit` only after
 all tick preflight succeeds, or `Abort` on failure. Pending cursors, residuals,
 parameters and the final local pose publish together. Failed attempts publish no

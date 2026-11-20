@@ -175,7 +175,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc PrepareHeadlessProjectSceneResources */
     Result<std::unique_ptr<HeadlessProjectSceneResources>> PrepareHeadlessProjectSceneResources(const HeadlessProjectSceneOptions &launch) {
-        auto resources = std::make_unique<HeadlessProjectSceneResources>();
+        auto resources = std::make_unique<HeadlessProjectSceneResources>(launch.cpuWorkerCount);
         // One absolute budget covers source/cook capture and all roles; no per-record reset.
         resources->deadline = std::chrono::steady_clock::now() + launch.loadTimeout;
         resources->load = {resources->cancellation.Token(), resources->deadline};

@@ -470,6 +470,12 @@ namespace Horo::Animation {
     GraphInstanceOutcome AnimationGraphInstance::Evaluate(const GraphEvaluationInput &input) {
         if (const auto owner = Owner(state_.get()); owner.HasError())
             return owner;
+        return EvaluateExclusive(input, input.cancellation);
+    }
+
+    /** @copydoc AnimationGraphInstance::EvaluateExclusive */
+    GraphInstanceOutcome AnimationGraphInstance::EvaluateExclusive(const GraphEvaluationInput &input,
+                                                                   const CancellationToken &publicationCancellation) {
         if (state_->closed)
             return {GraphInstanceFailure::AdmissionRejected};
         if (state_->ownerCancellation.IsCancellationRequested() || input.cancellation.IsCancellationRequested())
@@ -482,7 +488,7 @@ namespace Horo::Animation {
             return {GraphInstanceFailure::LimitExceeded};
         if (const auto executed = Detail::ExecuteGraph(*state_, input); executed.HasError())
             return executed;
-        state_->candidate.cancellation = input.cancellation;
+        state_->candidate.cancellation = publicationCancellation;
         state_->candidate.tick = input.tick;
         return {};
     }

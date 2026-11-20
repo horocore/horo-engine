@@ -32,6 +32,7 @@
 #include <string>
 #include <string_view>
 #include <system_error>
+#include <thread>
 #include <utility>
 
 namespace Horo::Application::Internal {
@@ -266,6 +267,10 @@ namespace Horo::Application::Internal {
             auto selection = launch.sceneInput;
             selection.captureNetworkSettings =
                 launch.role != Net::NetworkProjectRole::Standalone && launch.purpose == Net::NetworkWorldCompositionPurpose::Gameplay;
+            if (launch.role == Net::NetworkProjectRole::DedicatedServer) {
+                constexpr unsigned maximumCpuWorkers = 4;
+                selection.cpuWorkerCount = std::clamp(std::thread::hardware_concurrency(), 1U, maximumCpuWorkers);
+            }
             auto prepared = PrepareHeadlessProjectSceneResources(selection);
             if (prepared.HasError())
                 return Result<std::shared_ptr<const Runtime::RuntimeSceneDefinition>>::Failure(prepared.ErrorValue());
@@ -343,6 +348,8 @@ namespace Horo::Application::Internal {
                                                                                        : nullptr,
                                                .worldJobs = &resources->jobs};
             input.decisionReplay = launch.decisionReplay;
+            if (launch.role == Net::NetworkProjectRole::DedicatedServer)
+                input.animationParallel.emplace(resources->jobs, Duration::FromMilliseconds(50));
             if (initialState) {
                 input.replicatedSceneObjects = initialState->authoredObjects;
                 input.publicTransforms = initialState->transforms;

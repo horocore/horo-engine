@@ -7,6 +7,12 @@
 #include "Horo/Foundation/AssetCookTargetId.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
+#include <functional>
+
+namespace Horo {
+    class JobSystem;
+}
+
 namespace Horo::Runtime {
     /** @brief One invocation-scoped typed gameplay input snapshot copied by the Scene owner before graph evaluation. */
     struct SceneAnimationInputSnapshot final {
@@ -38,6 +44,12 @@ namespace Horo::Runtime {
         Animation::GraphActionLimits actions;
     };
 
+    /** @brief Optional host-provided CPU evaluation policy; the job system outlives the Scene adapter. */
+    struct SceneAnimationParallelEvaluation final {
+        std::reference_wrapper<JobSystem> jobs;
+        Duration deadline;
+    };
+
     /** @brief Complete explicit host composition; absent or foreign scheduler authority is never synthesized. */
     struct SceneAnimationRuntimeConfig final {
         RuntimeDispatchSource expectedDispatch;
@@ -48,6 +60,7 @@ namespace Horo::Runtime {
         std::shared_ptr<const SceneAnimationInputSource> inputs;
         Animation::AnimationEvaluationDomain evaluationDomain{
             Animation::AnimationEvaluationDomain::AuthoritativeSimulation}; /**< Fixed domain for the admitted graph and pose receipts. */
+        std::optional<SceneAnimationParallelEvaluation> parallelEvaluation;
     };
 
     /** @brief Non-owning immutable observation; no pose is claimed before an actual successful fixed commit. */
@@ -96,8 +109,9 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> OnPhase(RuntimePhase phase, const FrameContext &context) override;
         /** @brief Evaluates each playing instance once using the exact admitted fixed quantum and gameplay snapshot.
          * @param context Actual scheduler-issued attempted tick. @return Success with staged candidates or typed failure.
-         * @details The successful steady-state path performs no publication, allocation or I/O. Rejected paths may allocate
-         * canonical typed diagnostics. Forged/foreign/replayed dispatch fails before graph mutation.
+         * @details Serial steady-state evaluation allocates no memory. Opt-in parallel evaluation uses bounded Foundation dispatch
+         * and joins every child before the owner can commit or abort. No evaluation path publishes poses or performs I/O.
+         * Forged/foreign/replayed dispatch fails before graph mutation.
          */
         [[nodiscard]] Result<void> OnFixedUpdate(const FixedStepContext &context) override;
         /** @brief Validates all staged candidates through the existing Animation graph arm bridge.

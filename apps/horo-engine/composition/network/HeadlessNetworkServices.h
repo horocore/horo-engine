@@ -224,13 +224,15 @@ namespace Horo::Application::Internal {
         std::optional<HeadlessSceneTransformReplication> publicTransforms;
         std::shared_ptr<HeadlessInitialStateHost> initialSceneState;
         std::shared_ptr<HeadlessDecisionReplay> decisionReplay; /**< Optional explicit one-shot standalone replay capture. */
+        std::optional<Runtime::SceneAnimationParallelEvaluation> animationParallel;
     };
 
     /** @brief Composes actual project Scene services and their sole aggregate-owned Physics/Character pair.
      * @param definition Validated authored/cooked definition. @param input Explicit project/backend/load authority.
      * @param selectedFactories Existing network/presentation factories. @param gameplay Explicit optional gameplay policy.
      * @return Factories or original selected backend rejection; never substitutes another backend.
-     * @details Normal frame phases never block. Startup/travel Prepare drives only the bounded owned asset-load boundary.
+     * @details Startup/travel Prepare drives the bounded owned asset-load boundary. An explicitly selected dedicated animation
+     * policy joins worker-only CPU work before that world's native fixed step.
      */
     [[nodiscard]] Result<NetworkProductComposition> ComposeHeadlessSceneNetworkServices(
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition, HeadlessSceneActivationInput input,

@@ -333,6 +333,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         config.runtimeOwner = issued.identity;
         config.target = input.animationTarget;
         config.ownerCancellation = record.sceneCancellation;
+        if (input.animationParallel && record.request.world == Network::NetworkModeWorldKind::AuthorityServer)
+            config.parallelEvaluation.emplace(*input.animationParallel);
         if (record.request.world == Network::NetworkModeWorldKind::Client) {
             config.evaluationDomain = Animation::AnimationEvaluationDomain::Presentation;
             if (!input.replicaAnimationBindings.empty())

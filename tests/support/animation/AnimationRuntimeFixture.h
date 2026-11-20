@@ -133,7 +133,8 @@ namespace Horo::Animation::Test::Scene {
         bool clipSource{};
 
         explicit Fixture(bool directClip = false, bool withStructuralOwner = true, const SourcePreparation &prepareSources = {},
-                         std::shared_ptr<const Runtime::SceneAnimationInputSource> inputs = {})
+                         std::shared_ptr<const Runtime::SceneAnimationInputSource> inputs = {},
+                         std::optional<Runtime::SceneAnimationParallelEvaluation> parallel = {})
             : committed(CaptureRuntimeAssets(cook, prepareSources, sourceBinding)), clipSource(directClip) {
             scheduler = Cook::Take(Runtime::FrameScheduler::Create(clock, {.fixedStep = Duration::FromNanoseconds(10)}));
             Runtime::SceneAnimationRuntimeConfig config;
@@ -142,6 +143,8 @@ namespace Horo::Animation::Test::Scene {
             config.target = cook.request.target;
             config.ownerCancellation = token;
             config.inputs = std::move(inputs);
+            if (parallel)
+                config.parallelEvaluation.emplace(*parallel);
             auto adapter = Cook::Take(Runtime::SceneAnimationRuntime::Create(config));
             REQUIRE(scenes.AddActivationParticipant(adapter->MakeActivationParticipant()).HasValue());
             if (withStructuralOwner)

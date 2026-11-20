@@ -52,7 +52,11 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> BeginAttempt(const FixedStepContext &context);
         /** @brief Copies every playing actor's bounded input on the owner lane before graph evaluation. */
         [[nodiscard]] Result<void> CaptureInputs(const FixedStepContext &context) const;
-        [[nodiscard]] Result<void> EvaluateActor(Actor &actor, const FixedStepContext &context) const;
+        /** @brief Stages one actor per assigned slot using inputs captured by the Scene owner. */
+        [[nodiscard]] static Result<void> EvaluateRange(std::span<const std::shared_ptr<Actor>> actors,
+                                                        const Animation::GraphEvaluationInput &batch, const CancellationToken &work);
+        /** @brief Evaluates and joins all assigned slots before releasing the owner lane. */
+        [[nodiscard]] Result<void> EvaluateActors(const FixedStepContext &context) const;
         [[nodiscard]] Result<void> PrepareAttempt(const FixedStepContext &context);
         [[nodiscard]] Result<void> ArmActors() const;
         void PublishActors() const noexcept;
