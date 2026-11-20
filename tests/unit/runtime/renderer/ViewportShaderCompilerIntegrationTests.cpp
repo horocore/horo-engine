@@ -52,6 +52,28 @@ namespace {
         REQUIRE(compatibility.HasValue());
         CHECK(reflection.interfaceCompatibility == compatibility.Value());
     }
+
+    /** @brief Checks the real position/UV, sampler and premultiplied-color interface of the sampled canvas consumer. */
+    void CheckSampledCanvasShader(ShaderCompilationRequest request, const ExternalShaderCompilerAdapter &adapter,
+                                  const ShaderCompilerToolIdentity &cross) {
+        using namespace Horo::Editor;
+        request.manifest = EditorVulkanWorldCanvasShaderManifest();
+        request.source = Read(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / request.manifest.sourceIdentity);
+        request.reflection = ShaderCompilerReflectionRequest{cross, EditorVulkanWorldCanvasReflectionNames()};
+        const auto compiled = CompileShaderTargets(request, adapter, {});
+        INFO((compiled.HasError() ? compiled.ErrorValue().message : "compiled sampled canvas recipe"));
+        REQUIRE(compiled.HasValue());
+        REQUIRE(compiled.Value().artifacts.size() == 1);
+        const auto &artifact = compiled.Value().artifacts.front();
+        REQUIRE(artifact.reflection);
+        const auto metadata = EncodeReflectedShaderArtifact(*artifact.reflection);
+        REQUIRE(metadata.HasValue());
+        const auto cooked = LoadEditorVulkanWorldCanvasCook(artifact.payload, metadata.Value());
+        REQUIRE(cooked.HasValue());
+        CHECK(cooked.Value().metadata.cookedArtifactKey == artifact.reflection->cookedArtifactKey);
+        CHECK(LoadEditorVulkanViewportCook(artifact.payload, metadata.Value()).HasError());
+        CHECK(LoadEditorVulkanCameraCrossFadeCook(artifact.payload, metadata.Value()).HasError());
+    }
 }  // namespace
 #endif
 
@@ -113,9 +135,10 @@ TEST_CASE("Reviewed Vulkan tools cook and separate the linear scene raster from 
     const auto adapter = ExternalShaderCompilerAdapter::Create(std::move(configuration), std::make_shared<NativeExternalProcessRunner>());
     REQUIRE(adapter.HasValue());
     auto request = Request(ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16, {dxc->identity, spirvTools->identity});
-    request.source = Read(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/shaders/editor/viewport.hlsl");
     request.dependencies.clear();
     request.targets.front().requirement = EditorVulkanViewportShaderTarget();
+    CheckSampledCanvasShader(request, adapter.Value(), spirvCross->identity);
+    request.source = Read(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/shaders/editor/viewport.hlsl");
     request.reflection = ShaderCompilerReflectionRequest{spirvCross->identity, EditorVulkanViewportReflectionNames()};
 
     request.manifest = EditorVulkanViewportShaderManifest();

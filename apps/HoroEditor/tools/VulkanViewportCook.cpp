@@ -25,6 +25,7 @@ namespace {
     enum class CookMode {
         Viewport,
         CameraCrossFade,
+        WorldCanvas,
         RuntimeUiPaint,
         SceneLinear,
         Multiview,
@@ -53,6 +54,8 @@ namespace {
                 return Editor::EditorVulkanViewportShaderManifest();
             case CameraCrossFade:
                 return Editor::EditorVulkanCameraCrossFadeShaderManifest();
+            case WorldCanvas:
+                return Editor::EditorVulkanWorldCanvasShaderManifest();
             case RuntimeUiPaint:
                 return MakeUiPaintShaderManifest(UiPaintVulkanTarget());
             case SceneLinear:
@@ -83,6 +86,8 @@ namespace {
                 return Editor::EditorVulkanViewportReflectionNames();
             case CameraCrossFade:
                 return Editor::EditorVulkanCameraCrossFadeReflectionNames();
+            case WorldCanvas:
+                return Editor::EditorVulkanWorldCanvasReflectionNames();
             case RuntimeUiPaint:
                 return UiPaintVulkanReflectionNames();
             case SceneLinear:
@@ -113,6 +118,7 @@ namespace {
 
     /** @brief Closed names for standalone optional cook roles, shared by parsing and diagnosis. */
     constexpr std::array NamedCookModes{NamedCookMode{CookMode::CameraCrossFade, "camera-cross-fade"},
+                                        NamedCookMode{CookMode::WorldCanvas, "world-canvas"},
                                         NamedCookMode{CookMode::RuntimeUiPaint, "runtime-ui-paint"},
                                         NamedCookMode{CookMode::SceneLinear, "scene-linear"},
                                         NamedCookMode{CookMode::Multiview, "multiview"},
@@ -211,6 +217,8 @@ namespace {
                 return Admit(Editor::LoadEditorVulkanViewportCook(artifact.payload, metadata));
             case CameraCrossFade:
                 return Admit(Editor::LoadEditorVulkanCameraCrossFadeCook(artifact.payload, metadata));
+            case WorldCanvas:
+                return Admit(Editor::LoadEditorVulkanWorldCanvasCook(artifact.payload, metadata));
             case RuntimeUiPaint: {
                 const auto target = UiPaintVulkanTarget();
                 auto manifest = MakeUiPaintShaderManifest(target);
@@ -401,7 +409,7 @@ int main(int argc, char **argv) {
                      "[--scene-linear|--multiview|--multiview-environment|--multiview-motion|--multiview-coverage|"
                      "--multiview-coverage-reduction|--shadow|--"
                      "temporal-linear-depth|"
-                     "--temporal-motion|--camera-cross-fade|--runtime-ui-paint]\n"
+                     "--temporal-motion|--camera-cross-fade|--world-canvas|--runtime-ui-paint]\n"
                      "       HoroEditorVulkanShaderCook source.hlsl absolute-new-stage scratch-root dxc spirv-val spirv-cross "
                      "--native-reconstruction candidate-id [--scene-linear-source viewport.hlsl]\n"
                      "       HoroEditorVulkanShaderCook repository absolute-new-stage scratch-root dxc spirv-val spirv-cross "

@@ -8,6 +8,9 @@
 
 namespace Horo::Application::Internal {
     namespace {
+        using Preparation = Result<std::shared_ptr<const Render::CookedUiPaintKernel>>;
+        using PackageDecoder = Preparation (*)(std::span<const std::uint8_t>, std::span<const std::uint8_t>, Render::ShaderTargetBackend);
+
         /** @brief Reads only one fixed regular asset inside the explicit host-owned package, with finite preallocation. */
         Result<std::vector<std::uint8_t>> ReadPackageFile(const std::filesystem::path &root, const char *filename,
                                                           const std::size_t maximum, const CancellationToken &cancellation) {
@@ -36,24 +39,38 @@ namespace Horo::Application::Internal {
                 return Bytes::Failure(MakeError(Render::ShaderCompilerPipelineErrors::CancellationRequested));
             return Bytes::Success(std::move(bytes));
         }
+
+        /** @brief Reads and binds one exact caller-selected pair before publishing any native authority. */
+        Preparation Load(const std::filesystem::path &root, Render::ShaderTargetBackend selected, Render::ShaderTargetBackend expected,
+                         const char *payloadName, const char *metadataName, PackageDecoder decode, const CancellationToken &cancellation) {
+            if (selected != expected)
+                return Preparation::Failure(MakeError(Render::ShaderCompilerPipelineErrors::UnsupportedTarget));
+            try {
+                const auto payload = ReadPackageFile(root, payloadName, 16U * 1024U * 1024U, cancellation);
+                if (payload.HasError())
+                    return Preparation::Failure(payload.ErrorValue());
+                const auto record = ReadPackageFile(root, metadataName, 1024U * 1024U, cancellation);
+                if (record.HasError())
+                    return Preparation::Failure(record.ErrorValue());
+                return decode(payload.Value(), record.Value(), selected);
+            } catch (const std::bad_alloc &) {
+                return Preparation::Failure(MakeError(Render::ShaderCompilerPipelineErrors::AllocationFailed));
+            }
+        }
     }  // namespace
 
     /** @copydoc LoadPackagedProjectUiMetalKernel */
-    Result<std::shared_ptr<const Render::CookedUiPaintKernel>> LoadPackagedProjectUiMetalKernel(
-        const std::filesystem::path &assetRoot, const Render::ShaderTargetBackend selectedBackend, const CancellationToken &cancellation) {
-        using Preparation = Result<std::shared_ptr<const Render::CookedUiPaintKernel>>;
-        if (selectedBackend != Render::ShaderTargetBackend::Metal)
-            return Preparation::Failure(MakeError(Render::ShaderCompilerPipelineErrors::UnsupportedTarget));
-        try {
-            const auto payload = ReadPackageFile(assetRoot, "ui-paint-metal.horoshdr", 16U * 1024U * 1024U, cancellation);
-            if (payload.HasError())
-                return Preparation::Failure(payload.ErrorValue());
-            const auto record = ReadPackageFile(assetRoot, "ui-paint-metal.reflection.json", 1024U * 1024U, cancellation);
-            if (record.HasError())
-                return Preparation::Failure(record.ErrorValue());
-            return DecodeProjectUiPaintMetalPackage(payload.Value(), record.Value(), selectedBackend);
-        } catch (const std::bad_alloc &) {
-            return Preparation::Failure(MakeError(Render::ShaderCompilerPipelineErrors::AllocationFailed));
-        }
+    Preparation LoadPackagedProjectUiMetalKernel(const std::filesystem::path &assetRoot, const Render::ShaderTargetBackend selectedBackend,
+                                                 const CancellationToken &cancellation) {
+        return Load(assetRoot, selectedBackend, Render::ShaderTargetBackend::Metal, "ui-paint-metal.horoshdr",
+                    "ui-paint-metal.reflection.json", DecodeProjectUiPaintMetalPackage, cancellation);
+    }
+
+    /** @copydoc LoadPackagedProjectUiVulkanSceneKernel */
+    Preparation LoadPackagedProjectUiVulkanSceneKernel(const std::filesystem::path &assetRoot,
+                                                       const Render::ShaderTargetBackend selectedBackend,
+                                                       const CancellationToken &cancellation) {
+        return Load(assetRoot, selectedBackend, Render::ShaderTargetBackend::Vulkan, "ui-paint-vulkan.horoshdr",
+                    "ui-paint-vulkan.reflection.json", DecodeProjectUiPaintVulkanScenePackage, cancellation);
     }
 }  // namespace Horo::Application::Internal

@@ -189,6 +189,66 @@ namespace Horo::Editor {
         return Outcome::Success({{payload.begin(), payload.end()}, std::move(decoded).Value()});
     }
 
+    /** @copydoc EditorVulkanWorldCanvasShaderManifest */
+    Render::ShaderManifest EditorVulkanWorldCanvasShaderManifest() {
+        using namespace Render;
+        return {.schemaVersion = 1,
+                .sourceIdentity = "assets/shaders/editor/viewport_world_canvas.hlsl",
+                .sourceRevision = 1,
+                .entryPoints = {{ShaderStage::Vertex, "VSMain"}, {ShaderStage::Fragment, "PSMain"}},
+                .bindings = {{{1}, ShaderResourceKind::UniformBuffer, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Vertex},
+                             {{2}, ShaderResourceKind::SampledTexture, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment},
+                             {{3}, ShaderResourceKind::Sampler, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment}},
+                .parameters = {{{1}, {1}, ShaderValueType::Float32, 4, 4, 1}},
+                .targets = {EditorVulkanViewportShaderTarget()}};
+    }
+
+    /** @copydoc EditorVulkanWorldCanvasReflectionNames */
+    std::vector<Render::ShaderReflectionBindingName> EditorVulkanWorldCanvasReflectionNames() {
+        return {{{1}, "type.WorldCanvasParameters", {{{1}, "Mvp"}}}, {{2}, "CanvasColor", {}}, {{3}, "CanvasSampler", {}}};
+    }
+
+    namespace {
+        /** @brief Validates vertex position/UV, the exact linked UV and one premultiplied color output. */
+        bool ValidWorldCanvasInterface(const Render::NormalizedShaderReflection &reflection) {
+            using namespace Render;
+            using enum ShaderInterfaceDirection;
+
+            struct Attribute final {
+                ShaderStage stage;
+                ShaderInterfaceDirection direction;
+                std::uint32_t location, columns;
+            };
+
+            constexpr std::array expected{Attribute{ShaderStage::Vertex, Input, 0, 3}, Attribute{ShaderStage::Vertex, Input, 2, 2},
+                                          Attribute{ShaderStage::Vertex, Output, 0, 2}, Attribute{ShaderStage::Fragment, Input, 0, 2},
+                                          Attribute{ShaderStage::Fragment, Output, 0, 4}};
+            return reflection.stageInterface.size() == expected.size() && std::ranges::all_of(expected, [&](const auto &role) {
+                return std::ranges::count_if(reflection.stageInterface, [&](const auto &actual) {
+                    return actual.stage == role.stage && actual.direction == role.direction && actual.location == role.location &&
+                           actual.rows == 1 && actual.columns == role.columns && actual.type == ShaderValueType::Float32 &&
+                           actual.arrayCount == 1;
+                }) == 1;
+            });
+        }
+    }  // namespace
+
+    /** @copydoc LoadEditorVulkanWorldCanvasCook */
+    Result<EditorVulkanWorldCanvasCook> LoadEditorVulkanWorldCanvasCook(const std::span<const std::uint8_t> payload,
+                                                                        const std::span<const std::uint8_t> metadata) {
+        using Outcome = Result<EditorVulkanWorldCanvasCook>;
+        const auto manifest = EditorVulkanWorldCanvasShaderManifest();
+        const auto target = EditorVulkanViewportShaderTarget();
+        if (const auto valid = ValidateViewportStageEntries(manifest, target, payload); valid.HasError())
+            return Outcome::Failure(valid.ErrorValue());
+        auto decoded = Render::DecodeReflectedShaderArtifact(manifest, target, payload, metadata);
+        if (decoded.HasError())
+            return Outcome::Failure(decoded.ErrorValue());
+        if (!ValidWorldCanvasInterface(decoded.Value().reflection))
+            return Outcome::Failure(MakeError(Render::ShaderReflectionErrors::StageInterfaceMismatch));
+        return Outcome::Success({{payload.begin(), payload.end()}, std::move(decoded).Value()});
+    }
+
     /** @copydoc EditorVulkanSceneLinearShaderManifest */
     Render::ShaderManifest EditorVulkanSceneLinearShaderManifest() {
         auto manifest = EditorVulkanViewportShaderManifest();

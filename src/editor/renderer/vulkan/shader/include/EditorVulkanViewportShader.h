@@ -34,6 +34,23 @@ namespace Horo::Editor {
     [[nodiscard]] Result<EditorVulkanCameraCrossFadeCook> LoadEditorVulkanCameraCrossFadeCook(std::span<const std::uint8_t> payload,
                                                                                               std::span<const std::uint8_t> metadata);
 
+    /** @brief Verified resident-depth-compatible program for a sampled premultiplied World canvas. */
+    struct EditorVulkanWorldCanvasCook final {
+        std::vector<std::uint8_t> payload;
+        Render::ReflectedShaderArtifact metadata;
+    };
+
+    /** @brief Returns the exact MVP, sampled color and sampler shader ABI. */
+    [[nodiscard]] Render::ShaderManifest EditorVulkanWorldCanvasShaderManifest();
+    /** @brief Returns compiler-visible names for the World canvas shader resources and matrix field. */
+    [[nodiscard]] std::vector<Render::ShaderReflectionBindingName> EditorVulkanWorldCanvasReflectionNames();
+    /** @brief Validates the actual bound World canvas program and MeshVertex interface.
+     * @param payload Exact compiled and validated stage bytes.
+     * @param metadata Canonical reflection of those same stage bytes.
+     * @return Owned validated pair or typed mismatch. */
+    [[nodiscard]] Result<EditorVulkanWorldCanvasCook> LoadEditorVulkanWorldCanvasCook(std::span<const std::uint8_t> payload,
+                                                                                      std::span<const std::uint8_t> metadata);
+
     /** @brief Separate actual cooked depth artifact from the canonical shared shadow source. */
     struct EditorVulkanShadowCook {
         std::vector<std::uint8_t> payload;

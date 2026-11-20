@@ -79,6 +79,11 @@ namespace Horo::Editor {
         return LoadPackagedProgram(assetRoot / "shaders/editor/viewport-cross-fade-vulkan", &LoadEditorVulkanCameraCrossFadeCook);
     }
 
+    /** @copydoc LoadPackagedVulkanWorldCanvasShader */
+    Result<EditorVulkanWorldCanvasCook> LoadPackagedVulkanWorldCanvasShader(const std::filesystem::path &assetRoot) {
+        return LoadPackagedProgram(assetRoot / "shaders/editor/viewport-world-canvas-vulkan", &LoadEditorVulkanWorldCanvasCook);
+    }
+
     /** @copydoc LoadPackagedVulkanSceneLinearShader */
     Result<EditorVulkanSceneLinearCook> LoadPackagedVulkanSceneLinearShader(const std::filesystem::path &assetRoot) {
         return LoadPackagedProgram(assetRoot / "shaders/editor/viewport-scene-linear-vulkan", &LoadEditorVulkanSceneLinearCook);

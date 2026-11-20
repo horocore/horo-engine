@@ -378,6 +378,12 @@ requires a renderer graph that orders the read after the paint write and
 retains the texture through completion. Placement in a camera or scene and
 interaction mapping both depend on the consuming presentation pass.
 
+The Vulkan qualification bundle cooks the paint producer and the sampled
+canvas consumer as distinct artifacts. The paint package is admitted with a
+linear color target and its stencil format. The consumer validates its
+position, UV, uniform, sampler and color interfaces against the reflected
+native stages before the viewport can construct the sampling pass.
+
 The presentation receipt carries the exact World canvas plane when a consuming
 pass places the canvas in the scene. Runtime UI adopts that plane with the
 receipt's view, canvas and revisions. A later receipt can move the plane

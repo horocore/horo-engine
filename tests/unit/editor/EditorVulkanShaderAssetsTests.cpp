@@ -5,6 +5,7 @@
 #include <bit>
 #include <catch2/generators/catch_generators.hpp>
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <vector>
 
@@ -118,6 +119,20 @@ TEST_CASE("Packaged Vulkan scene raster admission requires its distinct compiled
     const CookFixture incorrectNativeStage{CookFixtureRole::SceneLinear, reflected};
     bundle.WriteCook(prefix, incorrectNativeStage);
     CHECK(LoadPackagedVulkanSceneLinearShader(bundle.root).HasError());
+}
+
+TEST_CASE("Packaged Vulkan sampled canvas binds its exact Vulkan consumer artifact", "[editor][shader-cook][assets][canvas]") {
+    const auto *configured = std::getenv("HORO_VULKAN_UI_PAINT_ASSET_ROOT");
+    if (!configured || !*configured)
+        SKIP("Supply the actual offline Vulkan canvas shader package.");
+    const std::filesystem::path assets{configured};
+    REQUIRE(assets.is_absolute());
+    const auto loaded = LoadPackagedVulkanWorldCanvasShader(assets);
+    REQUIRE(loaded.HasValue());
+    const auto metadata = EncodeReflectedShaderArtifact(loaded.Value().metadata);
+    REQUIRE(metadata.HasValue());
+    CHECK(LoadEditorVulkanWorldCanvasCook(loaded.Value().payload, metadata.Value()).HasValue());
+    CHECK(LoadEditorVulkanCameraCrossFadeCook(loaded.Value().payload, metadata.Value()).HasError());
 }
 
 TEST_CASE("Packaged Vulkan viewport loading requires and owns both canonical lit and shadow artifacts", "[editor][shader-cook][assets]") {

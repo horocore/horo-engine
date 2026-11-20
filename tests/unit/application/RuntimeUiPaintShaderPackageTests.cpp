@@ -4,6 +4,7 @@
 #include "support/AllocationProbe.h"
 
 #include <cstddef>
+#include <cstdlib>
 #include <optional>
 #include <span>
 
@@ -49,6 +50,26 @@ TEST_CASE("Application packaged UI explicitly denies unsupported backend before 
         REQUIRE(result.HasError());
         CHECK(result.ErrorValue().code.Value() == ShaderCompilerPipelineErrors::UnsupportedTarget.code.Value());
     }
+    for (const auto backend : {Metal, OpenGL, Null}) {
+        const auto result = LoadPackagedProjectUiVulkanSceneKernel("/does-not-exist", backend, cancellation);
+        REQUIRE(result.HasError());
+        CHECK(result.ErrorValue().code.Value() == ShaderCompilerPipelineErrors::UnsupportedTarget.code.Value());
+    }
+}
+
+TEST_CASE("Application Vulkan UI package binds the exact offline artifact for a scene target",
+          "[application][runtime_ui][package][vulkan]") {
+    const auto *configured = std::getenv("HORO_VULKAN_UI_PAINT_ASSET_ROOT");
+    if (!configured || !*configured)
+        SKIP("Supply the actual offline Vulkan UI paint package.");
+    const std::filesystem::path assets{configured};
+    REQUIRE(assets.is_absolute());
+    const auto loaded = LoadPackagedProjectUiVulkanSceneKernel(assets, ShaderTargetBackend::Vulkan, {});
+    REQUIRE(loaded.HasValue());
+    const auto &kernel = *loaded.Value();
+    CHECK(kernel.colorFormat == Horo::Render::RenderTextureFormat::Rgba16Float);
+    CHECK(kernel.stencilFormat == Horo::Render::RenderTextureFormat::Depth32FloatStencil8);
+    CHECK(ValidateCookedUiPaintKernel(kernel, ShaderTargetBackend::Vulkan).HasValue());
 }
 
 TEST_CASE("Application packaged UI loader retains bounded immutable metadata without native qualification",
