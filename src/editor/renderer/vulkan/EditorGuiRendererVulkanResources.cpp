@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <imgui.h>
 #include <limits>
+#include <utility>
 #include <vector>
 
 namespace Horo::Editor {
@@ -68,6 +69,29 @@ namespace Horo::Editor {
         pending.identity = nextIdentity_++;
         *free = pending;
         return Outcome::Success(pending.identity);
+    }
+
+    /** @copydoc EditorGuiRendererVulkan::ReplaceFontTexture */
+    Result<void> EditorGuiRendererVulkan::ReplaceFontTexture(ImFontAtlas &candidate) {
+        if (const auto valid = Validate(); valid.HasError())
+            return valid;
+        if (const auto *active = ImGui::GetIO().Fonts; !nativeInitialized_ || !platformInitialized_ || active->Locked ||
+                                                       &candidate == active || candidate.Locked || !candidate.IsBuilt() ||
+                                                       candidate.TexID != 0)
+            return Result<void>::Failure(MakeError(RendererErrors::GuiTextureInvalid));
+        unsigned char *pixels{};
+        int width{};
+        int height{};
+        candidate.GetTexDataAsRGBA32(&pixels, &width, &height);
+        if (!pixels || width <= 0 || height <= 0)
+            return Result<void>::Failure(MakeError(RendererErrors::GuiTextureInvalid));
+        const auto uploaded = CreateTexture({static_cast<std::uint32_t>(width), static_cast<std::uint32_t>(height),
+                                             std::span{pixels, static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4}});
+        if (uploaded.HasError())
+            return Result<void>::Failure(uploaded.ErrorValue());
+        candidate.SetTexID(static_cast<ImTextureID>(uploaded.Value()));
+        DestroyTexture(std::exchange(fontIdentity_, uploaded.Value()));
+        return Result<void>::Success();
     }
 
     /** @copydoc EditorGuiRendererVulkan::DestroyTexture */

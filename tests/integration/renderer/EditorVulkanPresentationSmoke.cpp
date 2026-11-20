@@ -1280,6 +1280,42 @@ namespace Horo::Tests::VulkanEditor {
         REQUIRE(host.Drain());
     }
 
+    TEST_CASE("Native Vulkan replaces a font atlas after presentation and preserves the active atlas on rejection",
+              "[native-smoke][vulkan][gui][font-atlas]") {
+        Host host;
+        auto &io = ImGui::GetIO();
+        const auto originalIdentity = io.Fonts->TexID;
+        {
+            auto frame = host.Frame(1);
+            host.ExecuteGuiOnly(frame);
+            Check(frame.Present());
+        }
+        using Atlas = std::unique_ptr<ImFontAtlas, decltype(&IM_DELETE<ImFontAtlas>)>;
+        Atlas replacement{IM_NEW(ImFontAtlas)(), &IM_DELETE<ImFontAtlas>};
+        ImFontConfig config;
+        config.RasterizerDensity = 1.5F;
+        auto *font = replacement->AddFontDefault(&config);
+        REQUIRE(font);
+        CHECK(host.gui->ReplaceFontTexture(*replacement).HasError());
+        CHECK(io.Fonts->TexID == originalIdentity);
+        REQUIRE(replacement->Build());
+        Check(host.gui->ReplaceFontTexture(*replacement), "upload replacement atlas");
+        CHECK(replacement->TexID != originalIdentity);
+        CHECK(replacement->TexID != 0);
+        Atlas previous{std::exchange(io.Fonts, replacement.release()), &IM_DELETE<ImFontAtlas>};
+        io.FontDefault = font;
+        {
+            auto frame = host.Frame(2);
+            host.ExecuteGuiOnly(frame);
+            previous.reset();
+            CHECK(ImGui::GetIO().FontDefault == font);
+            Check(frame.Present());
+        }
+        REQUIRE(host.Drain());
+        host.gui.reset();
+        CHECK(host.frontend->MemorySnapshot().allocationCount == 0);
+    }
+
     TEST_CASE("Native Vulkan empty viewport GUI tail and cancellation share canonical retirement", "[native-smoke][vulkan][gui]") {
         Host host;
         host.RecordCapabilities();

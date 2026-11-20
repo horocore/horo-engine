@@ -401,8 +401,12 @@ divided by framebuffer pixel density. SDL and the renderer retain ownership of
 framebuffer conversion. The theme starts from its unscaled metrics on each
 change, projects the same scale into native controls and design tokens, and
 keeps visible text at or above 16 logical pixels. Existing glyph resources stay
-valid while the logical scale changes. Rebuilding the atlas at a new DPI bucket
-requires a separate renderer-owned resource replacement boundary.
+valid while the logical scale changes. When the owning display reports a new
+rasterizer density, the Vulkan editor prepares a separate atlas before its
+next GUI frame. After upload admission it publishes the atlas and font roles
+together. The previous CPU atlas is retained until Dear ImGui begins the
+new frame, and canonical frame retirement owns the previous GPU texture.
+Failed preparation preserves the active atlas and roles.
 
 Shared text scopes still take resolved logical sizes. Desktop editor and native
 GUI consumers must rebuild with the updated theme header because font scopes

@@ -460,14 +460,14 @@ namespace Horo::Editor {
             return loadedAny;
         }
 
-        [[nodiscard]] const ImWchar *BuildEditorGlyphRanges(ImGuiIO &io) {
+        [[nodiscard]] const ImWchar *BuildEditorGlyphRanges(ImFontAtlas &atlas) {
             // ImGui default ranges do not always include the small UI glyphs used
             // by the HTML mockups (arrows, multiplication sign, square icon,
             // middle dot). Without these, they render as '?' in the editor.
             static ImVector<ImWchar> ranges;
             if (ranges.empty()) {
                 ImFontGlyphRangesBuilder builder;
-                builder.AddRanges(io.Fonts->GetGlyphRangesDefault());
+                builder.AddRanges(atlas.GetGlyphRangesDefault());
                 // Add Latin Extended-A for Turkish and other European characters
                 static constexpr std::array<ImWchar, 3> latinExtendedA = {0x0100, 0x017F, 0};
                 builder.AddRanges(latinExtendedA.data());
@@ -506,9 +506,9 @@ namespace Horo::Editor {
             return (scale > 1.0F) ? scale : 1.0F;
         }
 
-        [[nodiscard]] Fonts LoadEditorFonts(ImGuiIO &io, const float rasterizerDensity) {
+        [[nodiscard]] Fonts LoadEditorFonts(ImFontAtlas &atlas, const float rasterizerDensity) {
             Fonts f;
-            const ImWchar *ranges = BuildEditorGlyphRanges(io);
+            const ImWchar *ranges = BuildEditorGlyphRanges(atlas);
             ImFontConfig sansCfg{};
             sansCfg.OversampleH = 3;
             sansCfg.OversampleV = 2;
@@ -521,22 +521,21 @@ namespace Horo::Editor {
             emphasisCfg.OversampleH = 3;
             emphasisCfg.OversampleV = 2;
             emphasisCfg.RasterizerDensity = rasterizerDensity;
-            f.sans =
-                io.Fonts->AddFontFromFileTTF(AssetPath("fonts/inter/InterVariable.ttf").c_str(), Theme::FontPx::Sans, &sansCfg, ranges);
-            f.sansCompact = io.Fonts->AddFontFromFileTTF(AssetPath("fonts/inter/InterVariable.ttf").c_str(), Theme::FontPx::SansCompact,
-                                                         &compactCfg, ranges);
-            f.sansEmphasis = io.Fonts->AddFontFromFileTTF(AssetPath("fonts/inter/InterVariable.ttf").c_str(), Theme::FontPx::SansEmphasis,
-                                                          &emphasisCfg, ranges);
+            f.sans = atlas.AddFontFromFileTTF(AssetPath("fonts/inter/InterVariable.ttf").c_str(), Theme::FontPx::Sans, &sansCfg, ranges);
+            f.sansCompact = atlas.AddFontFromFileTTF(AssetPath("fonts/inter/InterVariable.ttf").c_str(), Theme::FontPx::SansCompact,
+                                                     &compactCfg, ranges);
+            f.sansEmphasis = atlas.AddFontFromFileTTF(AssetPath("fonts/inter/InterVariable.ttf").c_str(), Theme::FontPx::SansEmphasis,
+                                                      &emphasisCfg, ranges);
 
             ImFontConfig iconCfg{};
             iconCfg.OversampleH = 3;
             iconCfg.OversampleV = 2;
             iconCfg.RasterizerDensity = rasterizerDensity;
             const std::span iconRanges = Ui::UiIconRegistry::MaterialSymbolGlyphRanges();
-            f.monospace = io.Fonts->AddFontFromFileTTF(AssetPath("fonts/ibm-plex-mono/IBMPlexMono-Regular.ttf").c_str(),
-                                                       Theme::FontPx::Sans, &sansCfg, ranges);
-            f.monospaceEmphasis = io.Fonts->AddFontFromFileTTF(AssetPath("fonts/ibm-plex-mono/IBMPlexMono-SemiBold.ttf").c_str(),
-                                                               Theme::FontPx::Sans, &sansCfg, ranges);
+            f.monospace = atlas.AddFontFromFileTTF(AssetPath("fonts/ibm-plex-mono/IBMPlexMono-Regular.ttf").c_str(), Theme::FontPx::Sans,
+                                                   &sansCfg, ranges);
+            f.monospaceEmphasis = atlas.AddFontFromFileTTF(AssetPath("fonts/ibm-plex-mono/IBMPlexMono-SemiBold.ttf").c_str(),
+                                                           Theme::FontPx::Sans, &sansCfg, ranges);
             f.codeFamilies.emplace_back("IBM Plex Mono", f.monospace, f.monospaceEmphasis);
             // Native font discovery stays in the executable composition root. Only loaded
             // atlas families are offered; the source widget never probes the filesystem.
@@ -544,7 +543,7 @@ namespace Horo::Editor {
                 std::error_code error;
                 if (!std::filesystem::is_regular_file(path, error))
                     return;
-                if (auto *face = io.Fonts->AddFontFromFileTTF(path, Theme::FontPx::Sans, &sansCfg, ranges))
+                if (auto *face = atlas.AddFontFromFileTTF(path, Theme::FontPx::Sans, &sansCfg, ranges))
                     f.codeFamilies.emplace_back(name, face, face);
             };
 #if defined(__APPLE__)
@@ -559,12 +558,21 @@ namespace Horo::Editor {
             addFamily("DejaVu Sans Mono", "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf");
             addFamily("Liberation Mono", "/usr/share/fonts/truetype/liberation2/LiberationMono-Regular.ttf");
 #endif
-            f.icon = io.Fonts->AddFontFromFileTTF(AssetPath("fonts/MaterialSymbolsOutlined.ttf").c_str(), Theme::FontPx::Icon, &iconCfg,
-                                                  iconRanges.data());
-            if (f.sans)
-                io.FontDefault = f.sans;
+            f.icon = atlas.AddFontFromFileTTF(AssetPath("fonts/MaterialSymbolsOutlined.ttf").c_str(), Theme::FontPx::Icon, &iconCfg,
+                                              iconRanges.data());
             return f;
         }
+
+#if defined(HORO_HAS_RENDER_VULKAN)
+        /** @brief Matches the atlas allocation convention used by the Dear ImGui context. */
+        struct EditorFontAtlasDeleter final {
+            void operator()(ImFontAtlas *atlas) const noexcept {
+                IM_DELETE(atlas);
+            }
+        };
+
+        using EditorFontAtlasOwner = std::unique_ptr<ImFontAtlas, EditorFontAtlasDeleter>;
+#endif
 
         [[nodiscard]] std::uintptr_t LoadEditorTexture(IEditorGuiRenderer &guiRenderer, const char *assetPath) {
             const std::string path = AssetPath(assetPath);
@@ -1776,7 +1784,7 @@ namespace Horo::Editor {
             const EditorGuiOptions &options;
             EditorTelemetry &telemetry;
             EditorPresentationPorts presentation;
-            const Fonts &fonts;
+            Fonts &fonts;
             const EditorTextures &textures;
             ProjectCreationService &projectCreationService;
             EditorBackgroundServices background;
@@ -2586,6 +2594,51 @@ namespace Horo::Editor {
                 }
             }
 
+#if defined(HORO_HAS_RENDER_VULKAN)
+            /** @brief Builds and publishes a matching Vulkan atlas once per observed display generation. */
+            [[nodiscard]] EditorFontAtlasOwner RefreshVulkanFonts() {
+                if (fontDisplayRevision_ == windowDisplayRevision_)
+                    return {};
+                fontDisplayRevision_ = windowDisplayRevision_;
+                auto *renderer = dynamic_cast<EditorGuiRendererVulkan *>(&p_->presentation.guiRenderer);
+                if (!renderer)
+                    return {};
+                auto &io = p_->presentation.io;
+                const auto density = QueryRasterizerDensity(p_->presentation.window);
+                if (!io.Fonts->ConfigData.empty() && io.Fonts->ConfigData.front().RasterizerDensity == density)
+                    return {};
+                try {
+                    return ReplaceVulkanFonts(*renderer, io, density);
+                } catch (const std::filesystem::filesystem_error &error) {
+                    LOG_WARN("editor.font", "Keeping the active editor font atlas: %s", error.what());
+                    return {};
+                } catch (const std::bad_alloc &) {
+                    LOG_WARN("editor.font", "Keeping the active editor font atlas: replacement allocation failed.");
+                    return {};
+                }
+            }
+
+            /** @brief Commits prepared font roles after renderer admission and returns the previous CPU owner. */
+            [[nodiscard]] EditorFontAtlasOwner ReplaceVulkanFonts(EditorGuiRendererVulkan &renderer, ImGuiIO &io, float density) {
+                static_assert(std::is_nothrow_move_assignable_v<Fonts>);
+                EditorFontAtlasOwner candidate{IM_NEW(ImFontAtlas)()};
+                auto fonts = LoadEditorFonts(*candidate, density);
+                if (!fonts.sans || !fonts.sansCompact || !fonts.sansEmphasis || !fonts.monospace || !fonts.monospaceEmphasis ||
+                    !fonts.icon || !candidate->Build()) {
+                    LOG_WARN("editor.font", "Keeping the active editor font atlas: replacement roles or pixels are unavailable.");
+                    return {};
+                }
+                if (const auto replaced = renderer.ReplaceFontTexture(*candidate); replaced.HasError()) {
+                    LOG_WARN("editor.font", "Keeping the active editor font atlas: %s", replaced.ErrorValue().message.c_str());
+                    return {};
+                }
+                EditorFontAtlasOwner previous{std::exchange(io.Fonts, candidate.release())};
+                io.FontDefault = fonts.sans;
+                p_->fonts = std::move(fonts);
+                return previous;
+            }
+#endif
+
             Result<void> UpdatePresentation(const Runtime::FrameContext &context) {
                 if (auto refreshed = RefreshEditorThemeAccessibility(p_->configuration, *p_->presentation.window, themeAccessibility_);
                     refreshed.HasError())
@@ -2607,6 +2660,9 @@ namespace Horo::Editor {
                     viewportSceneState_->SetCameraCrossFadeCapacity(p_->presentation.viewportRenderer.CameraCrossFadeCapacity());
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
                     qualification_.RecordFrameWork(EditorSurfaceLifecycleQualification::FrameWork::GuiBegin);
+#endif
+#if defined(HORO_HAS_RENDER_VULKAN)
+                    auto previousAtlas = RefreshVulkanFonts();  // NewFrame changes ImGui's cached current font before this lease ends.
 #endif
                     if (const Result<void> guiBegun = p_->presentation.guiRenderer.BeginFrame(); guiBegun.HasError()) {
                         return guiBegun;
@@ -3345,6 +3401,9 @@ namespace Horo::Editor {
 #endif
             EditorSurfaceRecovery surfaceRecovery_{EditorSurfaceRecovery::Defer};
             std::uint64_t windowDisplayRevision_{1};
+#if defined(HORO_HAS_RENDER_VULKAN)
+            std::uint64_t fontDisplayRevision_{1};
+#endif
             bool displayChangePending_{};
 
             /** @brief One frame's native admission, GUI extraction and prepared scope, retaining the original lifetime order. */
@@ -4757,7 +4816,7 @@ namespace Horo::Editor {
         PreparedEditorStartup &startup;
         SDL_Window &window;
         ImGuiIO &io;
-        const Fonts &fonts;
+        Fonts &fonts;
         const EditorTextures &textures;
         EditorRenderComposition &composition;
         EditorTelemetry &telemetry;
@@ -5045,7 +5104,8 @@ namespace Horo::Editor {
         ImGui::CreateContext();
         auto &io = ImGui::GetIO();
         io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
-        auto fonts = LoadEditorFonts(io, QueryRasterizerDensity(window));
+        auto fonts = LoadEditorFonts(*io.Fonts, QueryRasterizerDensity(window));
+        io.FontDefault = fonts.sans;
         const auto themeConfiguration = startup.configuration->Snapshot();
         const auto &themeOverride = std::get<std::string>(themeConfiguration.Get(SettingKey{"editor.theme.override_path"}));
         const auto encodedThemesDirectory = startup.themesDirectory.generic_u8string();
