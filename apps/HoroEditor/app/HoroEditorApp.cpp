@@ -3059,7 +3059,7 @@ namespace Horo::Editor {
             struct PendingXrCanvasReceipt final {
                 std::uint64_t frameNumber;
                 Runtime::Ui::RuntimeUiInstanceId instance;
-                Runtime::Ui::UiPresentationReceipt receipt;
+                Application::Internal::RuntimeUiPaintHeadsetCanvasReceipt receipt;
             };
 
             /** @brief Applies the headset result to the exact submitted application-side UI receipt. */
@@ -3067,10 +3067,11 @@ namespace Horo::Editor {
                 const auto completed = xr.TakeCanvasCompletion();
                 if (!completed || !frameState_.xrCanvasReceipt)
                     return Result<void>::Success();
-                const auto &pending = *frameState_.xrCanvasReceipt;
+                auto &pending = *frameState_.xrCanvasReceipt;
                 if (pending.frameNumber != completed->frameNumber)
                     return Result<void>::Failure(MakeError(Runtime::Ui::UiErrors::RevisionStale));
-                const auto applied = authorities_.ui.HeadsetCanvasPresented(pending.instance, pending.receipt, completed->presented);
+                const auto applied =
+                    authorities_.ui.HeadsetCanvasPresented(pending.instance, std::move(pending.receipt), completed->presented);
                 frameState_.xrCanvasReceipt.reset();
                 return applied;
             }

@@ -10,6 +10,7 @@
 #include "RuntimeUiPaintProjection.h"
 
 #include <functional>
+#include <utility>
 
 namespace Horo::Runtime {
     class SceneActivationCandidate;
@@ -73,6 +74,24 @@ namespace Horo::Application::Internal {
         const Render::UiPaintProgramDescriptor *program{};
         const Render::CookedUiPaintKernel *kernel{};
         std::span<const Render::RenderTextureHandle> textures;
+    };
+
+    /** @brief Immutable hit geometry admitted by the same World canvas presentation as the drawn snapshot. */
+    struct RuntimeUiPaintPresentedWorldCanvas final {
+        Runtime::Ui::RuntimeUiInstanceId instance;
+        Runtime::Ui::UiPresentationReceipt presentation;
+        Runtime::Ui::UiHitTestSnapshot hit;
+    };
+
+    /** @brief One headset submission's presentation and hit geometry, retained until the matching native frame completes. */
+    class RuntimeUiPaintHeadsetCanvasReceipt final {
+        friend class RuntimeUiPaintPort;
+
+        RuntimeUiPaintHeadsetCanvasReceipt(Runtime::Ui::UiPresentationReceipt receipt, Runtime::Ui::UiHitTestSnapshot hit)
+            : receipt_(std::move(receipt)), hit_(std::move(hit)) {}
+
+        Runtime::Ui::UiPresentationReceipt receipt_;
+        Runtime::Ui::UiHitTestSnapshot hit_;
     };
 
     /** @brief Complete safe-point source/derived/renderer preparation; only the trusted executable host supplies these resources. */
@@ -187,7 +206,7 @@ namespace Horo::Application::Internal {
          * @param plane The same world geometry used by the encoded eye draws.
          * @return Matching interaction receipt or a typed stale/invalid-source error.
          */
-        [[nodiscard]] Result<Runtime::Ui::UiPresentationReceipt> DetachHeadsetCanvas(
+        [[nodiscard]] Result<RuntimeUiPaintHeadsetCanvasReceipt> DetachHeadsetCanvas(
             Runtime::Ui::RuntimeUiInstanceId instance, std::uint64_t frameNumber, const Runtime::Ui::UiWorldCanvasProjection &plane) const;
         /** @brief Applies the detached receipt only after the matching headset frame ends.
          * @param instance Exact original canvas owner.
@@ -196,7 +215,13 @@ namespace Horo::Application::Internal {
          * @return Success for an applied or retired receipt, or the original interaction error.
          */
         [[nodiscard]] Result<void> HeadsetCanvasPresented(Runtime::Ui::RuntimeUiInstanceId instance,
-                                                          Runtime::Ui::UiPresentationReceipt receipt, bool presented) const;
+                                                          RuntimeUiPaintHeadsetCanvasReceipt receipt, bool presented) const;
+        /** @brief Acquires admitted World hit geometry for the selected scene.
+         * @param scene Exact current scene identity.
+         * @return Empty until the canvas presents and is eligible, or the current immutable hit snapshot.
+         */
+        [[nodiscard]] Result<std::optional<RuntimeUiPaintPresentedWorldCanvas>> ReadPresentedWorldCanvas(
+            Runtime::SceneRuntimeId scene) const;
         /** @brief Applies a receipt only for UI actually encoded in that same native frame; presentation never retires GPU claims. */
         [[nodiscard]] Result<void> Presented(std::uint64_t frameNumber, bool nativePresentSucceeded) const;
         /** @brief Pins the actual current derived frame for host inspection; its lifetime participates in the existing drain fence. */

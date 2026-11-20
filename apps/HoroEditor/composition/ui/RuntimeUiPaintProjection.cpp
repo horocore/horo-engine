@@ -108,6 +108,24 @@ namespace Horo::Application::Internal {
                                                       : Result<void>::Failure(MakeError(UiErrors::CapacityExceeded));
     }
 
+    /** @copydoc RuntimeUiPaintProjection::Storage::PrepareWorldHitStore */
+    Result<void> RuntimeUiPaintProjection::Storage::PrepareWorldHitStore() {
+        if (authored->renderMode != UiRenderMode::WorldSpace)
+            return Result<void>::Success();
+        const auto extent = ResolveUiWorldCanvas(*authored);
+        if (extent.HasError())
+            return Result<void>::Failure(extent.ErrorValue());
+        constexpr std::uint32_t snapshotSlots = 4;  // Candidate, in-flight headset, presented and one replacement.
+        auto store = UiHitTestStore::Create({instance, canvas->tree.Canvas(), declaration.document, authored->renderMode, extent.Value(),
+                                             static_cast<std::uint32_t>(rows.size()), snapshotSlots});
+        if (store.HasError())
+            return Result<void>::Failure(store.ErrorValue());
+        hitStore.emplace(std::move(store).Value());
+        hitElements.reserve(rows.size());
+        hitClips.reserve(descriptor.limits.clips);
+        return Result<void>::Success();
+    }
+
     /** @copydoc RuntimeUiPaintProjection::Create */
     Result<std::unique_ptr<RuntimeUiPaintProjection>> RuntimeUiPaintProjection::Create(const RuntimeUiService &service,
                                                                                        const RuntimeUiInstanceId instance,
@@ -142,6 +160,8 @@ namespace Horo::Application::Internal {
         storage->candidate = &candidate;
         if (const auto rows = storage->AdmitRows(); rows.HasError())
             return Created::Failure(rows.ErrorValue());
+        if (const auto hitStore = storage->PrepareWorldHitStore(); hitStore.HasError())
+            return Created::Failure(hitStore.ErrorValue());
         storage->commands.reserve(descriptor.limits.commands);
         storage->clips.reserve(descriptor.limits.clips);
         storage->masks.reserve(descriptor.limits.masks);
@@ -212,7 +232,10 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc RuntimeUiPaintProjection::Extract */
-    Result<UiRenderSnapshot> RuntimeUiPaintProjection::Extract(const RuntimeUiService &service, const UiAnimationFrameLease &frame) {
+    Result<UiRenderSnapshot> RuntimeUiPaintProjection::Extract(const RuntimeUiService &service, const UiAnimationFrameLease &frame,
+                                                               std::optional<UiHitTestSnapshot> *worldHit) {
+        if (worldHit)
+            worldHit->reset();
         auto current = service.Acquire(storage_->instance);
         if (current.HasError())
             return Result<UiRenderSnapshot>::Failure(current.ErrorValue());
@@ -240,12 +263,22 @@ namespace Horo::Application::Internal {
                                               storage_->descriptor.view,
                                               storage_->descriptor.limits};
         const auto &input = storage_->declaration;
+        std::optional<UiHitTestSnapshot> candidateHit;
+        if (worldHit && storage_->hitStore) {
+            auto hit = storage_->hitStore->Publish(geometry->layout, storage_->hitElements);
+            if (hit.HasError())
+                return Result<UiRenderSnapshot>::Failure(hit.ErrorValue());
+            candidateHit.emplace(std::move(hit).Value());
+        }
         auto extracted = storage_->extractor.Extract(tree, descriptor,
                                                      {storage_->commands, input.textRuns, input.glyphs, storage_->clips, storage_->masks,
                                                       storage_->transforms, input.resources, storage_->groups},
                                                      frame);
-        if (extracted.HasValue())
-            ++storage_->revision;
+        if (extracted.HasError())
+            return extracted;
+        if (worldHit)
+            *worldHit = std::move(candidateHit);
+        ++storage_->revision;
         return extracted;
     }
 }  // namespace Horo::Application::Internal

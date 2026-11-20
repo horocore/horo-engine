@@ -108,6 +108,21 @@ namespace Horo::Application::Internal {
         });
     }
 
+    /** @copydoc RuntimeUiPaintPort::ReadPresentedWorldCanvas */
+    Result<std::optional<RuntimeUiPaintPresentedWorldCanvas>> RuntimeUiPaintPort::ReadPresentedWorldCanvas(
+        const Runtime::SceneRuntimeId scene) const {
+        using Read = Result<std::optional<RuntimeUiPaintPresentedWorldCanvas>>;
+        if (!state_ || !state_->Available() || state_->dispatching)
+            return Read::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
+        if (!scene.IsValid())
+            return Read::Failure(MakeError(UiErrors::HandleMalformed));
+        for (const auto *source : state_->Sources())
+            if (source && source->scene == scene && source->presentedWorld && !source->output.pending &&
+                !source->output.awaitingPresentation && source->animation->InputEligible(source->presentedWorld->presentation.view))
+                return Read::Success(source->presentedWorld);
+        return Read::Success(std::nullopt);
+    }
+
     /** @copydoc RuntimeUiPaintPort::ReadSceneCanvasFrame */
     Result<std::optional<RuntimeUiPaintSceneCanvasFrame>> RuntimeUiPaintPort::ReadSceneCanvasFrame(
         const std::uint64_t frameNumber, const Runtime::SceneRuntimeId scene, const std::optional<UiRenderMode> mode) const {
@@ -155,12 +170,13 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc RuntimeUiPaintPort::DetachHeadsetCanvas */
-    Result<UiPresentationReceipt> RuntimeUiPaintPort::DetachHeadsetCanvas(const RuntimeUiInstanceId instance, std::uint64_t frameNumber,
-                                                                          const UiWorldCanvasProjection &plane) const {
-        using Outcome = Result<UiPresentationReceipt>;
+    Result<RuntimeUiPaintHeadsetCanvasReceipt> RuntimeUiPaintPort::DetachHeadsetCanvas(const RuntimeUiInstanceId instance,
+                                                                                       std::uint64_t frameNumber,
+                                                                                       const UiWorldCanvasProjection &plane) const {
+        using Outcome = Result<RuntimeUiPaintHeadsetCanvasReceipt>;
         auto *source = state_ ? state_->ActiveSource(instance) : nullptr;
         if (!source || !source->worldCanvas || source->frame.extractedFrame != frameNumber || !source->frame.sceneSubmissionTaken ||
-            source->frame.sceneEncoded)
+            source->frame.sceneEncoded || !source->frame.worldHit)
             return Outcome::Failure(MakeError(UiErrors::RevisionStale));
         if (!plane.IsValid())
             return Outcome::Failure(MakeError(UiErrors::CanvasSpaceInvalid));
@@ -173,15 +189,16 @@ namespace Horo::Application::Internal {
                                             UiPresentationReason::None,
                                             plane};
         source->frame.extractedFrame.reset();
-        return Outcome::Success(receipt);
+        return Outcome::Success(RuntimeUiPaintHeadsetCanvasReceipt{receipt, std::move(*source->frame.worldHit)});
     }
 
     /** @copydoc RuntimeUiPaintPort::HeadsetCanvasPresented */
-    Result<void> RuntimeUiPaintPort::HeadsetCanvasPresented(const RuntimeUiInstanceId instance, UiPresentationReceipt receipt,
+    Result<void> RuntimeUiPaintPort::HeadsetCanvasPresented(const RuntimeUiInstanceId instance, RuntimeUiPaintHeadsetCanvasReceipt pending,
                                                             const bool presented) const {
         auto *source = state_ ? state_->ActiveSource(instance) : nullptr;
         if (!source || !source->worldCanvas)
             return Result<void>::Success();
+        auto &receipt = pending.receipt_;
         receipt.outcome = presented ? UiPresentationOutcome::Presented : UiPresentationOutcome::Failed;
         receipt.reason = presented ? UiPresentationReason::None : UiPresentationReason::ExecutionFailure;
         if (!presented)
@@ -193,6 +210,9 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(applied.ErrorValue());
         }
         source->output.awaitingPresentation = !presented;
+        source->presentedWorld.reset();
+        if (presented)
+            source->presentedWorld.emplace(instance, receipt, std::move(pending.hit_));
         return Result<void>::Success();
     }
 
@@ -211,6 +231,9 @@ namespace Horo::Application::Internal {
         if (const auto applied = animation->ApplyPresentation(receipt); applied.HasError())
             return Result<void>::Failure(applied.ErrorValue());
         output.awaitingPresentation = receipt.outcome != UiPresentationOutcome::Presented;
+        presentedWorld.reset();
+        if (receipt.worldProjection && frame.worldHit)
+            presentedWorld.emplace(instance, receipt, std::move(*frame.worldHit));
         frame.extractedFrame.reset();
         frame.encodedPlane.reset();
         return Result<void>::Success();

@@ -43,6 +43,8 @@ namespace Horo::Application::Internal {
             std::uint32_t firstCommand{};
             std::uint32_t mask{NoUiRenderIndex};
             std::uint32_t group{NoUiRenderIndex};
+            bool visibleForInput{};
+            bool enabledForInput{};
         };
     }  // namespace PaintProjectionDetail
 
@@ -63,6 +65,9 @@ namespace Horo::Application::Internal {
         std::vector<Runtime::Ui::UiMask> masks;
         std::vector<Runtime::Ui::UiOpacityGroup> groups;
         std::vector<Runtime::Ui::UiLogicalTransform> transforms;
+        std::optional<Runtime::Ui::UiHitTestStore> hitStore;
+        std::vector<Runtime::Ui::UiHitTestElement> hitElements;
+        std::vector<Runtime::Ui::UiLogicalRect> hitClips;
         std::uint64_t revision{};
 
         explicit Storage(Runtime::Ui::UiReloadLease pin, RuntimeUiPaintDeclaration input, Runtime::Ui::UiRenderExtractor render,
@@ -70,6 +75,7 @@ namespace Horo::Application::Internal {
             : source(std::move(pin)), declaration(std::move(input)), extractor(std::move(render)), descriptor(policy) {}
 
         [[nodiscard]] Result<void> AdmitRows();
+        [[nodiscard]] Result<void> PrepareWorldHitStore();
         [[nodiscard]] Result<void> Build(const PaintProjectionDetail::Presentation &frame);
         [[nodiscard]] Result<void> PaintRow(std::size_t index, const PaintProjectionDetail::Presentation &frame);
         [[nodiscard]] Result<void> BeginScopes(std::size_t index, const Runtime::Ui::UiDrawCommand &paint);

@@ -5,6 +5,7 @@
  */
 #include "Horo/Runtime/Ui/RuntimeUiService.h"
 #include "Horo/Runtime/Ui/UiElementCatalog.h"
+#include "Horo/Runtime/Ui/UiHitTesting.h"
 #include "Horo/Runtime/Ui/UiTheme.h"
 
 namespace Horo::Runtime {
@@ -96,10 +97,12 @@ namespace Horo::Application::Internal {
         RuntimeUiPaintProjection &operator=(const RuntimeUiPaintProjection &) = delete;
         /** @brief Extracts the current derived publication using the exact admitted source; never advances animation clocks.
          * @param service Same actual canonical publisher. @param frame Actual animation publication.
+         * @param worldHit Optional output for the World canvas hit snapshot paired with the returned render snapshot.
          * @return Immutable extracted frame or original stale/capacity/projection failure; no partial snapshot is issued.
          */
         [[nodiscard]] Result<Runtime::Ui::UiRenderSnapshot> Extract(const Runtime::Ui::RuntimeUiService &service,
-                                                                    const Runtime::Ui::UiAnimationFrameLease &frame);
+                                                                    const Runtime::Ui::UiAnimationFrameLease &frame,
+                                                                    std::optional<Runtime::Ui::UiHitTestSnapshot> *worldHit = nullptr);
 
     private:
         std::unique_ptr<Storage> storage_;

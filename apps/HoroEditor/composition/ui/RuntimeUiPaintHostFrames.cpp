@@ -108,6 +108,7 @@ namespace Horo::Application::Internal::Detail {
         frame.prepared.reset();
         frame.geometry.reset();
         frame.snapshot.reset();
+        frame.worldHit.reset();
         frame.animation = {};
         frame.encoded.reset();
         frame.encodedPlane.reset();
@@ -124,7 +125,7 @@ namespace Horo::Application::Internal::Detail {
         if (current.HasError())
             return Result<void>::Failure(current.ErrorValue());
         frame.animation = std::move(current).Value();
-        auto extracted = projection->Extract(service, frame.animation);
+        auto extracted = projection->Extract(service, frame.animation, worldCanvas ? &frame.worldHit : nullptr);
         if (extracted.HasError()) {
             auto error = extracted.ErrorValue();
             error.message = "Runtime UI source extraction: " + error.message;
@@ -166,6 +167,7 @@ namespace Horo::Application::Internal::Detail {
         retiring = true;
         animation->Shutdown();
         ReleaseFrame();
+        presentedWorld.reset();
         snapshotViews = {};
         projection.reset();
         if (programs.active) {

@@ -660,7 +660,7 @@ namespace Horo::Tests::VulkanEditor {
         bool verifyInitialAdmission = true;
         bool headsetProjected = true;
         Check(runtime->AddParticipant(std::make_unique<AuthoredCanvasRenderer>([&](const std::uint64_t number) {
-            std::optional<UiPresentationReceipt> headsetReceipt;
+            std::optional<RuntimeUiPaintHeadsetCanvasReceipt> headsetReceipt;
             RuntimeUiInstanceId headsetInstance;
             const auto pass = host.ViewportPass(scene);
             host.PrepareScene(scene);
@@ -713,9 +713,26 @@ namespace Horo::Tests::VulkanEditor {
             }
             Check(port.Presented(number, true));
             if (headsetReceipt) {
-                if (verifyInitialAdmission)
+                if (verifyInitialAdmission) {
                     CHECK_FALSE(port.InputEligible(view));
+                    CHECK_FALSE(UiRequire(port.ReadPresentedWorldCanvas(sceneId)));
+                }
                 Check(port.HeadsetCanvasPresented(headsetInstance, *headsetReceipt, headsetProjected));
+                const auto hit = UiRequire(port.ReadPresentedWorldCanvas(sceneId));
+                CHECK(hit.has_value() == headsetProjected);
+                if (hit) {
+                    CHECK(hit->instance == headsetInstance);
+                    CHECK(hit->presentation.view == view);
+                    CHECK(hit->hit.Descriptor().renderMode == UiRenderMode::WorldSpace);
+                    auto presented = UiRequire(UiPresentedInteractionState::Create(view, hit->presentation.canvas));
+                    Check(presented.Apply(hit->presentation));
+                    const auto &placed = *hit->presentation.worldProjection;
+                    const auto center = placed.origin + placed.horizontalExtent * 0.5F + placed.verticalExtent * 0.5F;
+                    const Math::Ray ray{center + Math::Vec3{0, 0, 1}, {0, 0, -1}, 0, 2};
+                    const auto targeted = UiRequire(hit->hit.HitTestWorld({view, hit->presentation.canvas, ray}, presented));
+                    REQUIRE(targeted);
+                    CHECK(targeted->logicalPosition.x == hit->hit.Descriptor().logicalExtent.width / 2);
+                }
             }
         })));
         Check(runtime->Startup());
@@ -744,10 +761,12 @@ namespace Horo::Tests::VulkanEditor {
 
         if (mode == UiRenderMode::WorldSpace) {
             const auto retired = view;
+            const auto retiredScene = sceneId;
             project.Publish(2, -1);
             sceneId = project.scenes.ActiveScene()->RuntimeId();
             scene.lightSceneDomain = sceneId.value;
             CHECK_FALSE(port.InputEligible(retired));
+            CHECK_FALSE(UiRequire(port.ReadPresentedWorldCanvas(retiredScene)));
             clock.Advance(Duration::FromMilliseconds(16));
             Check(runtime->RunFrame());
             CHECK(view != retired);
@@ -762,6 +781,7 @@ namespace Horo::Tests::VulkanEditor {
         clock.Advance(Duration::FromMilliseconds(16));
         Check(runtime->RunFrame());
         CHECK_FALSE(port.InputEligible(view));
+        CHECK_FALSE(UiRequire(port.ReadPresentedWorldCanvas(sceneId)));
         project.scenes.Shutdown();
         runtime->Shutdown();
         host.viewport->ReleaseViewportCanvas();

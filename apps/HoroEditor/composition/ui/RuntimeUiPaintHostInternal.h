@@ -13,6 +13,7 @@ namespace Horo::Application::Internal::Detail {
     struct RuntimeUiPaintFrame final {
         Runtime::Ui::UiAnimationFrameLease animation;
         std::optional<Runtime::Ui::UiRenderSnapshot> snapshot;
+        std::optional<Runtime::Ui::UiHitTestSnapshot> worldHit;
         std::optional<Runtime::Ui::UiRenderGeometryPlan> geometry;
         std::optional<Render::UiPaintPreparedFrame> prepared;
         std::array<Render::UiRenderImageBinding, Render::MaximumUiSubmissionImages> images;
@@ -79,6 +80,7 @@ namespace Horo::Application::Internal::Detail {
         RuntimeUiPaintOutput output;
         std::optional<Runtime::SceneRuntimeId> scene;
         std::optional<RuntimeUiPaintWorldCanvas> worldCanvas;
+        std::optional<RuntimeUiPaintPresentedWorldCanvas> presentedWorld;
         bool sceneCanvas{};
         bool retiring{};
         bool started{};

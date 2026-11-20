@@ -408,6 +408,9 @@ without changing layout. Unpresented output revokes the retained placement.
 World ray callers now pass only a view, canvas and ray in `UiWorldRayQuery`.
 Hosts must supply the actual rendered plane in `UiPresentationReceipt`.
 The input debugger follows the same targeting path.
+The scene UI host retains the hit geometry alongside the extracted World
+snapshot. Native presentation admits that exact pair. A headset submission
+retains both until its own completion, including when the mirror presents first.
 The shared pointer recognizer accepts bounded world rays for capture and
 gestures. A ray that crosses the plane outside the canvas can still move a
 captured contact. A tracking-loss cancellation can release it without geometry.

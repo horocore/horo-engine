@@ -1,6 +1,8 @@
 #include "Horo/Runtime/Ui/UiStyleAsset.h"
 #include "RuntimeUiPaintProjectionInternal.h"
 
+#include <algorithm>
+
 namespace Horo::Application::Internal {
     using namespace Runtime::Ui;
     using PaintProjectionDetail::Row;
@@ -31,6 +33,19 @@ namespace Horo::Application::Internal {
             properties.height = {};
             properties.padding = {};
             return ProjectUiThemeSurface(frame.Styles(), input, properties);
+        }
+
+        /** @brief Intersects two validated clip rectangles using wide endpoint arithmetic. */
+        UiLogicalRect IntersectHitClips(const UiLogicalRect &first, const UiLogicalRect &second) noexcept {
+            const auto left = std::max(first.origin.x, second.origin.x);
+            const auto top = std::max(first.origin.y, second.origin.y);
+            const auto right =
+                std::min(std::int64_t{first.origin.x} + first.extent.width, std::int64_t{second.origin.x} + second.extent.width);
+            const auto bottom =
+                std::min(std::int64_t{first.origin.y} + first.extent.height, std::int64_t{second.origin.y} + second.extent.height);
+            return {{left, top},
+                    {static_cast<std::int32_t>(std::max<std::int64_t>(0, right - left)),
+                     static_cast<std::int32_t>(std::max<std::int64_t>(0, bottom - top))}};
         }
     }  // namespace
 
@@ -70,6 +85,7 @@ namespace Horo::Application::Internal {
         paint.rect = layout.Value().arrangement.borderBox;
         paint.transform = static_cast<std::uint32_t>(index);
         UiLogicalTransform transform;
+        bool scrollable = false;
         if (const auto *clipping = frame.Clipping()) {
             const auto clip = clipping->Get(row.element);
             if (clip.HasError())
@@ -77,6 +93,7 @@ namespace Horo::Application::Internal {
             transform.values[4] = static_cast<float>(clip.Value().scrollTranslation.x);
             transform.values[5] = static_cast<float>(clip.Value().scrollTranslation.y);
             paint.clip = clip.Value().clip;
+            scrollable = clip.Value().scroll != NoUiLayoutScroll;
         }
         transforms.push_back(transform);
         row.firstCommand = static_cast<std::uint32_t>(commands.size());
@@ -85,9 +102,23 @@ namespace Horo::Application::Internal {
         paint.mask = row.mask;
         paint.group = row.group;
         const bool visible = paint.opacity > 0.0F;
+        const bool structural = UiElementCatalog::Find(row.source->type.Value())->surface;
+        if (hitStore) {
+            const auto *parent = row.parent == NoUiRenderIndex ? nullptr : &rows[row.parent];
+            row.visibleForInput = visible && (!parent || parent->visibleForInput);
+            row.enabledForInput =
+                !surface.state.Contains(UiVisualStateMask{UiVisualState::Disabled}) && (!parent || parent->enabledForInput);
+            const bool clipped = paint.clip != NoUiRenderIndex;
+            hitElements.push_back({.element = row.element,
+                                   .transform = transform,
+                                   .clip = clipped ? hitClips[paint.clip] : UiLogicalRect{},
+                                   .hasClip = clipped,
+                                   .visible = row.visibleForInput,
+                                   .enabled = row.enabledForInput && (structural || row.stateIndicators || scrollable)});
+        }
         if (row.isolate)
             paint.opacity = 1.0F;
-        if (const auto *kind = UiElementCatalog::Find(row.source->type.Value()); kind->surface)
+        if (structural)
             commands.push_back(paint);
         if (row.component != NoUiRenderIndex) {
             paint.payload = declaration.components[row.component].payload;
@@ -123,6 +154,8 @@ namespace Horo::Application::Internal {
         masks.clear();
         groups.clear();
         transforms.clear();
+        hitElements.clear();
+        hitClips.clear();
         if (const auto *clipping = frame.Clipping()) {
             const auto &layoutSource = frame.Layout().Descriptor();
             if (const auto &derived = clipping->Descriptor();
@@ -130,8 +163,11 @@ namespace Horo::Application::Internal {
                 layoutSource.sources != derived.sources || layoutSource.interaction != derived.interaction ||
                 clipping->Clips().size() > descriptor.limits.clips)
                 return Result<void>::Failure(MakeError(UiErrors::RevisionStale));
-            for (const auto &clip : clipping->Clips())
+            for (const auto &clip : clipping->Clips()) {
                 clips.push_back({clip.rect, clip.parent});
+                if (hitStore)
+                    hitClips.push_back(clip.parent == NoUiLayoutClip ? clip.rect : IntersectHitClips(clip.rect, hitClips[clip.parent]));
+            }
         }
         for (std::size_t index = 0; index < rows.size(); ++index) {
             const auto painted = PaintRow(index, frame);
