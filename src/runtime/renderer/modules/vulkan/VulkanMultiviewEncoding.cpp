@@ -57,8 +57,10 @@ namespace Horo::Render::Detail {
         const auto &rectangle = target.rectangle;
         const VkRect2D area{{static_cast<std::int32_t>(rectangle.x), static_cast<std::int32_t>(rectangle.y)},
                             {rectangle.width, rectangle.height}};
+        const auto &clear = target.clearRectangle;
         const VkRenderingInfo rendering{.sType = VK_STRUCTURE_TYPE_RENDERING_INFO,
-                                        .renderArea = area,
+                                        .renderArea = {{static_cast<std::int32_t>(clear.x), static_cast<std::int32_t>(clear.y)},
+                                                       {clear.width, clear.height}},
                                         .layerCount = array ? target.colorDescriptor.layerCount : 1U,
                                         .colorAttachmentCount = 1,
                                         .pColorAttachments = &color,

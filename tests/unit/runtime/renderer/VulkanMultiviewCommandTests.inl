@@ -212,10 +212,11 @@ TEST_CASE("Vulkan material raster preserves prepared stereo layers through singl
         ClearColor,
         ClearDepth,
         ForeignView,
-        PartialScene
+        PartialScene,
+        PartialSceneWithLayerClear
     };
     const auto mode = GENERATE(OverlayMode::LoadBoth, OverlayMode::ClearColor, OverlayMode::ClearDepth, OverlayMode::ForeignView,
-                               OverlayMode::PartialScene);
+                               OverlayMode::PartialScene, OverlayMode::PartialSceneWithLayerClear);
     NativeGraphFixture fixture(false);
     MultiviewPacket packet(fixture, false, true);
     auto builder = SubmissionTest::Take(RenderGraphBuilder::Create());
@@ -243,8 +244,11 @@ TEST_CASE("Vulkan material raster preserves prepared stereo layers through singl
     }
     for (auto &entry : packet.resources)
         entry.resource.owner = builder.Owner();
-    if (mode == OverlayMode::PartialScene)
+    const bool layerClear = mode == OverlayMode::PartialSceneWithLayerClear;
+    if (mode == OverlayMode::PartialScene || layerClear)
         --packet.targets.back().rectangle.width;
+    if (layerClear)
+        stereo.clearArea = MultiviewClearArea::AttachmentLayer;
     const auto &eye = packet.targets.back();
     const bool clearColor = mode == OverlayMode::ClearColor;
     const bool clearDepth = mode == OverlayMode::ClearDepth;
@@ -287,7 +291,7 @@ TEST_CASE("Vulkan material raster preserves prepared stereo layers through singl
     const auto executed = fixture.graph.ExecuteGraph(
         {{1}, compiled, workloads, packet.resources, &fixture.lease, false, &transfer, submissions, packet.meshes, packet.views});
     INFO((executed.HasError() ? executed.ErrorValue().message : "stereo overlay recorded"));
-    if (mode != OverlayMode::LoadBoth) {
+    if (mode != OverlayMode::LoadBoth && !layerClear) {
         REQUIRE(executed.HasError());
         const auto &expected =
             mode == OverlayMode::PartialScene ? VulkanBackendErrors::ResourceRequestInvalid : VulkanBackendErrors::ResourceIdentityInvalid;
@@ -299,6 +303,11 @@ TEST_CASE("Vulkan material raster preserves prepared stereo layers through singl
     REQUIRE(executed.HasValue());
     const auto &calls = fixture.encoded.renderingCalls;
     REQUIRE(calls.size() == 3);
+    CHECK(calls[1].extent.width == 8);
+    REQUIRE(fixture.encoded.scissors.size() == 3);
+    CHECK(fixture.encoded.scissors[1].extent.width == packet.targets.back().rectangle.width);
+    REQUIRE(fixture.encoded.viewports.size() == 3);
+    CHECK(fixture.encoded.viewports[1].width == static_cast<float>(packet.targets.back().rectangle.width));
     CHECK(calls.back().colorView == calls[1].colorView);
     CHECK(calls.back().colorLoad == VK_ATTACHMENT_LOAD_OP_LOAD);
     CHECK(calls.back().colorStore == VK_ATTACHMENT_STORE_OP_STORE);

@@ -904,6 +904,9 @@ views, remain within their near/far depth range, and meet the selected minimum
 projected span in pixels in both eyes. This admission keeps the authored
 plane unchanged for interaction. Opaque scene depth and presentation completion
 remain the consuming renderer and application's responsibilities.
+The Vulkan Play projection initializes each acquired color layer and its matching
+depth layer before a later pass can load them. Per-eye viewport and scissor
+continue to follow the acquired rectangles, including asymmetric eye sizes.
 
 Locomotion produces tick-assigned gameplay intent. Continuous/snap movement and teleport
 reach Character through typed commands; moving the camera or recentering tracking space

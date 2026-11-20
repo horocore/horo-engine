@@ -1,6 +1,7 @@
 #include "Horo/Runtime/Render/MaterialBinding.h"
 #include "Horo/Runtime/Render/MultiviewExtractionErrors.h"
 #include "Horo/Runtime/Render/MultiviewShaderParameters.h"
+#include "RenderMultiviewAttachmentContents.h"
 #include "VulkanMultiviewRuntime.h"
 #include "VulkanRenderBackendErrors.h"
 #include "VulkanShaderRuntime.h"
@@ -80,6 +81,7 @@ namespace Horo::Render::Detail {
             target.colorImage = color->image;
             target.colorDescriptor = color->textureDescriptor;
             target.rectangle = input.rectangle;
+            target.clearRectangle = MultiviewClearRectangle(workload.clearArea, input.rectangle, target.colorDescriptor.extent);
             target.layer = input.arrayLayer;
             if (input.depth.IsValid()) {
                 const auto *depth = Resource(request, resources, input.depth);

@@ -1536,6 +1536,7 @@ namespace Horo::Editor {
         const RenderGraphQueueSubmission submission{reserved.Value(), {0, bound->Passes().size()}};
         RenderGraphMultiview projection{storage.scene, storage.scene->Publication(), storage.targets,
                                         std::span{storage.draws}.first(storage.drawCount)};
+        projection.clearArea = MultiviewClearArea::AttachmentLayer;
         // The immutable packaged XR program writes alpha one for covered pixels. With blending disabled,
         // clearing uncovered pixels to zero RGBA gives the compositor a premultiplied image.
         if (storage.alpha.IsPremultiplied())

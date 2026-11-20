@@ -5,6 +5,13 @@
 #include "Horo/Runtime/Render/MultiviewGraphWorkload.h"
 
 namespace Horo::Render::Detail {
+    /** @brief Resolves the actual clear/store area independently of viewport and scissor. */
+    [[nodiscard]] inline MultiviewRenderRectangle MultiviewClearRectangle(const MultiviewClearArea area,
+                                                                          const MultiviewRenderRectangle view,
+                                                                          const FramebufferExtent extent) noexcept {
+        return area == MultiviewClearArea::AttachmentLayer ? MultiviewRenderRectangle{0, 0, extent.width, extent.height} : view;
+    }
+
     /** @brief Chooses the existing independent color or depth resource/layer mapping. */
     enum class MultiviewAttachmentAspect {
         Color,
@@ -35,7 +42,7 @@ namespace Horo::Render::Detail {
             for (const auto &target : workload.targets) {
                 const auto attachment = aspect == MultiviewAttachmentAspect::Color ? target.color : target.depth;
                 const auto targetLayer = aspect == MultiviewAttachmentAspect::Color ? target.arrayLayer : target.depthArrayLayer;
-                const auto &rectangle = target.rectangle;
+                const auto rectangle = MultiviewClearRectangle(workload.clearArea, target.rectangle, descriptor.extent);
                 if (attachment == resource && targetLayer == layer && rectangle.x == 0 && rectangle.y == 0 &&
                     rectangle.width == descriptor.extent.width && rectangle.height == descriptor.extent.height) {
                     covered = true;

@@ -67,6 +67,12 @@ namespace Horo::Render {
         Count
     };
 
+    /** @brief Selects the area cleared and stored for each admitted attachment layer. Geometry stays clipped to the active view. */
+    enum class MultiviewClearArea : std::uint8_t {
+        ViewRectangle,  /**< Touch only the active rectangle. */
+        AttachmentLayer /**< Initialize the whole layer for subsequent attachment loads. */
+    };
+
     /** @brief One atomic bounded whole-frame scene workload; all admission precedes encoding any view.
      * @details All spans are borrowed only for synchronous graph admission. The canonical frontend completion lease
      * retains the exact meshes/materials; native command retention uses HORO-326's existing ownership and timelines.
@@ -85,6 +91,7 @@ namespace Horo::Render {
         float depthClear{1.0F};
         MultiviewNativeWorkLimits limits;
         MultiviewOutput output{MultiviewOutput::ProjectionColor};
+        MultiviewClearArea clearArea{MultiviewClearArea::ViewRectangle};
     };
 
     /** @brief Exact frontend-resolved resident mesh generation, additional to the graph's typed buffer bindings. */

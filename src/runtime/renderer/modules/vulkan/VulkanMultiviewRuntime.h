@@ -41,6 +41,7 @@ namespace Horo::Render::Detail {
             RenderTextureDescriptor colorDescriptor;
             RenderTextureDescriptor depthDescriptor;
             MultiviewRenderRectangle rectangle;
+            MultiviewRenderRectangle clearRectangle;
             std::uint32_t layer{};
             std::uint32_t depthLayer{};
         };

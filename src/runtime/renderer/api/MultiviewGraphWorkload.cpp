@@ -186,6 +186,8 @@ namespace Horo::Render {
               workload.clearColor.red != 0.0F || workload.clearColor.green != 0.0F || workload.clearColor.blue != 0.0F ||
               workload.clearColor.alpha != 0.0F)))
             return Invalid();
+        if (workload.clearArea > MultiviewClearArea::AttachmentLayer)
+            return Invalid();
         if (workload.output == MultiviewOutput::ReprojectionCoverage &&
             (workload.targets.size() != MultiviewShaderParameterIds::PreviousEyeDepthBindings.size() || workload.geometry.empty()))
             return Invalid();
