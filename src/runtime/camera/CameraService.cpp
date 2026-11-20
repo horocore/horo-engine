@@ -41,6 +41,23 @@ namespace Horo::Runtime {
                 return previous.has_value() == next.has_value();
             return previous->sourceCamera == next->sourceCamera && previous->admissionGeneration == next->admissionGeneration;
         }
+
+        /** @brief Moves the camera and look target together, rejecting a non-representable view before publication. */
+        bool TranslateView(Render::RenderCameraView &view, const Math::Vec3 offset) {
+            view.position = view.position + offset;
+            view.target = view.target + offset;
+            return view.IsValid() && Math::TryLookAt(view.position, view.target, view.up).HasValue();
+        }
+
+        /** @brief Projects one finite cosmetic sample into unpublished copied views. */
+        bool ApplyShake(const CameraShakeSample shake, CameraProposal &destination, std::optional<CameraCrossFadeView> &crossFade) {
+            if (!Math::IsFinite(shake.worldOffset) || !std::isfinite(shake.amplitudeScale) || shake.amplitudeScale < 0.0F ||
+                shake.amplitudeScale > 1.0F)
+                return false;
+            const auto offset = shake.worldOffset * shake.amplitudeScale;
+            return offset == Math::Vec3{} ||
+                   (TranslateView(destination.values, offset) && (!crossFade || TranslateView(crossFade->source, offset)));
+        }
     }  // namespace
 
     /** @copydoc CameraService::Create */
@@ -291,6 +308,13 @@ namespace Horo::Runtime {
     /** @copydoc CameraService::Commit */
     Result<CameraSelectionSnapshot> CameraService::Commit(const std::uint64_t renderedFrame, const RuntimeSceneView scene,
                                                           const std::optional<CameraProposal> &base) {
+        return CommitWithShake(renderedFrame, scene, base, {});
+    }
+
+    /** @copydoc CameraService::CommitWithShake */
+    Result<CameraSelectionSnapshot> CameraService::CommitWithShake(const std::uint64_t renderedFrame, const RuntimeSceneView scene,
+                                                                   const std::optional<CameraProposal> &base,
+                                                                   const CameraShakeSample shake) {
         if (const auto valid = ValidateSceneFrame(renderedFrame, scene); valid.HasError())
             return Result<CameraSelectionSnapshot>::Failure(valid.ErrorValue());
         const auto sceneRevision = scene.StructuralRevision();
@@ -300,15 +324,17 @@ namespace Horo::Runtime {
         if (!winner && !EligibleBase(base))
             return Result<CameraSelectionSnapshot>::Failure(MakeError(CameraErrors::CameraUnavailable));
         const auto claim = winner ? std::optional{winner->request->claim} : std::nullopt;
-        const auto &selected = winner ? winner->proposal->selected : *base;
+        auto selected = winner ? winner->proposal->selected : *base;
         if (selected.sceneRevision != sceneRevision)
             return Result<CameraSelectionSnapshot>::Failure(MakeError(CameraErrors::StaleFrame));
-        const auto crossFade = winner ? winner->proposal->crossFade : std::nullopt;
+        auto crossFade = winner ? winner->proposal->crossFade : std::nullopt;
         if (winner && winner->proposal->staleCrossFade)
             return Result<CameraSelectionSnapshot>::Failure(MakeError(CameraErrors::StaleFrame));
         const bool changed = ChangesSelection(selected, claim, crossFade);
         if (!CanAdvanceEpoch(changed))
             return Result<CameraSelectionSnapshot>::Failure(MakeError(CameraErrors::InvalidFrame));
+        if (!ApplyShake(shake, selected, crossFade))
+            return Result<CameraSelectionSnapshot>::Failure(MakeError(CameraErrors::InvalidTarget, "Camera shake cannot be represented."));
         const auto epoch = committed_ ? committed_->selectionEpoch + static_cast<std::uint64_t>(changed) : 1;
         committed_.emplace(context_, renderedFrame, epoch, selected, claim, changed, crossFade);
         return Result<CameraSelectionSnapshot>::Success(*committed_);

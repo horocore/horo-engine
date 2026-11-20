@@ -1805,34 +1805,44 @@ namespace Horo::Editor {
             bool healthy{false}; /**< Set only after runtime startup and a normal, completed main-loop closure. */
         };
 
+        /** @brief Independent presentation values from one visual accessibility revision. */
+        struct EditorVisualPreferences final {
+            Runtime::Ui::UiVisualPresentationPolicy ui;
+            float cameraShakeScale;
+        };
+
         /** @brief Resolves the UI and effect preferences from one configuration revision. */
-        Result<Runtime::Ui::UiVisualPresentationPolicy> CaptureEditorVisualSettings(const ConfigurationSnapshot &config) {
-            using Outcome = Result<Runtime::Ui::UiVisualPresentationPolicy>;
+        Result<EditorVisualPreferences> CaptureEditorVisualSettings(const ConfigurationSnapshot &config) {
+            using Outcome = Result<EditorVisualPreferences>;
             const auto visual = Runtime::Ui::UiVisualAccessibilitySnapshot::Capture(config);
             if (visual.HasError())
                 return Outcome::Failure(visual.ErrorValue());
             const auto safety = Accessibility::VisualSafetySnapshot::Capture(config);
             if (safety.HasError())
                 return Outcome::Failure(safety.ErrorValue());
-            return Outcome::Success({config.Revision(), visual.Value().HighContrast(), safety.Value().ReduceMotion(),
-                                     visual.Value().ScaleFactor(), Runtime::Ui::DefaultUiAccessibleTargetDips,
-                                     safety.Value().SuppressFlash()});
+            return Outcome::Success(
+                {{config.Revision(), visual.Value().HighContrast(), safety.Value().ReduceMotion(), visual.Value().ScaleFactor(),
+                  Runtime::Ui::DefaultUiAccessibleTargetDips, safety.Value().SuppressFlash()},
+                 safety.Value().Scale(Accessibility::VisualEffectIntent::CameraShake)});
         }
 
-        /** @brief Projects one committed revision into Runtime UI and any attached Scene VFX owner. */
+        /** @brief Projects one committed revision into each attached presentation owner. */
         Result<void> RefreshRuntimeVisualAccessibility(const ConfigurationService &configuration,
                                                        const Application::Internal::RuntimeUiPaintPort &port,
-                                                       ConfigurationRevision &applied, Runtime::RuntimeSceneService *scene = nullptr) {
+                                                       ConfigurationRevision &applied, Runtime::RuntimeSceneService *scene = nullptr,
+                                                       EditorViewportSceneState *viewport = nullptr) {
             const auto config = configuration.Snapshot();
             if (config.Revision() == applied)
                 return Result<void>::Success();
             const auto visual = CaptureEditorVisualSettings(config);
             if (visual.HasError())
                 return Result<void>::Failure(visual.ErrorValue());
-            if (const auto update = port.UpdateVisualAccessibility(visual.Value()); update.HasError())
+            if (const auto update = port.UpdateVisualAccessibility(visual.Value().ui); update.HasError())
                 return update;
             if (scene)
-                scene->StageVfxFlashPolicy(visual.Value().suppressFlash ? Vfx::VfxFlashPolicy::Suppress : Vfx::VfxFlashPolicy::Present);
+                scene->StageVfxFlashPolicy(visual.Value().ui.suppressFlash ? Vfx::VfxFlashPolicy::Suppress : Vfx::VfxFlashPolicy::Present);
+            if (viewport)
+                viewport->SetCameraShakeScale(visual.Value().cameraShakeScale);
             applied = config.Revision();
             return Result<void>::Success();
         }
@@ -1861,7 +1871,7 @@ namespace Horo::Editor {
                 const auto visual = CaptureEditorVisualSettings(config);
                 if (visual.HasError())
                     return Result<void>::Failure(visual.ErrorValue());
-                const auto &preferences = visual.Value();
+                const auto &preferences = visual.Value().ui;
                 applied.scalePercent = ResolveEditorUiScalePercent(config);
                 Theme::ApplyVisualPreferences({preferences.highContrast, preferences.reduceMotion, preferences.suppressFlash});
                 applied.revision = config.Revision();
@@ -2187,7 +2197,7 @@ namespace Horo::Editor {
                 switch (phase) {
                     case Runtime::RuntimePhase::BeginFrame:
                         if (auto updated = RefreshRuntimeVisualAccessibility(p_->configuration, authorities_.ui, uiAccessibilityRevision_,
-                                                                             authorities_.scene);
+                                                                             authorities_.scene, viewportSceneState_);
                             updated.HasError())
                             return updated;
                         PollShaderReload();

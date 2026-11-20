@@ -268,6 +268,10 @@ struct VisualAccessibilitySettings {
   selected using the snapshot-backed `IColorAccessibilityQuery`.
 - Motion and flash suppression settings provide explicit hooks in camera and particle
   systems to clamp or skip strobe effects.
+- The Camera owner samples a cosmetic world-space translation at frame commit.
+  The host projects the scale from its committed visual-safety snapshot. Translation
+  affects only the copied render camera and look target, including both cross-fade
+  views, while preserving scene transforms, the chosen camera and the cut timeline.
 
 ---
 

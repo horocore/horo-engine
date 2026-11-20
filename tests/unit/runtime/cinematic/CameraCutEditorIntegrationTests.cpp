@@ -120,6 +120,29 @@ namespace Horo::Editor {
         CHECK(fixture.controller.ViewportScene().camera.position == after.position);
     }
 
+    TEST_CASE("Editor camera preview respects the host shake multiplier and restores the authoring view on stop",
+              "[unit][cinematic][camera][editor]") {
+        PreviewFixture fixture;
+        const auto authoring = fixture.controller.ViewportScene().camera;
+        fixture.Start();
+        REQUIRE(fixture.controller.SeekCameraCutPreview(3).HasValue());
+        const auto base = fixture.controller.ViewportScene().camera;
+        CHECK(fixture.controller.SetCameraCutPreviewShake({1, 2}, {8.0F, 0.0F, 0.0F}).HasError());
+        REQUIRE(fixture.controller.SetCameraCutPreviewShake({1, 1}, {4.0F, 0.0F, 0.0F}).HasValue());
+        fixture.controller.SetCameraShakeScale(0.5F);
+        CHECK(fixture.controller.ViewportScene().camera.position == base.position);
+        fixture.controller.SynchronizeRuntimeScenePreview();
+        CHECK(fixture.controller.ViewportScene().camera.position.x == base.position.x + 2.0F);
+        CHECK(fixture.controller.ViewportScene().camera.target.x == base.target.x + 2.0F);
+
+        fixture.controller.SetCameraShakeScale(0.0F);
+        fixture.controller.SynchronizeRuntimeScenePreview();
+        CHECK(fixture.controller.ViewportScene().camera.position == base.position);
+        fixture.controller.StopCameraCutPreview();
+        CHECK(fixture.controller.ViewportScene().camera.position == authoring.position);
+        CHECK(fixture.controller.SetCameraCutPreviewShake({1, 1}, {}).HasError());
+    }
+
     TEST_CASE("Editor preview honors host camera transition capabilities and authored fallback", "[unit][cinematic][camera][editor]") {
         PreviewFixture fixture;
         fixture.Start();

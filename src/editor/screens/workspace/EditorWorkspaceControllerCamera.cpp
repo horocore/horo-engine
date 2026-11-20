@@ -166,6 +166,21 @@ namespace Horo::Editor {
         SynchronizeRuntimeScenePreview();
     }
 
+    /** @copydoc EditorWorkspaceController::SetCameraCutPreviewShake */
+    Result<void> EditorWorkspaceController::SetCameraCutPreviewShake(Runtime::CameraViewContextId view, Math::Vec3 worldOffset) {
+        if (!m_cameraPreview || m_cameraPreview->camera.Context().view != view)
+            return Result<void>::Failure(MakeError(Runtime::CameraErrors::InvalidContext));
+        if (!Math::IsFinite(worldOffset))
+            return Result<void>::Failure(MakeError(Runtime::CameraErrors::InvalidTarget, "Camera shake must be finite."));
+        m_cameraPreview->shakeOffset = worldOffset;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorWorkspaceController::SetCameraShakeScale */
+    void EditorWorkspaceController::SetCameraShakeScale(float scale) noexcept {
+        m_cameraShakeScale = scale;
+    }
+
     /** @copydoc EditorWorkspaceController::ResolveCameraCutPreview */
     Result<EditorWorkspaceController::CameraPreviewFrame> EditorWorkspaceController::ResolveCameraCutPreview(
         const Runtime::RuntimeSceneView scene, const std::optional<EditorViewportCrossFadeCapacity> capacity) {
@@ -196,7 +211,8 @@ namespace Horo::Editor {
         if (m_cameraPreview->frame == std::numeric_limits<std::uint64_t>::max())
             return Result<CameraPreviewFrame>::Failure(MakeError(Runtime::CameraErrors::InvalidFrame));
         const auto selection =
-            m_cameraPreview->camera.Commit(++m_cameraPreview->frame, scene, AuthoringProposal(base, scene.StructuralRevision()));
+            m_cameraPreview->camera.CommitWithShake(++m_cameraPreview->frame, scene, AuthoringProposal(base, scene.StructuralRevision()),
+                                                    {m_cameraPreview->shakeOffset, m_cameraShakeScale});
         if (selection.HasError())
             return Result<CameraPreviewFrame>::Failure(selection.ErrorValue());
         CameraPreviewFrame frame{ViewportCamera(selection.Value().selected.values), std::nullopt};

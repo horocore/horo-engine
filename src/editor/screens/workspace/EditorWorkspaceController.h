@@ -241,6 +241,15 @@ namespace Horo::Editor {
         /** @brief Seeks without event traversal and immediately re-extracts the final camera.
          * @param position Exact authored timeline target. @return Success or typed seek/binding failure. */
         [[nodiscard]] Result<void> SeekCameraCutPreview(Cinematic::SequenceTime position);
+        /** @brief Copies an effect sample into the active preview for the next viewport extraction.
+         * @param view Exact current preview view. @param worldOffset Cosmetic world-space translation, or zero to clear.
+         * @return Success or a typed stale preview or nonfinite sample rejection.
+         */
+        [[nodiscard]] Result<void> SetCameraCutPreviewShake(Runtime::CameraViewContextId view, Math::Vec3 worldOffset);
+        /** @brief Copies the host's visual accessibility multiplier before preview extraction.
+         * @param scale Validated scale in [0, 1].
+         */
+        void SetCameraShakeScale(float scale) noexcept;
         /** @brief Releases preview authority at the owner boundary and restores the current authoring camera. */
         void StopCameraCutPreview();
 
@@ -894,11 +903,13 @@ namespace Horo::Editor {
             Runtime::CameraService camera;
             std::optional<Cinematic::CinematicCameraPlayback> playback;
             std::vector<Cinematic::SequenceFrameCameraCutRequest> crossings;
+            Math::Vec3 shakeOffset{};
             std::uint64_t frame{};
             CameraPreviewState(Cinematic::CinematicRuntimeService &&runtimeValue, Runtime::CameraService &&cameraValue);
         };
 
         std::unique_ptr<CameraPreviewState> m_cameraPreview;
+        float m_cameraShakeScale{1.0F};
         std::uint64_t m_viewportSceneRevision{};
         bool m_assetPlacementPreviewActive{false};
 

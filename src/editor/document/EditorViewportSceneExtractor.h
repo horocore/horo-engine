@@ -110,6 +110,16 @@ namespace Horo::Editor {
             return m_cameraCrossFadeCapacity;
         }
 
+        /** @brief Copies the visual accessibility scale for the workspace's next camera extraction. */
+        void SetCameraShakeScale(float scale) noexcept {
+            m_cameraShakeScale = scale;
+        }
+
+        /** @brief Returns the scale captured by the composition. */
+        [[nodiscard]] float CameraShakeScale() const noexcept {
+            return m_cameraShakeScale;
+        }
+
         /** @brief Carries the workspace camera publication failure to the next desktop extraction. */
         void SetCameraPreviewError(Error error) noexcept {
             m_cameraPreviewError = std::move(error);
@@ -145,6 +155,7 @@ namespace Horo::Editor {
         std::uint64_t m_meshResourceGeneration{};
         std::optional<EditorViewportCrossFadeCapacity> m_cameraCrossFadeCapacity;
         std::optional<Error> m_cameraPreviewError;
+        float m_cameraShakeScale{1.0F};
     };
 
     /** @brief Resolved object and parent world matrices used by editor manipulation tools. */

@@ -89,6 +89,12 @@ namespace Horo::Runtime {
         std::uint64_t admissionGeneration{}; /**< Frontend reservation generation to validate at extraction. */
     };
 
+    /** @brief A cosmetic view translation sampled by the host for one rendered frame. */
+    struct CameraShakeSample final {
+        Math::Vec3 worldOffset{};   /**< Unscaled world-space displacement supplied by the effect owner. */
+        float amplitudeScale{1.0F}; /**< Captured accessibility multiplier in [0, 1]. */
+    };
+
     /** @brief One owned decision shared unchanged by every pass of a rendered frame. */
     struct CameraSelectionSnapshot final {
         CameraViewContext context;
@@ -172,10 +178,19 @@ namespace Horo::Runtime {
          * @param renderedFrame Non-zero monotonically increasing extraction frame.
          * @param scene Current scene at the extraction safe point; no scene borrow is retained.
          * @param base Current gameplay or editor authoring proposal; never a saved pre-playback pointer.
-         * @return Immutable owned selection or typed suspended/stale/revision failure. A Scene change after this frame's
-         * first commit rejects re-extraction for that frame, preserving its immutable decision. */
+         * @return Immutable owned selection or typed lifecycle, context or frame failure. */
         [[nodiscard]] Result<CameraSelectionSnapshot> Commit(std::uint64_t renderedFrame, RuntimeSceneView scene,
                                                              const std::optional<CameraProposal> &base);
+        /** @brief Commits the same camera selection with one host-sampled cosmetic translation.
+         * @param renderedFrame Non-zero monotonically increasing extraction frame.
+         * @param scene Current scene at the extraction safe point; no scene borrow is retained.
+         * @param base Current gameplay or editor authoring proposal.
+         * @param shake Cosmetic sample and committed accessibility multiplier. A zero multiplier leaves the view unchanged.
+         * The translation affects the copied render views only, including both cross-fade views when present.
+         * @return Immutable owned selection or typed failure, including an unrepresentable shake. A Scene change after this frame's
+         * first commit rejects re-extraction for that frame, preserving its immutable decision. */
+        [[nodiscard]] Result<CameraSelectionSnapshot> CommitWithShake(std::uint64_t renderedFrame, RuntimeSceneView scene,
+                                                                      const std::optional<CameraProposal> &base, CameraShakeSample shake);
         /** @brief Closes admission and releases all overrides; already copied frames remain readable. */
         void Shutdown() noexcept;
 

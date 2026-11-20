@@ -186,6 +186,49 @@ namespace Horo::Cinematic {
         CHECK(destination.selectionEpoch > advanced.selectionEpoch);
     }
 
+    TEST_CASE("Camera shake translates both views at commit without changing scene poses or selection history",
+              "[unit][cinematic][camera][cross-fade]") {
+        Fixture fixture;
+        const auto scene = fixture.scene->View();
+        const auto context = fixture.camera.Context();
+        auto owner =
+            Take(CameraService::Create(context, CameraTransitionSupport::SingleViewBlend, CameraCrossFadeAdmission{context, 1, 2}));
+        const auto from = Take(ResolveSceneCamera(scene, *scene.Find({1})));
+        const auto to = Take(ResolveSceneCamera(scene, *scene.Find({2})));
+        const auto lease = Take(owner.Acquire({context, {1, 1}, 1}));
+        REQUIRE(owner.SubmitCrossFade(lease, from, to, 0.5F).HasValue());
+
+        const auto first = Take(owner.CommitWithShake(1, scene, std::nullopt, {{4.0F, 0.0F, 0.0F}, 0.25F}));
+        REQUIRE(first.crossFade);
+        CHECK(first.selected.values.position.x == to.values.position.x + 1.0F);
+        CHECK(first.selected.values.target.x == to.values.target.x + 1.0F);
+        CHECK(first.crossFade->source.position.x == from.values.position.x + 1.0F);
+        CHECK(first.crossFade->source.target.x == from.values.target.x + 1.0F);
+        CHECK(Take(owner.Commit(1, scene, std::nullopt)).selected.values.position == first.selected.values.position);
+
+        const auto muted = Take(owner.CommitWithShake(2, scene, std::nullopt, {{4.0F, 0.0F, 0.0F}, 0.0F}));
+        REQUIRE(muted.crossFade);
+        CHECK(muted.selected.values.position == to.values.position);
+        CHECK(muted.crossFade->source.position == from.values.position);
+        CHECK(muted.crossFade->destinationWeight == first.crossFade->destinationWeight);
+        CHECK(muted.selectionEpoch == first.selectionEpoch);
+        CHECK(Take(ResolveSceneCamera(scene, to.camera)).values.position == to.values.position);
+    }
+
+    TEST_CASE("Camera rejects invalid shake without consuming the requested frame", "[unit][cinematic][camera]") {
+        Fixture fixture;
+        const auto scene = fixture.scene->View();
+        const auto base = Take(ResolveSceneCamera(scene, *scene.Find({1})));
+        const auto unrepresentable = std::numeric_limits<float>::max();
+        const auto invalid = GENERATE(0, 1, 2);
+        const std::array samples{CameraShakeSample{{}, -1.0F}, CameraShakeSample{{}, std::numeric_limits<float>::quiet_NaN()},
+                                 CameraShakeSample{{0.0F, 0.0F, unrepresentable}, 1.0F}};
+        const auto rejected = fixture.camera.CommitWithShake(1, scene, base, samples[invalid]);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == CameraErrors::InvalidTarget.code.Value());
+        CHECK(Take(fixture.camera.Commit(1, scene, base)).selected.values.position == base.values.position);
+    }
+
     TEST_CASE("Authored smooth camera transitions degrade through linear blending and then hard cuts",
               "[unit][cinematic][camera][cross-fade]") {
         const auto availableViews = GENERATE(0, 1, 2);

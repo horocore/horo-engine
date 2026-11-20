@@ -169,6 +169,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             controller_->UpdateWorldBake();
             controller_->UpdateTerrainCook();
             controller_->UpdateContentBrowser();
+            controller_->SetCameraShakeScale(viewportSceneState_.CameraShakeScale());
             if (auto preview = controller_->SynchronizeRuntimeScenePreview(viewportSceneState_.CameraCrossFadeCapacity());
                 preview.HasError()) {
                 viewportSceneState_.SetCameraPreviewError(std::move(preview).ErrorValue());
