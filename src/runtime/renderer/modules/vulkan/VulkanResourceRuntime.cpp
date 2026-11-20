@@ -495,6 +495,11 @@ namespace Horo::Render::Detail {
             return Result<RenderMemoryCostPlan>::Failure(
                 ResourceError(VulkanBackendErrors::ResourceUnsupported, "Vulkan texture memory-cost query failed: format is unavailable; " +
                                                                             DescribeRenderTextureRequest(descriptor)));
+        // Vulkan may store depth and stencil separately, without the padding in the CPU texel representation.
+        constexpr std::uint64_t depthStencilContentBytes = 4U + 1U;
+        const std::uint64_t nativePayload = descriptor.format == RenderTextureFormat::Depth32FloatStencil8
+                                                ? (*payload / *RenderTextureTexelBytes(descriptor.format)) * depthStencilContentBytes
+                                                : *payload;
         const VkImageCreateInfo info = VulkanResourceConversion::ImageCreateInfo(descriptor);
         VkImage image{VK_NULL_HANDLE};
         if (impl_->dispatch.createImage(impl_->device, &info, nullptr, &image) != VK_SUCCESS)
@@ -503,15 +508,18 @@ namespace Horo::Render::Detail {
         VkMemoryRequirements requirements{};
         impl_->dispatch.getImageRequirements(impl_->device, image, &requirements);
         impl_->dispatch.destroyImage(impl_->device, image, nullptr);
-        if (!VulkanResourceConversion::RequirementsValid(requirements, *payload))
+        if (!VulkanResourceConversion::RequirementsValid(requirements, nativePayload))
             return Result<RenderMemoryCostPlan>::Failure(
-                ResourceError(VulkanBackendErrors::ResourceCreationFailed, "The Vulkan texture requirements are invalid."));
+                ResourceError(VulkanBackendErrors::ResourceCreationFailed,
+                              "Invalid Vulkan texture requirements for " + DescribeRenderTextureRequest(descriptor) + ", logical bytes " +
+                                  std::to_string(nativePayload) + ", required bytes " + std::to_string(requirements.size) + ", alignment " +
+                                  std::to_string(requirements.alignment)));
         const RenderMemoryCostPlan cost{.memoryClass = RenderMemoryClass::PersistentDevice,
                                         .allocationClass = RenderMemoryAllocationClass::Dedicated,
                                         .provenance = RenderMemoryCostProvenance::Exact,
                                         .compatibility = VulkanResourceConversion::Compatibility(requirements.memoryTypeBits,
                                                                                                  RenderMemoryClass::PersistentDevice),
-                                        .payloadBytes = *payload,
+                                        .payloadBytes = nativePayload,
                                         .requiredBytes = requirements.size,
                                         .alignment = requirements.alignment};
         return Result<RenderMemoryCostPlan>::Success(cost);
