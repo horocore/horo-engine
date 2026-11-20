@@ -518,6 +518,17 @@ admission and authorization. The effective tool set is derived from host role,
 project trust, user policy, context scope, capabilities, and operation approval.
 The model may request a tool; it never decides its own authority.
 
+The editor turn runtime receives a host-selected provider and an existing
+authenticated in-process MCP session. It waits on a host worker while the
+canonical MCP controller dispatches through its registered owners. Each turn
+admits one inference or tool operation at a time, bounds its history, rounds,
+stream events, tool calls, output-token allowance and deadline, and returns one
+terminal outcome. One editor runtime admits one active turn and rejects
+concurrent or reentrant work. Malformed or repeated tool intents are rejected before their
+round submits any tool. Tool execution keeps the controller's approval check,
+and termination of the turn cancels a still-pending exact operation. The
+runtime does not retry provider requests or publish partial conversation history.
+
 ## Internal IDE Communication
 
 The agent integration uses three distinct channels. They must not be collapsed

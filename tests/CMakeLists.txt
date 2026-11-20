@@ -338,6 +338,11 @@ add_test(NAME HoroModelProviderContractTests
             "$<TARGET_FILE:HoroModelProviderTests>" "$<TARGET_FILE_DIR:HoroModelProviderTests>")
 set_tests_properties(HoroModelProviderContractTests PROPERTIES LABELS "unit;agent;headless" TIMEOUT 60)
 
+add_executable(HoroEditorAgentTurnTests unit/editor/AgentTurnTests.cpp)
+target_include_directories(HoroEditorAgentTurnTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/unit/mcp")
+target_link_libraries(HoroEditorAgentTurnTests PRIVATE HoroMcpEditorAgentToolsInternal HoroEngine::McpController)
+horo_register_catch_test(HoroEditorAgentTurnTests LABELS "unit;agent;headless;ci-windows")
+
 add_executable(HoroPackageValidationTests
     unit/packages/GameplaySourceLibraryTests.cpp
     unit/packages/PackageInstallTests.cpp
