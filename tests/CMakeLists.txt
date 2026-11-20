@@ -397,6 +397,8 @@ if (HORO_ENABLE_IMGUI_UI_TESTS)
     )
     target_link_libraries(HoroEditorUiAutomationTests PRIVATE
             HoroEngine::Gui
+            HoroEngine::AISceneIntegration
+            HoroEngine::DecisionCookHost
             HoroUiInspectorInternal
             HoroEditorUiStyleHostInternal
             HoroEngine::PlatformProjectReadFiles
@@ -2479,7 +2481,8 @@ if(HORO_BUILD_EDITOR_GUI)
     target_compile_features(HoroTerrainWorkspaceTests PRIVATE cxx_std_20)
     target_include_directories(HoroTerrainWorkspaceTests PRIVATE ${PROJECT_SOURCE_DIR}/src ${PROJECT_SOURCE_DIR}/src/editor/screens/workspace
             ${CMAKE_CURRENT_SOURCE_DIR}/support)
-    target_link_libraries(HoroTerrainWorkspaceTests PRIVATE HoroEngine::Gui HoroEngine::TerrainAuthoring HoroEngine::Platform)
+    target_link_libraries(HoroTerrainWorkspaceTests PRIVATE HoroEngine::Gui HoroEngine::TerrainAuthoring HoroEngine::Platform
+        HoroEngine::AISceneIntegration HoroEngine::DecisionCookHost)
     target_compile_definitions(HoroTerrainWorkspaceTests PRIVATE PROJECT_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
     horo_register_catch_test(HoroTerrainWorkspaceTests LABELS "unit;editor;terrain;headless;gui")
 endif()
@@ -4076,6 +4079,8 @@ if (HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroInspectorEditSessionTests
             PRIVATE
             HoroEngine::Gui
+            HoroEngine::AISceneIntegration
+            HoroEngine::DecisionCookHost
     )
     add_executable(HoroGlobalDockPanelRenderTests
             unit/editor/GlobalDockBuildActiveRenderTests.cpp
@@ -4105,6 +4110,7 @@ if (HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroGlobalDockPanelRenderTests
             PRIVATE
             HoroEngine::AISceneIntegration
+            HoroEngine::DecisionCookHost
             HoroEngine::NetworkTransportNull
             HoroEngine::Gui
             HoroThirdParty::ImGui
@@ -4133,7 +4139,7 @@ if (HORO_BUILD_EDITOR_GUI)
     target_include_directories(HoroExtensionActivityViewTests PRIVATE
             ${PROJECT_SOURCE_DIR}/tests/support ${PROJECT_SOURCE_DIR}/tests)
     target_link_libraries(HoroExtensionActivityViewTests
-        PRIVATE HoroEngine::Gui HoroEngine::Extensions HoroEngine::AISceneIntegration HoroThirdParty::ImGui)
+        PRIVATE HoroEngine::Gui HoroEngine::Extensions HoroEngine::AISceneIntegration HoroEngine::DecisionCookHost HoroThirdParty::ImGui)
     add_executable(HoroEditorUiComponentsRenderTests
             unit/editor/EditorUiComponentsRenderTests.cpp
             support/AllocationProbe.cpp
