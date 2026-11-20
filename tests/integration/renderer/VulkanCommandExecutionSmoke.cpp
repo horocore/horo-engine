@@ -364,7 +364,9 @@ namespace {
 
 #include "VulkanReconstructionNativeSmoke.inl"
 #include "VulkanReconstructionSceneHistorySmoke.inl"
-#include "VulkanUiPaintNativeSmoke.inl"
 #include "VulkanVfxGpuNativeSmoke.inl"
 #include "VulkanVfxInstancedNativeSmoke.inl"
+
+// The paint cases reuse the VFX loader, resource owner and readback helpers above.
+#include "VulkanUiPaintNativeSmoke.inl"
 }  // namespace
