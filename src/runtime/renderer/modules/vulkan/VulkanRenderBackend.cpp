@@ -262,7 +262,7 @@ namespace Horo::Render {
             Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &update) override {
                 if (const auto access = CommandAccess(); access.HasError())
                     return access;
-                if (activeFrame_.IsValid())
+                if (update.frame != activeFrame_)
                     return Result<void>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
                 return commandPort_->UpdateUiPaintFrame(update);
             }

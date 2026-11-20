@@ -179,14 +179,19 @@ namespace Horo::Tests::RenderFrontendTesting {
         }
 
         Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &native) override {
+            auto &audit = lifecycleState.uiPaint;
+            if (audit.onUpload)
+                audit.onUpload();
+            if (native.frame != lifecycleState.activeFrame)
+                return Result<void>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
             if (native.update.cancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(UiPaintFrameErrors::Cancelled));
-            auto &audit = lifecycleState.uiPaint;
             if (audit.pending)
                 return Result<void>::Failure(MakeError(UiPaintFrameErrors::Pending));
             ++audit.updates;
             audit.revision = native.update.revision;
             audit.instances = native.instances;
+            audit.frame = native.frame;
             return Result<void>::Success();
         }
 

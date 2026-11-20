@@ -54,10 +54,12 @@ namespace Horo::Tests::RenderFrontendTesting {
         std::vector<UiPaintPassAudit> passes;
         std::size_t graphCalls{}, failGraphCall{};
         bool retainAfterAbort{};
-        std::function<void()> onGraph; /**< Test-only reentry probe; cleared before its borrowed frame leaves scope. */
+        std::function<void()> onUpload; /**< Synchronous test hook before committing the exact native frame update. */
+        std::function<void()> onGraph;  /**< Test-only reentry probe; cleared before its borrowed frame leaves scope. */
         std::function<void(const RenderGraphExecutionRequest &)> inspectGraph; /**< Synchronous observation of exact admitted graph. */
         std::uint64_t revision{};
         std::array<std::uint64_t, 3> instances{};
+        FrameToken frame;
     };
 
     /** @brief Ordered deterministic graph acceptance fault injection; no actual GPU commands or completion are claimed. */

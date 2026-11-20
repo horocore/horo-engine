@@ -468,7 +468,7 @@ namespace Horo::Render::Detail {
     Result<void> VulkanGraphRuntime::UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &update) {
         if (const auto access = impl_->Access(); access.HasError())
             return access;
-        if (impl_->lifecycle.frame.IsValid())
+        if (update.frame != impl_->lifecycle.frame || (update.frame.IsValid() && !CanWriteFrameInputs(update.frame)))
             return Result<void>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
         const UploadScope scope{impl_->lifecycle.uploading};
         for (const auto instance : update.instances) {
@@ -478,7 +478,7 @@ namespace Horo::Render::Detail {
             if (!retired.Value())
                 return Result<void>::Failure(MakeError(UiPaintFrameErrors::Pending));
         }
-        return impl_->resources->UpdateUiPaintFrame(update, impl_->lifecycle.closing);
+        return impl_->resources->UpdateUiPaintFrame(update, impl_->lifecycle.closing, impl_->lifecycle.frame);
     }
 
     /** @copydoc VulkanGraphRuntime::WasSubmissionAccepted */

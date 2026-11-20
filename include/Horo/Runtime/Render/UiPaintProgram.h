@@ -78,12 +78,14 @@ namespace Horo::Render {
     private:
         friend class UiPaintProgram;
 
-        UiPaintPreparedFrame(std::weak_ptr<const Detail::UiPaintProgramIdentity> identity, std::uint32_t slot, std::uint64_t revision)
-            : identity_(std::move(identity)), slot_(slot), revision_(revision) {}
+        UiPaintPreparedFrame(std::weak_ptr<const Detail::UiPaintProgramIdentity> identity, std::uint32_t slot, std::uint64_t revision,
+                             FrameToken frame = {})
+            : identity_(std::move(identity)), slot_(slot), revision_(revision), frame_(frame) {}
 
         std::weak_ptr<const Detail::UiPaintProgramIdentity> identity_;
         std::uint32_t slot_{};
         std::uint64_t revision_{};
+        FrameToken frame_{}; /**< When present, only this exact acquired scene frame may encode the preparation. */
     };
 
     /** @brief Exact accepted program/source pair in the one ordered UI composition phase; borrowed program and frame stay live. */
@@ -185,6 +187,15 @@ namespace Horo::Render {
          * @return Issued accepted frame or original typed error; failure preserves the prior slot publication. */
         [[nodiscard]] Result<UiPaintPreparedFrame> Prepare(std::uint32_t slot, const UiRenderSubmission &source,
                                                            const CancellationToken &cancellation = {});
+        /** @brief Publishes an already cold-prepared scene slot for the exact acquired renderer frame before recording.
+         * @param frame Current matching renderer scope with no recorded scene/parallel work.
+         * @param slot Slot selected by the actual viewport's native retention owner.
+         * @param source Current geometry and exact associated resource evidence.
+         * @param cancellation Source or frame cancellation observed before publication.
+         * @return Same-frame preparation or typed unavailable, stale, pending or cancelled failure. No resource creates or waits. */
+        [[nodiscard]] Result<UiPaintPreparedFrame> PrepareSceneFrame(RenderFrameScope &frame, std::uint32_t slot,
+                                                                     const UiRenderSubmission &source,
+                                                                     const CancellationToken &cancellation = {});
         /** @brief Resolves the dedicated canvas surface for an exact, current accepted slot.
          * @param prepared Preparation issued by this program and still current for its slot.
          * @return Borrowed linear premultiplied color target, or typed unsupported/currentness failure.
@@ -217,6 +228,9 @@ namespace Horo::Render {
         [[nodiscard]] Result<void> Shutdown();
 
     private:
+        /** @brief Builds and publishes one exact existing paint slot through its admitted update path. */
+        [[nodiscard]] Result<UiPaintPreparedFrame> PrepareInternal(std::uint32_t slot, const UiRenderSubmission &source,
+                                                                   const CancellationToken &cancellation, const RenderFrameScope *frame);
         /** @brief Prepares the shared paint graph and residents for the selected exact renderer destination. */
         [[nodiscard]] static Result<std::unique_ptr<UiPaintProgram>> CreateForTarget(
             RenderFrontend &frontend, const UiPaintProgramDescriptor &descriptor, const Runtime::Ui::UiRenderSnapshot &prototype,

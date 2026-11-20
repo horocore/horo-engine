@@ -1209,6 +1209,9 @@ namespace Horo::Render {
         RenderFrontendMemoryConfig memoryConfig_;
         friend class UiPaintFrameBufferPool;
         friend class UiPaintProgram;
+        /** @brief Shares exact resource binding for cold and active pre-record scene uploads. */
+        [[nodiscard]] Result<void> UpdateUiPaintFrameInternal(FrameToken frame, const UiPaintFrameBuffers &buffers,
+                                                              const UiPaintFrameUpdate &update);
         /** @brief Validate buffer creation at the existing owner boundary before any resource reservation. */
         [[nodiscard]] Result<void> AdmitUiPaintBufferRequest(const RenderBufferDescriptor &descriptor,
                                                              std::span<const std::byte> initialData,

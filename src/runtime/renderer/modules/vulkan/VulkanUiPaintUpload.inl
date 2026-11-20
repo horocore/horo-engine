@@ -1,7 +1,10 @@
 /** @copydoc VulkanResourceRuntime::UpdateUiPaintFrame */
-Result<void> VulkanResourceRuntime::UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &native, const bool &closing) {
+Result<void> VulkanResourceRuntime::UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &native, const bool &closing,
+                                                       const FrameToken &activeFrame) {
     if (closing || !impl_->device)
         return Result<void>::Failure(MakeError(UiPaintFrameErrors::Unavailable));
+    if (native.frame != activeFrame)
+        return Result<void>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
     if (const auto valid = ValidateUiPaintFrameUpdate(native.update); valid.HasError())
         return valid;
     const auto &update = native.update;
@@ -33,6 +36,8 @@ Result<void> VulkanResourceRuntime::UpdateUiPaintFrame(const NativeUiPaintFrameU
             return Result<void>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
     if (closing)
         return Result<void>::Failure(MakeError(UiPaintFrameErrors::Unavailable));
+    if (native.frame != activeFrame)
+        return Result<void>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
     if (update.cancellation.IsCancellationRequested())
         return Result<void>::Failure(MakeError(UiPaintFrameErrors::Cancelled));
 

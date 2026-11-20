@@ -123,6 +123,7 @@ namespace Horo::Render {
             std::vector<RenderGraphPassWorkload> workloads;
             std::vector<RenderGraphPassWorkload> sceneExecution; /**< Combined execution inventory reserved at preparation. */
             bool sceneExecuting{}; /**< Owner-lane fence protecting borrowed workload storage during recording. */
+            bool preparing{};      /**< Protects the inactive CPU candidate borrowed by a native upload. */
             std::array<UiPaintCpuFrame, 2> frames;
             std::uint32_t accepted{};
             std::uint64_t revision{};

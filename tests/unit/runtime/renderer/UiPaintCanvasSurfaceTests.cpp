@@ -3,6 +3,8 @@
 #include "UiPaintProgramTestSupport.h"
 
 #include <catch2/generators/catch_generators.hpp>
+#include <optional>
+#include <utility>
 
 namespace {
     using namespace Horo;
@@ -132,8 +134,9 @@ TEST_CASE("Scene graph consumes the exact prepared sampleable canvas in one fram
     REQUIRE(consumers[0].canvas != consumers[1].canvas);
     std::array<UiRenderImageBinding, 1> bindings;
     const auto stale = UiRequire(program->Prepare(0, fixture.Submission(*program, geometry, bindings)));
-    const auto prepared = UiRequire(program->Prepare(0, fixture.Submission(*program, geometry, bindings)));
-    CHECK(UiRequire(program->CanvasSurface(prepared)).color == consumers[0].canvas);
+    UiPaintPreparedFrame prepared;
+    if (!neutralRequired)
+        prepared = UiRequire(program->Prepare(0, fixture.Submission(*program, geometry, bindings)));
     const auto &consumer = consumers.front();
     constexpr std::array draws{UiPaintDraw{.indexCount = 3,
                                            .scissor = {0, 0, extent.width, extent.height},
@@ -150,6 +153,40 @@ TEST_CASE("Scene graph consumes the exact prepared sampleable canvas in one fram
                                                                                          .kernel = std::move(kernel),
                                                                                          .frameRevision = 1}}};
     auto frame = UiRequire(fixture.frontend->BeginFrame({.frameNumber = fixture.frameNumber++, .outputExtent = extent}));
+    if (neutralRequired) {
+        auto &upload = lifecycleState.uiPaint;
+        const auto before = upload.updates;
+        const auto revision = upload.revision;
+        CHECK(program->Prepare(0, fixture.Submission(*program, geometry, bindings)).HasError());
+        upload.onUpload = [&frame] {
+            frame.Cancel();
+        };
+        const auto cancelled = program->PrepareSceneFrame(frame, 0, fixture.Submission(*program, geometry, bindings));
+        upload.onUpload = {};
+        REQUIRE(cancelled.HasError());
+        CHECK(cancelled.ErrorValue().code.Value() == UiPaintFrameErrors::InvalidInput.code.Value());
+        CHECK(upload.updates == before);
+        CHECK(upload.revision == revision);
+        CHECK(UiRequire(program->CanvasSurface(stale)).color == consumers[0].canvas);
+
+        frame = UiRequire(fixture.frontend->BeginFrame({.frameNumber = fixture.frameNumber++, .outputExtent = extent}));
+        const auto token = frame.Token();
+        std::optional<RenderFrameScope> moved;
+        upload.onUpload = [&frame, &moved] {
+            moved.emplace(std::move(frame));
+        };
+        auto movedPreparation = program->PrepareSceneFrame(frame, 0, fixture.Submission(*program, geometry, bindings));
+        upload.onUpload = {};
+        REQUIRE(moved.has_value());
+        CHECK_FALSE(frame.Token().IsValid());
+        CHECK(moved->Token() == token);
+        prepared = UiRequire(std::move(movedPreparation));
+        CHECK(upload.updates == before + 1);
+        CHECK(upload.revision == revision + 1);
+        CHECK(upload.frame == token);
+        frame = std::move(*moved);
+    }
+    CHECK(UiRequire(program->CanvasSurface(prepared)).color == consumers[0].canvas);
     CHECK(program->Submit(frame, prepared, fixture.Submission(*program, geometry, bindings)).HasError());
     CHECK(program->ExecuteSceneCanvas(frame, stale, fixture.Submission(*program, geometry, bindings), workloads).HasError());
     auto foreign = workloads;
@@ -181,6 +218,9 @@ TEST_CASE("Scene graph consumes the exact prepared sampleable canvas in one fram
     REQUIRE(program->ExecuteSceneCanvas(frame, prepared, fixture.Submission(*program, geometry, bindings), workloads).HasValue());
     lifecycleState.uiPaint.inspectGraph = {};
     CHECK(program->ExecuteSceneCanvas(frame, prepared, fixture.Submission(*program, geometry, bindings), workloads).HasError());
+    const auto uploads = lifecycleState.uiPaint.updates;
+    CHECK(program->PrepareSceneFrame(frame, 0, fixture.Submission(*program, geometry, bindings)).HasError());
+    CHECK(lifecycleState.uiPaint.updates == uploads);
     CHECK(lifecycleState.executeCount == 1);
     if (explicitSubmissions) {
         REQUIRE(lifecycleState.reconstruction.recorded.size() == 1);
@@ -192,6 +232,13 @@ TEST_CASE("Scene graph consumes the exact prepared sampleable canvas in one fram
         CHECK(lifecycleState.graphResources.size() == program->Inventory().resources);
     REQUIRE(frame.Present().HasValue());
     CHECK(lifecycleState.presentCount == 1);
+    if (neutralRequired) {
+        auto later = UiRequire(fixture.frontend->BeginFrame({.frameNumber = fixture.frameNumber++, .outputExtent = extent}));
+        CHECK(UiRequire(program->CanvasSurface(prepared)).color == consumers[0].canvas);
+        CHECK(program->ExecuteSceneCanvas(later, prepared, fixture.Submission(*program, geometry, bindings), workloads).HasError());
+        CHECK(lifecycleState.executeCount == 1);
+        later.Cancel();
+    }
     REQUIRE(program->Shutdown().HasValue());
     CHECK(program->CanvasSurface(prepared).HasError());
 }

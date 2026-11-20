@@ -89,6 +89,14 @@ namespace Horo::Render {
                                                                 std::span<const std::uint32_t> indices,
                                                                 std::span<const UiPaintParameters> parameters,
                                                                 const CancellationToken &cancellation) {
+        return UpdateInternal(slot, vertices, indices, parameters, cancellation, {});
+    }
+
+    /** @copydoc UiPaintFrameBufferPool::UpdateInternal */
+    Result<UploadedUiPaintFrame> UiPaintFrameBufferPool::UpdateInternal(std::uint32_t slot, std::span<const UiPaintVertex> vertices,
+                                                                        std::span<const std::uint32_t> indices,
+                                                                        std::span<const UiPaintParameters> parameters,
+                                                                        const CancellationToken &cancellation, const FrameToken frame) {
         using Upload = Result<UploadedUiPaintFrame>;
         if (closed_ || std::this_thread::get_id() != owner_ || slot >= count_ || vertices.size() > budget_.vertices ||
             indices.size() > budget_.indices || parameters.size() > budget_.parameters ||
@@ -107,7 +115,7 @@ namespace Horo::Render {
             return Upload::Failure(std::move(*failure));
         const auto revision = revisions_[slot] + 1;
         const UiPaintFrameUpdate update{revision, vertices, indices, parameters, cancellation};
-        if (const auto uploaded = state->frontend->UpdateUiPaintFrame(slots_[slot], update); uploaded.HasError())
+        if (const auto uploaded = state->frontend->UpdateUiPaintFrameInternal(frame, slots_[slot], update); uploaded.HasError())
             return Upload::Failure(uploaded.ErrorValue());
         revisions_[slot] = revision;
         return Upload::Success({slots_[slot], revision});

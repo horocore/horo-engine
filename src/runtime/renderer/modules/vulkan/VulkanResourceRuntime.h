@@ -226,7 +226,8 @@ namespace Horo::Render::Detail {
          * @param closing Live device-owner closure fence, checked after native mapping.
          * @return Success or original validation/cancellation/mapping error without modifying candidate bytes.
          * @pre Actual Vulkan command owner proved all three earlier submissions retired; facility runs outside a frame. */
-        [[nodiscard]] Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &update, const bool &closing);
+        [[nodiscard]] Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &update, const bool &closing,
+                                                      const FrameToken &activeFrame);
         /** @brief Borrows one native member and its full family publication for exact frame validation.
          * @param instance Exact live native buffer identifier.
          * @return Current published family and mapped bytes, or typed invalid/stale failure.

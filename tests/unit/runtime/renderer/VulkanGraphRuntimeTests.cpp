@@ -115,6 +115,51 @@ namespace {
         CHECK(fixture.commandState.state.waitCalls == 0);
     }
 
+    TEST_CASE("Vulkan canvas upload borrows one exact acquired frame before its first recording",
+              "[renderer][vulkan][graph][ui-paint][retirement]") {
+        NativeGraphFixture fixture;
+        fixture.resourceState.state.sizedAllocations = true;
+        constexpr std::array vertices{UiPaintVertex{{1, 1}}, UiPaintVertex{{4, 1}}, UiPaintVertex{{1, 4}}};
+        constexpr std::array<std::uint32_t, 3> indices{0, 1, 2};
+        constexpr std::array parameters{UiPaintParameters{.extent = {8, 8}}};
+        constexpr std::array sizes{sizeof(vertices), sizeof(indices), UiPaintFrameUpdate::ParameterStride};
+        constexpr std::array roles{RenderBufferUsage::Vertex, RenderBufferUsage::Index, RenderBufferUsage::Uniform};
+        NativeUiPaintFrameUpdate pending{.update = {1, vertices, indices, parameters}, .frame = {1}};
+        for (std::size_t index = 0; index < roles.size(); ++index) {
+            const RenderBufferDescriptor descriptor{.byteSize = sizes[index],
+                                                    .usage = roles[index],
+                                                    .access = RenderBufferAccess::HostVisible};
+            const auto plan = SubmissionTest::Take(fixture.resources.QueryBufferMemoryCost(descriptor));
+            pending.instances[index] =
+                SubmissionTest::Take(fixture.resources.CreateBuffer(descriptor, {}, TestSupport::PlacementFor(plan, index + 1)));
+        }
+        CHECK(fixture.graph.UpdateUiPaintFrame(pending).HasError());
+        REQUIRE(fixture.graph.BeginFrame({1}).HasValue());
+        auto stale = pending;
+        stale.frame = {2};
+        CHECK(fixture.graph.UpdateUiPaintFrame(stale).HasError());
+        REQUIRE(fixture.graph.UpdateUiPaintFrame(pending).HasValue());
+        const auto uniform = pending.instances[2];
+        CHECK(SubmissionTest::Take(fixture.resources.ReadUiPaintBuffer(uniform)).publication.revision == 1);
+        pending.update.revision = 2;
+
+        auto builder = SubmissionTest::Take(RenderGraphBuilder::Create({1, 1, 1, 1}));
+        const auto pass = SubmissionTest::Take(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
+        const auto graph = SubmissionTest::Take(builder.Finalize());
+        const auto schedule = SubmissionTest::Take(CompileRenderGraph(graph));
+        const std::array queues{RenderQueueAssignment{RenderQueueRole::Graphics, {1}}};
+        const auto sync = SubmissionTest::Take(SynthesizeRenderGraphSynchronization(graph, schedule, queues, {}));
+        const auto compiled = SubmissionTest::Take(CompileRenderGraphExecution(graph, schedule, sync, queues));
+        const std::array workloads{RenderGraphPassWorkload{pass, std::monostate{}}};
+        const std::array submissions{RenderGraphQueueSubmission{RenderQueueSubmission{{1}, {1}, {}, {{1}, 1}}, {0, 1}}};
+        REQUIRE(fixture.graph.ExecuteGraph({{1}, compiled, workloads, {}, nullptr, false, nullptr, submissions}).HasValue());
+        CHECK(fixture.graph.UpdateUiPaintFrame(pending).HasError());
+        CHECK(SubmissionTest::Take(fixture.resources.ReadUiPaintBuffer(uniform)).publication.revision == 1);
+        fixture.graph.AbortFrame({1});
+        CHECK(fixture.graph.UpdateUiPaintFrame(pending).HasError());
+        CHECK(fixture.commandState.state.waitCalls == 0);
+    }
+
     TEST_CASE("Vulkan graph encoding emits real copy commands and matched family ownership barriers",
               "[unit][runtime][renderer][vulkan][graph]") {
         NativeGraphFixture fixture;

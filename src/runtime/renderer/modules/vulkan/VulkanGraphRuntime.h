@@ -78,7 +78,7 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &request);
         /** @brief Publishes an issued VFX block outside active recording, polling the sole native completion owner. */
         [[nodiscard]] Result<void> UpdateVfxFrame(const NativeVfxFrameUpdate &update);
-        /** @brief Publishes a complete UI slot after polling all three native residents outside active frames. */
+        /** @brief Publishes one complete slot after polling all three residents, outside a frame or before exact graph recording. */
         [[nodiscard]] Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &update);
         /** @brief Cold-realizes a UI kernel with exact selected physical resource evidence and native renderer dispatch. */
         [[nodiscard]] Result<std::shared_ptr<IResidentUiPaintKernel>> RealizeUiPaintKernel(

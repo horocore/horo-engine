@@ -22,11 +22,14 @@ namespace Horo::Render {
         /** @brief Abandons a private CPU candidate on any failed update without releasing the still-accepted publication. */
         class CandidateSourceGuard final {
         public:
-            explicit CandidateSourceGuard(Detail::UiPaintCpuFrame &frame) noexcept : frame_(&frame) {}
+            CandidateSourceGuard(Detail::UiPaintCpuFrame &frame, bool &preparing) noexcept : frame_(&frame), preparing_(preparing) {
+                preparing_ = true;
+            }
 
             ~CandidateSourceGuard() {
                 if (frame_)
                     frame_->ReleaseSource();
+                preparing_ = false;
             }
 
             void Commit() noexcept {
@@ -38,6 +41,7 @@ namespace Horo::Render {
 
         private:
             Detail::UiPaintCpuFrame *frame_;
+            bool &preparing_;
         };
 
         /** @brief Records all creation failures before any explicit shutdown release can recycle a generation. */
@@ -267,6 +271,19 @@ namespace Horo::Render {
     /** @copydoc UiPaintProgram::Prepare */
     Result<UiPaintPreparedFrame> UiPaintProgram::Prepare(std::uint32_t slotIndex, const UiRenderSubmission &source,
                                                          const CancellationToken &cancellation) {
+        return PrepareInternal(slotIndex, source, cancellation, nullptr);
+    }
+
+    /** @copydoc UiPaintProgram::PrepareSceneFrame */
+    Result<UiPaintPreparedFrame> UiPaintProgram::PrepareSceneFrame(RenderFrameScope &frame, const std::uint32_t slot,
+                                                                   const UiRenderSubmission &source,
+                                                                   const CancellationToken &cancellation) {
+        return PrepareInternal(slot, source, cancellation, &frame);
+    }
+
+    /** @copydoc UiPaintProgram::PrepareInternal */
+    Result<UiPaintPreparedFrame> UiPaintProgram::PrepareInternal(const std::uint32_t slotIndex, const UiRenderSubmission &source,
+                                                                 const CancellationToken &cancellation, const RenderFrameScope *frame) {
         using Preparation = Result<UiPaintPreparedFrame>;
         auto &state = *storage_;
         if (std::this_thread::get_id() != state.owner || state.closed || slotIndex >= state.native.slots.size())
@@ -274,9 +291,21 @@ namespace Horo::Render {
         const auto owner = state.frontend.lock();
         if (!owner || !owner->frontend)
             return Preparation::Failure(MakeError(UiPaintFrameErrors::Unavailable));
+        if (!frame && owner->frontend->activeFrameScope_ != nullptr)
+            return Preparation::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph, "Ordinary UI preparation is outside a frame."));
+        FrameToken frameToken;
+        if (frame) {
+            if (state.target != Detail::UiPaintRootTarget::SceneCanvas || frame->owner_ != owner->frontend)
+                return Preparation::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
+            if (const auto ready = frame->ValidateExecutionAdmission(); ready.HasError())
+                return Preparation::Failure(ready.ErrorValue());
+            frameToken = frame->Token();
+        }
         if (const auto valid = state.ValidateSource(source); valid.HasError())
             return Preparation::Failure(valid.ErrorValue());
         auto &slot = state.native.slots[slotIndex];
+        if (slot.preparing || slot.sceneExecuting)
+            return Preparation::Failure(MakeError(UiPaintFrameErrors::Pending));
         if (const auto validated = state.validation.Validate(source, slot.graph->Resources()); validated.HasError())
             return Preparation::Failure(validated.ErrorValue());
         for (const auto &surface : slot.surfaces)
@@ -301,11 +330,11 @@ namespace Horo::Render {
                 return Preparation::Failure(MakeError(UiPaintFrameErrors::Pending));
         }
         auto &candidate = slot.frames[1 - slot.accepted];
-        CandidateSourceGuard candidateSource{candidate};
+        CandidateSourceGuard candidateSource{candidate, slot.preparing};
         if (const auto built = state.BuildFrame(slot, candidate, source); built.HasError())
             return Preparation::Failure(built.ErrorValue());
-        const auto uploaded =
-            state.native.buffers->Update(slotIndex, candidate.vertices, candidate.indices, candidate.parameters, cancellation);
+        const auto uploaded = state.native.buffers->UpdateInternal(slotIndex, candidate.vertices, candidate.indices, candidate.parameters,
+                                                                   cancellation, frameToken);
         if (uploaded.HasError())
             return Preparation::Failure(uploaded.ErrorValue());
         slot.accepted = 1 - slot.accepted;
@@ -314,7 +343,7 @@ namespace Horo::Render {
         candidateSource.Commit();
         // The old prepared revision can no longer submit; its queued native captures retain their own exact provenance.
         slot.frames[1 - slot.accepted].ReleaseSource();
-        return Preparation::Success(UiPaintPreparedFrame{state.identity, slotIndex, slot.revision});
+        return Preparation::Success(UiPaintPreparedFrame{state.identity, slotIndex, slot.revision, frameToken});
     }
 
     /** @copydoc UiPaintProgram::ValidateSubmission */
@@ -347,7 +376,7 @@ namespace Horo::Render {
     Result<void> UiPaintProgram::ExecuteSceneCanvas(RenderFrameScope &frame, const UiPaintPreparedFrame &prepared,
                                                     UiRenderSubmission source,
                                                     const std::span<const RenderGraphPassWorkload> sceneWorkloads) {
-        if (storage_->target != Detail::UiPaintRootTarget::SceneCanvas)
+        if (storage_->target != Detail::UiPaintRootTarget::SceneCanvas || (prepared.frame_.IsValid() && prepared.frame_ != frame.Token()))
             return Result<void>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
         auto valid = ValidateSubmission(prepared, std::move(source));
         if (valid.HasError())
@@ -441,6 +470,10 @@ namespace Horo::Render {
     Result<void> UiPaintProgram::Storage::Shutdown() {
         if (std::this_thread::get_id() != owner)
             return Result<void>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
+        if (std::ranges::any_of(native.slots, [](const auto &slot) {
+            return slot.preparing || slot.sceneExecuting;
+        }))
+            return Result<void>::Failure(MakeError(UiPaintFrameErrors::Pending));
         closed = true;
         identity.reset();
         const auto state = frontend.lock();
