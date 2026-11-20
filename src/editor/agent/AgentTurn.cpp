@@ -17,8 +17,13 @@ namespace Horo::Agent {
         struct TurnAdmission final {
             std::atomic_flag &active;
 
+            explicit TurnAdmission(std::atomic_flag &flag) noexcept : active(flag) {}
+
+            TurnAdmission(const TurnAdmission &) = delete;
+            TurnAdmission &operator=(const TurnAdmission &) = delete;
+
             ~TurnAdmission() {
-                active.clear(std::memory_order_release);
+                active.clear();
             }
         };
 
@@ -108,10 +113,10 @@ namespace Horo::Agent {
         }
 
         /** @brief Maintains the terminal boundary even if a provider implementation throws. */
-        ModelOutcome StreamResponse(IModelProvider &provider, const ModelRequest &request, TurnStop &stop,
+        ModelOutcome StreamResponse(IModelProvider &provider, const ModelRequest &request, const TurnStop &stop,
                                     Detail::AgentTurnStream &stream) {
             try {
-                return provider.Stream(request, [&](const ModelEvent &event) {
+                return provider.Stream(request, [&stop, &stream](const ModelEvent &event) {
                     return !stop.Token().stop_requested() && stream.Accept(event);
                 }, stop.Token());
             } catch (const std::bad_alloc &) {
@@ -121,6 +126,47 @@ namespace Horo::Agent {
             }
         }
 
+        /** @brief Classifies one exact provider response before charging it to the turn or executing any tools. */
+        AgentTurnStatus CompleteModelRound(const ModelOutcome &outcome, const Detail::AgentTurnStream &stream, const TurnStop &stop) {
+            if (const auto stopped = stop.Status())
+                return *stopped;
+            if (const auto rejected = stream.Rejection())
+                return *rejected == Detail::TurnStreamFailure::Capacity ? BudgetExceeded : InvalidModelResponse;
+            if (!outcome.Succeeded())
+                return outcome.error->code == ModelErrorCode::Cancelled ? Cancelled : ProviderFailed;
+            return stream.Failure() ? InvalidModelResponse : Completed;
+        }
+
+        /** @brief Tracks the finite budgets shared by every inference and tool call in one admitted turn. */
+        struct TurnProgress final {
+            Detail::TurnStreamBudget remaining;
+            const TurnStop &stop;
+            std::uint64_t id;
+            std::size_t submitted{};
+        };
+
+        /** @brief Appends the assistant intent round and related results only after successful dispatch. */
+        AgentTurnStatus AppendToolRound(const IAgentTurnTools &tools, ModelRequest &request, ModelMessage message, TurnProgress &progress) {
+            if (const auto admission = PrepareTools(tools, request, message); admission != Completed)
+                return admission;
+            std::vector<ModelMessage> results;
+            results.reserve(message.toolIntents.size());
+            for (const auto &intent : message.toolIntents) {
+                std::string result;
+                const auto state =
+                    tools.Run(progress.id, ++progress.submitted, intent, progress.stop.Deadline(), progress.stop.Token(), result);
+                if (state != Completed)
+                    return state;
+                if (!Charge(progress.remaining.bytes, intent.callId) || !Charge(progress.remaining.bytes, result))
+                    return BudgetExceeded;
+                results.push_back({.role = ModelRole::Tool, .text = std::move(result), .toolCallId = intent.callId});
+            }
+            request.messages.push_back(std::move(message));
+            request.messages.insert(request.messages.end(), std::make_move_iterator(results.begin()),
+                                    std::make_move_iterator(results.end()));
+            return Completed;
+        }
+
     }  // namespace
 
     /** @copydoc AgentTurnRuntime::Run */
@@ -128,7 +174,7 @@ namespace Horo::Agent {
                                           ModelRequest request, const AgentTurnLimits &limits, const std::stop_token cancellation) {
         if (cancellation.stop_requested())
             return {Cancelled, {}};
-        if (active_.test_and_set(std::memory_order_acquire))
+        if (active_.test_and_set())
             return {Busy, {}};
         const TurnAdmission admissionGuard{active_};
         try {
@@ -144,29 +190,23 @@ namespace Horo::Agent {
             TurnStop stop{limits.timeout, cancellation};
             std::uint32_t tokens = limits.maximumOutputTokens;
             const auto outputPerRound = request.maximumOutputTokens;
-            std::size_t submitted{};
+            TurnProgress progress{remaining, stop, turnId};
             for (std::size_t round = 0; round < limits.maximumRounds && tokens > 0; ++round) {
                 if (const auto stopped = stop.Status())
                     return {*stopped, {}};
                 request.maximumOutputTokens = std::min(outputPerRound, tokens);
                 if (!AdmitModelRequest(request, known).Succeeded())
                     return {BudgetExceeded, {}};
-                Detail::AgentTurnStream stream{remaining};
+                Detail::AgentTurnStream stream{progress.remaining};
                 const auto outcome = StreamResponse(provider, request, stop, stream);
-                if (const auto stopped = stop.Status())
-                    return {*stopped, {}};
-                if (const auto rejected = stream.Rejection())
-                    return {*rejected == Detail::TurnStreamFailure::Capacity ? BudgetExceeded : InvalidModelResponse, {}};
-                if (!outcome.Succeeded())
-                    return {outcome.error->code == ModelErrorCode::Cancelled ? Cancelled : ProviderFailed, {}};
-                if (stream.Failure())
-                    return {InvalidModelResponse, {}};
+                if (const auto status = CompleteModelRound(outcome, stream, stop); status != Completed)
+                    return {status, {}};
                 const auto used =
                     stream.Usage() ? stream.Usage()->outputTokens.value_or(request.maximumOutputTokens) : request.maximumOutputTokens;
                 if (used > request.maximumOutputTokens)
                     return {BudgetExceeded, {}};
                 tokens -= static_cast<std::uint32_t>(used);
-                remaining = stream.Remaining();
+                progress.remaining = stream.Remaining();
                 auto message = std::move(stream).TakeMessage();
                 if (message.toolIntents.empty()) {
                     request.messages.push_back(std::move(message));
@@ -176,22 +216,8 @@ namespace Horo::Agent {
                     return {ToolDenied, {}};
                 if (round + 1 == limits.maximumRounds || tokens == 0)
                     return {BudgetExceeded, {}};
-                if (const auto admission = PrepareTools(*tools, request, message); admission != Completed)
-                    return {admission, {}};
-                std::vector<ModelMessage> results;
-                results.reserve(message.toolIntents.size());
-                for (const auto &intent : message.toolIntents) {
-                    std::string result;
-                    if (const auto state = tools->Run(turnId, ++submitted, intent, stop.Deadline(), stop.Token(), result);
-                        state != Completed)
-                        return {state, {}};
-                    if (!Charge(remaining.bytes, intent.callId) || !Charge(remaining.bytes, result))
-                        return {BudgetExceeded, {}};
-                    results.push_back({.role = ModelRole::Tool, .text = std::move(result), .toolCallId = intent.callId});
-                }
-                request.messages.push_back(std::move(message));
-                request.messages.insert(request.messages.end(), std::make_move_iterator(results.begin()),
-                                        std::make_move_iterator(results.end()));
+                if (const auto status = AppendToolRound(*tools, request, std::move(message), progress); status != Completed)
+                    return {status, {}};
             }
             return {BudgetExceeded, {}};
         } catch (const std::bad_alloc &) {

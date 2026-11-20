@@ -41,6 +41,35 @@ namespace Horo::Agent {
                 return TimedOut;
             return ToolFailed;
         }
+
+        /** @brief Confirms that each reply still names the same exact native operation. */
+        bool ReadOperationId(const Json &value, std::uint64_t &operation) {
+            if (!value.is_object() || !value.contains("operationId") || !value["operationId"].is_number_unsigned())
+                return false;
+            const auto observed = value["operationId"].get<std::uint64_t>();
+            if (observed == 0 || (operation != 0 && observed != operation))
+                return false;
+            operation = observed;
+            return true;
+        }
+
+        /** @brief Decodes terminal controller status, with no outcome until the owner settles the operation. */
+        std::optional<AgentTurnStatus> ReadToolOutcome(const Json &value, std::string &result) {
+            if (!value.contains("status") || !value["status"].is_string())
+                return ToolFailed;
+            const auto &status = value["status"].get_ref<const std::string &>();
+            if (status == "succeeded" && value.contains("result")) {
+                result = value["result"].dump();
+                return Completed;
+            }
+            if (status == "cancelled")
+                return Cancelled;
+            if (status == "timed_out")
+                return TimedOut;
+            if (status == "queued" || status == "running")
+                return std::nullopt;
+            return ToolFailed;
+        }
     }  // namespace
 
     /** @copydoc AgentTurnMcp::AgentTurnMcp */
@@ -77,24 +106,10 @@ namespace Horo::Agent {
             if (state.HasError())
                 return ErrorStatus(state.ErrorValue().code.Value());
             const auto &value = state.Value();
-            if (!value.is_object() || !value.contains("operationId") || !value["operationId"].is_number_unsigned() ||
-                !value.contains("status") || !value["status"].is_string())
+            if (!ReadOperationId(value, operation))
                 return ToolFailed;
-            const auto observed = value["operationId"].get<std::uint64_t>();
-            if (observed == 0 || (operation != 0 && observed != operation))
-                return ToolFailed;
-            operation = observed;
-            const auto &status = value["status"].get_ref<const std::string &>();
-            if (status == "succeeded" && value.contains("result")) {
-                result = value["result"].dump();
-                return Completed;
-            }
-            if (status == "cancelled")
-                return Cancelled;
-            if (status == "timed_out")
-                return TimedOut;
-            if (status != "queued" && status != "running")
-                return ToolFailed;
+            if (const auto outcome = ReadToolOutcome(value, result))
+                return *outcome;
             std::this_thread::sleep_until(std::min(Clock::now() + 10ms, deadline));
             if (stop.stop_requested() || Clock::now() >= deadline)
                 continue;
