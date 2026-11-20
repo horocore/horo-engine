@@ -4605,6 +4605,10 @@ add_executable(HoroEditorViewportSceneTests
 
 target_compile_features(HoroEditorViewportSceneTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorViewportSceneTests PRIVATE HoroEngine::EditorViewportScene)
+if(TARGET HoroEditorVulkanGuiInternal)
+    target_sources(HoroEditorViewportSceneTests PRIVATE unit/editor/EditorViewportVulkanCanvasProjectionTests.cpp)
+    target_link_libraries(HoroEditorViewportSceneTests PRIVATE HoroEditorVulkanGuiInternal)
+endif()
 add_executable(HoroWorldBakeApplicationTests
         unit/application/WorldBakeReplicationTests.cpp
         unit/application/WorldBakeApplicationTests.cpp
@@ -6918,7 +6922,8 @@ if (HORO_ENABLE_GPU_SMOKE_TESTS AND (WIN32 OR CMAKE_SYSTEM_NAME STREQUAL "Linux"
     target_compile_definitions(HoroEditorVulkanPresentationSmoke PRIVATE HORO_ENGINE_VERSION_STRING="${PROJECT_VERSION}")
     target_link_libraries(HoroEditorVulkanPresentationSmoke PRIVATE
         HoroEditorVulkanGuiInternal HoroEngine::RenderVulkan HoroThirdParty::ImGuiVulkan ${HORO_SDL3_TARGET}
-        HoroEngine::CinematicCameraRuntime HoroColorOutputPackageInternal HoroEditorImageProviderHostInternal HoroEngine::Platform)
+        HoroEngine::CinematicCameraRuntime HoroColorOutputPackageInternal HoroEditorImageProviderHostInternal HoroEngine::Platform
+        HoroRuntimeUiPaintHost HoroUiPaintShaderPackage)
     horo_register_catch_test(HoroEditorVulkanPresentationSmoke LABELS "native;renderer;vulkan;gui;qualification")
 endif ()
 

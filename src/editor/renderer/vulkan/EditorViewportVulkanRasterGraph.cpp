@@ -15,6 +15,7 @@ namespace Horo::Editor {
         constexpr auto MaximumDraws = RenderMaterialPass::MaximumDraws;
         constexpr auto MaximumScenePasses = MaximumDirectionalShadowCascades + 1;
         constexpr auto MaximumSpatialPasses = 1;
+        constexpr auto MaximumCanvasPasses = 1;
         constexpr auto MaximumColorPasses = 5;    // Two uploads, analytic output, overlay, SDR encode.
         constexpr auto MaximumColorImports = 10;  // Two outputs, four analytic table/staging resources and four fullscreen buffers.
         constexpr auto MaximumColorUses = 32;     // Fixed transfer and fullscreen shader reads, including the optional overlay.
@@ -55,8 +56,10 @@ namespace Horo::Editor {
             std::optional<CompiledRenderGraphExecution> graph;
             std::array<RasterInputs, RenderGraphMaterialRaster::MaximumRetainedPasses> inputs;
             RasterInputs displayOverlay;
+            RasterInputs canvas;
             EditorViewportColorGraph color;
-            std::array<RenderGraphPassWorkload, MaximumScenePasses + MaximumColorPasses + MaximumSpatialPasses> workloads;
+            std::array<RenderGraphPassWorkload, MaximumScenePasses + MaximumCanvasPasses + MaximumColorPasses + MaximumSpatialPasses>
+                workloads;
             std::optional<std::size_t> spatialWork;
             std::size_t count{};
         };
@@ -82,14 +85,22 @@ namespace Horo::Editor {
         public:
             RasterGraphAuthor(std::size_t draws, std::size_t passes, RenderQueueId graphics, bool color, bool spatial,
                               bool cameraCrossFade = false)
-                : builder(
+                : ownedBuilder(
                       Take(RenderGraphBuilder::Create({.maxPasses = passes + (color ? MaximumColorPasses : 0) + (spatial ? 1 : 0),
                                                        .maxResources = 3 + 2 * draws + draws * passes + (color ? MaximumColorImports : 0) +
                                                                        (spatial ? 1 : 0) + (cameraCrossFade ? 5 : 0),
                                                        .maxUsages = 3 * passes + 3 * draws * passes + (color ? MaximumColorUses : 0) +
                                                                     (spatial ? 2 : 0) + (cameraCrossFade ? 8 : 0),
                                                        .maxDependencies = passes + (color ? MaximumColorPasses : 0) + (spatial ? 1 : 0)}))),
-                  queue(graphics), spatial_(spatial) {}
+                  builder(*ownedBuilder), queue(graphics), spatial_(spatial) {}
+
+            /** @brief Appends the renderer-owned scene to the paint program's existing sampled canvas graph. */
+            RasterGraphAuthor(RenderGraphBuilder &scene, RenderQueueId graphics) noexcept : builder(scene), queue(graphics) {}
+
+            /** @brief Transfers cold imported state declarations to the combined graph's sole compiler. */
+            void AppendInitialStates(std::vector<RenderGraphImportedState> &destination) const {
+                destination.insert(destination.end(), initial.begin(), initial.end());
+            }
 
             RenderGraphResourceId Attach(RenderTextureHandle texture) {
                 const auto resource = Take(builder.ImportTexture(texture, RenderGraphResourceClass::Persistent));
@@ -121,9 +132,9 @@ namespace Horo::Editor {
                 input.draws.push_back({mesh, vertex, index, material});
             }
 
-            void SampleAtlas(RenderGraphPassRef pass, RasterInputs &input, RenderGraphResourceId atlas, RenderTextureViewHandle view) {
-                Take(builder.AddUsage({pass, atlas, RenderGraphAccess::Read, RenderGraphUsageKind::Sampled}));
-                input.reads.push_back({atlas, {}, view});
+            void Sample(RenderGraphPassRef pass, RasterInputs &input, RenderGraphResourceId texture, RenderTextureViewHandle view) {
+                Take(builder.AddUsage({pass, texture, RenderGraphAccess::Read, RenderGraphUsageKind::Sampled}));
+                input.reads.push_back({texture, {}, view});
             }
 
             RenderGraphPassWorkload Reconstruct(RenderGraphResourceId scene, RenderTextureViewHandle sceneView,
@@ -180,7 +191,8 @@ namespace Horo::Editor {
                 return resource;
             }
 
-            RenderGraphBuilder builder;
+            std::optional<RenderGraphBuilder> ownedBuilder;
+            RenderGraphBuilder &builder;
             RenderQueueId queue;
             bool spatial_{};
             RenderGraphPassRef last;
@@ -266,7 +278,7 @@ namespace Horo::Editor {
                 author.Draw(pass, inputs, draw.mesh, draw.vertices, draw.indices, draw.uniforms.material, draw.uniforms.buffer);
             }
             if (!inputs.draws.empty())
-                author.SampleAtlas(pass, inputs, atlas, attachments.atlasView);
+                author.Sample(pass, inputs, atlas, attachments.atlasView);
             variant.workloads[work] = {pass, RenderGraphMaterialRaster{.color = color,
                                                                        .depth = depth,
                                                                        .colorView = colorView,
@@ -285,7 +297,7 @@ namespace Horo::Editor {
             auto &input = variant.displayOverlay;
             input.Reserve(1);
             author.Draw(pass, input, overlay.mesh, overlay.vertices, overlay.indices, overlay.uniforms.material, overlay.uniforms.buffer);
-            author.SampleAtlas(pass, input, atlas, attachments.atlasView);
+            author.Sample(pass, input, atlas, attachments.atlasView);
             return {pass, RenderGraphMaterialRaster{.color = displayResource,
                                                     .depth = depth,
                                                     .colorView = displayView,
@@ -295,6 +307,74 @@ namespace Horo::Editor {
                                                     .depthClear = std::nullopt,
                                                     .draws = input.draws,
                                                     .reads = input.reads}};
+        }
+
+        /** @brief Appends an exact premultiplied canvas consumer using the opaque viewport attachments already authored. */
+        RenderGraphPassRef AuthorCanvas(RasterGraphAuthor &author, RasterVariant &variant, const OverlaySlot &quad,
+                                        RenderGraphResourceId canvas, RenderTextureViewHandle canvasView, RenderGraphResourceId color,
+                                        RenderGraphResourceId depth, const bool world) {
+            const auto pass = author.Pass();
+            author.Output(pass, color, RenderGraphUsageKind::ColorAttachment, RenderGraphAccess::ReadWrite);
+            if (world)
+                author.Output(pass, depth, RenderGraphUsageKind::DepthStencilAttachment, RenderGraphAccess::ReadWrite);
+            auto &input = variant.canvas;
+            input.Reserve(1);
+            author.Draw(pass, input, quad.mesh, quad.vertices, quad.indices, quad.uniforms.material, quad.uniforms.buffer);
+            author.Sample(pass, input, canvas, canvasView);
+            variant.workloads[variant.count++] = {pass, RenderGraphMaterialRaster{.color = color,
+                                                                                  .depth = world ? depth : RenderGraphResourceId{},
+                                                                                  .colorView = attachments.colorView,
+                                                                                  .depthView = world ? attachments.depthView
+                                                                                                     : RenderTextureViewHandle{},
+                                                                                  .extent = attachments.extent,
+                                                                                  .colorOperations = {.loadOperation =
+                                                                                                          AttachmentLoadOperation::Load},
+                                                                                  .depthClear = std::nullopt,
+                                                                                  .draws = input.draws,
+                                                                                  .reads = input.reads}};
+            return pass;
+        }
+
+        /** @brief Appends the same acquired viewport output chain for ordinary and canvas-bearing scene variants. */
+        void AppendColorTail(RasterGraphAuthor &author, RasterVariant &variant, const FrameSlot &slot, const RenderGraphResourceId scene,
+                             const RenderGraphResourceId depth, const RenderGraphResourceId atlas, const bool overlay,
+                             const EditorViewportColorPipeline &pipeline,
+                             const std::shared_ptr<IResidentNativeReconstructionKernel> &kernel) {
+            const auto displayResource = author.Attach(display);
+            const auto output = author.Attach(presentation);
+            auto toneMapInput = scene;
+            if (kernel) {
+                toneMapInput = author.Attach(spatial);
+                variant.spatialWork = variant.count;
+                variant.workloads[variant.count++] = author.Reconstruct(scene, attachments.colorView, toneMapInput, spatialView, kernel);
+            }
+            author.ColorScene(variant.color, pipeline, toneMapInput, displayResource, displayView, attachments.extent);
+            RenderGraphPassWorkload displayOverlay;
+            if (overlay)
+                displayOverlay = AuthorDisplayOverlay(author, variant, slot.overlay, displayResource, depth, atlas);
+            author.ColorEncode(variant.color, pipeline, output, presentationView);
+            const auto work = variant.color.Workloads();
+            for (const auto &pass : work.first(work.size() - 1))
+                variant.workloads[variant.count++] = pass;
+            if (overlay)
+                variant.workloads[variant.count++] = std::move(displayOverlay);
+            variant.workloads[variant.count++] = work.back();
+        }
+
+        /** @brief Reuses the opaque, shadow and output owners on the paint program's single combined graph. */
+        RenderGraphPassRef BuildCanvas(RasterVariant &variant, RenderGraphBuilder &builder, std::vector<RenderGraphImportedState> &initial,
+                                       const FrameSlot &slot, RenderQueueId queue, const OverlaySlot &quad, RenderGraphResourceId canvas,
+                                       RenderTextureViewHandle canvasView, const bool world, const bool overlay) {
+            RasterGraphAuthor author{builder, queue};
+            const auto atlas = author.Attach(attachments.atlas);
+            const auto color = author.Attach(attachments.color);
+            const auto depth = author.Attach(attachments.depth);
+            variant.count = atlasPasses + 1;
+            AuthorAtlas(author, variant, slot, atlas);
+            AuthorScene(author, variant, slot, atlas, color, depth, overlay, atlasPasses, attachments.colorView, attachments.depthView);
+            const auto consumer = AuthorCanvas(author, variant, quad, canvas, canvasView, color, depth, world);
+            author.AppendInitialStates(initial);
+            return consumer;
         }
 
         void Build(RasterVariant &variant, const FrameSlot &slot, RenderQueueId queue, bool overlay,
@@ -309,28 +389,8 @@ namespace Horo::Editor {
             AuthorAtlas(author, variant, slot, atlas);
             AuthorScene(author, variant, slot, atlas, scene, depth, overlay && !pipeline, atlasPasses, attachments.colorView,
                         attachments.depthView);
-            if (pipeline) {
-                const auto displayResource = author.Attach(display);
-                const auto output = author.Attach(presentation);
-                auto toneMapInput = scene;
-                if (kernel) {
-                    toneMapInput = author.Attach(spatial);
-                    variant.spatialWork = variant.count;
-                    variant.workloads[variant.count++] =
-                        author.Reconstruct(scene, attachments.colorView, toneMapInput, spatialView, kernel);
-                }
-                author.ColorScene(variant.color, *pipeline, toneMapInput, displayResource, displayView, attachments.extent);
-                RenderGraphPassWorkload displayOverlay;
-                if (overlay)
-                    displayOverlay = AuthorDisplayOverlay(author, variant, slot.overlay, displayResource, depth, atlas);
-                author.ColorEncode(variant.color, *pipeline, output, presentationView);
-                const auto work = variant.color.Workloads();
-                for (const auto &pass : work.first(work.size() - 1))
-                    variant.workloads[variant.count++] = pass;
-                if (overlay)
-                    variant.workloads[variant.count++] = std::move(displayOverlay);
-                variant.workloads[variant.count++] = work.back();
-            }
+            if (pipeline)
+                AppendColorTail(author, variant, slot, scene, depth, atlas, overlay, *pipeline, kernel);
             variant.graph.emplace(author.Compile());
         }
 
@@ -357,7 +417,7 @@ namespace Horo::Editor {
             auto &input = variant.inputs[variant.count - 1];
             input.Reserve(1);
             author.Draw(pass, input, program.mesh, program.vertices, program.indices, composite.material, composite.buffer);
-            author.SampleAtlas(pass, input, source, spare.colorView);
+            author.Sample(pass, input, source, spare.colorView);
             variant.workloads[variant.count - 1] = {pass, RenderGraphMaterialRaster{.color = destination,
                                                                                     .colorView = attachments.colorView,
                                                                                     .extent = attachments.extent,
@@ -412,6 +472,114 @@ namespace Horo::Editor {
             return prepared ? &(*prepared)[slot][index] : nullptr;
         }
     };
+
+    /** @brief Keeps all material spans and the authoritative producer alive until graph execution has taken its native pins. */
+    struct EditorViewportRendererVulkan::ViewportCanvasGraph final {
+        std::shared_ptr<ViewportRasterGraphs> topology;
+        std::unique_ptr<Render::UiPaintProgram> paint;
+        std::unique_ptr<CanvasQuadProgram> quad;
+        std::array<RasterVariant, std::tuple_size_v<FrameSlots>> slots;
+        bool overlay{};
+    };
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareViewportCanvas */
+    Result<void> EditorViewportRendererVulkan::PrepareViewportCanvas(
+        const Render::StaticMeshPassDescriptor &pass, const Render::UiPaintProgramDescriptor &paint,
+        const Runtime::Ui::UiRenderSnapshot &prototype, const std::span<const Render::RenderTextureHandle> textures,
+        const Render::CookedUiPaintKernel &writer, const EditorVulkanWorldCanvasCook &consumer,
+        const Render::UiRenderCompositionSpace space, const bool overlay, const Render::RenderGraphLimits &limits,
+        const CancellationToken &cancellation) {
+        using namespace Render;
+        if (!pass.IsValid() || color_ || preparedCrossFade_ || paint.frameSlots != device_.frames ||
+            (overlay && pass.scene.instances.size() >= MaximumDraws))
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+        if (const auto prepared = PrepareViewportRasterGraphs(pass); prepared.HasError())
+            return prepared;
+        try {
+            auto candidate = std::make_shared<ViewportCanvasGraph>();
+            candidate->topology = viewportRasterGraphs_;
+            candidate->overlay = overlay;
+            auto quad = CreateCanvasQuadProgram(consumer, space, RenderTextureFormat::Rgba8Unorm);
+            if (quad.HasError())
+                return Result<void>::Failure(quad.ErrorValue());
+            candidate->quad = std::move(quad).Value();
+
+            const UiPaintSceneCanvasGraph scene{limits, device_.graphicsIdentity,
+                                                [&](RenderGraphBuilder &builder, const UiPaintSceneCanvasSource &source,
+                                                    std::vector<RenderGraphImportedState> &initial) {
+                auto &program = *candidate->quad;
+                if (const auto bound = BindCanvasQuadSource(program, source.slot, source.surface.color); bound.HasError())
+                    return Result<RenderGraphPassRef>::Failure(bound.ErrorValue());
+                return Result<RenderGraphPassRef>::Success(
+                    candidate->topology->BuildCanvas(candidate->slots[source.slot], builder, initial, slots_[source.slot],
+                                                     device_.graphicsIdentity, program.slots[source.slot], source.color,
+                                                     program.sampledViews[source.slot], space == UiRenderCompositionSpace::World, overlay));
+            }};
+            auto program = UiPaintProgram::CreateSceneCanvas(frontend_, paint, prototype, textures, writer, scene, cancellation);
+            if (program.HasError())
+                return Result<void>::Failure(program.ErrorValue());
+            candidate->paint = std::move(program).Value();
+            if (const auto processed = frontend_.ProcessResourceRequests(); processed.HasError())
+                return Result<void>::Failure(processed.ErrorValue());
+            if (const auto checked = candidate->paint->ValidatePreparation(); checked.HasError())
+                return checked;
+            viewportCanvasGraph_ = std::move(candidate);
+            return Result<void>::Success();
+        } catch (const BuildFailure &failure) {
+            return Result<void>::Failure(failure.error);
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportGeometryCreationFailed));
+        }
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::ExecuteViewportCanvas */
+    Result<void> EditorViewportRendererVulkan::ExecuteViewportCanvas(Render::RenderFrameScope &frame,
+                                                                     const Render::StaticMeshPassDescriptor &pass,
+                                                                     const std::optional<Math::Mat4> &placement,
+                                                                     const ViewportCanvasSource &source) {
+        using namespace Render;
+        if (!viewportCanvasGraph_ || !source || color_ || preparedCrossFade_ || viewportCanvasGraph_->topology != viewportRasterGraphs_)
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleTarget));
+        auto &canvas = *viewportCanvasGraph_;
+        const auto slot = PrepareViewportSlot(frame.Token(), pass);
+        if (slot.HasError())
+            return Result<void>::Failure(slot.ErrorValue());
+        if (const auto lighting = forwardLighting_.Prepare(pass.scene); lighting.HasError())
+            return lighting;
+        if (const auto shadow = PrepareShadowFrame(frame.Token(), slot.Value(), pass); shadow.HasError())
+            return shadow;
+        const auto *shadow = preparedShadow_ ? &*preparedShadow_ : nullptr;
+        if (!canvas.topology->Matches(resources_, pass.scene, shadow))
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleTarget));
+        const auto count = PrepareViewportOverlay(frame.Token(), slot.Value(), pass);
+        if (count.HasError())
+            return Result<void>::Failure(count.ErrorValue());
+        if ((count.Value() > pass.scene.instances.size()) != canvas.overlay)
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleTarget));
+        if (const auto drawn = PrepareViewportDraws(frame.Token(), slot.Value(), pass); drawn.HasError())
+            return drawn;
+        if (const auto written = WriteCanvasQuad(frame.Token(), *canvas.quad, slot.Value(), pass, placement); written.HasError())
+            return written;
+
+        auto &variant = canvas.slots[slot.Value()];
+        if (shadow)
+            for (std::uint32_t index = 0; index < shadow->cascadeCount; ++index) {
+                const auto &tile = shadow->cascades[index].viewport;
+                std::get<RenderGraphMaterialRaster>(variant.workloads[index].workload).region =
+                    RenderMaterialRegion{tile.x, tile.y, tile.width, tile.height};
+            }
+        std::get<RenderGraphMaterialRaster>(variant.workloads[canvas.topology->atlasPasses].workload).colorOperations.clearColor =
+            pass.clearColor;
+        auto submission = source(*canvas.paint, slot.Value());
+        if (submission.HasError())
+            return Result<void>::Failure(submission.ErrorValue());
+        const auto frameInput = canvas.paint->PrepareSceneFrame(frame, slot.Value(), submission.Value());
+        if (frameInput.HasError())
+            return Result<void>::Failure(frameInput.ErrorValue());
+        recordedEver_ = true;
+        return canvas.paint->ExecuteSceneCanvas(frame, frameInput.Value(), std::move(submission).Value(),
+                                                std::span{variant.workloads}.first(variant.count));
+    }
 
     /** @copydoc EditorViewportRendererVulkan::PrepareViewportRasterGraphs */
     Result<void> EditorViewportRendererVulkan::PrepareViewportRasterGraphs(const Render::StaticMeshPassDescriptor &pass) {

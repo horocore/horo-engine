@@ -194,18 +194,25 @@ namespace Horo::Editor {
         using namespace Render;
         return {.schemaVersion = 1,
                 .sourceIdentity = "assets/shaders/editor/viewport_world_canvas.hlsl",
-                .sourceRevision = 1,
+                .sourceRevision = 2,
                 .entryPoints = {{ShaderStage::Vertex, "VSMain"}, {ShaderStage::Fragment, "PSMain"}},
                 .bindings = {{{1}, ShaderResourceKind::UniformBuffer, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Vertex},
                              {{2}, ShaderResourceKind::SampledTexture, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment},
                              {{3}, ShaderResourceKind::Sampler, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment}},
-                .parameters = {{{1}, {1}, ShaderValueType::Float32, 4, 4, 1}},
+                .parameters = {{{1}, {1}, ShaderValueType::Float32, 1, 4, 1},
+                               {{2}, {1}, ShaderValueType::Float32, 1, 4, 1},
+                               {{3}, {1}, ShaderValueType::Float32, 1, 4, 1},
+                               {{4}, {1}, ShaderValueType::Float32, 1, 4, 1}},
                 .targets = {EditorVulkanViewportShaderTarget()}};
     }
 
     /** @copydoc EditorVulkanWorldCanvasReflectionNames */
     std::vector<Render::ShaderReflectionBindingName> EditorVulkanWorldCanvasReflectionNames() {
-        return {{{1}, "type.WorldCanvasParameters", {{{1}, "Mvp"}}}, {{2}, "CanvasColor", {}}, {{3}, "CanvasSampler", {}}};
+        return {{{1},
+                 "type.WorldCanvasParameters",
+                 {{{1}, "ClipFromLocalX"}, {{2}, "ClipFromLocalY"}, {{3}, "ClipFromLocalZ"}, {{4}, "ClipFromLocalOrigin"}}},
+                {{2}, "CanvasColor", {}},
+                {{3}, "CanvasSampler", {}}};
     }
 
     namespace {

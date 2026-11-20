@@ -383,6 +383,12 @@ canvas consumer as distinct artifacts. The paint package is admitted with a
 linear color target and its stencil format. The consumer validates its
 position, UV, uniform, sampler and color interfaces against the reflected
 native stages before the viewport can construct the sampling pass.
+The base Vulkan viewport renders a prepared Camera or World canvas in the same
+graph as the opaque scene. Camera placement covers the selected viewport.
+World placement uses the scene camera and tests against opaque depth without
+writing depth. Native qualification reads the viewport pixels before and after
+moving a World canvas behind opaque geometry. The project host supplies canvas
+selection and the matching presentation receipt.
 
 The presentation receipt carries the exact World canvas plane when a consuming
 pass places the canvas in the scene. Runtime UI adopts that plane with the

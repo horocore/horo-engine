@@ -1,5 +1,8 @@
 cbuffer WorldCanvasParameters : register(b0, space0) {
-    float4x4 Mvp;
+    float4 ClipFromLocalX;
+    float4 ClipFromLocalY;
+    float4 ClipFromLocalZ;
+    float4 ClipFromLocalOrigin;
 };
 Texture2D<float4> CanvasColor : register(t1, space0);
 SamplerState CanvasSampler : register(s2, space0);
@@ -16,7 +19,8 @@ struct VertexOutput {
 
 VertexOutput VSMain(VertexInput input) {
     VertexOutput projected;
-    projected.position = mul(Mvp, float4(input.position, 1.0));
+    projected.position = input.position.x * ClipFromLocalX + input.position.y * ClipFromLocalY +
+                         input.position.z * ClipFromLocalZ + ClipFromLocalOrigin;
     projected.uv = input.uv;
     return projected;
 }

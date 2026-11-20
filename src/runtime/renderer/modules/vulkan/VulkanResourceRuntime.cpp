@@ -10,6 +10,7 @@
 #include <array>
 #include <bit>
 #include <cstring>
+#include <format>
 #include <memory>
 #include <new>
 #include <string_view>
@@ -511,9 +512,9 @@ namespace Horo::Render::Detail {
         if (!VulkanResourceConversion::RequirementsValid(requirements, nativePayload))
             return Result<RenderMemoryCostPlan>::Failure(
                 ResourceError(VulkanBackendErrors::ResourceCreationFailed,
-                              "Invalid Vulkan texture requirements for " + DescribeRenderTextureRequest(descriptor) + ", logical bytes " +
-                                  std::to_string(nativePayload) + ", required bytes " + std::to_string(requirements.size) + ", alignment " +
-                                  std::to_string(requirements.alignment)));
+                              std::format("Invalid Vulkan texture requirements for {}, logical bytes {}, required bytes {}, alignment {}",
+                                          DescribeRenderTextureRequest(descriptor), nativePayload, requirements.size,
+                                          requirements.alignment)));
         const RenderMemoryCostPlan cost{.memoryClass = RenderMemoryClass::PersistentDevice,
                                         .allocationClass = RenderMemoryAllocationClass::Dedicated,
                                         .provenance = RenderMemoryCostProvenance::Exact,

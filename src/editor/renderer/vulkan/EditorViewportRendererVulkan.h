@@ -8,6 +8,8 @@
 #include "Horo/Runtime/Render/NativeReconstructionKernel.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Render/ShaderHotReloadTarget.h"
+#include "Horo/Runtime/Render/UiPaintProgram.h"
+#include "Horo/Runtime/Render/UiRenderComposition.h"
 #include "VulkanEditorGraphicsBridge.h"
 #include "editor/renderer/EditorViewportResources.h"
 #include "editor/renderer/grid/ViewportOverlayTriangles.h"
@@ -43,6 +45,38 @@ namespace Horo::Editor {
         /** @copydoc IEditorViewportRenderer::ColorDiagnostics */
         [[nodiscard]] EditorViewportColorDiagnostics ColorDiagnostics() const noexcept override;
         [[nodiscard]] Result<void> Initialize();
+        /** @brief Prepares a sampled canvas and the exact ordinary viewport scene in one owned graph per frame slot.
+         * @param pass Exact viewport target, dimensions and renderable mesh topology.
+         * @param paint Finite producer descriptor with the same frame-slot count as the renderer.
+         * @param prototype Current canonical UI geometry used to admit structural roles.
+         * @param textures Exact sampled source inventory.
+         * @param writer Validated native Vulkan paint kernel.
+         * @param consumer Validated Vulkan position/UV sampled-color program.
+         * @param space Camera or World placement contract.
+         * @param overlay Whether the prepared scene also carries its ordinary viewport overlay.
+         * @param limits Explicit limits for the entire producer and scene graph.
+         * @param cancellation Cancelled source admission fence.
+         * @return Exact preparation outcome. A failed replacement preserves the previous preparation while its inputs remain current.
+         * @pre On the graphics owner, outside an active frame. The ordinary base output is required.
+         */
+        [[nodiscard]] Result<void> PrepareViewportCanvas(
+            const Render::StaticMeshPassDescriptor &pass, const Render::UiPaintProgramDescriptor &paint,
+            const Runtime::Ui::UiRenderSnapshot &prototype, std::span<const Render::RenderTextureHandle> textures,
+            const Render::CookedUiPaintKernel &writer, const EditorVulkanWorldCanvasCook &consumer, Render::UiRenderCompositionSpace space,
+            bool overlay, const Render::RenderGraphLimits &limits, const CancellationToken &cancellation = {});
+
+        /** @brief Produces an exact submission for an already prepared renderer-owned program and acquired frame slot. */
+        using ViewportCanvasSource = std::function<Result<Render::UiRenderSubmission>(const Render::UiPaintProgram &, std::uint32_t)>;
+
+        /** @brief Encodes an already prepared canvas and viewport scene before GUI composition.
+         * @param frame Exact active renderer frame.
+         * @param pass Actual matching viewport scene with current cameras and meshes.
+         * @param placement Current World-from-canvas matrix. Camera mode consumes no World placement.
+         * @param source Synchronous borrower providing canonical UI geometry and its admitted bindings for the selected slot.
+         * @return Scene execution result. Presentation and interactive receipts remain the host's responsibility.
+         */
+        [[nodiscard]] Result<void> ExecuteViewportCanvas(Render::RenderFrameScope &frame, const Render::StaticMeshPassDescriptor &pass,
+                                                         const std::optional<Math::Mat4> &placement, const ViewportCanvasSource &source);
         [[nodiscard]] Result<void> EnableCameraCrossFade() override;
         [[nodiscard]] EditorViewportCrossFadeCapacity CameraCrossFadeCapacity() const noexcept override;
         [[nodiscard]] Result<void> PrepareCameraCrossFadeFrame(const std::optional<EditorViewportCameraCrossFade> &crossFade) override;
@@ -182,6 +216,7 @@ namespace Horo::Editor {
         friend class EditorVulkanXrViewportAccess;
         struct XrProjectionGraph;
         struct ViewportRasterGraphs;
+        struct ViewportCanvasGraph;
         /** @brief Compiles owner-slot shadow/scene/overlay graphs only when exact resource topology changes. */
         [[nodiscard]] Result<void> PrepareViewportRasterGraphs(const Render::StaticMeshPassDescriptor &pass);
         /** @brief Records the one cold graph matching this actual native slot and frozen viewport resources. */
@@ -190,6 +225,7 @@ namespace Horo::Editor {
                                                               const Render::DirectionalShadowFrame *shadow,
                                                               const std::optional<Render::DirectionalShadowFrame> *sourceShadow = nullptr);
         std::shared_ptr<ViewportRasterGraphs> viewportRasterGraphs_;
+        std::shared_ptr<ViewportCanvasGraph> viewportCanvasGraph_;
         struct XrGraph;
         /** @copydoc EditorVulkanXrViewportAccess::TakePremultipliedProjection */
         [[nodiscard]] std::optional<EditorXrPremultipliedProjection> TakeXrPremultipliedProjection(
@@ -255,6 +291,36 @@ namespace Horo::Editor {
             std::size_t parameterBytes{}; /**< Exact logical packing extent, excluding native block tail padding. */
             std::size_t uniformBytes{};   /**< Selected backend's allocation, binding and full-upload extent. */
         };
+
+        /** @brief Owns one immutable canvas consumer and its slot-local mesh bindings. */
+        struct CanvasQuadProgram final {
+            explicit CanvasQuadProgram(EditorViewportRendererVulkan &viewport);
+            ~CanvasQuadProgram();
+            CanvasQuadProgram(const CanvasQuadProgram &) = delete;
+            CanvasQuadProgram &operator=(const CanvasQuadProgram &) = delete;
+
+            EditorViewportRendererVulkan &owner;
+            ShaderResources shader;
+            Render::RenderSamplerHandle sampler;
+            Render::RenderMeshHandle mesh;
+            Render::RenderBufferHandle vertices, indices;
+            std::array<OverlaySlot, std::tuple_size_v<FrameSlots>> slots;
+            std::array<Render::RenderTextureViewHandle, std::tuple_size_v<FrameSlots>> sampledViews;
+            Render::UiRenderCompositionSpace space{};
+        };
+
+        /** @brief Creates the closed color/depth pipeline and immutable quad outside frame recording. */
+        [[nodiscard]] Result<std::unique_ptr<CanvasQuadProgram>> CreateCanvasQuadProgram(const EditorVulkanWorldCanvasCook &cook,
+                                                                                         Render::UiRenderCompositionSpace space,
+                                                                                         Render::RenderTextureFormat colorFormat);
+        /** @brief Admits one distinct producer surface and frozen material for this graph slot. */
+        [[nodiscard]] Result<void> BindCanvasQuadSource(CanvasQuadProgram &program, std::uint32_t slot, Render::RenderTextureHandle canvas);
+        /** @brief Uploads the current camera/World matrix to the exact acquired frame's pre-bound slot. */
+        [[nodiscard]] Result<void> WriteCanvasQuad(Render::FrameToken frame, const CanvasQuadProgram &program, std::uint32_t slot,
+                                                   const Render::StaticMeshPassDescriptor &pass,
+                                                   const std::optional<Math::Mat4> &placement);
+        /** @brief Creates the closed top-left UV quad shared by all program slots. */
+        [[nodiscard]] Result<void> CreateCanvasQuadMesh(CanvasQuadProgram &program);
 
         /** @brief Owns the distinct sampled fullscreen program and immutable resources used by the cross-fade pass. */
         struct CameraCrossFadeProgram final {

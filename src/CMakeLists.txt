@@ -4173,6 +4173,8 @@ if (HORO_BUILD_EDITOR_GUI AND HORO_BUILD_RENDER_VULKAN AND TARGET HoroThirdParty
         editor/renderer/vulkan/EditorViewportRendererVulkan.cpp
         editor/renderer/vulkan/EditorViewportVulkanExecution.cpp
         editor/renderer/vulkan/EditorViewportVulkanRasterGraph.cpp
+        editor/renderer/vulkan/EditorViewportVulkanCanvas.cpp
+        editor/renderer/vulkan/EditorViewportVulkanCanvasProjection.cpp
         editor/renderer/vulkan/EditorViewportVulkanColor.cpp
         editor/renderer/vulkan/EditorViewportVulkanShadows.cpp
         editor/renderer/vulkan/EditorViewportVulkanLighting.cpp

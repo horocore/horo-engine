@@ -1,11 +1,14 @@
 /** @file EditorVulkanPresentationSmoke.cpp
  * @brief Real SDL/Vulkan GUI and cooked viewport composition; no simulated native admission. */
+#include "../../unit/runtime/renderer/UiSubmissionSourceFixture.h"
 #include "CameraCutNativeTestSupport.h"
 #include "ColorOutputPackage.h"
 #include "EditorImageProviderHost.h"
 #include "EditorVulkanShaderAssets.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
+#include "Horo/Runtime/Ui/UiRenderGeometry.h"
+#include "RuntimeUiPaintPackagedKernel.h"
 #include "VulkanBackendModule.h"
 #include "VulkanEditorGraphicsBridge.h"
 #include "VulkanVfxInstancedReadback.h"
@@ -276,16 +279,8 @@ namespace Horo::Tests::VulkanEditor {
         }
     };
 
-    /** @brief Uses the ordinary scene and GUI tail, then reads the exact production color attachment. */
-    std::vector<std::uint8_t> PresentCameraColor(Host &host, const RenderSceneView &scene, const std::uint64_t frameId,
-                                                 const RenderSamplerHandle readbackSampler,
-                                                 const std::optional<FramebufferExtent> output = std::nullopt) {
-        REQUIRE(host.viewportObservation);
-        host.viewportObservation->ResetDraws();
-        host.PrepareScene(scene);
-        auto frame = host.Frame(frameId, output.value_or(host.extent));
-        host.ExecuteSceneAndGui(frame, scene);
-        Check(frame.Present());
+    /** @brief Reads the exact published viewport attachment after a real native frame. */
+    std::vector<std::uint8_t> ReadViewportColor(Host &host, const RenderSamplerHandle readbackSampler) {
         using ResourceAccess = Render::Detail::RenderFrontendResourceAccess;
         const auto view = ResourceAccess::BackendInstance(*host.frontend, host.viewport->TextureView().sampledView);
         const auto sampler = ResourceAccess::BackendInstance(*host.frontend, readbackSampler);
@@ -297,6 +292,19 @@ namespace Horo::Tests::VulkanEditor {
         Readback readback{*host.viewportObservation, Readback::Capture::ViewportColor};
         readback.Prepare();
         return readback.ReadViewportColor(sample.Value().view);
+    }
+
+    /** @brief Uses the ordinary scene and GUI tail, then reads the exact production color attachment. */
+    std::vector<std::uint8_t> PresentCameraColor(Host &host, const RenderSceneView &scene, const std::uint64_t frameId,
+                                                 const RenderSamplerHandle readbackSampler,
+                                                 const std::optional<FramebufferExtent> output = std::nullopt) {
+        REQUIRE(host.viewportObservation);
+        host.viewportObservation->ResetDraws();
+        host.PrepareScene(scene);
+        auto frame = host.Frame(frameId, output.value_or(host.extent));
+        host.ExecuteSceneAndGui(frame, scene);
+        Check(frame.Present());
+        return ReadViewportColor(host, readbackSampler);
     }
 
     /** @brief Authors the two real orthographic viewpoints used by the native image oracle. */
@@ -345,6 +353,79 @@ namespace Horo::Tests::VulkanEditor {
         for (std::size_t index = 0; index + 3 < pixels.size(); index += 4)
             count += pixels[index] >= 240 && pixels[index + 1] <= 8 && pixels[index + 2] >= 240;
         return count;
+    }
+
+    TEST_CASE("Native Vulkan viewport samples Camera and World canvases with exact scene depth",
+              "[native-smoke][vulkan][gui][viewport][canvas]") {
+        using namespace Runtime::Ui;
+        using Render::Test::UiOwner;
+        using Render::Test::UiRequire;
+        const auto *root = std::getenv("HORO_VULKAN_UI_PAINT_ASSET_ROOT");
+        if (!root || !std::getenv("HORO_EDITOR_VULKAN_ASSET_ROOT"))
+            SKIP("Supply locked native Vulkan viewport and canvas shader packages.");
+        const auto consumer = UiRequire(LoadPackagedVulkanWorldCanvasShader(root));
+        const auto writer = UiRequire(Application::Internal::LoadPackagedProjectUiVulkanSceneKernel(root, ShaderTargetBackend::Vulkan, {}));
+        const CameraViewportFixture fixture;
+        const auto scene = fixture.View(0);
+        Host host{false, true};
+        host.CreateViewport(scene, nullptr, nullptr, true);
+        const auto pass = host.ViewportPass(scene);
+        const auto sampler = UiRequire(host.frontend->CreateSampler({})).handle;
+        Check(host.frontend->ProcessResourceRequests());
+        const auto tree = Render::Test::UiTree();
+        const UiRenderViewId view{UiOwner(), 9, 1};
+        const UiRenderSnapshotLimits limits{1, 0, 0, 0, 0, 1, 0};
+        auto extractor = UiRequire(UiRenderExtractor::Create({view, limits, 1}));
+        auto arena = UiRequire(UiRenderGeometryArena::Create({view, {4, 6, 1}, 1}));
+        const UiResolvedScreenCanvas projection{.logicalExtent = {4096, 2048}, .pixelExtent = {64, 32}, .pixelsPerDip = {1, 1}};
+        const auto descriptor = Runtime::Ui::Test::SnapshotDescriptor(tree, UiRequire(UiInteractionRevision::Create(1)),
+                                                                      UiRequire(UiRenderSnapshotRevision::Create(1)), view, limits);
+        const std::array commands{UiDrawCommand{UiRequire(tree.Root()).handle,
+                                                {{0, 0}, {4096, 2048}},
+                                                0,
+                                                NoUiRenderIndex,
+                                                NoUiRenderIndex,
+                                                1,
+                                                UiSolidDraw{{0, 1, 0, 1}}}};
+        const std::array transforms{UiLogicalTransform{}};
+        const auto snapshot = UiRequire(extractor.Extract(tree, descriptor, {.commands = commands, .transforms = transforms}));
+        const auto geometry = UiRequire(arena.Build(snapshot, projection));
+        const auto center = (pass.extent.height / 2 * pass.extent.width + pass.extent.width / 2) * 4;
+        const auto centerPixel = [&](const std::vector<std::uint8_t> &pixels) {
+            REQUIRE(center + 2 < pixels.size());
+            return std::array{int{pixels[center]}, int{pixels[center + 1]}, int{pixels[center + 2]}};
+        };
+        const auto opaque = centerPixel(PresentCameraColor(host, scene, 1, sampler));
+        CAPTURE(opaque);
+        REQUIRE(opaque[0] > 240);
+
+        using enum UiRenderCompositionSpace;
+        const auto space = GENERATE(Camera, World);
+        Check(host.viewport->PrepareViewportCanvas(pass, {projection, {32, 64, 4}, 2, 32}, snapshot, {}, *writer, consumer, space, false,
+                                                   {16, 64, 192, 32}));
+        const auto render = [&](const std::uint64_t number, const std::optional<Math::Mat4> &placement) {
+            auto frame = host.Frame(number);
+            Check(host.bridge->Port()->PreparePrimaryOutput(frame.Token(), {}));
+            Check(host.viewport->ExecuteViewportCanvas(frame, pass, placement, [&](const auto &, std::uint32_t) {
+                return Result<UiRenderSubmission>::Success({.geometry = &geometry});
+            }));
+            const auto output = host.viewport->TextureView();
+            host.ComposeGui(frame, &output);
+            Check(frame.Present());
+            return centerPixel(ReadViewportColor(host, sampler));
+        };
+        auto placement = Math::Mat4::Identity();
+        placement.values[14] = 1;
+        const auto front = render(2, space == World ? std::optional{placement} : std::nullopt);
+        CHECK(front[1] > 240);
+        CHECK(front[0] < 8);
+        if (space == World) {
+            placement.values[14] = -1;
+            const auto behind = render(3, placement);
+            CHECK(behind == opaque);
+        }
+        Check(host.frontend->ReleaseSampler(sampler));
+        CHECK(host.Drain());
     }
 
     /** @brief Uses the current renderer budget to publish and present a live fallback at the original sequence position. */
