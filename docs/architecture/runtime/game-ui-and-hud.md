@@ -408,6 +408,11 @@ without changing layout. Unpresented output revokes the retained placement.
 World ray callers now pass only a view, canvas and ray in `UiWorldRayQuery`.
 Hosts must supply the actual rendered plane in `UiPresentationReceipt`.
 The input debugger follows the same targeting path.
+The shared pointer recognizer accepts bounded world rays for capture and
+gestures. A ray that crosses the plane outside the canvas can still move a
+captured contact. A tracking-loss cancellation can release it without geometry.
+World samples use the presented plane and share the same gesture dispatch and
+control defaults as viewport pointers.
 
 A Scene entity can reference one canvas through its `uiCanvas` component. The
 reference names the registry asset, document, canvas and minimum document

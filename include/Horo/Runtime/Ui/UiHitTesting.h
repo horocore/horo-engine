@@ -91,6 +91,12 @@ namespace Horo::Runtime::Ui {
         float rayDistance{};            /**< World ray distance, or zero for a screen pointer. */
     };
 
+    /** @brief Resolved world ray for targeting and for movement during an existing capture. */
+    struct UiWorldPointerResolution final {
+        std::optional<UiHitTestResult> hit;
+        std::optional<UiLogicalPoint> position; /**< Canvas-plane intersection, including positions outside the canvas. */
+    };
+
     /** @brief Actual hit-test decision for one element, in front-to-back paint order. */
     enum class UiHitTestDecision : std::uint8_t {
         Hidden,
@@ -162,6 +168,13 @@ namespace Horo::Runtime::Ui {
          */
         [[nodiscard]] Result<std::optional<UiHitTestResult>> HitTestWorld(const UiWorldRayQuery &query,
                                                                           const UiPresentedInteractionState &presented) const;
+        /** @brief Resolves one ray against the last presented plane using the ordinary hit-test rules.
+         * @param query Exact canvas and a bounded ray segment.
+         * @param presented Last-presentation tracker for the queried view/canvas.
+         * @return Target and any representable plane intersection, or the original hit-test error.
+         */
+        [[nodiscard]] Result<UiWorldPointerResolution> ResolveWorldPointer(const UiWorldRayQuery &query,
+                                                                           const UiPresentedInteractionState &presented) const;
 
         /** @brief Runs the same screen hit test while copying actual decisions into bounded optional evidence.
          * @param query Actual pointer query. @param presented Actual presentation owner. @param observation Caller-owned output.
@@ -184,9 +197,9 @@ namespace Horo::Runtime::Ui {
                                                                                    const UiPresentedInteractionState &presented,
                                                                                    UiHitTestObservation *observation) const;
         /** @brief Implements ordinary world admission with a nullable observation buffer. */
-        [[nodiscard]] Result<std::optional<UiHitTestResult>> HitTestWorldObserved(const UiWorldRayQuery &query,
-                                                                                  const UiPresentedInteractionState &presented,
-                                                                                  UiHitTestObservation *observation) const;
+        [[nodiscard]] Result<UiWorldPointerResolution> ResolveWorldPointerObserved(const UiWorldRayQuery &query,
+                                                                                   const UiPresentedInteractionState &presented,
+                                                                                   UiHitTestObservation *observation) const;
         struct Storage;
         friend class UiHitTestStore;
         explicit UiHitTestSnapshot(std::shared_ptr<const Storage> storage) noexcept;

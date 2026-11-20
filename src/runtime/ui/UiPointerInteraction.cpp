@@ -48,8 +48,10 @@ namespace Horo::Runtime::Ui {
         class LiveGestureRoute final : public UiEventHandler {
         public:
             LiveGestureRoute(UiEventHandler &handler, const bool &stopped, const std::uint64_t &revision,
-                             const UiPointerCaptureToken *capture) noexcept
-                : handler_(handler), stopped_(stopped), revision_(revision), admittedRevision_(revision), capture_(capture) {}
+                             const UiPointerCaptureToken *capture, const UiPresentedInteractionState *worldPresentation) noexcept
+                : handler_(handler), stopped_(stopped), revision_(revision), admittedRevision_(revision), capture_(capture),
+                  worldPresentation_(worldPresentation),
+                  worldSnapshot_(worldPresentation ? worldPresentation->LastObservedSnapshot() : UiRenderSnapshotRevision{}) {}
 
             Result<UiEventResponse> Handle(const UiElementHandle element, const UiEventPhase phase, const UiRoutedEvent &event) override {
                 auto response = handler_.Handle(element, phase, event);
@@ -73,6 +75,8 @@ namespace Horo::Runtime::Ui {
                     return Result<void>::Failure(MakeError(UiErrors::EventDispatchLifecycleUnavailable));
                 if (revision_ != admittedRevision_)
                     return Result<void>::Failure(MakeError(UiErrors::EventDispatchRouteInvalidated));
+                if (worldPresentation_ && worldPresentation_->LastObservedSnapshot() != worldSnapshot_)
+                    return Result<void>::Failure(MakeError(UiErrors::HitTestSourceStale));
                 if (capture_ && !capture_->IsActive())
                     return Result<void>::Failure(MakeError(UiErrors::PointerCaptureSourceStale));
                 return Result<void>::Success();
@@ -83,6 +87,8 @@ namespace Horo::Runtime::Ui {
             const std::uint64_t &revision_;
             const std::uint64_t admittedRevision_;
             const UiPointerCaptureToken *capture_;
+            const UiPresentedInteractionState *worldPresentation_;
+            UiRenderSnapshotRevision worldSnapshot_;
         };
     }  // namespace
 
@@ -209,8 +215,10 @@ namespace Horo::Runtime::Ui {
         const auto contact = std::ranges::find_if(contacts_, [&gesture](const Contact &entry) {
             return entry.capture.IsActive() && entry.capture.Request().pointer.Value() == gesture.pointer;
         });
+        const auto *worldPresentation =
+            environment.hitTesting.Descriptor().renderMode == UiRenderMode::WorldSpace ? &environment.presented : nullptr;
         LiveGestureRoute handler{environment.handler, stopped_, transientRevision_,
-                                 contact == contacts_.end() ? nullptr : &contact->capture};
+                                 contact == contacts_.end() ? nullptr : &contact->capture, worldPresentation};
         const auto dispatched = environment.dispatcher.Dispatch(environment.tree, route, event, handler);
         if (dispatched.HasError())
             return Result<bool>::Failure(dispatched.ErrorValue());
@@ -258,38 +266,66 @@ namespace Horo::Runtime::Ui {
         return Result<void>::Success();
     }
 
-    /** @copydoc UiPointerInteraction::ProcessSample */
-    Result<void> UiPointerInteraction::ProcessSample(const UiPointerInteractionEnvironment &environment, const UiScreenPointerQuery &query,
-                                                     const UiPointerSample &sample, std::uint64_t &nextSequence,
-                                                     UiPointerInteractionResult &result) {
-        const auto hit = environment.hitTesting.HitTestScreen(query, environment.presented);
-        if (hit.HasError())
-            return Result<void>::Failure(hit.ErrorValue());
+    /** @copydoc UiPointerInteraction::ResolveSample */
+    Result<UiPointerInteraction::ResolvedSample> UiPointerInteraction::ResolveSample(const UiPointerInteractionEnvironment &environment,
+                                                                                     const UiResolvedScreenCanvas &canvasSpace,
+                                                                                     const UiPointerSample &sample) const {
+        using Outcome = Result<ResolvedSample>;
+        if (!sample.pointer.IsValid() || sample.edge >= UiPointerEdge::Count || sample.modality >= UiPointerModality::Count ||
+            sample.button >= UiPointerButton::Count)
+            return Outcome::Failure(MakeError(UiErrors::EventDispatchInvalid));
+        const auto &owner = descriptor_.owner;
+        if (sample.modality == UiPointerModality::WorldRay) {
+            if (environment.hitTesting.Descriptor().renderMode != UiRenderMode::WorldSpace)
+                return Outcome::Failure(MakeError(UiErrors::CanvasSpaceModeMismatch));
+            if (!sample.worldRay)
+                return sample.edge == UiPointerEdge::Cancel ? Outcome::Success({})
+                                                            : Outcome::Failure(MakeError(UiErrors::EventDispatchInvalid));
+            const auto world =
+                environment.hitTesting.ResolveWorldPointer({owner.view, owner.canvas, *sample.worldRay}, environment.presented);
+            if (world.HasError())
+                return Outcome::Failure(world.ErrorValue());
+            return Outcome::Success({world.Value().hit, world.Value().position});
+        }
+        if (sample.worldRay || !std::isfinite(sample.pixelX) || !std::isfinite(sample.pixelY))
+            return Outcome::Failure(MakeError(UiErrors::EventDispatchInvalid));
+        const UiScreenPointerQuery query{owner.view, owner.canvas, canvasSpace, sample.pixelX, sample.pixelY};
         const auto position = Position(query);
         if (position.HasError())
-            return Result<void>::Failure(position.ErrorValue());
-        const SampleContext context{environment, sample, hit.Value(), position.Value(), nextSequence, result};
+            return Outcome::Failure(position.ErrorValue());
+        const auto hit = environment.hitTesting.HitTestScreen(query, environment.presented);
+        if (hit.HasError())
+            return Outcome::Failure(hit.ErrorValue());
+        return Outcome::Success({hit.Value(), position.Value()});
+    }
+
+    /** @copydoc UiPointerInteraction::ProcessSample */
+    Result<void> UiPointerInteraction::ProcessSample(const UiPointerInteractionEnvironment &environment, const ResolvedSample &resolved,
+                                                     const UiPointerSample &sample, std::uint64_t &nextSequence,
+                                                     UiPointerInteractionResult &result) {
         if (sample.edge == UiPointerEdge::Press)
-            return PressContact(context);
+            return PressContact({environment, sample, resolved.hit, resolved.position.value_or(UiLogicalPoint{}), nextSequence, result});
         auto slots = std::span{contacts_}.first(descriptor_.pointerCapacity);
         auto found = std::ranges::find_if(slots, [&sample](const Contact &contact) {
             return contact.capture.State() != UiPointerCaptureState::Inactive && contact.capture.Request().pointer == sample.pointer;
         });
         if (found == slots.end()) {
             if (sample.modality == UiPointerModality::Mouse && (sample.edge == UiPointerEdge::Move || sample.edge == UiPointerEdge::Cancel))
-                return Hover(environment, sample.edge == UiPointerEdge::Move && hit.Value() ? hit.Value()->element : UiElementHandle{},
-                             sample, position.Value(), nextSequence, result);
+                return Hover(environment, sample.edge == UiPointerEdge::Move && resolved.hit ? resolved.hit->element : UiElementHandle{},
+                             sample, resolved.position.value_or(UiLogicalPoint{}), nextSequence, result);
             // Hoverless sources never manufacture a target before an admitted press.
             return Result<void>::Success();
         }
         const auto target = found->capture.Request().route.target;
         if (found->modality != sample.modality || found->capture.Request().button != sample.button)
             return Result<void>::Failure(MakeError(UiErrors::PointerCaptureInvalid));
-        const auto previous = ObservePosition(*found, position.Value());
+        const auto position = resolved.position.value_or(found->position);
+        const auto previous = ObservePosition(*found, position);
+        const SampleContext context{environment, sample, resolved.hit, position, nextSequence, result};
         UiGestureEvent gesture{UiGestureKind::Cancel, sample.pointer.Value(), target};
         if (sample.edge == UiPointerEdge::Cancel || !found->capture.IsActive()) {
             *found = {};
-            const auto emitted = Emit(environment, target, gesture, position.Value(), nextSequence, result);
+            const auto emitted = Emit(environment, target, gesture, position, nextSequence, result);
             return emitted.HasError() ? Result<void>::Failure(emitted.ErrorValue()) : Result<void>::Success();
         }
         if (sample.edge == UiPointerEdge::Move)
@@ -334,26 +370,23 @@ namespace Horo::Runtime::Ui {
                                                                   const std::uint64_t milliseconds, std::uint64_t &nextSequence) {
         if (const auto admitted = Validate(environment); admitted.HasError())
             return Result<UiPointerInteractionResult>::Failure(admitted.ErrorValue());
-        if (!canvasSpace.IsValid() || milliseconds < time_ || samples.size() > MaximumUiInteractionSamples || nextSequence == 0 ||
+        if ((!canvasSpace.IsValid() && environment.hitTesting.Descriptor().renderMode != UiRenderMode::WorldSpace) ||
+            milliseconds < time_ || samples.size() > MaximumUiInteractionSamples || nextSequence == 0 ||
             nextSequence > std::numeric_limits<std::uint64_t>::max() - 256)
             return Result<UiPointerInteractionResult>::Failure(MakeError(UiErrors::EventDispatchInvalid));
         // Validate the entire batch before any default runs; coordinates outside the viewport are legal during capture.
-        for (const auto &sample : samples) {
-            if (!sample.pointer.IsValid() || sample.edge >= UiPointerEdge::Count || sample.modality >= UiPointerModality::Count ||
-                sample.button >= UiPointerButton::Count || !std::isfinite(sample.pixelX) || !std::isfinite(sample.pixelY))
-                return Result<UiPointerInteractionResult>::Failure(MakeError(UiErrors::EventDispatchInvalid));
-            if (const auto position =
-                    Position({descriptor_.owner.view, descriptor_.owner.canvas, canvasSpace, sample.pixelX, sample.pixelY});
-                position.HasError())
-                return Result<UiPointerInteractionResult>::Failure(position.ErrorValue());
+        std::array<ResolvedSample, MaximumUiInteractionSamples> resolved{};
+        for (std::size_t index = 0; index < samples.size(); ++index) {
+            const auto sample = ResolveSample(environment, canvasSpace, samples[index]);
+            if (sample.HasError())
+                return Result<UiPointerInteractionResult>::Failure(sample.ErrorValue());
+            resolved[index] = sample.Value();
         }
         PumpGuard guard{pumping_};
         time_ = milliseconds;
         UiPointerInteractionResult result;
-        for (const auto &sample : samples) {
-            const auto processed =
-                ProcessSample(environment, {descriptor_.owner.view, descriptor_.owner.canvas, canvasSpace, sample.pixelX, sample.pixelY},
-                              sample, nextSequence, result);
+        for (std::size_t index = 0; index < samples.size(); ++index) {
+            const auto processed = ProcessSample(environment, resolved[index], samples[index], nextSequence, result);
             if (processed.HasError()) {
                 for (auto &contact : contacts_)
                     contact = {};

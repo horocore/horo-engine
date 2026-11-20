@@ -328,7 +328,9 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiHitTestSnapshot::HitTestWorld */
     Result<std::optional<UiHitTestResult>> UiHitTestSnapshot::HitTestWorld(const UiWorldRayQuery &query,
                                                                            const UiPresentedInteractionState &presented) const {
-        return HitTestWorldObserved(query, presented, nullptr);
+        const auto result = ResolveWorldPointer(query, presented);
+        return result.HasValue() ? Result<std::optional<UiHitTestResult>>::Success(result.Value().hit)
+                                 : Result<std::optional<UiHitTestResult>>::Failure(result.ErrorValue());
     }
 
     /** @copydoc UiHitTestSnapshot::HitTestWorld */
@@ -337,23 +339,32 @@ namespace Horo::Runtime::Ui {
                                                                            UiHitTestObservation &observation) const {
         observation.written = 0;
         observation.omitted = 0;
-        return HitTestWorldObserved(query, presented, &observation);
+        const auto result = ResolveWorldPointerObserved(query, presented, &observation);
+        return result.HasValue() ? Result<std::optional<UiHitTestResult>>::Success(result.Value().hit)
+                                 : Result<std::optional<UiHitTestResult>>::Failure(result.ErrorValue());
     }
 
-    /** @copydoc UiHitTestSnapshot::HitTestWorldObserved */
-    Result<std::optional<UiHitTestResult>> UiHitTestSnapshot::HitTestWorldObserved(const UiWorldRayQuery &query,
-                                                                                   const UiPresentedInteractionState &presented,
-                                                                                   UiHitTestObservation *observation) const {
+    /** @copydoc UiHitTestSnapshot::ResolveWorldPointer */
+    Result<UiWorldPointerResolution> UiHitTestSnapshot::ResolveWorldPointer(const UiWorldRayQuery &query,
+                                                                            const UiPresentedInteractionState &presented) const {
+        return ResolveWorldPointerObserved(query, presented, nullptr);
+    }
+
+    /** @copydoc UiHitTestSnapshot::ResolveWorldPointerObserved */
+    Result<UiWorldPointerResolution> UiHitTestSnapshot::ResolveWorldPointerObserved(const UiWorldRayQuery &query,
+                                                                                    const UiPresentedInteractionState &presented,
+                                                                                    UiHitTestObservation *observation) const {
+        using Outcome = Result<UiWorldPointerResolution>;
         if (!storage_)
-            return Failure<std::optional<UiHitTestResult>>(UiErrors::HitTestLifecycleUnavailable);
+            return Failure<UiWorldPointerResolution>(UiErrors::HitTestLifecycleUnavailable);
         if (storage_->descriptor.renderMode != UiRenderMode::WorldSpace)
-            return Failure<std::optional<UiHitTestResult>>(UiErrors::CanvasSpaceModeMismatch);
+            return Failure<UiWorldPointerResolution>(UiErrors::CanvasSpaceModeMismatch);
         if (const auto validation = ValidatePresentation(*storage_, query.view, query.canvas, presented); validation.HasError())
-            return Result<std::optional<UiHitTestResult>>::Failure(validation.ErrorValue());
+            return Outcome::Failure(validation.ErrorValue());
 
         const auto &placed = presented.WorldProjection();
         if (!placed)
-            return Failure<std::optional<UiHitTestResult>>(UiErrors::HitTestNotPresented);
+            return Failure<UiWorldPointerResolution>(UiErrors::HitTestNotPresented);
 
         const auto &ray = query.ray;
         const auto &projection = *placed;
@@ -362,14 +373,14 @@ namespace Horo::Runtime::Ui {
         if (!Math::IsFinite(ray.origin) || !Math::IsFinite(ray.direction) || !std::isfinite(ray.minimumDistance) ||
             !std::isfinite(ray.maximumDistance) || ray.minimumDistance < 0.0F || ray.maximumDistance < ray.minimumDistance ||
             !std::isfinite(directionLength) || std::abs(directionLength - 1.0F) > 0.001F)
-            return Failure<std::optional<UiHitTestResult>>(UiErrors::HitTestInvalid);
+            return Failure<UiWorldPointerResolution>(UiErrors::HitTestInvalid);
 
         const float denominator = Math::Dot(normal, ray.direction);
         if (std::abs(denominator) <= Math::DefaultEpsilon)
-            return Result<std::optional<UiHitTestResult>>::Success(std::nullopt);
+            return Outcome::Success({});
         const float distance = Math::Dot(normal, projection.origin - ray.origin) / denominator;
         if (!std::isfinite(distance) || distance < ray.minimumDistance || distance > ray.maximumDistance)
-            return Result<std::optional<UiHitTestResult>>::Success(std::nullopt);
+            return Outcome::Success({});
 
         const Math::Vec3 offset = ray.origin + ray.direction * distance - projection.origin;
         const double xx = Math::Dot(projection.horizontalExtent, projection.horizontalExtent);
@@ -382,7 +393,11 @@ namespace Horo::Runtime::Ui {
         const double vertical = (py * xx - px * xy) / determinant;
         const double logicalX = horizontal * storage_->descriptor.logicalExtent.width;
         const double logicalY = vertical * storage_->descriptor.logicalExtent.height;
-        return Result<std::optional<UiHitTestResult>>::Success(HitLogical(*storage_, logicalX, logicalY, distance, observation));
+        constexpr auto minimum = std::numeric_limits<std::int32_t>::min();
+        if (constexpr auto maximum = std::numeric_limits<std::int32_t>::max();
+            !(logicalX >= minimum && logicalX <= maximum && logicalY >= minimum && logicalY <= maximum))
+            return Outcome::Success({});
+        return Outcome::Success({HitLogical(*storage_, logicalX, logicalY, distance, observation), ToLogicalPoint(logicalX, logicalY)});
     }
 
     /** @copydoc UiHitTestStore::Create */
