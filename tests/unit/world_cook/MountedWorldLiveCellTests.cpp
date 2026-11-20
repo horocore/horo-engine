@@ -62,7 +62,7 @@ namespace Horo::WorldCook {
         /** @brief Composes the ordinary standalone product over a durable cooked World and observes its exact Scene facade. */
         class MountedCellProduct final {
         public:
-            explicit MountedCellProduct(const bool enableLive, const bool firstDemand) {
+            explicit MountedCellProduct(const bool enableLive, const bool firstDemand, const std::size_t maximumResidents = 1) {
                 namespace N = Network;
                 const auto published = fixture_.Publish();
                 REQUIRE(published.HasValue());
@@ -70,15 +70,21 @@ namespace Horo::WorldCook {
                 const auto release = fixture_.Release();
                 identity_ = fixture_.inputs.front().expected;
                 demand_ = {identity_.cell, {900}, identity_.scene, identity_.revision};
+                siblingIdentity_ = fixture_.inputs.back().expected;
+                sibling_ = {siblingIdentity_.cell, {901}, siblingIdentity_.scene, siblingIdentity_.revision};
                 CommittedWorldSelection selection{release.targetRoot,
                                                   release.target,
                                                   published.Value().publication->manifestDigest,
                                                   release.indexArtifact,
                                                   release.dependencyArtifact,
                                                   Math::WorldCoordinate64::FromMillimeters(0, 0, 0)};
-                if (enableLive)
-                    selection.liveCell =
-                        CommittedWorldLiveSelection{{20'000'000, 1'000'000, 4}, firstDemand ? std::optional{demand_} : std::nullopt};
+                if (enableLive) {
+                    const MountedWorldLiveLimits limits{.maximumFrameNanoseconds = 20'000'000,
+                                                        .maximumUnitNanoseconds = 1'000'000,
+                                                        .maximumCellEntities = 4,
+                                                        .maximumResidentCells = maximumResidents};
+                    selection.liveCell = CommittedWorldLiveSelection{limits, firstDemand ? std::optional{demand_} : std::nullopt};
+                }
                 S::SceneDefinitionBuilder root{{99}, {1}};
                 root.Add({.object = parentObject_});
                 auto built = std::move(root).Build();
@@ -140,6 +146,14 @@ namespace Horo::WorldCook {
                 Check(WithdrawHeadlessWorldCell(*scene_));
             }
 
+            void RequestSibling() {
+                Check(RequestHeadlessWorldCell(*scene_, sibling_));
+            }
+
+            void WithdrawFirstOccurrence() {
+                Check(WithdrawHeadlessWorldCell(*scene_, demand_.occurrence));
+            }
+
             Result<void> ProbeRequest() const {
                 return RequestHeadlessWorldCell(*scene_, demand_);
             }
@@ -158,14 +172,15 @@ namespace Horo::WorldCook {
                 REQUIRE(host_->Role(Network::NetworkModeWorldKind::Standalone, replacements.front().scene).HasError());
             }
 
-            bool Attached() const {
+            bool Attached(const bool sibling = false) const {
                 const auto scene = InspectHeadlessScene(*scene_);
                 REQUIRE(scene);
                 REQUIRE(scene->RuntimeId() == runtime_);
                 REQUIRE(scene->Find(parentObject_));
+                const auto &selected = sibling ? sibling_ : demand_;
                 return S::FindStreamedSceneInstance(*scene,
-                                                    {runtime_, demand_.occurrence, demand_.definition, S::SceneInstanceMode::Streamed},
-                                                    identity_, epoch_)
+                                                    {runtime_, selected.occurrence, selected.definition, S::SceneInstanceMode::Streamed},
+                                                    sibling ? siblingIdentity_ : identity_, epoch_)
                     .has_value();
             }
 
@@ -178,11 +193,11 @@ namespace Horo::WorldCook {
                 return std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
             }
 
-            std::int64_t UntilAttached(const bool expected) {
+            std::int64_t UntilAttached(const bool expected, const bool sibling = false) {
                 const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
                 do {
                     const auto sample = RunFrame();
-                    if (Attached() == expected)
+                    if (Attached(sibling) == expected)
                         return sample;
                     std::this_thread::sleep_for(std::chrono::milliseconds(1));
                 } while (std::chrono::steady_clock::now() < deadline);
@@ -201,8 +216,10 @@ namespace Horo::WorldCook {
             static constexpr S::SceneObjectId parentObject_{42};
             Fixture fixture_{false, false};
             S::SceneCellPayloadIdentity identity_;
+            S::SceneCellPayloadIdentity siblingIdentity_;
             W::PartitionEpoch epoch_;
             CommittedWorldInitialCell demand_;
+            CommittedWorldInitialCell sibling_;
             DeterministicClock clock_;
             JobSystem jobs_{{1, 4}};
             A::MemoryAssetProvider provider_;
@@ -223,14 +240,17 @@ namespace Horo::WorldCook {
                       << ",p99_ns=" << percentile(99) << ",max_ns=" << samples.back() << '\n';
         }
 
-        /** @brief Adds a verified material envelope and native collider declaration to one exact cell. */
+        /** @brief Gives the two cells independent native colliders backed by the same verified material envelope. */
         void PopulateCellMaterial(Fixture &fixture, const A::AssetDependency &material) {
-            auto &entity = fixture.entities.front();
-            entity.components.rigidBody = S::RigidBodyComponent{.id = {10}, .body = {100}};
-            entity.components.colliders = {
-                Physics::Collider(20, 200, entity.object.value, 100, material.id,
-                                  S::PhysicsColliderSource{S::PhysicsAnalyticCollider{S::PhysicsSphereCollider{0.5F}}})};
-            fixture.inputs.front().source.dependencies = {&material, 1};
+            for (std::size_t index = 0; index < fixture.entities.size(); ++index) {
+                auto &entity = fixture.entities[index];
+                const auto body = 100 + index;
+                entity.components.rigidBody = S::RigidBodyComponent{.id = {10 + index}, .body = {body}};
+                entity.components.colliders = {
+                    Physics::Collider(20 + index, 200 + index, entity.object.value, body, material.id,
+                                      S::PhysicsColliderSource{S::PhysicsAnalyticCollider{S::PhysicsSphereCollider{0.5F}}})};
+                fixture.inputs[index].source.dependencies = {&material, 1};
+            }
             const auto descriptor = Physics::PhysicsMaterialAsset::Create(
                 {.id = Physics::PhysicsMaterialAssetId::FromAssetId(material.id), .sourceRevision = 1});
             REQUIRE(descriptor.HasValue());
@@ -262,6 +282,8 @@ namespace Horo::WorldCook {
         const auto release = fixture.Release();
         const auto identity = fixture.inputs.front().expected;
         const CommittedWorldInitialCell request{identity.cell, {900}, identity.scene, identity.revision};
+        const auto siblingIdentity = fixture.inputs.back().expected;
+        const CommittedWorldInitialCell sibling{siblingIdentity.cell, {901}, siblingIdentity.scene, siblingIdentity.revision};
         const CommittedWorldSelection selection{release.targetRoot,
                                                 release.target,
                                                 published.Value().publication->manifestDigest,
@@ -301,7 +323,13 @@ namespace Horo::WorldCook {
         auto driver = std::make_unique<MountedCellDriver>(*mount, scene);
         auto &progress = *driver;
         REQUIRE(host->AddParticipant(std::move(driver)).HasValue());
-        REQUIRE(mount->BindLiveCell(host->DispatchSource(), jobs, {20'000'000, 1'000'000, 4}).HasValue());
+        REQUIRE(mount
+                    ->BindLiveCell(host->DispatchSource(), jobs,
+                                   {.maximumFrameNanoseconds = 20'000'000,
+                                    .maximumUnitNanoseconds = 1'000'000,
+                                    .maximumCellEntities = 4,
+                                    .maximumResidentCells = 2})
+                    .HasValue());
         REQUIRE(host->Startup().HasValue());
         W::TestSupport::RequireError(mount->AdvanceLiveCell({}), W::WorldArtifactErrors::Stale);
         const auto frame = [&] {
@@ -361,13 +389,37 @@ namespace Horo::WorldCook {
         REQUIRE(attached());
         frame();
         stage(Stage::Active);
-        REQUIRE(mount->WithdrawLiveCell().HasValue());
+
+        const S::SceneInstanceAddress siblingAddress{root, sibling.occurrence, sibling.definition, S::SceneInstanceMode::Streamed};
+        const auto siblingAttached = [&] {
+            REQUIRE(scene.ActiveScene());
+            return S::FindStreamedSceneInstance(*scene.ActiveScene(), siblingAddress, siblingIdentity, epoch).has_value();
+        };
+        REQUIRE(mount->RequestLiveCell(request).HasError());
+        REQUIRE(mount->RequestLiveCell(sibling).HasValue());
+        REQUIRE(mount->WithdrawLiveCell().HasError());
+        until([](const Result<Stage> &last) {
+            return last.HasError() || last.Value() == Stage::Active;
+        });
+        stage(Stage::Active);
+        REQUIRE(attached());
+        REQUIRE(siblingAttached());
+        REQUIRE(mount->WithdrawLiveCell(request.occurrence).HasValue());
         frame();
         stage(Stage::Retiring);
         REQUIRE_FALSE(attached());
+        REQUIRE(siblingAttached());
+        frame();
+        stage(Stage::Active);
+        REQUIRE(mount->WithdrawLiveCell(request.occurrence).HasError());
+        REQUIRE(mount->WithdrawLiveCell().HasValue());
+        frame();
+        stage(Stage::Retiring);
+        REQUIRE_FALSE(siblingAttached());
         frame();
         stage(Stage::Idle);
         REQUIRE_FALSE(attached());
+        REQUIRE_FALSE(siblingAttached());
     }
 
     TEST_CASE("Standalone mounted CoreEcs demand starts in the product frame and withdraws through the same Scene owner",
@@ -395,9 +447,20 @@ namespace Horo::WorldCook {
             product.CheckTravelRefusal();
             static_cast<void>(product.UntilAttached(true));
         }
+        SECTION("Configured standalone hosts can withdraw an exact occurrence while its sibling stays published") {
+            MountedCellProduct product{true, true, 2};
+            static_cast<void>(product.UntilAttached(true));
+            static_cast<void>(product.RunFrame());  // Reconcile the first positive Scene receipt.
+            product.RequestSibling();
+            static_cast<void>(product.UntilAttached(true, true));
+            static_cast<void>(product.RunFrame());
+            product.WithdrawFirstOccurrence();
+            static_cast<void>(product.UntilAttached(false));
+            REQUIRE(product.Attached(true));
+        }
     }
 
-    TEST_CASE("Mounted live cell admits committed asset leases before native body publication and retires both at cutoff",
+    TEST_CASE("Mounted live cells charge one committed allocation and retire it after the last native detach",
               "[world_cook][native][mounted_world][live_cell]") {
         auto runtime = Physics::PhysicsRuntime::Create(Physics::PhysicsRuntimeMode::Canonical);
         if (runtime.HasError() && runtime.ErrorValue().code.Value() == Physics::PhysicsErrors::CapabilityUnavailable.code.Value())
@@ -414,13 +477,20 @@ namespace Horo::WorldCook {
         const auto release = fixture.Release();
         const auto identity = fixture.inputs.front().expected;
         const CommittedWorldInitialCell request{identity.cell, {900}, identity.scene, identity.revision};
-        MountedWorldLiveLimits limits{20'000'000, 1'000'000, 4, 1, fixture.baseArtifacts.front().size()};
+        const auto siblingIdentity = fixture.inputs.back().expected;
+        const CommittedWorldInitialCell sibling{siblingIdentity.cell, {901}, siblingIdentity.scene, siblingIdentity.revision};
+        const auto bytes = fixture.baseArtifacts.front().size();
+        MountedWorldLiveLimits limits{20'000'000, 1'000'000, 4, 1, bytes, 2};
         bool expectCapacity{};
+        bool retainReader{};
         SECTION("One byte less than the exact envelope never publishes resources or native bodies") {
             --limits.maximumCellAssetBytes;
             expectCapacity = true;
         }
-        SECTION("The complete envelope is retained through a native attach and exact detach receipt") {}
+        SECTION("Both live cells share the complete envelope through exact native detach receipts") {}
+        SECTION("A remaining payload pin delays budget credit after the last native detach") {
+            retainReader = true;
+        }
         const CommittedWorldSelection selection{release.targetRoot,
                                                 release.target,
                                                 published.Value().publication->manifestDigest,
@@ -452,6 +522,7 @@ namespace Horo::WorldCook {
         REQUIRE(scene.ActiveScene());
         const auto root = scene.ActiveScene()->RuntimeId();
         const S::SceneInstanceAddress address{root, request.occurrence, request.definition, S::SceneInstanceMode::Streamed};
+        const S::SceneInstanceAddress siblingAddress{root, sibling.occurrence, sibling.definition, S::SceneInstanceMode::Streamed};
         const auto epoch = IdentityFrom<W::PartitionEpoch>(5);
         const auto attached = [&] {
             REQUIRE(scene.ActiveScene());
@@ -464,6 +535,10 @@ namespace Horo::WorldCook {
             const auto observed = scope.Value().physics.ReadSceneActivation();
             REQUIRE(observed.HasValue());
             return observed.Value().staticBodies;
+        };
+        const auto siblingAttached = [&] {
+            REQUIRE(scene.ActiveScene());
+            return S::FindStreamedSceneInstance(*scene.ActiveScene(), siblingAddress, siblingIdentity, epoch);
         };
         auto prepared = MountedWorld::Prepare(NativeDurableFileSystem{}, selection, 5, scene);
         REQUIRE(prepared.HasValue());
@@ -483,21 +558,31 @@ namespace Horo::WorldCook {
             clock.Advance(Duration::FromMilliseconds(17));
             REQUIRE(host->RunFrame().HasValue());
         };
-        frame();
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
-        while (progress.last.HasValue() && progress.last.Value() == Stage::Loading && std::chrono::steady_clock::now() < deadline) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        const auto load = [&] {
             frame();
-        }
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (progress.last.HasValue() && progress.last.Value() == Stage::Loading && std::chrono::steady_clock::now() < deadline) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                frame();
+            }
+        };
+        const auto chargedBytes = [&] {
+            const auto charged = mount->InspectLiveAssetBytes();
+            REQUIRE(charged.HasValue());
+            return charged.Value();
+        };
+        load();
         if (expectCapacity) {
             W::TestSupport::RequireError(progress.last, S::SceneCellPayloadErrors::CapacityExceeded);
             CHECK_FALSE(attached());
             CHECK(bodyCount() == 0);
+            CHECK(chargedBytes() == 0);
             return;
         }
         REQUIRE(progress.last.HasValue());
         REQUIRE(progress.last.Value() == Stage::Prepared);
         CHECK(bodyCount() == 0);
+        CHECK(chargedBytes() == bytes);
         frame();
         const auto baseline = attached();
         REQUIRE(baseline);
@@ -508,13 +593,49 @@ namespace Horo::WorldCook {
         frame();
         REQUIRE(progress.last.HasValue());
         REQUIRE(progress.last.Value() == Stage::Active);
-        REQUIRE(mount->WithdrawLiveCell().HasValue());
+        REQUIRE(mount->RequestLiveCell(sibling).HasValue());
+        load();
+        REQUIRE(progress.last.HasValue());
+        REQUIRE(progress.last.Value() == Stage::Prepared);
+        CHECK(chargedBytes() == bytes);
+        frame();
+        A::AssetPayloadLease reader;
+        {
+            const auto first = attached();
+            const auto second = siblingAttached();
+            REQUIRE(first);
+            REQUIRE(second);
+            REQUIRE(second->resources.size() == 1);
+            CHECK(first->resources.front().artifact.SharesAllocationWith(second->resources.front().artifact));
+            CHECK(bodyCount() == 2);
+            if (retainReader)
+                reader = second->resources.front().artifact;
+        }
+        frame();
+        REQUIRE(mount->WithdrawLiveCell(request.occurrence).HasValue());
         frame();
         CHECK_FALSE(attached());
+        REQUIRE(siblingAttached());
+        CHECK(bodyCount() == 1);
+        frame();
+        REQUIRE(progress.last.HasValue());
+        CHECK(progress.last.Value() == Stage::Active);
+        CHECK(chargedBytes() == bytes);
+        REQUIRE(mount->WithdrawLiveCell(sibling.occurrence).HasValue());
+        frame();
+        CHECK_FALSE(siblingAttached());
         CHECK(bodyCount() == 0);
+        CHECK(chargedBytes() == bytes);
         frame();
         REQUIRE(progress.last.HasValue());
         CHECK(progress.last.Value() == Stage::Idle);
+        if (retainReader) {
+            CHECK(chargedBytes() == bytes);
+            reader = {};
+            CHECK(chargedBytes() == bytes);
+            frame();
+        }
+        CHECK(chargedBytes() == 0);
     }
 
     TEST_CASE("Measure mounted CoreEcs frame impact through the standalone product", "[.mounted_world_benchmark]") {

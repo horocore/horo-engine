@@ -5,6 +5,7 @@
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Runtime/RuntimeDispatchEvidence.h"
 #include "Horo/Runtime/Scene/SceneCellPayloadCodec.h"
+#include "Horo/WorldStreaming/SharedAssetResidency.h"
 #include "Horo/WorldStreaming/StreamingCellInspection.h"
 #include "Horo/WorldStreaming/StreamingCellState.h"
 #include "Horo/WorldStreaming/StreamingOwnerFrameBudget.h"
@@ -379,31 +380,163 @@ namespace Horo::Application::Internal {
             return assets;
         }
 
+        struct DetachedCellAsset final {
+            Assets::AssetId id;
+            Assets::AssetPayloadRetainedBytes bytes;
+        };
+
+        struct PreparedCellAssets final {
+            std::vector<Runtime::RuntimeGroupAssetLease> resources;
+            std::vector<DetachedCellAsset> newAllocations;
+            std::vector<WS::SharedAssetLease> claims;
+        };
+
         struct PreparedLiveCell final {
             Runtime::RuntimeSceneCellPayload payload;
-            std::vector<Runtime::RuntimeGroupAssetLease> resources;
+            PreparedCellAssets assets;
+        };
+
+        /** @brief Projects an exact retained CPU allocation into the complete streaming budget vector. */
+        WS::StreamingBudgetAmounts CpuPayloadCharge(const std::size_t bytes) {
+            std::array<WS::StreamingBudgetAmount, WS::StreamingBudgetDimensionCount> amounts{};
+            for (std::size_t index = 0; index < amounts.size(); ++index)
+                amounts[index].dimension = static_cast<WS::StreamingBudgetDimension>(index);
+            amounts[static_cast<std::size_t>(WS::StreamingBudgetDimension::CpuResidentBytes)].value = bytes;
+            return WS::StreamingBudgetAmounts::Create(amounts).Value();
+        }
+
+        /** @brief Mount-owned payload pins and authority tickets, immutable to the worker during its single in-flight load. */
+        class MountedLiveAssets final {
+        public:
+            struct Entry final {
+                Assets::AssetId id;
+                Assets::AssetPayloadLease pin;
+                Assets::AssetPayloadRetainedBytes bytes;
+                std::optional<WS::SharedAssetRetirement> retiring;
+            };
+
+            MountedLiveAssets(WS::SharedAssetResidencyLedger ledger, const std::size_t capacity, const std::size_t entries)
+                : ledger_(std::move(ledger)), capacity_(capacity) {
+                entries_.reserve(entries);
+            }
+
+            /** @brief Look up the exact retained allocation in this immutable cook generation. */
+            [[nodiscard]] const Entry *Find(const Assets::AssetId id) const {
+                const auto entry = std::ranges::lower_bound(entries_, id, {}, &Entry::id);
+                return entry != entries_.end() && entry->id == id ? &*entry : nullptr;
+            }
+
+            /** @brief Project the physically retained CPU payload budget, including retiring allocations. */
+            [[nodiscard]] std::size_t ChargedBytes() const {
+                return static_cast<std::size_t>(ledger_.Charged(WS::StreamingBudgetDimension::CpuResidentBytes).Value());
+            }
+
+            /** @brief Only this uncharged capacity may be used to prepare new worker allocations. */
+            [[nodiscard]] std::size_t AvailableBytes() const {
+                return capacity_ - ChargedBytes();
+            }
+
+            /** @brief Transfer new allocations to the mount and acquire one authority lease per Scene consumer. */
+            [[nodiscard]] Result<void> Track(const PreparedCellAssets &prepared, const WS::StreamingFence &fence,
+                                             std::vector<WS::SharedAssetLease> &claims) {
+                for (const auto &resource : prepared.resources) {
+                    const auto id = resource.metadata.id;
+                    const auto entry = std::ranges::lower_bound(entries_, id, {}, &Entry::id);
+                    const bool existing = entry != entries_.end() && entry->id == id;
+                    const Assets::AssetPayloadRetainedBytes *bytes = nullptr;
+                    if (existing) {
+                        if (!entry->pin.SharesAllocationWith(resource.artifact))
+                            return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+                        bytes = &entry->bytes;
+                    } else {
+                        const auto detached = std::ranges::lower_bound(prepared.newAllocations, id, {}, &DetachedCellAsset::id);
+                        if (detached == prepared.newAllocations.end() || detached->id != id)
+                            return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Invalid));
+                        bytes = &detached->bytes;
+                    }
+                    // The mount pins one exact verified manifest. Its epoch is the immutable content revision in this ledger.
+                    const WS::SharedAssetKey key{id, Identity<WS::SharedAssetRevision>(fence.epoch.Value())};
+                    auto claimed = ledger_.Acquire(key, CpuPayloadCharge(bytes->Bytes()), {.fence = fence}, fence);
+                    if (claimed.HasError())
+                        return Result<void>::Failure(claimed.ErrorValue());
+                    if (!existing)
+                        entries_.insert(entry, Entry{id, resource.artifact, *bytes});
+                    claims.push_back(std::move(claimed).Value());
+                }
+                return Result<void>::Success();
+            }
+
+            /** @brief Release consumers after Scene detach, leaving charges until final physical release. */
+            [[nodiscard]] Result<void> Release(std::vector<WS::SharedAssetLease> &claims) {
+                while (!claims.empty()) {
+                    const auto claim = claims.back();
+                    const auto released = ledger_.Release(claim);
+                    if (released.HasError())
+                        return released;
+                    claims.pop_back();
+                    auto retiring = ledger_.BeginRetire(claim.key, claim.charge);
+                    if (retiring.HasError()) {
+                        if (retiring.ErrorValue().code.Value() == WS::WorldStreamingErrors::SharedAssetLifecycleUnavailable.code.Value())
+                            continue;  // A sibling cell still owns an exact consumer lease.
+                        return Result<void>::Failure(retiring.ErrorValue());
+                    }
+                    auto entry = std::ranges::lower_bound(entries_, claim.key.asset, {}, &Entry::id);
+                    entry->retiring = std::move(retiring).Value();
+                    entry->pin = {};
+                    ++retiring_;
+                }
+                return ReconcileRetired();
+            }
+
+            /** @brief Reports whether cache retirement still needs an ordinary structural cutoff. */
+            [[nodiscard]] bool HasRetiring() const noexcept {
+                return retiring_ != 0;
+            }
+
+            /** @brief Reclaim capacity only when the last pin has physically freed its vector capacity. */
+            [[nodiscard]] Result<void> ReconcileRetired() {
+                if (!HasRetiring())
+                    return Result<void>::Success();
+                for (auto entry = entries_.begin(); entry != entries_.end();) {
+                    if (!entry->retiring || entry->bytes.Bytes() != 0) {
+                        ++entry;
+                        continue;
+                    }
+                    const auto retired = ledger_.AcknowledgeRetired(*entry->retiring);
+                    if (retired.HasError())
+                        return retired;
+                    entry = entries_.erase(entry);
+                    --retiring_;
+                }
+                return Result<void>::Success();
+            }
+
+        private:
+            WS::SharedAssetResidencyLedger ledger_;
+            std::size_t capacity_;
+            std::vector<Entry> entries_;
+            std::size_t retiring_{};
         };
 
         /** @brief Resolves every declared dependency against the pinned registry and the exact committed World envelopes. */
-        Result<std::vector<Runtime::RuntimeGroupAssetLease>> PrepareCellAssets(std::span<const Runtime::SceneAssetDependency> dependencies,
-                                                                               std::span<const MountedCellAsset> inventory,
-                                                                               const Assets::AssetRegistrySnapshot &registry,
-                                                                               const Assets::AssetCookTargetId &target,
-                                                                               const MountedWorldLiveLimits &limits,
-                                                                               const CancellationToken &cancellation) {
-            using Output = Result<std::vector<Runtime::RuntimeGroupAssetLease>>;
+        Result<PreparedCellAssets> PrepareCellAssets(std::span<const Runtime::SceneAssetDependency> dependencies,
+                                                     std::span<const MountedCellAsset> inventory,
+                                                     const Assets::AssetRegistrySnapshot &registry, const Assets::AssetCookTargetId &target,
+                                                     const MountedWorldLiveLimits &limits, const MountedLiveAssets *shared,
+                                                     const CancellationToken &cancellation) {
+            using Output = Result<PreparedCellAssets>;
             if (dependencies.empty())
                 return Output::Success({});
-            if (limits.maximumCellAssets == 0)
+            if (!shared)
                 return Output::Failure(MakeError(Runtime::SceneCellPayloadErrors::Unsupported));
             if (dependencies.size() > limits.maximumCellAssets)
                 return Output::Failure(MakeError(Runtime::SceneCellPayloadErrors::CapacityExceeded));
-            auto cache = Assets::AssetPayloadCache::Create(dependencies.size(), limits.maximumCellAssetBytes);
-            if (cache.HasError())
-                return Output::Failure(cache.ErrorValue());
-            std::vector<Runtime::RuntimeGroupAssetLease> leases;
-            leases.reserve(dependencies.size());
-            std::size_t remaining = limits.maximumCellAssetBytes;
+            PreparedCellAssets prepared;
+            prepared.resources.reserve(dependencies.size());
+            prepared.newAllocations.reserve(dependencies.size());
+            prepared.claims.reserve(dependencies.size());
+            std::size_t remainingCell = limits.maximumCellAssetBytes;
+            std::size_t remainingPool = shared->AvailableBytes();
             for (const auto &dependency : dependencies) {
                 if (cancellation.IsCancellationRequested())
                     return Output::Failure(MakeError(WS::WorldArtifactErrors::Cancelled));
@@ -412,7 +545,16 @@ namespace Horo::Application::Internal {
                 if (!record || record->type != dependency.expectedType || found == inventory.end() || found->id != dependency.id)
                     return Output::Failure(
                         MakeError(WS::WorldArtifactErrors::Invalid, "A mounted cell asset is absent or has the wrong type."));
-                if (found->envelope.size() > remaining)
+                if (found->envelope.size() > remainingCell)
+                    return Output::Failure(MakeError(Runtime::SceneCellPayloadErrors::CapacityExceeded));
+                remainingCell -= found->envelope.size();
+                if (const auto *existing = shared->Find(dependency.id)) {
+                    if (existing->retiring)
+                        return Output::Failure(MakeError(Runtime::SceneCellPayloadErrors::CapacityExceeded));
+                    prepared.resources.emplace_back(dependency, existing->pin);
+                    continue;
+                }
+                if (found->envelope.size() > remainingPool)
                     return Output::Failure(MakeError(Runtime::SceneCellPayloadErrors::CapacityExceeded));
                 auto decoded = Assets::DecodeCookedArtifact(found->envelope, CookLimits);
                 if (decoded.HasError())
@@ -421,13 +563,19 @@ namespace Horo::Application::Internal {
                     decoded.Value().id != dependency.id)
                     return Output::Failure(
                         MakeError(WS::WorldArtifactErrors::Invalid, "A mounted cell asset does not match the World target."));
+                // A single-allocation cache reuses the Assets owner and yields an exact, non-pinning retirement observation.
+                auto cache = Assets::AssetPayloadCache::Create(1, remainingPool);
+                if (cache.HasError())
+                    return Output::Failure(cache.ErrorValue());
                 auto lease = cache.Value()->Admit(std::as_bytes(std::span{found->envelope}));
                 if (lease.HasError())
                     return Output::Failure(lease.ErrorValue());
-                remaining -= found->envelope.size();
-                leases.emplace_back(dependency, std::move(lease).Value());
+                auto bytes = cache.Value()->ObserveRetainedPayloadBytes();
+                remainingPool -= bytes.Bytes();
+                prepared.resources.emplace_back(dependency, std::move(lease).Value());
+                prepared.newAllocations.emplace_back(dependency.id, std::move(bytes));
             }
-            return Output::Success(std::move(leases));
+            return Output::Success(std::move(prepared));
         }
 
         struct AnchoredGeometryEntity final {
@@ -604,12 +752,30 @@ namespace Horo::Application::Internal {
             CancellationToken cancellation;
             CancellationSource lifetime;
             bool withdrawn{};
+
+            /** @brief Returns whether this exact occurrence must stop work. */
+            [[nodiscard]] bool IsWithdrawn() const noexcept {
+                return withdrawn || cancellation.IsCancellationRequested();
+            }
+
+            /** @brief Closes the occurrence and its worker or Scene owner admission. */
+            void Withdraw() {
+                withdrawn = true;
+                lifetime.RequestCancellation();
+            }
         };
 
         struct LiveLoad final {
             JobHandle job;
             // Only the worker writes the slot. The owner reads it after the job record publishes terminal status.
             std::shared_ptr<std::optional<PreparedLiveCell>> payload;
+        };
+
+        struct LiveResident final {
+            ActiveCell cell;
+            LiveDemand demand;
+            Runtime::SceneInstanceOperation attachment;
+            std::vector<WS::SharedAssetLease> claims;
         };
 
         struct LiveStreaming final {
@@ -625,7 +791,23 @@ namespace Horo::Application::Internal {
             std::shared_ptr<std::optional<PreparedLiveCell>> prepared;
             std::optional<WS::StreamingSchedulerReservation> reservation;
             std::optional<Runtime::SceneInstanceOperation> attachment;
+            std::optional<MountedLiveAssets> sharedAssets;
+            std::vector<WS::SharedAssetLease> claims;
+            std::vector<LiveResident> residents;
+            std::optional<std::size_t> retiring;
             std::optional<Runtime::SceneInstanceOperation> removal;
+
+            /** @brief Returns the in-flight retirement or the next withdrawn live occurrence. */
+            [[nodiscard]] std::optional<std::size_t> RetirementCandidate() const noexcept {
+                if (retiring)
+                    return retiring;
+                const auto found = std::ranges::find_if(residents, [](const LiveResident &resident) {
+                    return resident.demand.IsWithdrawn();
+                });
+                if (found == residents.end())
+                    return std::nullopt;
+                return static_cast<std::size_t>(found - residents.begin());
+            }
         };
 
         Assets::AssetCookTargetId target;
@@ -636,7 +818,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<MountedWorldLiveCellState> PollLiveLoad();
         [[nodiscard]] Result<MountedWorldLiveCellState> QueueLiveAttachment(const Runtime::RuntimeSceneView &parent);
         [[nodiscard]] Result<MountedWorldLiveCellState> PollLiveAttachment();
-        [[nodiscard]] Result<MountedWorldLiveCellState> RetireLiveCell(const Runtime::RuntimeSceneView &parent);
+        [[nodiscard]] Result<MountedWorldLiveCellState> RetireLiveCell(const Runtime::RuntimeSceneView &parent, std::size_t index);
         [[nodiscard]] Result<MountedWorldLiveCellState> RejectLive(const Error &error);
         /** @brief Reserves retirement of one exact Resident or Active cell until its resources have settled. */
         [[nodiscard]] Result<void> BeginLiveRetirement(const ActiveCell &cell);
@@ -645,6 +827,14 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> SettleLiveReservation(WS::StreamingCellOperationTransition terminal);
         [[nodiscard]] Result<WS::StreamingCellOperationId> IssueLiveOperation();
         [[nodiscard]] MountedWorldLiveCellState LiveStage() const noexcept;
+
+        /** @brief Returns the single occurrence available to geometry callers with an implicit selection. */
+        [[nodiscard]] const ActiveCell *ImplicitActiveCell() const noexcept {
+            if (activeCell)
+                return &*activeCell;
+            return live && live->residents.size() == 1 ? &live->residents.front().cell : nullptr;
+        }
+
         /** @brief Drains outstanding live work at the cold owner shutdown boundary. */
         void CloseLiveCell() noexcept;
     };
@@ -1055,6 +1245,11 @@ namespace Horo::Application::Internal {
             live->reservation ? RejectCellOperation(scheduler, *residency, *live->reservation, error) : Result<void>::Failure(error);
         if (live->reservation && scheduler.Inspect(*live->reservation).HasValue())
             return Result<MountedWorldLiveCellState>::Failure(rejected.ErrorValue());
+        if (live->sharedAssets) {
+            const auto released = live->sharedAssets->Release(live->claims);
+            if (released.HasError())
+                return Result<MountedWorldLiveCellState>::Failure(released.ErrorValue());
+        }
         live->demand.reset();
         live->load.reset();
         live->candidate.reset();
@@ -1067,9 +1262,9 @@ namespace Horo::Application::Internal {
     Result<MountedWorldLiveCellState> MountedWorld::State::StartLiveLoad(const Runtime::RuntimeSceneView &parent) {
         using Stage = MountedWorldLiveCellState;
         const auto &demand = *live->demand;
-        if (demand.withdrawn || demand.cancellation.IsCancellationRequested()) {
+        if (demand.IsWithdrawn()) {
             live->demand.reset();
-            return Result<Stage>::Success(Stage::Idle);
+            return Result<Stage>::Success(LiveStage());
         }
         const auto partition = registry->Snapshot();
         if (partition.HasError())
@@ -1106,19 +1301,21 @@ namespace Horo::Application::Internal {
         live->candidate.emplace(fence, address, identity);
         auto loaded = std::make_shared<std::optional<PreparedLiveCell>>();
         const auto maximumDependencies = live->limits.maximumCellAssets ? live->limits.maximumCellAssets : MaximumCells;
+        // The mount drains this job before destruction and serializes every owner mutation behind its terminal result.
+        const auto *sharedAssets = live->sharedAssets ? &*live->sharedAssets : nullptr;
         const JobProducerScope noBlocking{JobProducerRole::MainEditor};
         auto job = live->jobs.SubmitResult({.parentCancellation = demand.lifetime.Token(), .requirement = JobRequirement::Optional},
                                            [loaded, provider = std::shared_ptr<const Assets::MemoryAssetProvider>{cells},
                                             snapshot = partition.Value(), cell = *descriptor.Value(), metadata = *metadata, identity,
                                             assets = committedAssets, registry = live->assets, target = target, limits = live->limits,
-                                            maximumDependencies](const CancellationToken &cancel) {
+                                            maximumDependencies, sharedAssets](const CancellationToken &cancel) {
             auto decoded = DecodeCell(*provider, *snapshot.Descriptor(), cell, metadata, identity, cancel, limits.maximumCellEntities,
                                       maximumDependencies);
             if (decoded.HasError())
                 return Result<void>::Failure(decoded.ErrorValue());
             const auto inventory = assets ? std::span<const MountedCellAsset>{*assets} : std::span<const MountedCellAsset>{};
-            auto resources =
-                PrepareCellAssets(decoded.Value().Definition().AssetDependencies(), inventory, registry, target, limits, cancel);
+            auto resources = PrepareCellAssets(decoded.Value().Definition().AssetDependencies(), inventory, registry, target, limits,
+                                               sharedAssets, cancel);
             if (resources.HasError())
                 return Result<void>::Failure(resources.ErrorValue());
             loaded->emplace(std::move(decoded).Value(), std::move(resources).Value());
@@ -1134,7 +1331,7 @@ namespace Horo::Application::Internal {
     Result<MountedWorldLiveCellState> MountedWorld::State::PollLiveLoad() {
         using Stage = MountedWorldLiveCellState;
         const auto &demand = *live->demand;
-        const bool cancelled = demand.withdrawn || demand.cancellation.IsCancellationRequested();
+        const bool cancelled = demand.IsWithdrawn();
         if (cancelled)
             static_cast<void>(live->load->job.RequestCancel());
         const auto snapshot = live->load->job.Snapshot();
@@ -1151,6 +1348,13 @@ namespace Horo::Application::Internal {
         }
         live->prepared = std::move(live->load->payload);
         live->load.reset();
+        if (live->sharedAssets) {
+            const auto &assets = live->prepared->value().assets;
+            live->claims = std::move(live->prepared->value().assets.claims);
+            const auto tracked = live->sharedAssets->Track(assets, live->candidate->fence, live->claims);
+            if (tracked.HasError())
+                return RejectLive(tracked.ErrorValue());
+        }
         return Result<Stage>::Success(Stage::Prepared);
     }
 
@@ -1158,12 +1362,12 @@ namespace Horo::Application::Internal {
     Result<MountedWorldLiveCellState> MountedWorld::State::QueueLiveAttachment(const Runtime::RuntimeSceneView &parent) {
         using Stage = MountedWorldLiveCellState;
         const auto &demand = *live->demand;
-        if (demand.withdrawn || demand.cancellation.IsCancellationRequested() || !*live->prepared)
+        if (demand.IsWithdrawn() || !*live->prepared)
             return RejectLive(MakeError(WS::WorldArtifactErrors::Cancelled));
         const auto &cell = *live->candidate;
         if (parent.RuntimeId() != cell.address.parent)
             return RejectLive(MakeError(Runtime::SceneCellPayloadErrors::Stale));
-        if (!live->prepared->value().resources.empty() && parent.AssetRegistryRevision() != live->assets.Revision())
+        if (!live->prepared->value().assets.resources.empty() && parent.AssetRegistryRevision() != live->assets.Revision())
             return RejectLive(MakeError(Runtime::SceneCellPayloadErrors::Stale));
         const auto operation = IssueLiveOperation();
         if (operation.HasError())
@@ -1185,8 +1389,10 @@ namespace Horo::Application::Internal {
         const Runtime::SceneCellAttachmentRequest request{.runtime = cell.address.parent,
                                                           .fence = cell.fence,
                                                           .registry = parent.AssetRegistryRevision(),
-                                                          .limits = {1, live->limits.maximumCellEntities,
-                                                                     std::max<std::size_t>(1, live->limits.maximumCellAssets)},
+                                                          .limits = {live->limits.maximumResidentCells,
+                                                                     live->limits.maximumResidentCells * live->limits.maximumCellEntities,
+                                                                     std::max<std::size_t>(1, live->limits.maximumResidentCells *
+                                                                                                  live->limits.maximumCellAssets)},
                                                           .cancellation = demand.cancellation,
                                                           .ownerCancellation = demand.lifetime.Token()};
         const auto authority =
@@ -1194,8 +1400,8 @@ namespace Horo::Application::Internal {
                                                          MountedWorldStartup{demand.lifetime.Token(),
                                                                              std::chrono::steady_clock::time_point::max()});
         auto &prepared = live->prepared->value();
-        auto queued =
-            Runtime::QueueStreamedSceneInstance(scene, cell.address, prepared.payload, request, std::move(prepared.resources), authority);
+        auto queued = Runtime::QueueStreamedSceneInstance(scene, cell.address, prepared.payload, request,
+                                                          std::move(prepared.assets.resources), authority);
         if (queued.HasError())
             return RejectLive(queued.ErrorValue());
         live->attachment.emplace(std::move(queued).Value());
@@ -1218,16 +1424,21 @@ namespace Horo::Application::Internal {
             return RejectLive(MakeError(Runtime::SceneCellPayloadErrors::Stale));
         if (const auto completed = SettleLiveReservation(WS::StreamingCellOperationTransition::Complete); completed.HasError())
             return Result<Stage>::Failure(completed.ErrorValue());
-        activeCell.emplace(std::move(*live->candidate));
+        live->residents.emplace_back(std::move(*live->candidate), std::move(*live->demand), std::move(*live->attachment),
+                                     std::move(live->claims));
         live->candidate.reset();
-        return Result<Stage>::Success(Stage::Active);
+        live->demand.reset();
+        live->attachment.reset();
+        return Result<Stage>::Success(LiveStage());
     }
 
     /** @copydoc MountedWorld::State::RetireLiveCell */
-    Result<MountedWorldLiveCellState> MountedWorld::State::RetireLiveCell(const Runtime::RuntimeSceneView &parent) {
+    Result<MountedWorldLiveCellState> MountedWorld::State::RetireLiveCell(const Runtime::RuntimeSceneView &parent,
+                                                                          const std::size_t index) {
         using Stage = MountedWorldLiveCellState;
         using enum WS::StreamingCellOperationTransition;
-        const auto &cell = *activeCell;
+        auto &resident = live->residents[index];
+        const auto &cell = resident.cell;
         if (live->removal) {
             const auto *receipt = live->removal->Receipt();
             if (!receipt->Complete())
@@ -1239,18 +1450,23 @@ namespace Horo::Application::Internal {
             }
             if (receipt->ResultValue()->baselinesDetached != 1 || AttachedParent(cell))
                 return Result<Stage>::Failure(MakeError(Runtime::SceneCellPayloadErrors::Stale));
+            if (live->sharedAssets) {
+                const auto released = live->sharedAssets->Release(resident.claims);
+                if (released.HasError())
+                    return Result<Stage>::Failure(released.ErrorValue());
+            }
             if (const auto settled = SettleLiveReservation(AcknowledgeRetirement); settled.HasError())
                 return Result<Stage>::Failure(settled.ErrorValue());
-            activeCell.reset();
-            live->attachment.reset();
+            live->residents.erase(live->residents.begin() + static_cast<std::ptrdiff_t>(index));
+            live->retiring.reset();
             live->removal.reset();
-            live->demand.reset();
-            return Result<Stage>::Success(Stage::Idle);
+            return Result<Stage>::Success(LiveStage());
         }
         if (!AttachedParent(cell) || parent.RuntimeId() != cell.address.parent)
             return Result<Stage>::Failure(MakeError(Runtime::SceneCellPayloadErrors::Stale));
         if (const auto retired = BeginLiveRetirement(cell); retired.HasError())
             return Result<Stage>::Failure(retired.ErrorValue());
+        live->retiring = index;
         auto &scheduler = composition->Scheduler();
         const Runtime::SceneCellAttachmentRequest request{.runtime = cell.address.parent,
                                                           .fence = cell.fence,
@@ -1258,7 +1474,7 @@ namespace Horo::Application::Internal {
                                                           .limits = {1, live->limits.maximumCellEntities, 1},
                                                           .expectedRevision = cell.identity.revision};
         auto authority = std::make_shared<const LiveCellRetirementAuthority>(cell.identity, *residency, scheduler, *live->reservation);
-        auto queued = Runtime::QueueStreamedSceneRemoval(scene, *live->attachment, request, std::move(authority));
+        auto queued = Runtime::QueueStreamedSceneRemoval(scene, resident.attachment, request, std::move(authority));
         if (queued.HasError())
             return Result<Stage>::Failure(queued.ErrorValue());
         live->removal.emplace(std::move(queued).Value());
@@ -1267,9 +1483,10 @@ namespace Horo::Application::Internal {
 
     /** @copydoc MountedWorld::State::CloseLiveCell */
     void MountedWorld::State::CloseLiveCell() noexcept {
-        if (!live || !live->demand)
+        if (!live)
             return;
-        live->demand->lifetime.RequestCancellation();
+        if (live->demand)
+            live->demand->Withdraw();
         if (live->load) {
             static_cast<void>(live->load->job.RequestCancel());
             // The host's cold boundary may join the bounded, detached decoder. The frame pump only polls.
@@ -1285,24 +1502,31 @@ namespace Horo::Application::Internal {
         };
         cancelPending(live->attachment);
         cancelPending(live->removal);
-        if (!activeCell) {
-            if (live->candidate && AttachedParent(*live->candidate))
-                scene.Shutdown();
-            static_cast<void>(RejectLive(MakeError(WS::WorldArtifactErrors::Cancelled)));
-            return;
-        }
-        if (AttachedParent(*activeCell))
+        if ((live->candidate && AttachedParent(*live->candidate)) ||
+            std::ranges::any_of(live->residents, [this](const LiveResident &resident) {
+            return AttachedParent(resident.cell).has_value();
+        }))
             scene.Shutdown();
-        if (!AttachedParent(*activeCell) && BeginLiveRetirement(*activeCell).HasValue())
+        if (live->demand)
+            static_cast<void>(RejectLive(MakeError(WS::WorldArtifactErrors::Cancelled)));
+        if (live->retiring)
             static_cast<void>(SettleLiveReservation(WS::StreamingCellOperationTransition::AcknowledgeRetirement));
-        activeCell.reset();
+        for (std::size_t index = 0; index < live->residents.size(); ++index) {
+            auto &resident = live->residents[index];
+            if (live->retiring != index && BeginLiveRetirement(resident.cell).HasValue())
+                static_cast<void>(SettleLiveReservation(WS::StreamingCellOperationTransition::AcknowledgeRetirement));
+            if (live->sharedAssets)
+                static_cast<void>(live->sharedAssets->Release(resident.claims));
+        }
+        live->residents.clear();
     }
 
     /** @copydoc MountedWorldLiveLimits::IsValid */
     bool MountedWorldLiveLimits::IsValid() const noexcept {
         return maximumUnitNanoseconds > 0 && maximumUnitNanoseconds < maximumFrameNanoseconds && maximumCellEntities > 0 &&
-               maximumCellEntities <= 65536 && maximumCellAssets <= MaximumCells && maximumCellAssetBytes <= MaximumCellBytes &&
-               (maximumCellAssets == 0) == (maximumCellAssetBytes == 0);
+               maximumResidentCells > 0 && maximumResidentCells <= MaximumCells && maximumCellEntities <= 65536 / maximumResidentCells &&
+               maximumCellAssets <= WS::SharedAssetResidencyLimits::MaximumEntries / maximumResidentCells &&
+               maximumCellAssetBytes <= MaximumCellBytes && (maximumCellAssets == 0) == (maximumCellAssetBytes == 0);
     }
 
     /** @copydoc MountedWorld::BindLiveCell */
@@ -1312,43 +1536,95 @@ namespace Horo::Application::Internal {
             state_->initialAttempted || state_->live || !limits.IsValid() ||
             (limits.maximumCellAssets != 0 && (!state_->committedAssets || assets.Revision().value == 0)))
             return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Invalid));
-        state_->live.emplace(dispatch, jobs, limits, std::move(assets));
+        try {
+            State::LiveStreaming live{dispatch, jobs, limits, std::move(assets)};
+            live.residents.reserve(limits.maximumResidentCells);
+            if (limits.maximumCellAssets != 0) {
+                const auto slots = static_cast<std::uint32_t>(limits.maximumCellAssets * limits.maximumResidentCells);
+                const auto capacity = CpuPayloadCharge(limits.maximumCellAssetBytes);
+                auto shared = WS::SharedAssetResidencyLedger::Create(state_->composition->Owner(), {slots, slots, capacity});
+                if (shared.HasError())
+                    return Result<void>::Failure(shared.ErrorValue());
+                live.sharedAssets.emplace(std::move(shared).Value(), limits.maximumCellAssetBytes, slots);
+            }
+            state_->live.emplace(std::move(live));
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::CapacityExceeded));
+        }
         return Result<void>::Success();
     }
 
     /** @copydoc MountedWorld::RequestLiveCell */
     Result<void> MountedWorld::RequestLiveCell(const CommittedWorldInitialCell &selected, const CancellationToken &cancellation) {
-        if (std::this_thread::get_id() != state_->ownerThread || !state_->live || state_->live->demand || !selected.cell.IsValid() ||
+        if (std::this_thread::get_id() != state_->ownerThread || !state_->live || !selected.cell.IsValid() ||
             !selected.occurrence.IsValid() || !selected.definition.IsValid() || selected.revision.value == 0)
             return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Invalid));
         if (cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Cancelled));
-        state_->live->demand.emplace(selected, cancellation);
+        auto &live = *state_->live;
+        if (live.demand || live.RetirementCandidate() || live.residents.size() == live.limits.maximumResidentCells)
+            return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Invalid));
+        if (std::ranges::any_of(live.residents, [&](const State::LiveResident &resident) {
+            const auto &current = resident.demand.selected;
+            return current.cell == selected.cell || current.occurrence == selected.occurrence || current.definition == selected.definition;
+        }))
+            return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Invalid));
+        live.demand.emplace(selected, cancellation);
         return Result<void>::Success();
     }
 
     /** @copydoc MountedWorld::WithdrawLiveCell */
     Result<void> MountedWorld::WithdrawLiveCell() {
-        if (std::this_thread::get_id() != state_->ownerThread || !state_->live || !state_->live->demand)
+        if (std::this_thread::get_id() != state_->ownerThread || !state_->live)
             return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Stale));
-        auto &demand = *state_->live->demand;
-        demand.withdrawn = true;
-        demand.lifetime.RequestCancellation();
+        const auto &live = *state_->live;
+        if (live.demand && live.residents.empty())
+            return WithdrawLiveCell(live.demand->selected.occurrence);
+        if (!live.demand && live.residents.size() == 1)
+            return WithdrawLiveCell(live.residents.front().demand.selected.occurrence);
+        return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+    }
+
+    /** @copydoc MountedWorld::WithdrawLiveCell(Runtime::SceneInstanceId) */
+    Result<void> MountedWorld::WithdrawLiveCell(const Runtime::SceneInstanceId occurrence) {
+        if (std::this_thread::get_id() != state_->ownerThread || !state_->live)
+            return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+        auto &live = *state_->live;
+        if (live.demand && live.demand->selected.occurrence == occurrence) {
+            live.demand->Withdraw();
+            return Result<void>::Success();
+        }
+        const auto found = std::ranges::find_if(live.residents, [&](const State::LiveResident &resident) {
+            return resident.demand.selected.occurrence == occurrence;
+        });
+        if (found == live.residents.end())
+            return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+        found->demand.Withdraw();
         return Result<void>::Success();
+    }
+
+    /** @copydoc MountedWorld::InspectLiveAssetBytes */
+    Result<std::size_t> MountedWorld::InspectLiveAssetBytes() const {
+        if (std::this_thread::get_id() != state_->ownerThread || !state_->live)
+            return Result<std::size_t>::Failure(MakeError(WS::WorldArtifactErrors::Invalid));
+        const auto &assets = state_->live->sharedAssets;
+        return Result<std::size_t>::Success(assets ? assets->ChargedBytes() : 0);
     }
 
     /** @copydoc MountedWorld::State::LiveStage */
     MountedWorldLiveCellState MountedWorld::State::LiveStage() const noexcept {
         using enum MountedWorldLiveCellState;
-        if (activeCell)
-            return live->demand->withdrawn || live->demand->cancellation.IsCancellationRequested() ? Retiring : Active;
         if (live->attachment)
             return Attaching;
         if (live->prepared)
             return Prepared;
         if (live->load)
             return Loading;
-        return live->demand ? Requested : Idle;
+        if (live->demand)
+            return Requested;
+        if (live->RetirementCandidate())
+            return Retiring;
+        return live->residents.empty() ? Idle : Active;
     }
 
     /** @copydoc MountedWorld::AdvanceLiveCell */
@@ -1366,7 +1642,9 @@ namespace Horo::Application::Internal {
             return Result<Stage>::Failure(MakeError(WS::WorldArtifactErrors::Stale));
         live.lastFrame = facts.frame;
         const auto stage = state.LiveStage();
-        if (stage == Stage::Idle || stage == Stage::Active)
+        const bool idle = stage == Stage::Idle || stage == Stage::Active;
+        const bool retiringAssets = live.sharedAssets && live.sharedAssets->HasRetiring() && !live.load;
+        if (idle && !retiringAssets)
             return Result<Stage>::Success(stage);
         auto budget = WS::StreamingOwnerFrameBudget::Create(
             {state.composition->Scheduler().Owner(), Identity<WS::StreamingOwnerWorkRevision>(1),
@@ -1382,19 +1660,28 @@ namespace Horo::Application::Internal {
         if (!admitted.Value())
             return Result<Stage>::Success(stage);
         try {
+            if (retiringAssets) {
+                const auto retired = live.sharedAssets->ReconcileRetired();
+                if (retired.HasError())
+                    return Result<Stage>::Failure(retired.ErrorValue());
+            }
+            if (idle)
+                return Result<Stage>::Success(stage);
             if (live.load)
                 return state.PollLiveLoad();
-            if (live.attachment && !state.activeCell)
+            if (live.attachment)
                 return state.PollLiveAttachment();
             const auto parent = state.scene.ActiveScene();
             if (!parent)
                 return Result<Stage>::Failure(MakeError(WS::WorldArtifactErrors::Stale));
-            if (state.activeCell)
-                return state.RetireLiveCell(*parent);
-            return live.prepared ? state.QueueLiveAttachment(*parent) : state.StartLiveLoad(*parent);
+            if (live.prepared)
+                return state.QueueLiveAttachment(*parent);
+            if (live.demand)
+                return state.StartLiveLoad(*parent);
+            return state.RetireLiveCell(*parent, *live.RetirementCandidate());
         } catch (const std::bad_alloc &) {
             auto error = MakeError(WS::WorldArtifactErrors::CapacityExceeded);
-            if (!live.load && !live.attachment && !state.activeCell)
+            if (live.demand && !live.load && !live.attachment)
                 return state.RejectLive(error);
             return Result<Stage>::Failure(std::move(error));
         }
@@ -1402,14 +1689,14 @@ namespace Horo::Application::Internal {
 
     /** @copydoc MountedWorld::Anchors */
     std::span<const Runtime::SceneCellWorldAnchor> MountedWorld::Anchors(const Runtime::RuntimeSceneView &parent) const noexcept {
-        if (!parent.IsCurrent() || !state_->activeCell)
+        const auto *active = state_->ImplicitActiveCell();
+        if (!parent.IsCurrent() || !active)
             return {};
         const auto current = state_->scene.ActiveScene();
-        const auto &active = *state_->activeCell;
         if (!current || !parent.SameIncarnation(*current) ||
-            !Runtime::FindStreamedSceneInstance(parent, active.address, active.identity, active.fence.epoch))
+            !Runtime::FindStreamedSceneInstance(parent, active->address, active->identity, active->fence.epoch))
             return {};
-        return active.anchors;
+        return active->anchors;
     }
 
     /** @copydoc MountedWorld::CaptureGeometry */
@@ -1489,8 +1776,7 @@ namespace Horo::Application::Internal {
             const auto current = state_->scene.ActiveScene();
             if (!current || !parent.SameIncarnation(*current))
                 return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
-            if (state_->activeCell)
-                scoped = &*state_->activeCell;
+            scoped = state_->ImplicitActiveCell();
         }
         if (!scoped || scoped->anchors.empty())
             return Output::Failure(

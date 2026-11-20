@@ -66,7 +66,8 @@ namespace Horo::Application::Internal {
         std::uint64_t maximumUnitNanoseconds{};
         std::size_t maximumCellEntities{};
         std::size_t maximumCellAssets{};     /**< Zero disables external resources for this mount. */
-        std::size_t maximumCellAssetBytes{}; /**< Maximum encoded bytes retained by one cell's asset leases. */
+        std::size_t maximumCellAssetBytes{}; /**< Encoded-byte ceiling per cell and physical payload-byte ceiling per mount. */
+        std::size_t maximumResidentCells{1}; /**< Maximum simultaneous live CoreECS occurrences. */
 
         /** @brief Returns whether a complete bounded cell unit can be admitted with positive frame headroom. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -183,7 +184,7 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<bool> ReconcileInitialCell();
 
-        /** @brief Opt in to one live, explicitly selected CoreEcs cell on a mount with no startup cell.
+        /** @brief Opt in to explicitly selected live CoreEcs cells on a mount with no startup cell.
          * @param dispatch Exact canonical RuntimeHost dispatcher for this Scene owner.
          * @param jobs Existing bounded worker owner, which must outlive this mount's retirement.
          * @param limits Complete explicit preparation and owner-frame work limits.
@@ -203,9 +204,20 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> RequestLiveCell(const CommittedWorldInitialCell &selected, const CancellationToken &cancellation = {});
 
         /** @brief Withdraw one live demand, cancelling pending preparation or retiring its committed occurrence.
-         * @return Success only while this mount still owns a live demand or exact cell.
+         * @return Success only while this mount owns exactly one pending or published occurrence.
          */
         [[nodiscard]] Result<void> WithdrawLiveCell();
+
+        /** @brief Withdraw a pending or published occurrence selected by its exact authored instance.
+         * @param occurrence Instance ID originally admitted by RequestLiveCell.
+         * @return Success or typed stale evidence if the mount does not own that occurrence.
+         */
+        [[nodiscard]] Result<void> WithdrawLiveCell(Runtime::SceneInstanceId occurrence);
+
+        /** @brief Read exact charged CPU asset capacity on the Scene owner lane.
+         * @return Shared resident and retiring payload bytes, or a typed error if the live owner is unavailable.
+         */
+        [[nodiscard]] Result<std::size_t> InspectLiveAssetBytes() const;
 
         /** @brief Advances at most one bounded unit during an exact, previously unused structural dispatch.
          * @param evidence Live CommitDeferredLifecycleChanges evidence from the bound scheduler.

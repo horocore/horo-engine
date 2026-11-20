@@ -2237,12 +2237,20 @@ owner and activation and removal use the ordinary Scene structural cutoff.
 `--world-live-assets <maximum-assets> <maximum-encoded-bytes>` additionally admits
 the cell's named asset closure. The worker checks types against the pinned project
 registry and reads the exact committed World's verified envelopes. Asset leases
-remain with the structural group through native retirement. Hard co-load
-requirements, other payload providers and in-frame replacement remain unsupported
-by this single-cell route.
+remain with the structural group through native retirement. The mounted owner
+can admit multiple explicitly selected occurrences with an explicit resident
+count and one in-flight operation. A canonical lease keyed by the exact
+mounted manifest and asset identity shares one immutable allocation across
+cells. Every consumer pins that allocation until its positive Scene removal
+receipt. The charged CPU capacity returns after physical release of the final
+cache allocation, including any remaining detached payload pins. The encoded-byte
+ceiling applies to each cell's closure and to the mount's total retained cache
+capacity. The standalone arguments keep the default live capacity of one
+occurrence. Hard co-load requirements, other payload providers and in-frame
+replacement remain unsupported.
 
-Archive installation, ongoing gameplay-driven scheduling, multi-cell activation,
-gameplay focal positions and XR view projection require separate host composition.
+Archive installation, ongoing gameplay-driven scheduling, gameplay focal
+positions and XR view projection require separate host composition.
 
 ### Editor Play committed World ingress
 

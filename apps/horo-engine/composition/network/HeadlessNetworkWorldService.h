@@ -109,9 +109,11 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         }
 
         /** @brief Withdraws mounted work only from the exact live Scene facade and its existing demand owner. */
-        Result<void> WithdrawMountedCell() const {
+        Result<void> WithdrawMountedCell(const std::optional<Runtime::SceneInstanceId> occurrence = {}) const {
             auto *mount = LiveMountedScene();
-            return mount ? mount->WithdrawLiveCell() : Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+            if (!mount)
+                return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+            return occurrence ? mount->WithdrawLiveCell(*occurrence) : mount->WithdrawLiveCell();
         }
 
         /** @brief Captures only geometry from the exact active mounted Scene service on this lane. */

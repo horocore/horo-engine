@@ -338,10 +338,17 @@ namespace Horo::Application::Internal {
                      : Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
     }
 
-    /** @copydoc WithdrawHeadlessWorldCell */
+    /** @copydoc WithdrawHeadlessWorldCell(const Network::INetworkModeService &) */
     Result<void> WithdrawHeadlessWorldCell(const Network::INetworkModeService &service) {
         const auto *world = dynamic_cast<const WorldService *>(&service);
         return world ? world->WithdrawMountedCell() : Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+    }
+
+    /** @copydoc WithdrawHeadlessWorldCell(const Network::INetworkModeService &, Runtime::SceneInstanceId) */
+    Result<void> WithdrawHeadlessWorldCell(const Network::INetworkModeService &service, const Runtime::SceneInstanceId occurrence) {
+        const auto *world = dynamic_cast<const WorldService *>(&service);
+        return world ? world->WithdrawMountedCell(occurrence)
+                     : Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
     }
 
     /** @copydoc CaptureHeadlessWorldRenderGeometry */

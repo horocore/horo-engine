@@ -203,6 +203,13 @@ namespace Horo::Application::Internal {
      */
     [[nodiscard]] Result<void> WithdrawHeadlessWorldCell(const Network::INetworkModeService &service);
 
+    /** @brief Withdraws an exact pending or published occurrence through the standalone Scene owner.
+     * @param service Current standalone Scene facade.
+     * @param occurrence Exact World occurrence ID originally admitted by RequestHeadlessWorldCell.
+     * @return Success after withdrawal or a typed denial.
+     */
+    [[nodiscard]] Result<void> WithdrawHeadlessWorldCell(const Network::INetworkModeService &service, Runtime::SceneInstanceId occurrence);
+
     /** @brief Captures an exact active World camera and procedural geometry on the standalone Scene owner lane.
      * @param service Actual headless Scene service.
      * @param camera Exact mounted object with an authored camera target.
