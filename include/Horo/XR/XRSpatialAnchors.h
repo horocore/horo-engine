@@ -163,6 +163,8 @@ namespace Horo::XR {
         [[nodiscard]] Result<void> Withdraw(const XRAnchorScope &scope, XRAnchorWithdrawal reason);
 
     private:
+        friend class XRAnchorPersistence;
+
         struct Slot final {
             XRSpatialAnchorId id;
             XRAnchorObservation observation;

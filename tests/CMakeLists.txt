@@ -2118,6 +2118,12 @@ target_include_directories(HoroXRRuntimeTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR
 target_link_libraries(HoroXRRuntimeTests PRIVATE HoroEngine::XRRuntime HoroXRRuntimeHostInterface)
 horo_register_catch_test(HoroXRRuntimeTests LABELS "unit;xr;headless;lifecycle")
 
+add_executable(HoroXRAnchorPersistenceTests unit/runtime/xr/XRAnchorPersistenceTests.cpp)
+target_compile_features(HoroXRAnchorPersistenceTests PRIVATE cxx_std_20)
+target_include_directories(HoroXRAnchorPersistenceTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+target_link_libraries(HoroXRAnchorPersistenceTests PRIVATE HoroEngine::XRAnchorSaveIntegration)
+horo_register_catch_test(HoroXRAnchorPersistenceTests LABELS "unit;xr;headless;save;ci-windows")
+
 target_sources(HoroXRApiPublicHeaderConsumer PRIVATE public_headers/XRHandTrackingConsumer.cpp)
 add_library(HoroXRFakeRuntimeHostCompositionConsumer OBJECT public_headers/XRFakeRuntimeHostCompositionConsumer.cpp)
 target_compile_features(HoroXRFakeRuntimeHostCompositionConsumer PRIVATE cxx_std_20)

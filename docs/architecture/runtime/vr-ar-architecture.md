@@ -996,8 +996,25 @@ session continuity change rejects even results for a restarted native session wi
 the same ID. The host withdraws the scope before releasing native resources or changing
 access, space, or origin. A Scene adapter must re-read the live anchor at its own safe
 point before using that pose. The portable contract introduces no provider support
-or migration of existing consumers. Durable restore is a separate capability with
-opaque protected provider references. Plane/mesh snapshots
+or migration of existing consumers.
+
+`HoroXRAnchorSaveIntegration` provides the separate optional local durability
+lane. The selected host binds one canonical Save participant per durable anchor
+record and supplies the exact current XR scope plus a protected local store.
+Version 1 stores only fixed-width provider and partition routing, an inert
+protected-store lookup key, the access revision and expiry. The native reference
+or localization map remains solely in that local store. The record contains no
+native handle, live XR identity, pose, sample time or environment observation.
+Share/export and cloud composition require a separate privacy decision.
+The host supplies the staged participant's final publication port to the
+aggregate Save commit gate. Restore validates provider, schema, current access
+and expiry before lookup and revalidates the active grant before publishing.
+Missing and stale records carry no reference. An available reference restores
+as Unlocalized until the selected provider produces new live evidence through
+`XRSpatialAnchors`. Provider failure rolls back staging. A host without a
+selected protected store cannot bind this participant.
+
+Plane/mesh snapshots
 are bounded observed evidence and never mutate authored Scene, Physics or Navigation
 without an explicit destination-owned adapter and transaction. The portable plane publication
 authorizes one session and calibrated World origin at a time. It accepts a complete ordered

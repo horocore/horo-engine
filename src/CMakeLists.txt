@@ -2516,6 +2516,11 @@ add_library(HoroEngine::XRRuntime ALIAS HoroXRRuntime)
 target_compile_features(HoroXRRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroXRRuntime PUBLIC HoroEngine::XRApi)
 
+add_library(HoroXRAnchorSaveIntegration STATIC runtime/xr/runtime/XRAnchorPersistence.cpp)
+add_library(HoroEngine::XRAnchorSaveIntegration ALIAS HoroXRAnchorSaveIntegration)
+target_compile_features(HoroXRAnchorSaveIntegration PUBLIC cxx_std_20)
+target_link_libraries(HoroXRAnchorSaveIntegration PUBLIC HoroEngine::XRRuntime HoroEngine::Runtime)
+
 # Backend-neutral runtime publication is available only to explicit, non-installed host composition.
 set(_horo_xr_runtime_host_headers "${CMAKE_CURRENT_BINARY_DIR}/xr_runtime_host_headers")
 file(MAKE_DIRECTORY "${_horo_xr_runtime_host_headers}")
