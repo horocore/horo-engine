@@ -234,9 +234,9 @@ namespace Horo::Network::NativeQualification {
                 return joint.front().translation.x;
             }
 
-            /** @brief Plays once after the initial replica has confirmed its Scene state. */
-            void StartActionAfterReceipt(std::size_t snapshotsSent) {
-                if (projection_ != Projection::Action || !authority || actionQueued_ || snapshotsSent == 0)
+            /** @brief Plays once at the scenario's selected native connection or initial receipt boundary. */
+            void StartActionWhenReady(bool ready) {
+                if (projection_ != Projection::Action || !authority || actionQueued_ || !ready)
                     return;
                 REQUIRE(scene);
                 const auto actor = App::InspectHeadlessAnimationEntity(*scene, Object);

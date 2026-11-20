@@ -20,6 +20,7 @@ namespace Horo::Network::NativeQualification {
         std::optional<ChannelId> snapshotChannel;
         std::size_t snapshotsSent{};
         std::size_t snapshotsReceived{};
+        bool holdSnapshots{};  // Test-only packet loss while proving reconstruction from reliable initial state.
     };
 
     /** @brief Forward every operation to the same native adapter and retain only its actual Connect result. */
@@ -104,8 +105,11 @@ namespace Horo::Network::NativeQualification {
                 if (event.kind == NetworkTransportEventKind::Accepted || event.kind == NetworkTransportEventKind::Connected)
                     ++observation_.readyEvents;
                 if (event.kind == NetworkTransportEventKind::PacketReceived && event.channel == observation_.snapshotChannel &&
-                    event.delivery == DeliveryPolicy::UnreliableUnordered)
+                    event.delivery == DeliveryPolicy::UnreliableUnordered) {
+                    if (observation_.holdSnapshots)
+                        return;
                     ++observation_.snapshotsReceived;
+                }
                 observation_.lastEvent = event.kind;
                 if (!observation_.failure)
                     observation_.failure = event.failure;

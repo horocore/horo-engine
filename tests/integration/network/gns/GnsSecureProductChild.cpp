@@ -26,6 +26,7 @@ namespace Horo::Network::NativeQualification {
             bool liveScene{};
             bool liveVelocity{};
             bool liveAction{};
+            bool lateJoinAction{};
             unsigned side{};
         } input;
 
@@ -366,52 +367,84 @@ namespace Horo::Network::NativeQualification {
             std::cout << "NATIVE_REJECTED " << (input.side == 0 ? "server" : "client") << '\n' << std::flush;
         }
 
+        /** @brief Checks the committed client pose before and after live Snapshot delivery. */
+        struct PresentationProgress final {
+            std::optional<float> first;
+            std::size_t snapshotsAtFirst{};
+            bool appliedSnapshot{};
+
+            void Observe(const LiveScene::Product &product, TransportObservation &wire) {
+                const auto value = product.ClientPresentation();
+                if (!value || appliedSnapshot)
+                    return;
+                if (first) {
+                    appliedSnapshot = wire.snapshotsReceived > snapshotsAtFirst && product.LaterValue(*first, *value);
+                    return;
+                }
+                if (!product.FirstValue(*value))
+                    return;
+                first = value;
+                snapshotsAtFirst = wire.snapshotsReceived;
+                if (wire.holdSnapshots) {
+                    REQUIRE(snapshotsAtFirst == 0);
+                    wire.holdSnapshots = false;
+                }
+            }
+        };
+
+        /** @brief Sends the fixture command only when the replica world has an admitted session. */
+        bool TrySendQualificationCommand(ChildOwners &owners) {
+            const auto role = owners.host->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702});
+            if (role.HasError() || !role.Value().session)
+                return false;
+            if (owners.live)
+                owners.live->VerifyReplicaActionDenied();
+            REQUIRE(role.Value().worldSession);
+            REQUIRE_FALSE(role.Value().authority.IsValid());
+            const auto &wire = *owners.observation;
+            REQUIRE(wire.outbound.IsValid());
+            REQUIRE(wire.transport->Send(wire.outbound, ChannelId::Create(1, 2).Value(), owners.command, DeliveryPolicy::ReliableOrdered)
+                        .HasValue());
+            return true;
+        }
+
+        /** @brief Checks both peers' evidence from the admitted live Scene route. */
+        void VerifyPresentation(const ChildOwners &owners, const PresentationProgress &presentation) {
+            if (input.side == 1) {
+                REQUIRE(presentation.first);
+                REQUIRE(presentation.appliedSnapshot);
+                REQUIRE(owners.observation->snapshotsReceived > 0);
+                return;
+            }
+            REQUIRE(owners.observation->snapshotsSent > 0);
+            if (input.liveScene) {
+                const auto y = owners.live->SceneY();
+                REQUIRE(y);
+                REQUIRE(*y < LiveScene::AuthorityStartY);
+            }
+        }
+
         void Pump(ChildOwners &owners) {
+            auto &wire = *owners.observation;
+            wire.holdSnapshots = input.side == 1 && input.lateJoinAction;
             if (input.side == 0) {
                 std::cout << "NATIVE_READY server\n" << std::flush;
             }
             // Covers peer cold startup; the canonical admission policy still owns its strict protocol timeouts.
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
             bool sent{};
-            std::optional<float> firstPresentation;
-            std::size_t snapshotsAtFirstValue{};
-            bool appliedSnapshot{};
+            PresentationProgress presentation;
             while (std::chrono::steady_clock::now() < deadline) {
                 auto frame = owners.host->RunFrame();
                 if (frame.HasError())
                     ReportError(frame.ErrorValue());
                 REQUIRE(frame.HasValue());
                 if (owners.live)
-                    owners.live->StartActionAfterReceipt(owners.observation->snapshotsSent);
-                if (input.side == 1 && owners.live) {
-                    const auto value = owners.live->ClientPresentation();
-                    if (value) {
-                        const auto snapshots = owners.observation->snapshotsReceived;
-                        // The initial receipt and first live packet can be processed in the same host frame.
-                        if (!firstPresentation && owners.live->FirstValue(*value)) {
-                            firstPresentation = value;
-                            snapshotsAtFirstValue = snapshots;
-                        } else if (firstPresentation && snapshots > snapshotsAtFirstValue &&
-                                   owners.live->LaterValue(*firstPresentation, *value)) {
-                            appliedSnapshot = true;
-                        }
-                    }
-                }
-                if (input.side == 1 && !sent && (!owners.live || appliedSnapshot)) {
-                    const auto role = owners.host->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702});
-                    if (role.HasValue() && role.Value().session.has_value()) {
-                        if (owners.live)
-                            owners.live->VerifyReplicaActionDenied();
-                        REQUIRE(role.Value().worldSession.has_value());
-                        REQUIRE_FALSE(role.Value().authority.IsValid());
-                        REQUIRE(owners.observation->outbound.IsValid());
-                        REQUIRE(owners.observation->transport
-                                    ->Send(owners.observation->outbound, ChannelId::Create(1, 2).Value(), owners.command,
-                                           DeliveryPolicy::ReliableOrdered)
-                                    .HasValue());
-                        sent = true;
-                    }
-                }
+                    owners.live->StartActionWhenReady(input.lateJoinAction ? wire.readyEvents > 0 : wire.snapshotsSent > 0);
+                if (input.side == 1 && owners.live)
+                    presentation.Observe(*owners.live, wire);
+                if (input.side == 1 && !sent && (!owners.live || presentation.appliedSnapshot))
+                    sent = TrySendQualificationCommand(owners);
                 if ((input.side == 1 && owners.handler->calls > 0) ||
                     (input.side == 0 && std::filesystem::exists(std::filesystem::path(input.directory) / "stop-server")))
                     break;
@@ -421,18 +454,7 @@ namespace Horo::Network::NativeQualification {
                 ReportPeerState(owners, sent);
             REQUIRE(owners.handler->calls > 0);
             if (owners.live) {
-                if (input.side == 0) {
-                    if (input.liveScene) {
-                        const auto y = owners.live->SceneY();
-                        REQUIRE(y);
-                        REQUIRE(*y < LiveScene::AuthorityStartY);
-                    }
-                    REQUIRE(owners.observation->snapshotsSent > 0);
-                } else {
-                    REQUIRE(firstPresentation);
-                    REQUIRE(appliedSnapshot);
-                    REQUIRE(owners.observation->snapshotsReceived > 0);
-                }
+                VerifyPresentation(owners, presentation);
                 std::cout << "NATIVE_SNAPSHOT " << (input.side == 0 ? "server" : "client") << '\n' << std::flush;
             }
             REQUIRE(owners.host->ClientConnectionTerminal() == nullptr);
@@ -446,12 +468,12 @@ namespace Horo::Network::NativeQualification {
         REQUIRE(input.side <= 1);
         REQUIRE_FALSE(input.directory.empty());
         ChildOwners owners;
-        if (input.liveScene || input.liveVelocity || input.liveAction) {
+        if (input.liveScene || input.liveVelocity || input.liveAction || input.lateJoinAction) {
             REQUIRE_FALSE(input.rejectNativeRoot);
             auto projection = LiveScene::Projection::Transform;
             if (input.liveVelocity)
                 projection = LiveScene::Projection::Velocity;
-            if (input.liveAction)
+            if (input.liveAction || input.lateJoinAction)
                 projection = LiveScene::Projection::Action;
             owners.live = std::make_unique<LiveScene::Product>(owners.fixtures, owners.credentials, input.side == 0, projection);
         }
@@ -473,7 +495,8 @@ int main(int argc, char **argv) {
                Catch::Clara::Opt(Horo::Network::NativeQualification::input.rejectNativeRoot)["--reject-native-root"] |
                Catch::Clara::Opt(Horo::Network::NativeQualification::input.liveScene)["--live-scene"] |
                Catch::Clara::Opt(Horo::Network::NativeQualification::input.liveVelocity)["--live-velocity"] |
-               Catch::Clara::Opt(Horo::Network::NativeQualification::input.liveAction)["--live-action"];
+               Catch::Clara::Opt(Horo::Network::NativeQualification::input.liveAction)["--live-action"] |
+               Catch::Clara::Opt(Horo::Network::NativeQualification::input.lateJoinAction)["--late-join-action"];
     session.cli(cli);
     return session.run(argc, argv);
 }
