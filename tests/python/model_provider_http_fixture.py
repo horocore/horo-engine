@@ -139,8 +139,10 @@ def main():
     worker.start()
     environment = os.environ.copy()
     environment["HORO_MODEL_TEST_ENDPOINT"] = f"http://127.0.0.1:{server.server_port}"
-    environment["NO_PROXY"] = "127.0.0.1,localhost"
-    environment["no_proxy"] = "127.0.0.1,localhost"
+    # A proxy request would reach the fixture with an absolute URL and be rejected.
+    environment["http_proxy"] = environment["HORO_MODEL_TEST_ENDPOINT"]
+    environment["NO_PROXY"] = ""
+    environment["no_proxy"] = ""
     try:
         # The executable is resolved in the exact CMake-owned test directory, including external worktree builds.
         # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit, python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args

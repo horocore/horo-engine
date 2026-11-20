@@ -163,6 +163,18 @@ TEST_CASE("Local HTTP inference completes an approved editor MCP tool round with
     CHECK(result.messages.back().text == "Three objects");
 }
 
+TEST_CASE("Local model discovery rejects malformed loopback authorities before transport", "[agent][model][http]") {
+    for (const auto endpoint :
+         {"http://localhost:0", "http://127.0.0.1:65536", "http://localhost:port", "http://[::1]:", "http://127.0.0.1:11434\\alternate"}) {
+        CAPTURE(endpoint);
+        const auto provider = CreateOllamaModelProvider({.endpoint = endpoint});
+        const auto discovery = provider->Discover({});
+        REQUIRE(discovery.outcome.error.has_value());
+        CHECK(discovery.outcome.error->code == ModelErrorCode::InvalidRequest);
+        CHECK_FALSE(discovery.outcome.error->httpStatus.has_value());
+    }
+}
+
 TEST_CASE("Local editor inference reports unavailable or missing models and the same provider recovers", "[agent][model][http]") {
     auto provider = Create(false);
     AgentTurnRuntime runtime;

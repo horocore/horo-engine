@@ -3,7 +3,9 @@
 #include "ReferenceModelStream.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <charconv>
 #include <cstddef>
 #include <curl/curl.h>
 #include <limits>
@@ -47,14 +49,27 @@ namespace Horo::Agent {
             }
         };
 
-        /** @brief Keep URL validation simple and reject implicit redirect or credential-bearing endpoints. */
-        bool ValidEndpoint(std::string_view endpoint, Protocol protocol) {
+        /** @brief Recognizes a loopback authority with an explicit numeric port before any optional base path. */
+        bool IsLoopbackEndpoint(const std::string_view endpoint) {
+            constexpr std::array hosts{std::string_view{"http://localhost:"}, std::string_view{"http://127.0.0.1:"},
+                                       std::string_view{"http://[::1]:"}};
+            const auto host = std::ranges::find_if(hosts, [endpoint](const auto candidate) {
+                return endpoint.starts_with(candidate);
+            });
+            if (host == hosts.end())
+                return false;
+            const auto authority = endpoint.substr(host->size());
+            const auto port = authority.substr(0, authority.find('/'));
+            unsigned number{};
+            const auto parsed = std::from_chars(port.data(), port.data() + port.size(), number);
+            return parsed.ec == std::errc{} && parsed.ptr == port.data() + port.size() && number > 0 && number <= 65535;
+        }
+
+        /** @brief Keeps endpoint admission independent from credentials, query text and local transport policy. */
+        bool ValidEndpoint(std::string_view endpoint, Protocol protocol, const bool local) {
             const bool secure = endpoint.starts_with("https://");
-            const bool local = endpoint.starts_with("http://localhost:") || endpoint.starts_with("http://127.0.0.1:") ||
-                               endpoint.starts_with("http://[::1]:");
             return endpoint.size() >= 9 && (secure || local) && (protocol != Protocol::Ollama || local) &&
-                   endpoint.find('@') == std::string_view::npos && endpoint.find('?') == std::string_view::npos &&
-                   endpoint.find('#') == std::string_view::npos;
+                   endpoint.find_first_of("@?#\\") == std::string_view::npos;
         }
 
         /** @brief Map an HTTP status without retaining remote response text. */
@@ -181,7 +196,8 @@ namespace Horo::Agent {
         /** @brief Perform one real bounded HTTP request with a per-line or buffered response consumer. */
         ModelOutcome HttpRequest(const ModelProviderConfig &config, Protocol protocol, std::string_view path, const std::string *body,
                                  const std::string *bearer, std::stop_token stop, const std::function<bool(std::string_view)> &consume) {
-            if (!ValidEndpoint(config.endpoint, protocol) || config.timeout.count() <= 0 ||
+            const bool local = IsLoopbackEndpoint(config.endpoint);
+            if (!ValidEndpoint(config.endpoint, protocol, local) || config.timeout.count() <= 0 ||
                 config.timeout.count() > (std::numeric_limits<long>::max)() || !consume) {
                 return {ModelError{ModelErrorCode::InvalidRequest, "Invalid model provider endpoint or timeout", std::nullopt}};
             }
@@ -200,7 +216,8 @@ namespace Horo::Agent {
                 return {ModelError{ModelErrorCode::Transport, "Cannot initialize model HTTP client", std::nullopt}};
             // URL and TLS policy are configured together before callbacks or any transfer.
             if (curl_easy_setopt(curl, CURLOPT_URL, url.c_str()) != CURLE_OK ||
-                curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK) {
+                curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK ||
+                (local && curl_easy_setopt(curl, CURLOPT_PROXY, "") != CURLE_OK)) {
                 curl_easy_cleanup(curl);
                 return {ModelError{ModelErrorCode::Transport, "Cannot configure model HTTP transport", std::nullopt}};
             }
