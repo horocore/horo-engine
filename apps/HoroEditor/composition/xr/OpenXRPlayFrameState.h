@@ -90,6 +90,7 @@ namespace Horo::Application::Internal {
 
         std::optional<PassthroughFrame> passthrough;
         std::optional<Render::MultiviewMotionFrame> motionFrame;
+        bool nativeLightingBound{}; /**< Permission is rechecked before recording an admitted observation. */
         std::optional<XR::XRFrameId> coverageFrame;
         OpenXRPlayCoverageStatus coverageStatus{OpenXRPlayCoverageStatus::Unobserved};
         std::optional<Editor::EditorVulkanXrViewportAccess::CoverageReduction> reduction;
@@ -133,6 +134,7 @@ namespace Horo::Application::Internal {
             plan.reset();
             passthrough.reset();
             motionFrame.reset();
+            nativeLightingBound = false;
             reduction.reset();
             synthesisHistory.reset();
             const auto waited = compositor.Wait();

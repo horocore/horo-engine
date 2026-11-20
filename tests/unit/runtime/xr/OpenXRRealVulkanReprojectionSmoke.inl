@@ -303,12 +303,21 @@ namespace Horo::Tests::OpenXRApplication {
             std::unique_ptr<Host::OpenXRPlayHost> play;
 
             explicit NativePlayFixture(const std::filesystem::path &cooks, const Host::IOpenXRPlayLightingSource *lighting = nullptr,
-                                       const std::filesystem::path &lightingCooks = {}) {
+                                       const std::filesystem::path &lightingCooks = {},
+                                       std::shared_ptr<const Host::IOpenXRLightPermission> lightPermission = {}) {
                 REQUIRE(window);
                 platform = std::make_unique<Editor::SdlVulkanPresentationPort>(*window);
                 images = std::make_unique<NativePlayImages>(*platform, bridge);
                 script.native.synthesisExtension = true;
                 ++script.native.extensionCount;
+                if (lightPermission) {
+                    static constexpr std::array<std::string_view, 1> extensions{XR_ANDROID_LIGHT_ESTIMATION_EXTENSION_NAME};
+                    script.native.extraExtensions = extensions;
+                    ++script.native.extensionCount;
+                    script.census.extraProc = &OpenXR::LightScript::GetProc;
+                    script.census.lightEstimationSupport = XR_TRUE;
+                    product.policy->lightPermission = std::move(lightPermission);
+                }
                 static constexpr std::array<std::int64_t, 3> formats{VK_FORMAT_R8G8B8A8_UNORM, VK_FORMAT_R16G16B16A16_SFLOAT,
                                                                      VK_FORMAT_D32_SFLOAT};
                 script.census.formats = formats.size();
@@ -551,6 +560,69 @@ namespace Horo::Tests::OpenXRApplication {
         fixture.Project(2);
         CHECK(lighting.reads == (supported ? 2U : 0U));
         REQUIRE(fixture.script.frames.views == 2);
+        scene->Shutdown();
+    }
+
+    TEST_CASE("Signed Vulkan Play samples the native estimator only under current platform and application approval",
+              "[xr][application][play][native-estimator]") {
+        struct Permission final : Host::IOpenXRLightPermission {
+            bool SupportsLightEstimation() const noexcept override {
+                return true;
+            }
+
+            bool Allows(const XR::XRLightEstimateScope &) const noexcept override {
+                return allowed;
+            }
+
+            bool allowed{};
+        };
+
+        const auto *root = SDL_getenv("HORO_XR_PLAY_NATIVE_COOK_ROOT");
+        const auto *environment = SDL_getenv("HORO_XR_ENVIRONMENT_SHADER_DIRECTORY");
+        if (!root || !environment)
+            SKIP("Supply the genuine offline Vulkan projection and environment programs.");
+        OpenXR::LightScript nativeLight;
+        nativeLight.sampleAtCutoff = true;
+        nativeLight.expectedSpace = XR_NULL_HANDLE;
+        auto permission = std::make_shared<Permission>();
+        NativePlayFixture fixture{root, nullptr, environment, permission};
+        auto scene = ActivatePlay(fixture, std::nullopt);
+        auto input = std::make_unique<AppInputSample>(*fixture.play);
+        auto *observed = input.get();
+        RequireValue(fixture.scheduler->AddParticipant(std::move(input)));
+        RequireValue(fixture.scheduler->Startup());
+        for (const auto now : {100'000'000, 110'000'000}) {
+            fixture.script.clock.sample = now;
+            RequireValue(fixture.scheduler->RunFrame());
+            REQUIRE(observed->result);
+            RequireValue(*observed->result);
+        }
+        const auto session = fixture.session->RetainedSession();
+        REQUIRE(session);
+        const auto world = RequireValue(fixture.session->WorldSpace(*session));
+        const XR::XRLightEstimateScope scope{*session, world, RequireValue(XR::XRLightEstimateGrant::Create(1))};
+        const XR::XRLightEstimateLimits limits{Duration::FromMilliseconds(1), Duration::FromMilliseconds(100)};
+        const XR::XRLightProjectionPolicy policy{.ambientColor = {Render::SceneColorEncoding::LinearAcesCg},
+                                                 .directionalColor = {Render::SceneColorEncoding::LinearAcesCg},
+                                                 .direction = XR::XRLightDirectionConvention::TowardScene,
+                                                 .ambientScale = 0.25F,
+                                                 .directionalScale = 0.25F,
+                                                 .maximumAbsoluteChannel = 4.0F,
+                                                 .directionalIdentity = 1,
+                                                 .maximumAge = limits.maximumAge};
+        CHECK(fixture.play->StartNativeLighting(scope, limits, policy).HasError());
+        CHECK(nativeLight.createCalls == 0);
+        permission->allowed = true;
+        RequireValue(fixture.play->StartNativeLighting(scope, limits, policy));
+        fixture.script.frames.prediction = 120'000'000;
+        fixture.Project(1);
+        CHECK(nativeLight.sampleCalls == 1);
+        permission->allowed = false;
+        fixture.script.frames.prediction += fixture.script.frames.period;
+        fixture.Project(2);
+        CHECK(nativeLight.sampleCalls == 1);
+        RequireValue(fixture.play->StopNativeLighting());
+        CHECK(nativeLight.retireCalls == 1);
         scene->Shutdown();
     }
 

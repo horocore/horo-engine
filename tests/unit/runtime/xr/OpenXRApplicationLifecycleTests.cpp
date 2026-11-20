@@ -11,6 +11,7 @@
 #include "editor/renderer/vulkan/EditorViewportRendererVulkan.h"
 #include "support/OpenXRApplicationNativeTestSupport.h"
 #include "support/OpenXRInstalledProductTestFixture.h"
+#include "support/OpenXRLightTestSupport.h"
 #include "support/OpenXRPassthroughTestSupport.h"
 #include "support/OpenXRPlaneCaptureTestSupport.h"
 #include "unit/editor/SceneDocumentHierarchyFixture.h"

@@ -274,6 +274,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] bool MayArmPassthrough() const;
         /** @brief Checks the installed platform's current permission for the exact Play scope, without native I/O. */
         [[nodiscard]] bool AllowsPassthrough(const XR::XRPassthroughScope &scope) const noexcept;
+        /** @brief Reads cached platform clearance independently of the current operator grant. */
+        [[nodiscard]] bool AllowsNativeLighting(const XR::XRLightEstimateScope &scope) const noexcept;
         /** @brief Transfers the one-use Setup grant to the prepared Play owner. @param allowed Granted by Setup. */
         void SetPlaneCaptureConsent(bool allowed) noexcept;
         /** @brief Immediately withdraws geometry before beginning native retirement. */

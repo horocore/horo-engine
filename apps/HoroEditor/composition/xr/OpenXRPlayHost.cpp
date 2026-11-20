@@ -139,6 +139,8 @@ namespace Horo::Application::Internal {
         RevokeEyeGaze();
         RevokePlaneCapture();
         RevokePassthrough();
+        if (scene_ && scene_->nativeLighting)
+            scene_->nativeLighting->active = false;
         composition_.session.RequestHapticCancellation();
         if (busy_) {
             if (scene_ && !scene_->activated)

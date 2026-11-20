@@ -6,6 +6,56 @@
 #include <limits>
 
 namespace Horo::Application::Internal {
+    /** @copydoc OpenXRPlayHost::StartNativeLighting */
+    Result<void> OpenXRPlayHost::StartNativeLighting(const XR::XRLightEstimateScope &scope, const XR::XRLightEstimateLimits &limits,
+                                                     XR::XRLightProjectionPolicy policy) {
+        using namespace XR;
+        if (const auto lane = Lane(); lane.HasError())
+            return lane;
+        if (!scene_ || !scene_->published || scene_->retiring || frames_.Snapshot().phase != XRFramePhase::Idle)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
+        if (composition_.lighting || !Editor::EditorVulkanXrViewportAccess::SupportsEnvironmentLighting(composition_.viewport))
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
+        if (!scope.IsValid() || scope.session != scene_->session || scope.space != scene_->worldReference)
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        if (!LightingCutoff(scope))
+            return Result<void>::Failure(MakeError(XRErrors::PermissionDenied));
+        if (scene_->nativeLighting)
+            return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
+        auto projection = XRLightProjection::Create(scope, policy);
+        if (projection.HasError())
+            return Result<void>::Failure(projection.ErrorValue());
+        const Operation operation{*this};
+        if (auto native = native_.StartLightEstimation(scope, limits); native.HasError())
+            return native;
+        const bool admitted = !pendingRevoke_ && LightingCutoff(scope).has_value();
+        scene_->nativeLighting.emplace(scope, std::move(projection).Value(), admitted);
+        if (!admitted) {
+            if (auto retired = native_.StopLightEstimation(scope); retired.HasError())
+                return retired;
+            scene_->nativeLighting.reset();
+            return Result<void>::Failure(MakeError(XRErrors::PermissionDenied));
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRPlayHost::StopNativeLighting */
+    Result<void> OpenXRPlayHost::StopNativeLighting() {
+        if (const auto lane = Lane(); lane.HasError())
+            return lane;
+        if (!scene_ || !scene_->nativeLighting)
+            return Result<void>::Success();
+        auto &light = *scene_->nativeLighting;
+        light.active = false;
+        if (frames_.Snapshot().phase != XR::XRFramePhase::Idle)
+            return Result<void>::Failure(MakeError(XR::XRErrors::OperationIncompatible));
+        const Operation operation{*this};
+        if (auto retired = native_.StopLightEstimation(light.scope); retired.HasError())
+            return retired;
+        scene_->nativeLighting.reset();
+        return Result<void>::Success();
+    }
+
     namespace {
         constexpr std::chrono::milliseconds PreviewQueueLifetime{500};
 

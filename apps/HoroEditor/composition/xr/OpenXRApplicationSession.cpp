@@ -78,7 +78,7 @@ namespace Horo::Application::Internal {
         /** @brief Prepares exactly the installed extension routes usable by this editor composition. */
         Result<void> PrepareNativeDiscovery(OpenXRNativeSession &native, const XRLoaderPreflightRequest &selection, bool handsRequested,
                                             bool planePreview, const std::optional<NativeExtensionRequest> &passthrough,
-                                            bool optionalReprojection) {
+                                            bool optionalReprojection, bool lightEstimation) {
             const XRLoaderApiVersion compiled{XR_VERSION_MAJOR(XR_CURRENT_API_VERSION), XR_VERSION_MINOR(XR_CURRENT_API_VERSION),
                                               XR_VERSION_PATCH(XR_CURRENT_API_VERSION)};
             // The editor composition owns a time provider and color projection; its renderer has no native depth provider.
@@ -94,6 +94,7 @@ namespace Horo::Application::Internal {
                 Selection{{OpenXRPlatformTimeRoute().extension, true}, true},
                 Selection{{XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME}, true},
                 Selection{{XR_EXT_HAND_TRACKING_EXTENSION_NAME}, handsRequested},
+                Selection{{XR_ANDROID_LIGHT_ESTIMATION_EXTENSION_NAME}, lightEstimation},
                 Selection{{XR_EXT_FUTURE_EXTENSION_NAME}, planePreview},
                 Selection{{.name = XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME, .dependencies = spatialDependencies}, planePreview},
                 Selection{{.name = XR_EXT_SPATIAL_PLANE_TRACKING_EXTENSION_NAME, .dependencies = planeDependencies}, planePreview},
@@ -126,7 +127,8 @@ namespace Horo::Application::Internal {
             passthrough.reset();
         if (!native_ || native_.get() != owner)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
-        if (auto prepared = PrepareNativeDiscovery(*native_, selection_, hands, planes, passthrough, optionalReprojection);
+        const bool lightEstimation = policy_.lightPermission && policy_.lightPermission->SupportsLightEstimation();
+        if (auto prepared = PrepareNativeDiscovery(*native_, selection_, hands, planes, passthrough, optionalReprojection, lightEstimation);
             prepared.HasError())
             return prepared;
         auto actual = native_->DiscoverSystem(selection_.attempt);
@@ -170,6 +172,11 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRApplicationSession::AllowsPassthrough */
     bool OpenXRApplicationSession::AllowsPassthrough(const XRPassthroughScope &scope) const noexcept {
         return policy_.passthroughPermission && policy_.passthroughPermission->Allows(scope);
+    }
+
+    /** @copydoc OpenXRApplicationSession::AllowsNativeLighting */
+    bool OpenXRApplicationSession::AllowsNativeLighting(const XRLightEstimateScope &scope) const noexcept {
+        return policy_.lightPermission && policy_.lightPermission->Allows(scope);
     }
 
     /** @copydoc OpenXRApplicationSession::MayArmEyeGaze */

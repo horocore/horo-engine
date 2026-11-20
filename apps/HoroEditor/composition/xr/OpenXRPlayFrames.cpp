@@ -632,12 +632,50 @@ namespace Horo::Application::Internal {
         }
     }  // namespace
 
+    /** @copydoc OpenXRPlayHost::LightingCutoff */
+    std::optional<XRRuntimeTime> OpenXRPlayHost::LightingCutoff(const XRLightEstimateScope &scope) const noexcept {
+        const auto state = sessions_.Snapshot();
+        const auto *tracking = tracking_.Current();
+        if (!tracking || eventsPending_ || !state.admitsActions || state.session != scope.session || tracking->Session() != scope.session ||
+            tracking->WorldOriginRevision() != scope.space.worldOriginRevision || tracking->Focus() != XRTrackingFocusState::Focused ||
+            tracking->State() != XRTrackingState::Active || !composition_.session.AllowsNativeLighting(scope))
+            return std::nullopt;
+        return tracking->SampledAt();
+    }
+
+    /** @copydoc OpenXRPlayHost::ReadNativeLighting */
+    std::optional<XRProjectedLighting> OpenXRPlayHost::ReadNativeLighting(const XRCoordinateSpace &world) {
+        if (!scene_->nativeLighting || !scene_->nativeLighting->active)
+            return std::nullopt;
+        auto &light = *scene_->nativeLighting;
+        const auto cutoff = LightingCutoff(light.scope);
+        if (!cutoff || light.scope.space != world) {
+            light.active = false;
+            return std::nullopt;
+        }
+        const auto space = composition_.session.BorrowWorldSpace(world);
+        if (space.HasError() || !LightingCutoff(light.scope)) {
+            light.active = false;
+            return std::nullopt;
+        }
+        std::optional<XRLightEstimate> estimate;
+        if (native_.AdvanceLightEstimation(light.scope, space.Value(), *cutoff).HasValue() && LightingCutoff(light.scope)) {
+            if (auto current = native_.ReadLightEstimation(light.scope, *cutoff);
+                current.HasValue() && light.active && LightingCutoff(light.scope))
+                estimate.emplace(std::move(current).Value());
+        }
+        auto projected = light.projection.Update(light.scope, *cutoff, estimate ? &*estimate : nullptr);
+        return projected.HasValue() ? std::move(projected).Value() : std::nullopt;
+    }
+
     /** @copydoc OpenXRPlayHost::ReadFrameLighting */
-    std::optional<XRProjectedLighting> OpenXRPlayHost::ReadFrameLighting(const XRFrameSnapshot &frame,
-                                                                         const XRCoordinateSpace &world) const noexcept {
+    std::optional<XRProjectedLighting> OpenXRPlayHost::ReadFrameLighting(const XRFrameSnapshot &frame, const XRCoordinateSpace &world) {
         const auto *source = composition_.lighting;
-        if (!source || !sessions_.Snapshot().admitsActions ||
-            !Editor::EditorVulkanXrViewportAccess::SupportsEnvironmentLighting(composition_.viewport))
+        if (!Editor::EditorVulkanXrViewportAccess::SupportsEnvironmentLighting(composition_.viewport))
+            return std::nullopt;
+        if (!source)
+            return ReadNativeLighting(world);
+        if (!sessions_.Snapshot().admitsActions)
             return std::nullopt;
         const auto sample = source->Read(frame.frame, world, frame.predictedDisplayTime);
         if (!sample || !sample->scope.IsValid() || sample->scope.space != world || sample->scope.session != frame.frame.session ||
@@ -719,6 +757,7 @@ namespace Horo::Application::Internal {
         if (prepareMotion)
             render_->motionFrame = motion.frame;
         render_->plan.emplace(std::move(plan).Value());
+        render_->nativeLightingBound = environmentInput && !composition_.lighting;
         render_->hostFrameNumber = frameNumber;
         render_->canvasBound = placement.has_value();
         return Result<void>::Success();
@@ -732,6 +771,9 @@ namespace Horo::Application::Internal {
         if (!UsesXrScene() || !render_ || !render_->plan || !render_->acquisition || render_->encoded)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         const Operation operation{*this};
+        if (render_->nativeLightingBound &&
+            (!scene_->nativeLighting || !scene_->nativeLighting->active || !LightingCutoff(scene_->nativeLighting->scope)))
+            return AbortRenderFrame();
         auto executed =
             Editor::EditorVulkanXrViewportAccess::Execute(composition_.viewport, frame, output, render_->canvasBound ? canvas : nullptr);
         if (executed.HasError()) {

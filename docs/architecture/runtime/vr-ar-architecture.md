@@ -1075,6 +1075,12 @@ The Play host reads the optional application-owned light publication only on
 focused frames with the environment program admitted. It checks the exact frame,
 prediction, session, and calibrated World scope before binding renderer inputs.
 An absent, invalid, or withdrawn publication leaves that frame neutral.
+When an installed platform owner provides light permission evidence, Play can
+start the native estimator after a separate World-scoped application grant.
+It samples at the admitted tracking cutoff, projects through the bounded
+calibration policy, and rechecks the grant before encoding a lit frame.
+Withdrawal prevents further sampling. The native session retains any pending
+estimator retirement until the control lane can finish it.
 Each binding starts with neutral lighting. Omitted contributions use the same
 color as the ordinary projection, and withdrawing a contribution requires no
 change to scene lights, exposure, or the projection attachment layout.

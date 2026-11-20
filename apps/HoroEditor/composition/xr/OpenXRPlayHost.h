@@ -232,6 +232,16 @@ namespace Horo::Application::Internal {
         [[nodiscard]] std::optional<XR::XRPoseSample> ReadEyeGaze() const noexcept;
         /** @return Live authorized geometry for the current calibrated Play cutoff or typed unavailability. */
         [[nodiscard]] Result<XR::XRPlaneSnapshot> ReadPlaneObservations() const;
+        /** @brief Starts environment estimation after the app issues a separate consent grant for the current World.
+         * @param scope Exact focused session/World and fresh application grant.
+         * @param limits Bounded native cadence and expiry. @param projection Explicit renderer conversion policy.
+         * @return Successful admission or original permission, scope, platform or native failure.
+         * @pre Control lane outside an admitted frame. The installed platform authority supplies independent clearance.
+         */
+        [[nodiscard]] Result<void> StartNativeLighting(const XR::XRLightEstimateScope &scope, const XR::XRLightEstimateLimits &limits,
+                                                       XR::XRLightProjectionPolicy projection);
+        /** @brief Withdraws the current contribution before native retirement. @return Success or retryable native debt. */
+        [[nodiscard]] Result<void> StopNativeLighting();
         /** @brief Intersects a ray with the current consented World planes.
          * @param request Exact capture scope, age limit and
          * finite ray.
@@ -429,7 +439,11 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<const WorldCanvasFrame *> PrepareCanvasSource(const WorldCanvasFrame *canvas) const;
         /** @brief Reads a consented value only for this focused frame and exact World lineage. */
         [[nodiscard]] std::optional<XR::XRProjectedLighting> ReadFrameLighting(const XR::XRFrameSnapshot &frame,
-                                                                               const XR::XRCoordinateSpace &world) const noexcept;
+                                                                               const XR::XRCoordinateSpace &world);
+        /** @brief Samples and projects the current native grant at the admitted runtime clock cutoff. */
+        [[nodiscard]] std::optional<XR::XRProjectedLighting> ReadNativeLighting(const XR::XRCoordinateSpace &world);
+        /** @brief Checks current focus, tracking and cached platform clearance for an exact World. */
+        [[nodiscard]] std::optional<XR::XRRuntimeTime> LightingCutoff(const XR::XRLightEstimateScope &scope) const noexcept;
         [[nodiscard]] Result<void> BindRenderFrame(std::uint64_t frameNumber, const WorldCanvasFrame *canvas);
         /** @brief Acquires the optional reprojection pair after the ordinary projection is bound. */
         [[nodiscard]] std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages> AcquireAuxiliaryProjection(
@@ -456,6 +470,13 @@ namespace Horo::Application::Internal {
             void Revoke() noexcept;
         };
 
+        /** @brief Keeps producer scope and projection history for one Scene occurrence. Winding down can be retried outside frames. */
+        struct NativeLightingState final {
+            XR::XRLightEstimateScope scope;
+            XR::XRLightProjection projection;
+            bool active;
+        };
+
         struct SceneState final {
             Runtime::SceneRuntimeId scene;
             std::optional<SceneGeometry> geometry;
@@ -467,6 +488,7 @@ namespace Horo::Application::Internal {
             std::optional<XR::OpenXRInternal::NativeReferenceCalibrationObservation> mountedCalibration;
             XR::XRSessionId session;
             std::optional<XR::XRPassthroughGrant> passthroughGrant;
+            std::optional<NativeLightingState> nativeLighting;
             CancellationSource preparationCancellation; /**< Exact unpublished attempt; revocation cannot affect a replacement. */
             bool activated{};
             bool published{};
