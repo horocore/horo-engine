@@ -69,9 +69,10 @@ namespace Horo::Packages::Detail {
     /** @copydoc PackageActivationComposition::PackageActivationComposition */
     PackageActivationComposition::PackageActivationComposition(const PackageLifecycleConfiguration &configuration,
                                                                std::shared_ptr<const VerifiedPackageInstallRecord> install,
-                                                               const std::uint64_t generation) {
+                                                               const std::uint64_t generation)
+        : install_(std::move(install)) {
         (void)configuration;
-        snapshot_->install = std::move(install);
+        snapshot_->install = install_;
         snapshot_->generation = generation;
     }
 

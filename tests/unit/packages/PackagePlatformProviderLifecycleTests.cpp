@@ -113,6 +113,7 @@ namespace Horo::Packages::Tests {
     TEST_CASE("Package replacement retains revoked native work and verified files until owner drain",
               "[packages][platform-services][provider]") {
         for (const bool roleAware : {false, true}) {
+            CAPTURE(roleAware);
             ProviderFixture fixture{roleAware};
             fixture.flags = HORO_PACKAGE_PROVIDER_DELAY | HORO_PACKAGE_PROVIDER_BUSY;
             fixture.Install();
@@ -144,6 +145,8 @@ namespace Horo::Packages::Tests {
             REQUIRE(oldHost->Close().HasError());
             CHECK(fixture.images.front()->Snapshot().cancelled >= 1);
             REQUIRE_FALSE(fixture.images.front()->released);
+            CHECK_FALSE(previousInstall.expired());
+            CHECK(std::filesystem::exists(fixture.images.front()->root));
             fixture.images.front()->configure(0);
             REQUIRE(oldHost->Close().HasValue());
             const auto retiredRequest = oldHost->Query(oldRequest.Value());
