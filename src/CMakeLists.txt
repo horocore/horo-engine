@@ -1826,6 +1826,7 @@ add_library(HoroAI STATIC
         runtime/ai/api/AICapabilityDescriptors.cpp
         runtime/ai/api/AICanonicalErrors.cpp
         runtime/ai/api/AICanonicalState.cpp
+        runtime/ai/api/AIReplayEvidence.cpp
         runtime/ai/api/BlackboardCanonicalState.cpp
         runtime/ai/api/AIErrors.cpp
         runtime/ai/api/AISceneComponents.cpp

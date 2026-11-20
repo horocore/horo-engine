@@ -847,6 +847,7 @@ horo_configure_target_header_boundary(HoroAI PUBLIC_HEADERS
     Horo/AI/DecisionNodeRegistration.h
     Horo/AI/AICapabilityDescriptors.h
     Horo/AI/AICanonicalState.h
+    Horo/AI/AIReplayEvidence.h
     Horo/AI/AIErrors.h
     Horo/AI/AISceneComponents.h
     Horo/AI/AIIdentity.h

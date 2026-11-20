@@ -3270,6 +3270,14 @@ The engine supports two explicit simulation scheduling modes for AI:
 
 Client hosts in networked multiplayer run neither mode for remote AI; they perform presentation-only state interpolation.
 
+The replay evidence comparator validates bounded, contiguous fixed-tick windows
+before comparing them. The manifest declares each boundary as deterministic,
+nondeterministic, or omitted and identifies its schema and content. Canonical
+AI state uses the existing record encoder. The selected decision subject uses
+the existing versioned trace and its exact consumed Blackboard observation.
+Comparison reports the first differing tick and, when both sides recorded it,
+the first differing subsystem boundary with its publication identities.
+
 ### Scene decision scheduling tiers
 
 Hosts can compose an `AiDecisionSimulationProfile` through
