@@ -49,7 +49,10 @@ marker.unlink()
 '''
 
 
-def run(tool: str, *args: str, cwd: Path | None = None) -> subprocess.CompletedProcess:
+FIXTURE_CONFIGURE_TIMEOUT_SECONDS = 90
+
+
+def run(tool: str, *args: str, cwd: Path | None = None, timeout_seconds: int = 30) -> subprocess.CompletedProcess:
     if tool not in {"cmake", "ctest", "gcc", "gcov", "readelf", "dwarfdump"}:
         raise ValueError("Only fixed qualification tools may be executed")
     executable = shutil.which(tool)
@@ -58,7 +61,14 @@ def run(tool: str, *args: str, cwd: Path | None = None) -> subprocess.CompletedP
     command = [str(Path(executable).resolve(strict=True)), *args]
     # All arguments originate in this fixture; no shell or external command input.
     # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
-    return subprocess.run(command, cwd=cwd, capture_output=True, text=True, encoding="utf-8", check=True, shell=False, timeout=30)  # nosec B603
+    return subprocess.run(command, cwd=cwd, capture_output=True, text=True, encoding="utf-8", check=True,
+                          shell=False, timeout=timeout_seconds)  # nosec B603
+
+
+def configure_isolation_fixture(source: Path, build: Path) -> None:
+    # Test registration has no compiler. Avoid MSBuild discovery when the CI runner provides Ninja.
+    generator = ("-G", "Ninja") if sys.platform == "win32" and shutil.which("ninja") else ()
+    run("cmake", "-S", str(source), "-B", str(build), *generator, timeout_seconds=FIXTURE_CONFIGURE_TIMEOUT_SECONDS)
 
 
 def prepare_isolation_project(tmp_path: Path, isolate: bool, workers: int = 2) -> tuple[Path, Path]:
@@ -92,7 +102,7 @@ def prepare_isolation_project(tmp_path: Path, isolate: bool, workers: int = 2) -
         ])
     registry_path.write_text("\n".join(registry), encoding="utf-8")
     (source / "CMakeLists.txt").write_text("\n".join(lines), encoding="utf-8")
-    run("cmake", "-S", str(source), "-B", str(build))
+    configure_isolation_fixture(source, build)
     return build, evidence
 
 

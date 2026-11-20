@@ -453,7 +453,7 @@ jobs:
 
       - name: Verify Windows CTest fixture isolation
         if: runner.os == 'Windows'
-        timeout-minutes: 2
+        timeout-minutes: 5
         run: |
           "$HORO_QUALIFICATION_PYTHON" -m pip install --no-cache-dir --only-binary=:all: pytest==9.0.3
           "$HORO_QUALIFICATION_PYTHON" -m pytest tests/python/test_ci_test_isolation.py \
@@ -1146,10 +1146,20 @@ jobs:
           mode: Debug
           max-size: 2G
       - name: Configure reference SDK host
-        run: >-
-          cmake --preset ci-macos-debug
-          -DHORO_DEPENDENCY_SDK_CACHE="$RUNNER_TEMP/horo-dependency-sdk"
-          -DHORO_FETCH_DEPENDENCY_SDK_PACKAGES=ON
+        run: |
+          configure_log="$(mktemp)"
+          trap 'rm -f "$configure_log"' EXIT
+          for attempt in 1 2 3; do
+            if cmake --preset ci-macos-debug \
+              -DHORO_DEPENDENCY_SDK_CACHE="$RUNNER_TEMP/horo-dependency-sdk" \
+              -DHORO_FETCH_DEPENDENCY_SDK_PACKAGES=ON 2>&1 | tee "$configure_log"; then
+              exit 0
+            fi
+            if [[ "$attempt" == 3 ]] || ! grep -Eq 'The requested URL returned error: (502|503|504)([^0-9]|$)' "$configure_log"; then
+              exit 1
+            fi
+            sleep "$((5 * attempt))"
+          done
       - name: Build actual SDK consumers and native host
         run: >-
           cmake --build --preset ci-macos-debug --parallel 2 --target

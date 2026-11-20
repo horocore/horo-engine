@@ -13,7 +13,7 @@ import tempfile
 
 import pytest
 
-from test_ci_test_isolation import ROOT, run
+from test_ci_test_isolation import FIXTURE_CONFIGURE_TIMEOUT_SECONDS, ROOT, configure_isolation_fixture, run
 
 pytestmark = pytest.mark.skipif(not shutil.which("cmake") or not shutil.which("ctest"), reason="CMake/CTest required")
 NAMES = ("case one", "case_one", "case/path [literal] ü", "case;punctuation")
@@ -87,7 +87,7 @@ def project(tmp_path: Path, *, labels: str = "headless", isolate: bool = True, s
         'ENVIRONMENT_MODIFICATION "EXISTING=set:retained")',
         'horo_ci_catch_properties(HoroPhysicsTests)',
     ]), encoding="utf-8")
-    run("cmake", "-S", str(source), "-B", str(build))
+    configure_isolation_fixture(source, build)
     return build, evidence
 
 
@@ -286,7 +286,7 @@ set(ARG_LABELS headless)
 set(ARG_PROPERTIES TIMEOUT 10)
 horo_ci_catch_properties({target})
 ''')
-    run("cmake", "-S", str(source), "-B", str(build), "-G", "Ninja")
+    run("cmake", "-S", str(source), "-B", str(build), "-G", "Ninja", timeout_seconds=FIXTURE_CONFIGURE_TIMEOUT_SECONDS)
     identity = build.resolve().as_posix() + "\n" + target
     namespace = Path(runner_temp.name) / "hci" / hashlib.sha256(identity.encode()).hexdigest()[:16]
     assert (namespace / "identity.txt").read_text(encoding="utf-8") == identity
