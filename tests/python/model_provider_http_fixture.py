@@ -55,6 +55,9 @@ class Handler(BaseHTTPRequestHandler):
             if messages[2].get("role") != "tool" or (cloud and messages[2].get("tool_call_id") != "call-1"):
                 self.send_records(["{}"], status=400)
                 return
+            if not cloud and messages[2].get("tool_name") != "scene_query":
+                self.send_records(["{}"], status=400)
+                return
         self.send_model_stream(payload["model"], cloud)
 
     def send_model_stream(self, model, cloud):

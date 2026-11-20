@@ -144,6 +144,19 @@ TEST_CASE("Real adapters carry the assistant intent and tool result into the nex
     }
 }
 
+TEST_CASE("Local tool results require an exact pending assistant intent", "[agent][model][http]") {
+    auto provider = Create(false);
+    auto request = Request("history");
+    request.messages.push_back({ModelRole::Assistant, "", "", {{"call-1", "scene_query", "{}"}}});
+    request.messages.push_back({ModelRole::Tool, R"({"nodes":2})", "unknown-call"});
+    const auto outcome = provider->Stream(request, [](const ModelEvent &) {
+        return true;
+    }, {});
+    REQUIRE(outcome.error.has_value());
+    CHECK(outcome.error->code == ModelErrorCode::InvalidRequest);
+    CHECK_FALSE(outcome.error->httpStatus.has_value());
+}
+
 TEST_CASE("Real adapters preserve cancellation and sanitized failures", "[agent][model][http]") {
     for (const bool cloud : {false, true}) {
         DYNAMIC_SECTION((cloud ? "cloud" : "local")) {

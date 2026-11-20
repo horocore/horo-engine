@@ -7,6 +7,7 @@
 #include <cstddef>
 #include <curl/curl.h>
 #include <limits>
+#include <map>
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <string_view>
@@ -243,6 +244,7 @@ namespace Horo::Agent {
         Json RequestMessages(const ModelRequest &request, Protocol protocol) {
             using enum ModelRole;
             Json messages = Json::array();
+            std::map<std::string_view, std::string_view> pendingLocalTools;
             for (const auto &message : request.messages) {
                 std::string role = "user";
                 if (message.role == System)
@@ -252,17 +254,32 @@ namespace Horo::Agent {
                 if (message.role == Tool)
                     role = "tool";
                 Json item = {{"role", role}, {"content", message.text}};
-                if (message.role == Tool && protocol == Protocol::OpenAI)
-                    item["tool_call_id"] = message.toolCallId;
+                if (message.role == Tool) {
+                    if (protocol == Protocol::OpenAI) {
+                        item["tool_call_id"] = message.toolCallId;
+                    } else {
+                        const auto tool = pendingLocalTools.find(message.toolCallId);
+                        if (tool == pendingLocalTools.end())
+                            return nullptr;
+                        item["tool_name"] = tool->second;
+                        pendingLocalTools.erase(tool);
+                    }
+                } else if (!pendingLocalTools.empty()) {
+                    return nullptr;
+                }
                 if (!message.toolIntents.empty()) {
                     Json calls = RequestToolCalls(message.toolIntents, protocol);
                     if (calls.is_null())
                         return nullptr;
                     item["tool_calls"] = std::move(calls);
+                    if (protocol == Protocol::Ollama)
+                        for (const auto &intent : message.toolIntents)
+                            if (!pendingLocalTools.try_emplace(intent.callId, intent.name).second)
+                                return nullptr;
                 }
                 messages.push_back(std::move(item));
             }
-            return messages;
+            return pendingLocalTools.empty() ? std::move(messages) : Json(nullptr);
         }
 
         /** @brief Serialize host-admitted JSON schemas for provider-native tool declarations. */
@@ -354,7 +371,7 @@ namespace Horo::Agent {
                     return {ModelError{ModelErrorCode::InvalidRequest, "Model event sink is required", std::nullopt}};
                 const Json payload = RequestJson(request, m_protocol);
                 if (payload.is_null())
-                    return {ModelError{ModelErrorCode::InvalidRequest, "Invalid tool parameter schema", std::nullopt}};
+                    return {ModelError{ModelErrorCode::InvalidRequest, "Invalid tool schema or conversation history", std::nullopt}};
                 SensitiveCredential credential{ResolveCredential()};
                 if (credential.Invalid())
                     return {ModelError{ModelErrorCode::CredentialUnavailable, "Model credential unavailable", std::nullopt}};
