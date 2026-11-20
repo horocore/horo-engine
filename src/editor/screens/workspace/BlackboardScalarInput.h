@@ -2,30 +2,20 @@
 
 /** @file BlackboardScalarInput.h @brief Converts bounded editor text to typed numeric Blackboard defaults. */
 
+#include "../../ui/EditorNumberParsing.h"
 #include "Horo/AI/BlackboardSchema.h"
 
-#include <charconv>
-#include <cmath>
 #include <format>
 #include <string>
 #include <string_view>
-#include <type_traits>
 
 namespace Horo::Editor {
     namespace BlackboardInputDetail {
         /** @brief Validates a complete locale-independent number without reducing precision. */
         template <class Scalar> [[nodiscard]] std::optional<AI::BlackboardScalarValue> Read(std::string_view text) {
-            if (text.empty())
-                return std::nullopt;
             Scalar value{};
-            const auto *end = text.data() + text.size();
-            const auto result = std::from_chars(text.data(), end, value);
-            if (result.ec != std::errc{} || result.ptr != end)
+            if (!ParseEditorNumber(text, value))
                 return std::nullopt;
-            if constexpr (std::is_floating_point_v<Scalar>) {
-                if (!std::isfinite(value))
-                    return std::nullopt;
-            }
             return AI::BlackboardScalarValue{value};
         }
     }  // namespace BlackboardInputDetail

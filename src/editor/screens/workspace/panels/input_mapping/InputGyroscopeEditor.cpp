@@ -3,10 +3,10 @@
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Runtime/InputAccessibility.h"
 #include "InputMappingPanel.h"
+#include "editor/ui/EditorNumberParsing.h"
 
 #include <algorithm>
 #include <charconv>
-#include <cmath>
 #include <iterator>
 #include <limits>
 
@@ -38,8 +38,7 @@ namespace Horo::Editor {
                 return std::nullopt;
             std::ranges::replace(field, ',', '.');
             float value{};
-            const auto parsed = std::from_chars(field.data(), field.data() + (end - field.begin()), value);
-            return parsed.ec == std::errc{} && parsed.ptr == field.data() + (end - field.begin()) && std::isfinite(value)
+            return ParseEditorNumber(std::string_view{field.data(), static_cast<std::size_t>(end - field.begin())}, value)
                        ? std::optional{value}
                        : std::nullopt;
         }

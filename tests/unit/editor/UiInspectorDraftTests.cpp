@@ -320,6 +320,19 @@ TEST_CASE("UI inspector double buffers preserve canonical precision and failed i
     text.Capture(std::numeric_limits<double>::max());
     REQUIRE(text.Parse(parsed));
     CHECK(parsed == std::numeric_limits<double>::max());
+    text.Capture(std::numeric_limits<double>::denorm_min());
+    REQUIRE(text.Parse(parsed));
+    CHECK(parsed == std::numeric_limits<double>::denorm_min());
+    text.Capture(-0.0);
+    REQUIRE(text.Parse(parsed));
+    CHECK(std::signbit(parsed));
+    for (const std::string_view malformed : {"+1", " 1", "1 ", "1,5", "0x1p0", "1e-999", "1e+", "nan"}) {
+        CAPTURE(malformed);
+        text.bytes = {};
+        std::ranges::copy(malformed, text.bytes.begin());
+        CHECK_FALSE(text.Parse(parsed));
+        CHECK(std::signbit(parsed));
+    }
     text.Capture(std::numeric_limits<double>::infinity());
     CHECK_FALSE(text.valid);
     CHECK_FALSE(text.Parse(parsed));

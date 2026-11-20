@@ -7,9 +7,9 @@
 #include "Horo/Extensions/EditorPageDefinition.h"
 #include "Horo/Extensions/ExtensionErrors.h"
 #include "editor/design_system/components/EditorUiCustomResources.h"
+#include "editor/ui/EditorNumberParsing.h"
 
 #include <algorithm>
-#include <charconv>
 #include <imgui.h>
 
 namespace Horo::Editor {
@@ -138,9 +138,7 @@ namespace Horo::Editor {
             return {};
         }
         double number{};
-        const auto &text = entry.buffers[index];
-        if (const auto parsed = std::from_chars(text.data(), text.data() + text.size(), number);
-            parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size())
+        if (ParseEditorNumber(entry.buffers[index], number))
             return EditorInspectorScalar{number};
         entry.failure = MakeError(GuiLive::HostSymbol<&ExtensionErrors::EditorUiFormInvalid>());
         return {};
