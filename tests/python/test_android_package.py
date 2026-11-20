@@ -741,7 +741,7 @@ class AndroidAssemblyTests(unittest.TestCase):
         arguments = self.arguments()
         tools = self.prepare(arguments)
         paths = [Path("java/org/horocore/qualification") / name for name in
-                 ("HoroVulkanQualificationActivity.java", "PowerSaveObservation.java", "DisplayRefreshObservation.java")]
+                 ("HoroVulkanQualificationActivity.java", "PowerObservation.java", "DisplayRefreshObservation.java")]
         for renderer_profile in ("qualification-vulkan-development", android_package.OPENXR_DEVELOPMENT_PROFILE):
             with self.subTest(profile=renderer_profile):
                 _, profile = load_contract(renderer_profile, ["arm64-v8a"])

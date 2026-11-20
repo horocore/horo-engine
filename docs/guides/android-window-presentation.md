@@ -83,7 +83,11 @@ The resumed Vulkan Activity reads Android Battery Saver on entry and whenever
 the protected power-mode broadcast arrives. The observer reads the current
 value from Android's PowerManager and publishes only state transitions. The
 deployment report carries `enabled`, `disabled`, `inactive`, `unsupported`,
-or `unavailable`. Battery charge level and charging state are separate signals.
+or `unavailable`. The same foreground receiver independently reports battery
+charge percentage and charging state from Android's protected sticky battery
+broadcast. A missing or malformed snapshot gives `unavailable`. An explicit
+battery-absent report gives `unsupported`. Pausing the current Activity
+withdraws both observations.
 
 The resumed, focused Activity obtains the Android-reported refresh rate from
 the display attached to its window. It samples on focus and on notifications

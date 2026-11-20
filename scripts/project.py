@@ -639,7 +639,7 @@ def apk_write_project(stage: Path, tools: dict, profile: dict, abis: list[str], 
         package = Path("org/horocore/qualification")
         destination = stage / "java" / package
         destination.mkdir(parents=True, exist_ok=True)
-        for source_name in ("HoroVulkanQualificationActivity.java", "PowerSaveObservation.java", "DisplayRefreshObservation.java"):
+        for source_name in ("HoroVulkanQualificationActivity.java", "PowerObservation.java", "DisplayRefreshObservation.java"):
             shutil.copyfile(ROOT / "apps/android-package-qualification/java" / package / source_name, destination / source_name)
         activity_base = "org.horocore.qualification.HoroVulkanQualificationActivity"
     source = (f"package {profile['applicationId']};\n"
@@ -1183,6 +1183,10 @@ PLATFORM_STATE_LINES = {
     "power": re.compile(
         r"host-power revision=(?P<revision>[1-9][0-9]{0,18}) "
         r"state=(?P<state>inactive|unsupported|unavailable|enabled|disabled)"),
+    "battery": re.compile(
+        r"host-battery revision=(?P<revision>[1-9][0-9]{0,18}) "
+        r"state=(?P<state>inactive|unsupported|unavailable|charging|discharging|not-charging|full) "
+        r"percent=(?P<percent>-1|0|[1-9][0-9]{0,2})"),
     "refresh": re.compile(
         r"host-refresh revision=(?P<revision>[1-9][0-9]{0,18}) "
         r"state=(?P<state>inactive|unsupported|unavailable|observed) milliHz=(?P<milliHz>0|[1-9][0-9]{0,9})"),
@@ -1270,7 +1274,7 @@ def process_log_entries(log: str, process: DeployedProcess, after: int, through:
 
 
 def record_platform_state(evidence: dict, category: str, state: re.Match) -> None:
-    """Retain bounded, strictly newer observations and omit rates when the display is unavailable."""
+    """Retain bounded, strictly newer observations and include only available measurements."""
     revision = int(state["revision"])
     if not evidence.get(category, {}).get("revision", 0) < revision < 2**63:
         return
@@ -1281,6 +1285,13 @@ def record_platform_state(evidence: dict, category: str, state: re.Match) -> Non
             return
         if rate:
             value["milliHz"] = rate
+    elif category == "battery":
+        percent = int(state["percent"])
+        measured = value["state"] in ("charging", "discharging", "not-charging", "full")
+        if percent > 100 or (percent >= 0) != measured:
+            return
+        if measured:
+            value["percent"] = percent
     evidence[category] = value
 
 

@@ -477,6 +477,24 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual((status, report["status"]), (0, "complete"))
         self.assertEqual(report["observed"]["refresh"], {"revision": 2, "state": "inactive"})
 
+    def test_vulkan_capture_requires_a_bounded_percentage_for_battery_evidence(self):
+        log = log_line(LIFECYCLE) + log_line(FRAME)
+        log += log_line("host-battery revision=2 state=charging percent=0")
+        log += log_line("host-battery revision=3 state=full percent=101")
+        log += log_line("host-battery revision=4 state=discharging percent=-1")
+        log += log_line("host-battery revision=5 state=unsupported percent=55")
+        log += log_line("host-battery revision=6 state=full percent=100", uid="10200")
+        status, report, _ = self.execute({LOGCAT: log}, profile_name=VULKAN_PROFILE)
+        self.assertEqual((status, report["status"]), (0, "complete"))
+        self.assertEqual(report["observed"]["battery"], {"revision": 2, "state": "charging", "percent": 0})
+
+    def test_vulkan_capture_withdraws_a_battery_measurement_when_unavailable(self):
+        first = log_line(LIFECYCLE) + log_line("host-battery revision=2 state=inactive percent=-1")
+        second = log_line(FRAME) + log_line("host-battery revision=1 state=charging percent=80")
+        status, report, _ = self.execute({LOGCAT: [first, second]}, profile_name=VULKAN_PROFILE)
+        self.assertEqual((status, report["status"]), (0, "complete"))
+        self.assertEqual(report["observed"]["battery"], {"revision": 2, "state": "inactive"})
+
     def test_device_clock_discontinuity_or_malformed_clock_cannot_supply_evidence(self):
         for final, expected in ((START, "device_log_clock_changed"),
                                 ("1795000000.111000001", "device_log_clock_changed"),

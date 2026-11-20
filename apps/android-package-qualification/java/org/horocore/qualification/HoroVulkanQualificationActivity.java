@@ -11,7 +11,7 @@ import org.horocore.platform.HoroInputActivity;
 public class HoroVulkanQualificationActivity extends HoroInputActivity {
     private static ThermalObservation thermal;
     private static final MemoryObservation memory = new MemoryObservation();
-    private static final PowerSaveObservation power = new PowerSaveObservation();
+    private static final PowerObservation power = new PowerObservation();
     private static final DisplayRefreshObservation refresh = new DisplayRefreshObservation();
 
     @Override public void onResume() {
