@@ -12,6 +12,7 @@
 #include <catch2/reporters/catch_reporter_event_listener.hpp>
 #include <catch2/reporters/catch_reporter_registrars.hpp>
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <thread>
@@ -24,6 +25,7 @@ namespace Horo::Network::NativeQualification {
             std::string nativeDirectory;
             bool rejectNativeRoot{};
             bool liveScene{};
+            bool liveVelocity{};
             unsigned side{};
         } input;
 
@@ -371,7 +373,7 @@ namespace Horo::Network::NativeQualification {
             // Covers peer cold startup; the canonical admission policy still owns its strict protocol timeouts.
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(60);
             bool sent{};
-            std::optional<float> authorityY;
+            std::optional<float> firstPresentation;
             std::size_t snapshotsAtFirstValue{};
             bool appliedSnapshot{};
             while (std::chrono::steady_clock::now() < deadline) {
@@ -380,14 +382,17 @@ namespace Horo::Network::NativeQualification {
                     ReportError(frame.ErrorValue());
                 REQUIRE(frame.HasValue());
                 if (input.side == 1 && owners.live) {
-                    const auto y = owners.live->SceneY();
-                    if (y && *y != LiveScene::ClientStartY) {
+                    const auto value = owners.live->ClientPresentation();
+                    const bool qualified =
+                        value && (input.liveVelocity ? *value > 0.1F && *value < 100.0F : *value != LiveScene::ClientStartY);
+                    if (qualified) {
                         const auto snapshots = owners.observation->snapshotsReceived;
                         // The initial receipt and first live packet can be processed in the same host frame.
-                        if (!authorityY) {
-                            authorityY = y;
+                        if (!firstPresentation) {
+                            firstPresentation = value;
                             snapshotsAtFirstValue = snapshots;
-                        } else if (snapshots > snapshotsAtFirstValue && *y < *authorityY) {
+                        } else if (snapshots > snapshotsAtFirstValue &&
+                                   (input.liveVelocity ? std::abs(*value - *firstPresentation) > 5.0F : *value < *firstPresentation)) {
                             appliedSnapshot = true;
                         }
                     }
@@ -415,12 +420,14 @@ namespace Horo::Network::NativeQualification {
             REQUIRE(owners.handler->calls > 0);
             if (owners.live) {
                 if (input.side == 0) {
-                    const auto y = owners.live->SceneY();
-                    REQUIRE(y);
-                    REQUIRE(*y < LiveScene::AuthorityStartY);
+                    if (!input.liveVelocity) {
+                        const auto y = owners.live->SceneY();
+                        REQUIRE(y);
+                        REQUIRE(*y < LiveScene::AuthorityStartY);
+                    }
                     REQUIRE(owners.observation->snapshotsSent > 0);
                 } else {
-                    REQUIRE(authorityY);
+                    REQUIRE(firstPresentation);
                     REQUIRE(appliedSnapshot);
                     REQUIRE(owners.observation->snapshotsReceived > 0);
                 }
@@ -437,9 +444,9 @@ namespace Horo::Network::NativeQualification {
         REQUIRE(input.side <= 1);
         REQUIRE_FALSE(input.directory.empty());
         ChildOwners owners;
-        if (input.liveScene) {
+        if (input.liveScene || input.liveVelocity) {
             REQUIRE_FALSE(input.rejectNativeRoot);
-            owners.live = std::make_unique<LiveScene::Product>(owners.fixtures, owners.credentials, input.side == 0);
+            owners.live = std::make_unique<LiveScene::Product>(owners.fixtures, owners.credentials, input.side == 0, input.liveVelocity);
         }
         CreateHost(owners);
         if (input.rejectNativeRoot)
@@ -457,7 +464,8 @@ int main(int argc, char **argv) {
                Catch::Clara::Opt(Horo::Network::NativeQualification::input.side, "side")["--side"] |
                Catch::Clara::Opt(Horo::Network::NativeQualification::input.nativeDirectory, "native-directory")["--native-dir"] |
                Catch::Clara::Opt(Horo::Network::NativeQualification::input.rejectNativeRoot)["--reject-native-root"] |
-               Catch::Clara::Opt(Horo::Network::NativeQualification::input.liveScene)["--live-scene"];
+               Catch::Clara::Opt(Horo::Network::NativeQualification::input.liveScene)["--live-scene"] |
+               Catch::Clara::Opt(Horo::Network::NativeQualification::input.liveVelocity)["--live-velocity"];
     session.cli(cli);
     return session.run(argc, argv);
 }

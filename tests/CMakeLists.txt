@@ -710,9 +710,11 @@ if(HORO_BUILD_NETWORK_GNS)
     target_compile_features(HoroGnsSecureProductChild PRIVATE cxx_std_20)
     target_link_libraries(HoroGnsSecureProductChild PRIVATE HoroNetworkModeHostInternal)
     target_compile_definitions(HoroGnsSecureProductChild PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
-    target_include_directories(HoroGnsSecureProductChild PRIVATE ${PROJECT_SOURCE_DIR}/tests/unit/runtime/networking)
+    target_include_directories(HoroGnsSecureProductChild PRIVATE ${PROJECT_SOURCE_DIR}/tests/unit/runtime/networking
+        ${PROJECT_SOURCE_DIR}/tests/unit/runtime/animation)
     target_link_libraries(HoroGnsSecureProductChild PRIVATE HoroGnsNativeQualificationSupport HoroNetworkProductHost
-        HoroEngine::NetworkTransportGNS HoroEngine::NetworkTransportNull HoroEngine::Platform MbedTLS::mbedcrypto Catch2::Catch2)
+        HoroEngine::NetworkTransportGNS HoroEngine::NetworkTransportNull HoroEngine::Platform HoroEngine::AnimationCookedAssets
+        MbedTLS::mbedcrypto Catch2::Catch2)
     if(UNIX AND HORO_BUILD_PHYSICS_NATIVE)
         target_sources(HoroNetworkModeHostIntegrationTests PRIVATE integration/network/gns/GnsNativeProductPairTests.cpp)
         target_link_libraries(HoroNetworkModeHostIntegrationTests PRIVATE HoroGnsNativeQualificationSupport)

@@ -6,6 +6,7 @@
 #include "../NetworkAdmissionProductTestSupport.h"
 #include "../NetworkProductPrefabTestSupport.h"
 #include "GnsEvidenceAssertions.h"
+#include "GnsVelocityAnimationSupport.h"
 #include "HeadlessInitialStateAuthority.h"
 #include "Horo/Network/NetworkAuthoredScenePage.h"
 #include "Horo/Network/NetworkPrefabLifecycle.h"
@@ -125,8 +126,9 @@ namespace Horo::Network::NativeQualification {
 
         /** @brief Owns one native test module registry, authored resource boundary and observable Scene service. */
         struct Product final {
-            Product(const AdmissionTests::ProductPair &fixture, const std::shared_ptr<CredentialObservation> &credentials, bool authority)
-                : routes(fixture), grants(std::make_shared<Grants>(credentials)), authority(authority) {
+            Product(const AdmissionTests::ProductPair &fixture, const std::shared_ptr<CredentialObservation> &credentials, bool authority,
+                    bool velocity)
+                : routes(fixture), grants(std::make_shared<Grants>(credentials)), authority(authority), velocity_(velocity) {
                 auto settings = DefaultNetworkProjectSettings(Id<NetworkProjectSettingsId>(10)).Value();
                 settings.supportedRoles = NetworkProjectRoleSet::Client | NetworkProjectRoleSet::DedicatedServer;
                 settings.defaultRole = NetworkProjectRole::Client;
@@ -149,31 +151,47 @@ namespace Horo::Network::NativeQualification {
 
             [[nodiscard]] Result<App::NetworkProductComposition> Compose(NetworkModeFactories factories) {
                 const auto declaration = PrefabProductTestSupport::NativePrefabDeclaration();
+                const auto target = AssetCookTargetId::Parse("linux-x64").Value();
+                auto definition = Definition(target);
                 loadBoundary = {{}, std::chrono::steady_clock::now() + std::chrono::seconds(5)};
-                App::HeadlessSceneActivationInput
-                    input{.mode = Physics::PhysicsRuntimeMode::Canonical,
-                          .settings = Physics::Settings(),
-                          .registry = registry,
-                          .loads = loads,
-                          .load = loadBoundary,
-                          .prefabLoads = &loads,
-                          .prefabTarget = AssetCookTargetId::Parse("linux-x64").Value(),
-                          .replicatedSceneObjects = {{declaration.schema.id, declaration.schema.version, Object}},
-                          .publicTransforms = App::HeadlessSceneTransformReplication{declaration.schema.id,
-                                                                                     declaration.schema.version,
-                                                                                     {{declaration.schema.fields.front().id,
-                                                                                       SceneReplicationProperty::TranslationY}}},
-                          .initialSceneState = state};
+                const auto field = declaration.schema.fields.front().id;
+                const auto property = velocity_ ? SceneReplicationProperty::LinearVelocityX : SceneReplicationProperty::TranslationY;
+                App::HeadlessSceneActivationInput input{.mode = Physics::PhysicsRuntimeMode::Canonical,
+                                                        .settings = Physics::Settings(),
+                                                        .registry = registry,
+                                                        .loads = loads,
+                                                        .load = loadBoundary,
+                                                        .prefabLoads = &loads,
+                                                        .prefabTarget = target,
+                                                        .replicatedSceneObjects = {{declaration.schema.id, declaration.schema.version,
+                                                                                    Object}},
+                                                        .publicTransforms =
+                                                            App::HeadlessSceneTransformReplication{declaration.schema.id,
+                                                                                                   declaration.schema.version,
+                                                                                                   {{field, property}}},
+                                                        .initialSceneState = state};
+                if (velocity_ && !authority) {
+                    input.animationTarget = target;
+                    input.animationIdentities =
+                        std::make_shared<App::AnimationRuntimeIdentitySource>(App::AnimationRuntimeIdentityRange{1001, 1100});
+                    input.replicaAnimationBindings = {{Object, field, VelocityAnimation::SpeedParameter()}};
+                }
+                const bool movesCharacter = velocity_ && authority;
                 const App::GameplayWorldSelection selection{.moduleId = "game.tests",
                                                             .nativeArtifact = HORO_TEST_GAME_MODULE_PATH,
                                                             .descriptorRevision =
                                                                 Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH),
+                                                            .physicsPermission = movesCharacter ? App::GameplayPhysicsPermission::Granted
+                                                                                                : App::GameplayPhysicsPermission::Denied,
                                                             .prefabPermission = App::GameplayPrefabPermission::Granted,
-                                                            .moduleRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>()};
+                                                            .moduleRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>(),
+                                                            .characterPermission = movesCharacter
+                                                                                       ? App::GameplayCharacterPermission::Granted
+                                                                                       : App::GameplayCharacterPermission::Denied};
                 Gameplay::GameplayReplicationAdmissionPolicy admission{.inventory = project->ReplicationInventory()};
                 if (authority)
                     admission.use = ReplicationDeclarationUse::ServerActivation;
-                return App::ComposeHeadlessSceneNetworkServices(Definition(), input, std::move(factories), selection, admission);
+                return App::ComposeHeadlessSceneNetworkServices(std::move(definition), input, std::move(factories), selection, admission);
             }
 
             [[nodiscard]] std::optional<float> SceneY() const {
@@ -184,6 +202,24 @@ namespace Horo::Network::NativeQualification {
                 return view->Get(*entity).Value().localTransform->translation.y;
             }
 
+            /** @brief Reads the real published joint produced by the client's selected network-bound graph. */
+            [[nodiscard]] std::optional<float> ClientPresentation() const {
+                if (!velocity_)
+                    return SceneY();
+                const auto *animation = scene ? App::InspectHeadlessAnimation(*scene) : nullptr;
+                const auto actor = scene ? App::InspectHeadlessAnimationEntity(*scene, Object) : std::nullopt;
+                if (!animation || !actor)
+                    return std::nullopt;
+                const auto observed = animation->Query(*actor);
+                if (observed.HasError() || !observed.Value().component)
+                    return std::nullopt;
+                const auto &component = *observed.Value().component;
+                REQUIRE(component.domain == Animation::AnimationEvaluationDomain::Presentation);
+                std::array<Math::Transform, 1> joint;
+                REQUIRE(animation->CopyPose(*actor, component.currentPose, joint).HasValue());
+                return joint.front().translation.x;
+            }
+
             Routes routes;
             std::optional<NetworkProjectSettings> project;
             std::shared_ptr<Grants> grants;
@@ -191,18 +227,48 @@ namespace Horo::Network::NativeQualification {
             const INetworkModeService *scene{};  // Synchronous host-owned view, cleared before host teardown.
 
         private:
-            std::shared_ptr<const Runtime::RuntimeSceneDefinition> Definition() {
+            void AddAuthorityCharacter(Runtime::RuntimeEntityDefinition &actor, Runtime::SceneDefinitionBuilder &builder) {
+                const auto material = Physics::Asset(91);
+                const auto materialType = Physics::AssetType();
+                REQUIRE(registry.Publish({Physics::Record(material, materialType)}).status == Assets::AssetRegistryBuildStatus::Complete);
+                provider.Insert(material, Physics::CanonicalMaterialBytes(material));
+                Runtime::CharacterControllerComponent controller{.id = {7}, .enabled = true};
+                controller.collision.profile = Physics::Profile();
+                controller.collision.queryChannel = Physics::Settings().simulation.schema->QueryChannels().front().id;
+                controller.collision.defaultMaterial =
+                    Runtime::PhysicsColliderMaterialBinding{Physics::PhysicsMaterialSlotId::FromValue(1), material};
+                actor.components.characterController = controller;
+                actor.localTransform.translation.y = 0.99F;
+                actor.components.behaviors.push_back({.instanceId = {1},
+                                                      .typeId = Gameplay::BehaviorTypeId::Parse("game.tests.character_client").Value(),
+                                                      .fields = {{"continuous", true}}});
+                builder.Add({.object = {2},
+                             .components = {.rigidBody = Runtime::RigidBodyComponent{.id = {30}, .body = {300}},
+                                            .colliders = {Physics::Collider(31, 301, 2, 300, material,
+                                                                            Runtime::PhysicsAnalyticCollider{
+                                                                                Runtime::PhysicsStaticPlaneCollider{{0, 1, 0}, 0}})}}});
+            }
+
+            std::shared_ptr<const Runtime::RuntimeSceneDefinition> Definition(AssetCookTargetId target) {
                 Runtime::SceneDefinitionBuilder builder{{1700}, {1}};
                 Runtime::RuntimeEntityDefinition entity{.object = Object};
                 entity.localTransform.translation.y = authority ? AuthorityStartY : ClientStartY;
-                if (authority)
+                if (velocity_ && authority)
+                    AddAuthorityCharacter(entity, builder);
+                else if (velocity_)
+                    entity.components.animation = VelocityAnimation::Install(registry, provider, target);
+                else if (authority)
                     entity.components.behaviors.push_back(
                         {{1}, Gameplay::BehaviorTypeId::Parse("game.tests.replicated_presentation_motion").Value()});
                 builder.Add(std::move(entity));
+                const auto installed = registry.Snapshot();
+                for (const auto &asset : installed.Records())
+                    REQUIRE(builder.RequireAsset({asset.id, asset.type}).HasValue());
                 return std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(builder).Build().Value());
             }
 
             const bool authority;
+            const bool velocity_;
             JobSystem jobs{{1, 8}};
             Assets::AssetRegistry registry;
             Assets::MemoryAssetProvider provider;

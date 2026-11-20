@@ -58,7 +58,8 @@ namespace Horo::Network::NativeQualification {
 
         /** @brief Capture only fixed public phase tokens, never credential/key/certificate bytes or generic child output. */
         ExternalProcessRequest Request(const std::filesystem::path &directory, const unsigned side, ProcessState &state,
-                                       const std::filesystem::path &nativeDirectory, const bool rejectNativeRoot, const bool liveScene) {
+                                       const std::filesystem::path &nativeDirectory, const bool rejectNativeRoot,
+                                       std::string_view liveProjection) {
             ExternalProcessRequest request;
             request.executable = HORO_GNS_PRODUCT_CHILD;
             request.arguments = {"--fixture-dir", directory.string(), "--side", std::to_string(side), "--reporter", "compact"};
@@ -68,8 +69,8 @@ namespace Horo::Network::NativeQualification {
             }
             if (rejectNativeRoot)
                 request.arguments.push_back("--reject-native-root");
-            if (liveScene)
-                request.arguments.push_back("--live-scene");
+            if (!liveProjection.empty())
+                request.arguments.emplace_back(liveProjection);
             // Both real products verify their complete native image before peer admission.
             request.timeout = std::chrono::seconds(120);
             request.gracefulTermination = std::chrono::milliseconds(200);
@@ -118,12 +119,12 @@ namespace Horo::Network::NativeQualification {
 
         /** @brief Keep one shared Horo credential directory while optionally selecting a different native CA for the client. */
         void RunPair(const std::filesystem::path &credentials, const std::filesystem::path &clientNative = {},
-                     const bool expectNativeRejection = false, const bool liveScene = false) {
+                     const bool expectNativeRejection = false, std::string_view liveProjection = {}) {
             ProcessState server;
             ProcessState client;
             CancellationSource cancellation;
-            const auto serverRequest = Request(credentials, 0, server, {}, expectNativeRejection, liveScene);
-            const auto clientRequest = Request(credentials, 1, client, clientNative, expectNativeRejection, liveScene);
+            const auto serverRequest = Request(credentials, 0, server, {}, expectNativeRejection, liveProjection);
+            const auto clientRequest = Request(credentials, 1, client, clientNative, expectNativeRejection, liveProjection);
             std::jthread serverWorker([&] {
                 RunChild(serverRequest, server, cancellation.Token());
             });
@@ -144,8 +145,8 @@ namespace Horo::Network::NativeQualification {
             INFO("server public diagnostics: " << server.safeError);
             INFO("client public diagnostics: " << client.safeError);
             REQUIRE(server.ready.load());
-            RequireQualified(client, expectNativeRejection, liveScene);
-            RequireQualified(server, expectNativeRejection, liveScene);
+            RequireQualified(client, expectNativeRejection, !liveProjection.empty());
+            RequireQualified(server, expectNativeRejection, !liveProjection.empty());
         }
 
         void Provision(FixtureDirectory &fixture) {
@@ -197,7 +198,14 @@ namespace Horo::Network::NativeQualification {
               "[integration][network][gns][native-pair][replication]") {
         FixtureDirectory fixture;
         Provision(fixture);
-        RunPair(fixture.root, {}, false, true);
+        RunPair(fixture.root, {}, false, "--live-scene");
+    }
+
+    TEST_CASE("Two signed native ProductHost processes drive a replica pose with committed Character velocity",
+              "[integration][network][gns][native-pair][replication][velocity]") {
+        FixtureDirectory fixture;
+        Provision(fixture);
+        RunPair(fixture.root, {}, false, "--live-velocity");
     }
 
     TEST_CASE("Distinct native CA roots reject both ProductHost peers before readiness despite a shared Horo proof authority",
