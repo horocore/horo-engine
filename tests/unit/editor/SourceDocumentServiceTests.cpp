@@ -85,6 +85,42 @@ TEST_CASE("Source byte patches preserve scalar boundaries and deterministic dirt
     CHECK_FALSE(reverted.Value().SharesStateWith(original.Value()));
 }
 
+TEST_CASE("Source snapshots expose a revocable current witness without granting worker access to the document owner",
+          "[unit][editor][source][document]") {
+    SourceProject project;
+    project.Put("original\n");
+    SourceDocumentService owner{project.directory};
+    const auto identity = project.Identity();
+    const auto opened = owner.Open(identity, project.directory / "code.cpp");
+    REQUIRE(opened.HasValue());
+    CHECK_FALSE(SourceDocumentSnapshot{}.IsCurrent());
+    const auto onWorker = [](SourceDocumentSnapshot snapshot) {
+        bool current{};
+        std::jthread worker{[&] {
+            current = snapshot.IsCurrent();
+        }};
+        worker.join();
+        return current;
+    };
+    CHECK(onWorker(opened.Value()));
+    const auto edited = owner.Edit(identity.instance, {opened.Value().Revision(), 0, 8, "edited"});
+    REQUIRE(edited.HasValue());
+    CHECK_FALSE(onWorker(opened.Value()));
+    CHECK(opened.Value().Text() == "original\n");
+    CHECK(onWorker(edited.Value()));
+    REQUIRE(owner.Close(identity.instance).HasValue());
+    CHECK_FALSE(onWorker(edited.Value()));
+    CHECK(edited.Value().Text() == "edited\n");
+
+    const auto reopened = owner.Open(identity, project.directory / "code.cpp");
+    REQUIRE(reopened.HasValue());
+    CHECK(reopened.Value().Revision() == opened.Value().Revision());
+    CHECK_FALSE(onWorker(opened.Value()));
+    CHECK(onWorker(reopened.Value()));
+    owner = SourceDocumentService{project.directory};
+    CHECK_FALSE(onWorker(reopened.Value()));
+}
+
 TEST_CASE("Source external inspection never silently reloads a dirty buffer", "[unit][editor][source][document]") {
     SourceProject project;
     project.Put("base");

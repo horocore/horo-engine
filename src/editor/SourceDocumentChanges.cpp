@@ -165,7 +165,7 @@ namespace Horo::Editor {
             if (cancellation.IsCancellationRequested())
                 return Failure<SourceDocumentSnapshot>(SourceDocumentErrors::Cancelled);
             storage_->CommitHistory(record, std::move(entry).Value());
-            record.root = std::move(root).Value();
+            record.Publish(std::move(root).Value());
             return Result<SourceDocumentSnapshot>::Success(SourceDocumentSnapshot{record.root});
         } catch (const std::bad_alloc &) {
             return Failure<SourceDocumentSnapshot>(SourceDocumentErrors::TooLarge);
@@ -193,7 +193,7 @@ namespace Horo::Editor {
                 next.Value()->external = disposition;
                 if (cancellation.IsCancellationRequested())
                     return Failure<SourceDocumentSnapshot>(SourceDocumentErrors::Cancelled);
-                record.root = std::move(next).Value();
+                record.Publish(std::move(next).Value());
             }
             if (loaded.HasError())
                 return Result<SourceDocumentSnapshot>::Failure(loaded.ErrorValue());
@@ -239,7 +239,7 @@ namespace Horo::Editor {
             record.historyPosition = 0;
             record.historyBytes = 0;
             record.historyBoundary = SourceHistoryBoundary::None;
-            record.root = std::move(next).Value();
+            record.Publish(std::move(next).Value());
             return Result<SourceDocumentSnapshot>::Success(SourceDocumentSnapshot{record.root});
         } catch (const std::bad_alloc &) {
             return Failure<SourceDocumentSnapshot>(SourceDocumentErrors::TooLarge);
@@ -280,7 +280,7 @@ namespace Horo::Editor {
             if (cancellation.IsCancellationRequested())
                 return Failure<SourceHistoryResult>(SourceDocumentErrors::Cancelled);
             record.historyPosition = step->position;
-            record.root = std::move(next).Value();
+            record.Publish(std::move(next).Value());
             return Result<SourceHistoryResult>::Success({SourceDocumentSnapshot{record.root}, step->view});
         } catch (const std::bad_alloc &) {
             return Failure<SourceHistoryResult>(SourceDocumentErrors::TooLarge);

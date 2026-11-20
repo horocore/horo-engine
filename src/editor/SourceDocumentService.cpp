@@ -169,6 +169,7 @@ namespace Horo::Editor {
             return Result<std::shared_ptr<const Detail::SourceDocumentRoot>>::Failure(text.ErrorValue());
         auto root = std::make_shared<Detail::SourceDocumentRoot>();
         root->identity = identity;
+        root->currentRevision = std::make_shared<std::atomic<std::uint64_t>>(root->revision);
         root->text = std::move(text).Value();
         root->base = root->text;
         if (cancellation.IsCancellationRequested())
@@ -184,7 +185,10 @@ namespace Horo::Editor {
         if (const auto valid = storage_->Check(); valid.HasError())
             return valid;
         const auto count = std::erase_if(storage_->records, [instance](const auto &record) {
-            return record.root->identity.instance == instance;
+            if (record.root->identity.instance != instance)
+                return false;
+            record.Revoke();
+            return true;
         });
         return count == 1 ? Result<void>::Success() : Failure<void>(SourceDocumentErrors::Stale);
     }
@@ -198,6 +202,7 @@ namespace Horo::Editor {
         if (storage_->saving)
             return Failure<void>(SourceDocumentErrors::Busy);
         storage_->closed = true;
+        storage_->RevokeAll();
         storage_->records.clear();
         return Result<void>::Success();
     }

@@ -2,6 +2,7 @@
 
 #include "AgentLocalSceneTurn.h"
 #include "AgentTurn.h"
+#include "EditorLocalAgentContext.h"
 #include "EditorLocalAgentHistory.h"
 #include "Horo/Agent/ReferenceModelProviders.h"
 #include "Horo/Editor/EditorUiComponents.h"
@@ -25,7 +26,7 @@ namespace Horo::Editor {
 
         /** @brief Runs one user-initiated discovery or inference on an isolated worker. */
         Reply RunLocalOperation(std::string endpoint, std::optional<ModelRequest> request, std::optional<std::size_t> sceneCount,
-                                std::uint64_t turn, std::stop_token stop) {
+                                std::optional<EditorLocalAgentContext> source, std::uint64_t turn, std::stop_token stop) {
             ModelProviderConfig config{.endpoint = std::move(endpoint)};
             if (request && sceneCount.has_value())
                 return RunApprovedLocalSceneTurn(std::move(config), std::move(*request), turn, *sceneCount,
@@ -34,6 +35,10 @@ namespace Horo::Editor {
             if (!request)
                 return provider->Discover(stop);
             AgentTurnRuntime runtime;
+            if (source) {
+                const auto dispatch = source->Dispatch();
+                return runtime.Run(*provider, nullptr, turn, std::move(*request), {}, stop, &dispatch);
+            }
             return runtime.Run(*provider, nullptr, turn, std::move(*request), {}, stop);
         }
 
@@ -58,6 +63,7 @@ namespace Horo::Editor {
                 : IWorkspacePanel("workspace.local_agent"), history_(jobs, files) {}
 
             ~LocalAgentPanel() override {
+                RevokeSourceContext();
                 worker_.request_stop();
             }
 
@@ -79,6 +85,11 @@ namespace Horo::Editor {
 
             void OnAttach(PanelContext &context) override {
                 sceneCount_ = context.sceneObjectCount;
+                RevokeSourceContext();
+                activeSource_ = context.activeSourceSnapshot;
+                contextProject_ = context.projectIdentity;
+                contextLifetime_.emplace();
+                ++contextGeneration_;
                 if (context.projectFileRoot && !context.projectIdentity.empty())
                     history_.Attach({*context.projectFileRoot, std::string{context.projectIdentity}});
             }
@@ -89,6 +100,7 @@ namespace Horo::Editor {
                 prompt_.clear();
                 response_.clear();
                 sceneCount_ = {};
+                RevokeSourceContext();
                 history_.Detach();
                 awaitingCheckpoint_ = false;
                 submittedPrompt_.reset();
@@ -122,7 +134,7 @@ namespace Horo::Editor {
                 ImGui::BeginChild("##LocalAgent", size, false, ImGuiWindowFlags_NoSavedSettings);
                 DrawProvider(locale, fonts);
                 ImGui::TextUnformatted(LocalizedText(locale, "prompt").c_str());
-                ImGui::BeginDisabled(awaitingCheckpoint_);
+                ImGui::BeginDisabled(awaitingCheckpoint_ || sourcePreview_);
                 static_cast<void>(Ui::InputTextControl("##Prompt", prompt_, 4096, fonts));
                 ImGui::EndDisabled();
                 DrawSendActions(locale);
@@ -141,6 +153,15 @@ namespace Horo::Editor {
                 return reply_.valid();
             }
 
+            void RevokeSourceContext() noexcept {
+                if (contextLifetime_)
+                    contextLifetime_->RequestCancellation();
+                contextLifetime_.reset();
+                sourcePreview_.reset();
+                activeSource_ = {};
+                contextProject_.clear();
+            }
+
             [[nodiscard]] bool Button(const ILocalizationService &locale, const char *key, bool enabled) const {
                 const auto label = LocalizedText(locale, key) + "##" + key;
                 return Ui::Button({.label = label.c_str(), .enabled = enabled});
@@ -148,7 +169,7 @@ namespace Horo::Editor {
 
             void DrawProvider(const ILocalizationService &locale, const Theme::Fonts &fonts) {
                 ImGui::TextUnformatted(LocalizedText(locale, "endpoint").c_str());
-                ImGui::BeginDisabled(Busy() || awaitingCheckpoint_ || history_.HasRecovery());
+                ImGui::BeginDisabled(Busy() || awaitingCheckpoint_ || history_.HasRecovery() || sourcePreview_);
                 if (Ui::InputTextControl("##Endpoint", endpoint_, 256, fonts)) {
                     models_.clear();
                     selection_ = -1;
@@ -176,6 +197,10 @@ namespace Horo::Editor {
             }
 
             void DrawSendActions(const ILocalizationService &locale) {
+                if (sourcePreview_) {
+                    DrawSourceReview(locale);
+                    return;
+                }
                 const bool ready =
                     !Busy() && !awaitingCheckpoint_ && !history_.HasRecovery() && !endpoint_.empty() && !model_.empty() && !prompt_.empty();
                 if (Button(locale, "ask", ready)) {
@@ -186,6 +211,10 @@ namespace Horo::Editor {
                     awaitingCheckpoint_ = history_.ReviewRecoveryPrompt(prompt_);
                     return;
                 }
+                if (Button(locale, "context_offer", ready && activeSource_ && contextLifetime_ && !contextProject_.empty())) {
+                    PrepareSourceReview();
+                    return;
+                }
                 const auto count = sceneCount_ ? sceneCount_() : std::nullopt;
                 if (count.has_value()) {
                     ImGui::Text("%s %zu", LocalizedText(locale, "scene_count").c_str(), *count);
@@ -194,23 +223,68 @@ namespace Horo::Editor {
                 }
             }
 
-            void Send(std::optional<std::size_t> sceneCount, bool recoverable = false) {
+            void PrepareSourceReview() {
+                SourceDocumentSnapshot active;
+                if (!activeSource_(active)) {
+                    status_ = "context_unavailable";
+                    return;
+                }
+                auto prepared = EditorLocalAgentContext::Prepare(std::move(active), contextProject_, contextGeneration_,
+                                                                 contextLifetime_->Token(), turn_ + 1);
+                if (prepared.HasError()) {
+                    status_ = "context_unavailable";
+                    return;
+                }
+                sourcePreview_.emplace(std::move(prepared).Value());
+                status_ = nullptr;
+            }
+
+            void DrawSourceReview(const ILocalizationService &locale) {
+                SourceDocumentSnapshot active;
+                if (!activeSource_(active) || !sourcePreview_->Matches(active)) {
+                    sourcePreview_.reset();
+                    status_ = "context_stale";
+                    return;
+                }
+                ImGui::TextWrapped("%s", LocalizedText(locale, "context_review").c_str());
+                ImGui::PushTextWrapPos(0);
+                for (const auto &item : sourcePreview_->Items()) {
+                    const auto &payload = item.candidate.text;
+                    ImGui::TextUnformatted(payload.data(), payload.data() + payload.size());
+                }
+                ImGui::PopTextWrapPos();
+                if (Button(locale, "context_approve", !Busy())) {
+                    auto approved = std::exchange(sourcePreview_, std::nullopt);
+                    if (approved->Approve())
+                        Send({}, false, std::move(approved));
+                    else
+                        status_ = "context_stale";
+                    return;
+                }
+                ImGui::SameLine();
+                if (Button(locale, "context_cancel", true))
+                    sourcePreview_.reset();
+            }
+
+            void Send(std::optional<std::size_t> sceneCount, bool recoverable = false, std::optional<EditorLocalAgentContext> source = {}) {
                 ModelRequest request;
                 request.model = model_;
                 request.messages.push_back({.role = ModelRole::User, .text = prompt_});
                 history_.ClearReview();
-                submittedPrompt_ = recoverable || sceneCount.has_value() ? std::nullopt : std::optional{prompt_};
+                submittedPrompt_ = recoverable || sceneCount.has_value() || source ? std::nullopt : std::optional{prompt_};
                 submittedProject_ = history_.Project();
-                Start(std::move(request), sceneCount);
+                Start(std::move(request), sceneCount, std::move(source));
                 if (recoverable && !Busy())
                     history_.FinishRecovery(AgentHistoryMessageState::Failed);
             }
 
-            void Start(std::optional<ModelRequest> request, std::optional<std::size_t> sceneCount = {}) {
+            void Start(std::optional<ModelRequest> request, std::optional<std::size_t> sceneCount = {},
+                       std::optional<EditorLocalAgentContext> source = {}) {
                 try {
-                    std::packaged_task<Reply(std::stop_token)> task{
-                        [endpoint = endpoint_, request = std::move(request), sceneCount, turn = ++turn_](std::stop_token stop) mutable {
-                        return RunLocalOperation(std::move(endpoint), std::move(request), sceneCount, turn, stop);
+                    std::packaged_task<Reply(std::stop_token)> task{[endpoint = endpoint_, request = std::move(request), sceneCount,
+                                                                     source = std::move(source),
+                                                                     turn = ++turn_](std::stop_token stop) mutable {
+                        return RunLocalOperation(std::move(endpoint), std::move(request), sceneCount, std::move(source), turn, stop);
                     }};
                     auto pending = task.get_future();
                     worker_ = std::jthread{[task = std::move(task)](std::stop_token stop) mutable {
@@ -264,6 +338,10 @@ namespace Horo::Editor {
             }
 
             void Adopt(AgentTurnResult &result) {
+                if (result.status == AgentTurnStatus::ContextDenied) {
+                    status_ = result.contextError == Security::AgentPolicyReason::StaleAuthority ? "context_stale" : "context_unavailable";
+                    return;
+                }
                 if (result.status == AgentTurnStatus::Completed && !result.messages.empty()) {
                     response_ = std::move(result.messages.back().text);
                     status_ = response_.empty() ? "empty_response" : nullptr;
@@ -284,6 +362,11 @@ namespace Horo::Editor {
             std::string response_;
             std::vector<ModelDescriptor> models_;
             std::function<std::optional<std::size_t>()> sceneCount_;
+            std::function<bool(SourceDocumentSnapshot &)> activeSource_;
+            std::string contextProject_;
+            std::uint64_t contextGeneration_{};
+            std::optional<CancellationSource> contextLifetime_;
+            std::optional<EditorLocalAgentContext> sourcePreview_;
             EditorLocalAgentHistory history_;
             std::optional<std::string> submittedPrompt_;
             AgentHistoryProjectRevision submittedProject_;

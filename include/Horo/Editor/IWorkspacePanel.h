@@ -52,6 +52,7 @@ namespace Horo::Editor {
     class IXRSimulatorArtifacts;
     class IEditorGuiRenderer;
     class IEditorViewportRenderer;
+    class SourceDocumentSnapshot;
     struct EditorWorkspaceViewCommandData;
     struct EditorWorkspaceViewModel;
 
@@ -82,6 +83,8 @@ namespace Horo::Editor {
         std::function<std::optional<std::size_t>()> sceneObjectCount{}; /**< Narrow owner-lane authoring observation. */
         std::string_view projectIdentity{};                             /**< Validated project identity borrowed during attachment. */
         const std::filesystem::path *projectFileRoot{};                 /**< Exact native root borrowed during attachment. */
+        /** @brief Copies the already-open active Source document on the owner lane, leaving output unchanged on failure. */
+        std::function<bool(SourceDocumentSnapshot &)> activeSourceSnapshot{};
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */

@@ -339,9 +339,14 @@ add_test(NAME HoroModelProviderContractTests
             "$<TARGET_FILE:HoroModelProviderTests>" "$<TARGET_FILE_DIR:HoroModelProviderTests>")
 set_tests_properties(HoroModelProviderContractTests PROPERTIES LABELS "unit;agent;headless" TIMEOUT 60)
 
-add_executable(HoroEditorAgentTurnTests unit/editor/AgentTurnTests.cpp unit/editor/AgentContextTests.cpp)
+add_executable(HoroEditorAgentTurnTests
+    unit/editor/AgentTurnTests.cpp
+    unit/editor/AgentContextTests.cpp
+    unit/editor/EditorLocalAgentContextTests.cpp
+    "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorLocalAgentContext.cpp")
 target_include_directories(HoroEditorAgentTurnTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/unit/mcp")
-target_link_libraries(HoroEditorAgentTurnTests PRIVATE HoroMcpEditorAgentToolsInternal HoroEngine::McpController HoroEngine::McpProjectCodeQuery)
+target_link_libraries(HoroEditorAgentTurnTests PRIVATE HoroMcpEditorAgentToolsInternal HoroEngine::McpController
+    HoroEngine::McpProjectCodeQuery HoroEngine::EditorServices HoroEditorAgentHistoryInternal)
 horo_register_catch_test(HoroEditorAgentTurnTests LABELS "unit;agent;headless;ci-windows")
 
 add_executable(HoroEditorAgentHistoryTests unit/editor/AgentConversationStoreTests.cpp)

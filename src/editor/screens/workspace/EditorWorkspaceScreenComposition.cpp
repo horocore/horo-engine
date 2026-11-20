@@ -19,6 +19,7 @@
 #include "ScriptModuleHostServices.h"
 #include "editor/input/EditorInputActions.h"
 
+#include <algorithm>
 #include <array>
 #include <span>
 #include <utility>
@@ -135,6 +136,20 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         },
             .projectIdentity = projectIdentity,
             .projectFileRoot = &controller_->ProjectRoot(),
+            .activeSourceSnapshot =
+                [this](SourceDocumentSnapshot &output) {
+            const auto &model = controller_->ViewModel();
+            const auto active = model.workspacePanelHost.ActiveDocument();
+            if (!active)
+                return false;
+            const auto found = std::ranges::find_if(model.sourceDocuments, [active](const SourceDocumentSnapshot &source) {
+                return source.Revision() != 0 && source.Identity().instance == *active;
+            });
+            if (found == model.sourceDocuments.end())
+                return false;
+            output = *found;
+            return true;
+        },
         };
         contributions_.panels.AttachAll(panelContext);
     }

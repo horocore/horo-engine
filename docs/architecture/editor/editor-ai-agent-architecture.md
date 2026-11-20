@@ -853,6 +853,13 @@ auto-archived after 30 days (configurable).
 
 ### Context Injection
 
+The Local Model panel can review the already-open active Source document.
+The workspace supplies an immutable editor snapshot, without opening or
+reading a file. The panel shows the redacted bytes and local destination
+before issuing one-use approval. Source edits, close, and workspace
+detachment invalidate the preview before provider dispatch. This request and
+its reply are excluded from conversation history.
+
 Users can explicitly add context to a prompt:
 
 - **Selection**: "Use the selected object" — current selection is injected

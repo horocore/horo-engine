@@ -89,6 +89,12 @@ namespace Horo::Editor {
          * @details This is not semantic text equality. Both leases retain their roots throughout comparison, preventing
          *          address reuse from identifying another publication as the same root. */
         [[nodiscard]] bool SharesStateWith(const SourceDocumentSnapshot &other) const noexcept;
+        /** @brief Observe whether the source owner still publishes this exact revision.
+         * @return False for an inert snapshot, a newer publication, or a retired owner.
+         * @details The witness can be read from a worker without calling the owner-only document service.
+         * A stale snapshot remains an immutable byte lease.
+         */
+        [[nodiscard]] bool IsCurrent() const noexcept;
         /** @brief Returns the monotonic committed observation/edit revision. @return Zero when inert. */
         [[nodiscard]] std::uint64_t Revision() const noexcept;
         /** @brief Returns the revision of the last explicitly loaded or durably saved disk base. @return Zero when inert. */

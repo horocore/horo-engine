@@ -2,6 +2,7 @@
 
 #include "Horo/Editor/SourceDocumentService.h"
 
+#include <atomic>
 #include <string>
 #include <thread>
 #include <vector>
@@ -14,6 +15,10 @@ namespace Horo::Editor::Detail {
 
     struct SourceDocumentRoot final {
         DocumentIdentity identity;
+        /** @brief Shared per-incarnation witness. The owner writes the exact revision before publication and zero before retirement.
+         * Worker snapshots only read it. It outlives the owner until the last immutable root is released.
+         */
+        std::shared_ptr<std::atomic<std::uint64_t>> currentRevision;
         std::uint64_t revision{1};
         std::uint64_t baseRevision{1};
         std::shared_ptr<const SourceText> text;
@@ -66,6 +71,18 @@ namespace Horo::Editor {
             float autosaveElapsed{};
             float autosaveRetry{};
             bool autosaveDirty{};
+
+            /** @brief Changes the current publication and invalidates the previous worker witness before exposing the new root. */
+            void Publish(std::shared_ptr<const Detail::SourceDocumentRoot> next) noexcept {
+                next->currentRevision->store(next->revision);
+                root = std::move(next);
+            }
+
+            /** @brief Revokes worker admission before the owner removes this record. */
+            void Revoke() const noexcept {
+                root->currentRevision->store(0);
+            }
+
             /** @brief Borrows one available replay delta without changing history. */
             [[nodiscard]] std::optional<HistoryStep> Step(bool redo) const;
         };
@@ -76,6 +93,17 @@ namespace Horo::Editor {
         bool closed{};
         bool saving{};
         std::vector<Record> records;
+
+        ~Storage() noexcept {
+            RevokeAll();
+        }
+
+        /** @brief Revokes all extant document witnesses before removing the owner. */
+        void RevokeAll() const noexcept {
+            for (const auto &record : records)
+                record.Revoke();
+        }
+
         /** @brief Copies and validates one history entry and reserves capacity before publication. */
         [[nodiscard]] Result<HistoryEntry> PrepareHistory(Record &record, const SourceTextEdit &edit,
                                                           const Detail::SourceText &after) const;

@@ -298,7 +298,7 @@ namespace Horo::Editor {
                     replaced.HasError())
                     return Result<SourceSaveResult>::Failure(replaced.ErrorValue());
                 record.path.swap(path);
-                record.root = std::move(prepared);
+                record.Publish(std::move(prepared));
                 return Result<SourceSaveResult>::Success(std::move(result));
             }
         } catch (const std::bad_alloc &) {
