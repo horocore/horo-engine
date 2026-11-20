@@ -87,6 +87,7 @@ namespace Horo::Editor {
                 sceneCount_ = context.sceneObjectCount;
                 RevokeSourceContext();
                 activeSource_ = context.activeSourceSnapshot;
+                activeSourceRange_ = context.activeSourceRange;
                 contextProject_ = context.projectIdentity;
                 contextLifetime_.emplace();
                 ++contextGeneration_;
@@ -159,6 +160,7 @@ namespace Horo::Editor {
                 contextLifetime_.reset();
                 sourcePreview_.reset();
                 activeSource_ = {};
+                activeSourceRange_ = {};
                 contextProject_.clear();
             }
 
@@ -212,7 +214,11 @@ namespace Horo::Editor {
                     return;
                 }
                 if (Button(locale, "context_offer", ready && activeSource_ && contextLifetime_ && !contextProject_.empty())) {
-                    PrepareSourceReview();
+                    PrepareSourceReview(false);
+                    return;
+                }
+                if (Button(locale, "context_range_offer", ready && activeSourceRange_ && contextLifetime_ && !contextProject_.empty())) {
+                    PrepareSourceReview(true);
                     return;
                 }
                 const auto count = sceneCount_ ? sceneCount_() : std::nullopt;
@@ -223,20 +229,33 @@ namespace Horo::Editor {
                 }
             }
 
-            void PrepareSourceReview() {
+            void PrepareSourceReview(const bool selectedRange) {
                 SourceDocumentSnapshot active;
-                if (!activeSource_(active)) {
-                    status_ = "context_unavailable";
+                SourceContextRange range;
+                const bool available = selectedRange ? activeSourceRange_(active, range) : activeSource_(active);
+                if (!available) {
+                    status_ = selectedRange ? "context_range_unavailable" : "context_unavailable";
                     return;
                 }
-                auto prepared = EditorLocalAgentContext::Prepare(std::move(active), contextProject_, contextGeneration_,
-                                                                 contextLifetime_->Token(), turn_ + 1);
+                auto prepared =
+                    EditorLocalAgentContext::Prepare(std::move(active), contextProject_, contextGeneration_, contextLifetime_->Token(),
+                                                     turn_ + 1, selectedRange ? std::optional{range} : std::nullopt);
                 if (prepared.HasError()) {
                     status_ = "context_unavailable";
                     return;
                 }
                 sourcePreview_.emplace(std::move(prepared).Value());
                 status_ = nullptr;
+            }
+
+            /** @brief Rechecks widget byte offsets only on approval, avoiding whole-document scans during preview drawing. */
+            bool ReviewSelectionCurrent() const {
+                const auto expected = sourcePreview_->Selection();
+                if (!expected)
+                    return true;
+                SourceDocumentSnapshot active;
+                SourceContextRange range;
+                return activeSourceRange_(active, range) && sourcePreview_->Matches(active) && range == *expected;
             }
 
             void DrawSourceReview(const ILocalizationService &locale) {
@@ -254,8 +273,9 @@ namespace Horo::Editor {
                 }
                 ImGui::PopTextWrapPos();
                 if (Button(locale, "context_approve", !Busy())) {
+                    const bool selected = ReviewSelectionCurrent();
                     auto approved = std::exchange(sourcePreview_, std::nullopt);
-                    if (approved->Approve())
+                    if (selected && approved->Approve())
                         Send({}, false, std::move(approved));
                     else
                         status_ = "context_stale";
@@ -363,6 +383,7 @@ namespace Horo::Editor {
             std::vector<ModelDescriptor> models_;
             std::function<std::optional<std::size_t>()> sceneCount_;
             std::function<bool(SourceDocumentSnapshot &)> activeSource_;
+            std::function<bool(SourceDocumentSnapshot &, SourceContextRange &)> activeSourceRange_;
             std::string contextProject_;
             std::uint64_t contextGeneration_{};
             std::optional<CancellationSource> contextLifetime_;

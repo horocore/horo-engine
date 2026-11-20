@@ -860,6 +860,8 @@ TEST_CASE("Local model panel copy resolves in both shipped locales", "[unit][edi
                                "history_incomplete",
                                "history_streaming",
                                "context_offer",
+                               "context_range_offer",
+                               "context_range_unavailable",
                                "context_review",
                                "context_approve",
                                "context_cancel",

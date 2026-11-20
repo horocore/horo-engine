@@ -96,4 +96,63 @@ namespace Horo::Editor {
         REQUIRE(absent.HasError());
         CHECK(absent.ErrorValue().code.Value() == Application::CodeQueryErrors::Stale.code.Value());
     }
+
+    TEST_CASE("Local panel sends only the explicitly chosen bytes from an active source range", "[unit][agent][context][editor_source]") {
+        TestSupport::SourceProject source;
+        const std::string document = std::string(5000, ' ') + "\nNot selected.\nselected \xC3\xA9\r\nNot selected either.";
+        const std::string_view chosen = "selected \xC3\xA9\r\n";
+        const auto start = document.find(chosen);
+        source.Put(document);
+        SourceDocumentService owner{source.directory};
+        const auto snapshot = owner.Open(source.Identity(), source.directory / "code.cpp");
+        REQUIRE(snapshot.HasValue());
+        const auto bytes = snapshot.Value().TextLease();
+        REQUIRE(bytes);
+        CHECK(bytes->data() == snapshot.Value().Text().data());
+        const SourceContextRange range{start, chosen.size()};
+        CancellationSource lifetime;
+        auto prepared = EditorLocalAgentContext::Prepare(snapshot.Value(), "project", 3, lifetime.Token(), 94, range);
+        REQUIRE(prepared.HasValue());
+        auto context = std::move(prepared).Value();
+        REQUIRE(context.Selection() == range);
+        const auto &item = context.Items().front();
+        CHECK(item.provenance.kind == AgentContextKind::SourceRange);
+        CHECK(item.provenance.offset == range.offset);
+        CHECK(item.provenance.capturedBytes == range.length);
+        CHECK(item.candidate.text.ends_with(chosen));
+        CHECK(item.candidate.text.find("Not selected") == std::string::npos);
+        REQUIRE(context.Approve());
+        RecordingModel provider;
+        const auto dispatch = context.Dispatch();
+        AgentTurnRuntime runtime;
+        const auto result =
+            runtime.Run(provider, nullptr, 94, {.model = "local", .messages = {{.role = ModelRole::User, .text = "Explain this range"}}},
+                        {}, {}, &dispatch);
+        REQUIRE(result.status == AgentTurnStatus::Completed);
+        REQUIRE(provider.sent.size() == 2);
+        CHECK(provider.sent.front().text == item.candidate.text);
+        CHECK(result.messages.front().text == "Explain this range");
+    }
+
+    TEST_CASE("A source range cannot bypass redaction by clipping a sensitive line or private key header",
+              "[unit][agent][context][editor_source]") {
+        TestSupport::SourceProject source;
+        const std::string document =
+            "Password: example-password\n-----BEGIN PRIVATE KEY-----\nprivatebodyfixture\n-----END PRIVATE KEY-----\n";
+        source.Put(document);
+        SourceDocumentService owner{source.directory};
+        const auto snapshot = owner.Open(source.Identity(), source.directory / "code.cpp");
+        REQUIRE(snapshot.HasValue());
+        for (const std::string_view fragment : {"example-password", "privatebodyfixture"}) {
+            const SourceContextRange range{document.find(fragment), fragment.size()};
+            const auto preview = EditorLocalAgentContext::Prepare(snapshot.Value(), "project", 3, {}, 95, range);
+            REQUIRE(preview.HasValue());
+            CHECK(preview.Value().Items().front().candidate.text.ends_with("[redacted]"));
+            CHECK(preview.Value().Items().front().candidate.text.find(fragment) == std::string::npos);
+        }
+        const auto beyond =
+            EditorLocalAgentContext::Prepare(snapshot.Value(), "project", 3, {}, 96, SourceContextRange{document.size(), 1});
+        REQUIRE(beyond.HasError());
+        CHECK(beyond.ErrorValue().code.Value() == Application::CodeQueryErrors::Invalid.code.Value());
+    }
 }  // namespace Horo::Editor

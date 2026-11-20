@@ -38,6 +38,8 @@ namespace Horo::Editor {
          * @return Presentation, or null when its typed identity is inert or view IDs are exhausted.
          */
         [[nodiscard]] SourceEditorView *Acquire(DocumentInstanceId instance);
+        /** @brief Observes a range in an existing widget only. No presentation is created on a miss. */
+        [[nodiscard]] std::optional<SourceContextRange> ReadSelection(const SourceDocumentSnapshot &snapshot) const;
         /** @brief Removes only explicitly closed document presentations. @param tabs Current host-owned tab inventory. */
         void Retain(std::span<const WorkspaceDocumentTab> tabs);
         /** @brief Releases an old owner's widgets, tools and focus without reusing any allocated view IDs. */

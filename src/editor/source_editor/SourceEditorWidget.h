@@ -92,6 +92,8 @@ namespace Horo::Editor {
         [[nodiscard]] bool HasHighlight(std::uint64_t revision) const noexcept;
         /** @brief Returns exact document-byte selection. @return Empty selection if detached. */
         [[nodiscard]] SourceWidgetSelection Selection() const;
+        /** @brief Reads a nonempty selected range only from the unchanged mirror of this exact current source. */
+        [[nodiscard]] std::optional<SourceContextRange> ReadSelection(const SourceDocumentSnapshot &snapshot) const;
         /** @brief Captures this view's current presentation state for semantic editing/search commands.
          * @return Exact document byte offsets, scroll and host-issued view identity.
          */

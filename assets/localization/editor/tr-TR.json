@@ -133,6 +133,8 @@
     "workspace.local_agent.history_incomplete": {"text": "Eksik yanıt"},
     "workspace.local_agent.history_streaming": {"text": "Yanıt bekleniyor"},
     "workspace.local_agent.context_offer": {"text": "Etkin kaynak dosyasını incele"},
+    "workspace.local_agent.context_range_offer": {"text": "Seçili kaynak aralığını incele"},
+    "workspace.local_agent.context_range_unavailable": {"text": "Önce etkin kaynak dosyasında metin seçin."},
     "workspace.local_agent.context_review": {"text": "Seçili yerel modele gönderilecek kaynak metni inceleyin."},
     "workspace.local_agent.context_approve": {"text": "Kaynağı onayla ve isteği gönder"},
     "workspace.local_agent.context_cancel": {"text": "Kaynak incelemesinden vazgeç"},

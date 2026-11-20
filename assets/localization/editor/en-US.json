@@ -133,6 +133,8 @@
     "workspace.local_agent.history_incomplete": {"text": "Incomplete response"},
     "workspace.local_agent.history_streaming": {"text": "Response pending"},
     "workspace.local_agent.context_offer": {"text": "Review active source"},
+    "workspace.local_agent.context_range_offer": {"text": "Review selected source range"},
+    "workspace.local_agent.context_range_unavailable": {"text": "Select text in the active source first."},
     "workspace.local_agent.context_review": {"text": "Review the source text that will be sent to the selected local model."},
     "workspace.local_agent.context_approve": {"text": "Approve source and ask"},
     "workspace.local_agent.context_cancel": {"text": "Cancel source review"},

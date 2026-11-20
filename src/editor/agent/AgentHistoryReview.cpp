@@ -136,6 +136,28 @@ namespace Horo::Agent {
         return {Security::AgentDataClass::EditorContext, std::move(redacted)};
     }
 
+    /** @copydoc IsSensitiveDisplayRange */
+    bool IsSensitiveDisplayRange(const std::string_view source, const std::size_t offset, const std::size_t length) {
+        if (length == 0 || offset > source.size() || length > source.size() - offset)
+            return true;
+        const auto selectionEnd = offset + length;
+        bool privateKey{};
+        std::string folded;
+        for (std::size_t start = 0; start < selectionEnd;) {
+            const auto delimiter = source.find('\n', start);
+            const auto end = delimiter == std::string_view::npos ? source.size() : delimiter + 1;
+            const auto visibleEnd = delimiter == std::string_view::npos ? end : delimiter;
+            folded.assign(source.substr(start, visibleEnd - start));
+            std::ranges::transform(folded, folded.begin(), LowerAscii);
+            const bool insideOrBeginsKey = privateKey || PrivateKeyMarker(folded, "-----begin ");
+            if (end > offset && (insideOrBeginsKey || SensitiveLine(folded)))
+                return true;
+            privateKey = insideOrBeginsKey && !PrivateKeyMarker(folded, "-----end ");
+            start = end;
+        }
+        return false;
+    }
+
     namespace {
         /** @brief Admits one visible dialogue field through the same redactor used by the store. */
         Result<std::string> PrepareHistoryText(const AgentHistoryTextKind kind, const std::string_view text) {

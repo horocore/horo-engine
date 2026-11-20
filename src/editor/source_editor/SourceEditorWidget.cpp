@@ -549,6 +549,19 @@ namespace Horo::Editor {
         return storage_->CaptureSelection();
     }
 
+    /** @copydoc SourceEditorWidget::ReadSelection */
+    std::optional<SourceContextRange> SourceEditorWidget::ReadSelection(const SourceDocumentSnapshot &snapshot) const {
+        const auto &state = *storage_;
+        if (!state.buffer || state.pending || !snapshot.IsCurrent() || !state.source.SharesStateWith(snapshot) ||
+            !state.buffer->HasSelection())
+            return std::nullopt;
+        const auto selection = state.CaptureSelection();
+        const auto [first, last] = std::minmax(selection.anchor, selection.caret);
+        if (first == last)
+            return std::nullopt;
+        return SourceContextRange{first, last - first};
+    }
+
     /** @copydoc SourceEditorWidget::Identity */
     SourceEditingViewId SourceEditorWidget::Identity() const noexcept {
         return storage_->viewIdentity;

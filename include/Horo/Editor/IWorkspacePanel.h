@@ -53,6 +53,7 @@ namespace Horo::Editor {
     class IEditorGuiRenderer;
     class IEditorViewportRenderer;
     class SourceDocumentSnapshot;
+    struct SourceContextRange;
     struct EditorWorkspaceViewCommandData;
     struct EditorWorkspaceViewModel;
 
@@ -85,6 +86,8 @@ namespace Horo::Editor {
         const std::filesystem::path *projectFileRoot{};                 /**< Exact native root borrowed during attachment. */
         /** @brief Copies the already-open active Source document on the owner lane, leaving output unchanged on failure. */
         std::function<bool(SourceDocumentSnapshot &)> activeSourceSnapshot{};
+        /** @brief Copies the current nonempty source selection and its exact snapshot on the owner lane. */
+        std::function<bool(SourceDocumentSnapshot &, SourceContextRange &)> activeSourceRange{};
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */

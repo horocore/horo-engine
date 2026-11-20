@@ -13,6 +13,10 @@ namespace Horo::Agent {
      * are outside this boundary. The caller presents the result for the user's per-exchange approval.
      */
     [[nodiscard]] AgentHistoryTextDecision RedactHistoryDisplayText(AgentHistoryTextKind kind, std::string_view visible);
+    /** @brief Checks the complete lines and private-key state surrounding a selected range of bounded display text.
+     * @details A fragment alone may not carry its credential label. Invalid ranges are treated as sensitive.
+     */
+    [[nodiscard]] bool IsSensitiveDisplayRange(std::string_view source, std::size_t offset, std::size_t length);
 
     /** @brief Exact project and durable message identity returned after approving a recoverable ask. */
     struct AgentHistoryRecoveryTurn final {

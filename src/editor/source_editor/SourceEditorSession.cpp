@@ -14,6 +14,12 @@ namespace Horo::Editor {
         return &views_.try_emplace(instance.Value(), SourceEditingViewId{nextViewId_++}).first->second;
     }
 
+    /** @copydoc SourceEditorSession::ReadSelection */
+    std::optional<SourceContextRange> SourceEditorSession::ReadSelection(const SourceDocumentSnapshot &snapshot) const {
+        const auto found = views_.find(snapshot.Identity().instance.Value());
+        return found == views_.end() ? std::nullopt : found->second.widget.ReadSelection(snapshot);
+    }
+
     /** @copydoc SourceEditorSession::Retain */
     void SourceEditorSession::Retain(const std::span<const WorkspaceDocumentTab> tabs) {
         std::erase_if(views_, [tabs](const auto &entry) {

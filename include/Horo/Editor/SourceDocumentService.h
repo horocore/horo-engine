@@ -101,6 +101,8 @@ namespace Horo::Editor {
         [[nodiscard]] std::uint64_t BaseRevision() const noexcept;
         /** @brief Returns exact validated current bytes. @return Read-only call-independent borrowed view. */
         [[nodiscard]] std::string_view Text() const noexcept;
+        /** @brief Share the exact immutable text with a bounded consumer without copying the document. */
+        [[nodiscard]] std::shared_ptr<const std::string> TextLease() const noexcept;
         /** @brief Returns exact last explicitly loaded or durably saved disk bytes. @return Read-only base view. */
         [[nodiscard]] std::string_view DiskBase() const noexcept;
         /** @brief Compares current authored bytes to the saved base, not notification revisions. @return False when equal and durability is
@@ -117,6 +119,13 @@ namespace Horo::Editor {
         friend class SourceDocumentService;
         explicit SourceDocumentSnapshot(std::shared_ptr<const Detail::SourceDocumentRoot> root) noexcept;
         std::shared_ptr<const Detail::SourceDocumentRoot> root_;
+    };
+
+    /** @brief Nonempty half-open byte selection in one exact source document revision. */
+    struct SourceContextRange final {
+        std::size_t offset{};
+        std::size_t length{};
+        auto operator<=>(const SourceContextRange &) const = default;
     };
 
     /** @brief Host-issued editor-view identity, scoped to a project session; zero denotes a non-view edit. */

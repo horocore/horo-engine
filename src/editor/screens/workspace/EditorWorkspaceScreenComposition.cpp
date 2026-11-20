@@ -104,6 +104,19 @@ namespace Horo::Editor::WorkspaceScreenDetail {
 
     /** @copydoc EditorWorkspaceScreen::AttachWorkspacePanels */
     void EditorWorkspaceScreen::AttachWorkspacePanels(std::string_view projectIdentity) {
+        const auto activeSource = [this](SourceDocumentSnapshot &output) {
+            const auto &model = controller_->ViewModel();
+            const auto active = model.workspacePanelHost.ActiveDocument();
+            if (!active)
+                return false;
+            const auto found = std::ranges::find_if(model.sourceDocuments, [active](const SourceDocumentSnapshot &source) {
+                return source.Revision() != 0 && source.Identity().instance == *active;
+            });
+            if (found == model.sourceDocuments.end())
+                return false;
+            output = *found;
+            return true;
+        };
         PanelContext panelContext{
             .dataBus = controller_->DataBus(),
             .guiRenderer = panelServices_.guiRenderer,
@@ -136,18 +149,17 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         },
             .projectIdentity = projectIdentity,
             .projectFileRoot = &controller_->ProjectRoot(),
-            .activeSourceSnapshot =
-                [this](SourceDocumentSnapshot &output) {
-            const auto &model = controller_->ViewModel();
-            const auto active = model.workspacePanelHost.ActiveDocument();
-            if (!active)
+            .activeSourceSnapshot = activeSource,
+            .activeSourceRange =
+                [this, activeSource](SourceDocumentSnapshot &output, SourceContextRange &range) {
+            SourceDocumentSnapshot source;
+            if (!activeSource(source))
                 return false;
-            const auto found = std::ranges::find_if(model.sourceDocuments, [active](const SourceDocumentSnapshot &source) {
-                return source.Revision() != 0 && source.Identity().instance == *active;
-            });
-            if (found == model.sourceDocuments.end())
+            const auto selected = view_.ReadSourceSelection(source);
+            if (!selected)
                 return false;
-            output = *found;
+            output = std::move(source);
+            range = *selected;
             return true;
         },
         };

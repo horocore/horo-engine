@@ -34,6 +34,13 @@ namespace Horo::Editor {
         return root_ ? root_->text->bytes : std::string_view{};
     }
 
+    /** @copydoc SourceDocumentSnapshot::TextLease */
+    std::shared_ptr<const std::string> SourceDocumentSnapshot::TextLease() const noexcept {
+        if (!root_)
+            return {};
+        return {root_->text, &root_->text->bytes};
+    }
+
     /** @copydoc SourceDocumentSnapshot::DiskBase */
     std::string_view SourceDocumentSnapshot::DiskBase() const noexcept {
         return root_ ? root_->base->bytes : std::string_view{};

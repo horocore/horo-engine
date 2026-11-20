@@ -18,11 +18,13 @@ namespace Horo::Editor {
          * @param workspaceGeneration Nonzero local attachment generation.
          * @param lifetime Revocable project attachment token.
          * @param requestId Exact host request identity reserved for the upcoming turn.
+         * @param selection Explicit byte range from the active widget, or empty to review the complete file.
          * @return Bounded redacted context preview, or a typed denial before any provider access.
          */
         [[nodiscard]] static Result<EditorLocalAgentContext> Prepare(SourceDocumentSnapshot source, std::string projectIdentity,
                                                                      std::uint64_t workspaceGeneration, CancellationToken lifetime,
-                                                                     std::uint64_t requestId);
+                                                                     std::uint64_t requestId,
+                                                                     std::optional<SourceContextRange> selection = {});
 
         /** @brief Observe the exact bytes to present before asking for consent. */
         [[nodiscard]] std::span<const Agent::AgentContextPreviewItem> Items() const noexcept {
@@ -31,6 +33,11 @@ namespace Horo::Editor {
 
         /** @brief Check that this same edition of the same document is still selected in the workspace. */
         [[nodiscard]] bool Matches(const SourceDocumentSnapshot &active) const noexcept;
+
+        /** @brief Reports the captured explicit selection, when reviewing a range. */
+        [[nodiscard]] std::optional<SourceContextRange> Selection() const noexcept {
+            return selection_;
+        }
 
         /** @brief Record consent only after the exact preview is shown and the user explicitly approves it. */
         [[nodiscard]] bool Approve();
@@ -41,12 +48,14 @@ namespace Horo::Editor {
     private:
         EditorLocalAgentContext(SourceDocumentSnapshot source, Platform::ProjectReadContext project,
                                 std::unique_ptr<Security::AgentPolicy> policy, Agent::AgentContextPreview preview,
-                                std::function<bool(const Agent::AgentContextProvenance &)> current);
+                                std::function<bool(const Agent::AgentContextProvenance &)> current,
+                                std::optional<SourceContextRange> selection);
 
         SourceDocumentSnapshot source_;
         Platform::ProjectReadContext project_;
         std::unique_ptr<Security::AgentPolicy> policy_;
         Agent::AgentContextPreview preview_;
         std::function<bool(const Agent::AgentContextProvenance &)> current_;
+        std::optional<SourceContextRange> selection_;
     };
 }  // namespace Horo::Editor

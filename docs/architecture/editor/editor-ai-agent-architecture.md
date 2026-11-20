@@ -853,10 +853,14 @@ auto-archived after 30 days (configurable).
 
 ### Context Injection
 
-The Local Model panel can review the already-open active Source document.
+The Local Model panel can review the already-open active Source document or
+the explicit selection in its existing editor widget.
 The workspace supplies an immutable editor snapshot, without opening or
 reading a file. The panel shows the redacted bytes and local destination
-before issuing one-use approval. Source edits, close, and workspace
+before issuing one-use approval. Range approval also checks that the same
+selection still exists. Redaction checks any intersecting sensitive line
+and enclosing private-key block before clipping to the selected range.
+Source edits, close, and workspace
 detachment invalidate the preview before provider dispatch. This request and
 its reply are excluded from conversation history.
 

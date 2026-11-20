@@ -21,19 +21,25 @@ namespace Horo::Editor {
 
     EditorLocalAgentContext::EditorLocalAgentContext(SourceDocumentSnapshot source, Platform::ProjectReadContext project,
                                                      std::unique_ptr<Security::AgentPolicy> policy, Agent::AgentContextPreview preview,
-                                                     std::function<bool(const Agent::AgentContextProvenance &)> current)
+                                                     std::function<bool(const Agent::AgentContextProvenance &)> current,
+                                                     const std::optional<SourceContextRange> selection)
         : source_(std::move(source)), project_(std::move(project)), policy_(std::move(policy)), preview_(std::move(preview)),
-          current_(std::move(current)) {}
+          current_(std::move(current)), selection_(selection) {}
 
     /** @copydoc EditorLocalAgentContext::Prepare */
     Result<EditorLocalAgentContext> EditorLocalAgentContext::Prepare(SourceDocumentSnapshot source, std::string projectIdentity,
                                                                      const std::uint64_t workspaceGeneration, CancellationToken lifetime,
-                                                                     const std::uint64_t requestId) {
+                                                                     const std::uint64_t requestId,
+                                                                     const std::optional<SourceContextRange> selection) {
         using Output = Result<EditorLocalAgentContext>;
         using namespace Agent;
         if (!source.IsCurrent() || lifetime.IsCancellationRequested())
             return Output::Failure(MakeError(Application::CodeQueryErrors::Stale));
-        if (source.Text().size() > Security::AgentPolicyLimits{}.maximumItemBytes)
+        const auto textSize = source.Text().size();
+        if (selection && (selection->offset > textSize || selection->length == 0 || selection->length > textSize - selection->offset))
+            return Output::Failure(MakeError(Application::CodeQueryErrors::Invalid));
+        if (textSize > Platform::ProjectReadLimits{}.maximumFileBytes ||
+            (selection ? selection->length : textSize) > Security::AgentPolicyLimits{}.maximumItemBytes)
             return Output::Failure(MakeError(Application::CodeQueryErrors::Capacity));
 
         const auto identity = source.Identity();
@@ -49,20 +55,28 @@ namespace Horo::Editor {
         auto current = [source, path, revision](const AgentContextProvenance &provenance) {
             return source.IsCurrent() && provenance.origin == path && provenance.revision == revision;
         };
+        const bool sensitive = selection && IsSensitiveDisplayRange(source.Text(), selection->offset, selection->length);
         const AgentContextReaders
             readers{.existingText = [&source, &path, &revision](std::string_view requested, const Platform::ProjectReadContext &context) {
             using Reading = Result<std::optional<Platform::ProjectReadTextSnapshot>>;
             if (requested != path || !source.IsCurrent())
                 return Reading::Failure(MakeError(Application::CodeQueryErrors::Stale));
-            return Reading::Success(Platform::ProjectReadTextSnapshot{context.projectIdentity, context.projectGeneration, path, revision,
-                                                                      std::make_shared<const std::string>(source.Text())});
-        }, .redact = RedactSource, .isCurrent = current};
-        const std::array<AgentContextSelection, 1> selected{AgentContextTextRequest{AgentContextKind::File, path, revision}};
+            return Reading::Success(
+                Platform::ProjectReadTextSnapshot{context.projectIdentity, context.projectGeneration, path, revision, source.TextLease()});
+        }, .redact = [sensitive](const AgentContextProvenance &provenance, const std::string_view payload) {
+            if (!sensitive)
+                return RedactSource(provenance, payload);
+            const std::string framed = std::string{payload.substr(0, payload.size() - provenance.capturedBytes)} + "[redacted]";
+            return RedactSource(provenance, framed);
+        }, .isCurrent = current};
+        const std::array<AgentContextSelection, 1> selected{
+            AgentContextTextRequest{selection ? AgentContextKind::SourceRange : AgentContextKind::File, path, revision,
+                                    selection ? selection->offset : 0, selection ? selection->length : 0}};
         auto preview = AgentContextPreview::Capture(selected, readers, project, Residence, requestId, workspaceGeneration);
         if (preview.HasError())
             return Output::Failure(std::move(preview).ErrorValue());
         return Output::Success(EditorLocalAgentContext{std::move(source), std::move(project), std::move(policy), std::move(preview).Value(),
-                                                       std::move(current)});
+                                                       std::move(current), selection});
     }
 
     /** @copydoc EditorLocalAgentContext::Matches */
