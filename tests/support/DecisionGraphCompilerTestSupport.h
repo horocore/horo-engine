@@ -37,6 +37,8 @@ namespace Horo::AI::DecisionGraphTestSupport {
         std::vector<TaskHandle> tasks;
         std::vector<TaskHandle> abortedTasks;
         std::vector<AiTaskCancellationReason> abortReasons;
+        AiTaskContinuation continuation;
+        TaskHandle lastResumeTask;
         std::uint64_t succeedTick{2};
         std::size_t factories{};
         std::size_t starts{};
@@ -57,6 +59,7 @@ namespace Horo::AI::DecisionGraphTestSupport {
             ++probe_.starts;
             probe_.calls.push_back("start:" + std::to_string(operation.taskDefinition.Value()));
             probe_.tasks.push_back(operation.task);
+            probe_.continuation = context.continuation;
             if (probe_.onStart)
                 probe_.onStart();
             if (!immediate_ && probe_.startOutcome)
@@ -65,8 +68,10 @@ namespace Horo::AI::DecisionGraphTestSupport {
                                                                                                    : AiTaskState::Running);
         }
 
-        Result<AiTaskState> Resume(const BehaviorTreeEvaluationContext &context, const AiTaskOperationContext &) noexcept override {
+        Result<AiTaskState> Resume(const BehaviorTreeEvaluationContext &context,
+                                   const AiTaskOperationContext &operation) noexcept override {
             ++probe_.resumes;
+            probe_.lastResumeTask = operation.task;
             if (!immediate_ && probe_.resumeOutcome)
                 return *probe_.resumeOutcome;
             return Result<AiTaskState>::Success((immediate_ || context.tick >= probe_.succeedTick) ? AiTaskState::Succeeded

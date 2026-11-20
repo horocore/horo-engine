@@ -270,6 +270,92 @@ namespace Horo::AI {
             CHECK(old.probe.cleanups == 1);
         }
 
+        TEST_CASE("A compatible Scene recook retains the exact running task and detached completion",
+                  "[unit][ai][scene][decision_reservation][scheduler]") {
+            Fixture fixture;
+            fixture.probe.succeedTick = 100;
+            auto root = TreeNode(1, DecisionControlKind::Root);
+            auto task = TreeNode(2, DecisionControlKind::Task);
+            task.properties.emplace_back(MakeIdentity<BehaviorTreePropertyId>(44), "provider flag", BehaviorTreePropertyKind::Boolean,
+                                         false);
+            auto registration = Registration(fixture.probe);
+            registration.contract.properties = task.properties;
+            auto generation = DecisionNodeGeneration::Capture({&registration, 1}, fixture.admission);
+            REQUIRE(generation.HasValue());
+            fixture.providers = std::move(generation).Value();
+            const auto compile = [&](std::string title, bool enabled = false) {
+                root.displayName = std::move(title);
+                task.properties.front().value = enabled;
+                auto source = Tree(11, {root, task}, {Edge(1, 1, 2)});
+                source.executionTask = MakeIdentity<TaskId>(9000);
+                return fixture.Compile(std::span{&source, 1}, 11);
+            };
+            const auto original = compile("Original root caption");
+            const auto edited = compile("First edited caption");
+            const auto editedAgain = compile("Second edited caption");
+            REQUIRE(original->Digest() != edited->Digest());
+            REQUIRE(edited->Digest() != editedAgain->Digest());
+
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            auto runtime = AiSceneRuntime::Create({}, AiSceneCookedDecisionExecution{jobs, {}, {}}).Value();
+            auto scene = SceneFixture(fixture, *original);
+            scene.descriptor.cookedPlan = original;
+            auto publication = TestSupport::Publish(runtime, scene);
+            const auto agent = runtime.Snapshot().Value().Agents().front().handle;
+            auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();
+            REQUIRE(scheduler->EvaluateAtDecision(1).HasValue());
+            REQUIRE(scheduler->CommitAtIntentDispatch(1).HasValue());
+            REQUIRE(fixture.probe.tasks.size() == 1);
+            const auto taskHandle = fixture.probe.tasks.front();
+            const auto continuation = fixture.probe.continuation;
+            REQUIRE(continuation.IsCurrent());
+
+            REQUIRE(runtime.ReplaceCookedDecisionAtSafePoint(agent, original, edited).HasValue());
+            CHECK(continuation.IsCurrent());
+            CHECK(fixture.probe.factories == 1);
+            CHECK(fixture.probe.aborts == 0);
+            CHECK(fixture.probe.cleanups == 0);
+            TestSupport::ExpectError(scheduler->EvaluateAtDecision(1), AIErrors::SchedulerPhaseInvalid);
+            TestSupport::ExpectError(runtime.ReplaceCookedDecisionAtSafePoint(agent, original, editedAgain),
+                                     AIErrors::DecisionAssetActivationInvalid);
+            REQUIRE(scheduler->EvaluateAtDecision(2).HasValue());
+            REQUIRE(scheduler->CommitAtIntentDispatch(2).HasValue());
+            CHECK(fixture.probe.resumes == 1);
+            CHECK(fixture.probe.lastResumeTask == taskHandle);
+
+            REQUIRE(runtime.ReplaceCookedDecisionAtSafePoint(agent, edited, editedAgain).HasValue());
+            REQUIRE(continuation.IsCurrent());
+            SECTION("original mailbox publishes completion to the still-running task") {
+                AiTaskTerminalResult completed{.state = AiTaskState::Succeeded};
+                REQUIRE(continuation.PublishTerminal(completed).Value() == AiTaskPublicationDisposition::Accepted);
+                REQUIRE(scheduler->EvaluateAtDecision(3).HasValue());
+                REQUIRE(scheduler->CommitAtIntentDispatch(3).HasValue());
+                CHECK_FALSE(continuation.IsCurrent());
+                CHECK(fixture.probe.factories == 1);
+                CHECK(fixture.probe.starts == 1);
+                CHECK(fixture.probe.aborts == 0);
+                CHECK(fixture.probe.cleanups == 1);
+                const auto unused = runtime.ReserveDecisionTaskSlotsAtSafePoint(agent, 1);
+                REQUIRE(unused.HasValue());
+                CHECK(unused.Value().FirstSlot() == original->Storage().taskSlots + 1);
+            }
+            SECTION("changed authored properties require a new executor despite identical tree bindings") {
+                const auto changed = compile("Second edited caption", true);
+                using TreePlan = std::shared_ptr<const BehaviorTreeExecutionPlan>;
+                const auto &existingTree = std::get<TreePlan>(editedAgain->Graphs().front().execution);
+                const auto &changedTree = std::get<TreePlan>(changed->Graphs().front().execution);
+                REQUIRE(existingTree->IsCompatible(*changedTree));
+                REQUIRE(runtime.ReplaceCookedDecisionAtSafePoint(agent, editedAgain, changed).HasValue());
+                CHECK_FALSE(continuation.IsCurrent());
+                CHECK(fixture.probe.factories == 2);
+                CHECK(fixture.probe.aborts == 1);
+                CHECK(fixture.probe.cleanups == 1);
+                REQUIRE(scheduler->EvaluateAtDecision(3).HasValue());
+                REQUIRE(fixture.probe.tasks.size() == 2);
+                CHECK(fixture.probe.tasks.back() != taskHandle);
+            }
+        }
+
         TEST_CASE("Cooked Scene reports raw task callback errors without failing a successful Selector fallback",
                   "[unit][ai][scene][decision_reservation][scheduler]") {
             Fixture fixture;

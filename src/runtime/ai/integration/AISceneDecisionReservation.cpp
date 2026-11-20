@@ -66,6 +66,10 @@ namespace Horo::AI {
                 static_cast<void>(decision_->Cancel(AiTaskCancellationReason::PlanReplaced));
             }
 
+            DecisionGraphInstance &Decision() noexcept {
+                return *decision_;
+            }
+
         private:
             std::weak_ptr<Detail::AiSceneRuntimeState> state_;
             std::unique_ptr<DecisionGraphInstance> decision_;
@@ -223,8 +227,21 @@ namespace Horo::AI {
             return Outcome::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
         if ((replacement->Capabilities().bits & ~previous->Capabilities().bits) != 0)
             return Outcome::Failure(MakeError(AIErrors::CapabilityUnavailable));
-        if (auto valid = scheduler->ValidateDecisionReplacement(agent, previous); valid.HasError())
-            return valid;
+        const auto registered = scheduler->ValidateDecisionReplacement(agent, previous);
+        if (registered.HasError())
+            return Outcome::Failure(registered.ErrorValue());
+        auto *executor = dynamic_cast<ScheduledCookedDecision *>(registered.Value());
+        if (!executor)
+            return Outcome::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
+        auto retained = executor->Decision().TryRetainCompatibleFlatPlan(replacement);
+        if (retained.HasError())
+            return Outcome::Failure(retained.ErrorValue());
+        if (retained.Value()) {
+            scheduler->PublishRetainedDecisionImage(agent, replacement);
+            slot.cookedPlan = std::move(replacement);
+            ++state->revision;
+            return Outcome::Success();
+        }
 
         const auto sceneRevision = state->revision;
         const auto scheduleRevision = scheduler->populationRevision_;

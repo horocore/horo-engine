@@ -107,6 +107,7 @@ namespace Horo::AI {
         ~DecisionGraphInstance();
 
     private:
+        friend class AiSceneRuntime;
         struct OccurrenceState;
         struct CallAdapter;
         struct ActionAdapter;
@@ -121,6 +122,11 @@ namespace Horo::AI {
         [[nodiscard]] static Result<std::unique_ptr<DecisionGraphInstance>> CreateReserved(
             std::shared_ptr<const CookedDecisionPlan> plan, std::shared_ptr<const DecisionNodeGeneration> providers,
             AiDecisionTaskReservation reservation, AiTaskOperationContext operation, std::shared_ptr<IDecisionQueryTaskBinder> queryTasks);
+        /** @brief Rebinds an executable-equivalent flat tree without discarding its mailbox or callback lease.
+         * @param candidate Current cooked revision of the same root.
+         * @return True after a no-callback compatible replacement, false for a safely restartable mismatch, or owner error.
+         * @pre The Scene owner has validated its exact predecessor and completed the current scheduler tick. */
+        [[nodiscard]] Result<bool> TryRetainCompatibleFlatPlan(const std::shared_ptr<const CookedDecisionPlan> &candidate);
         /** @brief Shares the exact evaluation path for traced and untraced steps. */
         [[nodiscard]] Result<AiTaskState> StepImpl(const DecisionGraphStepInput &input, DecisionStepTrace *trace);
         /** @brief Runs one admitted step using the existing evaluation and cancellation boundaries. */

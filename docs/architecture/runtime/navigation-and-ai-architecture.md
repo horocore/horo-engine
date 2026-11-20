@@ -2659,10 +2659,12 @@ the complete closure replacement transaction remains required by GAI-003.11.
 
 For an active Scene agent in deterministic scheduling, the Scene owner can
 replace a flat cooked tree at a completed tick boundary. Admission checks the
-exact previous plan, the same root and Blackboard schema, and the fresh task
-interval before either owner publishes. The existing Blackboard values and read
-leases remain valid. After publication the previous tree retires with
-`PlanReplaced` and the new tree starts from its root on the next tick.
+exact previous plan and the same root and Blackboard schema. The existing
+Blackboard values and read leases remain valid. Compatible trees keep the
+original provider bindings, running task identities, and completion mailbox.
+Changes that require a restart reserve a fresh task interval before publication
+and retire the previous tree with `PlanReplaced`. Either path uses the new plan
+from the next tick.
 
 Scene-owned graph composition acquires its exclusive physical task range through
 `AiSceneRuntime::ReserveDecisionTaskSlotsAtSafePoint`. Compiler occurrence offsets

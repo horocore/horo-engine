@@ -576,14 +576,14 @@ namespace Horo::AI {
     /** @copydoc BehaviorTreeInstance::Replace(std::shared_ptr<const BehaviorTreeExecutionPlan>, std::unique_ptr<IBehaviorTreeExecutor>) */
     Result<bool> BehaviorTreeInstance::Replace(std::shared_ptr<const BehaviorTreeExecutionPlan> candidate,
                                                std::unique_ptr<IBehaviorTreeExecutor> replacementExecutor) {
+        if (!replacementExecutor) {
+            auto retained = TryRetainCompatiblePlan(candidate);
+            if (retained.HasError() || retained.Value())
+                return retained;
+        }
         if (auto admitted = AdmitReplacement(candidate, replacementExecutor.get()); admitted.HasError())
             return Result<bool>::Failure(admitted.ErrorValue());
         EvaluationGuard guard(evaluating_);
-        if (!replacementExecutor && plan_->IsCompatible(*candidate)) {
-            plan_ = std::move(candidate);
-            replacementTick_ = tick_;
-            return Result<bool>::Success(true);
-        }
         try {
             auto states = std::make_unique<NodeState[]>(candidate->Nodes().size());
             auto services = std::make_unique<ServiceState[]>(candidate->Services().size());
@@ -602,6 +602,18 @@ namespace Horo::AI {
         } catch (const std::bad_alloc &) {
             return Failure<bool>(AIErrors::BehaviorTreeStorageUnavailable);
         }
+    }
+
+    /** @copydoc BehaviorTreeInstance::TryRetainCompatiblePlan */
+    Result<bool> BehaviorTreeInstance::TryRetainCompatiblePlan(const std::shared_ptr<const BehaviorTreeExecutionPlan> &candidate) {
+        if (!candidate || !plan_->IsCompatible(*candidate))
+            return Result<bool>::Success(false);
+        if (auto admitted = AdmitReplacement(candidate, nullptr); admitted.HasError())
+            return Result<bool>::Failure(admitted.ErrorValue());
+        EvaluationGuard guard(evaluating_);
+        plan_ = candidate;
+        replacementTick_ = tick_;
+        return Result<bool>::Success(true);
     }
 
     /** @copydoc BehaviorTreeInstance::AdmitReplacement */

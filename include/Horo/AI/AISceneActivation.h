@@ -399,13 +399,14 @@ namespace Horo::AI {
          */
         [[nodiscard]] Result<void> ActivateCookedDecisionsAtSafePoint(AiSceneCookedDecisionExecution execution);
 
-        /** @brief Replaces one flat cooked decision at the owner's completed tick boundary and restarts from its root.
+        /** @brief Replaces one flat cooked decision at the owner's completed tick boundary.
          * @param agent Exact active Scene agent generation.
          * @param previous Exact currently published cooked plan and image owner.
          * @param replacement Current compiled revision of the same root and exact admitted Blackboard schema.
          * @return Success or a typed rejection preserving the prior decision, Blackboard and task range.
-         * @details The same Blackboard instance retains its values and read leases. A change may retire active nodes with
-         * PlanReplaced. New callbacks first run on the next tick. Composed decisions and schema migration are not admitted.
+         * @details Executable-equivalent plans retain active tasks and their existing callbacks. An incompatible accepted edit
+         * retires active nodes with PlanReplaced and restarts the root. The same Blackboard retains its values and read leases.
+         * Either path starts evaluating the new plan on the next tick. Composed decisions and schema migration are not admitted.
          * @pre Actual Scene owner lane, before the first evaluation or after the current intent dispatch. */
         [[nodiscard]] Result<void> ReplaceCookedDecisionAtSafePoint(AgentHandle agent, std::shared_ptr<const CookedDecisionPlan> previous,
                                                                     std::shared_ptr<const CookedDecisionPlan> replacement);

@@ -325,6 +325,8 @@ namespace Horo::AI {
     private:
         friend class BehaviorTreeExecutionPlan;
         friend class DecisionGraphInstance;
+        /** @brief Tries only the compatible no-callback branch, leaving incompatible state untouched. */
+        [[nodiscard]] Result<bool> TryRetainCompatiblePlan(const std::shared_ptr<const BehaviorTreeExecutionPlan> &candidate);
         /** @brief Validates replacement ownership, schema, task range and executor binding before any cancellation. */
         [[nodiscard]] Result<void> AdmitReplacement(const std::shared_ptr<const BehaviorTreeExecutionPlan> &candidate,
                                                     const IBehaviorTreeExecutor *replacementExecutor) const;

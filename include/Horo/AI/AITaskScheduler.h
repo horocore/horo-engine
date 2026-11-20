@@ -346,8 +346,12 @@ namespace Horo::AI {
 
     private:
         friend class AiSceneRuntime;
-        /** @brief Rejects a noncommitted tick or a different registered plan image before Scene candidate construction. */
-        [[nodiscard]] Result<void> ValidateDecisionReplacement(AgentHandle agent, const std::shared_ptr<const void> &previousImage);
+        /** @brief Borrows the evaluator only for an exact registered image at an eligible decision replacement boundary. */
+        [[nodiscard]] Result<IAiScheduledDecision *> ValidateDecisionReplacement(AgentHandle agent,
+                                                                                 const std::shared_ptr<const void> &previousImage);
+        /** @brief Rebinds the validated existing evaluator to its compatible plan without retiring the executor.
+         * @pre ValidateDecisionReplacement immediately preceded a no-callback compatible plan update. */
+        void PublishRetainedDecisionImage(AgentHandle agent, std::shared_ptr<const void> image) noexcept;
         /** @brief Reserves one exact same-agent decision replacement for the Scene owner's aggregate commit. */
         [[nodiscard]] Result<std::unique_ptr<PopulationChange>> PrepareDecisionReplacement(
             const AiScheduledDecisionRegistration &replacement, const std::shared_ptr<const void> &previousImage);

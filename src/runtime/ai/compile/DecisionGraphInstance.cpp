@@ -167,6 +167,38 @@ namespace Horo::AI {
                !binding_.operation.IsCancellationRequested();
     }
 
+    /** @copydoc DecisionGraphInstance::TryRetainCompatibleFlatPlan */
+    Result<bool> DecisionGraphInstance::TryRetainCompatibleFlatPlan(const std::shared_ptr<const CookedDecisionPlan> &candidate) {
+        using Retained = Result<bool>;
+        if (!candidate || std::this_thread::get_id() != owner_ || evaluating_)
+            return Invalid<bool>(AIErrors::DecisionAssetActivationInvalid);
+        if (!Available() || plan_->Occurrences().size() != 1 || candidate->Occurrences().size() != 1 ||
+            candidate->Root() != plan_->Root() || candidate->providers_ != plan_->providers_ ||
+            candidate->providers_.owner_before(plan_->providers_) || plan_->providers_.owner_before(candidate->providers_) ||
+            candidate->Capabilities() != plan_->Capabilities())
+            return Retained::Success(false);
+
+        const auto &existing = plan_->Graphs()[plan_->Occurrences().front().plan];
+        const auto &next = candidate->Graphs()[candidate->Occurrences().front().plan];
+        auto &state = *occurrences_.front();
+        const auto *tree = std::get_if<std::shared_ptr<const BehaviorTreeExecutionPlan>>(&next.execution);
+        if (!state.tree || !tree || plan_->Storage().taskSlots != candidate->Storage().taskSlots ||
+            next.schemaVersion != existing.schemaVersion || next.executionTask != existing.executionTask ||
+            plan_->Occurrences().front().firstTaskSlot != candidate->Occurrences().front().firstTaskSlot)
+            return Retained::Success(false);
+        const auto sameProperties =
+            std::ranges::equal(existing.providerProperties, next.providerProperties, [](const auto &left, const auto &right) {
+            return left.node == right.node && left.properties == right.properties;
+        });
+        if (!sameProperties)
+            return Retained::Success(false);
+
+        const auto replaced = state.tree->TryRetainCompatiblePlan(*tree);
+        if (replaced.HasValue() && replaced.Value())
+            plan_ = candidate;
+        return replaced;
+    }
+
     /** @copydoc DecisionGraphInstance::TraceOccurrence */
     DecisionTraceOccurrence DecisionGraphInstance::TraceOccurrence(const std::size_t index) const noexcept {
         const auto &occurrence = plan_->Occurrences()[index];

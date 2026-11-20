@@ -377,15 +377,23 @@ namespace Horo::AI {
     }
 
     /** @copydoc AiTaskScheduler::ValidateDecisionReplacement */
-    Result<void> AiTaskScheduler::ValidateDecisionReplacement(const AgentHandle agent, const std::shared_ptr<const void> &previousImage) {
+    Result<IAiScheduledDecision *> AiTaskScheduler::ValidateDecisionReplacement(const AgentHandle agent,
+                                                                                const std::shared_ptr<const void> &previousImage) {
+        using Validated = Result<IAiScheduledDecision *>;
         if (!CanChangePopulation(true) || settings_.mode != AiSchedulingMode::Deterministic ||
             report_.tick == std::numeric_limits<std::uint64_t>::max())
-            return Result<void>::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
+            return Validated::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
         const auto *entry = Find(agent);
         if (!entry || !previousImage || entry->image != previousImage || entry->image.owner_before(previousImage) ||
             previousImage.owner_before(entry->image) || entry->cancellation.IsCancellationRequested())
-            return Result<void>::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
-        return Result<void>::Success();
+            return Validated::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
+        return Validated::Success(entry->executor.get());
+    }
+
+    /** @copydoc AiTaskScheduler::PublishRetainedDecisionImage */
+    void AiTaskScheduler::PublishRetainedDecisionImage(const AgentHandle agent, std::shared_ptr<const void> image) noexcept {
+        Find(agent)->image = std::move(image);
+        ++populationRevision_;
     }
 
     /** @copydoc AiTaskScheduler::PrepareDecisionReplacement */
