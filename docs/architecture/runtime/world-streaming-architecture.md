@@ -2230,6 +2230,17 @@ Retirement observes actual parent shutdown before acknowledging the cell. Missin
 content, external asset dependencies, hard co-load requirements, compressed cells,
 and unsupported providers reject startup before mode publication.
 
+The standalone host can instead request one live cell with
+`--world-live-cell <x> <y> <z> <lod> <layer> <occurrence> <definition> <revision>
+<frame-ns> <unit-ns> <maximum-entities>`. Preparation runs on the existing job
+owner and activation and removal use the ordinary Scene structural cutoff.
+`--world-live-assets <maximum-assets> <maximum-encoded-bytes>` additionally admits
+the cell's named asset closure. The worker checks types against the pinned project
+registry and reads the exact committed World's verified envelopes. Asset leases
+remain with the structural group through native retirement. Hard co-load
+requirements, other payload providers and in-frame replacement remain unsupported
+by this single-cell route.
+
 Archive installation, ongoing gameplay-driven scheduling, multi-cell activation,
 gameplay focal positions and XR view projection require separate host composition.
 

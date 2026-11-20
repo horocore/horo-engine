@@ -1,5 +1,6 @@
 #include "MountedWorldHost.h"
 
+#include "Horo/Assets/AssetPayloadCache.h"
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Runtime/RuntimeDispatchEvidence.h"
@@ -333,13 +334,11 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Admit the committed cell's single supported provider against its independent authored identity. */
-        Result<Runtime::RuntimeSceneCellPayload> DecodeInitialCell(const Assets::MemoryAssetProvider &provider,
-                                                                   const WS::WorldPartitionDescriptor &partition,
-                                                                   const WS::WorldPartitionCellDescriptor &cell,
-                                                                   const WS::CookedWorldCellManifestEntry &metadata,
-                                                                   const Runtime::SceneCellPayloadIdentity &identity,
-                                                                   const CancellationToken &cancellation,
-                                                                   const std::size_t maximumEntities = 65536) {
+        Result<Runtime::RuntimeSceneCellPayload> DecodeCell(
+            const Assets::MemoryAssetProvider &provider, const WS::WorldPartitionDescriptor &partition,
+            const WS::WorldPartitionCellDescriptor &cell, const WS::CookedWorldCellManifestEntry &metadata,
+            const Runtime::SceneCellPayloadIdentity &identity, const CancellationToken &cancellation,
+            const std::size_t maximumEntities = 65536, const std::size_t maximumAssets = MaximumCells) {
             using Output = Result<Runtime::RuntimeSceneCellPayload>;
             const auto bytes = provider.Load(cell.package.chunkAsset, cancellation);
             if (bytes.HasError())
@@ -358,8 +357,77 @@ namespace Horo::Application::Internal {
             if (!Runtime::MatchesSceneCellPayloadWireVersion(body, core.version))
                 return Output::Failure(MakeError(Runtime::SceneCellPayloadErrors::Unsupported));
             return Runtime::DecodeSceneCellPayload(partition, body, identity, {}, {},
-                                                   {MaximumCellBytes, MaximumCellBytes, {maximumEntities, MaximumCells, MaximumCellBytes}},
+                                                   {MaximumCellBytes, MaximumCellBytes, {maximumEntities, maximumAssets, MaximumCellBytes}},
                                                    cancellation);
+        }
+
+        struct MountedCellAsset final {
+            Assets::AssetId id;
+            std::vector<std::uint8_t> envelope;
+        };
+
+        /** @brief Transfer already verified immutable envelopes from the selected commit to the worker-visible inventory. */
+        std::vector<MountedCellAsset> CaptureCellAssets(Assets::AssetCookGenerationContents &contents) {
+            std::vector<MountedCellAsset> assets;
+            for (std::size_t index = 0; index < contents.entries.size(); ++index) {
+                const auto &entry = contents.entries[index];
+                const auto type = entry.assetType.Value();
+                if (type == "world.index" || type == "world.dependencies" || type == "world.cell")
+                    continue;
+                assets.emplace_back(entry.assetId, std::move(contents.artifacts[index]));
+            }
+            return assets;
+        }
+
+        struct PreparedLiveCell final {
+            Runtime::RuntimeSceneCellPayload payload;
+            std::vector<Runtime::RuntimeGroupAssetLease> resources;
+        };
+
+        /** @brief Resolves every declared dependency against the pinned registry and the exact committed World envelopes. */
+        Result<std::vector<Runtime::RuntimeGroupAssetLease>> PrepareCellAssets(std::span<const Runtime::SceneAssetDependency> dependencies,
+                                                                               std::span<const MountedCellAsset> inventory,
+                                                                               const Assets::AssetRegistrySnapshot &registry,
+                                                                               const Assets::AssetCookTargetId &target,
+                                                                               const MountedWorldLiveLimits &limits,
+                                                                               const CancellationToken &cancellation) {
+            using Output = Result<std::vector<Runtime::RuntimeGroupAssetLease>>;
+            if (dependencies.empty())
+                return Output::Success({});
+            if (limits.maximumCellAssets == 0)
+                return Output::Failure(MakeError(Runtime::SceneCellPayloadErrors::Unsupported));
+            if (dependencies.size() > limits.maximumCellAssets)
+                return Output::Failure(MakeError(Runtime::SceneCellPayloadErrors::CapacityExceeded));
+            auto cache = Assets::AssetPayloadCache::Create(dependencies.size(), limits.maximumCellAssetBytes);
+            if (cache.HasError())
+                return Output::Failure(cache.ErrorValue());
+            std::vector<Runtime::RuntimeGroupAssetLease> leases;
+            leases.reserve(dependencies.size());
+            std::size_t remaining = limits.maximumCellAssetBytes;
+            for (const auto &dependency : dependencies) {
+                if (cancellation.IsCancellationRequested())
+                    return Output::Failure(MakeError(WS::WorldArtifactErrors::Cancelled));
+                const auto *record = registry.Find(dependency.id);
+                const auto found = std::ranges::lower_bound(inventory, dependency.id, {}, &MountedCellAsset::id);
+                if (!record || record->type != dependency.expectedType || found == inventory.end() || found->id != dependency.id)
+                    return Output::Failure(
+                        MakeError(WS::WorldArtifactErrors::Invalid, "A mounted cell asset is absent or has the wrong type."));
+                if (found->envelope.size() > remaining)
+                    return Output::Failure(MakeError(Runtime::SceneCellPayloadErrors::CapacityExceeded));
+                auto decoded = Assets::DecodeCookedArtifact(found->envelope, CookLimits);
+                if (decoded.HasError())
+                    return Output::Failure(decoded.ErrorValue());
+                if (decoded.Value().target != target || decoded.Value().type != dependency.expectedType ||
+                    decoded.Value().id != dependency.id)
+                    return Output::Failure(
+                        MakeError(WS::WorldArtifactErrors::Invalid, "A mounted cell asset does not match the World target."));
+                auto lease = cache.Value()->Admit(std::as_bytes(std::span{found->envelope}));
+                if (lease.HasError())
+                    return Output::Failure(lease.ErrorValue());
+                remaining -= found->envelope.size();
+                leases.emplace_back(dependency, std::move(lease).Value());
+            }
+            return Output::Success(std::move(leases));
         }
 
         struct AnchoredGeometryEntity final {
@@ -541,24 +609,27 @@ namespace Horo::Application::Internal {
         struct LiveLoad final {
             JobHandle job;
             // Only the worker writes the slot. The owner reads it after the job record publishes terminal status.
-            std::shared_ptr<std::optional<Runtime::RuntimeSceneCellPayload>> payload;
+            std::shared_ptr<std::optional<PreparedLiveCell>> payload;
         };
 
         struct LiveStreaming final {
             Runtime::RuntimeDispatchSource dispatch;
             const JobSystem &jobs;
             MountedWorldLiveLimits limits;
+            Assets::AssetRegistrySnapshot assets;
             std::uint64_t lastFrame{};
             std::uint64_t nextIdentity{4}; /**< Distinct from the three cold-start operations. */
             std::optional<LiveDemand> demand;
             std::optional<ActiveCell> candidate;
             std::optional<LiveLoad> load;
-            std::shared_ptr<std::optional<Runtime::RuntimeSceneCellPayload>> prepared;
+            std::shared_ptr<std::optional<PreparedLiveCell>> prepared;
             std::optional<WS::StreamingSchedulerReservation> reservation;
             std::optional<Runtime::SceneInstanceOperation> attachment;
             std::optional<Runtime::SceneInstanceOperation> removal;
         };
 
+        Assets::AssetCookTargetId target;
+        std::shared_ptr<const std::vector<MountedCellAsset>> committedAssets;
         std::optional<LiveStreaming> live;
 
         [[nodiscard]] Result<MountedWorldLiveCellState> StartLiveLoad(const Runtime::RuntimeSceneView &parent);
@@ -584,7 +655,8 @@ namespace Horo::Application::Internal {
                                                                 const CancellationToken &cancellation) {
         using Output = Result<std::unique_ptr<MountedWorld>>;
         if (generation == 0 || !selection.targetRoot.is_absolute() || !selection.target.IsValid() || !selection.index.IsValid() ||
-            !selection.dependencies.IsValid() || selection.index == selection.dependencies)
+            !selection.dependencies.IsValid() || selection.index == selection.dependencies ||
+            (selection.liveCell && !selection.liveCell->limits.IsValid()))
             return Output::Failure(MakeError(WS::WorldArtifactErrors::Invalid));
         if (cancellation.IsCancellationRequested())
             return Output::Failure(MakeError(WS::WorldArtifactErrors::Cancelled));
@@ -596,11 +668,12 @@ namespace Horo::Application::Internal {
             return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale, "The selected committed World manifest or target changed."));
         if (cancellation.IsCancellationRequested())
             return Output::Failure(MakeError(WS::WorldArtifactErrors::Cancelled));
-        const auto contents = Assets::ReadCookGenerationContents(files, published.Value(), MaximumBytes, CookLimits);
+        auto contents = Assets::ReadCookGenerationContents(files, published.Value(), MaximumBytes, CookLimits);
         if (contents.HasError())
             return Output::Failure(contents.ErrorValue());
+        auto inventory = std::move(contents).Value();
 
-        const auto indexArtifact = ReadArtifact(contents.Value(), selection.target, selection.index, "world.index");
+        const auto indexArtifact = ReadArtifact(inventory, selection.target, selection.index, "world.index");
         if (indexArtifact.HasError())
             return Output::Failure(indexArtifact.ErrorValue());
         auto index = WS::DecodeWorldIndexArtifact(std::as_bytes(std::span{indexArtifact.Value().payload}), IndexLimits, cancellation);
@@ -608,7 +681,7 @@ namespace Horo::Application::Internal {
             return Output::Failure(index.ErrorValue());
         if (index.Value().coordinates != WS::WorldIndexCoordinateSystem::RightHandedYUp)
             return Output::Failure(MakeError(WS::WorldArtifactErrors::Unsupported, "Standalone World mounting requires Horo world axes."));
-        const auto bundle = ReadArtifact(contents.Value(), selection.target, selection.dependencies, "world.dependencies");
+        const auto bundle = ReadArtifact(inventory, selection.target, selection.dependencies, "world.dependencies");
         if (bundle.HasError())
             return Output::Failure(bundle.ErrorValue());
         auto dependencies = WS::DecodeWorldDependencyArtifact(std::as_bytes(std::span{bundle.Value().payload}), index.Value(),
@@ -617,8 +690,11 @@ namespace Horo::Application::Internal {
             return Output::Failure(dependencies.ErrorValue());
 
         auto state = std::make_unique<State>(scene);
-        if (auto loaded = LoadCells(*state->cells, contents.Value(), selection.target, index.Value(), cancellation); loaded.HasError())
+        if (auto loaded = LoadCells(*state->cells, inventory, selection.target, index.Value(), cancellation); loaded.HasError())
             return Output::Failure(loaded.ErrorValue());
+        state->target = selection.target;
+        if (selection.liveCell && selection.liveCell->limits.maximumCellAssets != 0)
+            state->committedAssets = std::make_shared<const std::vector<MountedCellAsset>>(CaptureCellAssets(inventory));
         state->dependencies.emplace(std::move(dependencies).Value());
         state->integrity = std::move(index).Value().cells;
         const WS::StreamingRuntimeOwnerToken owner{index.Value().descriptor.Partition(), Identity<WS::PartitionEpoch>(generation),
@@ -717,8 +793,7 @@ namespace Horo::Application::Internal {
         std::optional<Runtime::RuntimeSceneCellPayload> payload;
         const auto loaded = RunCellOperation(scheduler, *residency, {Identity<WS::StreamingCellOperationId>(1), fence},
                                              WS::StreamingCellOperationKind::Load, {BeginPreparation}, Complete, [&](const auto &) {
-            auto decoded =
-                DecodeInitialCell(*cells, *partition.Value().Descriptor(), *record.Value(), *metadata, identity, boundary.cancellation);
+            auto decoded = DecodeCell(*cells, *partition.Value().Descriptor(), *record.Value(), *metadata, identity, boundary.cancellation);
             if (decoded.HasError())
                 return Result<void>::Failure(decoded.ErrorValue());
             if (!decoded.Value().Definition().AssetDependencies().empty())
@@ -1029,18 +1104,24 @@ namespace Horo::Application::Internal {
             return RejectLive(reserved.ErrorValue());
         live->reservation = reserved.Value();
         live->candidate.emplace(fence, address, identity);
-        auto loaded = std::make_shared<std::optional<Runtime::RuntimeSceneCellPayload>>();
+        auto loaded = std::make_shared<std::optional<PreparedLiveCell>>();
+        const auto maximumDependencies = live->limits.maximumCellAssets ? live->limits.maximumCellAssets : MaximumCells;
         const JobProducerScope noBlocking{JobProducerRole::MainEditor};
         auto job = live->jobs.SubmitResult({.parentCancellation = demand.lifetime.Token(), .requirement = JobRequirement::Optional},
                                            [loaded, provider = std::shared_ptr<const Assets::MemoryAssetProvider>{cells},
                                             snapshot = partition.Value(), cell = *descriptor.Value(), metadata = *metadata, identity,
-                                            maximumEntities = live->limits.maximumCellEntities](const CancellationToken &cancel) {
-            auto decoded = DecodeInitialCell(*provider, *snapshot.Descriptor(), cell, metadata, identity, cancel, maximumEntities);
+                                            assets = committedAssets, registry = live->assets, target = target, limits = live->limits,
+                                            maximumDependencies](const CancellationToken &cancel) {
+            auto decoded = DecodeCell(*provider, *snapshot.Descriptor(), cell, metadata, identity, cancel, limits.maximumCellEntities,
+                                      maximumDependencies);
             if (decoded.HasError())
                 return Result<void>::Failure(decoded.ErrorValue());
-            if (!decoded.Value().Definition().AssetDependencies().empty())
-                return Result<void>::Failure(MakeError(Runtime::SceneCellPayloadErrors::Unsupported));
-            loaded->emplace(std::move(decoded).Value());
+            const auto inventory = assets ? std::span<const MountedCellAsset>{*assets} : std::span<const MountedCellAsset>{};
+            auto resources =
+                PrepareCellAssets(decoded.Value().Definition().AssetDependencies(), inventory, registry, target, limits, cancel);
+            if (resources.HasError())
+                return Result<void>::Failure(resources.ErrorValue());
+            loaded->emplace(std::move(decoded).Value(), std::move(resources).Value());
             return Result<void>::Success();
         });
         if (job.HasError())
@@ -1082,6 +1163,8 @@ namespace Horo::Application::Internal {
         const auto &cell = *live->candidate;
         if (parent.RuntimeId() != cell.address.parent)
             return RejectLive(MakeError(Runtime::SceneCellPayloadErrors::Stale));
+        if (!live->prepared->value().resources.empty() && parent.AssetRegistryRevision() != live->assets.Revision())
+            return RejectLive(MakeError(Runtime::SceneCellPayloadErrors::Stale));
         const auto operation = IssueLiveOperation();
         if (operation.HasError())
             return RejectLive(operation.ErrorValue());
@@ -1102,14 +1185,17 @@ namespace Horo::Application::Internal {
         const Runtime::SceneCellAttachmentRequest request{.runtime = cell.address.parent,
                                                           .fence = cell.fence,
                                                           .registry = parent.AssetRegistryRevision(),
-                                                          .limits = {1, live->limits.maximumCellEntities, 1},
+                                                          .limits = {1, live->limits.maximumCellEntities,
+                                                                     std::max<std::size_t>(1, live->limits.maximumCellAssets)},
                                                           .cancellation = demand.cancellation,
                                                           .ownerCancellation = demand.lifetime.Token()};
         const auto authority =
             std::make_shared<const InitialCellAuthority>(cell.identity, *residency, scheduler, activated.Value(),
                                                          MountedWorldStartup{demand.lifetime.Token(),
                                                                              std::chrono::steady_clock::time_point::max()});
-        auto queued = Runtime::QueueStreamedSceneInstance(scene, cell.address, live->prepared->value(), request, {}, authority);
+        auto &prepared = live->prepared->value();
+        auto queued =
+            Runtime::QueueStreamedSceneInstance(scene, cell.address, prepared.payload, request, std::move(prepared.resources), authority);
         if (queued.HasError())
             return RejectLive(queued.ErrorValue());
         live->attachment.emplace(std::move(queued).Value());
@@ -1215,16 +1301,18 @@ namespace Horo::Application::Internal {
     /** @copydoc MountedWorldLiveLimits::IsValid */
     bool MountedWorldLiveLimits::IsValid() const noexcept {
         return maximumUnitNanoseconds > 0 && maximumUnitNanoseconds < maximumFrameNanoseconds && maximumCellEntities > 0 &&
-               maximumCellEntities <= 65536;
+               maximumCellEntities <= 65536 && maximumCellAssets <= MaximumCells && maximumCellAssetBytes <= MaximumCellBytes &&
+               (maximumCellAssets == 0) == (maximumCellAssetBytes == 0);
     }
 
     /** @copydoc MountedWorld::BindLiveCell */
     Result<void> MountedWorld::BindLiveCell(const Runtime::RuntimeDispatchSource &dispatch, const JobSystem &jobs,
-                                            const MountedWorldLiveLimits &limits) {
+                                            const MountedWorldLiveLimits &limits, Assets::AssetRegistrySnapshot assets) {
         if (std::this_thread::get_id() != state_->ownerThread || dispatch.BindingStatus() != Runtime::RuntimeDispatchStatus::Valid ||
-            state_->initialAttempted || state_->live || !limits.IsValid())
+            state_->initialAttempted || state_->live || !limits.IsValid() ||
+            (limits.maximumCellAssets != 0 && (!state_->committedAssets || assets.Revision().value == 0)))
             return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Invalid));
-        state_->live.emplace(dispatch, jobs, limits);
+        state_->live.emplace(dispatch, jobs, limits, std::move(assets));
         return Result<void>::Success();
     }
 

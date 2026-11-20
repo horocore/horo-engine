@@ -46,6 +46,7 @@ namespace Horo::WorldCook::PublicationTestSupport {
         W::WorldDependencyPlan dependencies{Dependencies(assignments)};
         std::array<S::RuntimeEntityDefinition, 2> entities{{{.object = {11}}, {.object = {22}}}};
         std::array<S::SceneCellCookInput, 2> inputs{Inputs(entities)};
+        std::vector<S::SceneCellCookDependency> dependencyArtifacts;
         std::vector<ObjectBinding> objects{SpatialObjectBinding{Endpoint(1), W::CandidateTestSupport::Cell(-1), {11}},
                                            SpatialObjectBinding{Endpoint(2), W::CandidateTestSupport::Cell(), {22}}};
         A::AssetChunkPlan packages{Packages()};
@@ -121,8 +122,20 @@ namespace Horo::WorldCook::PublicationTestSupport {
         }
 
         SourceCapture Source() const {
-            return {world.manifest.Descriptor(),     assignments, placements,       dependencies,      inputs, {}, objects, {},
-                    W::CandidateTestSupport::Hash(), 1,           cache.Revision(), "Canonical world", {},     {}};
+            return {world.manifest.Descriptor(),
+                    assignments,
+                    placements,
+                    dependencies,
+                    inputs,
+                    dependencyArtifacts,
+                    objects,
+                    {},
+                    W::CandidateTestSupport::Hash(),
+                    1,
+                    cache.Revision(),
+                    "Canonical world",
+                    {},
+                    {}};
         }
 
         ReleaseCapture Release() const {

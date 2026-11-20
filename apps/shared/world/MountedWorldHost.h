@@ -65,6 +65,8 @@ namespace Horo::Application::Internal {
         std::uint64_t maximumFrameNanoseconds{};
         std::uint64_t maximumUnitNanoseconds{};
         std::size_t maximumCellEntities{};
+        std::size_t maximumCellAssets{};     /**< Zero disables external resources for this mount. */
+        std::size_t maximumCellAssetBytes{}; /**< Maximum encoded bytes retained by one cell's asset leases. */
 
         /** @brief Returns whether a complete bounded cell unit can be admitted with positive frame headroom. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -185,12 +187,13 @@ namespace Horo::Application::Internal {
          * @param dispatch Exact canonical RuntimeHost dispatcher for this Scene owner.
          * @param jobs Existing bounded worker owner, which must outlive this mount's retirement.
          * @param limits Complete explicit preparation and owner-frame work limits.
+         * @param assets Pinned project asset registry for mounts admitting external dependencies.
          * @return Success, or typed denial without accessing Scene or starting work.
          * @pre Bind and advance on the Scene owner lane. Withdraw and drain at the ordinary structural cutoff before
          * replacing the Scene. Destroy an undrained mount only at the cold owner boundary, outside worker callbacks.
          */
         [[nodiscard]] Result<void> BindLiveCell(const Runtime::RuntimeDispatchSource &dispatch, const JobSystem &jobs,
-                                                const MountedWorldLiveLimits &limits);
+                                                const MountedWorldLiveLimits &limits, Assets::AssetRegistrySnapshot assets = {});
 
         /** @brief Admit an exact selected cell as demand; the structural frame owns worker submission.
          * @param selected Exact validated mount cell, independent authored occurrence, definition and revision.

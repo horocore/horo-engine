@@ -425,7 +425,9 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (const auto &live = input.mountedWorld->liveCell) {
                 if (!owners_->fixed || !input.worldJobs)
                     return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Invalid));
-                if (auto bound = world.Value()->BindLiveCell(owners_->fixed->Source(), *input.worldJobs, live->limits); bound.HasError())
+                if (auto bound =
+                        world.Value()->BindLiveCell(owners_->fixed->Source(), *input.worldJobs, live->limits, input.registry.Snapshot());
+                    bound.HasError())
                     return bound;
                 if (live->firstDemand)
                     if (auto requested = world.Value()->RequestLiveCell(*live->firstDemand, record_->sceneCancellation);

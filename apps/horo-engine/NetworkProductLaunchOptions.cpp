@@ -317,6 +317,29 @@ namespace Horo::Application::Internal {
             return selected;
         }
 
+        /** @brief Parses one exact numeric argument without accepting suffixes or overflow. */
+        bool ReadNumber(const std::string_view text, auto &value) {
+            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+            return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
+        }
+
+        struct LiveAssetBudget final {
+            std::size_t count{};
+            std::size_t bytes{};
+        };
+
+        /** @brief Parses exact external resource limits for the selected live cell. */
+        Result<LiveAssetBudget> ReadWorldLiveAssets(const std::span<char *> arguments, std::size_t &index) {
+            using Output = Result<LiveAssetBudget>;
+            LiveAssetBudget budget;
+            if (arguments.size() - index <= 2 || !ReadNumber(arguments[index + 1], budget.count) ||
+                !ReadNumber(arguments[index + 2], budget.bytes) || budget.count == 0 || budget.bytes == 0)
+                return Output::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Use --world-live-assets <maximum-assets> <maximum-encoded-bytes>."));
+            index += 3;
+            return Output::Success(budget);
+        }
+
         /** @brief Parses an exact first live demand and explicit owner limits without admitting a cook or Scene. */
         Result<CommittedWorldLiveSelection> ReadWorldLiveCell(const std::span<char *> arguments, std::size_t &index) {
             using Output = Result<CommittedWorldLiveSelection>;
@@ -328,15 +351,11 @@ namespace Horo::Application::Internal {
             auto selected = ParseCommittedWorldInitialCell(arguments.subspan(index + 1, CommittedWorldCellArgumentCount));
             if (selected.HasError())
                 return Output::Failure(selected.ErrorValue());
-            const auto number = [](const std::string_view text, auto &value) {
-                const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
-                return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
-            };
             const auto limitsBegin = index + 1 + CommittedWorldCellArgumentCount;
             MountedWorldLiveLimits limits;
-            if (!number(arguments[limitsBegin], limits.maximumFrameNanoseconds) ||
-                !number(arguments[limitsBegin + 1], limits.maximumUnitNanoseconds) ||
-                !number(arguments[limitsBegin + 2], limits.maximumCellEntities) || !limits.IsValid())
+            if (!ReadNumber(arguments[limitsBegin], limits.maximumFrameNanoseconds) ||
+                !ReadNumber(arguments[limitsBegin + 1], limits.maximumUnitNanoseconds) ||
+                !ReadNumber(arguments[limitsBegin + 2], limits.maximumCellEntities) || !limits.IsValid())
                 return Output::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "Invalid live World frame or entity limits."));
             index += 1 + count;
             return Output::Success({limits, std::move(selected).Value()});
@@ -401,6 +420,7 @@ namespace Horo::Application::Internal {
             std::optional<bool> prefabGrant;
             std::optional<CommittedWorldInitialCell> initialCell;
             std::optional<CommittedWorldLiveSelection> liveCell;
+            std::optional<LiveAssetBudget> liveAssets;
             for (std::size_t index = 0; index < arguments.size();) {
                 const std::string_view key{arguments[index]};
                 if (key == "--transport-qualification") {
@@ -445,6 +465,16 @@ namespace Horo::Application::Internal {
                     liveCell.emplace(std::move(selected).Value());
                     continue;
                 }
+                if (key == "--world-live-assets") {
+                    if (liveAssets)
+                        return Result<void>::Failure(
+                            MakeError(Net::NetworkErrors::NetworkModeInvalid, "The live World asset budget may be selected once."));
+                    auto budget = ReadWorldLiveAssets(arguments, index);
+                    if (budget.HasError())
+                        return Result<void>::Failure(budget.ErrorValue());
+                    liveAssets = budget.Value();
+                    continue;
+                }
                 if (key == "--world-mount") {
                     if (auto world = ReadWorldMount(arguments, index, launch); world.HasError())
                         return world;
@@ -485,11 +515,20 @@ namespace Horo::Application::Internal {
                         MakeError(Net::NetworkErrors::NetworkModeInvalid, "The startup World cell requires a committed World mount."));
                 launch.sceneInput.world->initialCell = initialCell;
             }
+            if (liveAssets) {
+                if (!liveCell)
+                    return Result<void>::Failure(
+                        MakeError(Net::NetworkErrors::NetworkModeInvalid, "Live World asset budgets require a selected live cell."));
+                liveCell->limits.maximumCellAssets = liveAssets->count;
+                liveCell->limits.maximumCellAssetBytes = liveAssets->bytes;
+            }
             if (liveCell) {
                 if (!launch.sceneInput.world || initialCell || launch.gameplay)
                     return Result<void>::Failure(
                         MakeError(Net::NetworkErrors::NetworkModeInvalid,
                                   "Live World demand requires a standalone mount without a startup cell or gameplay module."));
+                if (!liveCell->limits.IsValid())
+                    return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "Invalid live World asset limits."));
                 launch.sceneInput.world->liveCell = std::move(liveCell);
             }
             if (auto ai = ValidateCookedDecisions(launch); ai.HasError())

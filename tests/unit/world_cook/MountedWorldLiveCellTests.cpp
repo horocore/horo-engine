@@ -4,6 +4,8 @@
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/Platform.h"
+#include "Horo/Physics/PhysicsErrors.h"
+#include "Horo/Physics/PhysicsMaterialAsset.h"
 #include "Horo/Runtime/RuntimeHost.h"
 #include "Horo/Runtime/Scene/RuntimeSceneCellPayload.h"
 #include "Horo/WorldStreaming/WorldArtifactErrors.h"
@@ -220,6 +222,35 @@ namespace Horo::WorldCook {
             std::cout << stage << ",samples=" << samples.size() << ",p50_ns=" << percentile(50) << ",p95_ns=" << percentile(95)
                       << ",p99_ns=" << percentile(99) << ",max_ns=" << samples.back() << '\n';
         }
+
+        /** @brief Adds a verified material envelope and native collider declaration to one exact cell. */
+        void PopulateCellMaterial(Fixture &fixture, const A::AssetDependency &material) {
+            auto &entity = fixture.entities.front();
+            entity.components.rigidBody = S::RigidBodyComponent{.id = {10}, .body = {100}};
+            entity.components.colliders = {
+                Physics::Collider(20, 200, entity.object.value, 100, material.id,
+                                  S::PhysicsColliderSource{S::PhysicsAnalyticCollider{S::PhysicsSphereCollider{0.5F}}})};
+            fixture.inputs.front().source.dependencies = {&material, 1};
+            const auto descriptor = Physics::PhysicsMaterialAsset::Create(
+                {.id = Physics::PhysicsMaterialAssetId::FromAssetId(material.id), .sourceRevision = 1});
+            REQUIRE(descriptor.HasValue());
+            const auto encoded = Physics::EncodePhysicsMaterialAsset(descriptor.Value());
+            REQUIRE(encoded.HasValue());
+            const auto digest = ComputeSha256(encoded.Value());
+            const auto bytes = A::EncodeCookedArtifact(
+                {material.id, material.expectedType, fixture.Release().target, digest, digest, digest,
+                 std::vector<std::uint8_t>(reinterpret_cast<const std::uint8_t *>(encoded.Value().data()),
+                                           reinterpret_cast<const std::uint8_t *>(encoded.Value().data() + encoded.Value().size()))});
+            REQUIRE(bytes.HasValue());
+            fixture.baseArtifacts.push_back(bytes.Value());
+            fixture.dependencyArtifacts.push_back({.id = material.id, .content = T::DigestOf(bytes.Value()), .revision = 1});
+            const std::array chunks{A::AssetChunkDefinition{A::AssetChunkId::Parse("base").Value(),
+                                                            A::AssetChunkKind::Base,
+                                                            {Asset(4), Asset(5), Asset(6), Asset(7), material.id}}};
+            auto packages = A::AssetChunkPlan::Create(chunks);
+            REQUIRE(packages.HasValue());
+            fixture.packages = std::move(packages).Value();
+        }
     }  // namespace
 
     TEST_CASE("Mounted World streams a verified cell through the real structural cutoff and detaches only its occurrence",
@@ -364,6 +395,126 @@ namespace Horo::WorldCook {
             product.CheckTravelRefusal();
             static_cast<void>(product.UntilAttached(true));
         }
+    }
+
+    TEST_CASE("Mounted live cell admits committed asset leases before native body publication and retires both at cutoff",
+              "[world_cook][native][mounted_world][live_cell]") {
+        auto runtime = Physics::PhysicsRuntime::Create(Physics::PhysicsRuntimeMode::Canonical);
+        if (runtime.HasError() && runtime.ErrorValue().code.Value() == Physics::PhysicsErrors::CapabilityUnavailable.code.Value())
+            SKIP("The native Physics provider is omitted from this test build.");
+        REQUIRE(runtime.HasValue());
+        const A::AssetDependency material{Asset(9), Physics::AssetType()};
+        Fixture fixture{false, false};
+        PopulateCellMaterial(fixture, material);
+        const auto published = fixture.Publish();
+        if (published.HasError())
+            UNSCOPED_INFO(published.ErrorValue().code.Value() << ": " << published.ErrorValue().message);
+        REQUIRE(published.HasValue());
+        REQUIRE(published.Value().publication);
+        const auto release = fixture.Release();
+        const auto identity = fixture.inputs.front().expected;
+        const CommittedWorldInitialCell request{identity.cell, {900}, identity.scene, identity.revision};
+        MountedWorldLiveLimits limits{20'000'000, 1'000'000, 4, 1, fixture.baseArtifacts.front().size()};
+        bool expectCapacity{};
+        SECTION("One byte less than the exact envelope never publishes resources or native bodies") {
+            --limits.maximumCellAssetBytes;
+            expectCapacity = true;
+        }
+        SECTION("The complete envelope is retained through a native attach and exact detach receipt") {}
+        const CommittedWorldSelection selection{release.targetRoot,
+                                                release.target,
+                                                published.Value().publication->manifestDigest,
+                                                release.indexArtifact,
+                                                release.dependencyArtifact,
+                                                Math::WorldCoordinate64::FromMillimeters(0, 0, 0),
+                                                {},
+                                                CommittedWorldLiveSelection{limits, std::nullopt}};
+        JobSystem jobs{JobSystemConfig{1, 4}};
+        A::MemoryAssetProvider provider;
+        A::AssetLoadService loads{jobs, provider};
+        A::AssetRegistry registry;
+        REQUIRE(registry.Publish({Physics::Record(material.id, material.expectedType)}).status == A::AssetRegistryBuildStatus::Complete);
+        Physics::PhysicsSceneActivationAuthority authority;
+        ScenePhysicsHost native;
+        S::RuntimeSceneService scene{registry, loads, S::RuntimeSceneAssetLimits{}, S::SceneRuntimeId{101}};
+        auto activation = native.MakeParticipant(*runtime.Value(), authority, Physics::Settings());
+        REQUIRE(activation.HasValue());
+        REQUIRE(scene.AddActivationParticipant(std::move(activation).Value()).HasValue());
+        auto structural = native.MakeStructuralParticipant();
+        REQUIRE(structural.HasValue());
+        REQUIRE(scene.AddStructuralParticipant(std::move(structural).Value()).HasValue());
+        S::SceneDefinitionBuilder startup{{99}, {1}};
+        startup.Add({.object = {42}});
+        auto definition = std::move(startup).Build();
+        REQUIRE(definition.HasValue());
+        const HeadlessSceneLoadBoundary boundary{{}, std::chrono::steady_clock::now() + std::chrono::seconds(5)};
+        REQUIRE(PrepareHeadlessSceneAtLoadBoundary(scene, std::move(definition).Value(), boundary).HasValue());
+        REQUIRE(scene.ActiveScene());
+        const auto root = scene.ActiveScene()->RuntimeId();
+        const S::SceneInstanceAddress address{root, request.occurrence, request.definition, S::SceneInstanceMode::Streamed};
+        const auto epoch = IdentityFrom<W::PartitionEpoch>(5);
+        const auto attached = [&] {
+            REQUIRE(scene.ActiveScene());
+            REQUIRE(scene.ActiveScene()->Find({42}));
+            return S::FindStreamedSceneInstance(*scene.ActiveScene(), address, identity, epoch);
+        };
+        const auto bodyCount = [&] {
+            const auto scope = native.Borrow();
+            REQUIRE(scope.HasValue());
+            const auto observed = scope.Value().physics.ReadSceneActivation();
+            REQUIRE(observed.HasValue());
+            return observed.Value().staticBodies;
+        };
+        auto prepared = MountedWorld::Prepare(NativeDurableFileSystem{}, selection, 5, scene);
+        REQUIRE(prepared.HasValue());
+        auto mount = std::move(prepared).Value();
+        DeterministicClock clock;
+        auto created = S::RuntimeHost::Create(clock);
+        REQUIRE(created.HasValue());
+        auto host = std::move(created).Value();
+        auto driver = std::make_unique<MountedCellDriver>(*mount, scene);
+        const auto &progress = *driver;
+        REQUIRE(host->AddParticipant(std::move(driver)).HasValue());
+        REQUIRE(mount->BindLiveCell(host->DispatchSource(), jobs, limits, registry.Snapshot()).HasValue());
+        REQUIRE(host->Startup().HasValue());
+        REQUIRE(bodyCount() == 0);
+        REQUIRE(mount->RequestLiveCell(request).HasValue());
+        const auto frame = [&] {
+            clock.Advance(Duration::FromMilliseconds(17));
+            REQUIRE(host->RunFrame().HasValue());
+        };
+        frame();
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (progress.last.HasValue() && progress.last.Value() == Stage::Loading && std::chrono::steady_clock::now() < deadline) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            frame();
+        }
+        if (expectCapacity) {
+            W::TestSupport::RequireError(progress.last, S::SceneCellPayloadErrors::CapacityExceeded);
+            CHECK_FALSE(attached());
+            CHECK(bodyCount() == 0);
+            return;
+        }
+        REQUIRE(progress.last.HasValue());
+        REQUIRE(progress.last.Value() == Stage::Prepared);
+        CHECK(bodyCount() == 0);
+        frame();
+        const auto baseline = attached();
+        REQUIRE(baseline);
+        REQUIRE(baseline->resources.size() == 1);
+        CHECK(baseline->resources.front().metadata == material);
+        CHECK(baseline->resources.front().artifact.Digest() == T::DigestOf(fixture.baseArtifacts.front()));
+        CHECK(bodyCount() == 1);
+        frame();
+        REQUIRE(progress.last.HasValue());
+        REQUIRE(progress.last.Value() == Stage::Active);
+        REQUIRE(mount->WithdrawLiveCell().HasValue());
+        frame();
+        CHECK_FALSE(attached());
+        CHECK(bodyCount() == 0);
+        frame();
+        REQUIRE(progress.last.HasValue());
+        CHECK(progress.last.Value() == Stage::Idle);
     }
 
     TEST_CASE("Measure mounted CoreEcs frame impact through the standalone product", "[.mounted_world_benchmark]") {
