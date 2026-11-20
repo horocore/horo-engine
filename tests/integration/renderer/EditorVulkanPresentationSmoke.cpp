@@ -463,7 +463,8 @@ namespace Horo::Tests::VulkanEditor {
         const auto scene = fixture.View(0);
         Host host;
         host.CreateViewport(scene);
-        Check(host.viewport->PrepareXrProgram(UiRequire(LoadPackagedVulkanMultiviewShader(xrRoot))));
+        auto projectionProgram = UiRequire(LoadPackagedVulkanXrProjection(xrRoot));
+        Check(host.viewport->PrepareXrProgram(std::move(projectionProgram.cook), projectionProgram.program));
         const auto device = UiRequire(Viewport::Device(*host.viewport));
         constexpr FramebufferExtent eyeAllocation{64, 32};
         const RenderTextureDescriptor color{.extent = eyeAllocation,

@@ -1067,6 +1067,10 @@ lighting policy.
 The Vulkan Editor viewport can prepare a separate multipass environment
 lighting program. It consumes an explicit, renderer-owned ambient and
 directional contribution on the same multiview frame binding as geometry.
+The selected XR host loads this optional program from the offline-cooked
+`shaders/runtime/multiview-environment-vulkan.horoshdr` and matching
+`.reflection.json` in its packaged asset root. Both absent selects the ordinary
+program. An incomplete or foreign artifact pair fails package validation.
 Each binding starts with neutral lighting. Omitted contributions use the same
 color as the ordinary projection, and withdrawing a contribution requires no
 change to scene lights, exposure, or the projection attachment layout.

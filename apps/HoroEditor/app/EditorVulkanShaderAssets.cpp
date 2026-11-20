@@ -53,6 +53,21 @@ namespace Horo::Editor {
                 return Result<Cook>::Failure(metadata.ErrorValue());
             return load(payload.Value(), metadata.Value());
         }
+
+        /** @brief Checks whether an optional program is declared without ignoring package access errors. */
+        Result<bool> DeclaresEnvironmentProjection(const std::filesystem::path &prefix) {
+            bool present = false;
+            for (const auto *suffix : {".horoshdr", ".reflection.json"}) {
+                auto artifact = prefix;
+                artifact += suffix;
+                std::error_code error;
+                const bool exists = std::filesystem::exists(artifact, error);
+                if (error)
+                    return Result<bool>::Failure(BundleError());
+                present |= exists;
+            }
+            return Result<bool>::Success(present);
+        }
     }  // namespace
 
     /** @copydoc LoadPackagedVulkanViewportShader */
@@ -92,6 +107,22 @@ namespace Horo::Editor {
     /** @copydoc LoadPackagedVulkanMultiviewShader */
     Result<EditorVulkanMultiviewCook> LoadPackagedVulkanMultiviewShader(const std::filesystem::path &assetRoot) {
         return LoadPackagedProgram(assetRoot / "shaders/runtime/multiview-vulkan", &LoadEditorVulkanMultiviewCook);
+    }
+
+    /** @copydoc LoadPackagedVulkanXrProjection */
+    Result<PackagedVulkanXrProjection> LoadPackagedVulkanXrProjection(const std::filesystem::path &assetRoot) {
+        using Outcome = Result<PackagedVulkanXrProjection>;
+        const auto environmentPrefix = assetRoot / "shaders/runtime/multiview-environment-vulkan";
+        const auto environment = DeclaresEnvironmentProjection(environmentPrefix);
+        if (environment.HasError())
+            return Outcome::Failure(environment.ErrorValue());
+        const auto program =
+            environment.Value() ? EditorVulkanMultiviewProgram::EnvironmentLighting : EditorVulkanMultiviewProgram::Projection;
+        auto cooked = environment.Value() ? LoadPackagedProgram(environmentPrefix, &LoadEditorVulkanMultiviewEnvironmentCook)
+                                          : LoadPackagedVulkanMultiviewShader(assetRoot);
+        if (cooked.HasError())
+            return Outcome::Failure(cooked.ErrorValue());
+        return Outcome::Success({std::move(cooked).Value(), program});
     }
 
     /** @copydoc LoadPackagedVulkanMultiviewMotionShader */

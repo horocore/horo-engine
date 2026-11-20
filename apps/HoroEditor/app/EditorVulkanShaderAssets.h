@@ -26,6 +26,19 @@ namespace Horo::Editor {
      * fallback.
      */
     [[nodiscard]] Result<EditorVulkanMultiviewCook> LoadPackagedVulkanMultiviewShader(const std::filesystem::path &assetRoot);
+
+    /** @brief Complete offline-cooked XR program and the exact renderer contract it satisfies. */
+    struct PackagedVulkanXrProjection final {
+        EditorVulkanMultiviewCook cook;
+        EditorVulkanMultiviewProgram program;
+    };
+
+    /** @brief Selects the packaged environment projection when declared by its artifact pair.
+     * @param assetRoot Host-selected packaged assets.
+     * @return Verified program, or a typed package failure. An absent optional pair selects ordinary projection.
+     * @details An incomplete or foreign optional pair is an installation failure. Selection grants no sensor access.
+     */
+    [[nodiscard]] Result<PackagedVulkanXrProjection> LoadPackagedVulkanXrProjection(const std::filesystem::path &assetRoot);
     /** @brief Loads the separately cooked optional XR motion/depth program.
      * @param assetRoot Same selected packaged root as the
      * projection shader.

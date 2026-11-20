@@ -1565,7 +1565,7 @@ namespace Horo::Editor {
                 auto cooked = LoadPackagedVulkanViewportShader(EditorAssetRoot());
                 if (cooked.HasError())
                     return Result<void>::Failure(cooked.ErrorValue());
-                auto multiview = LoadPackagedVulkanMultiviewShader(EditorAssetRoot());
+                auto multiview = LoadPackagedVulkanXrProjection(EditorAssetRoot());
                 if (multiview.HasError())
                     return Result<void>::Failure(multiview.ErrorValue());
                 auto &bridge = *composition.vulkanGraphicsBridge;
@@ -1577,7 +1577,10 @@ namespace Horo::Editor {
                                                std::move(viewport), *options.directionalShadows, *options.lighting);
                     installed.HasError())
                     return installed;
-                if (const auto projection = composition.xrViewport->PrepareXrProgram(std::move(multiview).Value()); projection.HasError())
+                auto selectedProjection = std::move(multiview).Value();
+                if (const auto projection =
+                        composition.xrViewport->PrepareXrProgram(std::move(selectedProjection.cook), selectedProjection.program);
+                    projection.HasError())
                     return projection;
                 auto motion = LoadPackagedVulkanMultiviewMotionShader(EditorAssetRoot());
                 if (motion.HasValue())

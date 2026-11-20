@@ -70,6 +70,22 @@ TEST_CASE("Optional packaged Vulkan XR motion requires its own complete authenti
     CHECK(LoadPackagedVulkanMultiviewShader(bundle.root).HasValue());
 }
 
+TEST_CASE("Selected XR projection rejects incomplete and foreign environment programs", "[editor][shader-cook][assets][xr]") {
+    Bundle bundle;
+    constexpr std::string_view environment = "multiview-environment-vulkan";
+    std::filesystem::create_directories(bundle.root / "shaders/runtime");
+    const CookFixture projection{CookFixtureRole::Multiview, MultiviewEvidence()};
+    bundle.WriteCook("multiview-vulkan", projection, "runtime");
+    const auto baseline = LoadPackagedVulkanXrProjection(bundle.root);
+    REQUIRE(baseline.HasValue());
+    CHECK(baseline.Value().program == EditorVulkanMultiviewProgram::Projection);
+
+    bundle.Write("multiview-environment-vulkan.horoshdr", projection.compiled.payload, "runtime");
+    CHECK(LoadPackagedVulkanXrProjection(bundle.root).HasError());
+    bundle.WriteCook(environment, projection, "runtime");
+    CHECK(LoadPackagedVulkanXrProjection(bundle.root).HasError());
+}
+
 TEST_CASE("Packaged Vulkan stereo coverage binds the separate reflected artifact", "[editor][shader-cook][assets][xr]") {
     Bundle bundle;
     constexpr std::string_view prefix = "multiview-coverage-vulkan";
