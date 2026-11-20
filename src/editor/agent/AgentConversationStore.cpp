@@ -13,7 +13,7 @@ namespace Horo::Agent {
     namespace {
         constexpr std::size_t MaximumSnapshotBytes = 8U << 20U;
         constexpr std::size_t DatabaseOverhead = 64U << 10U;
-        constexpr std::size_t MaximumTitleBytes = 256;
+        constexpr std::size_t MaximumTitleBytes = AgentHistoryLimits::MaximumTitleBytes;
         constexpr std::uint32_t MaximumTokenCount = 1'000'000;
         constexpr int HistoryApplication = 0x48414948;  // HAIH
         constexpr int HistoryVersion = 1;
@@ -353,6 +353,7 @@ namespace Horo::Agent {
         const ErrorCodeDescriptor RejectedText =
             HistoryError("editor.agent.history.rejected_text", "This text was not admitted to history.");
         const ErrorCodeDescriptor Unavailable = HistoryError("editor.agent.history.unavailable", "Conversation history is unavailable.");
+        const ErrorCodeDescriptor Busy = HistoryError("editor.agent.history.busy", "A history operation is still pending.");
     }  // namespace AgentHistoryErrors
 
     struct AgentConversationStore::State final {
@@ -364,7 +365,7 @@ namespace Horo::Agent {
         AgentHistoryLimits limits;
         ExclusiveFileLock lease;
         Assets::AssetSourceIdentity identity;
-        History history;
+        std::shared_ptr<const History> history{std::make_shared<const History>()};
         StoreAvailability availability{StoreAvailability::Unavailable};
 
         /** @brief Returns whether this owner is allowed to replace the accepted image. */
@@ -381,7 +382,12 @@ namespace Horo::Agent {
                 return Output::Failure(MakeError(AgentHistoryErrors::Invalid));
             if (text.empty())
                 return Output::Success({});
-            auto decision = textFilter(kind, text);
+            AgentHistoryTextDecision decision;
+            try {
+                decision = textFilter(kind, text);
+            } catch (...) {
+                return Output::Failure(MakeError(AgentHistoryErrors::RejectedText));
+            }
             if (decision.classification != Security::AgentDataClass::EditorContext || !decision.admittedText ||
                 !ValidText(*decision.admittedText, limit) || (required && decision.admittedText->empty()))
                 return Output::Failure(MakeError(AgentHistoryErrors::RejectedText));
@@ -393,11 +399,13 @@ namespace Horo::Agent {
             auto image = WriteImage(next, project, limits);
             if (image.HasError())
                 return Result<void>::Failure(image.ErrorValue());
+            // Prepare the immutable display handoff before irreversible publication.
+            auto snapshot = std::make_shared<const History>(std::move(next));
             const auto published = Assets::PublishAssetSource(root, path, identity, image.Value(), lease, files);
             if (published.HasError())
                 return Result<void>::Failure(published.ErrorValue());
             identity = published.Value().identity;
-            history = std::move(next);
+            history = std::move(snapshot);
             availability = published.Value().status == Assets::AssetSourcePublicationStatus::Durable
                                ? StoreAvailability::Ready
                                : StoreAvailability::DurabilityUnconfirmed;
@@ -406,12 +414,28 @@ namespace Horo::Agent {
 
         /** @brief Update an exact conversation in a candidate snapshot and leave the old snapshot on failure. */
         template <typename Mutation> [[nodiscard]] Result<void> Edit(const AgentConversationId id, Mutation mutate) {
-            auto next = history;
+            auto next = *history;
             const auto conversation = std::ranges::find(next.conversations, id, &AgentConversation::id);
             if (conversation == next.conversations.end())
                 return Result<void>::Failure(MakeError(AgentHistoryErrors::Stale));
             auto changed = mutate(*conversation);
             return changed.HasError() ? changed : Commit(std::move(next));
+        }
+
+        /** @brief Adds a validated, unpublished conversation to the supplied candidate. */
+        [[nodiscard]] Result<AgentConversationId> AddConversation(History &next, const std::string_view title,
+                                                                  const std::uint64_t now) const {
+            using Output = Result<AgentConversationId>;
+            if (now == 0)
+                return Output::Failure(MakeError(AgentHistoryErrors::Invalid));
+            if (next.conversations.size() == limits.conversations || next.nextConversation == std::numeric_limits<std::uint64_t>::max())
+                return Output::Failure(MakeError(AgentHistoryErrors::Capacity));
+            auto admitted = Admit(AgentHistoryTextKind::Title, title, MaximumTitleBytes, true);
+            if (admitted.HasError())
+                return Output::Failure(admitted.ErrorValue());
+            const AgentConversationId id{next.nextConversation++};
+            next.conversations.emplace_back(id, std::move(admitted).Value(), now);
+            return Output::Success(id);
         }
     };
 
@@ -483,7 +507,7 @@ namespace Horo::Agent {
             }
         }
         if (!interrupted) {
-            owner.history = std::move(recovered);
+            owner.history = std::make_shared<const History>(std::move(recovered));
             return store;
         }
         if (owner.Commit(std::move(recovered)).HasError()) {
@@ -502,7 +526,14 @@ namespace Horo::Agent {
 
     /** @copydoc AgentConversationStore::Conversations */
     std::span<const AgentConversation> AgentConversationStore::Conversations() const noexcept {
-        return state_ ? std::span<const AgentConversation>{state_->history.conversations} : std::span<const AgentConversation>{};
+        return state_ ? std::span<const AgentConversation>{state_->history->conversations} : std::span<const AgentConversation>{};
+    }
+
+    /** @copydoc AgentConversationStore::ConversationSnapshot */
+    std::shared_ptr<const std::vector<AgentConversation>> AgentConversationStore::ConversationSnapshot() const noexcept {
+        if (!state_)
+            return {};
+        return {state_->history, &state_->history->conversations};
     }
 
     /** @copydoc AgentConversationStore::Create */
@@ -510,19 +541,12 @@ namespace Horo::Agent {
         using Output = Result<AgentConversationId>;
         if (!state_ || !state_->Writable())
             return Output::Failure(MakeError(AgentHistoryErrors::Unavailable));
-        if (now == 0)
-            return Output::Failure(MakeError(AgentHistoryErrors::Invalid));
-        if (state_->history.conversations.size() == state_->limits.conversations ||
-            state_->history.nextConversation == std::numeric_limits<std::uint64_t>::max())
-            return Output::Failure(MakeError(AgentHistoryErrors::Capacity));
-        auto admitted = state_->Admit(AgentHistoryTextKind::Title, title, MaximumTitleBytes, true);
-        if (admitted.HasError())
-            return Output::Failure(admitted.ErrorValue());
-        auto next = state_->history;
-        const AgentConversationId id{next.nextConversation++};
-        next.conversations.emplace_back(id, std::move(admitted).Value(), now);
+        auto next = *state_->history;
+        const auto added = state_->AddConversation(next, title, now);
+        if (added.HasError())
+            return added;
         const auto committed = state_->Commit(std::move(next));
-        return committed.HasValue() ? Output::Success(id) : Output::Failure(committed.ErrorValue());
+        return committed.HasValue() ? added : Output::Failure(committed.ErrorValue());
     }
 
     /** @copydoc AgentConversationStore::Rename */
@@ -554,7 +578,7 @@ namespace Horo::Agent {
     Result<void> AgentConversationStore::Delete(const AgentConversationId conversation) {
         if (!state_ || !state_->Writable())
             return Result<void>::Failure(MakeError(AgentHistoryErrors::Unavailable));
-        auto next = state_->history;
+        auto next = *state_->history;
         const auto found = std::ranges::find(next.conversations, conversation, &AgentConversation::id);
         if (found == next.conversations.end() || IsStreaming(*found))
             return Result<void>::Failure(MakeError(AgentHistoryErrors::Stale));
@@ -566,7 +590,7 @@ namespace Horo::Agent {
     Result<void> AgentConversationStore::ArchiveBefore(const std::uint64_t idleBeforeUnixSeconds) {
         if (!state_ || !state_->Writable())
             return Result<void>::Failure(MakeError(AgentHistoryErrors::Unavailable));
-        auto next = state_->history;
+        auto next = *state_->history;
         bool changed{};
         for (auto &conversation : next.conversations) {
             if (!conversation.archived && conversation.updatedUnixSeconds < idleBeforeUnixSeconds && !IsStreaming(conversation)) {
@@ -582,26 +606,39 @@ namespace Horo::Agent {
         using Output = Result<std::string>;
         if (!state_ || !state_->Writable())
             return Output::Failure(MakeError(AgentHistoryErrors::Unavailable));
-        const auto found = std::ranges::find(state_->history.conversations, conversation, &AgentConversation::id);
-        if (found == state_->history.conversations.end())
+        const auto &conversations = state_->history->conversations;
+        const auto found = std::ranges::find(conversations, conversation, &AgentConversation::id);
+        if (found == conversations.end())
             return Output::Failure(MakeError(AgentHistoryErrors::Stale));
         return Output::Success(Json{{"version", HistoryVersion}, {"conversation", EncodeConversation(*found)}}.dump());
     }
 
-    /** @copydoc AgentConversationStore::BeginTurn */
+    /** @copydoc AgentConversationStore::BeginTurn(AgentConversationId, std::string_view, std::span<const AgentHistoryReference>,
+     * std::uint64_t) */
     Result<AgentHistoryMessageId> AgentConversationStore::BeginTurn(const AgentConversationId conversation, const std::string_view userText,
                                                                     const std::span<const AgentHistoryReference> references,
                                                                     const std::uint64_t now) {
+        const auto started = BeginTurn({conversation, {}, userText, references, now});
         using Output = Result<AgentHistoryMessageId>;
+        return started.HasValue() ? Output::Success(started.Value().response) : Output::Failure(started.ErrorValue());
+    }
+
+    /** @copydoc AgentConversationStore::BeginTurn(const AgentHistoryTurnRequest &) */
+    Result<AgentHistoryStartedTurn> AgentConversationStore::BeginTurn(const AgentHistoryTurnRequest &request) {
+        using Output = Result<AgentHistoryStartedTurn>;
         if (!state_ || !state_->Writable())
             return Output::Failure(MakeError(AgentHistoryErrors::Unavailable));
+        const auto &[existing, title, userText, references, now] = request;
         if (references.size() > state_->limits.referencesPerMessage || !std::ranges::all_of(references, ValidReference))
             return Output::Failure(MakeError(AgentHistoryErrors::Invalid));
         auto admitted = state_->Admit(AgentHistoryTextKind::UserMessage, userText, state_->limits.textBytesPerMessage, true);
         if (admitted.HasError())
             return Output::Failure(admitted.ErrorValue());
-        auto next = state_->history;
-        const auto found = std::ranges::find(next.conversations, conversation, &AgentConversation::id);
+        auto next = *state_->history;
+        const auto conversation = existing ? Result<AgentConversationId>::Success(*existing) : state_->AddConversation(next, title, now);
+        if (conversation.HasError())
+            return Output::Failure(conversation.ErrorValue());
+        const auto found = std::ranges::find(next.conversations, conversation.Value(), &AgentConversation::id);
         if (found == next.conversations.end() || found->archived || IsStreaming(*found) || now < found->updatedUnixSeconds)
             return Output::Failure(MakeError(AgentHistoryErrors::Stale));
         if (found->messages.size() > state_->limits.messagesPerConversation - 2 ||
@@ -614,7 +651,7 @@ namespace Horo::Agent {
         found->messages.push_back({response, Role::Assistant, MessageState::Streaming, {}, {}, {}});
         found->updatedUnixSeconds = now;
         const auto committed = state_->Commit(std::move(next));
-        return committed.HasValue() ? Output::Success(response) : Output::Failure(committed.ErrorValue());
+        return committed.HasValue() ? Output::Success({conversation.Value(), response}) : Output::Failure(committed.ErrorValue());
     }
 
     /** @copydoc AgentConversationStore::Checkpoint */

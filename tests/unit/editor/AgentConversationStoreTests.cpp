@@ -15,6 +15,8 @@ namespace Horo::Agent {
 
         /** @brief Classifies the controlled test vocabulary and models a host-owned redaction callback. */
         AgentHistoryTextDecision HistoryFilter(AgentHistoryTextKind, const std::string_view visible) {
+            if (visible == "redactor exception fixture")
+                throw std::runtime_error{"filter failure with private input"};
             if (visible == "credential fixture")
                 return {Security::AgentDataClass::Credential, std::string{visible}};
             if (visible == "raw sensor fixture")
@@ -87,16 +89,35 @@ namespace Horo::Agent {
             REQUIRE(store.Create(title, 1).HasValue());
         }
 
+        /** @brief Consumes one correlated terminal operation while the owner pumps the session. */
+        AgentHistoryMutationCompletion TakeMutation(AgentHistorySession &session, const AgentHistoryOperationId operation) {
+            std::optional<AgentHistoryMutationCompletion> completion;
+            PollUntil(session, [&] {
+                completion = session.TakeMutation();
+                return completion.has_value();
+            });
+            REQUIRE(completion);
+            REQUIRE(completion->operation == operation);
+            return std::move(*completion);
+        }
+
         /** @brief Parks the test scheduler's only I/O worker until the scope or explicit release. */
         class PauseHistoryIo final {
         public:
             explicit PauseHistoryIo(const JobSystem &jobs) {
                 auto wait = released_.get_future().share();
-                auto queued = jobs.Submit({.resource = JobResource::Io}, [wait = std::move(wait)](const CancellationToken &) {
+                auto started = std::make_shared<std::promise<void>>();
+                auto acknowledged = started->get_future();
+                auto queued = jobs.Submit({.resource = JobResource::Io}, [wait = std::move(wait), started](const CancellationToken &) {
+                    started->set_value();
                     wait.wait();
                 });
                 REQUIRE(queued.HasValue());
                 job_ = std::move(queued).Value();
+                if (acknowledged.wait_for(std::chrono::seconds{5}) != std::future_status::ready) {
+                    Release();
+                    FAIL("History I/O worker did not begin the test pause");
+                }
             }
 
             ~PauseHistoryIo() {
@@ -322,5 +343,113 @@ namespace Horo::Agent {
         session.Shutdown();
         session.SelectProject(AgentHistoryProject{project.root, "history-project"});
         CHECK(session.View().phase == Phase::NoProject);
+    }
+
+    TEST_CASE("Editor history commits visible turns and terminal responses through one bounded writer",
+              "[unit][agent][conversation_history]") {
+        using Phase = AgentHistorySessionPhase;
+        Project project;
+        JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 2, .ioWorkerCount = 1}};
+        AgentHistorySession session{jobs, project.files, HistoryFilter};
+        session.SelectProject(AgentHistoryProject{project.root, "history-project"});
+        PollUntil(session, [&] {
+            return session.View().phase == Phase::Settled;
+        });
+        REQUIRE(session.View().availability == Availability::Ready);
+        const auto revision = session.View().project;
+        REQUIRE(revision.value != 0);
+
+        const std::string oversized((16U << 10U) + 1U, 'x');
+        RequireError(session.BeginTurn(revision, {.title = "Never created", .userText = oversized, .now = 1}),
+                     AgentHistoryErrors::Capacity);
+        for (const auto text : {"credential fixture", "redactor exception fixture"}) {
+            const auto queued = session.BeginTurn(revision, {.title = "Never created", .userText = text, .now = 1});
+            REQUIRE(queued.HasValue());
+            const auto failed = TakeMutation(session, queued.Value());
+            REQUIRE(failed.project == revision);
+            REQUIRE(failed.error);
+            CHECK(failed.error->code.Value() == AgentHistoryErrors::RejectedText.code.Value());
+            CHECK_FALSE(failed.started);
+            CHECK(session.View().conversations.empty());
+            CHECK_FALSE(std::filesystem::exists(project.Path()));
+        }
+
+        auto input = std::string{"visible prompt with private fragment"};
+        std::array references{AgentHistoryReference{AgentHistoryReferenceKind::Document, 17, 2}};
+        PauseHistoryIo pause{jobs};
+        const auto began = session.BeginTurn(revision, {.title = "Turn title", .userText = input, .references = references, .now = 2});
+        REQUIRE(began.HasValue());
+        input = "rewritten after admission";
+        references.front().identity = 99;
+        RequireError(session.BeginTurn(revision, {.title = "Busy", .userText = "Busy", .now = 2}), AgentHistoryErrors::Busy);
+        CHECK(session.View().conversations.empty());
+        pause.Release();
+        const auto beginReceipt = TakeMutation(session, began.Value());
+        REQUIRE(beginReceipt.started);
+        REQUIRE_FALSE(beginReceipt.error);
+        REQUIRE(session.View().conversations.size() == 1);
+        const auto started = *beginReceipt.started;
+        const auto &user = session.View().conversations.front().messages.front();
+        CHECK(user.text == "visible prompt with [redacted]");
+        REQUIRE(user.references.size() == 1);
+        CHECK(user.references.front().identity == 17);
+        const auto checkpoint = session.Checkpoint(revision, {.conversation = started.conversation,
+                                                              .response = started.response,
+                                                              .state = MessageState::Complete,
+                                                              .visibleText = "Visible answer",
+                                                              .usage = {20, 5},
+                                                              .now = 3});
+        REQUIRE(checkpoint.HasValue());
+        const auto answerReceipt = TakeMutation(session, checkpoint.Value());
+        CHECK(answerReceipt.project == revision);
+        CHECK_FALSE(answerReceipt.error);
+        CHECK_FALSE(answerReceipt.started);
+        CHECK(session.View().conversations.front().messages.back().state == MessageState::Complete);
+        session.Shutdown();
+        const auto reopened = project.Open();
+        REQUIRE(reopened.Availability() == Availability::Ready);
+        const auto &answer = reopened.Conversations().front().messages.back();
+        CHECK(answer.id == started.response);
+        CHECK(answer.text == "Visible answer");
+        CHECK(answer.usage.outputTokens == 5);
+        CHECK_FALSE(Contains(project.Image(), "private fragment"));
+    }
+
+    TEST_CASE("Editor history rejects edits when the worker queue is full and drops writes after project change",
+              "[unit][agent][conversation_history]") {
+        using Phase = AgentHistorySessionPhase;
+        Project first;
+        Project second;
+        Seed(second, "Second project");
+        JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 1, .ioWorkerCount = 1}};
+        AgentHistorySession session{jobs, first.files, HistoryFilter};
+        session.SelectProject(AgentHistoryProject{first.root, "history-project"});
+        const auto settled = [&] {
+            return session.View().phase == Phase::Settled;
+        };
+        PollUntil(session, settled);
+        const auto prior = session.View().project;
+        PauseHistoryIo pause{jobs};
+        auto blocker = jobs.Submit({.resource = JobResource::Io}, [](const CancellationToken &) {
+        });
+        REQUIRE(blocker.HasValue());
+        const AgentHistoryTurnRequest request{.title = "Stale write", .userText = "Stale prompt", .now = 2};
+        CHECK(session.BeginTurn(prior, request).HasError());
+        CHECK_FALSE(session.TakeMutation());
+        CHECK(session.View().conversations.empty());
+        REQUIRE(blocker.Value().RequestCancel().HasValue());
+        const auto queued = session.BeginTurn(prior, request);
+        REQUIRE(queued.HasValue());
+        session.SelectProject(AgentHistoryProject{second.root, "history-project"});
+        CHECK(session.View().conversations.empty());
+        CHECK_FALSE(session.TakeMutation());
+        pause.Release();
+        PollUntil(session, settled);
+        CHECK(session.View().project != prior);
+        CHECK_FALSE(session.TakeMutation());
+        RequireError(session.BeginTurn(prior, request), AgentHistoryErrors::Stale);
+        REQUIRE(session.View().conversations.size() == 1);
+        CHECK(session.View().conversations.front().title == "Second project");
+        CHECK_FALSE(std::filesystem::exists(first.Path()));
     }
 }  // namespace Horo::Agent

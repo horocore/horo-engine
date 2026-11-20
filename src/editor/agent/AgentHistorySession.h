@@ -23,14 +23,46 @@ namespace Horo::Agent {
         Settled
     };
 
+    /** @brief Exact selected-project incarnation within this editor session. */
+    struct AgentHistoryProjectRevision final {
+        std::uint64_t value{};
+        auto operator<=>(const AgentHistoryProjectRevision &) const noexcept = default;
+    };
+
+    /** @brief One accepted operation on the existing I/O worker. */
+    struct AgentHistoryOperationId final {
+        std::uint64_t value{};
+        auto operator<=>(const AgentHistoryOperationId &) const noexcept = default;
+    };
+
+    /** @brief Visible assistant response and exact owner IDs, with references only. */
+    struct AgentHistoryCheckpointRequest final {
+        AgentConversationId conversation;
+        AgentHistoryMessageId response;
+        AgentHistoryMessageState state;
+        std::string_view visibleText;
+        std::span<const AgentHistoryReference> references;
+        AgentHistoryUsage usage;
+        std::uint64_t now{};
+    };
+
+    /** @brief One settled write. A successful BeginTurn also returns its new durable IDs. */
+    struct AgentHistoryMutationCompletion final {
+        AgentHistoryProjectRevision project;
+        AgentHistoryOperationId operation;
+        std::optional<AgentHistoryStartedTurn> started;
+        std::optional<Error> error;
+    };
+
     /** @brief Borrowed editor-lane view, invalidated by the next project change, poll, or shutdown. */
     struct AgentHistorySessionView final {
         AgentHistorySessionPhase phase{AgentHistorySessionPhase::NoProject};
         std::optional<AgentHistoryAvailability> availability;
         std::span<const AgentConversation> conversations;
+        AgentHistoryProjectRevision project;
     };
 
-    /** @brief Serializes all store lifetime changes on the existing editor I/O lane.
+    /** @brief Serializes store lifetime changes and history writes on the existing editor I/O lane.
      * @details The editor lane only requests changes and publishes immutable display snapshots. No project
      * selection, SQLite access, file reads, or history recovery is part of editor startup completion.
      * The JobSystem, filesystem, and any objects borrowed by the filter outlive this session. The filter
@@ -62,6 +94,25 @@ namespace Horo::Agent {
 
         /** @brief Borrow the latest accepted, history-only projection on the editor lane. */
         [[nodiscard]] AgentHistorySessionView View() const noexcept;
+
+        /** @brief Admit a user turn through the exact open project and its bounded worker queue.
+         * @param project Current settled view's project revision.
+         * @param request Visible user input copied into a bounded job after admission checks.
+         * @return Exact operation ID or typed synchronous denial. A rejected operation does no writer work.
+         */
+        [[nodiscard]] Result<AgentHistoryOperationId> BeginTurn(AgentHistoryProjectRevision project,
+                                                                const AgentHistoryTurnRequest &request);
+
+        /** @brief Admit a bounded response update for the exact open project.
+         * @param project Current settled view's project revision.
+         * @param request Exact response, visible text, and numeric/reference metadata.
+         * @return Exact operation ID or typed synchronous denial. Durable settlement is observed separately.
+         */
+        [[nodiscard]] Result<AgentHistoryOperationId> Checkpoint(AgentHistoryProjectRevision project,
+                                                                 const AgentHistoryCheckpointRequest &request);
+
+        /** @brief Consume the one exact write completion after Poll publishes it. Switching projects clears old completions. */
+        [[nodiscard]] std::optional<AgentHistoryMutationCompletion> TakeMutation();
 
         /** @brief Drain accepted work and release the store at the cold editor shutdown boundary.
          * @pre Called outside scheduler callbacks, before the borrowed jobs and filesystem are destroyed.

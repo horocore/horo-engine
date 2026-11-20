@@ -55,6 +55,21 @@ namespace Horo::Agent {
         std::uint32_t outputTokens{};
     };
 
+    /** @brief Visible prompt and optional existing conversation. A new conversation needs a filtered title. */
+    struct AgentHistoryTurnRequest final {
+        std::optional<AgentConversationId> conversation;
+        std::string_view title;
+        std::string_view userText;
+        std::span<const AgentHistoryReference> references;
+        std::uint64_t now{};
+    };
+
+    /** @brief Exact durable conversation and response IDs assigned by the store. */
+    struct AgentHistoryStartedTurn final {
+        AgentConversationId conversation;
+        AgentHistoryMessageId response;
+    };
+
     /** @brief Sanitized history projection. This type grants no tool or provider authority. */
     struct AgentHistoryMessage final {
         AgentHistoryMessageId id;
@@ -84,6 +99,7 @@ namespace Horo::Agent {
     using AgentHistoryTextFilter = std::function<AgentHistoryTextDecision(AgentHistoryTextKind, std::string_view)>;
 
     struct AgentHistoryLimits final {
+        static constexpr std::size_t MaximumTitleBytes = 256;
         std::size_t conversations{32};
         std::size_t messagesPerConversation{128};
         std::size_t textBytesPerMessage{16U << 10U};
@@ -107,6 +123,7 @@ namespace Horo::Agent {
         extern const ErrorCodeDescriptor Stale;
         extern const ErrorCodeDescriptor RejectedText;
         extern const ErrorCodeDescriptor Unavailable;
+        extern const ErrorCodeDescriptor Busy;
     }  // namespace AgentHistoryErrors
 
     /** @brief An editor worker-owned, process-exclusive history service for one authorized project.
@@ -135,6 +152,8 @@ namespace Horo::Agent {
         [[nodiscard]] AgentHistoryAvailability Availability() const noexcept;
         /** @brief Borrow the current sanitized snapshot until the next successful mutation. */
         [[nodiscard]] std::span<const AgentConversation> Conversations() const noexcept;
+        /** @brief Share the immutable, already allocated committed projection across the worker boundary. */
+        [[nodiscard]] std::shared_ptr<const std::vector<AgentConversation>> ConversationSnapshot() const noexcept;
 
         /** @brief Create a conversation with a host-reviewed title. */
         [[nodiscard]] Result<AgentConversationId> Create(std::string_view title, std::uint64_t now);
@@ -158,6 +177,11 @@ namespace Horo::Agent {
          */
         [[nodiscard]] Result<AgentHistoryMessageId> BeginTurn(AgentConversationId conversation, std::string_view userText,
                                                               std::span<const AgentHistoryReference> references, std::uint64_t now);
+        /** @brief Start a turn in an existing conversation or create its conversation in the same durable commit.
+         * @param request Visible, host-filtered input and exact conversation selection or new title.
+         * @return Durable conversation and response IDs, or a typed failure without a partial conversation.
+         */
+        [[nodiscard]] Result<AgentHistoryStartedTurn> BeginTurn(const AgentHistoryTurnRequest &request);
         /** @brief Replace the visible response checkpoint or settle the active response.
          * @param conversation Exact owning conversation.
          * @param response Exact streaming assistant message returned by BeginTurn.
