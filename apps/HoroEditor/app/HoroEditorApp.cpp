@@ -6,6 +6,7 @@
 #include "EditorDirectionalShadowOptions.h"
 #include "EditorImageProviderHost.h"
 #include "EditorLightingOptions.h"
+#include "EditorLocalAgentPanel.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/Accessibility/VisualSafety.h"
 #include "Horo/Editor/XRSimulatorModel.h"
@@ -374,6 +375,7 @@ namespace Horo::Editor {
             std::optional<EditorXrInputPlayerSelection> xrInputPlayer;
             bool xrInputPlayerValid{true};
             bool xrSimulator{};
+            bool localAgent{};
             std::optional<bool> prefabGranted{false};
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
             bool qualifySurfaceLifecycle = false;
@@ -794,6 +796,8 @@ namespace Horo::Editor {
             opts.exitAfterFirstFrame = true;
         else if (argument == "--camera-preview-cross-fade")
             opts.cameraPreviewCrossFade = true;
+        else if (argument == "--local-agent")
+            opts.localAgent = true;
 #if defined(HORO_EDITOR_SURFACE_QUALIFICATION)
         else if (argument == "--qualify-opengl-surface-lifecycle")
             opts.qualifySurfaceLifecycle = true;
@@ -1061,6 +1065,8 @@ namespace Horo::Editor {
                                                "--physics",
                                                std::string{Application::Internal::ScenePhysicsHostModeName(options.physicsMode.value())}};
             arguments.insert(arguments.end(), {"--prefab", options.prefabGranted.value() ? "grant" : "deny"});
+            if (options.localAgent)
+                arguments.emplace_back("--local-agent");
             if (!options.cookedRoot.empty()) {
                 arguments.insert(arguments.end(), {"--cooked-root", options.cookedRoot, "--cook-target", options.cookTarget});
             }
@@ -3792,6 +3798,8 @@ namespace Horo::Editor {
             WorkspacePanelRegistry workspacePanelRegistry;
             RegisterInspectionWorkspacePanels(workspacePanelRegistry, p.presentation.renderFrontend);
             RegisterNavigationWorkspacePanel(workspacePanelRegistry, navigationBakeAccess, p.modalHost);
+            if (p.options.localAgent)
+                workspacePanelRegistry.RegisterPanel(MakeEditorLocalAgentPanel());
             EditorExtensionSources extensionSources{p.background.jobs};
             PfdNativeDialogs nativeDialogs;
             auto networkDebugger = std::make_shared<Application::NetworkDebuggerService>();

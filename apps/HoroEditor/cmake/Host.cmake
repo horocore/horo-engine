@@ -10,6 +10,7 @@ if(HORO_BUILD_EDITOR_GUI)
         HoroEditor/app/HoroEditorApp.cpp
         HoroEditor/app/EditorWindowChrome.cpp
         HoroEditor/app/EditorNavigationBakeHost.cpp
+        HoroEditor/app/EditorLocalAgentPanel.cpp
         HoroEditor/app/EditorWorkerShutdown.cpp
         HoroEditor/app/EditorAudioPreviewHost.cpp
         HoroEditor/app/EditorAudioPreviewDecode.cpp
@@ -30,6 +31,7 @@ if(HORO_BUILD_EDITOR_GUI)
     endif()
 
     target_link_libraries(HoroEditor PRIVATE HoroEngine::PlatformProjectReadFiles HoroShaderHotReloadHostInternal)
+    target_link_libraries(HoroEditor PRIVATE HoroEditorAgentTurnInternal HoroEngine::ModelProviderAdapters)
     target_link_libraries(HoroEditor PRIVATE HoroXRSimulatorPlayHost HoroEngine::VisualAccessibility)
     target_link_libraries(HoroEditor PRIVATE HoroXRSimulatorProjectArtifacts HoroEngine::PlatformProjectIo)
     include(HoroEditorGuiLiveReloadHost)

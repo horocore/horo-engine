@@ -1,5 +1,6 @@
 #include "../../support/OwnedTestDirectory.h"
 #include "Horo/Editor/Localization/LocalizationService.h"
+#include "Horo/Editor/Localization/LocalizedGui.h"
 
 #include <array>
 #include <catch2/catch_message.hpp>
@@ -803,6 +804,27 @@ TEST_CASE("Decision query authoring and preview copy resolve in both shipped loc
         constexpr auto framePoint = "workspace.environment_query.preview_frame_candidate";
         CHECK_FALSE(service.Get("editor", framePoint).empty());
         CHECK(service.Get("editor", framePoint) != framePoint);
+    }
+}
+
+TEST_CASE("Local model panel copy resolves in both shipped locales", "[unit][editor][agent][localization]") {
+    using namespace Horo::Editor;
+    const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
+    constexpr GuiLocalizationScope panel{"workspace.local_agent"};
+    for (const auto locale : {"en-US", "tr-TR"}) {
+        LocalizationService service{LocaleTag{locale}};
+        LocalizationError error;
+        REQUIRE(service.LoadCatalogFile(root / (std::string{locale} + ".json"), &error));
+        REQUIRE(service.Prepare(LocaleTag{locale}, &error));
+        REQUIRE(service.ActivatePrepared(&error));
+        for (const auto key : {"title", "endpoint", "discover", "model", "prompt", "ask", "stop", "working", "invalid", "unavailable",
+                               "timeout", "cancelled", "failed", "no_models", "empty_response"}) {
+            INFO(locale);
+            INFO(key);
+            const auto &value = panel.Text(service, key);
+            CHECK_FALSE(value.empty());
+            CHECK(value != std::string{"workspace.local_agent."} + key);
+        }
     }
 }
 

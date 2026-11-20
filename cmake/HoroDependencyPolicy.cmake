@@ -440,6 +440,7 @@ horo_allow_target_dependencies(TARGET HoroThirdPartyRccpp)
 horo_allow_target_dependencies(TARGET HoroEditor
     DEPENDENCIES HoroVisualAccessibility HoroXRSimulatorPlayHost HoroXRSimulatorProjectArtifacts HoroPlatformProjectIo HoroEditorClusteredLightingAssetsInternal HoroEditorBaselineLightingAssetsInternal HoroEditorViewportLightingInternal HoroEditorTerrainHostInternal HoroEditorGuiLiveReloadHost HoroEditorUiStyleHostInternal HoroRuntimeUiPaintHost HoroShaderHotReloadHostInternal
         HoroPlatformProjectReadFiles
+        HoroEditorAgentTurnInternal HoroModelProviderAdapters
         HoroNativeNavigationBakeHost
         HoroPlatformProjectIo
         HoroEditorSceneProductHost

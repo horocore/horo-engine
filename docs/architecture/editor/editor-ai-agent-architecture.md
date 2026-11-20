@@ -763,6 +763,12 @@ enum class AgentProvider {
 - Reports model capabilities, context limits, cost class, and availability
   through the same provider contract as remote adapters
 
+`HoroEditor --local-agent` enables the Local Model panel in the workspace.
+Enter the loopback HTTP service address and an installed model, or discover
+models from that address. Discovery and explicitly submitted text run on a
+worker. The workspace keeps running while the service responds. The panel sends
+the entered message, and workspace detachment cancels pending work.
+
 ### Cloud Provider
 
 - Connects through a provider adapter selected by host/project policy
