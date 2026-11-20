@@ -29,6 +29,7 @@ namespace Horo::Application::Internal {
 
 namespace Horo::Application::Internal::HeadlessNetworkDetail {
     class HeadlessFixedParticipant;
+    class ReplicaAnimationInputs;
 
     /** @brief One exact prepared committed capture shared by the current authority world's initial recipients. */
     struct InitialTransformCapture final {
@@ -60,6 +61,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         CancellationToken sceneCancellation;
         ScenePhysicsHost native;
         std::unique_ptr<Runtime::SceneAnimationRuntime> animation;
+        std::shared_ptr<ReplicaAnimationInputs> replicaAnimation;
         bool fixedReserved{};
         bool closeRequested{};
         bool closed{};

@@ -1,5 +1,7 @@
 #pragma once
 
+#include "HeadlessReplicaAnimationInputs.h"
+
 /** @file HeadlessAnimationFixed.h
  * @brief Target-private fixed participant borrowing the exact generation-owned world records.
  */
@@ -333,7 +335,9 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         config.ownerCancellation = record.sceneCancellation;
         if (record.request.world == Network::NetworkModeWorldKind::Client) {
             config.evaluationDomain = Animation::AnimationEvaluationDomain::Presentation;
-            config.inputs = input.replicaAnimationInputs;
+            if (!input.replicaAnimationBindings.empty())
+                record.replicaAnimation = std::make_shared<ReplicaAnimationInputs>(input.replicaAnimationBindings);
+            config.inputs = record.replicaAnimation ? record.replicaAnimation : input.replicaAnimationInputs;
         } else {
             config.inputs = input.animationInputs;
         }

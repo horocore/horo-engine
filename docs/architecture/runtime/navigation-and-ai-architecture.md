@@ -3254,6 +3254,12 @@ The execution of AI simulation phases is strictly governed by the host process's
   never inherited by a connected client World, including in a listen server.
   Its graph evaluates and publishes in the Presentation domain, which disables
   authoritative clip notify workspaces and publications.
+  Headless composition can bind explicitly declared scalar fields of individual
+  authored, replicated Scene actors to their client graph parameters. The
+  binding receives values from the authenticated Spawn and Snapshot routes
+  after the Scene transaction succeeds. Missing fields supply no graph
+  override. Reads use the exact Scene entity incarnation, and the
+  presentation inputs expire with replication admission or World retirement.
   Existing Scene animation configurations retain the authoritative default.
   Rebuild native consumers for the appended configuration field.
 - **Server State Privacy**: Agent perception memories (e.g. sight awareness meters, target tracking scores) and `BlackboardState` internal representations (behavior tree execution nodes, patrol indices, threat scoring matrices) are **server-private**.

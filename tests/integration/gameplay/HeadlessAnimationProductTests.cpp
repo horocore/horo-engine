@@ -1,7 +1,67 @@
 #include "AllocationProbe.h"
 #include "HeadlessAnimationProductFixture.h"
+#include "HeadlessReplicaAnimationInputs.h"
+#include "Horo/Network/SceneReplicationApplyOwner.h"
+#include "ReplicationStateCodecTestSupport.h"
 
 namespace Horo::Network::AnimationProduct {
+    TEST_CASE("Replica animation consumes only committed public fields for its exact Scene actor",
+              "[animation][headless][product][replica-inputs]") {
+        namespace Rep = StateCodecTestSupport;
+        using App::HeadlessNetworkDetail::ReplicaAnimationInputs;
+        Rep::CodecFixture fixture;
+        auto mapping = Rep::Object();
+        const Runtime::SceneObjectId authored{1};
+        mapping.provenance.authoredObject = authored;
+        Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, {1}};
+        Runtime::RuntimeEntityDefinition definition;
+        definition.object = authored;
+        builder.Add(definition);
+        std::shared_ptr<Runtime::RuntimeScene> scene =
+            Take(Runtime::RuntimeScene::Create(Take(std::move(builder).Build()), mapping.entity.runtime));
+        REQUIRE(scene->View().Find(authored) == mapping.entity);
+        const auto field = Rep::FieldIdValue(1);
+        const std::array sceneBindings{SceneReplicationFieldBinding{field, SceneReplicationProperty::TranslationX}};
+        const auto parameter = Take(Animation::GraphParameterId::Create(731));
+        const std::array bindings{App::HeadlessReplicaAnimationBinding{authored, field, parameter}};
+        const auto inputs = std::make_shared<ReplicaAnimationInputs>(bindings);
+        const auto sceneWriter =
+            Take(SceneReplicationApplyOwner::Create(scene, mapping.provenance.schema, mapping.provenance.schemaVersion, sceneBindings));
+        const auto writer = ReplicaAnimationInputs::Bind(inputs, sceneWriter);
+        CancellationSource world;
+        const CancellationToken live;
+        const Runtime::FixedStepContext tick{.cancellation = live};
+        const auto prepare = [&](ReplicationDecodedState decoded) {
+            const std::array updates{ReplicationApplyUpdate{mapping, Rep::Recipient(), std::move(decoded), live, world.Token()}};
+            return Take(writer->Prepare(updates));
+        };
+        const auto read = [&] {
+            const auto snapshot = inputs->Read(mapping.entity, tick);
+            REQUIRE(snapshot.parameters.size() == 1);
+            CHECK(snapshot.parameters.front().id == parameter);
+            return std::get<float>(snapshot.parameters.front().value);
+        };
+        auto initial = prepare(Take(fixture.codec->Decode(fixture.full, mapping)));
+        CHECK(inputs->Read(mapping.entity, tick).parameters.empty());
+        REQUIRE(initial->Commit(live).HasValue());
+        CHECK(read() == 1.0F);
+        CHECK(Take(scene->View().Get(mapping.entity)).localTransform->translation.x == 1.0F);
+        CHECK(inputs->Read({Runtime::SceneRuntimeId{90}, mapping.entity.entity}, tick).parameters.empty());
+
+        fixture.capture.Capture(2, 2.0);
+        auto next = prepare(Take(fixture.codec->Decode(Take(fixture.codec->Encode(fixture.capture.Pin())), mapping)));
+        CancellationSource cancelled;
+        cancelled.RequestCancellation();
+        REQUIRE(next->Commit(cancelled.Token()).HasError());
+        CHECK(read() == 1.0F);
+        auto retry = prepare(Take(fixture.codec->Decode(Take(fixture.codec->Encode(fixture.capture.Pin())), mapping)));
+        REQUIRE(retry->Commit(live).HasValue());
+        CHECK(read() == 2.0F);
+        CHECK(Take(scene->View().Get(mapping.entity)).localTransform->translation.x == 2.0F);
+        world.RequestCancellation();
+        CHECK(inputs->Read(mapping.entity, tick).parameters.empty());
+    }
+
 #if HORO_TEST_PHYSICS_NATIVE
     TEST_CASE("Actual configured Headless product commits real cooked Graph or Clip pose once after native fixed work",
               "[animation][headless][product][canonical]") {

@@ -135,6 +135,13 @@ namespace Horo::Application::Internal {
         std::vector<Network::SceneReplicationFieldBinding> fields;
     };
 
+    /** @brief Opts one authored actor into a public scalar input on its presentation graph. */
+    struct HeadlessReplicaAnimationBinding final {
+        Runtime::SceneObjectId object;
+        Network::FieldId field;
+        Animation::GraphParameterId parameter;
+    };
+
     class IHeadlessInitialStateAuthority;
     class IHeadlessInitialReplicaAuthority;
     class HeadlessInitialStateHost;
@@ -181,6 +188,8 @@ namespace Horo::Application::Internal {
             animationInputs; /**< Optional gameplay snapshot for authority and standalone Worlds. */
         std::shared_ptr<const Runtime::SceneAnimationInputSource>
             replicaAnimationInputs; /**< Optional public presentation snapshot for a connected client World. */
+        std::vector<HeadlessReplicaAnimationBinding>
+            replicaAnimationBindings; /**< Optional public Scene fields, exclusive with an external replica input source. */
         AI::AiScenePerceptionPositionSource
             perceptionPositions; /**< Global positions from the supplied candidate/current Scene in ascending entity order. */
         AI::PerceptionFilteringPolicy perceptionFiltering;

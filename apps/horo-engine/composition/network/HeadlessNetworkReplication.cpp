@@ -1,6 +1,7 @@
 #include "HeadlessInitialStateAuthority.h"
 #include "HeadlessNetworkWorldService.h"
 #include "HeadlessPrefabIntent.h"
+#include "HeadlessReplicaAnimationInputs.h"
 #include "Horo/Network/NetworkErrors.h"
 #include "Horo/Network/NetworkWorldBinding.h"
 #include "Horo/Network/SceneReplicationApplyOwner.h"
@@ -818,6 +819,8 @@ namespace Horo::Application::Internal {
             } else {
                 owner = std::make_shared<LiveReplicaSceneApply>(owners, read.record);
             }
+            if (read.record->replicaAnimation)
+                owner = HeadlessNetworkDetail::ReplicaAnimationInputs::Bind(read.record->replicaAnimation, std::move(owner));
             return PrepareReplicaReceiver(*read.record, world, read.mapping, authority, grant.Value(), std::move(owner), recordKind, now);
         } catch (const std::bad_alloc &) {
             return InitialReceiver::Failure(MakeError(Net::ReplicationCaptureErrors::Capacity));

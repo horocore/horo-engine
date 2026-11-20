@@ -1,6 +1,7 @@
 #include "HeadlessInitialStateAuthority.h"
 #include "HeadlessNetworkWorldService.h"
 #include "HeadlessPerceptionPolicy.h"
+#include "HeadlessReplicaAnimationInputs.h"
 #include "Horo/Gameplay/GameplayVfxScene.h"
 #include "Horo/Network/NetworkErrors.h"
 #include "Horo/Network/ReplicationWorldLifecycle.h"
@@ -321,12 +322,12 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
-        Result<void> ValidateAnimationSelection(const HeadlessSceneActivationInput &input) {
+        Result<void> ValidateAnimationSelection(HeadlessSceneActivationInput &input) {
             if (input.animationTarget.IsValid() != static_cast<bool>(input.animationIdentities))
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
             if ((input.animationInputs || input.replicaAnimationInputs) && !input.animationIdentities)
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
-            return Result<void>::Success();
+            return HeadlessNetworkDetail::ValidateReplicaAnimationBindings(input);
         }
     }  // namespace
 
