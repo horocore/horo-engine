@@ -165,7 +165,8 @@ namespace Horo::Editor {
                                                const Render::MultiviewMotionFrame *motion,
                                                std::span<const Render::RenderMotionObjectId> motionObjects, EditorXrProjectionAlpha alpha,
                                                const EditorVulkanXrViewportAccess::AuxiliaryImages *auxiliary = nullptr,
-                                               const Render::MultiviewEnvironmentLighting *lighting = nullptr);
+                                               const Render::MultiviewEnvironmentLighting *lighting = nullptr,
+                                               const std::array<Render::MultiviewRenderRectangle, 2> *rectangles = nullptr);
         /** @brief Ends current projection evidence and admits exact native projection into transform history.
          * @pre Same frame's successful native compositor end on the render owner lane.
          */

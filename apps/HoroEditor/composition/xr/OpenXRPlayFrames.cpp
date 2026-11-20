@@ -7,6 +7,7 @@
 #include "OpenXRPlayHost.h"
 #include "OpenXRVulkanSwapchain.h"
 
+#include <algorithm>
 #include <bit>
 #include <cmath>
 
@@ -70,7 +71,7 @@ namespace Horo::Application::Internal {
                     allocation.format,
                     allocation.usage,
                     allocation.extent,
-                    {0, 0, allocation.extent.width, allocation.extent.height},
+                    {0, 0, view.recommendedExtent.width, view.recommendedExtent.height},
                     eye,
                     2,
                     1};
@@ -613,10 +614,15 @@ namespace Horo::Application::Internal {
             render_->passthrough.emplace(*scope, publication, reference.Value());
         const auto alpha = render_->passthrough ? Editor::EditorXrProjectionAlpha::Premultiplied : Editor::EditorXrProjectionAlpha::Opaque;
         using Viewport = Editor::EditorVulkanXrViewportAccess;
+        std::array<Render::MultiviewRenderRectangle, 2> rectangles;
+        std::ranges::transform(plan.Value().Targets(), rectangles.begin(), [](const XRExternalRenderTargetDescriptor &target) {
+            const auto &region = target.renderRectangle;
+            return Render::MultiviewRenderRectangle{region.x, region.y, region.width, region.height};
+        });
         const auto bind = [&](const Viewport::AuxiliaryImages *auxiliary) {
             return Viewport::Bind(composition_.viewport, render_->acquisition->texture, render_->eyeViews, publication,
                                   converted.Value().Scene().Views(), scene_->geometry->Instances(), prepareMotion ? &motion : nullptr,
-                                  alpha, auxiliary);
+                                  alpha, auxiliary, nullptr, &rectangles);
         };
         if (auto baseline = bind(nullptr); baseline.HasError())
             return baseline;

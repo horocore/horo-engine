@@ -124,6 +124,7 @@ namespace Horo::Editor {
          * @param alpha Explicit projection color policy for this acquisition.
          * @param auxiliary Fresh optional motion/depth acquisitions. They require a complete adjacent predecessor.
          * @param lighting Optional same-frame renderer environment input. Absence uses the unlit baseline.
+         * @param rectangles Exact active regions from the view plan, in view order. Absence uses the full allocation for direct consumers.
          * @return Original typed validation/binding outcome. On optional failure the acquisition owner may omit
          * its pair and bind the ordinary projection with no auxiliary images.
          */
@@ -134,7 +135,8 @@ namespace Horo::Editor {
                                                std::span<const Render::RenderStaticMeshInstance> instances, const MotionInput *motion,
                                                EditorXrProjectionAlpha alpha = EditorXrProjectionAlpha::Opaque,
                                                const AuxiliaryImages *auxiliary = nullptr,
-                                               const Render::MultiviewEnvironmentLighting *lighting = nullptr);
+                                               const Render::MultiviewEnvironmentLighting *lighting = nullptr,
+                                               const std::array<Render::MultiviewRenderRectangle, 2> *rectangles = nullptr);
         /** @brief Takes the renderer's one-shot premultiplied scene evidence after observing the actual queue.
          * @param viewport Same selected renderer owner. @param publication Exact staged Scene/frame/origin/view/device.
          * @param color Exact acquired color target generation. @return Completed evidence or empty.

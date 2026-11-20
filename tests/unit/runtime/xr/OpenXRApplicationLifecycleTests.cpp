@@ -2763,7 +2763,20 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(Viewport::Bind(viewport, first.texture, first.views, publication, eyes, instances, &motionFrame,
                              Editor::EditorXrProjectionAlpha::Opaque, &pair)
                   .HasError());
-        RequireValue(Viewport::Bind(viewport, first.texture, first.views, publication, eyes, instances, &motionFrame));
+        const std::array colorRects{MultiviewRenderRectangle{1, 1, 5, 7}, MultiviewRenderRectangle{2, 0, 6, 4}};
+        auto outside = colorRects;
+        ++outside.back().width;
+        CHECK(Viewport::Bind(viewport, first.texture, first.views, publication, eyes, instances, &motionFrame,
+                             Editor::EditorXrProjectionAlpha::Opaque, nullptr, nullptr, &outside)
+                  .HasError());
+        RequireValue(Viewport::Bind(viewport, first.texture, first.views, publication, eyes, instances, &motionFrame,
+                                    Editor::EditorXrProjectionAlpha::Opaque, nullptr, nullptr, &colorRects));
+        const auto mirror = Viewport::Mirror(viewport, publication.frame, first.views.front());
+        REQUIRE(mirror.sampledView == first.views.front());
+        CHECK(mirror.u0 == 1.0F / 8.0F);
+        CHECK(mirror.u1 == 6.0F / 8.0F);
+        CHECK(mirror.v0 == 1.0F / 8.0F);
+        CHECK(mirror.v1 == 1.0F);
         const auto submit = [&](const std::uint64_t sequence) {
             CHECK_FALSE(Viewport::TakeCoverage(viewport, motionFrame.frame));
             auto frame = RequireValue(frontend.BeginFrame({sequence, {8, 8}}));
@@ -2809,6 +2822,15 @@ namespace Horo::Tests::OpenXRApplication {
             Viewport::CompleteMotion(viewport, motionFrame.frame, true);
         };
         submit(1);
+        REQUIRE(vulkan.encoded.scissors.size() >= colorRects.size());
+        for (std::size_t eye = 0; eye < colorRects.size(); ++eye) {
+            const auto &scissor = vulkan.encoded.scissors[eye];
+            const auto &rectangle = colorRects[eye];
+            CHECK(scissor.offset.x == static_cast<std::int32_t>(rectangle.x));
+            CHECK(scissor.offset.y == static_cast<std::int32_t>(rectangle.y));
+            CHECK(scissor.extent.width == rectangle.width);
+            CHECK(scissor.extent.height == rectangle.height);
+        }
         const auto previousDraws = vulkan.encoded.drawCalls.size();
         REQUIRE(previousDraws == instances.size() * 2);
         CHECK(fixture.vulkan->port.motionUniformWrites == 0);
