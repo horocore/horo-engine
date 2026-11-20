@@ -824,6 +824,11 @@ context. It hit-tests the last successfully presented interaction snapshot. Swit
 ray/direct modes, tracking or session loss, assignment change, modal/route exclusion,
 presentation-revision loss and source destruction release capture and neutralize the
 source. A Physics/Renderer hit is evidence only; it cannot set focus or invoke a widget.
+The OpenXR Play host can provide a controller ray and the down state of a
+consumer-selected, registered digital action from one committed tracking cutoff.
+The action must come from the exact controller that supplied the ray. An
+inactive action or lost tracking invalidates the source rather than supplying
+a normal release. The UI composition still owns routing, edges and cancellation.
 
 ### Semantic audio and haptic feedback
 

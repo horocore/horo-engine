@@ -1798,16 +1798,44 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(proximity.center == point);
         CHECK(proximity.radius == 0.3F);
 
+        const auto &selection = fixture.router.Actions().front().id;
+        const Application::Internal::OpenXRPlayControllerPointerRequest pointer{controller,
+                                                                                selection,
+                                                                                XR::XRControllerInteractionPose::Aim,
+                                                                                {{0, 0, -1}, 6},
+                                                                                confidence};
+        const auto pressed = RequireValue(fixture.play->ReadControllerPointer(sources.Scope(), pointer));
+        CHECK(pressed.selectDown);
+        CHECK(pressed.ray.maximumDistance == 6.0F);
+        const auto wrongDevice =
+            fixture.play->ReadControllerPointer(sources.Scope(), {hand, selection, pointer.pose, pointer.ray, pointer.minimumConfidence});
+        REQUIRE(wrongDevice.HasError());
+        CHECK(wrongDevice.ErrorValue().code.Value() == XR::XRErrors::OperationUnavailable.code.Value());
+        const Input::ActionId foreignAction{"unregistered"};
+        const auto wrongAction = fixture.play->ReadControllerPointer(sources.Scope(), {controller, foreignAction, pointer.pose, pointer.ray,
+                                                                                       pointer.minimumConfidence});
+        REQUIRE(wrongAction.HasError());
+        CHECK(wrongAction.ErrorValue().code.Value() == XR::XRErrors::OperationUnsupported.code.Value());
+        CHECK(fixture.script.actions.syncs == syncs);
+
+        fixture.script.actions.sample.boolean = XR_FALSE;
         sample();
         const auto newer = RequireValue(fixture.play->ReadInteractionSources(player));
         CHECK(newer.Scope().cutoff.tracking > sources.Scope().cutoff.tracking);
+        CHECK_FALSE(RequireValue(fixture.play->ReadControllerPointer(newer.Scope(), pointer)).selectDown);
+        CHECK(fixture.play->ReadControllerPointer(sources.Scope(), pointer).HasError());
         const auto stale = fixture.play->ReadInteractionCandidates(sources.Scope(), probes);
         REQUIRE(stale.HasError());
         CHECK(stale.ErrorValue().code.Value() == XR::XRErrors::TrackingSnapshotStale.code.Value());
+        fixture.script.actions.sample.active = XR_FALSE;
+        sample();
+        const auto inactive = RequireValue(fixture.play->ReadInteractionSources(player));
+        CHECK(fixture.play->ReadControllerPointer(inactive.Scope(), pointer).HasError());
         fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
         RequireValue(fixture.play->PollEvents());
         CHECK(fixture.play->ReadInteractionSources(player).HasError());
         CHECK(fixture.play->ReadInteractionCandidates(newer.Scope(), probes).HasError());
+        CHECK(fixture.play->ReadControllerPointer(inactive.Scope(), pointer).HasError());
         fixture.scheduler->Shutdown();
         scene->Shutdown();
         REQUIRE(RequireValue(fixture.ClosePlay()));

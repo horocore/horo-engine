@@ -80,6 +80,21 @@ namespace Horo::Application::Internal {
         bool operator==(const OpenXRPlayInteractionScope &) const noexcept = default;
     };
 
+    /** @brief Consumer-selected controller ray and registered digital action in an admitted Play context. */
+    struct OpenXRPlayControllerPointerRequest final {
+        XR::XRDeviceId device;
+        const Input::ActionId &selectAction;
+        XR::XRControllerInteractionPose pose;
+        XR::XRInteractionRayProbe ray;
+        XR::XRTrackingConfidence minimumConfidence{XR::XRTrackingConfidence::None};
+    };
+
+    /** @brief Same-cutoff device ray and held-state evidence. The consumer owns edges, capture, and cancellation. */
+    struct OpenXRPlayControllerPointerSample final {
+        Math::Ray ray;
+        bool selectDown{};
+    };
+
     /** @brief Current controller/hand source identities for a synchronous query, without raw tracking. */
     class OpenXRPlayInteractionSources final {
     public:
@@ -290,6 +305,14 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<XR::XRInteractionCandidates> ReadInteractionCandidates(const OpenXRPlayInteractionScope &scope,
                                                                                     std::span<const XR::XRInteractionProbe> probes) const;
+        /** @brief Copies a World ray and exact device selection state from the same committed tracking cutoff.
+         * @param scope Exact scene, player, session and cutoff from ReadInteractionSources.
+         * @param request Live device, consumer-selected registered action and finite ray policy.
+         * @return Evidence or typed stale, unavailable, unsupported or invalid failure. Inactive is distinct from released.
+         * @note This read performs no native calls or allocation on success and grants no UI routing or capture authority.
+         */
+        [[nodiscard]] Result<OpenXRPlayControllerPointerSample> ReadControllerPointer(
+            const OpenXRPlayInteractionScope &scope, const OpenXRPlayControllerPointerRequest &request) const;
         /** @brief Copies current reference identity and bounds from the selected Play session.
          * @param session Exact published session.
          * @return Immutable-by-copy evidence or typed stale/unavailable error.
@@ -328,6 +351,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> Lane() const;
         /** @brief Borrows a current committed interaction cutoff for this synchronous owner-lane read only. */
         [[nodiscard]] Result<const XR::XRTrackingSnapshot *> CurrentInteractionTracking(Input::PlayerId player) const;
+        /** @brief Fences an existing request against the exact committed Scene and tracking cutoff. */
+        [[nodiscard]] Result<const XR::XRTrackingSnapshot *> CurrentInteractionTracking(const OpenXRPlayInteractionScope &scope) const;
         /** @brief Checks current owner lane and absence of Play work before a private session test. */
         [[nodiscard]] bool SetupIdle() const noexcept;
         /** @brief Captures a bounded event result and revokes the exact Scene/Input authority when it cannot continue.

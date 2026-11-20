@@ -350,6 +350,19 @@ namespace Horo::Application::Internal {
         return Outcome::Success(snapshot);
     }
 
+    /** @copydoc OpenXRPlayHost::CurrentInteractionTracking(const OpenXRPlayInteractionScope &) const */
+    Result<const XRTrackingSnapshot *> OpenXRPlayHost::CurrentInteractionTracking(const OpenXRPlayInteractionScope &scope) const {
+        using Outcome = Result<const XRTrackingSnapshot *>;
+        const auto current = CurrentInteractionTracking(scope.player);
+        if (current.HasError())
+            return current;
+        if (scope.scene != scene_->scene)
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        if (scope.cutoff != DescribeXRInteractionCutoff(*current.Value()))
+            return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotStale));
+        return current;
+    }
+
     /** @copydoc OpenXRPlayHost::ReadInteractionSources */
     Result<OpenXRPlayInteractionSources> OpenXRPlayHost::ReadInteractionSources(const Input::PlayerId player) const {
         using Outcome = Result<OpenXRPlayInteractionSources>;
@@ -373,12 +386,35 @@ namespace Horo::Application::Internal {
     Result<XRInteractionCandidates> OpenXRPlayHost::ReadInteractionCandidates(const OpenXRPlayInteractionScope &scope,
                                                                               const std::span<const XRInteractionProbe> probes) const {
         using Outcome = Result<XRInteractionCandidates>;
-        const auto current = CurrentInteractionTracking(scope.player);
+        const auto current = CurrentInteractionTracking(scope);
         if (current.HasError())
             return Outcome::Failure(current.ErrorValue());
-        if (scope.scene != scene_->scene)
-            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
         return BuildXRInteractionCandidates(*current.Value(), scope.cutoff, probes);
+    }
+
+    /** @copydoc OpenXRPlayHost::ReadControllerPointer */
+    Result<OpenXRPlayControllerPointerSample> OpenXRPlayHost::ReadControllerPointer(
+        const OpenXRPlayInteractionScope &scope, const OpenXRPlayControllerPointerRequest &request) const {
+        using Outcome = Result<OpenXRPlayControllerPointerSample>;
+        const auto current = CurrentInteractionTracking(scope);
+        if (current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        const auto &bindings = input_.coordinator->Current()->bindings;
+        const auto binding = std::ranges::find(bindings, request.selectAction, &XRResolvedActionBinding::action);
+        if (binding == bindings.end() || binding->valueType != Input::ActionValueType::Digital)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnsupported));
+        const auto index = static_cast<std::uint32_t>(binding - bindings.begin());
+        const auto actions = current.Value()->Actions();
+        const auto select = std::ranges::find_if(actions, [&](const XRTrackedActionRecord &action) {
+            return action.bindingIndex == index && action.device == request.device;
+        });
+        if (select == actions.end() || !select->active)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
+        const XRInteractionProbe probe{request.device, request.pose, request.ray, request.minimumConfidence};
+        const auto geometry = BuildXRInteractionCandidates(*current.Value(), scope.cutoff, std::span{&probe, 1});
+        if (geometry.HasError())
+            return Outcome::Failure(geometry.ErrorValue());
+        return Outcome::Success({std::get<Math::Ray>(geometry.Value().Candidates().front().shape), select->x != 0.0F});
     }
 
     /** @copydoc OpenXRPlayHost::BuildInputSnapshot */
