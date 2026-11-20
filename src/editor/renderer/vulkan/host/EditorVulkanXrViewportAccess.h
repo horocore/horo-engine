@@ -15,6 +15,7 @@
 namespace Horo::Render {
     class RenderFrameScope;
     struct PrimaryOutputAttachment;
+    struct MultiviewEnvironmentLighting;
 }  // namespace Horo::Render
 
 namespace Horo::Editor {
@@ -122,6 +123,7 @@ namespace Horo::Editor {
          * @param motion Optional exact compositor prediction and stable object IDs for the selected frame-synthesis route.
          * @param alpha Explicit projection color policy for this acquisition.
          * @param auxiliary Fresh optional motion/depth acquisitions. They require a complete adjacent predecessor.
+         * @param lighting Optional same-frame renderer environment input. Absence uses the unlit baseline.
          * @return Original typed validation/binding outcome. On optional failure the acquisition owner may omit
          * its pair and bind the ordinary projection with no auxiliary images.
          */
@@ -131,7 +133,8 @@ namespace Horo::Editor {
                                                std::span<const Render::MultiviewSceneView> cameras,
                                                std::span<const Render::RenderStaticMeshInstance> instances, const MotionInput *motion,
                                                EditorXrProjectionAlpha alpha = EditorXrProjectionAlpha::Opaque,
-                                               const AuxiliaryImages *auxiliary = nullptr);
+                                               const AuxiliaryImages *auxiliary = nullptr,
+                                               const Render::MultiviewEnvironmentLighting *lighting = nullptr);
         /** @brief Takes the renderer's one-shot premultiplied scene evidence after observing the actual queue.
          * @param viewport Same selected renderer owner. @param publication Exact staged Scene/frame/origin/view/device.
          * @param color Exact acquired color target generation. @return Completed evidence or empty.

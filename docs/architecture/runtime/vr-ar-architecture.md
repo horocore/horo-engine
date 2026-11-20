@@ -1048,6 +1048,14 @@ are presentation inputs and do not mutate authored lights or exposure. The
 carries provider RGB and a direction without selecting the engine's color or
 lighting policy.
 
+The Vulkan Editor viewport can prepare a separate multipass environment
+lighting program. It consumes an explicit, renderer-owned ambient and
+directional contribution on the same multiview frame binding as geometry.
+Each binding starts with neutral lighting. Omitted contributions use the same
+color as the ordinary projection, and withdrawing a contribution requires no
+change to scene lights, exposure, or the projection attachment layout.
+The app owns provider activation, permission, scope, and conversion to ACEScg.
+
 The FB reconstruction passthrough route requires an explicitly enabled
 version-3-or-newer extension, a separate operator grant, two admitted layer
 slots and platform permission. It submits the runtime reconstruction underlay

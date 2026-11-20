@@ -208,6 +208,16 @@ The regression checks packed pixels from two eyes at known depths and rejects
 a stale completion. The same native qualification exercises the full-eye
 graph when the separately cooked motion and reduction programs are supplied.
 
+The opt-in environment lighting program is cooked from
+`assets/shaders/runtime/multiview_environment_mesh.hlsl` using
+`HoroEditorVulkanShaderCook` with `--multiview-environment`. Its
+`.horoshdr` and `.reflection.json` files have a separate artifact identity.
+For native verification, point `HORO_NATIVE_MULTIVIEW_ENVIRONMENT_PAYLOAD`
+and `HORO_NATIVE_MULTIVIEW_ENVIRONMENT_REFLECTION` at this pair and run
+`HoroRenderVulkanTests '[vulkan][multiview][environment][native-smoke]'`
+in the Vulkan and OpenXR Editor test build. It submits the same two-eye
+geometry with explicit lighting and with a withdrawn contribution.
+
 The closed reduction stage is available through the same offline cooker. Cook
 `assets/shaders/runtime/multiview_coverage_reduce.hlsl` with
 `--multiview-coverage-reduction`. Its two input views and two exact active

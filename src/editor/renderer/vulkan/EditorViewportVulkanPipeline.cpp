@@ -414,21 +414,29 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportRendererVulkan::PrepareXrProgram */
-    Result<void> EditorViewportRendererVulkan::PrepareXrProgram(EditorVulkanMultiviewCook cooked) {
+    Result<void> EditorViewportRendererVulkan::PrepareXrProgram(EditorVulkanMultiviewCook cooked,
+                                                                const EditorVulkanMultiviewProgram program) {
         using namespace Render;
         if (owner_ != std::this_thread::get_id() || !initialized_ || recordedEver_ || xrShader_.vertex.IsValid())
             return Result<void>::Failure(MakeError(RendererErrors::ViewportNotInitialized));
         const auto encoded = EncodeReflectedShaderArtifact(cooked.metadata);
         if (encoded.HasError())
             return Result<void>::Failure(encoded.ErrorValue());
-        if (const auto admitted = LoadEditorVulkanMultiviewCook(cooked.payload, encoded.Value()); admitted.HasError())
+        using enum EditorVulkanMultiviewProgram;
+        if (program != Projection && program != EnvironmentLighting)
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+        const bool environment = program == EnvironmentLighting;
+        const auto admitted = environment ? LoadEditorVulkanMultiviewEnvironmentCook(cooked.payload, encoded.Value())
+                                          : LoadEditorVulkanMultiviewCook(cooked.payload, encoded.Value());
+        if (admitted.HasError())
             return Result<void>::Failure(admitted.ErrorValue());
         xrShader_.payload = std::move(cooked.payload);
         xrShader_.metadata = std::move(cooked.metadata);
         if (auto stages = ProgramResources::CreateProgramStages(frontend_, xrShader_); stages.HasError())
             return stages;
         const RenderGraphicsPipelineState state{.cull = RenderCullMode::None, .depthFormat = RenderTextureFormat::Depth32Float};
-        const auto pipeline = ProgramResources::CreatePipelineState(frontend_, xrShader_, EditorVulkanMultiviewShaderManifest(), state);
+        const auto manifest = environment ? EditorVulkanMultiviewEnvironmentShaderManifest() : EditorVulkanMultiviewShaderManifest();
+        const auto pipeline = ProgramResources::CreatePipelineState(frontend_, xrShader_, manifest, state);
         if (pipeline.HasError())
             return Result<void>::Failure(pipeline.ErrorValue());
         xrShader_.pipeline = pipeline.Value();
@@ -442,6 +450,7 @@ namespace Horo::Editor {
                                                             slot * RenderMaterialPass::MaximumDraws + index + 1, xrShader_.pipeline);
                     prepared.HasError())
                     return prepared;
+        xrEnvironmentLighting_ = environment;
         return Result<void>::Success();
     }
 

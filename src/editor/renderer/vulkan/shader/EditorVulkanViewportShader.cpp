@@ -8,6 +8,7 @@
 #include "ShaderReflectionCook.h"
 
 #include <algorithm>
+#include <array>
 
 namespace Horo::Editor {
     /** @copydoc LoadEditorVulkanCoverageReductionCook */
@@ -346,6 +347,57 @@ namespace Horo::Editor {
             return Outcome::Failure(bytes.ErrorValue());
         if (bytes.Value() == 0 || bytes.Value() > 4096)
             return Outcome::Failure(MakeError(Render::ShaderReflectionErrors::LayoutMismatch));
+        return Outcome::Success({{payload.begin(), payload.end()}, std::move(reflection).Value()});
+    }
+
+    /** @copydoc EditorVulkanMultiviewEnvironmentShaderManifest */
+    Render::ShaderManifest EditorVulkanMultiviewEnvironmentShaderManifest() {
+        using namespace Render;
+        using namespace MultiviewShaderParameterIds;
+        using enum ShaderValueType;
+        auto manifest = EditorVulkanMultiviewShaderManifest();
+        manifest.sourceIdentity = "assets/shaders/runtime/multiview_environment_mesh.hlsl";
+        const std::array additions{ShaderParameter{NormalToWorld, Buffer, Float32, 4, 4, 1},
+                                   ShaderParameter{EnvironmentAmbient, Buffer, Float32, 1, 4, 1},
+                                   ShaderParameter{EnvironmentDirectional, Buffer, Float32, 1, 4, 1},
+                                   ShaderParameter{EnvironmentDirection, Buffer, Float32, 1, 4, 1}};
+        manifest.parameters.insert(manifest.parameters.end(), additions.begin(), additions.end());
+        return manifest;
+    }
+
+    /** @copydoc EditorVulkanMultiviewEnvironmentReflectionNames */
+    std::vector<Render::ShaderReflectionBindingName> EditorVulkanMultiviewEnvironmentReflectionNames() {
+        using namespace Render::MultiviewShaderParameterIds;
+        return {{Buffer,
+                 "type.MultiviewEnvironmentParameters",
+                 {{WorldToClip, "WorldToClip"},
+                  {LocalToWorld, "LocalToWorld"},
+                  {ViewLayers, "ViewLayers"},
+                  {NormalToWorld, "NormalToWorld"},
+                  {EnvironmentAmbient, "EnvironmentAmbient"},
+                  {EnvironmentDirectional, "EnvironmentDirectional"},
+                  {EnvironmentDirection, "EnvironmentDirection"}}}};
+    }
+
+    /** @copydoc LoadEditorVulkanMultiviewEnvironmentCook */
+    Result<EditorVulkanMultiviewCook> LoadEditorVulkanMultiviewEnvironmentCook(const std::span<const std::uint8_t> payload,
+                                                                               const std::span<const std::uint8_t> metadata) {
+        using namespace Render;
+        using Outcome = Result<EditorVulkanMultiviewCook>;
+        auto reflection = DecodeReflectedShaderArtifact(EditorVulkanMultiviewEnvironmentShaderManifest(),
+                                                        EditorVulkanViewportShaderTarget(), payload, metadata);
+        if (reflection.HasError())
+            return Outcome::Failure(reflection.ErrorValue());
+        if (const auto vertices = ValidateViewportMeshLayout(reflection.Value().reflection); vertices.HasError())
+            return Outcome::Failure(vertices.ErrorValue());
+        const auto layout = PrepareMaterialBindingLayout(reflection.Value().reflection);
+        if (layout.HasError())
+            return Outcome::Failure(layout.ErrorValue());
+        const auto bytes = MultiviewEnvironmentParameterBytes(layout.Value(), 2);
+        if (bytes.HasError())
+            return Outcome::Failure(bytes.ErrorValue());
+        if (bytes.Value() == 0 || bytes.Value() > 4096)
+            return Outcome::Failure(MakeError(ShaderReflectionErrors::LayoutMismatch));
         return Outcome::Success({{payload.begin(), payload.end()}, std::move(reflection).Value()});
     }
 

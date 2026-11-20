@@ -606,6 +606,7 @@ namespace Horo::XR::OpenXRInternal {
             XrSpace world{XR_NULL_HANDLE};
             XRLightEstimateScope scope;
             XRLightEstimateLimits limits;
+            mutable XRRuntimeTime lastClock; /**< Control-lane high-water mark shared by sampling and reads. */
             XRRuntimeTime lastRequest;
             XRRuntimeTime lastSample;
             std::optional<XRLightEstimate> current;

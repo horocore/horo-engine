@@ -77,9 +77,10 @@ namespace Horo::Editor {
                                                     const std::array<RenderTextureViewHandle, 2> &views,
                                                     const MultiviewPublication &publication, std::span<const MultiviewSceneView> cameras,
                                                     std::span<const RenderStaticMeshInstance> instances, const MotionInput *motion,
-                                                    const EditorXrProjectionAlpha alpha, const AuxiliaryImages *auxiliary) {
+                                                    const EditorXrProjectionAlpha alpha, const AuxiliaryImages *auxiliary,
+                                                    const MultiviewEnvironmentLighting *lighting) {
         return viewport.BindXrFrame(color, views, publication, cameras, instances, motion ? &motion->frame : nullptr,
-                                    motion ? motion->objects : std::span<const RenderMotionObjectId>{}, alpha, auxiliary);
+                                    motion ? motion->objects : std::span<const RenderMotionObjectId>{}, alpha, auxiliary, lighting);
     }
 
     /** @copydoc EditorVulkanXrViewportAccess::TakePremultipliedProjection */
@@ -637,6 +638,7 @@ namespace Horo::Editor {
         // its aliasing shared owner adds no allocation and pins that exact value through queue completion.
         std::shared_ptr<SnapshotStorage> payload{std::make_shared<SnapshotStorage>()};
         std::shared_ptr<const MultiviewSceneSnapshot> scene;
+        MultiviewEnvironmentLighting environment;
         std::array<MultiviewGraphGeometry, RenderMaterialPass::MaximumDraws> draws{};
         std::array<MultiviewGraphTarget, 2> targets{};
         std::size_t drawCount{};
@@ -1305,7 +1307,7 @@ namespace Horo::Editor {
         RenderTextureHandle color, const std::array<RenderTextureViewHandle, 2> &eyeViews, const MultiviewPublication &publication,
         std::span<const MultiviewSceneView> views, std::span<const RenderStaticMeshInstance> instances, const MultiviewMotionFrame *motion,
         std::span<const RenderMotionObjectId> motionObjects, const EditorXrProjectionAlpha alpha,
-        const EditorVulkanXrViewportAccess::AuxiliaryImages *auxiliary) {
+        const EditorVulkanXrViewportAccess::AuxiliaryImages *auxiliary, const MultiviewEnvironmentLighting *lighting) {
         if (owner_ == std::this_thread::get_id() && xrGraph_) {
             xrGraph_->bound = nullptr;
             xrGraph_->active = nullptr;
@@ -1313,6 +1315,7 @@ namespace Horo::Editor {
             xrGraph_->alpha.Reset();
             xrGraph_->encoded.reset();
             xrGraph_->motionFrame.reset();
+            xrGraph_->environment = {};
             xrGraph_->motionSubmitted = false;
             if (auto &coverage = xrGraph_->coverage) {
                 coverage->ResetObservation();
@@ -1323,6 +1326,8 @@ namespace Horo::Editor {
             (alpha != EditorXrProjectionAlpha::Opaque && alpha != EditorXrProjectionAlpha::Premultiplied))
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
         auto &storage = *xrGraph_;
+        if (lighting && (!xrEnvironmentLighting_ || !lighting->IsValid()))
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
         if (const auto &support = frontend_.Capabilities().support;
             support.deviceIncarnation != publication.deviceIncarnation || support.capabilityRevision != publication.capabilityRevision)
             return Result<void>::Failure(MakeError(RendererErrors::ViewportStaleTarget));
@@ -1406,6 +1411,8 @@ namespace Horo::Editor {
             coverage.predecessor = prior.frame;
         }
         storage.bound = bound.Value();
+        if (lighting)
+            storage.environment = *lighting;
         storage.projectionColor = color;
         storage.alpha.Bind(alpha, storage.scene->Publication(), color);
         if (staged)
@@ -1503,9 +1510,12 @@ namespace Horo::Editor {
         constexpr std::array<std::uint32_t, 2> singleLayerRouting{0, 0};
         for (const auto &draw : storage.scene->Draws()) {
             const auto instance = draw.instanceIndex;
+            const auto &localToWorld = storage.scene->Instances()[instance].localToWorld;
             const auto packed =
-                PackMultiviewShaderParameters(xrShader_.layout, storage.scene->Views(), storage.scene->Instances()[instance].localToWorld,
-                                              singleLayerRouting, scratch);
+                xrEnvironmentLighting_
+                    ? PackMultiviewEnvironmentParameters(xrShader_.layout, storage.scene->Views(), localToWorld, singleLayerRouting,
+                                                         storage.environment, scratch)
+                    : PackMultiviewShaderParameters(xrShader_.layout, storage.scene->Views(), localToWorld, singleLayerRouting, scratch);
             if (packed.HasError())
                 return fail(packed.ErrorValue());
             if (packed.Value() != xrShader_.parameterBytes)

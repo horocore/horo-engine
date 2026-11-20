@@ -185,7 +185,7 @@ namespace Horo::XR::OpenXRInternal {
             light_.active = false;
             return Outcome::Failure(MakeError(XRErrors::CoordinateSpaceIncompatible));
         }
-        if (!now.IsValid() || now < light_.lastRequest)
+        if (!now.IsValid() || now < light_.lastClock)
             return Outcome::Failure(MakeError(XRErrors::TimeDomainIncompatible));
 
         const LightOperation operation{lightCall_};
@@ -194,6 +194,7 @@ namespace Horo::XR::OpenXRInternal {
             light_.active = false;
             return Outcome::Failure(native.ErrorValue());
         }
+        light_.lastClock = now;
         if (light_.lastRequest.IsValid() &&
             now.Nanoseconds() - light_.lastRequest.Nanoseconds() < light_.limits.minimumUpdateInterval.ToNanoseconds())
             return Outcome::Success(false);
@@ -254,11 +255,12 @@ namespace Horo::XR::OpenXRInternal {
             return Outcome::Failure(MakeError(XRErrors::IdentityStale));
         if (!light_.active || !light_.current)
             return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
-        if (!now.IsValid() || now < light_.lastRequest)
+        if (!now.IsValid() || now < light_.lastClock)
             return Outcome::Failure(MakeError(XRErrors::TimeDomainIncompatible));
         const LightOperation operation{lightCall_};
         if (const auto native = Borrow(scope.session); native.HasError())
             return Outcome::Failure(native.ErrorValue());
+        light_.lastClock = now;
         if (now.Nanoseconds() - light_.current->sampledAt.Nanoseconds() > light_.limits.maximumAge.ToNanoseconds())
             return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotStale));
         return Outcome::Success(*light_.current);

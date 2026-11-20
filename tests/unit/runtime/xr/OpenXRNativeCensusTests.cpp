@@ -260,6 +260,9 @@ namespace Horo::Tests::OpenXR {
             CHECK(fixture.script.sampleCalls == 2);
             CHECK(fixture.Read(130).HasValue());
             RequireFailureIdentity(fixture.Read(131), XRErrors::TrackingSnapshotStale);
+            RequireFailureIdentity(fixture.Read(130), XRErrors::TimeDomainIncompatible);
+            RequireFailureIdentity(fixture.Advance(130), XRErrors::TimeDomainIncompatible);
+            CHECK(fixture.script.sampleCalls == 2);
             RequireFailureIdentity(fixture.Advance(131), XRErrors::TrackingSnapshotStale);
             RequireFailureIdentity(fixture.Read(131), XRErrors::OperationUnavailable);
         }

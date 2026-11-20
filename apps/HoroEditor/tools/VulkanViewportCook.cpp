@@ -28,6 +28,7 @@ namespace {
         RuntimeUiPaint,
         SceneLinear,
         Multiview,
+        MultiviewEnvironment,
         Shadow,
         MultiviewMotion,
         MultiviewCoverage,
@@ -58,6 +59,8 @@ namespace {
                 return {};  // The signed release and standalone route use their shared complete request.
             case Multiview:
                 return Editor::EditorVulkanMultiviewShaderManifest();
+            case MultiviewEnvironment:
+                return Editor::EditorVulkanMultiviewEnvironmentShaderManifest();
             case Shadow:
                 return Editor::EditorVulkanShadowShaderManifest();
             case MultiviewMotion:
@@ -86,6 +89,8 @@ namespace {
                 return {};
             case Multiview:
                 return Editor::EditorVulkanMultiviewReflectionNames();
+            case MultiviewEnvironment:
+                return Editor::EditorVulkanMultiviewEnvironmentReflectionNames();
             case Shadow:
                 return Editor::EditorVulkanShadowReflectionNames();
             case MultiviewMotion:
@@ -111,6 +116,7 @@ namespace {
                                         NamedCookMode{CookMode::RuntimeUiPaint, "runtime-ui-paint"},
                                         NamedCookMode{CookMode::SceneLinear, "scene-linear"},
                                         NamedCookMode{CookMode::Multiview, "multiview"},
+                                        NamedCookMode{CookMode::MultiviewEnvironment, "multiview-environment"},
                                         NamedCookMode{CookMode::Shadow, "shadow"},
                                         NamedCookMode{CookMode::MultiviewMotion, "multiview-motion"},
                                         NamedCookMode{CookMode::MultiviewCoverage, "multiview-coverage"},
@@ -219,6 +225,8 @@ namespace {
                 return Admit(Editor::LoadEditorVulkanSceneLinearCook(artifact.payload, metadata));
             case Multiview:
                 return Admit(Editor::LoadEditorVulkanMultiviewCook(artifact.payload, metadata));
+            case MultiviewEnvironment:
+                return Admit(Editor::LoadEditorVulkanMultiviewEnvironmentCook(artifact.payload, metadata));
             case Shadow:
                 return Admit(Editor::LoadEditorVulkanShadowCook(artifact.payload, metadata));
             case MultiviewMotion:
@@ -390,7 +398,8 @@ int main(int argc, char **argv) {
     const bool manualColorOutput = argc == 9 && std::string_view{argv[7]} == "--color-output-manual";
     if (!mode && !reconstruction && !manualColorOutput) {
         std::cerr << "Usage: HoroEditorVulkanShaderCook source.hlsl output-prefix scratch-root dxc spirv-val spirv-cross "
-                     "[--scene-linear|--multiview|--multiview-motion|--multiview-coverage|--multiview-coverage-reduction|--shadow|--"
+                     "[--scene-linear|--multiview|--multiview-environment|--multiview-motion|--multiview-coverage|"
+                     "--multiview-coverage-reduction|--shadow|--"
                      "temporal-linear-depth|"
                      "--temporal-motion|--camera-cross-fade|--runtime-ui-paint]\n"
                      "       HoroEditorVulkanShaderCook source.hlsl absolute-new-stage scratch-root dxc spirv-val spirv-cross "

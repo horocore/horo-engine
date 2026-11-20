@@ -48,10 +48,12 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> PrepareCameraCrossFadeFrame(const std::optional<EditorViewportCameraCrossFade> &crossFade) override;
         /** @brief Cold-prepares the actual canonical multiview program before selected XR can publish Ready.
          * @param cooked Same admitted compiler/reflection output loaded from the explicit packaged asset root.
+         * @param program Explicitly selected baseline or separate optional environment-lit variant.
          * @return Exact interface/native/material error, without changing ordinary desktop pipeline selection.
          * @pre Initialized selected Vulkan owner, before any interactive frame or graph recording.
          */
-        [[nodiscard]] Result<void> PrepareXrProgram(EditorVulkanMultiviewCook cooked);
+        [[nodiscard]] Result<void> PrepareXrProgram(EditorVulkanMultiviewCook cooked,
+                                                    EditorVulkanMultiviewProgram program = EditorVulkanMultiviewProgram::Projection);
         /** @brief Retains the optional packaged motion program before any rendering begins.
          * @param cooked Optional decoded
          * bundle from the selected packaged root.
@@ -99,6 +101,7 @@ namespace Horo::Editor {
          * @param motion Optional exact native prediction. @param motionObjects Stable object IDs aligned with instances.
          * @param alpha Explicit color policy for the selected canonical XR program.
          * @param auxiliary Exact auxiliary imports, when the selected frame has compatible history.
+         * @param lighting Optional same-frame renderer-owned environment input, borrowed only for the bind.
          * @return Success or original stale/capacity/tuple failure; no compilation, heap allocation or native wait.
          * @pre Previous acquisition's scene AND GUI tail references have retired. A failed bind cannot be executed.
          */
@@ -109,7 +112,8 @@ namespace Horo::Editor {
                                                std::span<const Render::RenderStaticMeshInstance> instances,
                                                const Render::MultiviewMotionFrame *motion,
                                                std::span<const Render::RenderMotionObjectId> motionObjects, EditorXrProjectionAlpha alpha,
-                                               const EditorVulkanXrViewportAccess::AuxiliaryImages *auxiliary = nullptr);
+                                               const EditorVulkanXrViewportAccess::AuxiliaryImages *auxiliary = nullptr,
+                                               const Render::MultiviewEnvironmentLighting *lighting = nullptr);
         /** @brief Ends current projection evidence and admits exact native projection into transform history.
          * @pre Same frame's successful native compositor end on the render owner lane.
          */
@@ -431,6 +435,7 @@ namespace Horo::Editor {
         bool crossFadeSceneReady_{};
         ShaderResources shadowShader_;
         ShaderResources xrShader_;
+        bool xrEnvironmentLighting_{};
         std::optional<EditorVulkanMultiviewCook> xrMotionCook_;
         std::optional<EditorVulkanMultiviewCook> xrCoverageCook_;
         std::vector<std::uint8_t> xrCoverageReductionArtifact_;

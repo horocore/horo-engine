@@ -591,6 +591,73 @@ namespace {
     }
 }  // namespace
 
+TEST_CASE("Vulkan executes the selected multiview environment program with active and withdrawn lighting",
+          "[vulkan][multiview][environment][native-smoke]") {
+    const char *payloadPath = std::getenv("HORO_NATIVE_MULTIVIEW_ENVIRONMENT_PAYLOAD");
+    const char *reflectionPath = std::getenv("HORO_NATIVE_MULTIVIEW_ENVIRONMENT_REFLECTION");
+    if (!payloadPath || !reflectionPath)
+        SKIP("Cook the multiview environment program for native qualification.");
+    const auto cook =
+        SubmissionTest::Take(Editor::LoadEditorVulkanMultiviewEnvironmentCook(ReadShader(payloadPath), ReadShader(reflectionPath)));
+    NativeTransformFixture fixture;
+    fixture.Initialize();
+    auto &backend = *fixture.backend;
+    const auto &support = backend.Capabilities().support;
+    const RenderGraphicsPipelineState state{.cull = RenderCullMode::None,
+                                            .depthTest = false,
+                                            .depthWrite = false,
+                                            .depthFormat = std::nullopt};
+    PrepareNativeCoverageProgram(fixture, cook, Editor::EditorVulkanMultiviewEnvironmentShaderManifest(), state);
+    fixture.PrepareDraw(false, {0, 0, 1});
+    const RenderMeshHandle mesh{{1}, 11, 1};
+    const auto color = NativeCoverageTarget(backend, RenderTextureFormat::Rgba8Unorm, RenderTextureUsage::RenderAttachment, 20);
+    const auto model = Math::Mat4::Identity();
+    const std::array eyes{MultiviewSceneView{0, model}, MultiviewSceneView{1, model}};
+    const std::array layers{0U, 0U};
+    const auto layout = SubmissionTest::Take(PrepareMaterialBindingLayout(cook.metadata.reflection));
+    const auto size = SubmissionTest::Take(MultiviewEnvironmentParameterBytes(layout, eyes.size()));
+    const MultiviewEnvironmentLighting active{.ambient = Math::Vec3{0.5F, 0.25F, 0.125F}, .directional = RenderLight{.stableIdentity = 1}};
+    const bool enabled = GENERATE(true, false);
+    CAPTURE(enabled);
+    const MultiviewPublication publication{1, 1, 1, 1, support.deviceIncarnation, support.capabilityRevision};
+    std::vector<std::byte> uniform(size);
+    REQUIRE(PackMultiviewEnvironmentParameters(layout, eyes, model, layers, enabled ? active : MultiviewEnvironmentLighting{}, uniform)
+                .HasValue());
+    NativeCoverageDraw draw{.uniform = {{1}, 70, 1}};
+    PublishNativeCoverageDraw(fixture, draw, std::move(uniform), publication, eyes, mesh, model);
+
+    auto builder = SubmissionTest::Take(RenderGraphBuilder::Create());
+    const auto pass = SubmissionTest::Take(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
+    const auto image = SubmissionTest::Take(builder.ImportTexture(color.texture, RenderGraphResourceClass::External));
+    REQUIRE(builder.ExportResource(image).HasValue());
+    REQUIRE(builder.AddUsage({pass, image, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment}).HasValue());
+    const auto buffer = [&](const RenderBufferHandle handle, const RenderGraphUsageKind usage) {
+        const auto resource = SubmissionTest::Take(builder.ImportBuffer(handle, RenderGraphResourceClass::Persistent));
+        REQUIRE(builder.AddUsage({pass, resource, RenderGraphAccess::Read, usage}).HasValue());
+        return resource;
+    };
+    const auto vertex = buffer({{1}, 7, 1}, RenderGraphUsageKind::VertexBuffer);
+    const auto index = buffer({{1}, 8, 1}, RenderGraphUsageKind::IndexBuffer);
+    const auto parameters = buffer(draw.uniform, RenderGraphUsageKind::UniformBuffer);
+    const RenderGraphLogicalState input{RenderGraphSynchronizationAccess::Read,
+                                        RenderGraphSynchronizationOperation::GraphicsInputBuffer,
+                                        RenderGraphPipelineScope::Graphics,
+                                        RenderGraphTextureLayout::NotApplicable,
+                                        {1}};
+    const std::array initial{RenderGraphImportedState{image, {}, RenderGraphInitialContents::Discarded},
+                             RenderGraphImportedState{vertex, input}, RenderGraphImportedState{index, input},
+                             RenderGraphImportedState{parameters, input}};
+    const std::array resources{RenderGraphResourceInstance{image, color.instance}, RenderGraphResourceInstance{vertex, fixture.vertices},
+                               RenderGraphResourceInstance{index, fixture.indices},
+                               RenderGraphResourceInstance{parameters, draw.nativeUniform}};
+    const std::array targets{MultiviewGraphTarget{image, {}, color.eyes[0].view, {}, {0, 0, 8, 8}, 0},
+                             MultiviewGraphTarget{image, {}, color.eyes[1].view, {}, {0, 0, 8, 8}, 1}};
+    const std::array geometry{MultiviewGraphGeometry{0, vertex, index, parameters, draw.material}};
+    const std::array workloads{RenderGraphPassWorkload{pass, RenderGraphMultiview{draw.scene, publication, targets, geometry}}};
+    const std::array meshes{RenderGraphMeshInstance{mesh, fixture.mesh}};
+    SubmitNativeCoverageGraph(backend, builder, initial, workloads, resources, 1, meshes, color.eyes);
+}
+
 TEST_CASE("Vulkan native coverage pixels classify exact stereo depth and copy through the completed graph",
           "[vulkan][multiview][coverage][native-smoke]") {
     const char *ordinaryPayload = std::getenv("HORO_NATIVE_MULTIVIEW_PAYLOAD");

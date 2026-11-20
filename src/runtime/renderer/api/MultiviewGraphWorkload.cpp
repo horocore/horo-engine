@@ -102,15 +102,24 @@ namespace Horo::Render {
             return true;
         }
 
+        /** @brief Selects the exact uniform ABI from the output kind and the reflected projection layout. */
+        [[nodiscard]] Result<std::size_t> ParameterBytes(const MaterialBindingLayout &layout, const MultiviewOutput output,
+                                                         const std::size_t viewCount) {
+            if (output != MultiviewOutput::ProjectionColor)
+                return MultiviewMotionParameterBytes(layout, viewCount);
+            const auto normal =
+                std::ranges::find(layout.parameters, MultiviewShaderParameterIds::NormalToWorld, &ShaderReflectedParameter::id);
+            return normal == layout.parameters.end() ? MultiviewShaderParameterBytes(layout, viewCount)
+                                                     : MultiviewEnvironmentParameterBytes(layout, viewCount);
+        }
+
         /** @brief Matches the explicit uniform dependency to the material's actual logical buffer generation. */
         [[nodiscard]] bool ParameterBindingMatches(const CompiledRenderGraphExecution &graph, const MultiviewGraphGeometry &geometry,
                                                    const RenderGraphMultiview &workload) {
             using namespace MultiviewShaderParameterIds;
             const auto &descriptor = geometry.material->Descriptor();
             const auto viewCount = workload.targets.size();
-            const auto size = workload.output == MultiviewOutput::ProjectionColor
-                                  ? MultiviewShaderParameterBytes(descriptor.layout, viewCount)
-                                  : MultiviewMotionParameterBytes(descriptor.layout, viewCount);
+            const auto size = ParameterBytes(descriptor.layout, workload.output, viewCount);
             const bool coverage = workload.output == MultiviewOutput::ReprojectionCoverage;
             if (descriptor.resources.size() != (coverage ? 1 + viewCount : 1) || size.HasError())
                 return false;

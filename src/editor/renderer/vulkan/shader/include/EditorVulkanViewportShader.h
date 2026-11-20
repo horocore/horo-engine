@@ -106,6 +106,23 @@ namespace Horo::Editor {
         Render::ReflectedShaderArtifact metadata;
     };
 
+    /** @brief Independently packaged selectable color program, with baseline projection always supported. */
+    enum class EditorVulkanMultiviewProgram : std::uint8_t {
+        Projection,
+        EnvironmentLighting
+    };
+
+    /** @brief Separate renderer-owned multiview lighting artifact. */
+    [[nodiscard]] Render::ShaderManifest EditorVulkanMultiviewEnvironmentShaderManifest();
+    /** @brief Closed logical member names for the reflected lighting uniforms. */
+    [[nodiscard]] std::vector<Render::ShaderReflectionBindingName> EditorVulkanMultiviewEnvironmentReflectionNames();
+    /** @brief Checks the complete environment program and its exact normal/color ABI.
+     * @param payload Same-operation SPIR-V package. @param metadata Exact reflected sidecar.
+     * @return Owned environment variant or typed reflection/layout failure.
+     */
+    [[nodiscard]] Result<EditorVulkanMultiviewCook> LoadEditorVulkanMultiviewEnvironmentCook(std::span<const std::uint8_t> payload,
+                                                                                             std::span<const std::uint8_t> metadata);
+
     /** @brief Validates actual immutable payload, canonical reflection and bounded multiview uniform ABI before realization.
      * @param payload Same compile-boundary SPIR-V package. @param metadata Its canonical immutable reflected record.
      * @return Exact accepted multipass program or original altered/target/interface/layout error; no reflected layout is invented.
