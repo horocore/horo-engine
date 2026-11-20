@@ -128,11 +128,25 @@ namespace Horo::Application::Internal {
         }
     };
 
+    /** @brief Maps one explicitly public authored action to a stable positive presentation tag. */
+    struct HeadlessAnimationActionTag final {
+        Animation::GraphActionId action;
+        std::int32_t tag{};
+    };
+
+    /** @brief Exact graph and slot allowed to contribute an action tag to the selected schema. */
+    struct HeadlessAnimationActionSelection final {
+        Animation::AnimationGraphId graph;
+        Animation::GraphActionSlotId slot;
+        std::vector<HeadlessAnimationActionTag> tags;
+    };
+
     /** @brief Explicit installed schema and public Scene fields for authority capture. */
     struct HeadlessSceneTransformReplication final {
         Network::ReplicationSchemaId schema;
         Network::ReplicationSchemaVersion version;
         std::vector<Network::SceneReplicationFieldBinding> fields;
+        std::optional<HeadlessAnimationActionSelection> action;
     };
 
     /** @brief Opts one authored actor into a public scalar input on its presentation graph. */

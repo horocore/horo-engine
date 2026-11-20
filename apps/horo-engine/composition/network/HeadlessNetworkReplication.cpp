@@ -411,7 +411,7 @@ namespace Horo::Application::Internal {
             return InitialReceiver::Success({std::move(owner), std::move(receiver).Value()});
         }
 
-        /** @brief Validates the complete transform field set and its actual installed scalar serializers. */
+        /** @brief Validates the complete field set and its actual installed scalar serializers. */
         bool MatchesPublicTransformFields(const HeadlessSceneTransformReplication &selection,
                                           const Gameplay::GameplayReplicationLease &installed) {
             const auto schema = installed.Descriptors()->Find(selection.schema);
@@ -421,7 +421,10 @@ namespace Horo::Application::Internal {
 
             return std::ranges::all_of(selection.fields, [&](const auto &field) {
                 const auto descriptor = installed.Serializers().DescriptorFor(selection.schema, field.field);
-                return descriptor.HasValue() && descriptor.Value()->valueKind == Network::ReplicationValueKind::FloatingPoint;
+                const auto kind = field.property == Net::SceneReplicationProperty::AnimationActionTag
+                                      ? Net::ReplicationValueKind::SignedInteger
+                                      : Net::ReplicationValueKind::FloatingPoint;
+                return descriptor.HasValue() && descriptor.Value()->valueKind == kind;
             });
         }
 
@@ -442,6 +445,56 @@ namespace Horo::Application::Internal {
                     return Result<Math::Vec3>::Failure(MakeError(Net::ReplicationCaptureErrors::Invalid));
                 return scoped->native.ReadCharacterVelocity(entity.entity.runtime, *entity.authoredObject, controller->id);
             };
+        }
+
+        /** @brief Projects only the admitted tag from one exact resident authoritative pose. */
+        Result<std::int32_t> ReadActionTag(const Runtime::SceneAnimationRuntime &animation, Runtime::EntityRef entity,
+                                           const HeadlessAnimationActionSelection &selection) {
+            using Tag = Result<std::int32_t>;
+            const auto observed = animation.Query(entity);
+            if (observed.HasError())
+                return Tag::Failure(observed.ErrorValue());
+            if (observed.Value().authoring.source.graph != selection.graph)
+                return Tag::Failure(MakeError(Net::ReplicationCaptureErrors::Invalid));
+            const auto &component = observed.Value().component;
+            if (!component)
+                return Tag::Failure(MakeError(Net::ReplicationCaptureErrors::Uncommitted));
+            std::array<Animation::GraphActionSlotObservation, Animation::AnimationGraphHardLimits::ActionSlots> slots;
+            std::uint32_t written{};
+            if (component->domain != Animation::AnimationEvaluationDomain::AuthoritativeSimulation ||
+                animation.CopyActionSlots(entity, component->currentPose, slots, written).HasError())
+                return Tag::Failure(MakeError(Net::ReplicationCaptureErrors::Stale));
+            const auto available = std::span{slots}.first(written);
+            const auto slot = std::ranges::find(available, selection.slot, &Animation::GraphActionSlotObservation::slot);
+            if (slot == available.end())
+                return Tag::Failure(MakeError(Net::ReplicationCaptureErrors::Invalid));
+            const auto tag = std::ranges::lower_bound(selection.tags, slot->action, {}, &HeadlessAnimationActionTag::action);
+            return Tag::Success(slot->active.IsValid() && tag != selection.tags.end() && tag->action == slot->action ? tag->tag : 0);
+        }
+
+        /** @brief Validates the public action list and binds it to the exact authority World owner. */
+        Result<Net::SceneReplicationActionSource> SelectAnimationAction(const std::shared_ptr<WorldRecord> &record,
+                                                                        const std::optional<HeadlessAnimationActionSelection> &selection) {
+            using Source = Result<Net::SceneReplicationActionSource>;
+            if (!selection)
+                return Source::Success({});
+            if (!record->animation || !selection->graph.IsValid() || !selection->slot.IsValid() || selection->tags.empty() ||
+                selection->tags.size() > Animation::AnimationGraphHardLimits::Actions)
+                return Source::Failure(MakeError(Net::ReplicationCaptureErrors::Invalid));
+            auto admitted = *selection;
+            std::ranges::sort(admitted.tags, {}, &HeadlessAnimationActionTag::action);
+            if (std::ranges::adjacent_find(admitted.tags, {}, &HeadlessAnimationActionTag::action) != admitted.tags.end() ||
+                std::ranges::any_of(admitted.tags, [](const auto &tag) {
+                return !tag.action.IsValid() || tag.tag <= 0;
+            }))
+                return Source::Failure(MakeError(Net::ReplicationCaptureErrors::Invalid));
+            return Source::Success(
+                [owner = std::weak_ptr{record}, admitted = std::move(admitted)](const Runtime::RuntimeEntityView &entity) {
+                const auto scoped = owner.lock();
+                if (!scoped || scoped->closeRequested || !scoped->animation)
+                    return Result<std::int32_t>::Failure(MakeError(Net::ReplicationCaptureErrors::Stale));
+                return ReadActionTag(*scoped->animation, entity.entity, admitted);
+            });
         }
 
         /** @brief Resolves one object against the committed Scene and the admitted live schema registry. */
@@ -869,9 +922,13 @@ namespace Horo::Application::Internal {
         if (!owners_->fixed || !installed || std::ranges::find(admitted, selection->schema) == admitted.end() ||
             !MatchesPublicTransformFields(*selection, *installed))
             return invalid();
+        auto action = SelectAnimationAction(record_, selection->action);
+        if (action.HasError())
+            return Result<void>::Failure(action.ErrorValue());
         auto source = Network::SceneReplicationCommitSource::CreateObserved(request_.scene, owners_->fixed->Source(), selection->schema,
                                                                             selection->version, selection->fields, record_,
-                                                                            SelectCharacterVelocity(record_, selection->fields));
+                                                                            SelectCharacterVelocity(record_, selection->fields),
+                                                                            std::move(action).Value());
         if (source.HasError())
             return Result<void>::Failure(std::move(source).ErrorValue());
         record_->publicTransforms = std::move(source).Value();

@@ -63,6 +63,12 @@ namespace Horo::Network {
 
         /** @brief Applies one finite representable network scalar to a declared typed property. */
         Result<void> SetField(Math::Transform &transform, const SceneReplicationProperty property, const ReplicationRuntimeValue &value) {
+            if (property == SceneReplicationProperty::AnimationActionTag) {
+                if (const auto *tag = std::get_if<std::int64_t>(&value);
+                    tag && *tag >= 0 && *tag <= std::numeric_limits<std::int32_t>::max())
+                    return Result<void>::Success();
+                return Result<void>::Failure(MakeError(ReplicationStateErrors::Invalid));
+            }
             const auto *number = std::get_if<double>(&value);
             if (!number || !std::isfinite(*number) || std::abs(*number) > std::numeric_limits<float>::max())
                 return Result<void>::Failure(MakeError(ReplicationStateErrors::Invalid));
@@ -88,7 +94,7 @@ namespace Horo::Network {
 
         /** @brief Validates stable sorted field identities before indexing their transform properties. */
         bool ValidField(const SceneReplicationFieldBinding &field, const FieldId previous) noexcept {
-            return field.field.IsValid() && field.field != previous && field.property <= SceneReplicationProperty::LinearVelocityZ;
+            return field.field.IsValid() && field.field != previous && field.property <= SceneReplicationProperty::AnimationActionTag;
         }
 
         /** @brief Owns exactly one field per transform property for both Scene ownership modes. */

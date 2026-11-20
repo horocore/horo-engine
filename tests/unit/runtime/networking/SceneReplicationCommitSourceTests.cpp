@@ -1,6 +1,8 @@
 #include "AllocationProbe.h"
+#include "Horo/Network/SceneReplicationApplyOwner.h"
 #include "Horo/Runtime/RuntimeHost.h"
 #include "ReplicationCaptureTestSupport.h"
+#include "ReplicationStateCodecTestSupport.h"
 
 #include <limits>
 
@@ -124,10 +126,11 @@ namespace Horo::Network {
 
             ObservedSceneFixture() : ObservedSceneFixture(TransformBindings(), {}) {}
 
-            ObservedSceneFixture(std::span<const SceneReplicationFieldBinding> fields, SceneReplicationVelocitySource velocity) {
+            ObservedSceneFixture(std::span<const SceneReplicationFieldBinding> fields, SceneReplicationVelocitySource velocity,
+                                 SceneReplicationActionSource action = {}) {
                 auto selected = SceneReplicationCommitSource::CreateObserved(scene.scene->View().RuntimeId(), runtime->DispatchSource(),
                                                                              mapping.provenance.schema, mapping.provenance.schemaVersion,
-                                                                             fields, owner, std::move(velocity));
+                                                                             fields, owner, std::move(velocity), std::move(action));
                 REQUIRE(selected.HasValue());
                 source = std::move(selected).Value();
                 auto participant = std::make_unique<ObservedScene>(scene, source);
@@ -147,6 +150,44 @@ namespace Horo::Network {
             }
         };
     }  // namespace
+
+    TEST_CASE("Declared public action tags cross the scalar codec and apply without steering the Scene",
+              "[network][capture][scene][actions]") {
+        const std::array fields{SceneReplicationFieldBinding{FieldIdValue(1), SceneReplicationProperty::AnimationActionTag}};
+        std::int32_t tag = 31;
+        ObservedSceneFixture fixture{fields, {}, [&tag](const Runtime::RuntimeEntityView &) {
+            return Result<std::int32_t>::Success(tag);
+        }};
+        REQUIRE(fixture.Step().HasValue());
+        const auto descriptor = BuildReplicationDescriptorSnapshot(std::array{Schema(10, {Field(1)})}, Limits).Value();
+        const auto scalar = CanonicalScalarReplicationSerializer::Create(
+                                {ValueType(1), Codec(1), {.value = "game.replication"}, ReplicationValueKind::SignedInteger, {}, 8, 1})
+                                .Value();
+        const std::array<std::shared_ptr<const IReplicationFieldSerializer>, 1> serializers{scalar};
+        const auto registry =
+            std::make_shared<const ReplicationSerializerRegistry>(ReplicationSerializerRegistry::Create(descriptor, serializers).Value());
+        const std::array targets{ReplicationCaptureTarget{fixture.mapping, fixture.source}};
+        auto capture = ReplicationStateCapture::Prepare(fixture.Open().Value(), registry, targets).Value();
+        const auto codec = StateCodecTestSupport::MakeCodec(registry);
+        const auto apply = SceneReplicationApplyOwner::Create(fixture.scene.scene, fixture.mapping.provenance.schema,
+                                                              fixture.mapping.provenance.schemaVersion, fields)
+                               .Value();
+        const auto publish = [&] {
+            return fixture.source->CaptureAfterCommit(fixture.scene.lifecycle, *capture, Runtime::RuntimePhase::NetworkFlush).Value();
+        };
+        REQUIRE(publish().published == 1);
+        const auto first = capture->Latest(fixture.mapping.object).Value();
+        const auto decoded = codec->Decode(codec->Encode(first).Value(), fixture.mapping).Value();
+        REQUIRE(decoded.Fields().size() == 1);
+        CHECK(std::get<std::int64_t>(decoded.Fields().front().value) == tag);
+        const std::array updates{ReplicationApplyUpdate{fixture.mapping, StateCodecTestSupport::Recipient(), decoded}};
+        REQUIRE(apply->Prepare(updates).Value()->Commit({}).HasValue());
+        CHECK(fixture.scene.scene->View().Get(fixture.mapping.entity).Value().localTransform->translation == Math::Vec3{3, 4, 5});
+        REQUIRE(fixture.Step().HasValue());
+        tag = -1;
+        CHECK(publish().failed == 1);
+        CHECK(capture->Latest(fixture.mapping.object).Value() == first);
+    }
 
     TEST_CASE("Observed Scene captures only declared Character velocity axes with the committed transform", "[network][capture][scene]") {
         using enum SceneReplicationProperty;

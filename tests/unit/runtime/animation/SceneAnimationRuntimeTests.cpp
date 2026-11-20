@@ -1,4 +1,5 @@
 #include "AllocationProbe.h"
+#include "AnimationActionTestFixtures.h"
 #include "AnimationPoseCompositionTestFixtures.h"
 #include "AnimationStateGraphTestFixtures.h"
 #include "animation/AnimationRuntimeFixture.h"
@@ -6,6 +7,35 @@
 #include <catch2/catch_approx.hpp>
 
 namespace Horo::Animation {
+    TEST_CASE("Scene action slots expose committed authority state and preserve old pose observations", "[animation][scene][actions]") {
+        Test::Scene::Fixture fixture(false, true, [](Test::Cook::Fixture &cook) -> std::optional<AnimationAuthoringComponent> {
+            const Test::Actions::Prepared action;
+            cook.Replace(*action.skeleton, action.compileClips, action.graph);
+            return std::nullopt;
+        });
+        auto &owner = *fixture.forward->adapter;
+        const auto queued = owner.QueueAction(fixture.entity, Test::Actions::Request());
+        REQUIRE(queued.HasValue());
+        CHECK_FALSE(fixture.Observation().component);
+        REQUIRE(fixture.Tick().HasValue());
+        const auto first = fixture.Observation();
+        REQUIRE(first.component);
+        std::array<GraphActionSlotObservation, 1> slots;
+        std::uint32_t written{};
+        REQUIRE(owner.CopyActionSlots(fixture.entity, first.component->currentPose, slots, written).HasValue());
+        REQUIRE(written == 1);
+        CHECK(slots.front().active == queued.handle);
+        REQUIRE(owner.CancelAction(fixture.entity, queued.handle, GraphActionStopPolicy::Cut).HasValue());
+        REQUIRE(fixture.Tick().HasValue());
+        const auto idle = fixture.Observation();
+        REQUIRE(idle.component);
+        REQUIRE(owner.CopyActionSlots(fixture.entity, idle.component->currentPose, slots, written).HasValue());
+        CHECK_FALSE(slots.front().active.IsValid());
+        REQUIRE(owner.CopyActionSlots(fixture.entity, first.component->currentPose, slots, written).HasValue());
+        CHECK(slots.front().action == Test::Actions::Request().action);
+        REQUIRE(owner.ReleaseActionResult(fixture.entity, queued.handle).HasValue());
+    }
+
     TEST_CASE("Actual Animation Scene loads real AST Graph or Clip artifacts and publishes genuine first-pose baseline",
               "[animation][scene][lifecycle][native]") {
         bool clip{};

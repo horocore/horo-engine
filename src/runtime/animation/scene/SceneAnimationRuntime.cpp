@@ -136,4 +136,50 @@ namespace Horo::Runtime {
             return Rejected(A::GraphInstanceFailure::HandleStale);
         return actor->graph.CopyPose(pose, output);
     }
+
+    /** @copydoc SceneAnimationRuntime::ResolveActionGraph */
+    std::pair<A::AnimationGraphInstance *, A::GraphActionFailure> SceneAnimationRuntime::ResolveActionGraph(EntityRef entity) const {
+        using enum A::GraphActionFailure;
+        if (!state_->OnOwner())
+            return {nullptr, ThreadViolation};
+        if (state_->closed || state_->config.ownerCancellation.IsCancellationRequested() ||
+            state_->config.evaluationDomain != A::AnimationEvaluationDomain::AuthoritativeSimulation)
+            return {nullptr, Closed};
+        if (state_->attempting)
+            return {nullptr, EvaluationPending};
+        const auto actor = state_->Find(entity);
+        return actor ? std::pair{&actor->graph, None} : std::pair<A::AnimationGraphInstance *, A::GraphActionFailure>{nullptr, HandleStale};
+    }
+
+    /** @copydoc SceneAnimationRuntime::QueueAction */
+    A::GraphActionCommandOutcome SceneAnimationRuntime::QueueAction(EntityRef entity, const A::GraphActionRequest &request) {
+        const auto [graph, failure] = ResolveActionGraph(entity);
+        return graph ? graph->QueueAction(request) : A::GraphActionCommandOutcome{failure};
+    }
+
+    /** @copydoc SceneAnimationRuntime::CancelAction */
+    A::GraphActionCommandOutcome SceneAnimationRuntime::CancelAction(EntityRef entity, const A::GraphActionHandle &handle,
+                                                                     A::GraphActionStopPolicy policy) {
+        const auto [graph, failure] = ResolveActionGraph(entity);
+        return graph ? graph->CancelAction(handle, policy) : A::GraphActionCommandOutcome{failure};
+    }
+
+    /** @copydoc SceneAnimationRuntime::ReleaseActionResult */
+    A::GraphActionCommandOutcome SceneAnimationRuntime::ReleaseActionResult(EntityRef entity, const A::GraphActionHandle &handle) {
+        const auto [graph, failure] = ResolveActionGraph(entity);
+        return graph ? graph->ReleaseActionResult(handle) : A::GraphActionCommandOutcome{failure};
+    }
+
+    /** @copydoc SceneAnimationRuntime::CopyActionSlots */
+    A::GraphInstanceOutcome SceneAnimationRuntime::CopyActionSlots(EntityRef entity, const A::PoseHandle &pose,
+                                                                   std::span<A::GraphActionSlotObservation> output,
+                                                                   std::uint32_t &written) const {
+        written = 0;
+        if (!state_->OnOwner())
+            return Rejected(A::GraphInstanceFailure::ThreadViolation);
+        const auto actor = state_->Find(entity);
+        if (!actor)
+            return Rejected(A::GraphInstanceFailure::HandleStale);
+        return actor->graph.CopyActionSlots(pose, output, written);
+    }
 }  // namespace Horo::Runtime

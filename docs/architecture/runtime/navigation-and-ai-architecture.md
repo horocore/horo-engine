@@ -3269,6 +3269,11 @@ The execution of AI simulation phases is strictly governed by the host process's
   Physics state.
   Existing transform-only declarations use the same field identifiers and
   values. Rebuild native consumers of the observed Scene capture factory.
+  A schema can also declare a signed AnimationActionTag field and select one
+  authoritative graph and action slot. Explicit action bindings assign
+  positive tags. Idle or unlisted actions publish zero. The client can bind
+  the tag to an integer presentation-graph parameter. The tag carries no
+  action handles, queues, clip time, or request history.
   Existing Scene animation configurations retain the authoritative default.
   Rebuild native consumers for the appended configuration field.
 - **Server State Privacy**: Agent perception memories (e.g. sight awareness meters, target tracking scores) and `BlackboardState` internal representations (behavior tree execution nodes, patrol indices, threat scoring matrices) are **server-private**.

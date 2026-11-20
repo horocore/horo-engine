@@ -8,7 +8,7 @@
 #include <exception>
 
 namespace Horo::Network::Detail {
-    inline constexpr std::size_t SceneTransformPropertyCount = static_cast<std::size_t>(SceneReplicationProperty::LinearVelocityZ) + 1;
+    inline constexpr std::size_t SceneTransformPropertyCount = static_cast<std::size_t>(SceneReplicationProperty::AnimationActionTag) + 1;
     using SceneTransformProperties = std::bitset<SceneTransformPropertyCount>;
 
     /** @brief Finds the set entry for a previously validated transform binding. */

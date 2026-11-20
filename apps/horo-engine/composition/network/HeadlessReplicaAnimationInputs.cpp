@@ -6,6 +6,13 @@
 
 namespace Horo::Application::Internal::HeadlessNetworkDetail {
     namespace {
+        /** @brief Retains the scalar type validated by the Scene apply owner. */
+        Animation::GraphParameterValue GraphParameter(const Network::ReplicationRuntimeValue &value) {
+            if (const auto *number = std::get_if<double>(&value))
+                return static_cast<float>(*number);
+            return static_cast<std::int32_t>(std::get<std::int64_t>(value));
+        }
+
         /** @brief Matches one authored object and one field declared in the public Scene schema. */
         bool IsPublicBinding(const HeadlessSceneActivationInput &input, const HeadlessReplicaAnimationBinding &binding) {
             return binding.object.IsValid() && binding.field.IsValid() && binding.parameter.IsValid() &&
@@ -85,7 +92,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             for (const auto &binding : bindings) {
                 const auto field = std::ranges::find(fields, binding.field, &Network::ReplicationCapturedField::field);
                 if (field != fields.end())
-                    row.parameters.push_back({binding.parameter, static_cast<float>(std::get<double>(field->value))});
+                    row.parameters.push_back({binding.parameter, GraphParameter(field->value)});
             }
             rows.push_back(std::move(row));
         }

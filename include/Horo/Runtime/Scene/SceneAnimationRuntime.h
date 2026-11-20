@@ -133,15 +133,43 @@ namespace Horo::Runtime {
          * @return Existing allocation-free graph outcome, including stale/thread/lifecycle/type errors.
          */
         [[nodiscard]] Animation::GraphInstanceOutcome QueueTrigger(EntityRef entity, Animation::GraphParameterId parameter);
+        /** @brief Queues an action on an authoritative Scene graph at the owner control boundary.
+         * @param entity Exact active entity. @param request Actual authored action and queue policy.
+         * @return Existing graph command outcome with a handle on admission.
+         */
+        [[nodiscard]] Animation::GraphActionCommandOutcome QueueAction(EntityRef entity, const Animation::GraphActionRequest &request);
+        /** @brief Queues cancellation of a retained authority action.
+         * @param entity Exact active entity. @param handle Its live action handle. @param policy Authored fade or immediate cut.
+         * @return Existing graph command outcome.
+         */
+        [[nodiscard]] Animation::GraphActionCommandOutcome CancelAction(EntityRef entity, const Animation::GraphActionHandle &handle,
+                                                                        Animation::GraphActionStopPolicy policy);
+        /** @brief Releases the authority graph's retained terminal record.
+         * @param entity Exact active entity. @param handle Its terminal action.
+         * @return Existing graph command outcome.
+         */
+        [[nodiscard]] Animation::GraphActionCommandOutcome ReleaseActionResult(EntityRef entity,
+                                                                               const Animation::GraphActionHandle &handle);
         /** @brief Copies a genuine resident committed pose through the actual graph owner.
          * @param entity Exact active entity. @param pose Exact resident graph handle. @param output Complete caller-owned joint storage.
          * @return Existing allocation-free graph residency/owner/size outcome; failures preserve output.
          */
         [[nodiscard]] Animation::GraphInstanceOutcome CopyPose(EntityRef entity, const Animation::PoseHandle &pose,
                                                                std::span<Math::Transform> output) const;
+        /** @brief Copies action slot observations through a resident committed Scene pose.
+         * @param entity Exact active entity. @param pose Exact resident handle. @param output Caller-owned slot storage.
+         * @param written Complete slot count or zero on failure.
+         * @return Existing allocation-free graph residency/owner/size outcome.
+         */
+        [[nodiscard]] Animation::GraphInstanceOutcome CopyActionSlots(EntityRef entity, const Animation::PoseHandle &pose,
+                                                                      std::span<Animation::GraphActionSlotObservation> output,
+                                                                      std::uint32_t &written) const;
 
     private:
         struct State;
+        /** @brief Resolves the mutable authoritative graph only on the idle owner lane. */
+        [[nodiscard]] std::pair<Animation::AnimationGraphInstance *, Animation::GraphActionFailure> ResolveActionGraph(
+            EntityRef entity) const;
         explicit SceneAnimationRuntime(std::shared_ptr<State> state) noexcept;
         std::shared_ptr<State> state_;
     };
