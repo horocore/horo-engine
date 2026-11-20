@@ -189,11 +189,11 @@ namespace Horo::Editor {
         if (!recovery_ || pending_)
             return;
         const auto &binding = recovery_->binding;
-        auto submitted = history_.Checkpoint(binding.project, {.conversation = binding.turn.conversation,
-                                                               .response = binding.turn.response,
-                                                               .state = state,
-                                                               .now = std::max(recovery_->checkpointTime, WallSeconds())});
-        if (Queue(std::move(submitted), Action::FinishRecovery))
+        const auto submitted = history_.Checkpoint(binding.project, {.conversation = binding.turn.conversation,
+                                                                     .response = binding.turn.response,
+                                                                     .state = state,
+                                                                     .now = std::max(recovery_->checkpointTime, WallSeconds())});
+        if (Queue(submitted, Action::FinishRecovery))
             recovery_->answer.reset();
         else if (!recovery_->answer)
             recovery_.reset();
@@ -221,10 +221,12 @@ namespace Horo::Editor {
         if (recoveryPrompt_) {
             ImGui::TextWrapped("%s", LocalizedText(locale, "history_recovery_prompt").c_str());
             DrawText(recoveryPrompt_->Prompt());
-            const auto now = WallSeconds();
-            if (Button(locale, "history_recovery_start", enabled) &&
-                Queue(recoveryPrompt_->StartApproved(history_, LocalizedText(locale, "history_title"), now), Action::StartRecovery, now))
-                recoveryPrompt_.reset();
+            if (Button(locale, "history_recovery_start", enabled)) {
+                const auto now = WallSeconds();
+                const auto started = recoveryPrompt_->StartApproved(history_, LocalizedText(locale, "history_title"), now);
+                if (Queue(started, Action::StartRecovery, now))
+                    recoveryPrompt_.reset();
+            }
             ImGui::SameLine();
             if (Button(locale, "history_cancel", !pending_))
                 recoveryPrompt_.reset();
