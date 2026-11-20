@@ -1189,6 +1189,8 @@ namespace Horo::Editor {
 #if defined(HORO_HAS_RENDER_VULKAN)
             std::unique_ptr<SdlVulkanPresentationPort> vulkanPresentationPort;
             std::unique_ptr<Render::Detail::VulkanEditorGraphicsBridge> vulkanGraphicsBridge;
+            EditorViewportRendererVulkan *desktopCanvasViewport{}; /**< Borrows the installed base Vulkan viewport. */
+            std::optional<EditorVulkanWorldCanvasCook> desktopCanvasConsumer;
 #endif
             std::unique_ptr<Render::RenderFrontend> frontend;
             std::unique_ptr<IEditorGuiRenderer> guiRenderer;
@@ -1519,9 +1521,11 @@ namespace Horo::Editor {
                     viewportCook.cameraCrossFade.emplace(std::move(fade).Value());
                 }
                 auto &bridge = *composition.vulkanGraphicsBridge;
-                const auto prepare = [&options](EditorViewportRendererVulkan &viewport, Render::RenderFrontend &frontend,
-                                                const EditorViewportLightingProfile &) {
+                const auto prepare = [&options, &composition](EditorViewportRendererVulkan &viewport, Render::RenderFrontend &frontend,
+                                                              const EditorViewportLightingProfile &) {
                     auto prepared = PrepareVulkanEditorColor(viewport, frontend, options);
+                    if (prepared.HasValue() && !options.color.root)
+                        composition.desktopCanvasViewport = &viewport;
                     if (prepared.HasError() || !options.cameraPreviewCrossFade)
                         return prepared;
                     if (const auto fade = viewport.EnableCameraCrossFade(); fade.HasError())
@@ -2837,6 +2841,12 @@ namespace Horo::Editor {
                     return IsDeferredFrameAdmission(preparedLighting.ErrorValue()) ? Result<bool>::Success(false)
                                                                                    : Result<bool>::Failure(preparedLighting.ErrorValue());
                 }
+#if defined(HORO_HAS_RENDER_VULKAN)
+                if (const auto canvas = PrepareWorldCanvasFrame(context); canvas.HasError()) {
+                    p_->presentation.viewportRenderer.FinishColorFrame(false);
+                    return Result<bool>::Failure(canvas.ErrorValue());
+                }
+#endif
                 const Render::FramebufferExtent outputExtent = pacing_.committedOutputExtent;
                 pacing_.presentingFrameNumber = context.frameNumber;
 
@@ -2853,6 +2863,76 @@ namespace Horo::Editor {
                     return Result<bool>::Failure(begun.ErrorValue());
                 frameState_.frame.emplace(std::move(begun).Value());
                 return Result<bool>::Success(true);
+            }
+
+#if defined(HORO_HAS_RENDER_VULKAN)
+            /** @brief Resolves one authored World canvas against the exact ordinary scene pass before acquiring native output. */
+            Result<void> PrepareWorldCanvasFrame(const Runtime::FrameContext &context) {
+                using namespace Application::Internal;
+                frameState_.worldCanvas.reset();
+                const auto &composition = p_->presentation.composition;
+                auto *viewport = composition.desktopCanvasViewport;
+                if (!viewport || !composition.desktopCanvasConsumer)
+                    return Result<void>::Success();
+                const auto &passes = frameState_.preparedPasses;
+                if (UsesXrPresentation() || passes.world.owner.IsValid() || passes.count != 2 || !passes.descriptors.front().staticMesh ||
+                    !viewport->CanComposeViewportCanvas())
+                    return Result<void>::Success();
+                const auto &pass = *passes.descriptors.front().staticMesh;
+                const auto source = authorities_.ui.ReadSceneCanvasFrame(context.frameNumber, {pass.scene.lightSceneDomain});
+                if (source.HasError())
+                    return Result<void>::Failure(source.ErrorValue());
+                if (!source.Value()) {
+                    viewport->ReleaseViewportCanvas();
+                    return Result<void>::Success();
+                }
+                const auto &canvas = *source.Value();
+                const auto sceneSource = canvas.worldCanvas->currentScene.lock();
+                const auto scene = sceneSource ? (*sceneSource)() : std::nullopt;
+                if (!scene || scene->RuntimeId() != canvas.scene)
+                    return Result<void>::Success();
+                const auto plane = CaptureRuntimeUiPaintWorldCanvasPlane(*scene, *canvas.worldCanvas);
+                if (plane.HasError())
+                    return Result<void>::Success();
+                const auto transform = BuildRuntimeUiPaintWorldCanvasTransform(plane.Value());
+                if (transform.HasError())
+                    return Result<void>::Failure(transform.ErrorValue());
+                Render::RenderGraphLimits limits;
+                limits.maxPasses = canvas.program->maximumPasses;
+                const EditorViewportRendererVulkan::ViewportCanvasPreparation request{*canvas.program,
+                                                                                      *canvas.prototype,
+                                                                                      canvas.textures,
+                                                                                      *canvas.kernel,
+                                                                                      *composition.desktopCanvasConsumer,
+                                                                                      Render::UiRenderCompositionSpace::World,
+                                                                                      limits};
+                if (const auto prepared = viewport->PrepareViewportCanvas(pass, request, context.cancellation); prepared.HasError())
+                    return prepared;
+                frameState_.worldCanvas.emplace(PreparedWorldCanvas{canvas.instance, plane.Value(), transform.Value()});
+                return Result<void>::Success();
+            }
+#endif
+
+            /** @brief Encodes the selected prepared desktop scene while retaining its normal viewport and GUI ownership. */
+            Result<void> ExecuteDesktopScene(const std::uint64_t frameNumber) {
+                const auto &prepared = frameState_.preparedPasses;
+                const auto passes = std::span{prepared.descriptors}.first(prepared.count);
+#if defined(HORO_HAS_RENDER_VULKAN)
+                if (const auto &canvas = frameState_.worldCanvas; canvas && passes.size() == 2) {
+                    auto &viewport = *p_->presentation.composition.desktopCanvasViewport;
+                    const auto executed = viewport.ExecutePreparedCanvasFrame(*frameState_.frame, passes, canvas->transform,
+                                                                              [this, instance = canvas->instance,
+                                                                               frameNumber](const auto &program, const std::uint32_t slot) {
+                        return authorities_.ui.TakeSceneCanvasSubmission(instance, frameNumber, program, slot);
+                    });
+                    if (executed.HasError())
+                        return executed;
+                    return authorities_.ui.SceneCanvasEncoded(canvas->instance, frameNumber, canvas->plane);
+                }
+#else
+                static_cast<void>(frameNumber);
+#endif
+                return p_->presentation.viewportRenderer.ExecutePreparedFrame(*frameState_.frame, passes);
             }
 
             /** @brief Observes existing app-owned Scene/debt selection; never infers native readiness from a GUI projection. */
@@ -2971,11 +3051,7 @@ namespace Horo::Editor {
 #endif
                 {
                     DropRetiredMountedViewport();
-                    scene = p_->presentation.viewportRenderer
-                                .ExecutePreparedFrame(*frameState_.frame,
-                                                      std::span<const Render::RenderPassDescriptor>{frameState_.preparedPasses.descriptors
-                                                                                                        .data(),
-                                                                                                    frameState_.preparedPasses.count});
+                    scene = ExecuteDesktopScene(context.frameNumber);
                 }
                 if (scene.HasError())
                     return FailRenderFrame(scene.ErrorValue());
@@ -3094,6 +3170,15 @@ namespace Horo::Editor {
             std::uint64_t windowDisplayRevision_{1};
             bool displayChangePending_{};
 
+#if defined(HORO_HAS_RENDER_VULKAN)
+            /** @brief Retains the same frozen World plane for rendering and input publication. */
+            struct PreparedWorldCanvas final {
+                Runtime::Ui::RuntimeUiInstanceId instance;
+                Runtime::Ui::UiWorldCanvasProjection plane;
+                Math::Mat4 transform;
+            };
+#endif
+
             /** @brief One frame's native admission, GUI extraction and prepared scope, retaining the original lifetime order. */
             struct FrameState final {
                 bool nativePresentationPending{false};
@@ -3104,6 +3189,9 @@ namespace Horo::Editor {
                 std::uint64_t inputGyroscopeRevision{};
                 Input::InputContextToken focusedWidgetInputContext;
                 EditorPreparedPasses preparedPasses;
+#if defined(HORO_HAS_RENDER_VULKAN)
+                std::optional<PreparedWorldCanvas> worldCanvas;
+#endif
                 std::optional<Render::RenderFrameScope> frame;
             };
 
@@ -3528,6 +3616,16 @@ namespace Horo::Editor {
             if (allocator.HasError())
                 return std::nullopt;
             Application::Internal::RuntimeUiPaintProjectPolicy uiPolicy;
+#if defined(HORO_HAS_RENDER_VULKAN)
+            if (p.presentation.composition.desktopCanvasViewport &&
+                p.presentation.renderFrontend.Capabilities().support.features.Supports(Render::RenderCapability::UiPaint)) {
+                auto consumer = LoadPackagedVulkanWorldCanvasShader(EditorAssetRoot());
+                if (consumer.HasValue()) {
+                    p.presentation.composition.desktopCanvasConsumer.emplace(std::move(consumer).Value());
+                    uiPolicy.vulkanSceneCanvasAssets = EditorAssetRoot();
+                }
+            }
+#endif
             if (p.presentation.renderFrontend.Capabilities().backend == Render::RenderBackendId{"metal"})
                 uiPolicy.source =
                     Application::Internal::RuntimeUiPaintPackagedAssets{EditorAssetRoot(), Render::ShaderTargetBackend::Metal};
@@ -4664,6 +4762,10 @@ namespace Horo::Editor {
             composition.frontend->DetachStaticMeshPassExecutor(*composition.viewportRenderer);
         if (composition.frontend && !composition.frontend->Capabilities().supportsRenderTargetResources)
             (void)composition.frontend->ReleaseOffscreenTarget(composition.viewportTarget);
+#if defined(HORO_HAS_RENDER_VULKAN)
+        composition.desktopCanvasViewport = nullptr;
+        composition.desktopCanvasConsumer.reset();
+#endif
         composition.viewportRenderer.reset();
         composition.guiRenderer.reset();
         ImGui::DestroyContext();

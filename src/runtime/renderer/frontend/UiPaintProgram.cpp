@@ -1,4 +1,5 @@
 #include "Horo/Runtime/Render/RenderGraphExecutionErrors.h"
+#include "RenderFrontendResourceAccess.h"
 #include "UiPaintProgramInternal.h"
 
 #include <algorithm>
@@ -6,6 +7,20 @@
 #include <new>
 
 namespace Horo::Render {
+    /** @copydoc Detail::RenderFrontendResourceAccess::MatchesSceneCanvas */
+    bool Detail::RenderFrontendResourceAccess::MatchesSceneCanvas(const UiPaintProgram &program, const UiPaintProgramDescriptor &policy,
+                                                                  const Runtime::Ui::UiRenderSnapshot &prototype,
+                                                                  const std::span<const RenderTextureHandle> textures) noexcept {
+        const auto &state = *program.storage_;
+        const auto &current = state.descriptor;
+        const auto &a = current.capacity;
+        const auto &b = policy.capacity;
+        return state.owner == std::this_thread::get_id() && !state.closed && state.target == UiPaintRootTarget::SceneCanvas &&
+               current.projection == policy.projection && current.frameSlots == policy.frameSlots &&
+               current.maximumPasses == policy.maximumPasses && a.vertices == b.vertices && a.indices == b.indices &&
+               a.parameters == b.parameters && std::ranges::equal(textures, state.source.external) && state.MatchesSource(prototype);
+    }
+
     namespace UiPaintProgramErrors {
         const ErrorCodeDescriptor PreparationRequired{ErrorDomainId{"horo.render"},
                                                       ErrorCode{"render.ui_paint.program.preparation_required"}, ErrorSeverity::Info,

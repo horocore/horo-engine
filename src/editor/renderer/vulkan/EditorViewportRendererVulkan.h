@@ -68,6 +68,10 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> PrepareViewportCanvas(const Render::StaticMeshPassDescriptor &pass,
                                                          const ViewportCanvasPreparation &request,
                                                          const CancellationToken &cancellation = {});
+        /** @brief Observes whether the selected base output supports a separate sampled canvas for the current frame. */
+        [[nodiscard]] bool CanComposeViewportCanvas() const noexcept;
+        /** @brief Releases a retired canvas recipe on the render owner lane before acquiring a frame. */
+        void ReleaseViewportCanvas() noexcept;
 
         /** @brief Produces an exact submission for an already prepared renderer-owned program and acquired frame slot. */
         using ViewportCanvasSource = std::function<Result<Render::UiRenderSubmission>(const Render::UiPaintProgram &, std::uint32_t)>;
@@ -81,6 +85,14 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<void> ExecuteViewportCanvas(Render::RenderFrameScope &frame, const Render::StaticMeshPassDescriptor &pass,
                                                          const std::optional<Math::Mat4> &placement, const ViewportCanvasSource &source);
+        /** @brief Uses ordinary viewport and primary-output admission with a canvas in its one scene graph.
+         * @param frame Exact acquired frame. @param passes Ordinary prepared viewport and output descriptors.
+         * @param placement Current World plane converted to renderer-local quad coordinates, if applicable.
+         * @param source Exact per-slot canvas source. @return Executed scene or a typed failure with frame admission canceled. */
+        [[nodiscard]] Result<void> ExecutePreparedCanvasFrame(Render::RenderFrameScope &frame,
+                                                              std::span<const Render::RenderPassDescriptor> passes,
+                                                              const std::optional<Math::Mat4> &placement,
+                                                              const ViewportCanvasSource &source);
         [[nodiscard]] Result<void> EnableCameraCrossFade() override;
         [[nodiscard]] EditorViewportCrossFadeCapacity CameraCrossFadeCapacity() const noexcept override;
         [[nodiscard]] Result<void> PrepareCameraCrossFadeFrame(const std::optional<EditorViewportCameraCrossFade> &crossFade) override;
@@ -221,6 +233,17 @@ namespace Horo::Editor {
         struct XrProjectionGraph;
         struct ViewportRasterGraphs;
         struct ViewportCanvasGraph;
+
+        /** @brief Borrows canvas recording inputs only while the exact prepared scene phase executes. */
+        struct CanvasFrame final {
+            const std::optional<Math::Mat4> &placement;
+            const ViewportCanvasSource &source;
+        };
+
+        /** @brief Keeps validation, native output admission and cancellation identical for both viewport scene recipes. */
+        [[nodiscard]] Result<void> ExecutePreparedSceneFrame(Render::RenderFrameScope &frame,
+                                                             std::span<const Render::RenderPassDescriptor> passes,
+                                                             const CanvasFrame *canvas);
         /** @brief Compiles owner-slot shadow/scene/overlay graphs only when exact resource topology changes. */
         [[nodiscard]] Result<void> PrepareViewportRasterGraphs(const Render::StaticMeshPassDescriptor &pass);
         /** @brief Records the one cold graph matching this actual native slot and frozen viewport resources. */

@@ -13,6 +13,7 @@ namespace Horo::Render {
     struct RenderGraphImportedState;
 
     namespace Detail {
+        class RenderFrontendResourceAccess;
         struct UiPaintProgramIdentity;
         enum class UiPaintRootTarget : std::uint8_t;
     }  // namespace Detail
@@ -228,6 +229,7 @@ namespace Horo::Render {
         [[nodiscard]] Result<void> Shutdown();
 
     private:
+        friend class Detail::RenderFrontendResourceAccess;
         /** @brief Builds and publishes one exact existing paint slot through its admitted update path. */
         [[nodiscard]] Result<UiPaintPreparedFrame> PrepareInternal(std::uint32_t slot, const UiRenderSubmission &source,
                                                                    const CancellationToken &cancellation, const RenderFrameScope *frame);

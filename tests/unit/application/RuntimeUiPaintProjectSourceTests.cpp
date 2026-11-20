@@ -7,6 +7,7 @@
 #include "UiPaintPackageTestFixture.h"
 
 #include <chrono>
+#include <cstdlib>
 #include <thread>
 
 using namespace Horo;
@@ -60,7 +61,8 @@ namespace {
 
         explicit ProjectUi(const bool paint = true, const bool kernel = true, const std::filesystem::path &packagedRoot = {},
                            const UiRenderMode renderMode = UiRenderMode::ScreenSpaceOverlay,
-                           const UiCanvasReferenceResolution resolution = {}, const UiCanvasScaleFactor fontScale = {})
+                           const UiCanvasReferenceResolution resolution = {}, const UiCanvasScaleFactor fontScale = {},
+                           const std::filesystem::path &sceneCanvasRoot = {})
             : frontend(Frontend(paint)) {
             const auto type = Take(Assets::AssetTypeId::Parse("runtime.ui.document"));
             REQUIRE(registry
@@ -106,6 +108,8 @@ namespace {
                 policy.kernel = std::make_shared<Render::CookedUiPaintKernel>();  // Explicit CPU tracking seam, never native cook proof.
             if (!packagedRoot.empty())
                 policy.source = RuntimeUiPaintPackagedAssets{packagedRoot, Render::ShaderTargetBackend::Metal};
+            if (!sceneCanvasRoot.empty())
+                policy.vulkanSceneCanvasAssets = sceneCanvasRoot;
             sources = Take(RuntimeUiPaintProjectSources::Create(port, std::move(allocator), std::move(policy)));
             REQUIRE(scenes.AddActivationParticipant(sources->MakeParticipant(scenes, registry, uiLoads, target)).HasValue());
             REQUIRE(scenes.Startup({}).HasValue());
@@ -245,6 +249,12 @@ TEST_CASE("World canvas projection derives one centered plane from the exact cur
     CHECK(Math::NearlyEqual(resolved.plane.origin, {11, 23, -5}, 0.0001F));
     CHECK(Math::NearlyEqual(resolved.plane.horizontalExtent, {0, 6, 0}, 0.0001F));
     CHECK(Math::NearlyEqual(resolved.plane.verticalExtent, {2, 0, 0}, 0.0001F));
+    const auto placement = Take(BuildRuntimeUiPaintWorldCanvasTransform(resolved.plane));
+    CHECK(Math::NearlyEqual(Math::TransformPoint(placement, {-0.5F, 0.5F, 0}), resolved.plane.origin));
+    CHECK(Math::NearlyEqual(Math::TransformPoint(placement, {0.5F, -0.5F, 0}),
+                            resolved.plane.origin + resolved.plane.horizontalExtent + resolved.plane.verticalExtent));
+    CHECK(BuildRuntimeUiPaintWorldCanvasTransform({resolved.plane.origin, resolved.plane.horizontalExtent, resolved.plane.horizontalExtent})
+              .HasError());
     CHECK((resolved.logicalExtent == UiCanvasLogicalExtent{12'800, 5'120}));
     CHECK((resolved.rasterExtent == UiCanvasPixelExtent{200, 80}));
     CHECK((resolved.fontScale == UiCanvasScaleFactor{3, 2}));
@@ -275,6 +285,8 @@ TEST_CASE("World canvas projection derives one centered plane from the exact cur
     const auto updated = Take(CaptureRuntimeUiPaintWorldCanvasPlane(changed, resolved));
     CHECK(Math::NearlyEqual(updated.origin, {21, 23, -5}, 0.0001F));
     CHECK(Math::NearlyEqual(updated.horizontalExtent, resolved.plane.horizontalExtent));
+    CHECK(
+        Math::NearlyEqual(Math::TransformPoint(Take(BuildRuntimeUiPaintWorldCanvasTransform(updated)), {-0.5F, 0.5F, 0}), updated.origin));
 
     const auto replacement = publish(2, 30);
     REQUIRE(replacement.Find({2}));
@@ -303,6 +315,27 @@ TEST_CASE("Registered World canvas needs an actual selected Scene consumer befor
     fixture.Frame();
     CHECK(Tests::RenderFrontendTesting::lifecycleState.uiPaint.graphCalls == 0);
     CHECK(Tests::RenderFrontendTesting::lifecycleState.uiPaint.kernels == 0);
+}
+
+TEST_CASE("Project World canvas enters the scene route without claiming screen presentation",
+          "[application][runtime_ui][project][world-canvas]") {
+    const auto *root = std::getenv("HORO_VULKAN_UI_PAINT_ASSET_ROOT");
+    if (!root || !*root)
+        SKIP("Supply the immutable offline Vulkan UI paint package.");
+    ProjectUi fixture{true, false, {}, UiRenderMode::WorldSpace, {200, 80}, {3, 2}, root};
+    REQUIRE_FALSE(fixture.Publish(1, 1));
+    const auto client = fixture.Client(1);
+    CHECK(client->Validate().HasValue());
+    fixture.Frame();
+    CHECK(Tests::RenderFrontendTesting::lifecycleState.uiPaint.graphCalls == 0);
+    CHECK_FALSE(fixture.port.InputEligible({Source::Owner(), 1, 1}));
+
+    const auto stable = fixture.scenes.ActiveScene()->RuntimeId();
+    const auto failure = fixture.Publish(2, 2);
+    REQUIRE(failure);
+    CHECK(failure->code.Value() == UiErrors::CapacityExceeded.code.Value());
+    CHECK(fixture.scenes.ActiveScene()->RuntimeId() == stable);
+    CHECK(client->Validate().HasValue());
 }
 
 TEST_CASE("Project Scene canvas sources use canonical admission and the same application paint phase",

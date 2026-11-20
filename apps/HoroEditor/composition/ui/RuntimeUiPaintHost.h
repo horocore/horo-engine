@@ -4,8 +4,12 @@
  * @brief Non-installed fixed application lifecycle adapter joining the canonical UI source and same-frame renderer stage.
  */
 #include "Horo/Runtime/Render/UiPaintProgram.h"
+#include "Horo/Runtime/Scene/RuntimeScene.h"
+#include "Horo/Runtime/Ui/UiPresentationReceipt.h"
 #include "Horo/Runtime/UiAnimationRuntimeParticipant.h"
 #include "RuntimeUiPaintProjection.h"
+
+#include <functional>
 
 namespace Horo::Runtime {
     class SceneActivationCandidate;
@@ -44,6 +48,33 @@ namespace Horo::Application::Internal {
         std::vector<Runtime::Ui::UiGlyphAtlasGlyphKey> glyphs;
     };
 
+    /** @brief Observes the current scene on its owner lane while the activation participant is alive. */
+    using RuntimeUiPaintWorldSceneView = std::function<std::optional<Runtime::RuntimeSceneView>()>;
+
+    /** @brief Exact authored World canvas placement and bounded offscreen dimensions before viewport admission. */
+    struct RuntimeUiPaintWorldCanvas final {
+        Runtime::EntityRef entity;
+        Runtime::Ui::UiCanvasAssetReference reference;
+        Runtime::Ui::UiDocumentRevision documentRevision;
+        Assets::AssetRegistryRevision registryRevision;
+        Runtime::Ui::UiWorldCanvasProjection plane; /**< Scene coordinates, before selected view's render-origin localization. */
+        Runtime::Ui::UiCanvasLogicalExtent logicalExtent;
+        Runtime::Ui::UiCanvasPixelExtent rasterExtent; /**< Authored raster dimensions independent of monitor extent and DPI. */
+        Runtime::Ui::UiCanvasScaleFactor fontScale;
+        std::weak_ptr<const RuntimeUiPaintWorldSceneView> currentScene;
+    };
+
+    /** @brief Owner-lane borrows for synchronous SceneCanvas consumer preparation within the extracted frame. */
+    struct RuntimeUiPaintSceneCanvasFrame final {
+        Runtime::Ui::RuntimeUiInstanceId instance;
+        Runtime::SceneRuntimeId scene;
+        const RuntimeUiPaintWorldCanvas *worldCanvas{};
+        const Runtime::Ui::UiRenderSnapshot *prototype{};
+        const Render::UiPaintProgramDescriptor *program{};
+        const Render::CookedUiPaintKernel *kernel{};
+        std::span<const Render::RenderTextureHandle> textures;
+    };
+
     /** @brief Complete safe-point source/derived/renderer preparation; only the trusted executable host supplies these resources. */
     struct RuntimeUiPaintSourcePreparation final {
         Runtime::Ui::RuntimeUiInstanceId instance;
@@ -60,7 +91,8 @@ namespace Horo::Application::Internal {
         Render::UiPaintProgramDescriptor program;
         Render::CookedUiPaintKernel kernel;
         std::shared_ptr<Runtime::Ui::UiElementSlotAllocator>
-            allocatorLifetime; /**< Optional exact owner pin; must alias allocator when supplied. */
+            allocatorLifetime;                                /**< Optional exact owner pin; must alias allocator when supplied. */
+        std::optional<RuntimeUiPaintWorldCanvas> worldCanvas; /**< Scene-owned source routed through the selected viewport graph. */
     };
 
     /** @brief Same canonical private source plus fully owned derived/native preparation; no Scene component borrow survives. */
@@ -121,6 +153,29 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<bool> CollectRetired() const;
         /** @brief Extends the actual active scene frame with the exact prepared UI; no separate Execute or Present authority. */
         [[nodiscard]] Result<void> ComposeUi(Render::RenderFrameScope &frame, std::uint64_t frameNumber) const;
+        /** @brief Observes the one extracted World source for synchronous consumer preparation.
+         * @param frameNumber Exact Runtime extraction frame.
+         * @return Empty for no World source, or original owner/extraction failure.
+         * @details Borrows expire on the next extraction, source transition, retirement or shutdown. Do not retain them.
+         */
+        [[nodiscard]] Result<std::optional<RuntimeUiPaintSceneCanvasFrame>> ReadSceneCanvasFrame(std::uint64_t frameNumber,
+                                                                                                 Runtime::SceneRuntimeId scene) const;
+        /** @brief Transfers the exact extracted paint submission once and binds the renderer's actual SceneCanvas slot.
+         * @param instance Exact active World source. @param frameNumber Exact Runtime extraction frame.
+         * @param program Selected SceneCanvas program. @param slot Slot chosen by the viewport graph.
+         * @return Move-only submission with frame-local borrows or original lifecycle/binding failure.
+         */
+        [[nodiscard]] Result<Render::UiRenderSubmission> TakeSceneCanvasSubmission(Runtime::Ui::RuntimeUiInstanceId instance,
+                                                                                   std::uint64_t frameNumber,
+                                                                                   const Render::UiPaintProgram &program,
+                                                                                   std::uint32_t slot) const;
+        /** @brief Records the World plane encoded by the viewport after successful graph execution.
+         * @param instance Exact submitted World source. @param frameNumber Exact Runtime extraction frame.
+         * @param plane Scene-space plane used by the executed consumer.
+         * @return Success or typed stale/invalid evidence. Presented determines the terminal outcome.
+         */
+        [[nodiscard]] Result<void> SceneCanvasEncoded(Runtime::Ui::RuntimeUiInstanceId instance, std::uint64_t frameNumber,
+                                                      Runtime::Ui::UiWorldCanvasProjection plane) const;
         /** @brief Applies a receipt only for UI actually encoded in that same native frame; presentation never retires GPU claims. */
         [[nodiscard]] Result<void> Presented(std::uint64_t frameNumber, bool nativePresentSucceeded) const;
         /** @brief Pins the actual current derived frame for host inspection; its lifetime participates in the existing drain fence. */

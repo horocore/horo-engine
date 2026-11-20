@@ -60,7 +60,7 @@ namespace Horo::Application::Internal::Detail {
 
     /** @copydoc RuntimeUiPaintSource::Refresh */
     Result<void> RuntimeUiPaintSource::Refresh(Render::RenderFrontend &frontend, const CancellationToken &cancellation) {
-        if (!refresh || !frame.snapshot)
+        if (worldCanvas || !refresh || !frame.snapshot)
             return Result<void>::Success();
         auto candidate =
             Render::UiPaintProgram::Create(frontend, programs.policy, *frame.snapshot, textures, programs.kernel, cancellation);
@@ -75,30 +75,31 @@ namespace Horo::Application::Internal::Detail {
     }
 
     /** @copydoc RuntimeUiPaintSource::BindResources */
-    Result<void> RuntimeUiPaintSource::BindResources() {
+    Result<Render::UiRenderSubmission> RuntimeUiPaintSource::BindResources(const Render::UiPaintProgram &program,
+                                                                           const std::uint32_t slot) {
+        using Submission = Result<Render::UiRenderSubmission>;
         for (std::size_t index = 0; index < resources.images.size(); ++index) {
             const auto &image = resources.images[index];
-            auto resource = programs.active->TextureResource(frame.slot, image.realization.Creation().handle);
+            auto resource = program.TextureResource(slot, image.realization.Creation().handle);
             if (resource.HasError())
-                return Result<void>::Failure(resource.ErrorValue());
+                return Submission::Failure(resource.ErrorValue());
             frame.images[index] = {image.registry.get(), image.realization.Image(), image.realization.Page(), resource.Value(),
                                    &image.realization};
         }
         for (std::size_t index = 0; index < resources.fonts.size(); ++index) {
             const auto &font = resources.fonts[index];
-            auto resource = programs.active->TextureResource(frame.slot, font.realization.Creation().handle);
+            auto resource = program.TextureResource(slot, font.realization.Creation().handle);
             if (resource.HasError())
-                return Result<void>::Failure(resource.ErrorValue());
+                return Submission::Failure(resource.ErrorValue());
             frame.fonts[index] = {font.face.get(), resource.Value(), &font.realization};
         }
         auto atlas = SealGlyphs(resources);
         if (atlas.HasError())
-            return Result<void>::Failure(atlas.ErrorValue());
-        frame.submission = {&*frame.geometry,
-                            {frame.images.data(), resources.images.size()},
-                            {frame.fonts.data(), resources.fonts.size()},
-                            std::move(atlas).Value()};
-        return Result<void>::Success();
+            return Submission::Failure(atlas.ErrorValue());
+        return Submission::Success({&*frame.geometry,
+                                    {frame.images.data(), resources.images.size()},
+                                    {frame.fonts.data(), resources.fonts.size()},
+                                    std::move(atlas).Value()});
     }
 
     /** @copydoc RuntimeUiPaintSource::ReleaseFrame */
@@ -109,6 +110,9 @@ namespace Horo::Application::Internal::Detail {
         frame.snapshot.reset();
         frame.animation = {};
         frame.encoded.reset();
+        frame.encodedPlane.reset();
+        frame.extractedFrame.reset();
+        frame.sceneSubmissionTaken = false;
     }
 
     /** @copydoc RuntimeUiPaintSource::Extract */
@@ -126,15 +130,21 @@ namespace Horo::Application::Internal::Detail {
             return Result<void>::Failure(std::move(error));
         }
         frame.snapshot.emplace(std::move(extracted).Value());
-        if (!programs.active || refresh)
+        if (!worldCanvas && (!programs.active || refresh))
             return Result<void>::Success();  // The explicit next owner safe point consumes this actual prototype.
         auto built = arena.Build(*frame.snapshot, programs.policy.projection);
         if (built.HasError())
             return Result<void>::Failure(built.ErrorValue());
         frame.geometry.emplace(std::move(built).Value());
+        if (worldCanvas) {
+            frame.extractedFrame = frameNumber;
+            return Result<void>::Success();
+        }
         frame.slot = static_cast<std::uint32_t>(frameNumber % programs.policy.frameSlots);
-        if (const auto bindings = BindResources(); bindings.HasError())
-            return bindings;
+        auto bindings = BindResources(*programs.active, frame.slot);
+        if (bindings.HasError())
+            return Result<void>::Failure(bindings.ErrorValue());
+        frame.submission = std::move(bindings).Value();
         auto uploaded = programs.active->Prepare(frame.slot, frame.submission, cancellation);
         if (uploaded.HasError()) {
             frame.submission = {};
@@ -175,6 +185,10 @@ namespace Horo::Application::Internal::Detail {
             if (refresh)
                 if (const auto refreshed = Refresh(frontend, cancellation); refreshed.HasError())
                     return refreshed;
+        }
+        if (phase == Runtime::RuntimePhase::EndFrame && worldCanvas) {
+            if (const auto suppressed = FinishWorldCanvas(context.frameNumber, false); suppressed.HasError())
+                return suppressed;
         }
         if (const auto forwarded = animation->OnPhase(phase, context); forwarded.HasError()) {
             auto error = forwarded.ErrorValue();

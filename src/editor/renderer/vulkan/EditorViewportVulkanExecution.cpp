@@ -72,6 +72,22 @@ namespace Horo::Editor {
     /** @copydoc IEditorViewportRenderer::ExecutePreparedFrame */
     Result<void> EditorViewportRendererVulkan::ExecutePreparedFrame(Render::RenderFrameScope &frame,
                                                                     const std::span<const Render::RenderPassDescriptor> passes) {
+        return ExecutePreparedSceneFrame(frame, passes, nullptr);
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::ExecutePreparedCanvasFrame */
+    Result<void> EditorViewportRendererVulkan::ExecutePreparedCanvasFrame(Render::RenderFrameScope &frame,
+                                                                          const std::span<const Render::RenderPassDescriptor> passes,
+                                                                          const std::optional<Math::Mat4> &placement,
+                                                                          const ViewportCanvasSource &source) {
+        const CanvasFrame canvas{placement, source};
+        return ExecutePreparedSceneFrame(frame, passes, &canvas);
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::ExecutePreparedSceneFrame */
+    Result<void> EditorViewportRendererVulkan::ExecutePreparedSceneFrame(Render::RenderFrameScope &frame,
+                                                                         const std::span<const Render::RenderPassDescriptor> passes,
+                                                                         const CanvasFrame *canvas) {
         using namespace Render;
         const auto fail = [&frame](const Error &error) {
             frame.Cancel();
@@ -96,13 +112,14 @@ namespace Horo::Editor {
                 output = &*pass.primaryOutput;
             }
         }
-        if (!output)
+        if (!output || (canvas && !viewport))
             return fail(MakeError(RendererErrors::ViewportInvalidScene));
         if (const auto prepared = PrepareViewportOutput(frame, *output, viewport); prepared.HasError())
             return fail(prepared.ErrorValue());
         if (!viewport)
             return frame.Execute({});
-        const auto executed = ExecuteViewport(frame, *viewport);
+        const auto executed =
+            canvas ? ExecuteViewportCanvas(frame, *viewport, canvas->placement, canvas->source) : ExecuteViewport(frame, *viewport);
         if (executed.HasError())
             frame.Cancel();
         return executed;

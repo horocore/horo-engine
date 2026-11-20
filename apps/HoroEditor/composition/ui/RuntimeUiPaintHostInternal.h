@@ -19,8 +19,11 @@ namespace Horo::Application::Internal::Detail {
         std::array<Render::UiRenderFontBinding, Render::MaximumUiSubmissionFonts> fonts;
         Render::UiRenderSubmission submission;
         std::optional<Runtime::Ui::UiPresentationReceipt> encoded;
+        std::optional<Runtime::Ui::UiWorldCanvasProjection> encodedPlane;
+        std::optional<std::uint64_t> extractedFrame;
         std::uint64_t encodedFrame{};
         std::uint32_t slot{};
+        bool sceneSubmissionTaken{};
     };
 
     /** @brief Actual immutable source policy plus latest native evidence; observation never authors a second canvas. */
@@ -74,6 +77,7 @@ namespace Horo::Application::Internal::Detail {
         bool refresh{true};
         RuntimeUiPaintOutput output;
         std::optional<Runtime::SceneRuntimeId> scene;
+        std::optional<RuntimeUiPaintWorldCanvas> worldCanvas;
         bool retiring{};
         bool started{};
         std::uint32_t retirementSlot{Runtime::Ui::NoUiRenderIndex};
@@ -96,10 +100,12 @@ namespace Horo::Application::Internal::Detail {
         /** @brief Prepares a complete structural replacement only at the explicit application owner safe point. */
         [[nodiscard]] Result<void> Refresh(Render::RenderFrontend &frontend, const CancellationToken &cancellation);
         /** @brief Builds allocation-free current image/font/atlas evidence for the exact selected native slot. */
-        [[nodiscard]] Result<void> BindResources();
+        [[nodiscard]] Result<Render::UiRenderSubmission> BindResources(const Render::UiPaintProgram &program, std::uint32_t slot);
         /** @brief Extracts current canonical source/derived data before the editor opens its native frame. */
         [[nodiscard]] Result<void> Extract(const Runtime::Ui::RuntimeUiService &service, std::uint64_t frameNumber,
                                            const CancellationToken &cancellation);
+        /** @brief Applies one World draw completion or explicit suppression using the extracted snapshot's exact revisions. */
+        [[nodiscard]] Result<void> FinishWorldCanvas(std::uint64_t frameNumber, bool nativePresentSucceeded);
         /** @brief Releases local CPU pins before the existing derived/source drain fence is queried. */
         void ReleaseFrame() noexcept;
         /** @brief Closes this exact derived producer while preserving pending native and immutable leases for collection. */

@@ -490,22 +490,56 @@ namespace Horo::Editor {
         std::unique_ptr<Render::UiPaintProgram> paint;
         std::unique_ptr<CanvasQuadProgram> quad;
         std::array<RasterVariant, std::tuple_size_v<FrameSlots>> slots;
+        Sha256Digest writer;
+        Sha256Digest consumer;
+        RenderTextureFormat stencil{};
+        RenderGraphLimits limits;
         bool overlay{};
+
+        /** @brief Compares the stored artifact identities and exact authored graph bounds. */
+        bool Matches(const ViewportCanvasPreparation &request) const noexcept {
+            return writer == request.writer.artifact.reflection->cookedArtifactKey &&
+                   consumer == request.consumer.metadata.cookedArtifactKey && stencil == request.writer.stencilFormat &&
+                   quad->space == request.space && overlay == request.overlay && limits.maxPasses == request.limits.maxPasses &&
+                   limits.maxResources == request.limits.maxResources && limits.maxUsages == request.limits.maxUsages &&
+                   limits.maxDependencies == request.limits.maxDependencies &&
+                   Detail::RenderFrontendResourceAccess::MatchesSceneCanvas(*paint, request.paint, request.prototype, request.textures);
+        }
     };
+
+    /** @copydoc EditorViewportRendererVulkan::CanComposeViewportCanvas */
+    bool EditorViewportRendererVulkan::CanComposeViewportCanvas() const noexcept {
+        return initialized_ && !color_ && !preparedCrossFade_ && !requestedGrid_.visible && !requestedLightVisualizer_.selectedLight;
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::ReleaseViewportCanvas */
+    void EditorViewportRendererVulkan::ReleaseViewportCanvas() noexcept {
+        viewportCanvasGraph_.reset();
+    }
 
     /** @copydoc EditorViewportRendererVulkan::PrepareViewportCanvas */
     Result<void> EditorViewportRendererVulkan::PrepareViewportCanvas(const Render::StaticMeshPassDescriptor &pass,
                                                                      const ViewportCanvasPreparation &request,
                                                                      const CancellationToken &cancellation) {
         using namespace Render;
+        if (cancellation.IsCancellationRequested())
+            return Result<void>::Failure(MakeError(UiPaintFrameErrors::Cancelled));
         if (!pass.IsValid() || color_ || preparedCrossFade_ || request.paint.frameSlots != device_.frames ||
             (request.overlay && pass.scene.instances.size() >= MaximumDraws))
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
         if (const auto prepared = PrepareViewportRasterGraphs(pass); prepared.HasError())
             return prepared;
+        if (!request.writer.artifact.reflection)
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+        if (viewportCanvasGraph_ && viewportCanvasGraph_->topology == viewportRasterGraphs_ && viewportCanvasGraph_->Matches(request))
+            return Result<void>::Success();
         try {
             auto candidate = std::make_shared<ViewportCanvasGraph>();
             candidate->topology = viewportRasterGraphs_;
+            candidate->writer = request.writer.artifact.reflection->cookedArtifactKey;
+            candidate->consumer = request.consumer.metadata.cookedArtifactKey;
+            candidate->stencil = request.writer.stencilFormat;
+            candidate->limits = request.limits;
             candidate->overlay = request.overlay;
             auto quad = CreateCanvasQuadProgram(request.consumer, request.space, RenderTextureFormat::Rgba8Unorm);
             if (quad.HasError())

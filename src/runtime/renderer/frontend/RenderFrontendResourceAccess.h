@@ -3,10 +3,22 @@
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Render/RenderSubmission.h"
 
+namespace Horo::Render {
+    struct UiPaintProgramDescriptor;
+}
+
+namespace Horo::Runtime::Ui {
+    class UiRenderSnapshot;
+}
+
 namespace Horo::Render::Detail {
     /** @brief Internal adapter used by matching integrations without publishing native resource identity. */
     class RenderFrontendResourceAccess final {
     public:
+        /** @brief Checks whether a live SceneCanvas program can admit the same paint roles and resource generations without rebuilding. */
+        [[nodiscard]] static bool MatchesSceneCanvas(const UiPaintProgram &program, const UiPaintProgramDescriptor &policy,
+                                                     const Runtime::Ui::UiRenderSnapshot &prototype,
+                                                     std::span<const RenderTextureHandle> textures) noexcept;
         /** @brief Validates the existing open graphics owner outside any active frame.
          * @param frontend Selected existing frontend. @return Exact registry incarnation or original lifecycle error. */
         [[nodiscard]] static Result<RenderResourceOwnerId> RequirePreparationBoundary(const RenderFrontend &frontend);

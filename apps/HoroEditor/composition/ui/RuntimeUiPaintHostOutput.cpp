@@ -21,7 +21,7 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(UiErrors::CanvasSpaceInvalid));
         const auto sources = Sources();
         for (const auto *source : sources) {
-            if (!source)
+            if (!source || source->worldCanvas)
                 continue;
             const auto resolved = ResolveUiScreenCanvasWithEvidence(source->output.canvas, evidence);
             if (resolved.HasError())
@@ -29,7 +29,8 @@ namespace Horo::Application::Internal {
         }
         output = evidence;
         for (auto *source : sources) {
-            if (!source || source->output.pending == evidence || (!source->output.pending && source->output.current == evidence))
+            if (!source || source->worldCanvas || source->output.pending == evidence ||
+                (!source->output.pending && source->output.current == evidence))
                 continue;
             source->output.pending = evidence;
             source->output.awaitingPresentation = true;

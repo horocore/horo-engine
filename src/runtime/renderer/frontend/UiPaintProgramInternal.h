@@ -181,6 +181,8 @@ namespace Horo::Render {
         [[nodiscard]] Result<void> CompileSlot(std::uint32_t slot, const UiPaintFrameBuffers &buffers,
                                                const UiPaintSceneCanvasGraph *scene);
         [[nodiscard]] Result<void> ValidateSource(const UiRenderSubmission &submission) const;
+        /** @brief Tests only the retained source's structural roles, independent of one frame's geometry or outcome. */
+        [[nodiscard]] bool MatchesSource(const Runtime::Ui::UiRenderSnapshot &snapshot) const noexcept;
         [[nodiscard]] Result<void> BuildFrame(Detail::UiPaintSlotProgram &slot, Detail::UiPaintCpuFrame &candidate,
                                               const UiRenderSubmission &submission);
         [[nodiscard]] Result<void> BuildMask(Detail::UiPaintSlotProgram &slot, Detail::UiPaintCpuFrame &candidate,

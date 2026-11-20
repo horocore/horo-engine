@@ -402,11 +402,20 @@ namespace Horo::Tests::VulkanEditor {
         using enum UiRenderCompositionSpace;
         const auto space = GENERATE(Camera, World);
         const UiPaintProgramDescriptor paint{projection, {32, 64, 4}, 2, 32};
-        Check(host.viewport->PrepareViewportCanvas(pass, {paint, snapshot, {}, *writer, consumer, space, {16, 64, 192, 32}}));
+        const EditorViewportRendererVulkan::ViewportCanvasPreparation prepared{paint, snapshot,         {}, *writer, consumer,
+                                                                               space, {16, 64, 192, 32}};
+        Check(host.viewport->PrepareViewportCanvas(pass, prepared));
+        const UiPaintProgram *programIdentity{};
         const auto render = [&](const std::uint64_t number, const std::optional<Math::Mat4> &placement) {
             auto frame = host.Frame(number);
-            Check(host.bridge->Port()->PreparePrimaryOutput(frame.Token(), {}));
-            Check(host.viewport->ExecuteViewportCanvas(frame, pass, placement, [&](const auto &, std::uint32_t) {
+            const std::array passes{RenderPassDescriptor{.id = {1}, .kind = RenderPassKind::Graphics, .staticMesh = pass},
+                                    RenderPassDescriptor{.id = {2},
+                                                         .kind = RenderPassKind::Graphics,
+                                                         .primaryOutput = PrimaryOutputAttachment{}}};
+            Check(host.viewport->ExecutePreparedCanvasFrame(frame, passes, placement, [&](const auto &program, std::uint32_t) {
+                if (programIdentity)
+                    CHECK(programIdentity == &program);
+                programIdentity = &program;
                 return Result<UiRenderSubmission>::Success({.geometry = &geometry});
             }));
             const auto output = host.viewport->TextureView();
@@ -421,6 +430,7 @@ namespace Horo::Tests::VulkanEditor {
         CHECK(front[0] < 8);
         if (space == World) {
             placement.values[14] = -1;
+            Check(host.viewport->PrepareViewportCanvas(pass, prepared));
             const auto behind = render(3, placement);
             CHECK(behind == opaque);
         }

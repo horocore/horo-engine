@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <exception>
 #include <limits>
+#include <utility>
 
 namespace Horo::Application::Internal {
     using namespace Runtime::Ui;
@@ -141,7 +142,7 @@ namespace Horo::Application::Internal {
                 remaining -= realized.Value();
             }
             for (const auto &source : incoming_)
-                if (source)
+                if (source && source->programs.active)
                     if (const auto ready = source->programs.active->ValidatePreparation(); ready.HasError())
                         return ready;
             return Result<void>::Success();
@@ -153,6 +154,8 @@ namespace Horo::Application::Internal {
             std::size_t passes{};
             std::size_t resources{};
             std::size_t draws{};
+            std::array<Runtime::SceneRuntimeId, Detail::MaximumSceneUiSources> worldOwners{};
+            std::size_t worldCount{};
             const auto add = [](std::size_t &sum, const std::size_t count, const std::size_t maximum) {
                 if (count > maximum || sum > maximum - count)
                     return false;
@@ -160,6 +163,13 @@ namespace Horo::Application::Internal {
                 return true;
             };
             const auto include = [&](const Source &source) {
+                if (source.worldCanvas) {
+                    const auto owners = std::span{worldOwners}.first(worldCount);
+                    if (!source.scene || worldCount == worldOwners.size() || std::ranges::find(owners, *source.scene) != owners.end())
+                        return false;
+                    worldOwners[worldCount++] = *source.scene;
+                    return source.programs.policy.capacity.IsValid();
+                }
                 if (!source.programs.active)
                     return false;
                 const auto inventory = source.programs.active->Inventory();
@@ -284,6 +294,7 @@ namespace Horo::Application::Internal {
                                                                                   std::move(input.kernel), input.runtime.viewport},
                                                std::move(input.allocatorLifetime));
         source->scene = transition_.next;
+        source->worldCanvas = std::move(input.worldCanvas);
         source->retirementSlot = reservations_[index];
         incoming_[index] = std::move(source);
         auto &candidate = *incoming_[index];
@@ -295,7 +306,10 @@ namespace Horo::Application::Internal {
                                                                 const CancellationToken &cancellation) const {
         if (const auto resources = candidate.AdmitResources(); resources.HasError())
             return resources;
-        candidate.output.pending = state_->output;
+        if (!candidate.worldCanvas)
+            candidate.output.pending = state_->output;
+        if ((candidate.output.canvas.renderMode == UiRenderMode::WorldSpace) != candidate.worldCanvas.has_value())
+            return Result<void>::Failure(MakeError(UiErrors::CanvasSpaceModeMismatch));
         if (const auto output = candidate.ApplyOutput(); output.HasError())
             return output;
         if (state_->accessibility.revision != 0) {
@@ -308,11 +322,13 @@ namespace Horo::Application::Internal {
         auto prototype = candidate.projection->ExtractPrototype(*pin.Get(), baseline.Value());
         if (prototype.HasError())
             return Result<void>::Failure(prototype.ErrorValue());
-        auto program = Render::UiPaintProgram::Create(*state_->frontend, candidate.programs.policy, prototype.Value(), candidate.textures,
-                                                      candidate.programs.kernel, cancellation);
-        if (program.HasError())
-            return Result<void>::Failure(program.ErrorValue());
-        candidate.programs.active = std::move(program).Value();
+        if (!candidate.worldCanvas) {
+            auto program = Render::UiPaintProgram::Create(*state_->frontend, candidate.programs.policy, prototype.Value(),
+                                                          candidate.textures, candidate.programs.kernel, cancellation);
+            if (program.HasError())
+                return Result<void>::Failure(program.ErrorValue());
+            candidate.programs.active = std::move(program).Value();
+        }
         candidate.refresh = false;
         if (state_->started) {
             if (const auto started = candidate.animation->Startup(state_->cancellation.Token()); started.HasError())

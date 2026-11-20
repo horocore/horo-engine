@@ -108,6 +108,69 @@ namespace Horo::Application::Internal {
         });
     }
 
+    /** @copydoc RuntimeUiPaintPort::ReadSceneCanvasFrame */
+    Result<std::optional<RuntimeUiPaintSceneCanvasFrame>> RuntimeUiPaintPort::ReadSceneCanvasFrame(
+        const std::uint64_t frameNumber, const Runtime::SceneRuntimeId scene) const {
+        using Read = Result<std::optional<RuntimeUiPaintSceneCanvasFrame>>;
+        if (!state_ || !state_->Available() || state_->dispatching)
+            return Read::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
+        for (const auto *source : state_->Sources())
+            if (source && source->worldCanvas && source->scene == scene && source->frame.extractedFrame == frameNumber)
+                return Read::Success(RuntimeUiPaintSceneCanvasFrame{source->instance, scene, &*source->worldCanvas,
+                                                                    &*source->frame.snapshot, &source->programs.policy,
+                                                                    &source->programs.kernel, source->textures});
+        return Read::Success(std::nullopt);
+    }
+
+    /** @copydoc RuntimeUiPaintPort::TakeSceneCanvasSubmission */
+    Result<Render::UiRenderSubmission> RuntimeUiPaintPort::TakeSceneCanvasSubmission(const RuntimeUiInstanceId instance,
+                                                                                     const std::uint64_t frameNumber,
+                                                                                     const Render::UiPaintProgram &program,
+                                                                                     const std::uint32_t slot) const {
+        using Submission = Result<Render::UiRenderSubmission>;
+        auto *source = state_ ? state_->ActiveSource(instance) : nullptr;
+        if (!source || !source->worldCanvas || source->frame.extractedFrame != frameNumber || slot >= source->programs.policy.frameSlots ||
+            source->frame.sceneSubmissionTaken)
+            return Submission::Failure(MakeError(UiErrors::RevisionStale));
+        auto submission = source->BindResources(program, slot);
+        if (submission.HasValue())
+            source->frame.sceneSubmissionTaken = true;
+        return submission;
+    }
+
+    /** @copydoc RuntimeUiPaintPort::SceneCanvasEncoded */
+    Result<void> RuntimeUiPaintPort::SceneCanvasEncoded(const RuntimeUiInstanceId instance, const std::uint64_t frameNumber,
+                                                        const UiWorldCanvasProjection plane) const {
+        auto *source = state_ ? state_->ActiveSource(instance) : nullptr;
+        if (!source || !source->worldCanvas || source->frame.extractedFrame != frameNumber || !source->frame.sceneSubmissionTaken ||
+            source->frame.encodedPlane)
+            return Result<void>::Failure(MakeError(UiErrors::RevisionStale));
+        if (!plane.IsValid())
+            return Result<void>::Failure(MakeError(UiErrors::CanvasSpaceInvalid));
+        source->frame.encodedPlane = plane;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc Detail::RuntimeUiPaintSource::FinishWorldCanvas */
+    Result<void> Detail::RuntimeUiPaintSource::FinishWorldCanvas(const std::uint64_t frameNumber, const bool nativePresentSucceeded) {
+        if (frame.extractedFrame != frameNumber)
+            return Result<void>::Success();
+        const auto &descriptor = frame.snapshot->Descriptor();
+        UiPresentationReceipt receipt{descriptor.view, descriptor.canvas, descriptor.interactionRevision, descriptor.snapshotRevision};
+        if (frame.encodedPlane) {
+            receipt.outcome = nativePresentSucceeded ? UiPresentationOutcome::Presented : UiPresentationOutcome::Failed;
+            receipt.reason = nativePresentSucceeded ? UiPresentationReason::None : UiPresentationReason::ExecutionFailure;
+            if (nativePresentSucceeded)
+                receipt.worldProjection = frame.encodedPlane;
+        }
+        if (const auto applied = animation->ApplyPresentation(receipt); applied.HasError())
+            return Result<void>::Failure(applied.ErrorValue());
+        output.awaitingPresentation = !receipt.worldProjection.has_value();
+        frame.extractedFrame.reset();
+        frame.encodedPlane.reset();
+        return Result<void>::Success();
+    }
+
     /** @copydoc RuntimeUiPaintPort::ComposeUi */
     Result<void> RuntimeUiPaintPort::ComposeUi(Render::RenderFrameScope &frame, const std::uint64_t frameNumber) const {
         if (!state_ || !state_->Available())
@@ -116,7 +179,7 @@ namespace Horo::Application::Internal {
         std::array<Render::UiPaintProgramSubmission, Detail::MaximumSceneUiSources> batch;
         std::size_t count = 0;
         for (const auto *source : sources) {
-            if (!source)
+            if (!source || source->worldCanvas)
                 continue;
             if (count == batch.size())
                 return Result<void>::Failure(MakeError(UiErrors::CapacityExceeded));
@@ -128,12 +191,12 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         count = 0;
         for (auto *source : sources)
-            if (source)
+            if (source && !source->worldCanvas)
                 batch[count++] = {source->programs.active.get(), &*source->frame.prepared, std::move(source->frame.submission)};
         if (const auto submitted = Render::UiPaintProgram::SubmitBatch(frame, {batch.data(), count}); submitted.HasError())
             return submitted;
         for (auto *source : sources) {
-            if (!source)
+            if (!source || source->worldCanvas)
                 continue;
             const auto &descriptor = source->frame.geometry->SourceSnapshot().Descriptor();
             source->frame.encoded = UiPresentationReceipt{descriptor.view,
@@ -156,7 +219,14 @@ namespace Horo::Application::Internal {
             if (source && source->frame.encoded && source->frame.encodedFrame != frameNumber)
                 return Result<void>::Failure(MakeError(UiErrors::RevisionStale));
         for (auto *source : sources) {
-            if (!source || !source->frame.encoded)
+            if (!source)
+                continue;
+            if (source->worldCanvas) {
+                if (const auto completed = source->FinishWorldCanvas(frameNumber, nativePresentSucceeded); completed.HasError())
+                    return completed;
+                continue;
+            }
+            if (!source->frame.encoded)
                 continue;
             auto receipt = *source->frame.encoded;
             receipt.outcome = nativePresentSucceeded ? UiPresentationOutcome::Presented : UiPresentationOutcome::Failed;

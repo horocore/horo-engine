@@ -13,18 +13,6 @@
 #include <variant>
 
 namespace Horo::Application::Internal {
-    /** @brief Exact authored World canvas placement and bounded offscreen dimensions before viewport admission. */
-    struct RuntimeUiPaintWorldCanvas final {
-        Runtime::EntityRef entity;
-        Runtime::Ui::UiCanvasAssetReference reference;
-        Runtime::Ui::UiDocumentRevision documentRevision;
-        Assets::AssetRegistryRevision registryRevision;
-        Runtime::Ui::UiWorldCanvasProjection plane; /**< Scene coordinates, before any selected view's render-origin localization. */
-        Runtime::Ui::UiCanvasLogicalExtent logicalExtent;
-        Runtime::Ui::UiCanvasPixelExtent rasterExtent; /**< Authored reference dimensions, independent of monitor extent and DPI. */
-        Runtime::Ui::UiCanvasScaleFactor fontScale;
-    };
-
     /** @brief Resolves a centered local XY canvas using the current Scene's exact bounded parent transforms.
      * @param scene Current view of the actual selected Scene owner.
      * @param entity Exact owner of the registered canvas reference.
@@ -44,6 +32,11 @@ namespace Horo::Application::Internal {
      * @pre Caller checks the binding against its own current Runtime UI document publication before encoding. */
     [[nodiscard]] Result<Runtime::Ui::UiWorldCanvasProjection> CaptureRuntimeUiPaintWorldCanvasPlane(
         Runtime::RuntimeSceneView scene, const RuntimeUiPaintWorldCanvas &canvas);
+
+    /** @brief Converts the same plane retained for hit testing to the renderer's centered quad coordinates.
+     * @param plane Current World canvas plane in the selected scene's coordinate system.
+     * @return Affine local-to-scene matrix, or a typed failure for a degenerate or nonfinite plane. */
+    [[nodiscard]] Result<Math::Mat4> BuildRuntimeUiPaintWorldCanvasTransform(const Runtime::Ui::UiWorldCanvasProjection &plane);
 
     /** @brief Explicit admitted launcher route, used only for a real authored source at a load-time Scene safe point.
      * @details Both borrowed services outlive project factories and their synchronous preparation jobs. No tool discovery occurs. */
@@ -68,6 +61,7 @@ namespace Horo::Application::Internal {
         std::uint32_t maximumElements{512};
         std::uint32_t previousInstanceSlot{};
         std::uint32_t previousCanvasSlot{};
+        std::optional<std::filesystem::path> vulkanSceneCanvasAssets; /**< Exact package root admitted by the selected viewport. */
     };
 
     /** @brief One application source namespace, shared by real preview/Play factories and pinned through source retirement.

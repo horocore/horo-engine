@@ -110,9 +110,18 @@ namespace Horo::Render {
         const auto changed = [] {
             return Result<void>::Failure(MakeError(UiPaintProgramErrors::PreparationRequired));
         };
-        if (!submission.geometry || !submission.geometry->IsValid())
+        if (!submission.geometry || !submission.geometry->IsValid() || !MatchesSource(submission.geometry->SourceSnapshot()))
             return changed();
-        const auto &snapshot = submission.geometry->SourceSnapshot();
+        if (const auto &presentation = submission.geometry->Descriptor().presentation;
+            presentation && *presentation != descriptor.projection)
+            return changed();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiPaintProgram::Storage::MatchesSource */
+    bool UiPaintProgram::Storage::MatchesSource(const Runtime::Ui::UiRenderSnapshot &snapshot) const noexcept {
+        if (!snapshot.IsValid())
+            return false;
         const auto &expected = source.prototype.Descriptor();
         if (const auto &actual = snapshot.Descriptor();
             actual.instance != expected.instance || actual.canvas != expected.canvas || actual.document != expected.document ||
@@ -120,35 +129,32 @@ namespace Horo::Render {
             actual.view != expected.view || snapshot.Commands().size() != source.prototype.Commands().size() ||
             snapshot.Groups().size() != source.prototype.Groups().size() || snapshot.Masks().size() != source.prototype.Masks().size() ||
             snapshot.Resources().size() != source.prototype.Resources().size())
-            return changed();
-        if (const auto &presentation = submission.geometry->Descriptor().presentation;
-            presentation && *presentation != descriptor.projection)
-            return changed();
+            return false;
         for (std::size_t index = 0; index < snapshot.Commands().size(); ++index) {
             const auto &command = snapshot.Commands()[index];
             const auto &prototype = source.prototype.Commands()[index];
             if (command.element != prototype.element || command.group != prototype.group || command.mask != prototype.mask ||
                 command.payload.index() != prototype.payload.index())
-                return changed();
+                return false;
         }
         for (std::size_t index = 0; index < snapshot.Groups().size(); ++index) {
             const auto &group = snapshot.Groups()[index];
             const auto &prototype = source.prototype.Groups()[index];
             if (group.element != prototype.element || group.parent != prototype.parent || group.firstCommand != prototype.firstCommand ||
                 group.commandCount != prototype.commandCount || group.mask != prototype.mask)
-                return changed();
+                return false;
         }
         for (std::size_t index = 0; index < snapshot.Masks().size(); ++index)
             if (snapshot.Masks()[index].parent != source.prototype.Masks()[index].parent)
-                return changed();
+                return false;
         for (std::size_t index = 0; index < snapshot.Resources().size(); ++index) {
             const auto &reference = snapshot.Resources()[index];
             const auto &prototype = source.prototype.Resources()[index];
             if (reference.asset != prototype.asset || reference.revision != prototype.revision || reference.role != prototype.role ||
                 reference.colorSpace != prototype.colorSpace || reference.sampling != prototype.sampling ||
                 reference.fallback != prototype.fallback || reference.residency != prototype.residency)
-                return changed();
+                return false;
         }
-        return Result<void>::Success();
+        return true;
     }
 }  // namespace Horo::Render
