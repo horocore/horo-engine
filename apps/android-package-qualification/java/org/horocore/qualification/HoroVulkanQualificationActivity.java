@@ -13,6 +13,28 @@ public class HoroVulkanQualificationActivity extends HoroInputActivity {
     private static final MemoryObservation memory = new MemoryObservation();
     private static final PowerObservation power = new PowerObservation();
     private static final DisplayRefreshObservation refresh = new DisplayRefreshObservation();
+    private long thermalPacingToken;
+    private boolean conserveThermalPacing;
+
+    private native void horoThermalPacingEvent(long token, boolean conserve);
+
+    /** The native owner binds once and gets the latest Activity-local state under the callback gate. */
+    private synchronized boolean horoBindThermalPacing(long token) {
+        if (token <= thermalPacingToken) return false;
+        thermalPacingToken = token;
+        horoThermalPacingEvent(token, conserveThermalPacing);
+        return true;
+    }
+
+    private synchronized void horoDetachThermalPacing(long token) {
+        if (thermalPacingToken == token) thermalPacingToken = 0;
+    }
+
+    private synchronized void updateThermalPacing(boolean conserve) {
+        if (conserveThermalPacing == conserve) return;
+        conserveThermalPacing = conserve;
+        if (thermalPacingToken != 0) horoThermalPacingEvent(thermalPacingToken, conserve);
+    }
 
     @Override public void onResume() {
         super.onResume();
@@ -138,10 +160,14 @@ public class HoroVulkanQualificationActivity extends HoroInputActivity {
                     default: return UNAVAILABLE;
                 }
             }
+
+            boolean conservesAttempts() {
+                return this == SEVERE || this == CRITICAL || this == EMERGENCY || this == SHUTDOWN;
+            }
         }
 
         private final Context application;
-        private Object owner;
+        private HoroVulkanQualificationActivity owner;
         private PowerManager manager;
         private Listener listener;
         private boolean accepting;
@@ -152,8 +178,9 @@ public class HoroVulkanQualificationActivity extends HoroInputActivity {
             this.application = application;
         }
 
-        void resume(Object activity) {
+        void resume(HoroVulkanQualificationActivity activity) {
             if (owner == activity) return;
+            if (owner != null) owner.updateThermalPacing(false);
             owner = activity;
             accepting = false;
             if (!retireListener()) {
@@ -179,6 +206,7 @@ public class HoroVulkanQualificationActivity extends HoroInputActivity {
 
         void pause(Object activity) {
             if (owner != activity) return;
+            owner.updateThermalPacing(false);
             owner = null;
             accepting = false;
             retireListener();
@@ -199,6 +227,7 @@ public class HoroVulkanQualificationActivity extends HoroInputActivity {
         }
 
         private void publish(State state) {
+            if (owner != null) owner.updateThermalPacing(state.conservesAttempts());
             if (state == previous || revision == Long.MAX_VALUE) return;
             previous = state;
             Log.i("HoroPackageQualification", "host-thermal revision=" + ++revision + " state=" + state.diagnostic);

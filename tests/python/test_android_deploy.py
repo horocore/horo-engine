@@ -495,6 +495,14 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual((status, report["status"]), (0, "complete"))
         self.assertEqual(report["observed"]["battery"], {"revision": 2, "state": "inactive"})
 
+    def test_vulkan_capture_records_pacing_from_the_frame_owner(self):
+        first = log_line(LIFECYCLE) + log_line("host-pacing revision=2 state=thermal-conservation")
+        second = log_line(FRAME) + log_line("host-pacing revision=1 state=baseline")
+        second += log_line("host-pacing revision=3 state=baseline", uid="10200")
+        status, report, _ = self.execute({LOGCAT: [first, second]}, profile_name=VULKAN_PROFILE)
+        self.assertEqual((status, report["status"]), (0, "complete"))
+        self.assertEqual(report["observed"]["pacing"], {"revision": 2, "state": "thermal-conservation"})
+
     def test_device_clock_discontinuity_or_malformed_clock_cannot_supply_evidence(self):
         for final, expected in ((START, "device_log_clock_changed"),
                                 ("1795000000.111000001", "device_log_clock_changed"),

@@ -159,7 +159,7 @@ extern "C" void android_main(android_app *app) {
     if (input.Status() != Horo::Platform::Android::InputAdmission::Accepted)
         __android_log_write(ANDROID_LOG_ERROR, "HoroPackageQualification", "Android input bridge unavailable");
 #if defined(HORO_ANDROID_QUALIFICATION_VULKAN)
-    auto created = Horo::AndroidQualification::QualificationHost::Create();
+    auto created = Horo::AndroidQualification::QualificationHost::Create(*app);
     if (created.HasError()) {
         Report(created.ErrorValue());
         return;

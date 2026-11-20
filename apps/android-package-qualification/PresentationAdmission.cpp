@@ -1,5 +1,8 @@
 #include "PresentationAdmission.h"
 
+#include <algorithm>
+#include <limits>
+
 namespace Horo::AndroidQualification {
     namespace PresentationAdmissionErrors {
         const ErrorCodeDescriptor InvalidReceipt{ErrorDomainId{"horo.android.qualification"},
@@ -88,16 +91,51 @@ namespace Horo::AndroidQualification {
     }
 
     /** @copydoc FramePacing::FramePacing */
-    FramePacing::FramePacing(const Clock::duration minimumInterval) noexcept : minimumInterval_(minimumInterval) {}
+    FramePacing::FramePacing(const Clock::duration minimumInterval, const Clock::duration conservationInterval) noexcept
+        : minimumInterval_(minimumInterval), conservationInterval_(std::max(minimumInterval, conservationInterval)) {}
 
     /** @copydoc FramePacing::TryAdmit */
-    bool FramePacing::TryAdmit(const Platform::AndroidLifecycleSnapshot &state, const Clock::time_point now) noexcept {
+    bool FramePacing::TryAdmit(const Platform::AndroidLifecycleSnapshot &state, const Clock::time_point now, const Mode mode) noexcept {
         if (minimumInterval_ <= Clock::duration::zero() || state.queuedObservationCount != 0 || !state.hasPresentation ||
             state.process != Platform::AndroidProcessState::Running || state.activity != Platform::AndroidActivityState::Resumed)
             return false;
-        if (lastAttempt_ && (now < *lastAttempt_ || now - *lastAttempt_ < minimumInterval_))
+        const auto interval = mode == Mode::ThermalConservation ? conservationInterval_ : minimumInterval_;
+        if (lastAttempt_ && (now < *lastAttempt_ || now - *lastAttempt_ < interval))
             return false;
         lastAttempt_ = now;
         return true;
+    }
+
+    /** @copydoc ThermalPacingMailbox::Acquire */
+    ThermalPacingMailbox::Token ThermalPacingMailbox::Acquire() noexcept {
+        auto previous = state_.load(std::memory_order_acquire);
+        constexpr Token maximumGeneration = static_cast<Token>(std::numeric_limits<std::int64_t>::max()) & ~Flags;
+        if ((previous & Active) || previous >= maximumGeneration)
+            return 0;
+        const auto token = (previous + Flags + 1) | Active;
+        return state_.compare_exchange_strong(previous, token, std::memory_order_acq_rel) ? token : 0;
+    }
+
+    /** @copydoc ThermalPacingMailbox::Revoke */
+    void ThermalPacingMailbox::Revoke(const Token token) noexcept {
+        // No replacement can acquire while Active remains set, and only this lease's owner revokes it.
+        if (token && (state_.load(std::memory_order_acquire) & ~Conserving) == token)
+            state_.fetch_and(~Flags, std::memory_order_acq_rel);
+    }
+
+    /** @copydoc ThermalPacingMailbox::Publish */
+    void ThermalPacingMailbox::Publish(const Token token, const bool conserve) noexcept {
+        auto previous = state_.load(std::memory_order_acquire);
+        if ((token & Flags) != Active || (previous & ~Conserving) != token)
+            return;
+        // Callbacks for one token are serialized. CAS failure means this owner was withdrawn.
+        static_cast<void>(state_.compare_exchange_strong(previous, token | (conserve ? Conserving : 0), std::memory_order_acq_rel));
+    }
+
+    /** @copydoc ThermalPacingMailbox::Read */
+    FramePacing::Mode ThermalPacingMailbox::Read(const Token token) const noexcept {
+        return (token & Flags) == Active && state_.load(std::memory_order_acquire) == (token | Conserving)
+                   ? FramePacing::Mode::ThermalConservation
+                   : FramePacing::Mode::Baseline;
     }
 }  // namespace Horo::AndroidQualification

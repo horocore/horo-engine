@@ -233,4 +233,68 @@ namespace Horo::AndroidQualification::Tests {
         CHECK_FALSE(pacing.TryAdmit(replacement, start + 1min + 15ms));
         CHECK(pacing.TryAdmit(replacement, start + 1min + 16ms));
     }
+
+    TEST_CASE("Android thermal conservation changes only the next admitted presentation attempt",
+              "[platform][android][presentation][pacing]") {
+        using namespace std::chrono_literals;
+        using enum FramePacing::Mode;
+        Fixture fixture;
+        FramePacing pacing{16ms, 32ms};
+        const FramePacing::Clock::time_point start{};
+        Accepted(fixture.adapter.OnActivityStarted(fixture.activity));
+        Accepted(fixture.adapter.OnActivityResumed(fixture.activity));
+        fixture.Commit();
+        Accepted(fixture.admission.Reconcile(fixture.Facts(), true));
+        const auto foreground = fixture.State();
+        REQUIRE(pacing.TryAdmit(foreground, start));
+        CHECK_FALSE(pacing.TryAdmit(foreground, start + 16ms, ThermalConservation));
+        REQUIRE(pacing.TryAdmit(foreground, start + 32ms, ThermalConservation));
+        CHECK_FALSE(pacing.TryAdmit(foreground, start + 47ms));
+        REQUIRE(pacing.TryAdmit(foreground, start + 48ms));
+
+        std::size_t attempts{};
+        for (auto elapsed = 49ms; elapsed <= 10048ms; elapsed += 1ms)
+            attempts += pacing.TryAdmit(foreground, start + elapsed, ThermalConservation);
+        CHECK(attempts == 312);
+
+        Accepted(fixture.adapter.OnActivityPaused(fixture.activity));
+        CHECK_FALSE(pacing.TryAdmit(fixture.State(), start + 1min, ThermalConservation));
+        fixture.Commit();
+        CHECK_FALSE(pacing.TryAdmit(fixture.State(), start + 1min));
+        Accepted(fixture.adapter.OnActivityResumed(fixture.activity));
+        fixture.Commit();
+        Accepted(fixture.admission.Reconcile(fixture.Facts(), true));
+        REQUIRE(pacing.TryAdmit(fixture.State(), start + 1min));
+        CHECK_FALSE(pacing.TryAdmit(fixture.State(), start + 1min, ThermalConservation));
+        CHECK(pacing.TryAdmit(fixture.State(), start + 1min + 16ms));
+    }
+
+    TEST_CASE("Android thermal publication ignores a withdrawn token after replacement", "[platform][android][presentation][pacing]") {
+        using enum FramePacing::Mode;
+        ThermalPacingMailbox mailbox;
+        const auto first = mailbox.Acquire();
+        REQUIRE(first != 0);
+        CHECK(mailbox.Acquire() == 0);
+        mailbox.Publish(first, true);
+        CHECK(mailbox.Read(first) == ThermalConservation);
+        mailbox.Revoke(first);
+        const auto replacement = mailbox.Acquire();
+        REQUIRE(replacement > first);
+        std::thread late{[&] {
+            mailbox.Publish(first, true);
+            mailbox.Publish(0, true);
+        }};
+        late.join();
+        CHECK(mailbox.Read(first) == Baseline);
+        CHECK(mailbox.Read(replacement) == Baseline);
+        mailbox.Publish(replacement, true);
+        mailbox.Revoke(first);
+        CHECK(mailbox.Read(replacement) == ThermalConservation);
+        mailbox.Publish(replacement, false);
+        CHECK(mailbox.Read(replacement) == Baseline);
+        mailbox.Revoke(replacement);
+        mailbox.Publish(replacement, true);
+        CHECK(mailbox.Read(replacement) == Baseline);
+        CHECK(mailbox.Acquire() > replacement);
+    }
 }  // namespace Horo::AndroidQualification::Tests

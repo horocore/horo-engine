@@ -1187,6 +1187,8 @@ PLATFORM_STATE_LINES = {
         r"host-battery revision=(?P<revision>[1-9][0-9]{0,18}) "
         r"state=(?P<state>inactive|unsupported|unavailable|charging|discharging|not-charging|full) "
         r"percent=(?P<percent>-1|0|[1-9][0-9]{0,2})"),
+    "pacing": re.compile(
+        r"host-pacing revision=(?P<revision>[1-9][0-9]{0,18}) state=(?P<state>baseline|thermal-conservation)"),
     "refresh": re.compile(
         r"host-refresh revision=(?P<revision>[1-9][0-9]{0,18}) "
         r"state=(?P<state>inactive|unsupported|unavailable|observed) milliHz=(?P<milliHz>0|[1-9][0-9]{0,9})"),

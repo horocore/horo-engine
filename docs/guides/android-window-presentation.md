@@ -58,18 +58,24 @@ presentation generation after replacement or resize, including a changed receipt
 while readiness remains true. Presentation readiness and Activity permission are
 separate: frame execution additionally requires Running and Resumed states.
 
-The qualification host enforces a 16 ms fallback interval between frame
-attempts on its monotonic clock. Input or lifecycle wakeups cannot advance
-that cadence. Pausing or losing presentation prevents frame attempts, and
-resuming never submits missed frames. This fallback is independent of display
-refresh, thermal policy, and presentation completion.
+The qualification host enforces a 16 ms baseline interval between frame
+attempts on its monotonic clock. Android's severe, critical, emergency and
+shutdown thermal states select a 32 ms interval while that observation is
+active. Recovery or an unavailable observation restores the baseline from
+the last actual attempt. Pause and presentation loss stop attempts, and
+resume starts without a backlog. The policy gates frame attempts after input
+commit and leaves display refresh, simulation scheduling and authored
+settings to their existing owners.
+The deployment report can carry the native owner's selected pacing mode
+alongside Android's distinct thermal observation.
 
 The Vulkan qualification Activity observes Android's thermal status while it
 is resumed. Its optional deployment evidence contains a process-local
 revision and a platform status. A paused Activity publishes `inactive`.
 Missing service or registration failure is reported as `unsupported` or
-`unavailable`. The observer reports state changes only, and it leaves frame
-cadence and authored settings to their existing owners.
+`unavailable`. The Activity sends only the current conservation decision to
+its native frame owner. Retirement revokes that Activity's mailbox token before
+attempting Java cleanup. JNI binding and retirement run outside frame admission.
 
 At resume, the Activity samples Android's system low-memory state once.
 While resumed, Android's legacy running trim levels can publish

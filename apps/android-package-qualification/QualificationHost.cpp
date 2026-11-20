@@ -1,5 +1,6 @@
 #include "QualificationHost.h"
 
+#include "AndroidGameActivityJni.h"
 #include "Horo/Platform/Internal/AndroidLifecycleAdapter.h"
 #include "Horo/Platform/Internal/AndroidWindowHost.h"
 #include "Horo/Runtime/Render/Internal/VulkanAndroidBackendModule.h"
@@ -13,6 +14,7 @@
 #include <limits>
 #include <optional>
 #include <thread>
+#include <utility>
 
 namespace Horo::AndroidQualification {
     using namespace Horo::Platform;
@@ -21,6 +23,87 @@ namespace Horo::AndroidQualification {
 
     namespace {
         constexpr auto MinimumFrameAttemptInterval = std::chrono::milliseconds{16};
+        constexpr auto ThermalFrameAttemptInterval = std::chrono::milliseconds{32};
+        ThermalPacingMailbox ThermalPacingPublications;
+
+        /** @brief Cold JNI binding to one Activity's latest attempt policy; no JNI calls from frame admission. */
+        class ThermalPacingBinding final {
+        public:
+            ~ThermalPacingBinding() {
+                Detach();
+            }
+
+            void Bind(android_app &app) {
+                const auto *native = app.activity;
+                if (app.destroyRequested || !native || !native->vm || !native->javaGameActivity)
+                    return;
+                const GameActivityJniAttachment connection{native->vm};
+                auto *env = connection.Environment();
+                if (!env)
+                    return;
+                const auto concrete = env->GetObjectClass(native->javaGameActivity);
+                // The generated PackageActivity inherits the selected Vulkan composition.
+                const auto type = concrete ? env->GetSuperclass(concrete) : nullptr;
+                const auto bind = type ? env->GetMethodID(type, "horoBindThermalPacing", "(J)Z") : nullptr;
+                const auto detach = bind ? env->GetMethodID(type, "horoDetachThermalPacing", "(J)V") : nullptr;
+                const JNINativeMethod callback{const_cast<char *>("horoThermalPacingEvent"), const_cast<char *>("(JZ)V"),
+                                               reinterpret_cast<void *>(&Observe)};
+                const bool registered = !env->ExceptionCheck() && detach && env->RegisterNatives(type, &callback, 1) == JNI_OK;
+                if (type)
+                    env->DeleteLocalRef(type);
+                if (concrete)
+                    env->DeleteLocalRef(concrete);
+                if (env->ExceptionCheck())
+                    env->ExceptionClear();
+                if (!registered)
+                    return;
+
+                token_ = ThermalPacingPublications.Acquire();
+                if (!token_)
+                    return;
+                // GameActivity holds this global reference until android_main has returned.
+                activity_ = native->javaGameActivity;
+                vm_ = native->vm;
+                detach_ = detach;
+                // Keep the lifetime gate armed before Java can retain the peer.
+                const auto bound = env->CallBooleanMethod(activity_, bind, static_cast<jlong>(token_));
+                const bool failed = env->ExceptionCheck();
+                if (failed)
+                    env->ExceptionClear();
+                if (failed || bound != JNI_TRUE)
+                    Detach();
+            }
+
+            void Detach() noexcept {
+                const auto token = std::exchange(token_, 0);
+                if (!token)
+                    return;
+                ThermalPacingPublications.Revoke(token);
+                const GameActivityJniAttachment connection{vm_};
+                if (auto *env = connection.Environment()) {
+                    env->CallVoidMethod(activity_, detach_, static_cast<jlong>(token));
+                    if (env->ExceptionCheck())
+                        env->ExceptionClear();
+                }
+                activity_ = nullptr;
+            }
+
+            [[nodiscard]] FramePacing::Mode Mode() const noexcept {
+                return ThermalPacingPublications.Read(token_);
+            }
+
+        private:
+            /** @brief UI-lane producer. A late Java callback can only compare its revoked token. */
+            static void JNICALL Observe(JNIEnv *, jobject, jlong token, const jboolean conserve) noexcept {
+                if (token > 0)
+                    ThermalPacingPublications.Publish(static_cast<ThermalPacingMailbox::Token>(token), conserve == JNI_TRUE);
+            }
+
+            ThermalPacingMailbox::Token token_{};
+            jobject activity_{};
+            JavaVM *vm_{};
+            jmethodID detach_{};
+        };
 
         enum class FrameStage : std::size_t {
             Begin,
@@ -74,7 +157,8 @@ namespace Horo::AndroidQualification {
         std::unique_ptr<AndroidLifecycleAdapter> adapter;
         std::unique_ptr<AndroidWindowHost> windows;
         std::unique_ptr<PresentationAdmission> presentation;
-        FramePacing pacing{MinimumFrameAttemptInterval};
+        FramePacing pacing{MinimumFrameAttemptInterval, ThermalFrameAttemptInterval};
+        ThermalPacingBinding thermalPacing;
         RenderBackendRegistry registry;
         std::unique_ptr<IRenderBackend> backend;
         AndroidActivityGeneration activity;
@@ -84,7 +168,19 @@ namespace Horo::AndroidQualification {
         std::array<std::uint64_t, 3> pending{};
         std::uint64_t presentAccepted{}; /**< At most one accepted Present per bounded frame request; never completion evidence. */
         std::optional<HostObservation> observation;
+        std::optional<FramePacing::Mode> observedPacing;
+        std::uint64_t pacingRevision{};
         bool reportNextOutcome{true}, reportFirstPresent{true};
+
+        /** @brief Publishes the policy selected by the real frame owner when it changes. */
+        void ObservePacing(const FramePacing::Mode mode) noexcept {
+            if (observedPacing == mode || pacingRevision == std::numeric_limits<std::uint64_t>::max())
+                return;
+            observedPacing = mode;
+            __android_log_print(ANDROID_LOG_INFO, "HoroPackageQualification", "host-pacing revision=%llu state=%s",
+                                static_cast<unsigned long long>(++pacingRevision),
+                                mode == FramePacing::Mode::ThermalConservation ? "thermal-conservation" : "baseline");
+        }
 
         /** @brief Reports transition-only canonical/window facts already obtained by the ordinary host pump. */
         void Observe(const AndroidLifecycleSnapshot &current, const AndroidWindowSnapshot &native, bool ready) noexcept {
@@ -259,7 +355,7 @@ namespace Horo::AndroidQualification {
     }
 
     /** @copydoc QualificationHost::Create */
-    Result<std::unique_ptr<QualificationHost>> QualificationHost::Create() {
+    Result<std::unique_ptr<QualificationHost>> QualificationHost::Create(android_app &app) {
         using Outcome = Result<std::unique_ptr<QualificationHost>>;
         auto lifecycle = AndroidLifecycleController::Create(std::this_thread::get_id());
         if (lifecycle.HasError())
@@ -282,6 +378,7 @@ namespace Horo::AndroidQualification {
             return Outcome::Failure(committed.ErrorValue());
         if (auto active = state->ActivateRenderer(); active.HasError())
             return Outcome::Failure(active.ErrorValue());
+        state->thermalPacing.Bind(app);
         return Outcome::Success(std::unique_ptr<QualificationHost>(new QualificationHost(std::move(state))));
     }
 
@@ -309,7 +406,10 @@ namespace Horo::AndroidQualification {
         if (lifecycle.HasError())
             return Result<void>::Failure(lifecycle.ErrorValue());
         state_->Observe(lifecycle.Value(), native.Value(), available.Value());
-        if (!state_->pacing.TryAdmit(lifecycle.Value(), FramePacing::Clock::now()))
+        const auto mode =
+            lifecycle.Value().activity == AndroidActivityState::Resumed ? state_->thermalPacing.Mode() : FramePacing::Mode::Baseline;
+        state_->ObservePacing(mode);
+        if (!state_->pacing.TryAdmit(lifecycle.Value(), FramePacing::Clock::now(), mode))
             return Result<void>::Success();
         return state_->Render(extent);
     }
@@ -318,6 +418,7 @@ namespace Horo::AndroidQualification {
     Result<bool> QualificationHost::PollShutdown() {
         if (state_->drained)
             return Result<bool>::Success(true);
+        state_->thermalPacing.Detach();
         if (auto closed = state_->BeginShutdown(); closed.HasError())
             return Result<bool>::Failure(closed.ErrorValue());
         const auto drained = state_->backend->PollDrain();
