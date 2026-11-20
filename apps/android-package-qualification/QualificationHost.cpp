@@ -7,6 +7,7 @@
 
 #include <android/log.h>
 #include <array>
+#include <chrono>
 #include <exception>
 #include <game-activity/native_app_glue/android_native_app_glue.h>
 #include <limits>
@@ -19,6 +20,8 @@ namespace Horo::AndroidQualification {
     using namespace Horo::Render;
 
     namespace {
+        constexpr auto MinimumFrameAttemptInterval = std::chrono::milliseconds{16};
+
         enum class FrameStage : std::size_t {
             Begin,
             Execute,
@@ -71,6 +74,7 @@ namespace Horo::AndroidQualification {
         std::unique_ptr<AndroidLifecycleAdapter> adapter;
         std::unique_ptr<AndroidWindowHost> windows;
         std::unique_ptr<PresentationAdmission> presentation;
+        FramePacing pacing{MinimumFrameAttemptInterval};
         RenderBackendRegistry registry;
         std::unique_ptr<IRenderBackend> backend;
         AndroidActivityGeneration activity;
@@ -305,8 +309,7 @@ namespace Horo::AndroidQualification {
         if (lifecycle.HasError())
             return Result<void>::Failure(lifecycle.ErrorValue());
         state_->Observe(lifecycle.Value(), native.Value(), available.Value());
-        if (!available.Value() || lifecycle.Value().process != AndroidProcessState::Running ||
-            lifecycle.Value().activity != AndroidActivityState::Resumed)
+        if (!state_->pacing.TryAdmit(lifecycle.Value(), FramePacing::Clock::now()))
             return Result<void>::Success();
         return state_->Render(extent);
     }

@@ -86,4 +86,18 @@ namespace Horo::AndroidQualification {
             return lost;
         return Publish(window);
     }
+
+    /** @copydoc FramePacing::FramePacing */
+    FramePacing::FramePacing(const Clock::duration minimumInterval) noexcept : minimumInterval_(minimumInterval) {}
+
+    /** @copydoc FramePacing::TryAdmit */
+    bool FramePacing::TryAdmit(const Platform::AndroidLifecycleSnapshot &state, const Clock::time_point now) noexcept {
+        if (minimumInterval_ <= Clock::duration::zero() || state.queuedObservationCount != 0 || !state.hasPresentation ||
+            state.process != Platform::AndroidProcessState::Running || state.activity != Platform::AndroidActivityState::Resumed)
+            return false;
+        if (lastAttempt_ && (now < *lastAttempt_ || now - *lastAttempt_ < minimumInterval_))
+            return false;
+        lastAttempt_ = now;
+        return true;
+    }
 }  // namespace Horo::AndroidQualification

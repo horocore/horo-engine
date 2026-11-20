@@ -58,6 +58,12 @@ presentation generation after replacement or resize, including a changed receipt
 while readiness remains true. Presentation readiness and Activity permission are
 separate: frame execution additionally requires Running and Resumed states.
 
+The qualification host enforces a 16 ms fallback interval between frame
+attempts on its monotonic clock. Input or lifecycle wakeups cannot advance
+that cadence. Pausing or losing presentation prevents frame attempts, and
+resuming never submits missed frames. This fallback is independent of display
+refresh, thermal policy, and presentation completion.
+
 ## Nonblocking acquisition and retirement
 
 Availability polling observes the native output and advances retirement. It does

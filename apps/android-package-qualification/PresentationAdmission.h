@@ -3,6 +3,7 @@
 #include "Horo/Platform/Internal/AndroidLifecycleAdapter.h"
 #include "Horo/Platform/Internal/AndroidWindowHost.h"
 
+#include <chrono>
 #include <optional>
 
 namespace Horo::AndroidQualification {
@@ -32,5 +33,24 @@ namespace Horo::AndroidQualification {
         Platform::Android::AndroidLifecycleAdapter &adapter_;
         std::optional<Platform::Android::AndroidWindowSnapshot> ready_;
         std::uint64_t latestRevision_{}; /**< Derived native-facts watermark, never a lifecycle generation issuer. */
+    };
+
+    /** @brief Bounds frame attempts independently of native event-loop wakeups. */
+    class FramePacing final {
+    public:
+        using Clock = std::chrono::steady_clock;
+
+        /** @brief Selects the host's fallback cadence. @param minimumInterval Minimum time between attempts. */
+        explicit FramePacing(Clock::duration minimumInterval) noexcept;
+
+        /** @brief Consumes at most one attempt for a committed foreground presentation.
+         * @param state Current committed lifecycle snapshot after native readiness reconciliation.
+         * @param now Monotonic time on the frame owner.
+         * @return True if a frame may be attempted. No debt accrues while paused or on a late wakeup. */
+        [[nodiscard]] bool TryAdmit(const Platform::AndroidLifecycleSnapshot &state, Clock::time_point now) noexcept;
+
+    private:
+        const Clock::duration minimumInterval_;
+        std::optional<Clock::time_point> lastAttempt_;
     };
 }  // namespace Horo::AndroidQualification

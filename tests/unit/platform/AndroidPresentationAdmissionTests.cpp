@@ -2,6 +2,7 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
 #include <thread>
 
 namespace Horo::AndroidQualification::Tests {
@@ -188,5 +189,48 @@ namespace Horo::AndroidQualification::Tests {
         CHECK(fixture.State().presentationGeneration == first);
         Accepted(fixture.admission.Reconcile(fixture.Facts(), true));
         CHECK(fixture.State().presentationGeneration == first);
+    }
+
+    TEST_CASE("Android frame pacing bounds rapid wakeups and recovers without a frame backlog",
+              "[platform][android][presentation][pacing]") {
+        using namespace std::chrono_literals;
+        Fixture fixture;
+        FramePacing pacing{16ms};
+        const FramePacing::Clock::time_point start{};
+        Accepted(fixture.adapter.OnActivityStarted(fixture.activity));
+        Accepted(fixture.adapter.OnActivityResumed(fixture.activity));
+        fixture.Commit();
+        CHECK_FALSE(pacing.TryAdmit(fixture.State(), start));
+        Accepted(fixture.admission.Reconcile(fixture.Facts(), true));
+
+        const auto ready = fixture.State();
+        REQUIRE(pacing.TryAdmit(ready, start));
+        CHECK_FALSE(pacing.TryAdmit(ready, start - 1ms));
+        CHECK_FALSE(pacing.TryAdmit(ready, start + 15ms));
+        std::size_t attempts = 1;
+        for (auto elapsed = 16ms; elapsed < 10s; elapsed += 1ms)
+            attempts += pacing.TryAdmit(ready, start + elapsed);
+        CHECK(attempts == 625);
+
+        Accepted(fixture.adapter.OnActivityPaused(fixture.activity));
+        CHECK_FALSE(pacing.TryAdmit(fixture.State(), start + 10s));
+        fixture.Commit();
+        const auto paused = fixture.State();
+        REQUIRE(paused.activity == AndroidActivityState::Paused);
+        CHECK_FALSE(pacing.TryAdmit(paused, start + 1min));
+        Accepted(fixture.adapter.OnActivityResumed(fixture.activity));
+        fixture.Commit();
+        Accepted(fixture.admission.Reconcile(fixture.Facts(), true));
+        const auto resumed = fixture.State();
+        REQUIRE(pacing.TryAdmit(resumed, start + 1min));
+        CHECK_FALSE(pacing.TryAdmit(resumed, start + 1min));
+
+        fixture.Replace();
+        CHECK_FALSE(pacing.TryAdmit(fixture.State(), start + 1min + 15ms));
+        Accepted(fixture.admission.Reconcile(fixture.Facts(), true));
+        const auto replacement = fixture.State();
+        REQUIRE(replacement.presentationGeneration > resumed.presentationGeneration);
+        CHECK_FALSE(pacing.TryAdmit(replacement, start + 1min + 15ms));
+        CHECK(pacing.TryAdmit(replacement, start + 1min + 16ms));
     }
 }  // namespace Horo::AndroidQualification::Tests
