@@ -537,6 +537,12 @@ to fixed scheduling and is not multiplied here. Exact signed sub-tick residuals
 are retained with each occurrence's independent clip cursor, including across
 rate changes. Intermediate arithmetic and complete traversal budgets are checked.
 
+The Scene owner captures all playing actors' parameters, rates and curve times
+before any graph evaluates. Each actor owns a typed parameter buffer sized from
+its admitted graph, charged to the same instance storage limit. Capture copies a
+source's borrowed span immediately, so a source may reuse scratch storage for the
+next actor. An oversized snapshot rejects the attempt before graph work begins.
+
 `Evaluate` stages privately. The enclosing tick owner calls `Commit` only after
 all tick preflight succeeds, or `Abort` on failure. Pending cursors, residuals,
 parameters and the final local pose publish together. Failed attempts publish no

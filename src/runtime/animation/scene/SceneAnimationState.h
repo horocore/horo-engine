@@ -13,10 +13,12 @@ namespace Horo::Runtime {
             EntityRef entity;
             Animation::AnimationAuthoringComponent authoring;
             Animation::AnimationInstanceHandle instance;
+            std::vector<Animation::GraphParameterInput> inputStorage;
+            SceneAnimationInputSnapshot capturedInput;
             bool playing{};
             bool staged{};
             Actor(AnimationSceneInternal::PreparedAssets prepared, Animation::AnimationGraphInstance instanceOwner, EntityRef owner,
-                  Animation::AnimationAuthoringComponent component, Animation::AnimationInstanceHandle identity);
+                  Animation::AnimationAuthoringComponent component, Animation::AnimationInstanceHandle identity, std::size_t inputCapacity);
         };
 
         struct Set final {
@@ -48,6 +50,8 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> AddActor(Set &set, const RuntimeSceneView &scene, const RuntimeEntityView &entity);
         [[nodiscard]] bool ReadAttempt(const FixedStepContext &context, RuntimeDispatchFacts &facts) const noexcept;
         [[nodiscard]] Result<void> BeginAttempt(const FixedStepContext &context);
+        /** @brief Copies every playing actor's bounded input on the owner lane before graph evaluation. */
+        [[nodiscard]] Result<void> CaptureInputs(const FixedStepContext &context) const;
         [[nodiscard]] Result<void> EvaluateActor(Actor &actor, const FixedStepContext &context) const;
         [[nodiscard]] Result<void> PrepareAttempt(const FixedStepContext &context);
         [[nodiscard]] Result<void> ArmActors() const;

@@ -132,7 +132,8 @@ namespace Horo::Animation::Test::Scene {
         EntityRef entity;
         bool clipSource{};
 
-        explicit Fixture(bool directClip = false, bool withStructuralOwner = true, const SourcePreparation &prepareSources = {})
+        explicit Fixture(bool directClip = false, bool withStructuralOwner = true, const SourcePreparation &prepareSources = {},
+                         std::shared_ptr<const Runtime::SceneAnimationInputSource> inputs = {})
             : committed(CaptureRuntimeAssets(cook, prepareSources, sourceBinding)), clipSource(directClip) {
             scheduler = Cook::Take(Runtime::FrameScheduler::Create(clock, {.fixedStep = Duration::FromNanoseconds(10)}));
             Runtime::SceneAnimationRuntimeConfig config;
@@ -140,6 +141,7 @@ namespace Horo::Animation::Test::Scene {
             config.runtimeOwner = Id<AnimationRuntimeId>(501);  // Explicit test-owned namespace, never derived from a Scene ID.
             config.target = cook.request.target;
             config.ownerCancellation = token;
+            config.inputs = std::move(inputs);
             auto adapter = Cook::Take(Runtime::SceneAnimationRuntime::Create(config));
             REQUIRE(scenes.AddActivationParticipant(adapter->MakeActivationParticipant()).HasValue());
             if (withStructuralOwner)

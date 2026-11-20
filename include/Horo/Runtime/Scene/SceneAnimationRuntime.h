@@ -8,7 +8,7 @@
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
 namespace Horo::Runtime {
-    /** @brief One invocation-scoped typed gameplay input snapshot; the graph copies it before evaluation returns. */
+    /** @brief One invocation-scoped typed gameplay input snapshot copied by the Scene owner before graph evaluation. */
     struct SceneAnimationInputSnapshot final {
         std::span<const Animation::GraphParameterInput> parameters;
         Animation::GraphPlaybackRate playbackRate;
@@ -21,7 +21,7 @@ namespace Horo::Runtime {
         virtual ~SceneAnimationInputSource() = default;
         /** @brief Borrows the actual immutable gameplay snapshot prepared before this exact attempted tick.
          * @param entity Exact Scene entity incarnation. @param context Actual callback, never retained.
-         * @return Bounded immutable input view valid until the caller's synchronous graph evaluation returns.
+         * @return Bounded immutable input view valid until the next Read or the end of the fixed callback.
          * @details Owner lane, allocation/I/O/callback-free; no mutation of this adapter or its graph owners.
          */
         [[nodiscard]] virtual SceneAnimationInputSnapshot Read(EntityRef entity, const FixedStepContext &context) const noexcept = 0;

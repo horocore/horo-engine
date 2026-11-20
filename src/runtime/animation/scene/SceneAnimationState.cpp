@@ -11,9 +11,10 @@ namespace Horo::Runtime {
     SceneAnimationRuntime::State::State(SceneAnimationRuntimeConfig value) : config(std::move(value)) {}
 
     SceneAnimationRuntime::State::Actor::Actor(PreparedAssets prepared, A::AnimationGraphInstance instanceOwner, EntityRef owner,
-                                               A::AnimationAuthoringComponent component, A::AnimationInstanceHandle identity)
+                                               A::AnimationAuthoringComponent component, A::AnimationInstanceHandle identity,
+                                               std::size_t inputCapacity)
         : assets(std::move(prepared)), graph(std::move(instanceOwner)), entity(owner), authoring(component), instance(identity),
-          playing(component.startsPlaying) {}
+          inputStorage(inputCapacity), playing(component.startsPlaying) {}
 
     bool SceneAnimationRuntime::State::OnOwner() const noexcept {
         return owner == std::this_thread::get_id();
@@ -74,7 +75,11 @@ namespace Horo::Runtime {
         const A::AnimationInstanceHandle identity{config.runtimeOwner, component.component, {slot, generation}};
         A::GraphInstanceCreateContext context;
         context.instance = identity;
-        context.maximumStorageBytes = config.limits.maximumInstanceStorageBytes;
+        const auto inputCapacity = config.inputs ? prepared.program->Parameters().size() : std::size_t{};
+        const auto inputBytes = inputCapacity * sizeof(A::GraphParameterInput);
+        if (inputBytes >= config.limits.maximumInstanceStorageBytes)
+            return Return::Failure(MakeError(A::AnimationAssetErrors::Capacity));
+        context.maximumStorageBytes = config.limits.maximumInstanceStorageBytes - inputBytes;
         context.maximumInstructions = config.limits.maximumInstructions;
         context.maximumJointOperations = config.limits.maximumJointOperations;
         context.clipLimits = config.limits.clip;
@@ -84,7 +89,8 @@ namespace Horo::Runtime {
         auto graph = A::AnimationGraphInstance::Create(prepared.Borrow(), context);
         if (graph.HasError())
             return Return::Failure(graph.ErrorValue());
-        return Return::Success(std::make_shared<Actor>(std::move(prepared), std::move(graph).Value(), entity.entity, component, identity));
+        return Return::Success(
+            std::make_shared<Actor>(std::move(prepared), std::move(graph).Value(), entity.entity, component, identity, inputCapacity));
     }
 
     Result<void> SceneAnimationRuntime::State::AddActor(Set &set, const RuntimeSceneView &scene, const RuntimeEntityView &entity) {

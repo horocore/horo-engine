@@ -1,5 +1,6 @@
 #include "AllocationProbe.h"
 #include "AnimationActionTestFixtures.h"
+#include "AnimationGraphInstanceTestFixtures.h"
 #include "AnimationPoseCompositionTestFixtures.h"
 #include "AnimationStateGraphTestFixtures.h"
 #include "animation/AnimationRuntimeFixture.h"
@@ -7,6 +8,59 @@
 #include <catch2/catch_approx.hpp>
 
 namespace Horo::Animation {
+    TEST_CASE("Scene animation freezes per-actor input before evaluation without fixed-path allocation", "[animation][scene][input]") {
+        struct Inputs final : Runtime::SceneAnimationInputSource {
+            GraphParameterId parameter{Test::Id<GraphParameterId>(1)};
+            Runtime::EntityRef first;
+            bool oversized{};
+            mutable std::array<GraphParameterInput, 2> scratch;
+
+            Runtime::SceneAnimationInputSnapshot Read(Runtime::EntityRef entity,
+                                                      const Runtime::FixedStepContext &) const noexcept override {
+                scratch.front() = {parameter, entity == first ? 0.0F : 1.0F};
+                return {std::span{scratch}.first(oversized && entity != first ? scratch.size() : 1)};
+            }
+        };
+
+        auto inputs = std::make_shared<Inputs>();
+        Test::Scene::Fixture fixture(false, true, [](Test::Cook::Fixture &cook) -> std::optional<AnimationAuthoringComponent> {
+            const auto graph = Test::Instance::Blended();
+            const Test::Instance::Prepared prepared{graph};
+            cook.Replace(*prepared.skeleton, prepared.compileClips, graph);
+            return std::nullopt;
+        }, inputs);
+        inputs->first = fixture.entity;
+        Runtime::RuntimeEntityCreateInfo create;
+        create.components.animation = fixture.Binding();
+        create.components.animation->component = Test::Id<AnimationComponentId>(8);
+        Runtime::SceneCommandBuffer commands;
+        REQUIRE(commands.Create(create).IsValid());
+        const auto created = fixture.Structural(std::move(commands));
+        REQUIRE(created->ResultValue());
+        REQUIRE(created->ResultValue()->created.size() == 1);
+        const auto second = created->ResultValue()->created.front().entity;
+
+        inputs->oversized = true;
+        REQUIRE(fixture.Tick().HasError());
+        CHECK_FALSE(fixture.Observation().component);
+        inputs->oversized = false;
+        Tests::AllocationProbe::Measurement measured;
+        auto tick = Result<void>::Success();
+        {
+            Tests::AllocationProbe::ScopedMeasurement window;
+            tick = fixture.scheduler->RunFrame(fixture.lifecycle, fixture.token, false);
+            measured = window.Snapshot();
+        }
+        REQUIRE(tick.HasValue());
+        CHECK(measured.requests == 0);
+        CHECK(fixture.PoseX() == 10.0F);
+        const auto other = Test::Cook::Take(fixture.forward->adapter->Query(second));
+        REQUIRE(other.component);
+        std::array<Math::Transform, 1> pose;
+        REQUIRE(fixture.forward->adapter->CopyPose(second, other.component->currentPose, pose).HasValue());
+        CHECK(pose[0].translation.x == 110.0F);
+    }
+
     TEST_CASE("Scene action slots expose committed authority state and preserve old pose observations", "[animation][scene][actions]") {
         Test::Scene::Fixture fixture(false, true, [](Test::Cook::Fixture &cook) -> std::optional<AnimationAuthoringComponent> {
             const Test::Actions::Prepared action;

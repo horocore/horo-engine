@@ -1,6 +1,7 @@
 #include "AnimationGraphSceneCommitAccess.h"
 #include "SceneAnimationState.h"
 
+#include <algorithm>
 #include <exception>
 
 namespace Horo::Runtime {
@@ -31,10 +32,25 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
-    Result<void> SceneAnimationRuntime::State::EvaluateActor(Actor &actor, const FixedStepContext &context) const {
-        if (!actor.playing)
+    /** @copydoc SceneAnimationRuntime::State::CaptureInputs */
+    Result<void> SceneAnimationRuntime::State::CaptureInputs(const FixedStepContext &context) const {
+        if (!config.inputs)
             return Result<void>::Success();
-        const auto snapshot = config.inputs ? config.inputs->Read(actor.entity, context) : SceneAnimationInputSnapshot{};
+        for (const auto &actor : active->current->actors) {
+            if (!actor || !actor->playing)
+                continue;
+            auto snapshot = config.inputs->Read(actor->entity, context);
+            if (snapshot.parameters.size() > actor->inputStorage.size())
+                return Result<void>::Failure(A::DescribeGraphInstanceFailure({A::GraphInstanceFailure::LimitExceeded}));
+            std::ranges::copy(snapshot.parameters, actor->inputStorage.begin());
+            snapshot.parameters = std::span{actor->inputStorage}.first(snapshot.parameters.size());
+            actor->capturedInput = snapshot;
+        }
+        return Result<void>::Success();
+    }
+
+    Result<void> SceneAnimationRuntime::State::EvaluateActor(Actor &actor, const FixedStepContext &context) const {
+        const auto &snapshot = actor.capturedInput;
         const A::GraphEvaluationInput input{attemptTick,           {context.fixedDelta.ToNanoseconds()},
                                             snapshot.playbackRate, snapshot.parameters,
                                             context.cancellation,  snapshot.curveTime};
@@ -136,8 +152,10 @@ namespace Horo::Runtime {
             return admitted;
         if (!state_->active || state_->active->closed)
             return Result<void>::Success();
+        if (const auto captured = state_->CaptureInputs(context); captured.HasError())
+            return captured;
         for (const auto &actor : state_->active->current->actors) {
-            if (!actor)
+            if (!actor || !actor->playing)
                 continue;
             const auto evaluated = state_->EvaluateActor(*actor, context);
             if (evaluated.HasError())
