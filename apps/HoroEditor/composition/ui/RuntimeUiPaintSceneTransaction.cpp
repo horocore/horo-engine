@@ -154,8 +154,8 @@ namespace Horo::Application::Internal {
             std::size_t passes{};
             std::size_t resources{};
             std::size_t draws{};
-            std::array<Runtime::SceneRuntimeId, Detail::MaximumSceneUiSources> worldOwners{};
-            std::size_t worldCount{};
+            std::array<Runtime::SceneRuntimeId, Detail::MaximumSceneUiSources> viewportOwners{};
+            std::size_t viewportCount{};
             const auto add = [](std::size_t &sum, const std::size_t count, const std::size_t maximum) {
                 if (count > maximum || sum > maximum - count)
                     return false;
@@ -163,11 +163,11 @@ namespace Horo::Application::Internal {
                 return true;
             };
             const auto include = [&](const Source &source) {
-                if (source.worldCanvas) {
-                    const auto owners = std::span{worldOwners}.first(worldCount);
-                    if (!source.scene || worldCount == worldOwners.size() || std::ranges::find(owners, *source.scene) != owners.end())
+                if (source.sceneCanvas) {
+                    const auto owners = std::span{viewportOwners}.first(viewportCount);
+                    if (!source.scene || viewportCount == viewportOwners.size() || std::ranges::find(owners, *source.scene) != owners.end())
                         return false;
-                    worldOwners[worldCount++] = *source.scene;
+                    viewportOwners[viewportCount++] = *source.scene;
                     return source.programs.policy.capacity.IsValid();
                 }
                 if (!source.programs.active)
@@ -295,6 +295,7 @@ namespace Horo::Application::Internal {
                                                std::move(input.allocatorLifetime));
         source->scene = transition_.next;
         source->worldCanvas = std::move(input.worldCanvas);
+        source->sceneCanvas = input.sceneCanvas;
         source->retirementSlot = reservations_[index];
         incoming_[index] = std::move(source);
         auto &candidate = *incoming_[index];
@@ -307,8 +308,10 @@ namespace Horo::Application::Internal {
         if (const auto resources = candidate.AdmitResources(); resources.HasError())
             return resources;
         if (!candidate.worldCanvas)
-            candidate.output.pending = state_->output;
+            candidate.output.pending = candidate.sceneCanvas ? state_->cameraOutput : state_->output;
         if ((candidate.output.canvas.renderMode == UiRenderMode::WorldSpace) != candidate.worldCanvas.has_value())
+            return Result<void>::Failure(MakeError(UiErrors::CanvasSpaceModeMismatch));
+        if (candidate.sceneCanvas && !candidate.worldCanvas && candidate.output.canvas.renderMode != UiRenderMode::ScreenSpaceCamera)
             return Result<void>::Failure(MakeError(UiErrors::CanvasSpaceModeMismatch));
         if (const auto output = candidate.ApplyOutput(); output.HasError())
             return output;
@@ -322,7 +325,7 @@ namespace Horo::Application::Internal {
         auto prototype = candidate.projection->ExtractPrototype(*pin.Get(), baseline.Value());
         if (prototype.HasError())
             return Result<void>::Failure(prototype.ErrorValue());
-        if (!candidate.worldCanvas) {
+        if (!candidate.sceneCanvas) {
             auto program = Render::UiPaintProgram::Create(*state_->frontend, candidate.programs.policy, prototype.Value(),
                                                           candidate.textures, candidate.programs.kernel, cancellation);
             if (program.HasError())

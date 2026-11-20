@@ -24,8 +24,9 @@ namespace Horo::Tests::UiPaintHostTesting {
     /** @brief Actual ordered RuntimeHost renderer consumer; it owns the same frame for scene, UI and native present. */
     class Renderer final : public Runtime::RuntimeLifecycleParticipant {
     public:
-        Renderer(Render::RenderFrontend &frontend, RuntimeUiPaintPort port, const Render::FramebufferExtent &output)
-            : frontend_(frontend), port_(std::move(port)), output_(output) {}
+        Renderer(Render::RenderFrontend &frontend, RuntimeUiPaintPort port, const Render::FramebufferExtent &output,
+                 std::function<void(std::uint64_t)> observe = {})
+            : frontend_(frontend), port_(std::move(port)), output_(output), observe_(std::move(observe)) {}
 
         Result<void> Startup(const CancellationToken &) override {
             return Result<void>::Success();
@@ -41,6 +42,8 @@ namespace Horo::Tests::UiPaintHostTesting {
 
         Result<void> OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &context) override {
             if (phase == Runtime::RuntimePhase::RenderExecution) {
+                if (observe_)
+                    observe_(context.frameNumber);
                 auto begun = frontend_.BeginFrame({.frameNumber = context.frameNumber, .outputExtent = output_});
                 if (begun.HasError())
                     return Result<void>::Failure(begun.ErrorValue());
@@ -61,6 +64,7 @@ namespace Horo::Tests::UiPaintHostTesting {
         Render::RenderFrontend &frontend_;
         RuntimeUiPaintPort port_;
         const Render::FramebufferExtent &output_;
+        std::function<void(std::uint64_t)> observe_;
         std::optional<Render::RenderFrameScope> frame_;
     };
 

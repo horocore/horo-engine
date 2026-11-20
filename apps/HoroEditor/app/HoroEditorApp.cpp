@@ -2842,7 +2842,7 @@ namespace Horo::Editor {
                                                                                    : Result<bool>::Failure(preparedLighting.ErrorValue());
                 }
 #if defined(HORO_HAS_RENDER_VULKAN)
-                if (const auto canvas = PrepareWorldCanvasFrame(context); canvas.HasError()) {
+                if (const auto canvas = PrepareSceneCanvasFrame(context); canvas.HasError()) {
                     p_->presentation.viewportRenderer.FinishColorFrame(false);
                     return Result<bool>::Failure(canvas.ErrorValue());
                 }
@@ -2866,10 +2866,36 @@ namespace Horo::Editor {
             }
 
 #if defined(HORO_HAS_RENDER_VULKAN)
-            /** @brief Resolves one authored World canvas against the exact ordinary scene pass before acquiring native output. */
-            Result<void> PrepareWorldCanvasFrame(const Runtime::FrameContext &context) {
+            /** @brief Retains an exact submitted source and its optional shared World plane. */
+            struct PreparedSceneCanvas final {
+                Runtime::Ui::RuntimeUiInstanceId instance;
+                std::optional<Runtime::Ui::UiWorldCanvasProjection> plane;
+                std::optional<Math::Mat4> transform;
+            };
+
+            /** @brief Captures matching draw and interaction evidence from the current owner-lane World entity. */
+            static Result<bool> PlaceWorldCanvas(const Application::Internal::RuntimeUiPaintSceneCanvasFrame &canvas,
+                                                 PreparedSceneCanvas &placement) {
                 using namespace Application::Internal;
-                frameState_.worldCanvas.reset();
+                const auto source = canvas.worldCanvas->currentScene.lock();
+                const auto scene = source ? (*source)() : std::nullopt;
+                if (!scene || scene->RuntimeId() != canvas.scene)
+                    return Result<bool>::Success(false);
+                const auto plane = CaptureRuntimeUiPaintWorldCanvasPlane(*scene, *canvas.worldCanvas);
+                if (plane.HasError())
+                    return Result<bool>::Success(false);
+                const auto transform = BuildRuntimeUiPaintWorldCanvasTransform(plane.Value());
+                if (transform.HasError())
+                    return Result<bool>::Failure(transform.ErrorValue());
+                placement.plane = plane.Value();
+                placement.transform = transform.Value();
+                return Result<bool>::Success(true);
+            }
+
+            /** @brief Resolves one authored canvas against the exact ordinary scene pass before acquiring native output. */
+            Result<void> PrepareSceneCanvasFrame(const Runtime::FrameContext &context) {
+                using namespace Application::Internal;
+                frameState_.sceneCanvas.reset();
                 const auto &composition = p_->presentation.composition;
                 auto *viewport = composition.desktopCanvasViewport;
                 if (!viewport || !composition.desktopCanvasConsumer)
@@ -2887,16 +2913,19 @@ namespace Horo::Editor {
                     return Result<void>::Success();
                 }
                 const auto &canvas = *source.Value();
-                const auto sceneSource = canvas.worldCanvas->currentScene.lock();
-                const auto scene = sceneSource ? (*sceneSource)() : std::nullopt;
-                if (!scene || scene->RuntimeId() != canvas.scene)
+                PreparedSceneCanvas placement{.instance = canvas.instance};
+                if (canvas.worldCanvas) {
+                    const auto world = PlaceWorldCanvas(canvas, placement);
+                    if (world.HasError())
+                        return Result<void>::Failure(world.ErrorValue());
+                    if (!world.Value())
+                        return Result<void>::Success();
+                } else if (canvas.program->projection.pixelExtent !=
+                           Runtime::Ui::UiCanvasPixelExtent{pass.extent.width, pass.extent.height}) {
                     return Result<void>::Success();
-                const auto plane = CaptureRuntimeUiPaintWorldCanvasPlane(*scene, *canvas.worldCanvas);
-                if (plane.HasError())
-                    return Result<void>::Success();
-                const auto transform = BuildRuntimeUiPaintWorldCanvasTransform(plane.Value());
-                if (transform.HasError())
-                    return Result<void>::Failure(transform.ErrorValue());
+                }
+                using Render::UiRenderCompositionSpace;
+                const auto space = canvas.worldCanvas ? UiRenderCompositionSpace::World : UiRenderCompositionSpace::Camera;
                 Render::RenderGraphLimits limits;
                 limits.maxPasses = canvas.program->maximumPasses;
                 const EditorViewportRendererVulkan::ViewportCanvasPreparation request{*canvas.program,
@@ -2904,11 +2933,11 @@ namespace Horo::Editor {
                                                                                       canvas.textures,
                                                                                       *canvas.kernel,
                                                                                       *composition.desktopCanvasConsumer,
-                                                                                      Render::UiRenderCompositionSpace::World,
+                                                                                      space,
                                                                                       limits};
                 if (const auto prepared = viewport->PrepareViewportCanvas(pass, request, context.cancellation); prepared.HasError())
                     return prepared;
-                frameState_.worldCanvas.emplace(PreparedWorldCanvas{canvas.instance, plane.Value(), transform.Value()});
+                frameState_.sceneCanvas.emplace(std::move(placement));
                 return Result<void>::Success();
             }
 #endif
@@ -2918,7 +2947,7 @@ namespace Horo::Editor {
                 const auto &prepared = frameState_.preparedPasses;
                 const auto passes = std::span{prepared.descriptors}.first(prepared.count);
 #if defined(HORO_HAS_RENDER_VULKAN)
-                if (const auto &canvas = frameState_.worldCanvas; canvas && passes.size() == 2) {
+                if (const auto &canvas = frameState_.sceneCanvas; canvas && passes.size() == 2) {
                     auto &viewport = *p_->presentation.composition.desktopCanvasViewport;
                     const auto executed = viewport.ExecutePreparedCanvasFrame(*frameState_.frame, passes, canvas->transform,
                                                                               [this, instance = canvas->instance,
@@ -2977,8 +3006,16 @@ namespace Horo::Editor {
                 if (prepared.HasError())
                     return Result<void>::Failure(prepared.ErrorValue());
                 frameState_.preparedPasses.viewportMeshResourceGeneration = viewportSceneState_->MeshResourceGeneration();
-                if (prepared.Value().has_value())
+                if (prepared.Value().has_value()) {
                     p_->presentation.viewportTarget = *prepared.Value();
+#if defined(HORO_HAS_RENDER_VULKAN)
+                    if (p_->presentation.composition.desktopCanvasConsumer && !frameState_.preparedPasses.world.owner.IsValid()) {
+                        const auto extent = p_->presentation.viewportRenderer.RequestedExtent();
+                        if (extent.IsValid())
+                            return authorities_.ui.UpdateCameraOutput({extent.width, extent.height});
+                    }
+#endif
+                }
                 return Result<void>::Success();
             }
 
@@ -3170,15 +3207,6 @@ namespace Horo::Editor {
             std::uint64_t windowDisplayRevision_{1};
             bool displayChangePending_{};
 
-#if defined(HORO_HAS_RENDER_VULKAN)
-            /** @brief Retains the same frozen World plane for rendering and input publication. */
-            struct PreparedWorldCanvas final {
-                Runtime::Ui::RuntimeUiInstanceId instance;
-                Runtime::Ui::UiWorldCanvasProjection plane;
-                Math::Mat4 transform;
-            };
-#endif
-
             /** @brief One frame's native admission, GUI extraction and prepared scope, retaining the original lifetime order. */
             struct FrameState final {
                 bool nativePresentationPending{false};
@@ -3190,7 +3218,7 @@ namespace Horo::Editor {
                 Input::InputContextToken focusedWidgetInputContext;
                 EditorPreparedPasses preparedPasses;
 #if defined(HORO_HAS_RENDER_VULKAN)
-                std::optional<PreparedWorldCanvas> worldCanvas;
+                std::optional<PreparedSceneCanvas> sceneCanvas;
 #endif
                 std::optional<Render::RenderFrameScope> frame;
             };

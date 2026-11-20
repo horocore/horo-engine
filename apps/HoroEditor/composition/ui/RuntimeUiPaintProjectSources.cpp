@@ -68,6 +68,7 @@ namespace Horo::Application::Internal {
         struct ProjectCanvasProjection final {
             UiResolvedScreenCanvas raster;
             std::optional<RuntimeUiPaintWorldCanvas> world;
+            bool sceneCanvas{};
         };
 
         /** @brief Preserves actual authored child order under one selected canvas; no component pointer escapes preparation. */
@@ -327,7 +328,7 @@ namespace Horo::Application::Internal {
         std::shared_ptr<Detail::RuntimeUiPaintHostState> host;
         std::shared_ptr<UiElementSlotAllocator> allocator;
         RuntimeUiPaintProjectPolicy policy;
-        std::shared_ptr<const Render::CookedUiPaintKernel> worldKernel;
+        std::shared_ptr<const Render::CookedUiPaintKernel> sceneKernel;
         std::uint32_t instanceSlot{};
         std::uint32_t canvasSlot{};
 
@@ -339,7 +340,7 @@ namespace Horo::Application::Internal {
                                                                   std::vector<UiReloadCanvas> canvases, RuntimeStyleRegistry registry,
                                                                   ProjectCanvasProjection projection) const;
         /** @brief Lazily prepares the explicitly selected real kernel policy; failures leave the cache unpublished. */
-        Result<void> PrepareKernel(bool world);
+        Result<void> PrepareKernel(bool sceneCanvas);
         /** @brief Resolves the selected source against its actual raster target. */
         Result<ProjectCanvasProjection> ResolveProjection(const UiRuntimeAssetLoadResult &loaded, const UiCanvasDescriptor &canvas,
                                                           const SceneCanvasSource &source, const Runtime::RuntimeSceneView &scene) const;
@@ -372,7 +373,7 @@ namespace Horo::Application::Internal {
         auto resolved = ResolveProjection(loaded, *selected, source, scene);
         if (resolved.HasError())
             return Built::Failure(resolved.ErrorValue());
-        if (const auto kernel = PrepareKernel(resolved.Value().world.has_value()); kernel.HasError())
+        if (const auto kernel = PrepareKernel(resolved.Value().sceneCanvas); kernel.HasError())
             return Built::Failure(kernel.ErrorValue());
         auto registry = Registry(loaded);
         if (registry.HasError())
@@ -391,8 +392,12 @@ namespace Horo::Application::Internal {
                                                                                              const Runtime::RuntimeSceneView &scene) const {
         using Projected = Result<ProjectCanvasProjection>;
         if (canvas.renderMode != UiRenderMode::WorldSpace) {
-            const auto resolved = ResolveUiScreenCanvasWithEvidence(canvas, *host->output);
-            return resolved.HasValue() ? Projected::Success({resolved.Value(), {}}) : Projected::Failure(resolved.ErrorValue());
+            const bool camera = canvas.renderMode == UiRenderMode::ScreenSpaceCamera && policy.vulkanSceneCanvasAssets.has_value();
+            auto evidence = camera && host->cameraOutput ? *host->cameraOutput : *host->output;
+            if (camera)
+                evidence.safeAreaInsets = {};
+            const auto resolved = ResolveUiScreenCanvasWithEvidence(canvas, evidence);
+            return resolved.HasValue() ? Projected::Success({resolved.Value(), {}, camera}) : Projected::Failure(resolved.ErrorValue());
         }
         const auto limit = host->frontend->Capabilities().support.limits.maxTextureDimension2D;
         auto placement = ResolveRuntimeUiPaintWorldCanvas(scene, source.entity, loaded, limit);
@@ -404,7 +409,7 @@ namespace Horo::Application::Internal {
                                             .pixelExtent = placement.Value().rasterExtent,
                                             .pixelsPerDip = {1, 1},
                                             .fontScale = placement.Value().fontScale};
-        return Projected::Success({raster, std::move(placement).Value()});
+        return Projected::Success({raster, std::move(placement).Value(), true});
     }
 
     /** @copydoc RuntimeUiPaintProjectSources::Storage::BuildCanvases */
@@ -439,7 +444,7 @@ namespace Horo::Application::Internal {
         ProjectCanvasProjection projection) const {
         using Built = Result<RuntimeUiPaintSceneSourcePreparation>;
         const auto &resolved = projection.raster;
-        const auto &kernel = projection.world ? worldKernel : policy.kernel;
+        const auto &kernel = projection.sceneCanvas ? sceneKernel : policy.kernel;
         auto selectedCanvas = std::ranges::find(canvases, reference.canvas, &UiReloadCanvas::id);
         auto &canvas = *selectedCanvas;
         auto preparation = PrepareCanvas(canvas, loaded.document, registry, resolved, allocator->Ownership());
@@ -474,18 +479,19 @@ namespace Horo::Application::Internal {
               {resolved, paint, 2, 256},
               *kernel,
               allocator,
-              std::move(projection.world)}});
+              std::move(projection.world),
+              projection.sceneCanvas}});
     }
 
     /** @copydoc RuntimeUiPaintProjectSources::Storage::PrepareKernel */
-    Result<void> RuntimeUiPaintProjectSources::Storage::PrepareKernel(const bool world) {
-        if (world) {
-            if (!worldKernel) {
+    Result<void> RuntimeUiPaintProjectSources::Storage::PrepareKernel(const bool sceneCanvas) {
+        if (sceneCanvas) {
+            if (!sceneKernel) {
                 auto prepared = LoadPackagedProjectUiVulkanSceneKernel(*policy.vulkanSceneCanvasAssets, Render::ShaderTargetBackend::Vulkan,
                                                                        host->cancellation.Token());
                 if (prepared.HasError())
                     return Result<void>::Failure(prepared.ErrorValue());
-                worldKernel = std::move(prepared).Value();
+                sceneKernel = std::move(prepared).Value();
             }
             return Result<void>::Success();
         }

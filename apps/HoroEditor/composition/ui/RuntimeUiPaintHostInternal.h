@@ -24,6 +24,7 @@ namespace Horo::Application::Internal::Detail {
         std::uint64_t encodedFrame{};
         std::uint32_t slot{};
         bool sceneSubmissionTaken{};
+        bool sceneEncoded{};
     };
 
     /** @brief Actual immutable source policy plus latest native evidence; observation never authors a second canvas. */
@@ -78,6 +79,7 @@ namespace Horo::Application::Internal::Detail {
         RuntimeUiPaintOutput output;
         std::optional<Runtime::SceneRuntimeId> scene;
         std::optional<RuntimeUiPaintWorldCanvas> worldCanvas;
+        bool sceneCanvas{};
         bool retiring{};
         bool started{};
         std::uint32_t retirementSlot{Runtime::Ui::NoUiRenderIndex};
@@ -105,7 +107,7 @@ namespace Horo::Application::Internal::Detail {
         [[nodiscard]] Result<void> Extract(const Runtime::Ui::RuntimeUiService &service, std::uint64_t frameNumber,
                                            const CancellationToken &cancellation);
         /** @brief Applies one World draw completion or explicit suppression using the extracted snapshot's exact revisions. */
-        [[nodiscard]] Result<void> FinishWorldCanvas(std::uint64_t frameNumber, bool nativePresentSucceeded);
+        [[nodiscard]] Result<void> FinishSceneCanvas(std::uint64_t frameNumber, bool nativePresentSucceeded);
         /** @brief Releases local CPU pins before the existing derived/source drain fence is queried. */
         void ReleaseFrame() noexcept;
         /** @brief Closes this exact derived producer while preserving pending native and immutable leases for collection. */
@@ -130,6 +132,7 @@ namespace Horo::Application::Internal::Detail {
         bool sceneSealed{};
         bool scenePreparing{};
         std::optional<Runtime::Ui::UiCanvasViewportEvidence> output;
+        std::optional<Runtime::Ui::UiCanvasViewportEvidence> cameraOutput;
         CancellationSource cancellation;
         RuntimeUiPaintHostPhase phase{RuntimeUiPaintHostPhase::NoSource};
         Runtime::Ui::UiVisualPresentationPolicy accessibility;
@@ -147,7 +150,7 @@ namespace Horo::Application::Internal::Detail {
         }
 
         /** @brief Transactionally validates and queues the latest effective viewport for every admitted source. */
-        [[nodiscard]] Result<void> QueueOutput(const Runtime::Ui::UiCanvasViewportEvidence &evidence);
+        [[nodiscard]] Result<void> QueueOutput(const Runtime::Ui::UiCanvasViewportEvidence &evidence, bool camera = false);
         /** @brief Stops admission, releases CPU observations and retains the actual stopped child for explicit drain. */
         [[nodiscard]] Result<void> Retire();
         /** @brief Copies a bounded borrow inventory; normal work excludes stopped and retired children. */

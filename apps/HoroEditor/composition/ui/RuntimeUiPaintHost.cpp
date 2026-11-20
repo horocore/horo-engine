@@ -102,6 +102,12 @@ namespace Horo::Application::Internal {
             evidence.minimumControlTargetDips = policy.minimumControlTargetDips;
             if (const auto queued = state_->QueueOutput(evidence); queued.HasError())
                 return queued;
+            if (state_->cameraOutput) {
+                evidence.pixelExtent = state_->cameraOutput->pixelExtent;
+                evidence.safeAreaInsets = {};
+                if (const auto queued = state_->QueueOutput(evidence, true); queued.HasError())
+                    return queued;
+            }
         }
         state_->accessibility = policy;
         return Result<void>::Success();

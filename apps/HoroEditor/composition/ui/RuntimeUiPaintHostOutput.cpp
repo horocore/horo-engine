@@ -15,21 +15,34 @@ namespace Horo::Application::Internal {
         return state_->QueueOutput(effective);
     }
 
+    /** @copydoc RuntimeUiPaintPort::UpdateCameraOutput */
+    Result<void> RuntimeUiPaintPort::UpdateCameraOutput(const UiCanvasPixelExtent extent) const {
+        if (!state_ || !state_->Available() || state_->dispatching || !state_->output)
+            return Result<void>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
+        auto evidence = *state_->output;
+        evidence.pixelExtent = extent;
+        evidence.safeAreaInsets = {};
+        return state_->QueueOutput(evidence, true);
+    }
+
     /** @copydoc Detail::RuntimeUiPaintHostState::QueueOutput */
-    Result<void> Detail::RuntimeUiPaintHostState::QueueOutput(const UiCanvasViewportEvidence &evidence) {
+    Result<void> Detail::RuntimeUiPaintHostState::QueueOutput(const UiCanvasViewportEvidence &evidence, const bool camera) {
         if (!evidence.IsValid())
             return Result<void>::Failure(MakeError(UiErrors::CanvasSpaceInvalid));
         const auto sources = Sources();
+        const auto usesOutput = [camera](const RuntimeUiPaintSource *source) {
+            return source && !source->worldCanvas && source->sceneCanvas == camera;
+        };
         for (const auto *source : sources) {
-            if (!source || source->worldCanvas)
+            if (!usesOutput(source))
                 continue;
             const auto resolved = ResolveUiScreenCanvasWithEvidence(source->output.canvas, evidence);
             if (resolved.HasError())
                 return Result<void>::Failure(resolved.ErrorValue());
         }
-        output = evidence;
+        (camera ? cameraOutput : output) = evidence;
         for (auto *source : sources) {
-            if (!source || source->worldCanvas || source->output.pending == evidence ||
+            if (!usesOutput(source) || source->output.pending == evidence ||
                 (!source->output.pending && source->output.current == evidence))
                 continue;
             source->output.pending = evidence;

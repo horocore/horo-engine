@@ -388,11 +388,12 @@ graph as the opaque scene. Camera placement covers the selected viewport.
 World placement uses the scene camera and tests against opaque depth without
 writing depth. Native qualification reads the viewport pixels before and after
 moving a World canvas behind opaque geometry. The editor's base Vulkan game
-viewport selects a World canvas from the same published Scene as the opaque
-pass. The project host takes the authored raster size from the canvas and
-uses the current entity hierarchy to derive one plane for the draw and its
-receipt. The application accepts at most one World canvas per Scene. A skipped
-or failed frame clears interaction with the old plane. The authored World path
+viewport selects a Camera or World canvas from the same published Scene as the
+opaque pass. A Camera canvas uses the game viewport's committed extent and
+display scale. A World canvas uses its authored raster size and the current
+entity hierarchy to derive one plane for the draw and its receipt. The
+application accepts one viewport canvas per Scene. A skipped or failed frame
+revokes interaction with the previous presentation. This authored route
 requires the ordinary desktop viewport, without a mounted origin or XR eye
 routing.
 

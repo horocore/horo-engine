@@ -60,7 +60,7 @@ namespace Horo::Application::Internal::Detail {
 
     /** @copydoc RuntimeUiPaintSource::Refresh */
     Result<void> RuntimeUiPaintSource::Refresh(Render::RenderFrontend &frontend, const CancellationToken &cancellation) {
-        if (worldCanvas || !refresh || !frame.snapshot)
+        if (sceneCanvas || !refresh || !frame.snapshot)
             return Result<void>::Success();
         auto candidate =
             Render::UiPaintProgram::Create(frontend, programs.policy, *frame.snapshot, textures, programs.kernel, cancellation);
@@ -113,6 +113,7 @@ namespace Horo::Application::Internal::Detail {
         frame.encodedPlane.reset();
         frame.extractedFrame.reset();
         frame.sceneSubmissionTaken = false;
+        frame.sceneEncoded = false;
     }
 
     /** @copydoc RuntimeUiPaintSource::Extract */
@@ -130,13 +131,13 @@ namespace Horo::Application::Internal::Detail {
             return Result<void>::Failure(std::move(error));
         }
         frame.snapshot.emplace(std::move(extracted).Value());
-        if (!worldCanvas && (!programs.active || refresh))
+        if (!sceneCanvas && (!programs.active || refresh))
             return Result<void>::Success();  // The explicit next owner safe point consumes this actual prototype.
         auto built = arena.Build(*frame.snapshot, programs.policy.projection);
         if (built.HasError())
             return Result<void>::Failure(built.ErrorValue());
         frame.geometry.emplace(std::move(built).Value());
-        if (worldCanvas) {
+        if (sceneCanvas) {
             frame.extractedFrame = frameNumber;
             return Result<void>::Success();
         }
@@ -186,8 +187,8 @@ namespace Horo::Application::Internal::Detail {
                 if (const auto refreshed = Refresh(frontend, cancellation); refreshed.HasError())
                     return refreshed;
         }
-        if (phase == Runtime::RuntimePhase::EndFrame && worldCanvas) {
-            if (const auto suppressed = FinishWorldCanvas(context.frameNumber, false); suppressed.HasError())
+        if (phase == Runtime::RuntimePhase::EndFrame && sceneCanvas) {
+            if (const auto suppressed = FinishSceneCanvas(context.frameNumber, false); suppressed.HasError())
                 return suppressed;
         }
         if (const auto forwarded = animation->OnPhase(phase, context); forwarded.HasError()) {

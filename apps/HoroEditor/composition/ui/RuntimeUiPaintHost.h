@@ -93,6 +93,7 @@ namespace Horo::Application::Internal {
         std::shared_ptr<Runtime::Ui::UiElementSlotAllocator>
             allocatorLifetime;                                /**< Optional exact owner pin; must alias allocator when supplied. */
         std::optional<RuntimeUiPaintWorldCanvas> worldCanvas; /**< Scene-owned source routed through the selected viewport graph. */
+        bool sceneCanvas{}; /**< Route the authored Camera or World source through the selected scene graph. */
     };
 
     /** @brief Same canonical private source plus fully owned derived/native preparation; no Scene component borrow survives. */
@@ -142,6 +143,8 @@ namespace Horo::Application::Internal {
          * @return Admission or typed invalid/source/lifecycle failure. Prior prepared geometry cannot restore input after a change.
          */
         [[nodiscard]] Result<void> UpdateOutput(const Runtime::Ui::UiCanvasViewportEvidence &evidence) const;
+        /** @brief Updates the exact game viewport metrics independently of the primary output and its safe area. */
+        [[nodiscard]] Result<void> UpdateCameraOutput(Runtime::Ui::UiCanvasPixelExtent extent) const;
         /** @brief Admits one committed host preference for all active and subsequently attached UI sources.
          * @param policy Complete immutable accessibility policy from one committed configuration revision.
          * @return Original owner, stale, or invalid policy failure. No local snapshot changes until the derived update.
@@ -169,13 +172,13 @@ namespace Horo::Application::Internal {
                                                                                    std::uint64_t frameNumber,
                                                                                    const Render::UiPaintProgram &program,
                                                                                    std::uint32_t slot) const;
-        /** @brief Records the World plane encoded by the viewport after successful graph execution.
-         * @param instance Exact submitted World source. @param frameNumber Exact Runtime extraction frame.
-         * @param plane Scene-space plane used by the executed consumer.
+        /** @brief Records the completed viewport encoding before native presentation.
+         * @param instance Exact submitted scene source. @param frameNumber Exact Runtime extraction frame.
+         * @param plane Scene-space plane only for a World source.
          * @return Success or typed stale/invalid evidence. Presented determines the terminal outcome.
          */
         [[nodiscard]] Result<void> SceneCanvasEncoded(Runtime::Ui::RuntimeUiInstanceId instance, std::uint64_t frameNumber,
-                                                      Runtime::Ui::UiWorldCanvasProjection plane) const;
+                                                      std::optional<Runtime::Ui::UiWorldCanvasProjection> plane) const;
         /** @brief Applies a receipt only for UI actually encoded in that same native frame; presentation never retires GPU claims. */
         [[nodiscard]] Result<void> Presented(std::uint64_t frameNumber, bool nativePresentSucceeded) const;
         /** @brief Pins the actual current derived frame for host inspection; its lifetime participates in the existing drain fence. */

@@ -47,6 +47,7 @@ namespace {
         Render::FramebufferExtent output{100, 100};
         std::unique_ptr<Runtime::RuntimeHost> host{Take(Runtime::RuntimeHost::Create(clock))};
         RuntimeUiPaintPort port;
+        std::function<void(std::uint64_t)> observeViewport;
         std::shared_ptr<RuntimeUiPaintProjectSources> sources;
         const Assets::AssetCookTargetId target{Take(Assets::AssetCookTargetId::Parse("headless-null"))};
         const Assets::AssetId asset{[] {
@@ -114,7 +115,10 @@ namespace {
             REQUIRE(scenes.AddActivationParticipant(sources->MakeParticipant(scenes, registry, uiLoads, target)).HasValue());
             REQUIRE(scenes.Startup({}).HasValue());
             REQUIRE(host->AddParticipant(std::move(composition.participant)).HasValue());
-            REQUIRE(host->AddParticipant(std::make_unique<Renderer>(*frontend, port, output)).HasValue());
+            REQUIRE(host->AddParticipant(std::make_unique<Renderer>(*frontend, port, output, [this](const std::uint64_t frame) {
+                if (observeViewport)
+                    observeViewport(frame);
+            })).HasValue());
             REQUIRE(host->Startup().HasValue());
         }
 
@@ -336,6 +340,34 @@ TEST_CASE("Project World canvas enters the scene route without claiming screen p
     CHECK(failure->code.Value() == UiErrors::CapacityExceeded.code.Value());
     CHECK(fixture.scenes.ActiveScene()->RuntimeId() == stable);
     CHECK(client->Validate().HasValue());
+}
+
+TEST_CASE("Project Camera canvas uses game viewport dimensions instead of the main drawable",
+          "[application][runtime_ui][project][camera-canvas]") {
+    const auto *root = std::getenv("HORO_VULKAN_UI_PAINT_ASSET_ROOT");
+    if (!root || !*root)
+        SKIP("Supply the immutable offline Vulkan UI paint package.");
+    ProjectUi fixture{true, false, {}, UiRenderMode::ScreenSpaceCamera, {200, 80}, {}, root};
+    UiCanvasPixelExtent expected{72, 48};
+    REQUIRE(fixture.port.UpdateCameraOutput(expected).HasValue());
+    REQUIRE_FALSE(fixture.Publish(1, 1));
+    const auto scene = fixture.scenes.ActiveScene()->RuntimeId();
+    std::size_t frames{};
+    fixture.observeViewport = [&](const std::uint64_t frame) {
+        const auto source = Take(fixture.port.ReadSceneCanvasFrame(frame, scene));
+        REQUIRE(source);
+        CHECK_FALSE(source->worldCanvas);
+        CHECK(source->program->projection.pixelExtent == expected);
+        CHECK_FALSE(Take(fixture.port.ReadSceneCanvasFrame(frame, {scene.value + 1})));
+        ++frames;
+    };
+    fixture.Frame();
+    expected = {96, 64};
+    REQUIRE(fixture.port.UpdateCameraOutput(expected).HasValue());
+    fixture.Frame();
+    CHECK(frames == 2);
+    CHECK(Tests::RenderFrontendTesting::lifecycleState.uiPaint.graphCalls == 0);
+    CHECK_FALSE(fixture.port.InputEligible({Source::Owner(), 1, 1}));
 }
 
 TEST_CASE("Project Scene canvas sources use canonical admission and the same application paint phase",
