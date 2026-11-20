@@ -41,6 +41,16 @@ class Handler(BaseHTTPRequestHandler):
         if cloud and self.headers.get("Authorization") != "Bearer fixture-token":
             self.send_records([json.dumps({"error": "private"})], status=401)
             return
+        if not cloud and payload["model"] == "editor-local-tool":
+            self.send_editor_local_tool(payload)
+            return
+        if not cloud and payload["model"] == "editor-local-missing":
+            self.send_records([json.dumps({"error": "private"})], status=404)
+            return
+        if not cloud and payload["model"] == "editor-local-restart" and not self.server.local_restart_observed:
+            self.server.local_restart_observed = True
+            self.send_records([json.dumps({"error": "private"})], status=503)
+            return
         if payload["model"] == "limited":
             self.send_records([json.dumps({"error": "private"})], status=429)
             return
@@ -59,6 +69,23 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_records(["{}"], status=400)
                 return
         self.send_model_stream(payload["model"], cloud)
+
+    def send_editor_local_tool(self, payload):
+        messages = payload.get("messages", [])
+        tools = [tool.get("function", {}).get("name") for tool in payload.get("tools", [])]
+        if self.headers.get("Authorization") is not None or tools != ["scene.inspect"]:
+            self.send_records(["{}"], status=400)
+            return
+        if len(messages) == 1:
+            frames = [{"message": {"tool_calls": [{"function": {"name": "scene.inspect", "arguments": {}}}]}},
+                      {"done": True, "eval_count": 2}]
+        elif (len(messages) == 3 and messages[1].get("tool_calls", [{}])[0].get("function", {}).get("name") == "scene.inspect"
+              and messages[2] == {"role": "tool", "tool_name": "scene.inspect", "content": '{"count":3}'}):
+            frames = [{"message": {"content": "Three objects"}}, {"done": True, "eval_count": 2}]
+        else:
+            self.send_records(["{}"], status=400)
+            return
+        self.send_records([json.dumps(frame) + "\n" for frame in frames])
 
     def send_model_stream(self, model, cloud):
         if model == "buffer-allocation":
@@ -107,6 +134,7 @@ def main():
             or not binary.is_file() or not os.access(binary, os.X_OK)):
         raise ValueError("CTest must supply the built HoroModelProviderTests executable")
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    server.local_restart_observed = False
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     environment = os.environ.copy()

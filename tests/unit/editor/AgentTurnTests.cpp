@@ -1,11 +1,7 @@
 #include "AgentTurn.h"
-#include "AgentTurnMcp.h"
-#include "Horo/Mcp/McpController.h"
-#include "Horo/Mcp/McpInProcessAdapter.h"
-#include "McpAuthorizationTestSupport.h"
+#include "AgentTurnTestTools.h"
 
 #include <catch2/catch_test_macros.hpp>
-#include <future>
 #include <thread>
 
 namespace Horo::Agent {
@@ -44,58 +40,7 @@ namespace Horo::Agent {
             return request;
         }
 
-        /** @brief Real registered application adapter, invoked only while the owner pumps the MCP controller. */
-        struct SceneTool final : Mcp::IMcpToolAdapter {
-            std::size_t calls{};
-
-            Result<nlohmann::json> Invoke(const nlohmann::json &, const Mcp::McpRequestContext &) override {
-                ++calls;
-                return Result<nlohmann::json>::Success({{"count", 3}});
-            }
-        };
-
-        struct Tools final {
-            std::shared_ptr<SceneTool> scene = std::make_shared<SceneTool>();
-            std::shared_ptr<Mcp::McpController> owner;
-            std::shared_ptr<Mcp::McpInProcessAdapter> adapter;
-
-            explicit Tools(const Mcp::McpToolEffect effect = Mcp::McpToolEffect::Query) {
-                const auto auth = Mcp::Test::Authorization();
-                auto registry = std::make_shared<Mcp::McpToolRegistry>(auth);
-                auto revision = registry->Publish({{.descriptor = {.id = {"scene.inspect"},
-                                                                   .description = "Test scene summary",
-                                                                   .inputSchema = {{"type", "object"}},
-                                                                   .outputSchema = {{"type", "object"}},
-                                                                   .effect = effect},
-                                                    .adapter = scene,
-                                                    .owner = Mcp::McpOwnerContext::Editor}});
-                REQUIRE(revision.HasValue());
-                auto created = Mcp::McpController::Create(registry, {}, auth);
-                REQUIRE(created.HasValue());
-                owner = std::move(created).Value();
-                REQUIRE(owner->BindOwner(Mcp::McpOwnerContext::Editor).HasValue());
-                auto manager = Mcp::McpSessionManager::Create(owner, {}, auth);
-                REQUIRE(manager.HasValue());
-                auto opened = Mcp::McpInProcessAdapter::Start(std::move(manager).Value(),
-                                                              Mcp::Test::Authenticate({.clientIdentity = "agent-test",
-                                                                                       .registryRevision = revision.Value()},
-                                                                                      auth));
-                REQUIRE(opened.HasValue());
-                adapter = std::move(opened).Value();
-            }
-
-            AgentTurnResult Run(Model &model, AgentTurnLimits limits = {}) const {
-                limits.timeout = 2s;
-                const AgentTurnMcp bridge{adapter};
-                AgentTurnRuntime runtime;
-                auto pending = std::async(std::launch::async, [&] {
-                    return runtime.Run(model, &bridge, 23, Request(true), limits);
-                });
-                while (pending.wait_for(1ms) != std::future_status::ready)
-                    REQUIRE(owner->Pump(Mcp::McpOwnerContext::Editor).HasValue());
-                return pending.get();
-            }
-        };
+        using TestSupport::Tools;
 
         /** @brief Forms one inert response intent for the registered query. */
         ModelEvent Intent(std::string id, std::string arguments = "{}") {
@@ -111,7 +56,7 @@ namespace Horo::Agent {
                 return Emit(sink, {Intent("inspect-1"), {.kind = ModelEventKind::Completed}});
             return Emit(sink, {{.kind = ModelEventKind::TextDelta, .text = "Three objects"}, {.kind = ModelEventKind::Completed}});
         };
-        const auto result = tools.Run(model);
+        const auto result = tools.Run(model, Request(true));
         REQUIRE(result.status == AgentTurnStatus::Completed);
         REQUIRE(result.messages.size() == 4);
         REQUIRE(model.requests.size() == 2);
@@ -132,7 +77,7 @@ namespace Horo::Agent {
             return Emit(sink,
                         {Intent("first"), repeatedId ? Intent("first") : Intent("second", "[]"), {.kind = ModelEventKind::Completed}});
         };
-        const auto result = tools.Run(model);
+        const auto result = tools.Run(model, Request(true));
         CHECK(result.status == AgentTurnStatus::InvalidModelResponse);
         CHECK(result.messages.empty());
         CHECK(tools.scene->calls == 0);
@@ -153,7 +98,7 @@ namespace Horo::Agent {
         model.action = [](std::size_t, const ModelEventSink &sink, std::stop_token) {
             return Emit(sink, {Intent("inspect-1"), {.kind = ModelEventKind::Completed}});
         };
-        const auto result = tools.Run(model, budgets);
+        const auto result = tools.Run(model, Request(true), budgets);
         CHECK(result.status == expected);
         CHECK(result.messages.empty());
         CHECK(model.requests.size() == 1);

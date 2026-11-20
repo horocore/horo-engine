@@ -1,3 +1,4 @@
+#include "AgentTurnTestTools.h"
 #include "AllocationProbe.h"
 #include "Horo/Agent/ModelProvider.h"
 #include "Horo/Agent/ReferenceModelProviders.h"
@@ -142,6 +143,43 @@ TEST_CASE("Real adapters carry the assistant intent and tool result into the nex
             REQUIRE(outcome.Succeeded());
         }
     }
+}
+
+TEST_CASE("Local HTTP inference completes an approved editor MCP tool round without credentials", "[agent][model][http]") {
+    auto provider = Create(false);
+    const auto discovery = provider->Discover({});
+    REQUIRE(discovery.outcome.Succeeded());
+    CHECK(discovery.residency == ModelResidency::OnDevice);
+    REQUIRE(discovery.models.size() == 1);
+    CHECK(discovery.models.front().id == "normal");
+    auto request = Request("editor-local-tool");
+    request.tools.push_back({"scene.inspect", "Read a bounded scene summary", R"({"type":"object"})"});
+    request.requiredFeatures.bits |= static_cast<std::uint32_t>(ModelFeature::Tools);
+    Horo::Agent::TestSupport::Tools tools;
+    const auto result = tools.Run(*provider, std::move(request));
+    REQUIRE(result.status == AgentTurnStatus::Completed);
+    REQUIRE(result.messages.size() == 4);
+    CHECK(tools.scene->calls == 1);
+    CHECK(result.messages.back().text == "Three objects");
+}
+
+TEST_CASE("Local editor inference reports unavailable or missing models and the same provider recovers", "[agent][model][http]") {
+    auto provider = Create(false);
+    AgentTurnRuntime runtime;
+    const auto unavailable = runtime.Run(*provider, nullptr, 1, Request("editor-local-restart"), {});
+    CHECK(unavailable.status == AgentTurnStatus::ProviderFailed);
+    CHECK(unavailable.providerError == ModelErrorCode::Unavailable);
+    CHECK(unavailable.messages.empty());
+
+    const auto recovered = runtime.Run(*provider, nullptr, 2, Request("editor-local-restart"), {});
+    REQUIRE(recovered.status == AgentTurnStatus::Completed);
+    REQUIRE(recovered.messages.size() == 2);
+    CHECK(recovered.messages.back().text == "hello world");
+
+    const auto missing = runtime.Run(*provider, nullptr, 3, Request("editor-local-missing"), {});
+    CHECK(missing.status == AgentTurnStatus::ProviderFailed);
+    CHECK(missing.providerError == ModelErrorCode::InvalidRequest);
+    CHECK(missing.messages.empty());
 }
 
 TEST_CASE("Local tool results require an exact pending assistant intent", "[agent][model][http]") {

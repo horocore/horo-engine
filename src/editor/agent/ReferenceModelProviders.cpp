@@ -386,6 +386,8 @@ namespace Horo::Agent {
                     return {ModelError{ModelErrorCode::Cancelled, "Model request cancelled", std::nullopt}};
                 if (parser.Invalid())
                     return {ModelError{ModelErrorCode::Protocol, "Invalid model stream", std::nullopt}};
+                if (m_protocol == Protocol::Ollama && outcome.error && outcome.error->httpStatus == 404)
+                    return {ModelError{ModelErrorCode::InvalidRequest, "Configured local model was not found", 404}};
                 if (!outcome.Succeeded())
                     return outcome;
                 return parser.Finish();

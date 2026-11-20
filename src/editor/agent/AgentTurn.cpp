@@ -199,7 +199,9 @@ namespace Horo::Agent {
                     return {BudgetExceeded, {}};
                 Detail::AgentTurnStream stream{progress.remaining};
                 const auto outcome = StreamResponse(provider, request, stop, stream);
-                if (const auto status = CompleteModelRound(outcome, stream, stop); status != Completed)
+                if (const auto status = CompleteModelRound(outcome, stream, stop); status == ProviderFailed)
+                    return {status, {}, outcome.error->code};
+                else if (status != Completed)
                     return {status, {}};
                 const auto used =
                     stream.Usage() ? stream.Usage()->outputTokens.value_or(request.maximumOutputTokens) : request.maximumOutputTokens;

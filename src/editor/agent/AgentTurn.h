@@ -33,6 +33,7 @@ namespace Horo::Agent {
     struct AgentTurnResult final {
         AgentTurnStatus status{AgentTurnStatus::InvalidRequest};
         std::vector<ModelMessage> messages;
+        std::optional<ModelErrorCode> providerError{}; /**< Structured provider failure without response text or credentials. */
     };
 
     /** @brief Restricted editor-host bridge for already admitted local authoring tools. */
