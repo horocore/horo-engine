@@ -216,7 +216,18 @@ def signal_owned_windows_console(pid, birth, event):
 
 
 def check_windows_interrupts(cli, checks):
-    """Use an isolated hidden console without modifying the test driver's console or handlers."""
+    """Give only the private launcher the Ctrl+C suppression inherited from some CI hosts."""
+    launcher = subprocess.run([sys.executable, str(Path(__file__).resolve()), "--check-windows-interrupts", cli.binary],
+                              close_fds=True, creationflags=subprocess.CREATE_NO_WINDOW,
+                              capture_output=True, timeout=55)
+    checks.assertEqual(launcher.returncode, 0, launcher.stderr)
+
+
+def run_windows_interrupts(executable):
+    """Qualify both console events even when the CLI inherits its launcher's ignore attribute."""
+    windows_check(windows_kernel().SetConsoleCtrlHandler(None, True))
+    cli = NativeCli(executable)
+    checks = unittest.TestCase()
     for event in (0, 1):
         with cli.start(["mcp", "serve"], windows_console=True) as process:
             exchange(process, checks, 1, "tools/list", {})
@@ -227,7 +238,10 @@ def check_windows_interrupts(cli, checks):
                                      str(process.pid), str(birth), str(event)], close_fds=True,
                                     creationflags=subprocess.CREATE_NO_WINDOW, capture_output=True, timeout=10)
             checks.assertEqual(helper.returncode, 0, helper.stderr)
-            process.wait(timeout=15)
+            try:
+                process.wait(timeout=15)
+            except subprocess.TimeoutExpired as error:
+                raise AssertionError(f"CLI did not stop after Windows console event {event}") from error
             output, diagnostics = process.communicate(timeout=5)
             checks.assertEqual((process.returncode, output), (7, b""), diagnostics)
 
@@ -263,5 +277,7 @@ def run(executable):
 if __name__ == "__main__":
     if len(sys.argv) == 5 and sys.argv[1] == "--signal-owned-console":
         signal_owned_windows_console(int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]))
+    elif len(sys.argv) == 3 and sys.argv[1] == "--check-windows-interrupts":
+        run_windows_interrupts(sys.argv[2])
     else:
         run(sys.argv[1])

@@ -67,6 +67,9 @@ namespace Horo::Application::Internal {
                 if (!SetConsoleCtrlHandler(InterruptHandler, TRUE))
                     return Failure();
                 signals_ = true;
+                // The CLI owns its control policy. A launcher may have inherited a Ctrl+C ignore attribute.
+                if (!SetConsoleCtrlHandler(nullptr, FALSE))
+                    return Failure();
                 // A protocol service accepts redirected input, never an implicit interactive console.
                 if (GetFileType(input_) != FILE_TYPE_PIPE && GetFileType(input_) != FILE_TYPE_DISK)
                     return Failure();
