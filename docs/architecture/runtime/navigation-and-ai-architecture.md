@@ -3278,6 +3278,11 @@ the existing versioned trace and its exact consumed Blackboard observation.
 Comparison reports the first differing tick and, when both sides recorded it,
 the first differing subsystem boundary with its publication identities.
 
+The deterministic Scene owner can arm one selected agent for its next fixed
+tick. The scheduler records the trace during that agent's original budgeted
+decision step. After intent dispatch and the committed Scene tick, the owner
+can detach the trace and canonical AI population for off-owner comparison.
+
 ### Scene decision scheduling tiers
 
 Hosts can compose an `AiDecisionSimulationProfile` through

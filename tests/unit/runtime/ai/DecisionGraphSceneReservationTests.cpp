@@ -107,9 +107,13 @@ namespace Horo::AI {
             const auto snapshot = runtime.CaptureDecisionSnapshotAtSafePoint(agent);
             REQUIRE(snapshot.HasValue());
             AiWorkBudget insufficient{*required - 1};
-            const auto denied = tree.Value()->StepBudgeted({1, snapshot.Value().Binding(), snapshot.Value(), {}}, insufficient);
+            DecisionStepTrace deniedEvidence;
+            const auto denied =
+                tree.Value()->StepBudgetedWithTrace({1, snapshot.Value().Binding(), snapshot.Value(), {}}, insufficient, deniedEvidence);
             REQUIRE(denied.HasValue());
             CHECK_FALSE(denied.Value());
+            CHECK(deniedEvidence.Header().tick == 0);
+            CHECK(deniedEvidence.Records().empty());
             CHECK(insufficient.Exhausted());
             CHECK(insufficient.Remaining() == *required - 1);
             CHECK(fixture.probe.starts == 0);
@@ -668,7 +672,7 @@ namespace Horo::AI {
             AiReplayManifest manifest;
             std::array<AiReplayTick, TickCount> ticks;
             std::array<std::shared_ptr<const DecisionStepTrace>, TickCount> traces;
-            std::array<AiTaskState, TickCount> outcomes{};
+            std::array<std::size_t, TickCount> evaluatedWork{};
             std::size_t committedQueries{};
         };
 
@@ -690,6 +694,7 @@ namespace Horo::AI {
             Fixture fixture;
             auto setup = PreparePointDecision(fixture);
             auto selected = SceneFixture(fixture, *setup.decision);
+            selected.descriptor.cookedPlan = setup.decision;
             selected.binding.incarnation = AiRuntimeIncarnation::Create(runtimeIdentity).Value();
             selected.binding.scene = Runtime::SceneRuntimeId{runtimeIdentity};
             selected.owner.runtime = selected.binding.scene;
@@ -716,18 +721,11 @@ namespace Horo::AI {
             }
             auto owner =
                 std::make_shared<PointQueryOwner>(*live.Value(), selected.owner, std::move(setup.query), std::move(setup.registry));
-            auto runtime = std::move(AiSceneRuntime::Create()).Value();
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            auto runtime = AiSceneRuntime::Create({}, AiSceneCookedDecisionExecution{jobs, {}, {}, owner}).Value();
             auto publication = TestSupport::Publish(runtime, selected);
             const auto agent = runtime.Snapshot().Value().Agents().front().handle;
-            const auto rootTask = MakeIdentity<TaskId>(9000);
-            const auto parent = runtime.StartTaskAtSafePoint(agent, rootTask);
-            REQUIRE(parent.HasValue());
-            auto tasks =
-                runtime.ReserveDecisionTaskSlotsAtSafePoint(agent, static_cast<std::uint32_t>(setup.decision->Storage().taskSlots));
-            REQUIRE(tasks.HasValue());
-            auto decision =
-                DecisionGraphInstance::Create(setup.decision, std::move(tasks).Value(), {rootTask, parent.Value(), agent}, owner);
-            REQUIRE(decision.HasValue());
+            auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();
             REQUIRE(owner->task);
             constexpr std::size_t CanonicalBudget = 4096;
             for (std::size_t index = 0; index < replay.ticks.size(); ++index) {
@@ -755,18 +753,35 @@ namespace Horo::AI {
                 const auto revision = snapshot.Value().CapturedRevision();
                 frame.observations[BoundaryIndex(QueryPublication)] =
                     AiReplayObservation{{queryVersion, revision}, HashPointQueryOutput(snapshot.Value(), setup.key, sync.Value())};
-                const DecisionGraphStepInput input{frame.tick, snapshot.Value().Binding(), snapshot.Value(), {}};
-                auto trace = captureDecisionEvidence ? std::make_shared<DecisionStepTrace>() : nullptr;
-                const auto outcome = trace ? decision.Value()->StepWithTrace(input, *trace) : decision.Value()->Step(input);
-                REQUIRE(outcome.HasValue());
-                replay.outcomes[index] = outcome.Value();
-                if (trace) {
-                    frame.decision = AiReplayDecisionObservation{replay.manifest.decisionSubject, input.current, revision, trace.get()};
-                    replay.traces[index] = std::move(trace);
+                if (captureDecisionEvidence)
+                    REQUIRE(runtime.ArmDecisionReplayAtSafePoint(agent, frame.tick).HasValue());
+                const auto evaluated = scheduler->EvaluateAtDecision(frame.tick);
+                REQUIRE(evaluated.HasValue());
+                REQUIRE(evaluated.Value().failed == 0);
+                replay.evaluatedWork[index] = evaluated.Value().workUnits;
+                if (captureDecisionEvidence) {
+                    TestSupport::ExpectError(runtime.CaptureDecisionReplayAtSafePoint(scene, frame.tick, CanonicalBudget),
+                                             AIErrors::SchedulerPhaseInvalid);
                 }
-                const auto state = runtime.CaptureCanonicalState(scene, CanonicalBudget);
-                REQUIRE(state.HasValue());
-                const auto digest = HashAiReplayCanonicalState(state.Value(), CanonicalBudget);
+                REQUIRE(scheduler->CommitAtIntentDispatch(frame.tick).HasValue());
+                const auto digest = [&]() {
+                    if (!captureDecisionEvidence) {
+                        const auto state = runtime.CaptureCanonicalState(scene, CanonicalBudget);
+                        REQUIRE(state.HasValue());
+                        return HashAiReplayCanonicalState(state.Value(), CanonicalBudget);
+                    }
+                    TestSupport::ExpectError(runtime.CaptureDecisionReplayAtSafePoint({}, frame.tick, CanonicalBudget),
+                                             AIErrors::CanonicalRestoreStale);
+                    TestSupport::ExpectError(runtime.CaptureDecisionReplayAtSafePoint(scene, frame.tick, 0),
+                                             AIErrors::CanonicalStateInvalid);
+                    const auto capture = runtime.CaptureDecisionReplayAtSafePoint(scene, frame.tick, CanonicalBudget);
+                    REQUIRE(capture.HasValue());
+                    frame.decision = capture.Value().Decision();
+                    replay.traces[index] = capture.Value().trace;
+                    TestSupport::ExpectError(runtime.CaptureDecisionReplayAtSafePoint(scene, frame.tick, CanonicalBudget),
+                                             AIErrors::CanonicalRestoreStale);
+                    return HashAiReplayCanonicalState(capture.Value().canonical, CanonicalBudget);
+                }();
                 REQUIRE(digest.HasValue());
                 frame.observations[BoundaryIndex(CanonicalAi)] =
                     AiReplayObservation{{scene.DefinitionRevision().value, frame.tick}, digest.Value()};
@@ -792,9 +807,9 @@ namespace Horo::AI {
             const auto timing = CompareAiReplayEvidence(withoutTrace.manifest, noEvidence, withoutTrace.manifest, withoutTrace.ticks);
             REQUIRE(timing.HasValue());
             CHECK_FALSE(timing.Value());
-            CHECK(baseline.outcomes == withoutTrace.outcomes);
+            CHECK(baseline.evaluatedWork == withoutTrace.evaluatedWork);
             CHECK(baseline.committedQueries == 1);
-            CHECK(baseline.outcomes.back() == AiTaskState::Succeeded);
+            CHECK(baseline.traces.back()->Header().outcome == AiTaskState::Succeeded);
             CHECK(baseline.ticks.front().observations[BoundaryIndex(CanonicalAi)]->canonical !=
                   baseline.ticks.back().observations[BoundaryIndex(CanonicalAi)]->canonical);
 

@@ -40,8 +40,17 @@ namespace Horo::AI {
                 const auto snapshot = CaptureDecisionSnapshot(*state, context.agent);
                 if (snapshot.HasError())
                     return Result<AiSliceOutcome>::Failure(snapshot.ErrorValue());
-                const auto step =
-                    decision_->StepBudgeted({context.tick, snapshot.Value().Binding(), snapshot.Value(), {}}, budget, &providerFailure_);
+                const DecisionGraphStepInput input{context.tick, snapshot.Value().Binding(), snapshot.Value(), {}};
+                auto *capture = state->decisionReplay ? &*state->decisionReplay : nullptr;
+                const bool recording = capture && capture->agent == context.agent && capture->tick == context.tick &&
+                                       capture->executor == this && !capture->observed;
+                const auto step = recording ? decision_->StepBudgetedWithTrace(input, budget, *capture->trace, &providerFailure_)
+                                            : decision_->StepBudgeted(input, budget, &providerFailure_);
+                if (recording) {
+                    const auto revision = input.blackboard.CapturedRevision();
+                    if (capture->trace->Header().MatchesObservation(capture->plan->Digest(), context.tick, input.current, revision))
+                        capture->observed = AiReplayDecisionObservation{capture->subject, input.current, revision, capture->trace.get()};
+                }
                 if (step.HasError())
                     return Result<AiSliceOutcome>::Failure(step.ErrorValue());
                 return Result<AiSliceOutcome>::Success(step.Value() ? AiSliceOutcome::Complete : AiSliceOutcome::BudgetExhausted);
@@ -77,6 +86,68 @@ namespace Horo::AI {
             std::uint64_t evaluationTick_{};
         };
     }  // namespace
+
+    /** @copydoc AiSceneRuntime::ArmDecisionReplayAtSafePoint */
+    Result<void> AiSceneRuntime::ArmDecisionReplayAtSafePoint(const AgentHandle agent, const std::uint64_t tick) const {
+        if (auto valid = CapabilityAtSafePoint().ValidateAtSafePoint(); valid.HasError())
+            return valid;
+        auto *scheduler = active_->scheduler.get();
+        if (!scheduler || !decisionExecution_)
+            return Result<void>::Failure(MakeError(AIErrors::RuntimeUnavailable));
+        const auto previousTick = scheduler->report_.tick;
+        if (tick == 0 || (previousTick != 0 && (tick <= previousTick || tick - previousTick != 1)))
+            return Result<void>::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
+        const auto selected = DecisionAgent(*active_, agent);
+        if (selected.HasError())
+            return Result<void>::Failure(selected.ErrorValue());
+        const auto &slot = *selected.Value();
+        const auto registered = scheduler->ValidateDecisionReplacement(agent, slot.cookedPlan);
+        if (registered.HasError())
+            return Result<void>::Failure(registered.ErrorValue());
+        const auto *executor = dynamic_cast<const ScheduledCookedDecision *>(registered.Value());
+        if (!executor || !slot.cookedPlan->IsCurrent())
+            return Result<void>::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
+        try {
+            auto trace = std::make_shared<DecisionStepTrace>();
+            active_->decisionReplay.emplace(agent, slot.record.agent.agent, tick, scheduler->populationRevision_, slot.cookedPlan, executor,
+                                            std::move(trace));
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(AIErrors::DecisionAssetStorageUnavailable));
+        }
+    }
+
+    /** @copydoc AiSceneRuntime::CaptureDecisionReplayAtSafePoint */
+    Result<AiSceneDecisionReplayCapture> AiSceneRuntime::CaptureDecisionReplayAtSafePoint(const Runtime::RuntimeSceneView scene,
+                                                                                          const std::uint64_t tick,
+                                                                                          const std::size_t maximumCanonicalBytes) const {
+        using Capture = Result<AiSceneDecisionReplayCapture>;
+        if (auto valid = CapabilityAtSafePoint().ValidateAtSafePoint(); valid.HasError())
+            return Capture::Failure(valid.ErrorValue());
+        const auto state = active_;
+        auto *scheduler = state->scheduler.get();
+        const auto *report = scheduler ? scheduler->CompletedReportAtSafePoint() : nullptr;
+        if (!report || report->tick != tick)
+            return Capture::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
+        if (!scene.IsCurrent() || scene.RuntimeId() != state->binding.scene || !state->decisionReplay ||
+            state->decisionReplay->tick != tick || !state->decisionReplay->observed ||
+            state->decisionReplay->schedulerRevision != scheduler->populationRevision_)
+            return Capture::Failure(MakeError(AIErrors::CanonicalRestoreStale));
+        auto &pending = *state->decisionReplay;
+        const auto &observed = *pending.observed;
+        const auto selected = DecisionAgent(*state, pending.agent);
+        if (selected.HasError() || selected.Value()->cookedPlan != pending.plan ||
+            selected.Value()->blackboard->Binding() != observed.blackboard || pending.trace->DroppedRecords() != 0)
+            return Capture::Failure(MakeError(AIErrors::CanonicalStateInvalid));
+        auto canonical = CaptureCanonicalState(scene, maximumCanonicalBytes);
+        if (canonical.HasError())
+            return Capture::Failure(canonical.ErrorValue());
+        AiSceneDecisionReplayCapture capture{scene.RuntimeId(),        scene.StructuralRevision(),  tick,
+                                             observed.subject,         observed.blackboard,         observed.blackboardRevision,
+                                             std::move(pending.trace), std::move(canonical).Value()};
+        state->decisionReplay.reset();
+        return Capture::Success(std::move(capture));
+    }
 
     /** @copydoc AiSceneRuntime::ResolveDecisionQueryOwnerAtSafePoint */
     Result<Runtime::EntityRef> AiSceneRuntime::ResolveDecisionQueryOwnerAtSafePoint(AgentHandle agent) const {

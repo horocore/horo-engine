@@ -314,6 +314,20 @@ namespace Horo::AI {
     /** @copydoc DecisionGraphInstance::StepBudgeted */
     Result<std::optional<AiTaskState>> DecisionGraphInstance::StepBudgeted(const DecisionGraphStepInput &input, AiWorkBudget &budget,
                                                                            std::optional<DecisionProviderFailure> *providerFailure) {
+        return StepBudgetedImpl(input, budget, nullptr, providerFailure);
+    }
+
+    /** @copydoc DecisionGraphInstance::StepBudgetedWithTrace */
+    Result<std::optional<AiTaskState>> DecisionGraphInstance::StepBudgetedWithTrace(
+        const DecisionGraphStepInput &input, AiWorkBudget &budget, DecisionStepTrace &trace,
+        std::optional<DecisionProviderFailure> *providerFailure) {
+        return StepBudgetedImpl(input, budget, &trace, providerFailure);
+    }
+
+    /** @copydoc DecisionGraphInstance::StepBudgetedImpl */
+    Result<std::optional<AiTaskState>> DecisionGraphInstance::StepBudgetedImpl(const DecisionGraphStepInput &input, AiWorkBudget &budget,
+                                                                               DecisionStepTrace *trace,
+                                                                               std::optional<DecisionProviderFailure> *providerFailure) {
         using Outcome = Result<std::optional<AiTaskState>>;
         const auto work = plan_->MaximumDecisionWorkUnits();
         if (!work)
@@ -324,7 +338,7 @@ namespace Horo::AI {
             providerFailure->reset();
         if (Available() && !budget.Consume(*work))
             return Outcome::Success(std::nullopt);
-        auto evaluated = StepValidated(input, nullptr, providerFailure);
+        auto evaluated = StepRecorded(input, trace, providerFailure);
         if (providerFailure && (binding_.operation.IsCancellationRequested() || !providers_->CanAdmit()))
             providerFailure->reset();
         if (evaluated.HasError())
@@ -348,6 +362,12 @@ namespace Horo::AI {
     Result<AiTaskState> DecisionGraphInstance::StepImpl(const DecisionGraphStepInput &input, DecisionStepTrace *trace) {
         if (auto valid = ValidateStep(input); valid.HasError())
             return Result<AiTaskState>::Failure(valid.ErrorValue());
+        return StepRecorded(input, trace);
+    }
+
+    /** @copydoc DecisionGraphInstance::StepRecorded */
+    Result<AiTaskState> DecisionGraphInstance::StepRecorded(const DecisionGraphStepInput &input, DecisionStepTrace *trace,
+                                                            std::optional<DecisionProviderFailure> *providerFailure) {
         if (trace) {
             trace->header_ = {.root = plan_->Root(),
                               .planDigest = plan_->Digest(),
@@ -357,7 +377,7 @@ namespace Horo::AI {
             trace->count_ = 0;
             trace->dropped_ = 0;
         }
-        auto result = StepValidated(input, trace);
+        auto result = StepValidated(input, trace, providerFailure);
         if (trace)
             trace->header_.outcome = result.HasValue() ? result.Value() : AiTaskState::Failed;
         return result;

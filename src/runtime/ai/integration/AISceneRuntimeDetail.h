@@ -35,6 +35,18 @@ namespace Horo::AI::Detail {
         bool retired{};
     };
 
+    /** @brief One opt-in preallocated trace and its exact Scene scheduler authority. */
+    struct SceneDecisionReplayPending final {
+        AgentHandle agent;
+        AgentId subject;
+        std::uint64_t tick{};
+        std::uint64_t schedulerRevision{};
+        std::shared_ptr<const CookedDecisionPlan> plan;
+        const IAiScheduledDecision *executor{}; /**< Observed only while comparing the live evaluator address. */
+        std::shared_ptr<DecisionStepTrace> trace;
+        std::optional<AiReplayDecisionObservation> observed;
+    };
+
     /** @brief Complete spatial candidate prepared against the current owner and detached entity evidence. */
     struct PerceptionGroupPublication final {
         PerceptionSpatialBroadphase *owner{};
@@ -84,6 +96,7 @@ namespace Horo::AI::Detail {
         std::uint64_t revision{1};
         std::uint64_t lastAgentIdentity{}; /**< Owner-issued prefab identity high-water; advanced only with aggregate publication. */
         std::unique_ptr<AiTaskScheduler> scheduler;
+        std::optional<SceneDecisionReplayPending> decisionReplay;
         std::optional<AiScenePerceptionExecution> perceptionExecution;
         const PerceptionSpatialBroadphase *perceptionSpatial{}; /**< Exact publisher borrowed for the same activation lifetime. */
         std::uint64_t lastPerceptionTick{};

@@ -5,6 +5,7 @@
  * @brief Transactional SceneRuntime activation and lifecycle ownership for typed AI components.
  */
 
+#include "Horo/AI/AIReplayEvidence.h"
 #include "Horo/AI/AIRuntimeCapability.h"
 #include "Horo/AI/AISceneComponents.h"
 #include "Horo/AI/AITaskLifecycle.h"
@@ -121,6 +122,25 @@ namespace Horo::AI {
         AiSchedulingFailureOrigin origin;
         Error error;
         std::optional<Runtime::EntityRef> entity; /**< Present only while the original agent and entity generations are live. */
+    };
+
+    /** @brief Detached evidence from one selected decision and the canonical AI population at a completed tick. */
+    struct AiSceneDecisionReplayCapture final {
+        Runtime::SceneRuntimeId scene;
+        std::uint64_t sceneStructureRevision{};
+        std::uint64_t tick{};
+        AgentId subject;
+        BlackboardInstanceBinding blackboard; /**< Exact frozen observation consumed by the selected decision. */
+        std::uint64_t blackboardRevision{};
+        std::shared_ptr<const DecisionStepTrace> trace;
+        AiCanonicalState canonical;
+
+        /** @brief Borrows the existing v4 trace for comparison while this detached capture stays alive. */
+        [[nodiscard]] AiReplayDecisionObservation Decision() const & noexcept {
+            return {subject, blackboard, blackboardRevision, trace.get()};
+        }
+
+        AiReplayDecisionObservation Decision() const && = delete;
     };
 
     /** @brief Immutable value snapshot of one AI scene publication. */
@@ -467,6 +487,25 @@ namespace Horo::AI {
          * @details Call on the simulation owner after BlackboardSync; no mutable blackboard or Scene pointer escapes.
          */
         [[nodiscard]] Result<BlackboardSnapshot> CaptureDecisionSnapshotAtSafePoint(AgentHandle agent) const;
+
+        /** @brief Reserves evidence for one selected cooked decision before its next scheduled tick.
+         * @param agent Exact active Scene agent generation selected by the host.
+         * @param tick Next fixed tick, or the initial positive tick before scheduling starts.
+         * @return Success or typed owner, phase, capacity or plan failure.
+         * @details Owner-only, with one bounded buffer. A new successful arm replaces any unconsumed request.
+         * Scheduler budgets, callbacks and evaluation order are unchanged. */
+        [[nodiscard]] Result<void> ArmDecisionReplayAtSafePoint(AgentHandle agent, std::uint64_t tick) const;
+
+        /** @brief Detaches the actual armed decision trace and canonical base-agent population after committed simulation.
+         * @param scene Current committed Scene after the host completed its fixed tick.
+         * @param tick Exact armed tick with completed AI intent dispatch.
+         * @param maximumCanonicalBytes Caller-owned canonical capture allocation budget.
+         * @return Owned evidence or typed stale, incomplete or capacity failure. Only success consumes the request.
+         * @details No hashing, serialization or repeated decision evaluation happens here. The host may transfer the detached result
+         * to a worker for hashing and pass its Decision() observation to replay comparison. */
+        [[nodiscard]] Result<AiSceneDecisionReplayCapture> CaptureDecisionReplayAtSafePoint(Runtime::RuntimeSceneView scene,
+                                                                                            std::uint64_t tick,
+                                                                                            std::size_t maximumCanonicalBytes) const;
 
         /** @brief Publishes the currently registered Perception endpoints through the canonical spatial owner.
          * @param scene Exact committed Scene. @param revision Positive owner-issued spatial revision.

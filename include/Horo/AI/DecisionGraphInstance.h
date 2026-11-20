@@ -97,6 +97,14 @@ namespace Horo::AI {
          */
         [[nodiscard]] Result<std::optional<AiTaskState>> StepBudgeted(const DecisionGraphStepInput &input, AiWorkBudget &budget,
                                                                       std::optional<DecisionProviderFailure> *providerFailure);
+        /** @brief Observes the same scheduler slice after admission and before returning its one original outcome.
+         * @param input Exact committed observation. @param budget Normal scheduler allowance.
+         * @param trace Caller-reserved decision evidence; unchanged when admission or allowance fails.
+         * @param providerFailure Optional original provider error observer.
+         * @return Original budgeted step result. Recording grants no extra work or callbacks. */
+        [[nodiscard]] Result<std::optional<AiTaskState>> StepBudgetedWithTrace(
+            const DecisionGraphStepInput &input, AiWorkBudget &budget, DecisionStepTrace &trace,
+            std::optional<DecisionProviderFailure> *providerFailure = nullptr);
         /** @brief Advances the same runtime with opt-in bounded, redacted decision evidence.
          * @param input The committed tick and immutable blackboard snapshot used by every occurrence.
          * @param trace Caller-owned destination. Invalid, off-owner or reentrant admission leaves it untouched.
@@ -129,6 +137,13 @@ namespace Horo::AI {
         [[nodiscard]] Result<bool> TryRetainCompatibleFlatPlan(const std::shared_ptr<const CookedDecisionPlan> &candidate);
         /** @brief Shares the exact evaluation path for traced and untraced steps. */
         [[nodiscard]] Result<AiTaskState> StepImpl(const DecisionGraphStepInput &input, DecisionStepTrace *trace);
+        /** @brief Admits one scheduler slice before writing optional evidence. */
+        [[nodiscard]] Result<std::optional<AiTaskState>> StepBudgetedImpl(const DecisionGraphStepInput &input, AiWorkBudget &budget,
+                                                                          DecisionStepTrace *trace,
+                                                                          std::optional<DecisionProviderFailure> *providerFailure);
+        /** @brief Initializes and seals optional evidence around an already admitted execution. */
+        [[nodiscard]] Result<AiTaskState> StepRecorded(const DecisionGraphStepInput &input, DecisionStepTrace *trace,
+                                                       std::optional<DecisionProviderFailure> *providerFailure = nullptr);
         /** @brief Runs one admitted step using the existing evaluation and cancellation boundaries. */
         [[nodiscard]] Result<AiTaskState> StepValidated(const DecisionGraphStepInput &input, DecisionStepTrace *trace,
                                                         std::optional<DecisionProviderFailure> *providerFailure = nullptr);
