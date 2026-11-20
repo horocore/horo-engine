@@ -373,6 +373,8 @@ namespace Horo::Application::Internal {
         auto resolved = ResolveProjection(loaded, *selected, source, scene);
         if (resolved.HasError())
             return Built::Failure(resolved.ErrorValue());
+        if (!resolved.Value().sceneCanvas && !host->frontend->Capabilities().support.features.Supports(Render::RenderCapability::UiPaint))
+            return Invalid<RuntimeUiPaintSceneSourcePreparation>(UiErrors::CapabilityUnsupported);
         if (const auto kernel = PrepareKernel(resolved.Value().sceneCanvas); kernel.HasError())
             return Built::Failure(kernel.ErrorValue());
         auto registry = Registry(loaded);
@@ -532,7 +534,7 @@ namespace Horo::Application::Internal {
             return port.PrepareScene(transition, {});
         if (!host->Available())
             return Prepared::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
-        if (!host->frontend->Capabilities().support.features.Supports(Render::RenderCapability::UiPaint))
+        if (!policy.vulkanSceneCanvasAssets && !host->frontend->Capabilities().support.features.Supports(Render::RenderCapability::UiPaint))
             return Prepared::Failure(MakeError(UiErrors::CapabilityUnsupported));
         const auto snapshot = registry.Snapshot();
         std::vector<RuntimeUiPaintSceneSourcePreparation> sources;

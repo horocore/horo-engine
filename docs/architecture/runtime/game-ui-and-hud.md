@@ -396,6 +396,10 @@ application accepts one viewport canvas per Scene. A skipped or failed frame
 revokes interaction with the previous presentation. This authored route
 requires the ordinary desktop viewport, without a mounted origin or XR eye
 routing.
+Native coverage loads the actual authored asset through the Scene participant,
+reads Camera and World output pixels, and verifies that input is admitted only
+after the matching native presentation. Scene replacement retires the old
+interaction view and applies opaque depth to the new World placement.
 
 The presentation receipt carries the exact World canvas plane when a consuming
 pass places the canvas in the scene. Runtime UI adopts that plane with the

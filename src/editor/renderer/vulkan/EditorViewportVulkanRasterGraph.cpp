@@ -507,9 +507,23 @@ namespace Horo::Editor {
         }
     };
 
+    /** @copydoc EditorViewportRendererVulkan::SupportsViewportCanvas */
+    bool EditorViewportRendererVulkan::SupportsViewportCanvas() const noexcept {
+        using namespace Render;
+        using enum RenderTextureUsage;
+        const auto &backend = frontend_.Capabilities();
+        const auto &usages = backend.support.formats.usages;
+        const auto supports = [&usages](const RenderTextureFormat format, const RenderTextureUsage required) {
+            return HasTextureUsage(usages[static_cast<std::size_t>(format)], required);
+        };
+        return initialized_ && !color_ && backend.supportsMaterialRasterGraph &&
+               supports(RenderTextureFormat::Rgba16Float, Sampled | RenderAttachment) &&
+               supports(RenderTextureFormat::Depth32FloatStencil8, RenderAttachment);
+    }
+
     /** @copydoc EditorViewportRendererVulkan::CanComposeViewportCanvas */
     bool EditorViewportRendererVulkan::CanComposeViewportCanvas() const noexcept {
-        return initialized_ && !color_ && !preparedCrossFade_ && !requestedGrid_.visible && !requestedLightVisualizer_.selectedLight;
+        return SupportsViewportCanvas() && !preparedCrossFade_ && !requestedGrid_.visible && !requestedLightVisualizer_.selectedLight;
     }
 
     /** @copydoc EditorViewportRendererVulkan::ReleaseViewportCanvas */

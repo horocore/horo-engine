@@ -2949,11 +2949,11 @@ namespace Horo::Editor {
 #if defined(HORO_HAS_RENDER_VULKAN)
                 if (const auto &canvas = frameState_.sceneCanvas; canvas && passes.size() == 2) {
                     auto &viewport = *p_->presentation.composition.desktopCanvasViewport;
-                    const auto executed = viewport.ExecutePreparedCanvasFrame(*frameState_.frame, passes, canvas->transform,
-                                                                              [this, instance = canvas->instance,
-                                                                               frameNumber](const auto &program, const std::uint32_t slot) {
+                    const auto submit = [this, instance = canvas->instance, frameNumber](const auto &program, const std::uint32_t slot) {
                         return authorities_.ui.TakeSceneCanvasSubmission(instance, frameNumber, program, slot);
-                    });
+                    };
+                    const auto executed =
+                        viewport.ExecutePreparedCanvasFrame(*frameState_.frame, passes, canvas->transform, std::cref(submit));
                     if (executed.HasError())
                         return executed;
                     return authorities_.ui.SceneCanvasEncoded(canvas->instance, frameNumber, canvas->plane);
@@ -3645,8 +3645,7 @@ namespace Horo::Editor {
                 return std::nullopt;
             Application::Internal::RuntimeUiPaintProjectPolicy uiPolicy;
 #if defined(HORO_HAS_RENDER_VULKAN)
-            if (p.presentation.composition.desktopCanvasViewport &&
-                p.presentation.renderFrontend.Capabilities().support.features.Supports(Render::RenderCapability::UiPaint)) {
+            if (const auto *viewport = p.presentation.composition.desktopCanvasViewport; viewport && viewport->SupportsViewportCanvas()) {
                 auto consumer = LoadPackagedVulkanWorldCanvasShader(EditorAssetRoot());
                 if (consumer.HasValue()) {
                     p.presentation.composition.desktopCanvasConsumer.emplace(std::move(consumer).Value());

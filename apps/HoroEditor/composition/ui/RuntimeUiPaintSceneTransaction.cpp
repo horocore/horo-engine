@@ -368,7 +368,11 @@ namespace Horo::Application::Internal {
         using Prepared = Result<std::unique_ptr<Runtime::SceneActivationCandidate>>;
         if (!state_ || !state_->Available() || state_->dispatching)
             return Prepared::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
-        if (!incoming.empty() && !state_->frontend->Capabilities().support.features.Supports(Render::RenderCapability::UiPaint))
+        const auto &capabilities = state_->frontend->Capabilities();
+        if (!capabilities.support.features.Supports(Render::RenderCapability::UiPaint) &&
+            std::ranges::any_of(incoming, [&capabilities](const auto &source) {
+            return !source.paint.sceneCanvas || !capabilities.supportsMaterialRasterGraph;
+        }))
             return Prepared::Failure(MakeError(Render::UiPaintFrameErrors::Unavailable));
 
         struct PreparationGuard final {

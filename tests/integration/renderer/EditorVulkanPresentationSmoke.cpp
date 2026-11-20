@@ -5,10 +5,14 @@
 #include "ColorOutputPackage.h"
 #include "EditorImageProviderHost.h"
 #include "EditorVulkanShaderAssets.h"
+#include "Horo/Assets/AssetCookOutput.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
+#include "Horo/Runtime/RuntimeHost.h"
 #include "Horo/Runtime/Ui/UiRenderGeometry.h"
+#include "Horo/Runtime/Ui/UiStyleAsset.h"
 #include "RuntimeUiPaintPackagedKernel.h"
+#include "RuntimeUiPaintProjectSources.h"
 #include "VulkanBackendModule.h"
 #include "VulkanEditorGraphicsBridge.h"
 #include "VulkanVfxInstancedReadback.h"
@@ -436,6 +440,223 @@ namespace Horo::Tests::VulkanEditor {
         }
         Check(host.frontend->ReleaseSampler(sampler));
         CHECK(host.Drain());
+    }
+
+    /** @brief Publishes a cooked project asset and opens its authored canvas via the actual Scene participant. */
+    struct AuthoredViewportCanvas final {
+        using Port = Application::Internal::RuntimeUiPaintPort;
+
+        Assets::AssetRegistry registry;
+        Assets::MemoryAssetProvider provider;
+        JobSystem jobs{JobSystemConfig{2, 32}};
+        Assets::AssetLoadService assetLoads{jobs, provider};
+        Runtime::Ui::UiRuntimeAssetLoadService uiLoads{registry, assetLoads};
+        Runtime::RuntimeSceneService scenes{registry, assetLoads, {}, {100}};
+        Runtime::Ui::UiCanvasAssetReference reference;
+
+        AuthoredViewportCanvas(Port port, const std::filesystem::path &packages, const Runtime::Ui::UiRenderMode mode) {
+            using namespace Runtime::Ui;
+            using namespace Application::Internal;
+            using Render::Test::UiAsset;
+            using Render::Test::UiBytes;
+            using Render::Test::UiOwner;
+            using Render::Test::UiRequire;
+            const auto asset = UiAsset(91);
+            const auto kind = UiRequire(Assets::AssetTypeId::Parse("runtime.ui.document"));
+            const auto target = UiRequire(Assets::AssetCookTargetId::Parse("headless-null"));
+            reference = {asset, UiRequire(UiDocumentId::Create(UiBytes(1))), UiRequire(UiCanvasId::Create(UiBytes(2))),
+                         UiRequire(UiDocumentRevision::Create(1))};
+            const auto root = UiRequire(UiElementId::Create(UiBytes(3)));
+            const auto panel = UiRequire(UiElementId::Create(UiBytes(4)));
+            UiDocumentBuilder document{reference.document, reference.minimumRevision};
+            Check(document.AddCanvas({.id = reference.canvas, .rootElement = root, .renderMode = mode, .referenceResolution = {64, 32}}));
+            auto canvas = UiRequire(CreateUiElement(UiElementKind::Canvas, root, {}));
+            canvas.presentation->layout.width = UiLength::Percent(64);
+            canvas.presentation->layout.height = UiLength::Percent(64);
+            Check(document.AddElement(std::move(canvas)));
+            auto surface = UiRequire(CreateUiElement(UiElementKind::Panel, panel, root));
+            surface.presentation->layout.width = UiLength::Percent(64);
+            surface.presentation->layout.height = UiLength::Percent(64);
+            surface.presentation->inlineStyle.push_back(
+                {CoreUiStylePropertyId(UiCoreStyleProperty::Fill), UiStyleValueSource::Literal(UiStyleColor{0, 1, 0, 1}), false});
+            Check(document.AddElement(std::move(surface)));
+            const auto compiled = UiRequire(CookedUiDocument::Cook(UiRequire(std::move(document).Build())));
+            Assets::AssetCookArtifact artifact{.id = asset, .type = kind, .target = target};
+            artifact.payload.assign(compiled.Payload().begin(), compiled.Payload().end());
+            artifact.payloadDigest = ComputeSha256(std::as_bytes(std::span{artifact.payload}));
+            provider.Insert(asset, UiRequire(Assets::EncodeCookedArtifact(artifact)));
+            REQUIRE(registry
+                        .Publish({{asset, kind, UiRequire(ProjectPath::Parse("assets/canvas.ui")),
+                                   UiRequire(ProjectPath::Parse("assets/canvas.ui.horo"))}})
+                        .status == Assets::AssetRegistryBuildStatus::Complete);
+            auto allocator = std::make_shared<UiElementSlotAllocator>(UiRequire(UiElementSlotAllocator::Create(UiOwner())));
+            auto sources =
+                UiRequire(RuntimeUiPaintProjectSources::Create(port, std::move(allocator), {.vulkanSceneCanvasAssets = packages}));
+            Check(scenes.AddActivationParticipant(sources->MakeParticipant(scenes, registry, uiLoads, target)));
+            Check(scenes.Startup({}));
+            Publish(1, 1);
+        }
+
+        /** @brief Replaces the complete authored scene at the checked owner safe point. */
+        void Publish(const std::uint64_t revision, const float z) {
+            using Render::Test::UiRequire;
+            Runtime::SceneDefinitionBuilder scene{{5}, {revision}};
+            Runtime::RuntimeEntityDefinition entity{.object = {1}, .localTransform = {.translation = {0, 0, z}}};
+            entity.components.uiCanvas = Runtime::UiCanvasComponent{reference};
+            scene.Add(std::move(entity));
+            Check(scenes.QueuePreparation(UiRequire(std::move(scene).Build())));
+            const CancellationToken cancellation;
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+            while (std::chrono::steady_clock::now() < deadline) {
+                Check(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges,
+                                     {.frameNumber = revision, .cancellation = cancellation}));
+                if (const auto failed = scenes.TakeOperationError())
+                    Check(Result<void>::Failure(*failed), "publish authored project and canvas");
+                const auto current = scenes.ActiveScene();
+                if (current && current->DefinitionRevision() == Runtime::SceneDefinitionRevision{revision})
+                    return;
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+            FAIL("Authored Scene canvas did not reach its publication deadline");
+        }
+    };
+
+    /** @brief Drives one test render callback at the same phase as the canonical editor consumer. */
+    class AuthoredCanvasRenderer final : public Runtime::RuntimeLifecycleParticipant {
+    public:
+        explicit AuthoredCanvasRenderer(std::function<void(std::uint64_t)> draw) : draw_(std::move(draw)) {}
+
+        Result<void> Startup(const CancellationToken &) override {
+            return Result<void>::Success();
+        }
+
+        Result<void> OnFixedUpdate(const Runtime::FixedStepContext &) override {
+            return Result<void>::Success();
+        }
+
+        void Shutdown() noexcept override {}
+
+        Result<void> OnPhase(const Runtime::RuntimePhase phase, const Runtime::FrameContext &context) override {
+            if (phase == Runtime::RuntimePhase::RenderExecution)
+                draw_(context.frameNumber);
+            return Result<void>::Success();
+        }
+
+    private:
+        std::function<void(std::uint64_t)> draw_;
+    };
+
+    TEST_CASE("Native Vulkan presents an authored project canvas before admitting its interaction",
+              "[native-smoke][vulkan][gui][viewport][authored-canvas]") {
+        using namespace Runtime::Ui;
+        using namespace Application::Internal;
+        using Render::Test::UiOwner;
+        using Render::Test::UiRequire;
+        const auto *root = std::getenv("HORO_VULKAN_UI_PAINT_ASSET_ROOT");
+        if (!root || !std::getenv("HORO_EDITOR_VULKAN_ASSET_ROOT"))
+            SKIP("Supply locked native Vulkan viewport and canvas shader packages.");
+        const auto consumer = UiRequire(LoadPackagedVulkanWorldCanvasShader(root));
+        const auto mode = GENERATE(UiRenderMode::ScreenSpaceCamera, UiRenderMode::WorldSpace);
+        const CameraViewportFixture fixture;
+        Host host{false, true};
+        DeterministicClock clock;
+        auto runtime = UiRequire(Runtime::RuntimeHost::Create(clock));
+        auto paint = UiRequire(RuntimeUiPaintHost::Compose(*host.frontend, runtime->DispatchSource(), {UiOwner()}));
+        const auto port = paint.port;
+        Check(port.UpdateOutput({{host.extent.width, host.extent.height}, {1, 1}, {}}));
+        Check(port.UpdateCameraOutput({Host::CameraQualificationExtent.width, Host::CameraQualificationExtent.height}));
+        AuthoredViewportCanvas project{port, root, mode};
+        auto scene = fixture.View(0);
+        auto sceneId = project.scenes.ActiveScene()->RuntimeId();
+        scene.lightSceneDomain = sceneId.value;
+        host.CreateViewport(scene, nullptr, nullptr, true);
+        REQUIRE(host.viewport->SupportsViewportCanvas());
+        const auto sampler = UiRequire(host.frontend->CreateSampler({})).handle;
+        Check(host.frontend->ProcessResourceRequests());
+        Check(runtime->AddParticipant(std::move(paint.participant)));
+        UiRenderViewId view;
+        bool draw = true;
+        Check(runtime->AddParticipant(std::make_unique<AuthoredCanvasRenderer>([&](const std::uint64_t number) {
+            const auto pass = host.ViewportPass(scene);
+            host.PrepareScene(scene);
+            if (draw) {
+                const auto source = UiRequire(port.ReadSceneCanvasFrame(number, sceneId));
+                REQUIRE(source);
+                view = source->prototype->Descriptor().view;
+                CHECK_FALSE(port.InputEligible(view));
+                const auto space = source->worldCanvas ? UiRenderCompositionSpace::World : UiRenderCompositionSpace::Camera;
+                std::optional<UiWorldCanvasProjection> plane;
+                std::optional<Math::Mat4> transform;
+                if (source->worldCanvas) {
+                    const auto observer = source->worldCanvas->currentScene.lock();
+                    REQUIRE(observer);
+                    const auto current = (*observer)();
+                    REQUIRE(current);
+                    plane = UiRequire(CaptureRuntimeUiPaintWorldCanvasPlane(*current, *source->worldCanvas));
+                    transform = UiRequire(BuildRuntimeUiPaintWorldCanvasTransform(*plane));
+                }
+                Check(host.viewport->PrepareViewportCanvas(pass, {*source->program,
+                                                                  *source->prototype,
+                                                                  source->textures,
+                                                                  *source->kernel,
+                                                                  consumer,
+                                                                  space,
+                                                                  {32, 128, 512, 128}}));
+                auto frame = host.Frame(number);
+                const std::array passes{RenderPassDescriptor{.kind = RenderPassKind::Graphics, .staticMesh = pass},
+                                        RenderPassDescriptor{.kind = RenderPassKind::Graphics, .primaryOutput = PrimaryOutputAttachment{}}};
+                Check(host.viewport->ExecutePreparedCanvasFrame(frame, passes, transform, [&](const auto &program, std::uint32_t slot) {
+                    return port.TakeSceneCanvasSubmission(source->instance, number, program, slot);
+                }));
+                Check(port.SceneCanvasEncoded(source->instance, number, plane));
+                CHECK_FALSE(port.InputEligible(view));
+                const auto output = host.viewport->TextureView();
+                host.ComposeGui(frame, &output);
+                Check(frame.Present());
+            } else {
+                auto frame = host.Frame(number);
+                host.ExecuteSceneAndGui(frame, scene);
+                Check(frame.Present());
+            }
+            Check(port.Presented(number, true));
+        })));
+        Check(runtime->Startup());
+        clock.Advance(Duration::FromMilliseconds(16));
+        Check(runtime->RunFrame());
+        REQUIRE(view.IsValid());
+        CHECK(port.InputEligible(view));
+        const auto pass = host.ViewportPass(scene);
+        const auto pixels = ReadViewportColor(host, sampler);
+        const auto center = (pass.extent.height / 2 * pass.extent.width + pass.extent.width / 2) * 4;
+        REQUIRE(center + 2 < pixels.size());
+        CHECK(pixels[center + 1] > 240);
+
+        if (mode == UiRenderMode::WorldSpace) {
+            const auto retired = view;
+            project.Publish(2, -1);
+            sceneId = project.scenes.ActiveScene()->RuntimeId();
+            scene.lightSceneDomain = sceneId.value;
+            CHECK_FALSE(port.InputEligible(retired));
+            clock.Advance(Duration::FromMilliseconds(16));
+            Check(runtime->RunFrame());
+            CHECK(view != retired);
+            CHECK(port.InputEligible(view));
+            const auto occluded = ReadViewportColor(host, sampler);
+            REQUIRE(center + 2 < occluded.size());
+            CHECK(occluded[center] > 240);
+            CHECK(occluded[center + 1] < 8);
+        }
+
+        draw = false;
+        clock.Advance(Duration::FromMilliseconds(16));
+        Check(runtime->RunFrame());
+        CHECK_FALSE(port.InputEligible(view));
+        project.scenes.Shutdown();
+        runtime->Shutdown();
+        host.viewport->ReleaseViewportCanvas();
+        Check(host.frontend->ReleaseSampler(sampler));
+        CHECK(host.Drain());
+        CHECK(UiRequire(port.CollectRetired()));
     }
 
     /** @brief Uses the current renderer budget to publish and present a live fallback at the original sequence position. */

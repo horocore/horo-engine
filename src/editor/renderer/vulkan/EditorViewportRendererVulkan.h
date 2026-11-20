@@ -68,6 +68,8 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> PrepareViewportCanvas(const Render::StaticMeshPassDescriptor &pass,
                                                          const ViewportCanvasPreparation &request,
                                                          const CancellationToken &cancellation = {});
+        /** @brief Observes the selected device's scene canvas route independently of primary-output UI support. */
+        [[nodiscard]] bool SupportsViewportCanvas() const noexcept;
         /** @brief Observes whether the selected base output supports a separate sampled canvas for the current frame. */
         [[nodiscard]] bool CanComposeViewportCanvas() const noexcept;
         /** @brief Releases a retired canvas recipe on the render owner lane before acquiring a frame. */

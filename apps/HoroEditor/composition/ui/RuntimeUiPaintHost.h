@@ -156,15 +156,16 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<bool> CollectRetired() const;
         /** @brief Extends the actual active scene frame with the exact prepared UI; no separate Execute or Present authority. */
         [[nodiscard]] Result<void> ComposeUi(Render::RenderFrameScope &frame, std::uint64_t frameNumber) const;
-        /** @brief Observes the one extracted World source for synchronous consumer preparation.
+        /** @brief Observes the one extracted Camera or World source for synchronous consumer preparation.
          * @param frameNumber Exact Runtime extraction frame.
-         * @return Empty for no World source, or original owner/extraction failure.
+         * @param scene Exact selected viewport scene.
+         * @return Empty when the scene owns no extracted viewport source, or original owner/extraction failure.
          * @details Borrows expire on the next extraction, source transition, retirement or shutdown. Do not retain them.
          */
         [[nodiscard]] Result<std::optional<RuntimeUiPaintSceneCanvasFrame>> ReadSceneCanvasFrame(std::uint64_t frameNumber,
                                                                                                  Runtime::SceneRuntimeId scene) const;
         /** @brief Transfers the exact extracted paint submission once and binds the renderer's actual SceneCanvas slot.
-         * @param instance Exact active World source. @param frameNumber Exact Runtime extraction frame.
+         * @param instance Exact active viewport source. @param frameNumber Exact Runtime extraction frame.
          * @param program Selected SceneCanvas program. @param slot Slot chosen by the viewport graph.
          * @return Move-only submission with frame-local borrows or original lifecycle/binding failure.
          */
