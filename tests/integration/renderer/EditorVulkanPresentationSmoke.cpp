@@ -19,6 +19,7 @@
 #include "editor/renderer/vulkan/EditorGuiRendererVulkan.h"
 #include "editor/renderer/vulkan/EditorViewportRendererVulkan.h"
 #include "editor/renderer/vulkan/SdlVulkanPresentationPort.h"
+#include "editor/renderer/vulkan/host/EditorVulkanXrViewportAccess.h"
 #include "runtime/renderer/frontend/RenderFrontendResourceAccess.h"
 
 #include <SDL3/SDL.h>
@@ -443,6 +444,58 @@ namespace Horo::Tests::VulkanEditor {
     }
 
     /** @brief Publishes a cooked project asset and opens its authored canvas via the actual Scene participant. */
+    TEST_CASE("Native Vulkan prepares a sampled XR canvas graph with both eye passes", "[native-smoke][vulkan][xr][canvas]") {
+        using namespace Runtime::Ui;
+        using Viewport = EditorVulkanXrViewportAccess;
+        using Render::Test::UiOwner;
+        using Render::Test::UiRequire;
+        const auto *uiRoot = SDL_getenv("HORO_VULKAN_UI_PAINT_ASSET_ROOT");
+        const auto *xrRoot = SDL_getenv("HORO_VULKAN_XR_ASSET_ROOT");
+        if (!uiRoot || !xrRoot || !SDL_getenv("HORO_EDITOR_VULKAN_ASSET_ROOT"))
+            SKIP("Supply the locked viewport, multiview and canvas shader packages.");
+
+        const auto consumer = UiRequire(LoadPackagedVulkanWorldCanvasShader(uiRoot));
+        const auto writer =
+            UiRequire(Application::Internal::LoadPackagedProjectUiVulkanSceneKernel(uiRoot, ShaderTargetBackend::Vulkan, {}));
+        const CameraViewportFixture fixture;
+        const auto scene = fixture.View(0);
+        Host host;
+        host.CreateViewport(scene);
+        Check(host.viewport->PrepareXrProgram(UiRequire(LoadPackagedVulkanMultiviewShader(xrRoot))));
+        const auto device = UiRequire(Viewport::Device(*host.viewport));
+        constexpr FramebufferExtent eyeAllocation{64, 32};
+        const RenderTextureDescriptor color{.extent = eyeAllocation,
+                                            .format = RenderTextureFormat::Rgba8Unorm,
+                                            .layerCount = 2,
+                                            .usage = RenderTextureUsage::RenderAttachment | RenderTextureUsage::Sampled};
+        const RenderGraphLogicalState acquire{RenderGraphSynchronizationAccess::ReadWrite,
+                                              RenderGraphSynchronizationOperation::ColorAttachment, RenderGraphPipelineScope::Graphics,
+                                              RenderGraphTextureLayout::ColorAttachment, device.graphicsIdentity};
+        auto release = acquire;
+        release.scope = RenderGraphPipelineScope::External;
+        const auto tree = Render::Test::UiTree();
+        const UiRenderViewId view{UiOwner(), 9, 1};
+        const UiRenderSnapshotLimits limits{1, 0, 0, 0, 0, 1, 0};
+        auto extractor = UiRequire(UiRenderExtractor::Create({view, limits, 1}));
+        const auto descriptor = Runtime::Ui::Test::SnapshotDescriptor(tree, UiRequire(UiInteractionRevision::Create(1)),
+                                                                      UiRequire(UiRenderSnapshotRevision::Create(1)), view, limits);
+        const std::array commands{UiDrawCommand{UiRequire(tree.Root()).handle,
+                                                {{0, 0}, {4096, 2048}},
+                                                0,
+                                                NoUiRenderIndex,
+                                                NoUiRenderIndex,
+                                                1,
+                                                UiSolidDraw{{0, 1, 0, 1}}}};
+        const std::array transforms{UiLogicalTransform{}};
+        const auto snapshot = UiRequire(extractor.Extract(tree, descriptor, {.commands = commands, .transforms = transforms}));
+        const UiResolvedScreenCanvas projection{.logicalExtent = {4096, 2048}, .pixelExtent = {64, 32}, .pixelsPerDip = {1, 1}};
+        const UiPaintProgramDescriptor paint{projection, {32, 64, 4}, 1, 32};
+        const Viewport::CanvasPreparation canvas{paint, snapshot, {}, *writer, consumer};
+        Check(Viewport::Prepare(*host.viewport, scene.meshResources, color, acquire, release, false, nullptr, 0, &canvas));
+        Check(Viewport::Retire(*host.viewport));
+        CHECK(host.Drain());
+    }
+
     struct AuthoredViewportCanvas final {
         using Port = Application::Internal::RuntimeUiPaintPort;
 

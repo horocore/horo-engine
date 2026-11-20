@@ -55,6 +55,15 @@ namespace Horo::Render {
             PreparedRenderGraphTemplate &operator=(const PreparedRenderGraphTemplate &) = delete;
             PreparedRenderGraphTemplate(PreparedRenderGraphTemplate &&) noexcept = default;
             PreparedRenderGraphTemplate &operator=(PreparedRenderGraphTemplate &&) = delete;
+
+            /** @brief Reports whether the canonical completion lease still owns a bound execution.
+             * @param execution Borrow from this owner thread's prepared template.
+             * @return True until that execution's scene and GUI references retire.
+             */
+            [[nodiscard]] static bool InFlight(const CompiledRenderGraphExecution &execution) noexcept {
+                return execution.templateBinding_ && execution.templateBinding_->inFlight_;
+            }
+
             /** @brief Declares one typed external slot on an ordinary builder without inventing a resident identity.
              * @param builder Existing owner-thread open builder; all authored pass/resource identities remain canonical.
              * @param descriptor Exact cold-admitted native allocation structure.

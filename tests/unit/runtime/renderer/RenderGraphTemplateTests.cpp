@@ -186,20 +186,24 @@ namespace Horo::Tests::RenderFrontendTesting {
         lifecycleState.completeGraphOnPresent = false;
         const auto bound = Bind();
         REQUIRE(bound.HasValue());
+        CHECK_FALSE(PreparedRenderGraphTemplate::InFlight(*bound.Value()));
         auto begun = frontend->BeginFrame({1, {64, 64}});
         REQUIRE(begun.HasValue());
         auto frame = std::move(begun).Value();
         REQUIRE(frame.ExecuteGraph(*bound.Value(), {}).HasValue());
+        CHECK(PreparedRenderGraphTemplate::InFlight(*bound.Value()));
         auto *sceneLease = lifecycleState.graphLease;
         REQUIRE(sceneLease != nullptr);
         EmptyGui gui;
         REQUIRE(frame.ComposeGui(gui).HasValue());
         CHECK(lifecycleState.graphLease == sceneLease);
         REQUIRE(frame.Present().HasValue());
+        CHECK(PreparedRenderGraphTemplate::InFlight(*bound.Value()));
         CHECK(Bind().HasError());
         CHECK(bound.Value()->Owner().IsValid());
         sceneLease->Release();
         lifecycleState.graphLease = nullptr;
+        CHECK_FALSE(PreparedRenderGraphTemplate::InFlight(*bound.Value()));
         REQUIRE(Bind().HasValue());
     }
 

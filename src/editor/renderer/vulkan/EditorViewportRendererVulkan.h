@@ -145,7 +145,8 @@ namespace Horo::Editor {
                                                   const Render::RenderGraphLogicalState &acquired,
                                                   const Render::RenderGraphLogicalState &requiredFinal, bool retainPreviousDepth = false,
                                                   const EditorVulkanXrViewportAccess::AuxiliaryPlan *auxiliary = nullptr,
-                                                  std::size_t coverageDrawCapacity = 0);
+                                                  std::size_t coverageDrawCapacity = 0,
+                                                  const EditorVulkanXrViewportAccess::CanvasPreparation *canvas = nullptr);
         /** @brief Binds a fresh native eye acquisition to the cold graph before the SAME RenderFrameScope begins.
          * @param color Fresh imported acquisition. @param eyeViews Exact current per-layer frontend views.
          * @param publication Canonical Scene/frame/origin/view and actual device/capability evidence.
@@ -166,7 +167,8 @@ namespace Horo::Editor {
                                                std::span<const Render::RenderMotionObjectId> motionObjects, EditorXrProjectionAlpha alpha,
                                                const EditorVulkanXrViewportAccess::AuxiliaryImages *auxiliary = nullptr,
                                                const Render::MultiviewEnvironmentLighting *lighting = nullptr,
-                                               const std::array<Render::MultiviewRenderRectangle, 2> *rectangles = nullptr);
+                                               const std::array<Render::MultiviewRenderRectangle, 2> *rectangles = nullptr,
+                                               const EditorVulkanXrViewportAccess::CanvasPlacement *canvas = nullptr);
         /** @brief Ends current projection evidence and admits exact native projection into transform history.
          * @pre Same frame's successful native compositor end on the render owner lane.
          */
@@ -177,7 +179,8 @@ namespace Horo::Editor {
          * @post Consumes this binding once. Desktop presentation never proves native compositor submission.
          */
         [[nodiscard]] Result<EditorVulkanXrViewportAccess::ProjectionSubmission> ExecuteXrFrame(
-            Render::RenderFrameScope &frame, const Render::PrimaryOutputAttachment &output);
+            Render::RenderFrameScope &frame, const Render::PrimaryOutputAttachment &output,
+            const EditorVulkanXrViewportAccess::CanvasSource *canvas = nullptr);
         /** @brief Returns only the exact admitted current first-eye sample, never a desktop-camera fallback.
          * @param frame Exact App bind frame. @param expected Exact retained acquired first-eye generation.
          * @return Typed GUI binding or empty when no fresh XR frame is bound/retained by its native owner.

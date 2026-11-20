@@ -10,16 +10,26 @@
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "VulkanEditorGraphicsBridge.h"
 
+#include <functional>
 #include <memory>
 
 namespace Horo::Render {
     class RenderFrameScope;
     struct PrimaryOutputAttachment;
     struct MultiviewEnvironmentLighting;
+    struct UiPaintProgramDescriptor;
+    struct CookedUiPaintKernel;
+    struct UiRenderSubmission;
+    class UiPaintProgram;
 }  // namespace Horo::Render
+
+namespace Horo::Runtime::Ui {
+    class UiRenderSnapshot;
+}
 
 namespace Horo::Editor {
     class EditorViewportRendererVulkan;
+    struct EditorVulkanWorldCanvasCook;
 
     /** @brief Static composition boundary, without another viewport, scene, queue or completion authority.
      * @details All borrows use the viewport's render-owner lane and existing resource lifetime. The concrete
@@ -27,6 +37,24 @@ namespace Horo::Editor {
      */
     class EditorVulkanXrViewportAccess final {
     public:
+        /** @brief Borrowed cold UI program and sampled-quad artifacts for the XR projection. */
+        struct CanvasPreparation final {
+            const Render::UiPaintProgramDescriptor &paint;
+            const Runtime::Ui::UiRenderSnapshot &prototype;
+            std::span<const Render::RenderTextureHandle> textures;
+            const Render::CookedUiPaintKernel &writer;
+            const EditorVulkanWorldCanvasCook &consumer;
+        };
+
+        /** @brief Exact visible same-frame world canvas projection, with upward clip Y and shared scene depth. */
+        struct CanvasPlacement final {
+            Render::MultiviewPublication publication;
+            std::array<Math::Mat4, 2> clips;
+        };
+
+        /** @brief Synchronous UI geometry extraction for the exact program and retired paint slot. */
+        using CanvasSource = std::function<Result<Render::UiRenderSubmission>(const Render::UiPaintProgram &, std::uint32_t)>;
+
         /** @brief Optional compositor evidence, borrowed only while the exact selected viewport stages its real snapshot. */
         struct MotionInput final {
             Render::MultiviewMotionFrame frame;
@@ -108,6 +136,7 @@ namespace Horo::Editor {
          * @param retainPreviousDepth Current optional policy admits retaining sampled predecessor depth.
          * @param auxiliary Exact optional producer tuple; absent keeps the ordinary graph.
          * @param coverageDrawCapacity Initial scene instance bound for cold coverage descriptors; zero disables coverage.
+         * @param canvas Optional sampled world canvas recipe for ordinary XR projection.
          * @return Original owner/resource/graph error or successful preparation before interactive admission.
          */
         [[nodiscard]] static Result<void> Prepare(EditorViewportRendererVulkan &viewport,
@@ -115,7 +144,8 @@ namespace Horo::Editor {
                                                   const Render::RenderTextureDescriptor &color,
                                                   const Render::RenderGraphLogicalState &acquired,
                                                   const Render::RenderGraphLogicalState &requiredFinal, bool retainPreviousDepth,
-                                                  const AuxiliaryPlan *auxiliary = nullptr, std::size_t coverageDrawCapacity = 0);
+                                                  const AuxiliaryPlan *auxiliary = nullptr, std::size_t coverageDrawCapacity = 0,
+                                                  const CanvasPreparation *canvas = nullptr);
         /** @brief Bind one real acquisition before BeginFrame, using fixed owner storage and exact live publications.
          * @param viewport Existing owner. @param color Fresh native import. @param views Exact layer views.
          * @param publication Current Scene/frame/origin/device evidence. @param cameras Actual native view matrices.
@@ -125,18 +155,17 @@ namespace Horo::Editor {
          * @param auxiliary Fresh optional motion/depth acquisitions. They require a complete adjacent predecessor.
          * @param lighting Optional same-frame renderer environment input. Absence uses the unlit baseline.
          * @param rectangles Exact active regions from the view plan, in view order. Absence uses the full allocation for direct consumers.
+         * @param canvas Optional current canvas with the exact matching projection publication.
          * @return Original typed validation/binding outcome. On optional failure the acquisition owner may omit
          * its pair and bind the ordinary projection with no auxiliary images.
          */
-        [[nodiscard]] static Result<void> Bind(EditorViewportRendererVulkan &viewport, Render::RenderTextureHandle color,
-                                               const std::array<Render::RenderTextureViewHandle, 2> &views,
-                                               const Render::MultiviewPublication &publication,
-                                               std::span<const Render::MultiviewSceneView> cameras,
-                                               std::span<const Render::RenderStaticMeshInstance> instances, const MotionInput *motion,
-                                               EditorXrProjectionAlpha alpha = EditorXrProjectionAlpha::Opaque,
-                                               const AuxiliaryImages *auxiliary = nullptr,
-                                               const Render::MultiviewEnvironmentLighting *lighting = nullptr,
-                                               const std::array<Render::MultiviewRenderRectangle, 2> *rectangles = nullptr);
+        [[nodiscard]] static Result<void> Bind(
+            EditorViewportRendererVulkan &viewport, Render::RenderTextureHandle color,
+            const std::array<Render::RenderTextureViewHandle, 2> &views, const Render::MultiviewPublication &publication,
+            std::span<const Render::MultiviewSceneView> cameras, std::span<const Render::RenderStaticMeshInstance> instances,
+            const MotionInput *motion, EditorXrProjectionAlpha alpha = EditorXrProjectionAlpha::Opaque,
+            const AuxiliaryImages *auxiliary = nullptr, const Render::MultiviewEnvironmentLighting *lighting = nullptr,
+            const std::array<Render::MultiviewRenderRectangle, 2> *rectangles = nullptr, const CanvasPlacement *canvas = nullptr);
         /** @brief Takes the renderer's one-shot premultiplied scene evidence after observing the actual queue.
          * @param viewport Same selected renderer owner. @param publication Exact staged Scene/frame/origin/view/device.
          * @param color Exact acquired color target generation. @return Completed evidence or empty.
@@ -238,7 +267,8 @@ namespace Horo::Editor {
          * @return Exact encoded graphics work awaiting native queue admission, or the original error.
          */
         [[nodiscard]] static Result<ProjectionSubmission> Execute(EditorViewportRendererVulkan &viewport, Render::RenderFrameScope &frame,
-                                                                  const Render::PrimaryOutputAttachment &output);
+                                                                  const Render::PrimaryOutputAttachment &output,
+                                                                  const CanvasSource *canvas = nullptr);
         /** @brief Resolves native acceptance for this exact recording and discards a closed unissued signal. */
         [[nodiscard]] static Result<SubmissionState> ResolveSubmission(EditorViewportRendererVulkan &viewport,
                                                                        const ProjectionSubmission &submission);
