@@ -439,6 +439,22 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "launch_process_unattributed"})
         self.assertFalse(any("force-stop" in cmd or "logcat" in cmd for cmd in commands))
 
+    def test_malformed_cold_openxr_start_stops_only_with_the_exact_private_receipt(self):
+        _, profile = project.load_contract(project.OPENXR_DEVELOPMENT_PROFILE, ["arm64-v8a"])
+        application = profile["applicationId"]
+        stop = ("shell", "am", "force-stop", "--user", "10", application)
+        for uid, cleanup in (("1010200", {"status": "stopped"}),
+                             ("10200", {"status": "unconfirmed", "reason": "launch_process_unattributed"})):
+            with self.subTest(uid=uid):
+                status, report, commands = self.execute(
+                    {launch_command(application): f"LaunchState: COLD\nActivity: {application}/.PackageActivity"},
+                    OPENXR_OPTIONS, project.OPENXR_DEVELOPMENT_PROFILE, launch_receipt=log_line(LAUNCH_MARKER, uid=uid))
+                self.assertEqual((status, report["stage"], report["error"]), (1, "launch", "launch_unconfirmed"))
+                self.assertNotIn("observed", report)
+                self.assertNotIn(LAUNCH_NONCE, json.dumps(report))
+                self.assertEqual(report["cleanup"], cleanup)
+                self.assertEqual(stop in commands, cleanup["status"] == "stopped")
+
     def test_successful_start_still_requires_one_exact_private_cold_receipt(self):
         for receipt in ("", log_line(LAUNCH_MARKER, stamp=START), log_line(LAUNCH_MARKER, uid="10200"),
                         log_line(LAUNCH_MARKER, pid=999), log_line(LAUNCH_MARKER) * 2,

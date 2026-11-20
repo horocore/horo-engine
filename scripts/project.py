@@ -1387,10 +1387,14 @@ class AndroidPackageLaunch:
         allowed_components = {component, f"{self.application}/.{PACKAGE_ACTIVITY}"}
         states = re.findall(r"^LaunchState: ([A-Z]+)$", launched, re.MULTILINE)
         activities = re.findall(r"^Activity: (\S+)$", launched, re.MULTILINE)
+        exact_activity = len(activities) == 1 and activities[0] in allowed_components
+        not_started = "Warning: Activity not started" in launched
         if (re.findall(r"^Status: ([a-z]+)$", launched, re.MULTILINE) != ["ok"]
-                or len(activities) != 1 or activities[0] not in allowed_components
-                or states not in ([], ["COLD"]) or "Warning: Activity not started" in launched):
-            self.recovery = None
+                or not exact_activity or states not in ([], ["COLD"]) or not_started):
+            # Allow cleanup only when the device still reported this exact cold launch.
+            # Rollback must prove the private receipt and current process before stopping it.
+            if not exact_activity or states != ["COLD"] or not_started:
+                self.recovery = None
             raise AndroidDeployError("launch_unconfirmed")
         self.process = self.recover_process(self.device, uid)
         return self.process, start
