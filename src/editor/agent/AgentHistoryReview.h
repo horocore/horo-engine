@@ -14,6 +14,53 @@ namespace Horo::Agent {
      */
     [[nodiscard]] AgentHistoryTextDecision RedactHistoryDisplayText(AgentHistoryTextKind kind, std::string_view visible);
 
+    /** @brief Exact project and durable message identity returned after approving a recoverable ask. */
+    struct AgentHistoryRecoveryTurn final {
+        AgentHistoryProjectRevision project;
+        AgentHistoryStartedTurn turn;
+    };
+
+    /** @brief Redacted prompt preview with no provider request or captured context. */
+    class AgentHistoryPromptReview final {
+    public:
+        /** @brief Prepare one visible plain-text prompt for separate user approval. */
+        [[nodiscard]] static Result<AgentHistoryPromptReview> Prepare(AgentHistoryProjectRevision project, std::string_view prompt);
+
+        /** @brief Borrow the exact text that would be written to the checkpoint. */
+        [[nodiscard]] std::string_view Prompt() const noexcept {
+            return prompt_;
+        }
+
+        /** @brief Queue a durable streaming marker with the approved prompt and an empty assistant response. */
+        [[nodiscard]] Result<AgentHistoryOperationId> StartApproved(AgentHistorySession &history, std::string_view title,
+                                                                    std::uint64_t now) const;
+
+    private:
+        AgentHistoryPromptReview(AgentHistoryProjectRevision project, std::string prompt);
+        AgentHistoryProjectRevision project_;
+        std::string prompt_;
+    };
+
+    /** @brief Redacted terminal answer for one exact previously approved recoverable turn. */
+    class AgentHistoryAnswerReview final {
+    public:
+        /** @brief Prepare only the visible answer for explicit approval and exact checkpoint replacement. */
+        [[nodiscard]] static Result<AgentHistoryAnswerReview> Prepare(AgentHistoryRecoveryTurn recovery, std::string_view answer);
+
+        /** @brief Borrow the exact redacted answer to show before approval. */
+        [[nodiscard]] std::string_view Answer() const noexcept {
+            return answer_;
+        }
+
+        /** @brief Queue completion of the exact checkpoint after the user approves this answer. */
+        [[nodiscard]] Result<AgentHistoryOperationId> SaveApproved(AgentHistorySession &history, std::uint64_t now) const;
+
+    private:
+        AgentHistoryAnswerReview(AgentHistoryRecoveryTurn recovery, std::string answer);
+        AgentHistoryRecoveryTurn recovery_;
+        std::string answer_;
+    };
+
     /** @brief Immutable sanitized display pair for one exact plain local chat exchange. */
     class AgentHistoryExchangeReview final {
     public:

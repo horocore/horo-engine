@@ -852,6 +852,13 @@ TEST_CASE("Local model panel copy resolves in both shipped locales", "[unit][edi
                                "history_delete",
                                "history_delete_confirm",
                                "history_cancel",
+                               "history_recovery_offer",
+                               "history_recovery_prompt",
+                               "history_recovery_start",
+                               "history_recovery_answer",
+                               "history_recovery_keep_incomplete",
+                               "history_incomplete",
+                               "history_streaming",
                                "history_recent_messages",
                                "history_title",
                                "history_unavailable"}) {

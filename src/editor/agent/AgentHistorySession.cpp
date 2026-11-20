@@ -256,8 +256,7 @@ namespace Horo::Agent {
         /** @brief Schedules a conversation command with no caller text to validate or retain. */
         template <typename Command>
         [[nodiscard]] Result<AgentHistoryOperationId> SubmitConversation(const AgentHistoryProjectRevision project, Command command) {
-            const auto admission = CheckMutation(project);
-            if (admission.HasError())
+            if (const auto admission = CheckMutation(project); admission.HasError())
                 return Result<AgentHistoryOperationId>::Failure(admission.ErrorValue());
             return SubmitMutation(std::move(command));
         }
@@ -346,8 +345,7 @@ namespace Horo::Agent {
     Result<AgentHistoryOperationId> AgentHistorySession::Rename(const AgentHistoryProjectRevision project,
                                                                 const AgentConversationId conversation, const std::string_view title) {
         using Output = Result<AgentHistoryOperationId>;
-        const auto admission = state_->CheckMutation(project);
-        if (admission.HasError())
+        if (const auto admission = state_->CheckMutation(project); admission.HasError())
             return Output::Failure(admission.ErrorValue());
         if (title.size() > AgentHistoryLimits::MaximumTitleBytes)
             return Output::Failure(MakeError(AgentHistoryErrors::Capacity));

@@ -555,7 +555,7 @@ namespace Horo::Agent {
         });
         REQUIRE(session.View().availability == Availability::Ready);
         const auto projectRevision = session.View().project;
-        const auto finish = [&](const Result<AgentHistoryOperationId> &submission) {
+        const auto finish = [&session, projectRevision](const Result<AgentHistoryOperationId> &submission) {
             REQUIRE(submission.HasValue());
             auto completion = TakeMutation(session, submission.Value());
             CHECK(completion.project == projectRevision);
@@ -615,7 +615,7 @@ namespace Horo::Agent {
         JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 2, .ioWorkerCount = 1}};
         AgentHistorySession session{jobs, first.files, HistoryFilter};
         session.SelectProject(AgentHistoryProject{first.root, "history-project"});
-        const auto settled = [&] {
+        const auto settled = [&session] {
             return session.View().phase == Phase::Settled;
         };
         PollUntil(session, settled);
@@ -638,5 +638,63 @@ namespace Horo::Agent {
         REQUIRE(exported.exportedText);
         CHECK(exported.exportedText->find("Second project history") != std::string::npos);
         CHECK(exported.exportedText->find("First project history") == std::string::npos);
+    }
+
+    TEST_CASE("An explicitly approved recoverable prompt survives interruption without saving the unapproved response",
+              "[unit][agent][conversation_history]") {
+        using Phase = AgentHistorySessionPhase;
+        Project project;
+        JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 2, .ioWorkerCount = 1}};
+        AgentHistorySession session{jobs, project.files, RedactHistoryDisplayText};
+        session.SelectProject(AgentHistoryProject{project.root, "history-project"});
+        PollUntil(session, [&session] {
+            return session.View().phase == Phase::Settled;
+        });
+        const auto revision = session.View().project;
+        const auto review = AgentHistoryPromptReview::Prepare(revision, "Visible prompt.\nPassword: prompt-secret");
+        REQUIRE(review.HasValue());
+        CHECK(review.Value().Prompt() == "Visible prompt.\n[redacted]");
+        CHECK_FALSE(std::filesystem::exists(project.Path()));
+        const auto start = review.Value().StartApproved(session, "Recoverable local ask", 2);
+        REQUIRE(start.HasValue());
+        const auto accepted = TakeMutation(session, start.Value());
+        REQUIRE_FALSE(accepted.error);
+        REQUIRE(accepted.started);
+        const AgentHistoryRecoveryTurn recovery{accepted.project, *accepted.started};
+        const auto &saved = session.View().conversations.front().messages;
+        REQUIRE(saved.size() == 2);
+        CHECK(saved.front().text == review.Value().Prompt());
+        CHECK(saved.back().state == MessageState::Streaming);
+        CHECK(saved.back().text.empty());
+        const auto checkpoint = project.Image();
+        CHECK_FALSE(Contains(checkpoint, "prompt-secret"));
+
+        const auto answer = AgentHistoryAnswerReview::Prepare(recovery, "Visible answer.\nAuthorization: Bearer response-secret");
+        REQUIRE(answer.HasValue());
+        CHECK(answer.Value().Answer() == "Visible answer.\n[redacted]");
+        CHECK(project.Image() == checkpoint);
+        bool approved{};
+        SECTION("Ending the owner before approval keeps the response empty and recovers it as incomplete") {}
+        SECTION("Explicit answer approval updates the same response without appending a second conversation") {
+            const auto save = answer.Value().SaveApproved(session, 3);
+            REQUIRE(save.HasValue());
+            const auto settled = TakeMutation(session, save.Value());
+            REQUIRE_FALSE(settled.error);
+            CHECK_FALSE(settled.started);
+            approved = true;
+        }
+        session.Shutdown();
+        const auto reopened = project.Open();
+        REQUIRE(reopened.Availability() == (approved ? Availability::Ready : Availability::Recovered));
+        REQUIRE(reopened.Conversations().size() == 1);
+        const auto &conversation = reopened.Conversations().front();
+        CHECK(conversation.id == recovery.turn.conversation);
+        REQUIRE(conversation.messages.size() == 2);
+        CHECK(conversation.messages.back().id == recovery.turn.response);
+        CHECK(conversation.messages.back().state == (approved ? MessageState::Complete : MessageState::Incomplete));
+        CHECK(conversation.messages.back().text == (approved ? answer.Value().Answer() : std::string_view{}));
+        const auto image = project.Image();
+        CHECK_FALSE(Contains(image, "response-secret"));
+        CHECK(Contains(image, "Visible answer.") == approved);
     }
 }  // namespace Horo::Agent

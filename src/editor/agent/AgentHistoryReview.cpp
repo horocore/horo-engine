@@ -136,6 +136,64 @@ namespace Horo::Agent {
         return {Security::AgentDataClass::EditorContext, std::move(redacted)};
     }
 
+    namespace {
+        /** @brief Admits one visible dialogue field through the same redactor used by the store. */
+        Result<std::string> PrepareHistoryText(const AgentHistoryTextKind kind, const std::string_view text) {
+            using Output = Result<std::string>;
+            if (text.empty())
+                return Output::Failure(MakeError(AgentHistoryErrors::Invalid));
+            if (text.size() > MaximumDisplayBytes)
+                return Output::Failure(MakeError(AgentHistoryErrors::Capacity));
+            auto redacted = RedactHistoryDisplayText(kind, text);
+            if (!redacted.admittedText)
+                return Output::Failure(MakeError(AgentHistoryErrors::RejectedText));
+            return Output::Success(std::move(*redacted.admittedText));
+        }
+    }  // namespace
+
+    AgentHistoryPromptReview::AgentHistoryPromptReview(AgentHistoryProjectRevision project, std::string prompt)
+        : project_(project), prompt_(std::move(prompt)) {}
+
+    /** @copydoc AgentHistoryPromptReview::Prepare */
+    Result<AgentHistoryPromptReview> AgentHistoryPromptReview::Prepare(AgentHistoryProjectRevision project, std::string_view prompt) {
+        using Output = Result<AgentHistoryPromptReview>;
+        if (project.value == 0)
+            return Output::Failure(MakeError(AgentHistoryErrors::Invalid));
+        auto text = PrepareHistoryText(AgentHistoryTextKind::UserMessage, prompt);
+        if (text.HasError())
+            return Output::Failure(std::move(text).ErrorValue());
+        return Output::Success(AgentHistoryPromptReview{project, std::move(text).Value()});
+    }
+
+    /** @copydoc AgentHistoryPromptReview::StartApproved */
+    Result<AgentHistoryOperationId> AgentHistoryPromptReview::StartApproved(AgentHistorySession &history, std::string_view title,
+                                                                            std::uint64_t now) const {
+        return history.BeginTurn(project_, {.title = title, .userText = prompt_, .now = now});
+    }
+
+    AgentHistoryAnswerReview::AgentHistoryAnswerReview(AgentHistoryRecoveryTurn recovery, std::string answer)
+        : recovery_(recovery), answer_(std::move(answer)) {}
+
+    /** @copydoc AgentHistoryAnswerReview::Prepare */
+    Result<AgentHistoryAnswerReview> AgentHistoryAnswerReview::Prepare(AgentHistoryRecoveryTurn recovery, std::string_view answer) {
+        using Output = Result<AgentHistoryAnswerReview>;
+        if (recovery.project.value == 0 || recovery.turn.conversation.value == 0 || recovery.turn.response.value == 0)
+            return Output::Failure(MakeError(AgentHistoryErrors::Invalid));
+        auto text = PrepareHistoryText(AgentHistoryTextKind::AssistantMessage, answer);
+        if (text.HasError())
+            return Output::Failure(std::move(text).ErrorValue());
+        return Output::Success(AgentHistoryAnswerReview{recovery, std::move(text).Value()});
+    }
+
+    /** @copydoc AgentHistoryAnswerReview::SaveApproved */
+    Result<AgentHistoryOperationId> AgentHistoryAnswerReview::SaveApproved(AgentHistorySession &history, std::uint64_t now) const {
+        return history.Checkpoint(recovery_.project, {.conversation = recovery_.turn.conversation,
+                                                      .response = recovery_.turn.response,
+                                                      .state = AgentHistoryMessageState::Complete,
+                                                      .visibleText = answer_,
+                                                      .now = now});
+    }
+
     AgentHistoryExchangeReview::AgentHistoryExchangeReview(AgentHistoryProjectRevision project, std::string prompt, std::string response)
         : project_(project), prompt_(std::move(prompt)), response_(std::move(response)) {}
 
@@ -143,15 +201,15 @@ namespace Horo::Agent {
     Result<AgentHistoryExchangeReview> AgentHistoryExchangeReview::Prepare(const AgentHistoryProjectRevision project,
                                                                            const std::string_view prompt, const std::string_view response) {
         using Output = Result<AgentHistoryExchangeReview>;
-        if (project.value == 0 || prompt.empty() || response.empty())
+        if (project.value == 0)
             return Output::Failure(MakeError(AgentHistoryErrors::Invalid));
-        if (prompt.size() > MaximumDisplayBytes || response.size() > MaximumDisplayBytes)
-            return Output::Failure(MakeError(AgentHistoryErrors::Capacity));
-        auto user = RedactHistoryDisplayText(AgentHistoryTextKind::UserMessage, prompt);
-        auto assistant = RedactHistoryDisplayText(AgentHistoryTextKind::AssistantMessage, response);
-        if (!user.admittedText || !assistant.admittedText)
-            return Output::Failure(MakeError(AgentHistoryErrors::RejectedText));
-        return Output::Success(AgentHistoryExchangeReview{project, std::move(*user.admittedText), std::move(*assistant.admittedText)});
+        auto user = PrepareHistoryText(AgentHistoryTextKind::UserMessage, prompt);
+        if (user.HasError())
+            return Output::Failure(std::move(user).ErrorValue());
+        auto assistant = PrepareHistoryText(AgentHistoryTextKind::AssistantMessage, response);
+        if (assistant.HasError())
+            return Output::Failure(std::move(assistant).ErrorValue());
+        return Output::Success(AgentHistoryExchangeReview{project, std::move(user).Value(), std::move(assistant).Value()});
     }
 
     /** @copydoc AgentHistoryExchangeReview::SaveApproved */

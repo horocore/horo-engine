@@ -25,6 +25,24 @@ namespace Horo::Editor {
             ImGui::PopTextWrapPos();
         }
 
+        /** @brief Identifies a saved response even when no text has been approved. */
+        const char *ResponseStateKey(const AgentHistoryMessageState state) {
+            using enum AgentHistoryMessageState;
+            switch (state) {
+                case Streaming:
+                    return "history_streaming";
+                case Incomplete:
+                    return "history_incomplete";
+                case Cancelled:
+                    return "cancelled";
+                case Failed:
+                    return "failed";
+                case Complete:
+                    return nullptr;
+            }
+            return nullptr;
+        }
+
         /** @brief Returns a nonnegative host timestamp for a completed exchange. */
         std::uint64_t WallSeconds() {
             const auto seconds =
@@ -47,6 +65,8 @@ namespace Horo::Editor {
         attached_.reset();
         history_.SelectProject(std::nullopt);
         review_.reset();
+        recoveryPrompt_.reset();
+        recovery_.reset();
         pending_.reset();
         deletion_.reset();
         selected_ = {};
@@ -57,7 +77,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorLocalAgentHistory::Poll */
-    void EditorLocalAgentHistory::Poll() {
+    bool EditorLocalAgentHistory::Poll() {
         if (attached_) {
             history_.SelectProject(std::move(attached_));
             attached_.reset();
@@ -65,12 +85,29 @@ namespace Horo::Editor {
         history_.Poll();
         auto completed = history_.TakeMutation();
         if (!completed || !pending_ || completed->operation != pending_->id || completed->project != Project())
-            return;
-        const auto action = pending_->action;
+            return false;
+        const auto accepted = *pending_;
+        const auto action = accepted.action;
         pending_.reset();
         if (completed->error) {
             status_ = "history_write_error";
-            return;
+            if (action == Action::FinishRecovery && recovery_ && !recovery_->answer)
+                recovery_.reset();
+            return false;
+        }
+        if (action == Action::StartRecovery) {
+            if (!completed->started) {
+                status_ = "history_write_error";
+                return false;
+            }
+            recovery_.emplace(AgentHistoryRecoveryTurn{completed->project, *completed->started}, accepted.checkpointTime);
+            status_ = "history_streaming";
+            return true;
+        }
+        if (action == Action::FinishRecovery) {
+            recovery_.reset();
+            status_ = "history_saved";
+            return false;
         }
         if (action == Action::Export) {
             export_ = std::move(completed->exportedText);
@@ -84,6 +121,7 @@ namespace Horo::Editor {
                     title_ = selected->title;
             }
         }
+        return false;
     }
 
     /** @copydoc EditorLocalAgentHistory::Project */
@@ -105,20 +143,102 @@ namespace Horo::Editor {
         review_.reset();
     }
 
+    /** @copydoc EditorLocalAgentHistory::CanReviewRecovery */
+    bool EditorLocalAgentHistory::CanReviewRecovery() const noexcept {
+        return Available(history_.View()) && !pending_ && !recoveryPrompt_ && !recovery_;
+    }
+
+    /** @copydoc EditorLocalAgentHistory::ReviewRecoveryPrompt */
+    bool EditorLocalAgentHistory::ReviewRecoveryPrompt(std::string_view prompt) {
+        if (!CanReviewRecovery())
+            return false;
+        auto prepared = AgentHistoryPromptReview::Prepare(Project(), prompt);
+        if (prepared.HasError()) {
+            status_ = "history_write_error";
+            return false;
+        }
+        review_.reset();
+        recoveryPrompt_.emplace(std::move(prepared).Value());
+        return true;
+    }
+
+    /** @copydoc EditorLocalAgentHistory::RecoveryStartPending */
+    bool EditorLocalAgentHistory::RecoveryStartPending() const noexcept {
+        return recoveryPrompt_.has_value() || (pending_ && pending_->action == Action::StartRecovery);
+    }
+
+    /** @copydoc EditorLocalAgentHistory::HasRecovery */
+    bool EditorLocalAgentHistory::HasRecovery() const noexcept {
+        return recovery_.has_value();
+    }
+
+    /** @copydoc EditorLocalAgentHistory::ReviewRecoveryAnswer */
+    void EditorLocalAgentHistory::ReviewRecoveryAnswer(std::string_view answer) {
+        if (!recovery_)
+            return;
+        auto prepared = AgentHistoryAnswerReview::Prepare(recovery_->binding, answer);
+        if (prepared.HasError()) {
+            FinishRecovery(AgentHistoryMessageState::Incomplete);
+            return;
+        }
+        recovery_->answer.emplace(std::move(prepared).Value());
+    }
+
+    /** @copydoc EditorLocalAgentHistory::FinishRecovery */
+    void EditorLocalAgentHistory::FinishRecovery(const AgentHistoryMessageState state) {
+        if (!recovery_ || pending_)
+            return;
+        const auto &binding = recovery_->binding;
+        auto submitted = history_.Checkpoint(binding.project, {.conversation = binding.turn.conversation,
+                                                               .response = binding.turn.response,
+                                                               .state = state,
+                                                               .now = std::max(recovery_->checkpointTime, WallSeconds())});
+        if (Queue(std::move(submitted), Action::FinishRecovery))
+            recovery_->answer.reset();
+        else if (!recovery_->answer)
+            recovery_.reset();
+    }
+
     bool EditorLocalAgentHistory::Button(const ILocalizationService &locale, const char *key, bool enabled) const {
         const auto label = LocalizedText(locale, key) + "##" + key;
         return Ui::Button({.label = label.c_str(), .enabled = enabled});
     }
 
-    bool EditorLocalAgentHistory::Queue(Result<AgentHistoryOperationId> operation, Action action) {
+    bool EditorLocalAgentHistory::Queue(const Result<AgentHistoryOperationId> &operation, Action action,
+                                        const std::uint64_t checkpointTime) {
         if (operation.HasError()) {
             status_ = "history_write_error";
             return false;
         }
-        pending_ = Pending{operation.Value(), action};
+        pending_ = Pending{operation.Value(), action, checkpointTime};
         export_.reset();
         status_ = action == Action::Save ? "history_saving" : "history_working";
         return true;
+    }
+
+    void EditorLocalAgentHistory::DrawRecovery(const ILocalizationService &locale, const AgentHistorySessionView &view) {
+        const bool enabled = Available(view) && !pending_;
+        if (recoveryPrompt_) {
+            ImGui::TextWrapped("%s", LocalizedText(locale, "history_recovery_prompt").c_str());
+            DrawText(recoveryPrompt_->Prompt());
+            const auto now = WallSeconds();
+            if (Button(locale, "history_recovery_start", enabled) &&
+                Queue(recoveryPrompt_->StartApproved(history_, LocalizedText(locale, "history_title"), now), Action::StartRecovery, now))
+                recoveryPrompt_.reset();
+            ImGui::SameLine();
+            if (Button(locale, "history_cancel", !pending_))
+                recoveryPrompt_.reset();
+        }
+        if (!recovery_ || !recovery_->answer)
+            return;
+        ImGui::TextWrapped("%s", LocalizedText(locale, "history_recovery_answer").c_str());
+        DrawText(recovery_->answer->Answer());
+        if (Button(locale, "history_save", enabled))
+            static_cast<void>(Queue(recovery_->answer->SaveApproved(history_, std::max(recovery_->checkpointTime, WallSeconds())),
+                                    Action::FinishRecovery));
+        ImGui::SameLine();
+        if (Button(locale, "history_recovery_keep_incomplete", enabled && !pending_))
+            FinishRecovery(AgentHistoryMessageState::Incomplete);
     }
 
     void EditorLocalAgentHistory::DrawReview(const ILocalizationService &locale, const AgentHistorySessionView &view) {
@@ -166,14 +286,17 @@ namespace Horo::Editor {
         const auto messages = std::span{conversation.messages};
         if (messages.size() > 8)
             ImGui::TextUnformatted(LocalizedText(locale, "history_recent_messages").c_str());
-        for (const auto &message : messages.last(std::min(messages.size(), std::size_t{8})))
+        for (const auto &message : messages.last(std::min(messages.size(), std::size_t{8}))) {
+            if (const auto key = ResponseStateKey(message.state))
+                ImGui::TextUnformatted(LocalizedText(locale, key).c_str());
             DrawText(message.text);
+        }
     }
 
     void EditorLocalAgentHistory::DrawActions(const EditorGuiContext &context, const AgentHistorySessionView &view,
                                               const AgentConversation &conversation) {
         const auto &locale = context.localization;
-        const bool enabled = Available(view) && !pending_;
+        const bool enabled = Available(view) && !pending_ && !recovery_ && !recoveryPrompt_;
         ImGui::TextUnformatted(LocalizedText(locale, "history_name").c_str());
         ImGui::BeginDisabled(!enabled);
         static_cast<void>(Ui::InputTextControl("##LocalHistoryName", title_, AgentHistoryLimits::MaximumTitleBytes, context.theme.fonts));
@@ -192,12 +315,12 @@ namespace Horo::Editor {
     }
 
     void EditorLocalAgentHistory::DrawDeletion(const ILocalizationService &locale, const AgentHistorySessionView &view) {
-        const auto popup = LocalizedText(locale, "history_delete") + "###LocalHistoryDelete";
-        if (!ImGui::BeginPopupModal(popup.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
+        if (const auto popup = LocalizedText(locale, "history_delete") + "###LocalHistoryDelete";
+            !ImGui::BeginPopupModal(popup.c_str(), nullptr, ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoSavedSettings))
             return;
-        const auto found =
-            deletion_ ? std::ranges::find(view.conversations, deletion_->conversation, &AgentConversation::id) : view.conversations.end();
-        if (found == view.conversations.end() || deletion_->project != view.project) {
+        if (const auto found = deletion_ ? std::ranges::find(view.conversations, deletion_->conversation, &AgentConversation::id)
+                                         : view.conversations.end();
+            found == view.conversations.end() || deletion_->project != view.project) {
             deletion_.reset();
             ImGui::CloseCurrentPopup();
         } else {
@@ -205,7 +328,7 @@ namespace Horo::Editor {
             DrawText(found->title);
             const bool cancelled = Button(locale, "history_cancel");
             ImGui::SameLine();
-            const bool deleted = Button(locale, "history_delete", Available(view) && !pending_) &&
+            const bool deleted = Button(locale, "history_delete", Available(view) && !pending_ && !recovery_ && !recoveryPrompt_) &&
                                  Queue(history_.Delete(view.project, found->id), Action::Change);
             if (cancelled || deleted) {
                 deletion_.reset();
@@ -218,6 +341,7 @@ namespace Horo::Editor {
     /** @copydoc EditorLocalAgentHistory::Draw */
     void EditorLocalAgentHistory::Draw(const EditorGuiContext &context) {
         const auto view = history_.View();
+        DrawRecovery(context.localization, view);
         DrawReview(context.localization, view);
         DrawManager(context, view);
         DrawDeletion(context.localization, view);

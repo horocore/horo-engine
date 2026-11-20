@@ -837,6 +837,12 @@ and response before offering a save. Approval writes both messages as a single
 project-scoped operation. The editor continues to poll history and turn
 completion while the panel is hidden.
 
+The panel also offers recovery for an explicitly approved plain-text request.
+It commits the reviewed, redacted prompt and an empty response checkpoint on
+the history worker before starting inference. A successful reply requires its
+own review before the panel completes the same checkpoint. A restart after an
+interruption displays the saved prompt and an incomplete-response marker.
+
 Saved conversation management uses the same project worker and is bound to the
 selected conversation. The panel supports rename, archive, restore, and deletion
 after confirmation. An export reads the sanitized JSON projection. The user can

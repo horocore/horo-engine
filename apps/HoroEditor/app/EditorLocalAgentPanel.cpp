@@ -15,6 +15,7 @@
 #include <optional>
 #include <stop_token>
 #include <thread>
+#include <utility>
 #include <variant>
 
 namespace Horo::Editor {
@@ -89,13 +90,21 @@ namespace Horo::Editor {
                 response_.clear();
                 sceneCount_ = {};
                 history_.Detach();
+                awaitingCheckpoint_ = false;
                 submittedPrompt_.reset();
                 status_ = nullptr;
             }
 
             /** @brief Advances result publication and project storage after the workspace's runtime update. */
             void Poll() {
-                history_.Poll();
+                if (history_.Poll()) {
+                    if (std::exchange(awaitingCheckpoint_, false))
+                        Send({}, true);
+                    else
+                        history_.FinishRecovery(AgentHistoryMessageState::Incomplete);
+                } else if (awaitingCheckpoint_ && !history_.RecoveryStartPending()) {
+                    awaitingCheckpoint_ = false;
+                }
                 PollReply();
             }
 
@@ -113,7 +122,9 @@ namespace Horo::Editor {
                 ImGui::BeginChild("##LocalAgent", size, false, ImGuiWindowFlags_NoSavedSettings);
                 DrawProvider(locale, fonts);
                 ImGui::TextUnformatted(LocalizedText(locale, "prompt").c_str());
+                ImGui::BeginDisabled(awaitingCheckpoint_);
                 static_cast<void>(Ui::InputTextControl("##Prompt", prompt_, 4096, fonts));
+                ImGui::EndDisabled();
                 DrawSendActions(locale);
                 if (Busy() && Button(locale, "stop", !worker_.get_stop_token().stop_requested()))
                     worker_.request_stop();
@@ -137,7 +148,7 @@ namespace Horo::Editor {
 
             void DrawProvider(const ILocalizationService &locale, const Theme::Fonts &fonts) {
                 ImGui::TextUnformatted(LocalizedText(locale, "endpoint").c_str());
-                ImGui::BeginDisabled(Busy());
+                ImGui::BeginDisabled(Busy() || awaitingCheckpoint_ || history_.HasRecovery());
                 if (Ui::InputTextControl("##Endpoint", endpoint_, 256, fonts)) {
                     models_.clear();
                     selection_ = -1;
@@ -165,9 +176,14 @@ namespace Horo::Editor {
             }
 
             void DrawSendActions(const ILocalizationService &locale) {
-                const bool ready = !Busy() && !endpoint_.empty() && !model_.empty() && !prompt_.empty();
+                const bool ready =
+                    !Busy() && !awaitingCheckpoint_ && !history_.HasRecovery() && !endpoint_.empty() && !model_.empty() && !prompt_.empty();
                 if (Button(locale, "ask", ready)) {
                     Send({});
+                    return;
+                }
+                if (Button(locale, "history_recovery_offer", ready && history_.CanReviewRecovery())) {
+                    awaitingCheckpoint_ = history_.ReviewRecoveryPrompt(prompt_);
                     return;
                 }
                 const auto count = sceneCount_ ? sceneCount_() : std::nullopt;
@@ -178,14 +194,16 @@ namespace Horo::Editor {
                 }
             }
 
-            void Send(std::optional<std::size_t> sceneCount) {
+            void Send(std::optional<std::size_t> sceneCount, bool recoverable = false) {
                 ModelRequest request;
                 request.model = model_;
                 request.messages.push_back({.role = ModelRole::User, .text = prompt_});
                 history_.ClearReview();
-                submittedPrompt_ = sceneCount.has_value() ? std::nullopt : std::optional{prompt_};
+                submittedPrompt_ = recoverable || sceneCount.has_value() ? std::nullopt : std::optional{prompt_};
                 submittedProject_ = history_.Project();
                 Start(std::move(request), sceneCount);
+                if (recoverable && !Busy())
+                    history_.FinishRecovery(AgentHistoryMessageState::Failed);
             }
 
             void Start(std::optional<ModelRequest> request, std::optional<std::size_t> sceneCount = {}) {
@@ -216,14 +234,16 @@ namespace Horo::Editor {
                     auto reply = reply_.get();
                     if (discard_)
                         status_ = nullptr;
-                    else if (worker_.get_stop_token().stop_requested())
+                    else if (worker_.get_stop_token().stop_requested()) {
                         status_ = "cancelled";
-                    else
+                        history_.FinishRecovery(AgentHistoryMessageState::Cancelled);
+                    } else
                         std::visit([this](auto &result) {
                             Adopt(result);
                         }, reply);
                 } catch (const std::exception &) {
                     status_ = discard_ ? nullptr : "failed";
+                    history_.FinishRecovery(AgentHistoryMessageState::Failed);
                 }
                 submittedPrompt_.reset();
             }
@@ -247,11 +267,15 @@ namespace Horo::Editor {
                 if (result.status == AgentTurnStatus::Completed && !result.messages.empty()) {
                     response_ = std::move(result.messages.back().text);
                     status_ = response_.empty() ? "empty_response" : nullptr;
-                    if (!response_.empty() && submittedPrompt_)
+                    if (history_.HasRecovery())
+                        history_.ReviewRecoveryAnswer(response_);
+                    else if (!response_.empty() && submittedPrompt_)
                         history_.Review(submittedProject_, *submittedPrompt_, response_);
                     return;
                 }
                 status_ = result.status == AgentTurnStatus::TimedOut ? "timeout" : FailureKey(result.providerError);
+                history_.FinishRecovery(result.status == AgentTurnStatus::Cancelled ? AgentHistoryMessageState::Cancelled
+                                                                                    : AgentHistoryMessageState::Failed);
             }
 
             std::string endpoint_;
@@ -267,6 +291,7 @@ namespace Horo::Editor {
             const char *status_{};
             std::uint64_t turn_{};
             bool discard_{};
+            bool awaitingCheckpoint_{};
             std::jthread worker_;
             std::future<Reply> reply_;
         };
