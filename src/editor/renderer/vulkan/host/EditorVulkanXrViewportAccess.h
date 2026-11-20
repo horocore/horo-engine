@@ -96,6 +96,9 @@ namespace Horo::Editor {
         [[nodiscard]] static bool CanPrepareReduction(const EditorViewportRendererVulkan &viewport,
                                                       Render::RenderTextureFormat depth) noexcept;
 
+        /** @brief Reports the actual admitted environment program for this owner and lane. */
+        [[nodiscard]] static bool SupportsEnvironmentLighting(const EditorViewportRendererVulkan &viewport) noexcept;
+
         /** @brief Prepares a real paired graph before native activation and captures its exact private owner. */
         [[nodiscard]] static Result<PreparedTargets> PreparePairedTargets(EditorViewportRendererVulkan &viewport,
                                                                           std::span<const Render::RenderMeshResourceView> meshes,

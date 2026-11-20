@@ -1,5 +1,6 @@
 #include "EditorVulkanXrViewportAccess.h"
 #include "Horo/Foundation/Assertions.h"
+#include "Horo/Runtime/Render/MultiviewShaderParameters.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/XR/XRMultiviewScene.h"
 #include "OpenXRFrameCompositor.h"
@@ -631,6 +632,20 @@ namespace Horo::Application::Internal {
         }
     }  // namespace
 
+    /** @copydoc OpenXRPlayHost::ReadFrameLighting */
+    std::optional<XRProjectedLighting> OpenXRPlayHost::ReadFrameLighting(const XRFrameSnapshot &frame,
+                                                                         const XRCoordinateSpace &world) const noexcept {
+        const auto *source = composition_.lighting;
+        if (!source || !sessions_.Snapshot().admitsActions ||
+            !Editor::EditorVulkanXrViewportAccess::SupportsEnvironmentLighting(composition_.viewport))
+            return std::nullopt;
+        const auto sample = source->Read(frame.frame, world, frame.predictedDisplayTime);
+        if (!sample || !sample->scope.IsValid() || sample->scope.space != world || sample->scope.session != frame.frame.session ||
+            sample->frame != frame.frame || sample->prediction != frame.predictedDisplayTime)
+            return std::nullopt;
+        return sample->lighting;
+    }
+
     /** @copydoc OpenXRPlayHost::BindRenderFrame */
     Result<void> OpenXRPlayHost::BindRenderFrame(const std::uint64_t frameNumber, const WorldCanvasFrame *canvas) {
         if (!scene_ || !scene_->projection || !render_->views || !render_->acquisition)
@@ -676,6 +691,11 @@ namespace Horo::Application::Internal {
         if (projected.HasError())
             return Result<void>::Failure(projected.ErrorValue());
         const auto &placement = projected.Value();
+        const auto lighting = ReadFrameLighting(frame, reference.Value().Target());
+        const Render::MultiviewEnvironmentLighting environment =
+            lighting ? Render::MultiviewEnvironmentLighting{lighting->ambient, lighting->directional}
+                     : Render::MultiviewEnvironmentLighting{};
+        const auto *environmentInput = lighting && environment.IsValid() ? &environment : nullptr;
         // A canvas has no signed per-pixel motion writer. Only the ordinary projection represents this frame.
         const bool prepareMotion = !placement && WantsMotionHistory(scene_->projection->plan);
         if (!placement && render_->writer && render_->writer->coordinated)
@@ -688,7 +708,7 @@ namespace Horo::Application::Internal {
         const auto bind = [&](const Viewport::AuxiliaryImages *auxiliary) {
             return Viewport::Bind(composition_.viewport, render_->acquisition->texture, render_->eyeViews, publication,
                                   converted.Value().Scene().Views(), scene_->geometry->Instances(), prepareMotion ? &motion : nullptr,
-                                  alpha, auxiliary, nullptr, &rectangles, placement ? &*placement : nullptr);
+                                  alpha, auxiliary, environmentInput, &rectangles, placement ? &*placement : nullptr);
         };
         if (auto baseline = bind(nullptr); baseline.HasError())
             return baseline;

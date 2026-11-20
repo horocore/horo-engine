@@ -36,6 +36,11 @@ namespace Horo::Editor {
         return port && port->SupportsStereoCoverageReduction(viewport.device_.graphicsIdentity);
     }
 
+    /** @copydoc EditorVulkanXrViewportAccess::SupportsEnvironmentLighting */
+    bool EditorVulkanXrViewportAccess::SupportsEnvironmentLighting(const EditorViewportRendererVulkan &viewport) noexcept {
+        return viewport.owner_ == std::this_thread::get_id() && viewport.initialized_ && viewport.xrEnvironmentLighting_;
+    }
+
     /** @copydoc EditorVulkanXrViewportAccess::PreparedTargets::PreparedTargets */
     EditorVulkanXrViewportAccess::PreparedTargets::PreparedTargets(std::weak_ptr<const void> graph, const std::uint64_t device,
                                                                    const std::uint64_t capabilities) noexcept

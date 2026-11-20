@@ -1071,6 +1071,10 @@ The selected XR host loads this optional program from the offline-cooked
 `shaders/runtime/multiview-environment-vulkan.horoshdr` and matching
 `.reflection.json` in its packaged asset root. Both absent selects the ordinary
 program. An incomplete or foreign artifact pair fails package validation.
+The Play host reads the optional application-owned light publication only on
+focused frames with the environment program admitted. It checks the exact frame,
+prediction, session, and calibrated World scope before binding renderer inputs.
+An absent, invalid, or withdrawn publication leaves that frame neutral.
 Each binding starts with neutral lighting. Omitted contributions use the same
 color as the ordinary projection, and withdrawing a contribution requires no
 change to scene lights, exposure, or the projection attachment layout.

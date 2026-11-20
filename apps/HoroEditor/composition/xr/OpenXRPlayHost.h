@@ -9,6 +9,7 @@
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 #include "Horo/XR/XRInteraction.h"
+#include "Horo/XR/XRLightProjection.h"
 #include "OpenXRApplicationSession.h"
 #include "OpenXRInputClock.h"
 #include "OpenXRSessionEvents.h"
@@ -49,6 +50,28 @@ namespace Horo::Application::Internal {
         Complete
     };
 
+    /** @brief Renderer-ready values copied by the app's consented light owner for one exact prediction. */
+    struct OpenXRPlayLightingSample final {
+        XR::XRLightEstimateScope scope;
+        XR::XRFrameId frame;
+        XR::XRRenderPredictionTime prediction;
+        XR::XRProjectedLighting lighting;
+    };
+
+    /** @brief Optional app-owned lighting publication. No native sampling or permission requests occur on this port. */
+    class IOpenXRPlayLightingSource {
+    public:
+        virtual ~IOpenXRPlayLightingSource() = default;
+        /** @brief Copies only the current independently consented observation, or returns empty after invalidation.
+         * @param frame Exact active frame. @param world Exact calibrated World child.
+         * @param prediction Current prediction being rendered.
+         * @return Values projected by the app's scope and calibrated conversion policy, or empty on loss or expiry.
+         * @pre Owner lane. This bounded read cannot call back into Play or perform native/database work.
+         */
+        [[nodiscard]] virtual std::optional<OpenXRPlayLightingSample> Read(XR::XRFrameId frame, const XR::XRCoordinateSpace &world,
+                                                                           XR::XRRenderPredictionTime prediction) const noexcept = 0;
+    };
+
     /** @brief Same startup authorities, retained until native frame/image debt is actually drained.
      * @details This composition is selected only for explicit XR+Vulkan. The ordinary desktop has no host.
      * The same RuntimeHost source/fixedStep and same canonical InputRouter are mandatory; no clock, tick,
@@ -63,6 +86,7 @@ namespace Horo::Application::Internal {
         Runtime::RuntimeDispatchSource dispatch;
         Duration fixedStep;
         Runtime::SceneObjectId trackingRoot;
+        const IOpenXRPlayLightingSource *lighting{}; /**< Optional app-owned provider, borrowed through retirement. */
     };
 
     /** @brief Fully tracked native reference relation for one exact active presentation frame. */
@@ -403,6 +427,9 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> AbortRenderFrame();
         /** @brief Prepares the canvas variant when the selected projection supports it. */
         [[nodiscard]] Result<const WorldCanvasFrame *> PrepareCanvasSource(const WorldCanvasFrame *canvas) const;
+        /** @brief Reads a consented value only for this focused frame and exact World lineage. */
+        [[nodiscard]] std::optional<XR::XRProjectedLighting> ReadFrameLighting(const XR::XRFrameSnapshot &frame,
+                                                                               const XR::XRCoordinateSpace &world) const noexcept;
         [[nodiscard]] Result<void> BindRenderFrame(std::uint64_t frameNumber, const WorldCanvasFrame *canvas);
         /** @brief Acquires the optional reprojection pair after the ordinary projection is bound. */
         [[nodiscard]] std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages> AcquireAuxiliaryProjection(
@@ -587,6 +614,7 @@ namespace Horo::Application::Internal {
             Runtime::RuntimeDispatchSource dispatch;
             Duration fixedStep;
             Runtime::SceneObjectId trackingRoot;
+            const IOpenXRPlayLightingSource *lighting;
         };
 
         Parents composition_;

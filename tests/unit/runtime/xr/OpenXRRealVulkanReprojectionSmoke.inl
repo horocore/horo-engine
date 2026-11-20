@@ -302,7 +302,8 @@ namespace Horo::Tests::OpenXRApplication {
             std::unique_ptr<Editor::EditorGuiRendererVulkan> gui;
             std::unique_ptr<Host::OpenXRPlayHost> play;
 
-            explicit NativePlayFixture(const std::filesystem::path &cooks) {
+            explicit NativePlayFixture(const std::filesystem::path &cooks, const Host::IOpenXRPlayLightingSource *lighting = nullptr,
+                                       const std::filesystem::path &lightingCooks = {}) {
                 REQUIRE(window);
                 platform = std::make_unique<Editor::SdlVulkanPresentationPort>(*window);
                 images = std::make_unique<NativePlayImages>(*platform, bridge);
@@ -346,7 +347,13 @@ namespace Horo::Tests::OpenXRApplication {
                 base.shadow = LoadNativeCook(cooks, "shadow", Editor::LoadEditorVulkanShadowCook);
                 viewport = std::make_unique<Editor::EditorViewportRendererVulkan>(*frontend, bridge, std::move(base));
                 RequireValue(viewport->Initialize());
-                RequireValue(viewport->PrepareXrProgram(LoadNativeCook(cooks, "multiview", Editor::LoadEditorVulkanMultiviewCook)));
+                if (lightingCooks.empty()) {
+                    RequireValue(viewport->PrepareXrProgram(LoadNativeCook(cooks, "multiview", Editor::LoadEditorVulkanMultiviewCook)));
+                } else {
+                    RequireValue(viewport->PrepareXrProgram(LoadNativeCook(lightingCooks, "multiview-environment-vulkan",
+                                                                           Editor::LoadEditorVulkanMultiviewEnvironmentCook),
+                                                            Editor::EditorVulkanMultiviewProgram::EnvironmentLighting));
+                }
                 viewport->StageXrMotionProgram(LoadNativeCook(cooks, "motion", Editor::LoadEditorVulkanMultiviewMotionCook));
                 viewport->StageXrCoverageProgram(LoadNativeCook(cooks, "coverage", Editor::LoadEditorVulkanMultiviewCoverageCook));
                 viewport->StageXrCoverageReductionProgram(
@@ -361,7 +368,8 @@ namespace Horo::Tests::OpenXRApplication {
                                                                   bindings,
                                                                   scheduler->DispatchSource(),
                                                                   Duration::FromMilliseconds(10),
-                                                                  {root.value}}));
+                                                                  {root.value},
+                                                                  lighting}));
             }
 
             ~NativePlayFixture() {
@@ -504,6 +512,45 @@ namespace Horo::Tests::OpenXRApplication {
             REQUIRE(chain.appSpaceDeltaPose.position.x == 0.0F);
             REQUIRE(chain.appSpaceDeltaPose.orientation.w == 1.0F);
         }
+        scene->Shutdown();
+    }
+
+    TEST_CASE("Signed Vulkan Play reads optional lighting only for the selected program and current frame",
+              "[xr][application][play][native-lighting]") {
+        struct Source final : Host::IOpenXRPlayLightingSource {
+            [[nodiscard]] std::optional<Host::OpenXRPlayLightingSample> Read(
+                XR::XRFrameId frame, const XR::XRCoordinateSpace &world, XR::XRRenderPredictionTime prediction) const noexcept override {
+                ++reads;
+                if (withdrawn)
+                    return std::nullopt;
+                const auto grant = XR::XRLightEstimateGrant::Create(1);
+                if (grant.HasError())
+                    return std::nullopt;
+                return Host::OpenXRPlayLightingSample{{frame.session, world, grant.Value()},
+                                                      frame,
+                                                      prediction,
+                                                      {.ambient = Math::Vec3{0.25F, 0.5F, 0.75F}}};
+            }
+
+            mutable std::uint32_t reads{};
+            bool withdrawn{};
+        } lighting;
+
+        const auto *root = SDL_getenv("HORO_XR_PLAY_NATIVE_COOK_ROOT");
+        const auto *environment = SDL_getenv("HORO_XR_ENVIRONMENT_SHADER_DIRECTORY");
+        if (!root || !environment)
+            SKIP("Supply the genuine offline Vulkan projection and environment programs.");
+        const bool supported = GENERATE(false, true);
+        NativePlayFixture fixture{root, &lighting, supported ? std::filesystem::path{environment} : std::filesystem::path{}};
+        auto scene = ActivatePlay(fixture, std::nullopt);
+        fixture.script.clock.sample = 1;
+        fixture.Project(1);
+        CHECK(lighting.reads == (supported ? 1U : 0U));
+        lighting.withdrawn = true;
+        fixture.script.frames.prediction += fixture.script.frames.period;
+        fixture.Project(2);
+        CHECK(lighting.reads == (supported ? 2U : 0U));
+        REQUIRE(fixture.script.frames.views == 2);
         scene->Shutdown();
     }
 

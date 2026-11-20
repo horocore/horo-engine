@@ -18,7 +18,8 @@ namespace Horo::Application::Internal {
                        std::move(composition.bindings),
                        std::move(composition.dispatch),
                        composition.fixedStep,
-                       composition.trackingRoot},
+                       composition.trackingRoot,
+                       composition.lighting},
           native_(preparation.native), discoveryAttempt_(preparation.preflight.Attempt()), getProc_(preparation.getProc), clock_(native_) {
         input_.router = &composition.router;
         const auto version = preparation.preflight.LoaderApiVersion();
