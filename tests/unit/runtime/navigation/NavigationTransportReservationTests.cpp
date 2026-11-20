@@ -114,17 +114,21 @@ namespace Horo::Navigation {
         REQUIRE_FALSE(queue.TryPop());
     }
 
-    TEST_CASE("A reused partition resets its produced prefix before another query throws", "[unit][navigation][coordinator]") {
+    TEST_CASE("A reused partition publishes a fresh query failure without replaying prior completions", "[unit][navigation][coordinator]") {
         JobSystem jobs{{.workerCount = 1}};
         auto world = std::move(NavigationWorldLifecycle::Create(4)).Value();
         Activate(world, std::make_unique<ControlledBackend>(nullptr, true));
-        auto coordinator = std::move(NavigationCoordinator::Create(jobs, Limits())).Value();
+        auto limits = Limits();
+        limits.maximumJobs = 1;
+        auto coordinator = std::move(NavigationCoordinator::Create(jobs, limits)).Value();
         const auto first = Admit(coordinator, world);
         auto throwing = Input(Caller(2));
         throwing.request.start.x = 2.0F;
         const auto second = Admit(coordinator, world, throwing);
         REQUIRE(coordinator.Dispatch(1) == 2);
-        REQUIRE(AwaitLatestPartition(jobs).state == JobState::Failed);
+        // Provider exceptions become typed query completions. The worker still finishes the whole partition.
+        const auto firstPartition = AwaitLatestPartition(jobs);
+        REQUIRE(firstPartition.state == JobState::Succeeded);
         const NavigationPathCaller callers[]{Caller(), Caller(2)};
         REQUIRE(coordinator.Commit(Current(callers)) == 2);
         const auto firstResult = coordinator.Take(first);
@@ -132,19 +136,26 @@ namespace Horo::Navigation {
         REQUIRE(firstResult.has_value());
         REQUIRE(secondResult.has_value());
         REQUIRE(firstResult->result.HasValue());
-        REQUIRE(secondResult->result.HasError());
+        CHECK(firstResult->job == firstPartition.id);
+        CHECK(secondResult->job == firstPartition.id);
+        REQUIRE(ErrorIs(*secondResult, NavigationErrors::ProviderFailed));
         REQUIRE(coordinator.IsDrained());
         throwing.caller = Caller(3);
         throwing.targetTick = 2;
         auto accepted = coordinator.Submit(world, std::move(throwing), 1);
         REQUIRE(accepted.HasValue());
         REQUIRE(coordinator.Dispatch(2) == 1);
-        REQUIRE(AwaitLatestPartition(jobs).state == JobState::Failed);
+        const auto reusedPartition = AwaitLatestPartition(jobs);
+        REQUIRE(reusedPartition.id != firstPartition.id);
+        REQUIRE(reusedPartition.state == JobState::Succeeded);
         const NavigationPathCaller current[]{Caller(3)};
         REQUIRE(coordinator.Commit(Current(current, 2)) == 1);
         const auto failure = coordinator.Take(accepted.Value());
         REQUIRE(failure.has_value());
-        REQUIRE(failure->result.HasError());
+        CHECK(failure->job == reusedPartition.id);
+        REQUIRE(ErrorIs(*failure, NavigationErrors::ProviderFailed));
+        REQUIRE_FALSE(coordinator.Take(first));
+        REQUIRE_FALSE(coordinator.Take(second));
         REQUIRE_FALSE(coordinator.Take(accepted.Value()));
         REQUIRE(coordinator.IsDrained());
     }
