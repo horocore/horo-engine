@@ -137,6 +137,7 @@ namespace Horo::Runtime::Ui {
     };
 
     class UiAnimationOwner;
+    class UiFeedbackQueue;
 
     /** @brief Call-duration production pointer composition; actual tree, controls and capture owners never escape. */
     struct UiAnimationPointerInput final {
@@ -151,6 +152,7 @@ namespace Horo::Runtime::Ui {
         std::span<UiControlDefaultAction> defaults; /**< At least 65 output slots; caller retains an applied prefix on failure. */
         std::uint32_t &writtenDefaults;             /**< Set before return, including an error after earlier admitted defaults. */
         std::optional<UiAccessibleGesture> accessible;
+        UiFeedbackQueue *feedback{}; /**< Optional same-presentation semantic sink. Cue admission never changes input outcomes. */
     };
 
     /** @brief Synchronous pointer admission at the actual canvas owner or its privately owning runtime participant.

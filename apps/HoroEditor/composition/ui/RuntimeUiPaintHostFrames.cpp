@@ -166,6 +166,8 @@ namespace Horo::Application::Internal::Detail {
     Result<void> RuntimeUiPaintSource::Retire() {
         retiring = true;
         animation->Shutdown();
+        if (worldFeedback)
+            worldFeedback->Shutdown();
         ReleaseFrame();
         presentedWorld.reset();
         snapshotViews = {};

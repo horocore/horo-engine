@@ -858,6 +858,12 @@ audio/haptic work, allocation, or I/O. On reload the old queue retires and
 discards its stale cues; the new presented owner gets a new queue. Shutdown
 likewise discards undelivered optional cues.
 
+World pointer dispatch records focus changes, applied control defaults, and
+genuine routed control cancellations in the canvas's reserved feedback queue.
+The application reads those intents through the current World presentation.
+Changing the presented interaction revision or withdrawing pointer admission
+discards undelivered cues. A full queue leaves the UI action in effect.
+
 At a non-frame-hot host safe point, a borrowed `UiFeedbackRealizer` may map an
 intent to optional audio and/or haptic effects. Its per-modality result explicitly
 distinguishes skipped, realized, unavailable, and failed. Provider failure does

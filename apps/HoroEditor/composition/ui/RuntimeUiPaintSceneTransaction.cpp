@@ -11,6 +11,23 @@ namespace Horo::Application::Internal {
     using State = Detail::RuntimeUiPaintHostState;
     using Source = Detail::RuntimeUiPaintSource;
 
+    namespace {
+        /** @brief Reserves the complete World pointer route and semantic queue before source publication. */
+        Result<void> PrepareWorldInteraction(Source &candidate, const UiRenderSnapshotDescriptor &source) {
+            auto dispatcher = UiEventDispatcher::Create({source.instance, source.canvas, source.document, MaximumUiTreeDepth});
+            if (dispatcher.HasError())
+                return Result<void>::Failure(dispatcher.ErrorValue());
+            auto feedback = UiFeedbackQueue::Create({{source.instance, source.canvas, source.document, source.documentRevision,
+                                                      source.treeRevision, source.interactionRevision},
+                                                     MaximumUiInteractionSamples});
+            if (feedback.HasError())
+                return Result<void>::Failure(feedback.ErrorValue());
+            candidate.worldDispatcher.emplace(std::move(dispatcher).Value());
+            candidate.worldFeedback.emplace(std::move(feedback).Value());
+            return Result<void>::Success();
+        }
+    }  // namespace
+
     /** @brief Actual application Scene participant candidate; the generic Scene claim remains the only publication authority. */
     class RuntimeUiPaintSceneTransaction final : public Runtime::SceneActivationCandidate {
     public:
@@ -325,13 +342,9 @@ namespace Horo::Application::Internal {
         auto prototype = candidate.projection->ExtractPrototype(*pin.Get(), baseline.Value());
         if (prototype.HasError())
             return Result<void>::Failure(prototype.ErrorValue());
-        if (candidate.worldCanvas) {
-            const auto &source = prototype.Value().Descriptor();
-            auto dispatcher = UiEventDispatcher::Create({source.instance, source.canvas, source.document, MaximumUiTreeDepth});
-            if (dispatcher.HasError())
-                return Result<void>::Failure(dispatcher.ErrorValue());
-            candidate.worldDispatcher.emplace(std::move(dispatcher).Value());
-        }
+        if (candidate.worldCanvas)
+            if (const auto interaction = PrepareWorldInteraction(candidate, prototype.Value().Descriptor()); interaction.HasError())
+                return interaction;
         if (!candidate.sceneCanvas) {
             auto program = Render::UiPaintProgram::Create(*state_->frontend, candidate.programs.policy, prototype.Value(),
                                                           candidate.textures, candidate.programs.kernel, cancellation);

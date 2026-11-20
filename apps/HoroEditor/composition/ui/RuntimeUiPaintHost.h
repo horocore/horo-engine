@@ -5,6 +5,7 @@
  */
 #include "Horo/Runtime/Render/UiPaintProgram.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
+#include "Horo/Runtime/Ui/UiFeedback.h"
 #include "Horo/Runtime/Ui/UiPresentationReceipt.h"
 #include "Horo/Runtime/UiAnimationRuntimeParticipant.h"
 #include "RuntimeUiPaintProjection.h"
@@ -246,6 +247,11 @@ namespace Horo::Application::Internal {
          * @return Cleanup result. A retired source still releases the caller's transient leases.
          */
         [[nodiscard]] Result<void> CancelWorldPointers(Runtime::Ui::UiPointerInteraction &interaction, std::uint64_t &nextSequence) const;
+        /** @brief Takes one semantic cue from the exact currently presented World canvas.
+         * @param scene Exact current scene. @return Current cue, no cue, or typed lifecycle/identity failure.
+         * @note The host owns any audio/haptic realization. This call performs no device work.
+         */
+        [[nodiscard]] Result<std::optional<Runtime::Ui::UiFeedbackIntent>> TryDequeueWorldFeedback(Runtime::SceneRuntimeId scene) const;
         /** @brief Applies a receipt only for UI actually encoded in that same native frame; presentation never retires GPU claims. */
         [[nodiscard]] Result<void> Presented(std::uint64_t frameNumber, bool nativePresentSucceeded) const;
         /** @brief Pins the actual current derived frame for host inspection; its lifetime participates in the existing drain fence. */

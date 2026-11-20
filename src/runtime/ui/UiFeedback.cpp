@@ -221,6 +221,28 @@ namespace Horo::Runtime::Ui {
         return Enqueue(UiFeedbackIntent{.kind = UiFeedbackKind::Cancel, .source = input.source});
     }
 
+    /** @copydoc UiFeedbackQueue::AdvancePresentation */
+    Result<void> UiFeedbackQueue::AdvancePresentation(const UiInteractionRevision interaction) {
+        if (!storage_ || storage_->state != UiFeedbackQueueState::Active || storage_->delivering)
+            return Failure<void>(UiErrors::FeedbackLifecycleUnavailable);
+        auto &current = storage_->descriptor.owner.interaction;
+        if (!interaction.IsValid() || interaction < current)
+            return Failure<void>(UiErrors::FeedbackSourceStale);
+        if (interaction != current) {
+            DiscardPending();
+            current = interaction;
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc UiFeedbackQueue::DiscardPending */
+    void UiFeedbackQueue::DiscardPending() noexcept {
+        if (storage_ && !storage_->delivering) {
+            storage_->head = 0;
+            storage_->count = 0;
+        }
+    }
+
     /** @copydoc UiFeedbackQueue::TryDequeue */
     Result<std::optional<UiFeedbackIntent>> UiFeedbackQueue::TryDequeue() {
         if (!storage_ || storage_->state == UiFeedbackQueueState::Stopped || storage_->delivering)

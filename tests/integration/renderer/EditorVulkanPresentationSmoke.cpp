@@ -638,13 +638,21 @@ namespace Horo::Tests::VulkanEditor {
             };
             REQUIRE(update(true, 1) == 0);
             CHECK(update(false, 2) == 0);
+            CHECK_FALSE(Render::Test::UiRequire(port.TryDequeueWorldFeedback(scene)));
             CHECK(update(true, 3) == 1);
+            const auto cue = Render::Test::UiRequire(port.TryDequeueWorldFeedback(scene));
+            REQUIRE(cue);
+            CHECK(cue->kind == Runtime::Ui::UiFeedbackKind::Focus);
+            CHECK(cue->source.owner.instance == target.instance);
+            CHECK(cue->source.owner.interaction == target.presentation.interactionRevision);
+            CHECK(cue->focusScope.has_value());
             Check(pointer_.Cancel(port));
             CHECK(update(true, 4) == 0);
             CHECK(update(false, 5) == 0);
             CHECK(update(true, 6) == 1);
             CHECK(pressed_);
             CHECK(pressCount_ == 2);
+            CHECK_FALSE(Render::Test::UiRequire(port.TryDequeueWorldFeedback(scene)));
             lastRay_ = ray;
         }
 
@@ -653,6 +661,7 @@ namespace Horo::Tests::VulkanEditor {
             REQUIRE(blocked.HasError());
             CHECK(blocked.ErrorValue().code.Value() == Runtime::Ui::UiErrors::HitTestNotPresented.code.Value());
             Check(pointer_.Cancel(port));
+            CHECK_FALSE(Render::Test::UiRequire(port.TryDequeueWorldFeedback(scene)));
         }
 
         [[nodiscard]] bool Pressed() const noexcept {

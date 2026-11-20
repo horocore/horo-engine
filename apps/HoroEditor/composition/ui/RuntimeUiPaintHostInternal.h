@@ -81,6 +81,7 @@ namespace Horo::Application::Internal::Detail {
         std::optional<Runtime::SceneRuntimeId> scene;
         std::optional<RuntimeUiPaintWorldCanvas> worldCanvas;
         std::optional<Runtime::Ui::UiEventDispatcher> worldDispatcher; /**< Reserved once before the World source publishes. */
+        std::optional<Runtime::Ui::UiFeedbackQueue> worldFeedback;
         std::optional<RuntimeUiPaintPresentedWorldCanvas> presentedWorld;
         bool sceneCanvas{};
         bool retiring{};

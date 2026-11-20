@@ -32,6 +32,11 @@ namespace Horo::Application::Internal {
                    source.animation->InputEligible(source.presentedWorld->presentation.view);
         }
 
+        /** @brief Aligns the reserved queue with the exact current native presentation. */
+        Result<void> AdvanceWorldFeedback(Detail::RuntimeUiPaintSource &source) {
+            return source.worldFeedback->AdvancePresentation(source.presentedWorld->presentation.interactionRevision);
+        }
+
         /** @brief Validates the bounded batch before forwarding samples to the shared recognizer. */
         Result<void> ValidateWorldPointerSamples(const std::span<const UiPointerSample> samples) {
             if (samples.size() > MaximumUiInteractionSamples)
@@ -193,6 +198,7 @@ namespace Horo::Application::Internal {
         const WorldPointerDispatch guard{state->dispatching};
         if (const auto admitted = AdmitWorldPointer(*source, batch); admitted.HasError())
             return Outcome::Failure(admitted.ErrorValue());
+        auto *feedback = source->worldFeedback && AdvanceWorldFeedback(*source).HasValue() ? &*source->worldFeedback : nullptr;
         const auto hit = source->presentedWorld->hit;  // Shutdown in an observer can clear the source's copy.
         return source->animation->PumpPointers({owner.view,
                                                 batch.interaction,
@@ -203,7 +209,9 @@ namespace Horo::Application::Internal {
                                                 batch.milliseconds,
                                                 batch.nextSequence,
                                                 batch.defaults,
-                                                batch.writtenDefaults},
+                                                batch.writtenDefaults,
+                                                {},
+                                                feedback},
                                                observer);
     }
 
@@ -213,10 +221,29 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(UiErrors::EventDispatchLifecycleUnavailable));
         if (auto *source = state_->ActiveSource(interaction.Owner().instance); source && source->worldCanvas) {
             const WorldPointerDispatch guard{state_->dispatching};
+            if (source->worldFeedback)
+                source->worldFeedback->DiscardPending();
             return source->animation->CancelPointers(interaction, nextSequence);
         }
         interaction.CancelTransient();
         return Result<void>::Success();
+    }
+
+    /** @copydoc RuntimeUiPaintPort::TryDequeueWorldFeedback */
+    Result<std::optional<UiFeedbackIntent>> RuntimeUiPaintPort::TryDequeueWorldFeedback(const Runtime::SceneRuntimeId scene) const {
+        using Outcome = Result<std::optional<UiFeedbackIntent>>;
+        if (!state_ || !state_->Available() || state_->dispatching)
+            return Outcome::Failure(MakeError(UiErrors::FeedbackLifecycleUnavailable));
+        if (!scene.IsValid())
+            return Outcome::Failure(MakeError(UiErrors::HandleMalformed));
+        for (auto *source : state_->Sources()) {
+            if (!source || source->scene != scene || !source->worldFeedback || !WorldInputReady(*source))
+                continue;
+            if (const auto advanced = AdvanceWorldFeedback(*source); advanced.HasError())
+                return Outcome::Failure(advanced.ErrorValue());
+            return source->worldFeedback->TryDequeue();
+        }
+        return Outcome::Success(std::nullopt);
     }
 
     /** @copydoc RuntimeUiPaintWorldPointer::Bind */
@@ -368,6 +395,8 @@ namespace Horo::Application::Internal {
         source->presentedWorld.reset();
         if (presented)
             source->presentedWorld.emplace(instance, receipt, std::move(pending.hit_));
+        else if (source->worldFeedback)
+            source->worldFeedback->DiscardPending();
         return Result<void>::Success();
     }
 
@@ -389,6 +418,8 @@ namespace Horo::Application::Internal {
         presentedWorld.reset();
         if (receipt.worldProjection && frame.worldHit)
             presentedWorld.emplace(instance, receipt, std::move(*frame.worldHit));
+        else if (worldFeedback)
+            worldFeedback->DiscardPending();
         frame.extractedFrame.reset();
         frame.encodedPlane.reset();
         return Result<void>::Success();
