@@ -444,7 +444,8 @@ namespace Horo::Tests::VulkanEditor {
     }
 
     /** @brief Publishes a cooked project asset and opens its authored canvas via the actual Scene participant. */
-    TEST_CASE("Native Vulkan prepares a sampled XR canvas graph with both eye passes", "[native-smoke][vulkan][xr][canvas]") {
+    TEST_CASE("Native Vulkan prepares both XR canvas eye passes with or without paired motion targets",
+              "[native-smoke][vulkan][xr][canvas]") {
         using namespace Runtime::Ui;
         using Viewport = EditorVulkanXrViewportAccess;
         using Render::Test::UiOwner;
@@ -453,6 +454,7 @@ namespace Horo::Tests::VulkanEditor {
         const auto *xrRoot = SDL_getenv("HORO_VULKAN_XR_ASSET_ROOT");
         if (!uiRoot || !xrRoot || !SDL_getenv("HORO_EDITOR_VULKAN_ASSET_ROOT"))
             SKIP("Supply the locked viewport, multiview and canvas shader packages.");
+        const bool paired = GENERATE(false, true);
 
         const auto consumer = UiRequire(LoadPackagedVulkanWorldCanvasShader(uiRoot));
         const auto writer =
@@ -491,7 +493,29 @@ namespace Horo::Tests::VulkanEditor {
         const UiResolvedScreenCanvas projection{.logicalExtent = {4096, 2048}, .pixelExtent = {64, 32}, .pixelsPerDip = {1, 1}};
         const UiPaintProgramDescriptor paint{projection, {32, 64, 4}, 1, 32};
         const Viewport::CanvasPreparation canvas{paint, snapshot, {}, *writer, consumer};
-        Check(Viewport::Prepare(*host.viewport, scene.meshResources, color, acquire, release, false));
+        if (paired) {
+            if (!std::filesystem::exists(std::filesystem::path{xrRoot} / "shaders/runtime/multiview-motion-vulkan.horoshdr"))
+                SKIP("Supply the locked multiview motion shader package for paired preparation.");
+            host.viewport->StageXrMotionProgram(UiRequire(LoadPackagedVulkanMultiviewMotionShader(xrRoot)));
+            auto motionColor = color;
+            motionColor.format = RenderTextureFormat::Rgba16Float;
+            auto motionDepth = color;
+            motionDepth.format = RenderTextureFormat::Depth32Float;
+            auto acquireDepth = acquire;
+            acquireDepth.operation = RenderGraphSynchronizationOperation::DepthStencilAttachment;
+            acquireDepth.layout = RenderGraphTextureLayout::DepthStencilAttachment;
+            auto releaseDepth = acquireDepth;
+            releaseDepth.scope = RenderGraphPipelineScope::External;
+            REQUIRE(UiRequire(Viewport::PrepareMotionPipeline(*host.viewport, motionColor.format, motionDepth.format)));
+            const Viewport::AuxiliaryPlan auxiliary{{motionColor, acquire, release},
+                                                    {motionDepth, acquireDepth, releaseDepth},
+                                                    {eyeAllocation, eyeAllocation}};
+            const auto prepared =
+                UiRequire(Viewport::PreparePairedTargets(*host.viewport, scene.meshResources, color, acquire, release, auxiliary, 0));
+            CHECK(Viewport::IsPrepared(*host.viewport, prepared));
+        } else {
+            Check(Viewport::Prepare(*host.viewport, scene.meshResources, color, acquire, release, false));
+        }
         REQUIRE(UiRequire(Viewport::PrepareCanvas(*host.viewport, scene.meshResources, canvas)));
         Check(Viewport::Retire(*host.viewport));
         CHECK(host.Drain());

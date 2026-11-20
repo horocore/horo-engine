@@ -906,6 +906,9 @@ plane unchanged for interaction. Opaque scene depth and presentation completion
 remain the consuming renderer and application's responsibilities.
 OpenXR Play captures `xr.world_canvas.minimum_span_pixels` from the admitted
 project configuration at reopen. Existing projects inherit a one-pixel floor.
+When a canvas is drawn, Play submits the ordinary projection and clears motion
+history at frame completion. The canvas has no matching signed motion or coverage
+writer. A subsequent scene-only frame establishes a new motion predecessor.
 The Vulkan Play projection initializes each acquired color layer and its matching
 depth layer before a later pass can load them. Per-eye viewport and scissor
 continue to follow the acquired rectangles, including asymmetric eye sizes.

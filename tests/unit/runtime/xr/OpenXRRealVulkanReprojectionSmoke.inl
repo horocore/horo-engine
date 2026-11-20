@@ -1,6 +1,8 @@
 /** @file OpenXRRealVulkanReprojectionSmoke.inl
  * @brief Installed OpenXR Play driven by real Vulkan memory, graphics and coverage with scripted runtime ownership.
  */
+#include "../renderer/UiSubmissionSourceFixture.h"
+#include "RuntimeUiPaintShaderPackage.h"
 #include "editor/renderer/vulkan/EditorGuiRendererVulkan.h"
 #include "editor/renderer/vulkan/SdlVulkanPresentationPort.h"
 
@@ -412,7 +414,8 @@ namespace Horo::Tests::OpenXRApplication {
                 }
             }
 
-            void Project(const std::uint64_t number) {
+            void Project(const std::uint64_t number, const Host::OpenXRPlayHost::WorldCanvasFrame *canvas = nullptr,
+                         const Editor::EditorVulkanXrViewportAccess::CanvasSource *submitCanvas = nullptr) {
                 CAPTURE(number);
                 const auto step = [](std::string_view name, auto result) {
                     INFO(name);
@@ -422,9 +425,9 @@ namespace Horo::Tests::OpenXRApplication {
                     SDL_PumpEvents();
                     return step("poll native WSI availability", frontend->PollPresentationAvailability(extent));
                 });
-                REQUIRE(step("prepare native prediction", play->PrepareRenderFrame(number)));
+                REQUIRE(step("prepare native prediction", play->PrepareRenderFrame(number, canvas)));
                 auto frame = step("begin Vulkan WSI frame", frontend->BeginFrame({number, extent}));
-                step("execute native Play graph", play->ExecuteRenderFrame(frame, {}));
+                step("execute native Play graph", play->ExecuteRenderFrame(frame, {}, submitCanvas));
                 const auto mirror = play->MirrorView(number);
                 REQUIRE(mirror.IsValid());
                 step("begin GUI", gui->BeginFrame());
@@ -441,6 +444,27 @@ namespace Horo::Tests::OpenXRApplication {
                 });
             }
         };
+
+        /** @brief Extracts one resource-free authored panel for the native scene canvas writer. */
+        Runtime::Ui::UiRenderSnapshot MakeNativeWorldCanvas() {
+            using namespace Runtime::Ui;
+            using Render::Test::UiOwner;
+            const auto tree = Render::Test::UiTree();
+            const UiRenderViewId view{UiOwner(), 9, 1};
+            const UiRenderSnapshotLimits limits{1, 0, 0, 0, 0, 1, 0};
+            auto extractor = RequireValue(UiRenderExtractor::Create({view, limits, 1}));
+            const auto descriptor = Runtime::Ui::Test::SnapshotDescriptor(tree, RequireValue(UiInteractionRevision::Create(1)),
+                                                                          RequireValue(UiRenderSnapshotRevision::Create(1)), view, limits);
+            const std::array commands{UiDrawCommand{RequireValue(tree.Root()).handle,
+                                                    {{0, 0}, {4096, 2048}},
+                                                    0,
+                                                    NoUiRenderIndex,
+                                                    NoUiRenderIndex,
+                                                    1.0F,
+                                                    UiSolidDraw{{0, 1, 0, 1}}}};
+            const std::array transforms{UiLogicalTransform{}};
+            return RequireValue(extractor.Extract(tree, descriptor, {.commands = commands, .transforms = transforms}));
+        }
     }  // namespace
 
     TEST_CASE("Signed Play submits true Vulkan full-eye reduction to its matching native synthesis End",
@@ -480,6 +504,70 @@ namespace Horo::Tests::OpenXRApplication {
             REQUIRE(chain.appSpaceDeltaPose.position.x == 0.0F);
             REQUIRE(chain.appSpaceDeltaPose.orientation.w == 1.0F);
         }
+        scene->Shutdown();
+    }
+
+    TEST_CASE("Signed Vulkan Play projects a world canvas and rebuilds synthesis history after it leaves",
+              "[xr][application][play][reprojection][native-positive][canvas]") {
+        using namespace Render;
+        using namespace Runtime::Ui;
+        const auto *root = std::getenv("HORO_XR_PLAY_NATIVE_COOK_ROOT");
+        const auto *uiRoot = std::getenv("HORO_VULKAN_UI_PAINT_ASSET_ROOT");
+        if (!root || !uiRoot)
+            SKIP("Supply the locked XR and canvas shader packages.");
+        const std::filesystem::path shaders = std::filesystem::path{uiRoot} / "shaders";
+        const auto writer =
+            RequireValue(Host::DecodeProjectUiPaintVulkanScenePackage(ReadNativeCook(shaders / "runtime/ui-paint-vulkan.horoshdr"),
+                                                                      ReadNativeCook(shaders / "runtime/ui-paint-vulkan.reflection.json"),
+                                                                      ShaderTargetBackend::Vulkan));
+        const auto consumer = LoadNativeCook(shaders / "editor", "viewport-world-canvas-vulkan", Editor::LoadEditorVulkanWorldCanvasCook);
+        const auto snapshot = MakeNativeWorldCanvas();
+        const UiResolvedScreenCanvas raster{.logicalExtent = {4096, 2048}, .pixelExtent = {64, 32}, .pixelsPerDip = {1, 1}};
+        auto arena = RequireValue(UiRenderGeometryArena::Create({snapshot.Descriptor().view, {4, 6, 1}, 1}));
+        const auto geometry = RequireValue(arena.Build(snapshot, raster));
+        const UiPaintProgramDescriptor paint{raster, {32, 64, 4}, 1, 32};
+        auto transform = Math::Mat4::Identity();
+        transform.values[14] = -2.0F;
+        const Host::OpenXRPlayHost::WorldCanvasFrame canvas{{paint, snapshot, {}, *writer, consumer}, transform};
+        unsigned submissions{};
+        const Editor::EditorVulkanXrViewportAccess::CanvasSource submit = [&geometry, &submissions](const auto &, std::uint32_t slot) {
+            CHECK(slot == 0);
+            ++submissions;
+            return Result<UiRenderSubmission>::Success({.geometry = &geometry});
+        };
+
+        NativePlayFixture fixture{root};
+        auto scene = ActivatePlay(fixture, std::nullopt);
+        fixture.script.clock.sample = 1;
+        fixture.Project(1);
+        fixture.script.frames.prediction += fixture.script.frames.period;
+        fixture.Project(2);
+        const auto &projection = fixture.script.frames;
+        const auto synthesis = projection.ext.front();
+        REQUIRE(synthesis.type == XR_TYPE_FRAME_SYNTHESIS_INFO_EXT);
+        const auto nativeColor = projection.encoded.front().subImage.swapchain;
+        const auto nativeMotion = synthesis.motionVectorSubImage.swapchain;
+        const auto nativeDepth = synthesis.depthSubImage.swapchain;
+        fixture.script.frames.prediction += fixture.script.frames.period;
+        fixture.Project(3, &canvas, &submit);
+        CHECK(submissions == 1);
+        REQUIRE(projection.layers == 1);
+        REQUIRE(projection.views == 2);
+        REQUIRE(projection.ext.front().type == XR_TYPE_UNKNOWN);
+        CHECK(fixture.images->Read(nativeColor).releases == 3);
+        CHECK(fixture.images->Read(nativeMotion).releases == 1);
+        CHECK(fixture.images->Read(nativeDepth).releases == 1);
+        const auto completed = fixture.play->TakeCanvasCompletion();
+        REQUIRE(completed);
+        CHECK(completed->frameNumber == 3);
+        CHECK(completed->presented);
+
+        fixture.script.frames.prediction += fixture.script.frames.period;
+        fixture.Project(4);
+        REQUIRE(projection.ext.front().type == XR_TYPE_UNKNOWN);
+        fixture.script.frames.prediction += fixture.script.frames.period;
+        fixture.Project(5);
+        REQUIRE(projection.ext.front().type == XR_TYPE_FRAME_SYNTHESIS_INFO_EXT);
         scene->Shutdown();
     }
 }  // namespace Horo::Tests::OpenXRApplication

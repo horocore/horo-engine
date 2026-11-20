@@ -812,6 +812,11 @@ namespace Horo::Editor {
         FramebufferExtent extent;
         RenderTimelinePoint observed;
 
+        /** @brief Supplies the stable depth for canvas draws, which never publish motion history. */
+        Projection &CanvasOutput() noexcept {
+            return historyEnabled ? history.front() : *single;
+        }
+
         /** @brief Selects a writable slot without overwriting the exact retained predecessor. */
         Projection &SelectOutput() noexcept {
             if (!historyEnabled)
@@ -1509,15 +1514,14 @@ namespace Horo::Editor {
         if (!initialized_ || !xrGraph_ || xrGraph_->retiring || !canvas.writer.artifact.reflection)
             return Outcome::Failure(MakeError(RendererErrors::ViewportInvalidScene));
         auto &storage = *xrGraph_;
-        if (storage.historyEnabled || storage.bound ||
-            (storage.lastCanvasVariant && Detail::PreparedRenderGraphTemplate::InFlight(*storage.lastCanvasVariant)))
+        if (storage.bound || (storage.lastCanvasVariant && Detail::PreparedRenderGraphTemplate::InFlight(*storage.lastCanvasVariant)))
             return Outcome::Success(false);
         const XrGraph::Projection::Topology::ScenePreparation scene{frontend_,
                                                                     resources_,
                                                                     meshes,
                                                                     xrDrawSlots_[0],
                                                                     storage.allocation,
-                                                                    storage.single->depthTexture.handle};
+                                                                    storage.CanvasOutput().depthTexture.handle};
         if (const auto ready = storage.PrepareCanvas(*this, scene, canvas); ready.HasError())
             return Outcome::Failure(ready.ErrorValue());
         return Outcome::Success(true);
@@ -1574,7 +1578,7 @@ namespace Horo::Editor {
 
         // Temporary fixed values do not touch a potentially queued slot. Only successful canonical Bind
         // below proves the sole instance has retired, permitting mutation of its retained payload storage.
-        auto &projection = storage.SelectOutput();
+        auto &projection = canvas ? storage.CanvasOutput() : storage.SelectOutput();
         if (auxiliary && (!projection.paired || !storage.auxiliary))
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
         auto &ordinary = auxiliary ? *projection.paired : projection.ordinary;

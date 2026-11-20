@@ -580,7 +580,7 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRPlayHost::PrepareCanvasSource */
     Result<const OpenXRPlayHost::WorldCanvasFrame *> OpenXRPlayHost::PrepareCanvasSource(const WorldCanvasFrame *canvas) const {
         using Outcome = Result<const WorldCanvasFrame *>;
-        if (!canvas || render_->writer || WantsMotionHistory(scene_->projection->plan))
+        if (!canvas)
             return Outcome::Success(nullptr);
         const auto prepared =
             Editor::EditorVulkanXrViewportAccess::PrepareCanvas(composition_.viewport, scene_->geometry->Resources(), canvas->preparation);
@@ -655,9 +655,6 @@ namespace Horo::Application::Internal {
             render_->ConvertScene(plan.Value(), configuration, revision.Value(), input_.origin, reference.Value(), publication);
         if (converted.HasError())
             return Result<void>::Failure(converted.ErrorValue());
-        if (render_->writer && render_->writer->coordinated)
-            static_cast<void>(frames_.RecordReprojectionReference(frame.frame, reference.Value()));
-        const bool prepareMotion = WantsMotionHistory(scene_->projection->plan);
         const Editor::EditorVulkanXrViewportAccess::MotionInput motion{{publication, frame.frame.sequence,
                                                                         frame.predictedDisplayTime.Nanoseconds()},
                                                                        scene_->geometry->MotionObjects()};
@@ -679,6 +676,10 @@ namespace Horo::Application::Internal {
         if (projected.HasError())
             return Result<void>::Failure(projected.ErrorValue());
         const auto &placement = projected.Value();
+        // A canvas has no signed per-pixel motion writer. Only the ordinary projection represents this frame.
+        const bool prepareMotion = !placement && WantsMotionHistory(scene_->projection->plan);
+        if (!placement && render_->writer && render_->writer->coordinated)
+            static_cast<void>(frames_.RecordReprojectionReference(frame.frame, reference.Value()));
         std::array<Render::MultiviewRenderRectangle, 2> rectangles;
         std::ranges::transform(plan.Value().Targets(), rectangles.begin(), [](const XRExternalRenderTargetDescriptor &target) {
             const auto &region = target.renderRectangle;
@@ -691,7 +692,8 @@ namespace Horo::Application::Internal {
         };
         if (auto baseline = bind(nullptr); baseline.HasError())
             return baseline;
-        if (const auto pair = AcquireAuxiliaryProjection(frame.frame, plan.Value()); pair && bind(&*pair).HasError())
+        if (const auto pair = placement ? std::nullopt : AcquireAuxiliaryProjection(frame.frame, plan.Value());
+            pair && bind(&*pair).HasError())
             if (auto baseline = bind(nullptr); baseline.HasError())
                 return baseline;
         if (prepareMotion)
