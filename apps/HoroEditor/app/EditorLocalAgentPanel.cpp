@@ -1,9 +1,8 @@
 #include "EditorLocalAgentPanel.h"
 
-#include "AgentHistoryReview.h"
-#include "AgentHistorySession.h"
 #include "AgentLocalSceneTurn.h"
 #include "AgentTurn.h"
+#include "EditorLocalAgentHistory.h"
 #include "Horo/Agent/ReferenceModelProviders.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/IWorkspacePanel.h"
@@ -55,7 +54,7 @@ namespace Horo::Editor {
         class LocalAgentPanel final : public IWorkspacePanel {
         public:
             LocalAgentPanel(const JobSystem &jobs, DurableFileSystem &files)
-                : IWorkspacePanel("workspace.local_agent"), history_(jobs, files, RedactHistoryDisplayText) {}
+                : IWorkspacePanel("workspace.local_agent"), history_(jobs, files) {}
 
             ~LocalAgentPanel() override {
                 worker_.request_stop();
@@ -80,7 +79,7 @@ namespace Horo::Editor {
             void OnAttach(PanelContext &context) override {
                 sceneCount_ = context.sceneObjectCount;
                 if (context.projectFileRoot && !context.projectIdentity.empty())
-                    attachedProject_.emplace(*context.projectFileRoot, std::string{context.projectIdentity});
+                    history_.Attach({*context.projectFileRoot, std::string{context.projectIdentity}});
             }
 
             void OnDetach() override {
@@ -89,27 +88,14 @@ namespace Horo::Editor {
                 prompt_.clear();
                 response_.clear();
                 sceneCount_ = {};
-                attachedProject_.reset();
-                history_.SelectProject(std::nullopt);
-                historyStatus_ = nullptr;
-                pendingSave_.reset();
-                review_.reset();
+                history_.Detach();
                 submittedPrompt_.reset();
-                showLatestHistory_ = false;
                 status_ = nullptr;
             }
 
             /** @brief Advances result publication and project storage after the workspace's runtime update. */
             void Poll() {
-                if (attachedProject_) {
-                    history_.SelectProject(std::move(attachedProject_));
-                    attachedProject_.reset();
-                }
                 history_.Poll();
-                if (const auto completed = history_.TakeMutation(); completed && completed->operation == pendingSave_) {
-                    historyStatus_ = completed->error ? "history_write_error" : "history_saved";
-                    pendingSave_.reset();
-                }
                 PollReply();
             }
 
@@ -135,62 +121,11 @@ namespace Horo::Editor {
                     ImGui::TextWrapped("%s", LocalizedText(locale, status_).c_str());
                 if (!response_.empty())
                     ImGui::TextWrapped("%s", response_.c_str());
-                DrawHistory(locale);
+                history_.Draw(context);
                 ImGui::EndChild();
             }
 
         private:
-            [[nodiscard]] static bool CanSave(const AgentHistorySessionView &view) {
-                using enum AgentHistoryAvailability;
-                return view.availability == Ready || view.availability == Recovered || view.availability == DurabilityUnconfirmed;
-            }
-
-            /** @brief Displays owned review bytes exactly as they would be written by explicit approval. */
-            static void DrawHistoryText(std::string_view text) {
-                if (text.empty())
-                    return;
-                ImGui::PushTextWrapPos(0);
-                ImGui::TextUnformatted(text.data(), text.data() + text.size());
-                ImGui::PopTextWrapPos();
-            }
-
-            void DrawHistory(const ILocalizationService &locale) {
-                const auto view = history_.View();
-                if (review_) {
-                    ImGui::TextUnformatted(LocalizedText(locale, "history_review").c_str());
-                    DrawHistoryText(review_->Prompt());
-                    DrawHistoryText(review_->Response());
-                    if (Button(locale, "history_save", CanSave(view) && !pendingSave_))
-                        SaveReview(locale);
-                    if (view.phase == AgentHistorySessionPhase::Settled && !CanSave(view))
-                        ImGui::TextWrapped("%s", LocalizedText(locale, "history_unavailable").c_str());
-                }
-                if (historyStatus_)
-                    ImGui::TextWrapped("%s", LocalizedText(locale, historyStatus_).c_str());
-                if (!view.conversations.empty() && Button(locale, "history_latest", true))
-                    showLatestHistory_ = !showLatestHistory_;
-                if (showLatestHistory_ && !view.conversations.empty()) {
-                    const auto &messages = view.conversations.back().messages;
-                    for (const auto &message : std::span{messages}.last(std::min(messages.size(), std::size_t{2})))
-                        DrawHistoryText(message.text);
-                }
-            }
-
-            /** @brief Schedules the exact reviewed exchange without waiting on persistence. */
-            void SaveReview(const ILocalizationService &locale) {
-                const auto seconds =
-                    std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-                const auto result = review_->SaveApproved(history_, LocalizedText(locale, "history_title"),
-                                                          seconds > 0 ? static_cast<std::uint64_t>(seconds) : 0);
-                if (result.HasError()) {
-                    historyStatus_ = "history_write_error";
-                    return;
-                }
-                pendingSave_ = result.Value();
-                review_.reset();
-                historyStatus_ = "history_saving";
-            }
-
             [[nodiscard]] bool Busy() const {
                 return reply_.valid();
             }
@@ -247,9 +182,9 @@ namespace Horo::Editor {
                 ModelRequest request;
                 request.model = model_;
                 request.messages.push_back({.role = ModelRole::User, .text = prompt_});
-                review_.reset();
+                history_.ClearReview();
                 submittedPrompt_ = sceneCount.has_value() ? std::nullopt : std::optional{prompt_};
-                submittedProject_ = history_.View().project;
+                submittedProject_ = history_.Project();
                 Start(std::move(request), sceneCount);
             }
 
@@ -312,12 +247,8 @@ namespace Horo::Editor {
                 if (result.status == AgentTurnStatus::Completed && !result.messages.empty()) {
                     response_ = std::move(result.messages.back().text);
                     status_ = response_.empty() ? "empty_response" : nullptr;
-                    if (!response_.empty() && submittedPrompt_ && submittedProject_.value != 0 &&
-                        submittedProject_ == history_.View().project) {
-                        auto prepared = AgentHistoryExchangeReview::Prepare(submittedProject_, *submittedPrompt_, response_);
-                        if (prepared.HasValue())
-                            review_.emplace(std::move(prepared).Value());
-                    }
+                    if (!response_.empty() && submittedPrompt_)
+                        history_.Review(submittedProject_, *submittedPrompt_, response_);
                     return;
                 }
                 status_ = result.status == AgentTurnStatus::TimedOut ? "timeout" : FailureKey(result.providerError);
@@ -329,14 +260,9 @@ namespace Horo::Editor {
             std::string response_;
             std::vector<ModelDescriptor> models_;
             std::function<std::optional<std::size_t>()> sceneCount_;
-            AgentHistorySession history_;
-            std::optional<AgentHistoryProject> attachedProject_;
-            std::optional<AgentHistoryExchangeReview> review_;
-            std::optional<AgentHistoryOperationId> pendingSave_;
+            EditorLocalAgentHistory history_;
             std::optional<std::string> submittedPrompt_;
             AgentHistoryProjectRevision submittedProject_;
-            const char *historyStatus_{};
-            bool showLatestHistory_{};
             int selection_{-1};
             const char *status_{};
             std::uint64_t turn_{};

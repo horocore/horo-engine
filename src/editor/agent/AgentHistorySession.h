@@ -52,6 +52,7 @@ namespace Horo::Agent {
         AgentHistoryOperationId operation;
         std::optional<AgentHistoryStartedTurn> started;
         std::optional<Error> error;
+        std::optional<std::string> exportedText; /**< Owned sanitized JSON from an exact export operation. */
     };
 
     /** @brief Borrowed editor-lane view, invalidated by the next project change, poll, or shutdown. */
@@ -120,6 +121,38 @@ namespace Horo::Agent {
          */
         [[nodiscard]] Result<AgentHistoryOperationId> Checkpoint(AgentHistoryProjectRevision project,
                                                                  const AgentHistoryCheckpointRequest &request);
+
+        /** @brief Queue an exact conversation rename through the existing history text filter.
+         * @param project Current settled project incarnation.
+         * @param conversation Conversation within that project.
+         * @param title New visible title copied only after bounded admission.
+         * @return Exact accepted operation ID or typed denial.
+         */
+        [[nodiscard]] Result<AgentHistoryOperationId> Rename(AgentHistoryProjectRevision project, AgentConversationId conversation,
+                                                             std::string_view title);
+
+        /** @brief Queue archive or restore for one exact, non-streaming conversation.
+         * @param project Current settled project incarnation.
+         * @param conversation Exact conversation in that project.
+         * @param archived True to archive, false to restore.
+         * @return Exact accepted operation ID or typed denial.
+         */
+        [[nodiscard]] Result<AgentHistoryOperationId> SetArchived(AgentHistoryProjectRevision project, AgentConversationId conversation,
+                                                                  bool archived);
+
+        /** @brief Queue deletion after the editor has received explicit user confirmation.
+         * @param project Current settled project incarnation.
+         * @param conversation Exact conversation the user approved deleting.
+         * @return Exact accepted operation ID or typed denial.
+         */
+        [[nodiscard]] Result<AgentHistoryOperationId> Delete(AgentHistoryProjectRevision project, AgentConversationId conversation);
+
+        /** @brief Queue a bounded display-only projection of one accepted conversation.
+         * @param project Current settled project incarnation.
+         * @param conversation Exact conversation to serialize.
+         * @return Exact accepted operation ID or typed denial. The receipt owns sanitized JSON without filesystem effects.
+         */
+        [[nodiscard]] Result<AgentHistoryOperationId> Export(AgentHistoryProjectRevision project, AgentConversationId conversation);
 
         /** @brief Consume the one exact write completion after Poll publishes it. Switching projects clears old completions. */
         [[nodiscard]] std::optional<AgentHistoryMutationCompletion> TakeMutation();

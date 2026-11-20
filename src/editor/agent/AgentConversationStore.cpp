@@ -623,7 +623,10 @@ namespace Horo::Agent {
         const auto found = std::ranges::find(conversations, conversation, &AgentConversation::id);
         if (found == conversations.end())
             return Output::Failure(MakeError(AgentHistoryErrors::Stale));
-        return Output::Success(Json{{"version", HistoryVersion}, {"conversation", EncodeConversation(*found)}}.dump());
+        auto exported = Json{{"version", HistoryVersion}, {"conversation", EncodeConversation(*found)}}.dump();
+        if (exported.size() > state_->limits.snapshotBytes)
+            return Output::Failure(MakeError(AgentHistoryErrors::Capacity));
+        return Output::Success(std::move(exported));
     }
 
     /** @copydoc AgentConversationStore::BeginTurn(AgentConversationId, std::string_view, std::span<const AgentHistoryReference>,

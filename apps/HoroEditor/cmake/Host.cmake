@@ -11,6 +11,7 @@ if(HORO_BUILD_EDITOR_GUI)
         HoroEditor/app/EditorWindowChrome.cpp
         HoroEditor/app/EditorNavigationBakeHost.cpp
         HoroEditor/app/EditorLocalAgentPanel.cpp
+        HoroEditor/app/EditorLocalAgentHistory.cpp
         HoroEditor/app/EditorWorkerShutdown.cpp
         HoroEditor/app/EditorAudioPreviewHost.cpp
         HoroEditor/app/EditorAudioPreviewDecode.cpp

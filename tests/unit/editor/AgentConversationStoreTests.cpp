@@ -7,6 +7,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
 #include <future>
+#include <iterator>
 #include <thread>
 
 namespace Horo::Agent {
@@ -532,5 +533,110 @@ namespace Horo::Agent {
         CHECK(failure.error->code.Value() == AgentHistoryErrors::RejectedText.code.Value());
         CHECK(session.View().conversations.empty());
         CHECK_FALSE(std::filesystem::exists(project.Path()));
+    }
+
+    TEST_CASE("Editor history manages one exact conversation and exports display data without a file write",
+              "[unit][agent][conversation_history]") {
+        using Phase = AgentHistorySessionPhase;
+        Project project;
+        AgentConversationId conversation;
+        {
+            auto store = project.Open();
+            const auto recorded = store.RecordCompleted({.title = "Original", .userText = "visible prompt with private fragment", .now = 2},
+                                                        {"Visible answer", {}});
+            REQUIRE(recorded.HasValue());
+            conversation = recorded.Value().conversation;
+        }
+        JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 2, .ioWorkerCount = 1}};
+        AgentHistorySession session{jobs, project.files, HistoryFilter};
+        session.SelectProject(AgentHistoryProject{project.root, "history-project"});
+        PollUntil(session, [&] {
+            return session.View().phase == Phase::Settled;
+        });
+        REQUIRE(session.View().availability == Availability::Ready);
+        const auto projectRevision = session.View().project;
+        const auto finish = [&](const Result<AgentHistoryOperationId> &submission) {
+            REQUIRE(submission.HasValue());
+            auto completion = TakeMutation(session, submission.Value());
+            CHECK(completion.project == projectRevision);
+            CHECK_FALSE(completion.started);
+            return completion;
+        };
+
+        RequireError(session.Rename(projectRevision, conversation, std::string(256 + 1, 'x')), AgentHistoryErrors::Capacity);
+        const auto denied = finish(session.Rename(projectRevision, conversation, "credential fixture"));
+        REQUIRE(denied.error);
+        CHECK(denied.error->code.Value() == AgentHistoryErrors::RejectedText.code.Value());
+        CHECK(session.View().conversations.front().title == "Original");
+
+        PauseHistoryIo pause{jobs};
+        std::string title{"Reviewed name"};
+        const auto submitted = session.Rename(projectRevision, conversation, title);
+        title = "Edited after queue admission";
+        REQUIRE(submitted.HasValue());
+        RequireError(session.Delete(projectRevision, conversation), AgentHistoryErrors::Busy);
+        pause.Release();
+        CHECK_FALSE(finish(submitted).error);
+        CHECK(session.View().conversations.front().title == "Reviewed name");
+
+        CHECK_FALSE(finish(session.SetArchived(projectRevision, conversation, true)).error);
+        CHECK(session.View().conversations.front().archived);
+        const auto persisted = project.Image();
+        const auto exported = finish(session.Export(projectRevision, conversation));
+        REQUIRE_FALSE(exported.error);
+        REQUIRE(exported.exportedText);
+        CHECK(exported.exportedText->find("Reviewed name") != std::string::npos);
+        CHECK(exported.exportedText->find("Visible answer") != std::string::npos);
+        CHECK(exported.exportedText->find("private fragment") == std::string::npos);
+        CHECK(project.Image() == persisted);
+        const auto directory = std::filesystem::directory_iterator{project.Path().parent_path()};
+        CHECK(std::distance(directory, std::filesystem::directory_iterator{}) == 1);
+
+        CHECK_FALSE(finish(session.SetArchived(projectRevision, conversation, false)).error);
+        CHECK_FALSE(session.View().conversations.front().archived);
+        CHECK_FALSE(finish(session.Delete(projectRevision, conversation)).error);
+        CHECK(session.View().conversations.empty());
+        const auto deleted = finish(session.Export(projectRevision, conversation));
+        REQUIRE(deleted.error);
+        CHECK(deleted.error->code.Value() == AgentHistoryErrors::Stale.code.Value());
+        CHECK_FALSE(deleted.exportedText);
+        session.Shutdown();
+        const auto reopened = project.Open();
+        REQUIRE(reopened.Availability() == Availability::Ready);
+        CHECK(reopened.Conversations().empty());
+    }
+
+    TEST_CASE("Editor history discards a queued export across exact project replacement", "[unit][agent][conversation_history]") {
+        using Phase = AgentHistorySessionPhase;
+        Project first;
+        Project second;
+        Seed(first, "First project history");
+        Seed(second, "Second project history");
+        JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 2, .ioWorkerCount = 1}};
+        AgentHistorySession session{jobs, first.files, HistoryFilter};
+        session.SelectProject(AgentHistoryProject{first.root, "history-project"});
+        const auto settled = [&] {
+            return session.View().phase == Phase::Settled;
+        };
+        PollUntil(session, settled);
+        REQUIRE(session.View().conversations.size() == 1);
+        const auto oldRevision = session.View().project;
+        const auto reusedConversationId = session.View().conversations.front().id;
+        PauseHistoryIo pause{jobs};
+        REQUIRE(session.Export(oldRevision, reusedConversationId).HasValue());
+        session.SelectProject(AgentHistoryProject{second.root, "history-project"});
+        CHECK_FALSE(session.TakeMutation());
+        pause.Release();
+        PollUntil(session, settled);
+        CHECK_FALSE(session.TakeMutation());
+        REQUIRE(session.View().conversations.size() == 1);
+        CHECK(session.View().conversations.front().id == reusedConversationId);
+        RequireError(session.Export(oldRevision, reusedConversationId), AgentHistoryErrors::Stale);
+        const auto current = session.Export(session.View().project, reusedConversationId);
+        REQUIRE(current.HasValue());
+        const auto exported = TakeMutation(session, current.Value());
+        REQUIRE(exported.exportedText);
+        CHECK(exported.exportedText->find("Second project history") != std::string::npos);
+        CHECK(exported.exportedText->find("First project history") == std::string::npos);
     }
 }  // namespace Horo::Agent

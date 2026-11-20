@@ -21,12 +21,24 @@ namespace Horo::Agent {
             std::shared_ptr<const std::vector<AgentConversation>> conversations;
         };
 
-        struct WorkResult final {
-            Display display;
+        struct MutationPayload final {
             std::optional<AgentHistoryStartedTurn> started;
+            std::optional<std::string> exportedText;
         };
 
-        using MutationResult = Result<std::optional<AgentHistoryStartedTurn>>;
+        struct WorkResult final {
+            Display display;
+            MutationPayload payload;
+        };
+
+        using MutationResult = Result<MutationPayload>;
+
+        /** @brief Keeps the typed store error for operations without a response payload. */
+        MutationResult MutationOutcome(Result<void> applied) {
+            if (applied.HasError())
+                return MutationResult::Failure(std::move(applied).ErrorValue());
+            return MutationResult::Success({});
+        }
 
         struct TurnWork final {
             std::optional<AgentConversationId> conversation;
@@ -43,7 +55,7 @@ namespace Horo::Agent {
                 auto started = answer ? store.RecordCompleted(request, {*answer, usage}) : store.BeginTurn(request);
                 if (started.HasError())
                     return MutationResult::Failure(std::move(started).ErrorValue());
-                return MutationResult::Success(std::move(started).Value());
+                return MutationResult::Success({.started = std::move(started).Value()});
             }
         };
 
@@ -58,10 +70,7 @@ namespace Horo::Agent {
 
             /** @brief Applies one visible response update without accepting any provider-owned envelope. */
             [[nodiscard]] MutationResult operator()(AgentConversationStore &store) const {
-                auto saved = store.Checkpoint(conversation, response, state, visibleText, references, usage, now);
-                if (saved.HasError())
-                    return MutationResult::Failure(std::move(saved).ErrorValue());
-                return MutationResult::Success(std::nullopt);
+                return MutationOutcome(store.Checkpoint(conversation, response, state, visibleText, references, usage, now));
             }
         };
 
@@ -103,7 +112,7 @@ namespace Horo::Agent {
                 auto applied = mutation(*store);
                 if (applied.HasError())
                     return Result<void>::Failure(std::move(applied).ErrorValue());
-                result.started = std::move(applied).Value();
+                result.payload = std::move(applied).Value();
                 result.display = CaptureDisplay(*store);
                 return Result<void>::Success();
             }
@@ -132,7 +141,8 @@ namespace Horo::Agent {
 
         /** @brief Records the exact terminal writer outcome. Failed writes keep the previous committed snapshot. */
         void SettleMutation(const Flight &completed, const JobTerminalResult &terminal) {
-            mutation.emplace(desired->revision, *completed.operation, completed.result->started, terminal.error);
+            auto &payload = completed.result->payload;
+            mutation.emplace(desired->revision, *completed.operation, payload.started, terminal.error, std::move(payload.exportedText));
             if (terminal.state == JobState::Succeeded)
                 display = std::move(completed.result->display);
         }
@@ -242,6 +252,15 @@ namespace Horo::Agent {
             }
             return SubmitMutation(std::move(work));
         }
+
+        /** @brief Schedules a conversation command with no caller text to validate or retain. */
+        template <typename Command>
+        [[nodiscard]] Result<AgentHistoryOperationId> SubmitConversation(const AgentHistoryProjectRevision project, Command command) {
+            const auto admission = CheckMutation(project);
+            if (admission.HasError())
+                return Result<AgentHistoryOperationId>::Failure(admission.ErrorValue());
+            return SubmitMutation(std::move(command));
+        }
     };
 
     /** @copydoc AgentHistorySession::AgentHistorySession */
@@ -321,6 +340,47 @@ namespace Horo::Agent {
                                                      {request.references.begin(), request.references.end()},
                                                      request.usage,
                                                      request.now});
+    }
+
+    /** @copydoc AgentHistorySession::Rename */
+    Result<AgentHistoryOperationId> AgentHistorySession::Rename(const AgentHistoryProjectRevision project,
+                                                                const AgentConversationId conversation, const std::string_view title) {
+        using Output = Result<AgentHistoryOperationId>;
+        const auto admission = state_->CheckMutation(project);
+        if (admission.HasError())
+            return Output::Failure(admission.ErrorValue());
+        if (title.size() > AgentHistoryLimits::MaximumTitleBytes)
+            return Output::Failure(MakeError(AgentHistoryErrors::Capacity));
+        return state_->SubmitMutation([conversation, title = std::string{title}](AgentConversationStore &store) {
+            return MutationOutcome(store.Rename(conversation, title));
+        });
+    }
+
+    /** @copydoc AgentHistorySession::SetArchived */
+    Result<AgentHistoryOperationId> AgentHistorySession::SetArchived(const AgentHistoryProjectRevision project,
+                                                                     const AgentConversationId conversation, const bool archived) {
+        return state_->SubmitConversation(project, [conversation, archived](AgentConversationStore &store) {
+            return MutationOutcome(store.SetArchived(conversation, archived));
+        });
+    }
+
+    /** @copydoc AgentHistorySession::Delete */
+    Result<AgentHistoryOperationId> AgentHistorySession::Delete(const AgentHistoryProjectRevision project,
+                                                                const AgentConversationId conversation) {
+        return state_->SubmitConversation(project, [conversation](AgentConversationStore &store) {
+            return MutationOutcome(store.Delete(conversation));
+        });
+    }
+
+    /** @copydoc AgentHistorySession::Export */
+    Result<AgentHistoryOperationId> AgentHistorySession::Export(const AgentHistoryProjectRevision project,
+                                                                const AgentConversationId conversation) {
+        return state_->SubmitConversation(project, [conversation](const AgentConversationStore &store) {
+            auto exported = store.Export(conversation);
+            if (exported.HasError())
+                return MutationResult::Failure(std::move(exported).ErrorValue());
+            return MutationResult::Success({.exportedText = std::move(exported).Value()});
+        });
     }
 
     /** @copydoc AgentHistorySession::TakeMutation */

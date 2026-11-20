@@ -837,6 +837,11 @@ and response before offering a save. Approval writes both messages as a single
 project-scoped operation. The editor continues to poll history and turn
 completion while the panel is hidden.
 
+Saved conversation management uses the same project worker and is bound to the
+selected conversation. The panel supports rename, archive, restore, and deletion
+after confirmation. An export reads the sanitized JSON projection. The user can
+copy that exact preview from the panel.
+
 History is searchable from the chat panel. Old conversations are
 auto-archived after 30 days (configurable).
 
