@@ -344,6 +344,10 @@ target_include_directories(HoroEditorAgentTurnTests PRIVATE "${CMAKE_CURRENT_SOU
 target_link_libraries(HoroEditorAgentTurnTests PRIVATE HoroMcpEditorAgentToolsInternal HoroEngine::McpController HoroEngine::McpProjectCodeQuery)
 horo_register_catch_test(HoroEditorAgentTurnTests LABELS "unit;agent;headless;ci-windows")
 
+add_executable(HoroEditorAgentHistoryTests unit/editor/AgentConversationStoreTests.cpp)
+target_link_libraries(HoroEditorAgentHistoryTests PRIVATE HoroEditorAgentHistoryInternal HoroEngine::Platform)
+horo_register_catch_test(HoroEditorAgentHistoryTests LABELS "unit;agent;headless;ci-windows")
+
 add_executable(HoroPackageValidationTests
     unit/packages/GameplaySourceLibraryTests.cpp
     unit/packages/PackageInstallTests.cpp

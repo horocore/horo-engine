@@ -346,6 +346,20 @@ target_include_directories(HoroThirdPartyUfbx
         ${ufbx_SOURCE_DIR}
 )
 
+if(HORO_BUILD_EDITOR_GUI OR BUILD_TESTING)
+    FetchContent_Declare(horo_sqlite
+        URL https://sqlite.org/2026/sqlite-amalgamation-3540100.zip
+        URL_HASH SHA256=0a9c8e34352dad46006aa82836d5383bff9dc6bc9ce5a60553c05aa30e6ad1f9
+    )
+    FetchContent_MakeAvailable(horo_sqlite)
+    find_package(Threads REQUIRED)
+    add_library(HoroThirdPartySQLite STATIC "${horo_sqlite_SOURCE_DIR}/sqlite3.c")
+    add_library(HoroThirdParty::SQLite ALIAS HoroThirdPartySQLite)
+    target_include_directories(HoroThirdPartySQLite SYSTEM INTERFACE "${horo_sqlite_SOURCE_DIR}")
+    target_compile_definitions(HoroThirdPartySQLite PRIVATE SQLITE_OMIT_LOAD_EXTENSION SQLITE_DQS=0 SQLITE_TEMP_STORE=3)
+    target_link_libraries(HoroThirdPartySQLite PRIVATE Threads::Threads)
+endif()
+
 if(BUILD_TESTING)
     set(HORO_CATCH2_REVISION "6ee0826dcae55ed1e06b2c5701981221e979e1e6")
     set(CATCH_INSTALL_DOCS OFF CACHE BOOL "" FORCE)

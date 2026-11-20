@@ -224,6 +224,18 @@ configure_file(editor/agent/AgentContext.h "${_horo_agent_turn_headers}/AgentCon
 target_include_directories(HoroEditorAgentTurnInternal INTERFACE "${_horo_agent_turn_headers}")
 target_link_libraries(HoroEditorAgentTurnInternal PUBLIC HoroEngine::ModelProvider HoroEngine::ProjectCodeQuery HoroEngine::Security)
 
+if(HORO_BUILD_EDITOR_GUI OR BUILD_TESTING)
+    add_library(HoroEditorAgentHistoryInternal STATIC editor/agent/AgentConversationStore.cpp)
+    target_compile_features(HoroEditorAgentHistoryInternal PUBLIC cxx_std_20)
+    set(_horo_agent_history_headers "${CMAKE_CURRENT_BINARY_DIR}/editor_agent_history_headers")
+    file(MAKE_DIRECTORY "${_horo_agent_history_headers}")
+    configure_file(editor/agent/AgentConversationStore.h "${_horo_agent_history_headers}/AgentConversationStore.h" COPYONLY)
+    target_include_directories(HoroEditorAgentHistoryInternal INTERFACE "${_horo_agent_history_headers}")
+    target_link_libraries(HoroEditorAgentHistoryInternal
+        PUBLIC HoroEngine::Foundation HoroEngine::Security
+        PRIVATE HoroEngine::Assets HoroThirdParty::SQLite nlohmann_json::nlohmann_json)
+endif()
+
 add_library(HoroMcpEditorAgentToolsInternal STATIC editor/agent/AgentTurnMcp.cpp)
 target_compile_features(HoroMcpEditorAgentToolsInternal PUBLIC cxx_std_20)
 configure_file(editor/agent/AgentTurnMcp.h "${_horo_agent_turn_headers}/AgentTurnMcp.h" COPYONLY)

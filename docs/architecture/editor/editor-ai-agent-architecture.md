@@ -809,6 +809,17 @@ struct ConversationRecord {
 };
 ```
 
+The private history owner publishes bounded SQLite images under
+`.horo/local/agent/conversations.sqlite`. It uses an exclusive project-file
+lease and durable atomic replacement. The host opens the store on an editor
+worker. Corrupt, foreign-project, and unsupported images produce an empty,
+unavailable view.
+The original images remain available for recovery. Committed streaming
+responses reopen as incomplete. The history owner requires its own host text
+filter and keeps only admitted display text, numeric usage, and opaque typed
+attachment and tool references. Provider request envelopes and tool payloads
+remain ephemeral.
+
 History is searchable from the chat panel. Old conversations are
 auto-archived after 30 days (configurable).
 
