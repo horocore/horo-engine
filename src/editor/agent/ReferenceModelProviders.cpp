@@ -87,6 +87,16 @@ namespace Horo::Agent {
             return {code, message.str(), status};
         }
 
+        /** @brief Keep local endpoint problems actionable without exposing URLs or remote response text. */
+        ModelError TransportError(Protocol protocol, CURLcode result) {
+            using enum ModelErrorCode;
+            if (protocol == Protocol::Ollama && result == CURLE_COULDNT_CONNECT)
+                return {Unavailable, "Local model service is unreachable. Start it or check its configured port.", std::nullopt};
+            if (protocol == Protocol::Ollama && result == CURLE_OPERATION_TIMEDOUT)
+                return {Unavailable, "Local model request timed out. Wait for the model to load and retry.", std::nullopt};
+            return {Transport, "Model HTTP transport failed", std::nullopt};
+        }
+
         /** @brief Own the bounded response buffer and cancellation state for one HTTP transfer. */
         struct HttpContext final {
             std::string pending;
@@ -170,7 +180,7 @@ namespace Horo::Agent {
         }
 
         /** @brief Translate a completed transfer and its final fragment into the neutral outcome. */
-        ModelOutcome FinishHttpResponse(const HttpContext &context, CURLcode result, long status) {
+        ModelOutcome FinishHttpResponse(const HttpContext &context, Protocol protocol, CURLcode result, long status) {
             using enum ModelErrorCode;
             if (context.stop.stop_requested() || context.cancelled)
                 return {ModelError{Cancelled, "Model request cancelled", std::nullopt}};
@@ -179,7 +189,7 @@ namespace Horo::Agent {
             if (context.invalid)
                 return {ModelError{Protocol, "Invalid model response", std::nullopt}};
             if (result != CURLE_OK)
-                return {ModelError{Transport, "Model HTTP transport failed", std::nullopt}};
+                return {TransportError(protocol, result)};
             if (status < 200 || status >= 300)
                 return {HttpError(status)};
             if (!context.pending.empty()) {
@@ -239,7 +249,7 @@ namespace Horo::Agent {
             curl_slist_free_all(headers);
             curl_easy_cleanup(curl);
             std::ranges::fill(authorization, '\0');
-            return FinishHttpResponse(context, result, status);
+            return FinishHttpResponse(context, protocol, result, status);
         }
 
         /** @brief Serialize one assistant turn's intents without sending vendor types across the public boundary. */

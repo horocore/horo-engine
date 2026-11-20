@@ -15,8 +15,8 @@
 namespace {
     using namespace Horo::Agent;
 
-    std::string Endpoint() {
-        const char *value = std::getenv("HORO_MODEL_TEST_ENDPOINT");
+    std::string Endpoint(const char *variable = "HORO_MODEL_TEST_ENDPOINT") {
+        const char *value = std::getenv(variable);
         REQUIRE(value != nullptr);
         return value;
     }
@@ -205,6 +205,42 @@ TEST_CASE("Local tool results require an exact pending assistant intent", "[agen
     REQUIRE(outcome.error.has_value());
     CHECK(outcome.error->code == ModelErrorCode::InvalidRequest);
     CHECK_FALSE(outcome.error->httpStatus.has_value());
+}
+
+TEST_CASE("Local inference distinguishes a stopped service and a loading model", "[agent][model][http]") {
+    auto offline = CreateOllamaModelProvider({.endpoint = Endpoint("HORO_MODEL_TEST_OFFLINE_ENDPOINT")});
+    const auto discovery = offline->Discover({});
+    REQUIRE(discovery.outcome.error);
+    CHECK(discovery.outcome.error->code == ModelErrorCode::Unavailable);
+    CHECK(discovery.outcome.error->message.find("configured port") != std::string::npos);
+    CHECK(discovery.models.empty());
+
+    auto loading = CreateOllamaModelProvider({.endpoint = Endpoint(), .timeout = std::chrono::milliseconds{200}});
+    std::vector<ModelEvent> events;
+    const auto status = loading->Stream(Request("editor-local-loading"), [&](const ModelEvent &event) {
+        events.push_back(event);
+        return true;
+    }, {});
+    REQUIRE(status.error);
+    CHECK(status.error->code == ModelErrorCode::Unavailable);
+    CHECK(status.error->message.find("model to load") != std::string::npos);
+    CHECK(events.empty());
+}
+
+TEST_CASE("Local cancellation interrupts a quiet stream before it can publish completion", "[agent][model][http]") {
+    auto provider = CreateOllamaModelProvider({.endpoint = Endpoint(), .timeout = std::chrono::seconds{8}});
+    std::stop_source source;
+    std::vector<ModelEventKind> events;
+    const auto started = std::chrono::steady_clock::now();
+    const auto status = provider->Stream(Request("editor-local-idle"), [&](const ModelEvent &event) {
+        events.push_back(event.kind);
+        source.request_stop();
+        return true;
+    }, source.get_token());
+    REQUIRE(status.error);
+    CHECK(status.error->code == ModelErrorCode::Cancelled);
+    CHECK(events == std::vector{ModelEventKind::TextDelta});
+    CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds{5});
 }
 
 TEST_CASE("Real adapters preserve cancellation and sanitized failures", "[agent][model][http]") {

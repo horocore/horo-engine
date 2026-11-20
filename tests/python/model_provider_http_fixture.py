@@ -2,6 +2,7 @@
 
 import json
 import os
+import socket
 import subprocess  # nosec B404 - this fixture executes only the validated CMake test target.
 import sys
 import threading
@@ -14,6 +15,13 @@ class Handler(BaseHTTPRequestHandler):
 
     def log_message(self, *_args):
         pass
+
+    def handle(self):
+        try:
+            super().handle()
+        except (BrokenPipeError, ConnectionResetError):
+            # The cancellation tests deliberately close the active connection.
+            pass
 
     def send_records(self, records, content_type="application/json", status=200):
         data = "".join(records).encode("utf-8")
@@ -44,6 +52,9 @@ class Handler(BaseHTTPRequestHandler):
         if not cloud and payload["model"] == "editor-local-tool":
             self.send_editor_local_tool(payload)
             return
+        if not cloud and payload["model"] in {"editor-local-loading", "editor-local-idle"}:
+            self.hold_local_response(payload["model"] == "editor-local-idle")
+            return
         if not cloud and payload["model"] == "editor-local-missing":
             self.send_records([json.dumps({"error": "private"})], status=404)
             return
@@ -69,6 +80,17 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_records(["{}"], status=400)
                 return
         self.send_model_stream(payload["model"], cloud)
+
+    def hold_local_response(self, begin_stream):
+        self.close_connection = True
+        if begin_stream:
+            self.send_response(200)
+            self.send_header("Content-Type", "application/x-ndjson")
+            self.send_header("Connection", "close")
+            self.end_headers()
+            self.wfile.write(b'{"message":{"content":"first"}}\n')
+            self.wfile.flush()
+        self.server.release_pending.wait(timeout=10)
 
     def send_editor_local_tool(self, payload):
         messages = payload.get("messages", [])
@@ -135,6 +157,7 @@ def main():
         raise ValueError("CTest must supply the built HoroModelProviderTests executable")
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.local_restart_observed = False
+    server.release_pending = threading.Event()
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     environment = os.environ.copy()
@@ -144,10 +167,14 @@ def main():
     environment["NO_PROXY"] = ""
     environment["no_proxy"] = ""
     try:
-        # The executable is resolved in the exact CMake-owned test directory, including external worktree builds.
-        # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit, python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
-        return subprocess.run([str(binary)], env=environment, check=False).returncode  # nosec B603
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as offline:
+            offline.bind(("127.0.0.1", 0))
+            environment["HORO_MODEL_TEST_OFFLINE_ENDPOINT"] = f"http://127.0.0.1:{offline.getsockname()[1]}"
+            # The executable is resolved in the exact CMake-owned test directory, including external worktree builds.
+            # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit, python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+            return subprocess.run([str(binary)], env=environment, check=False).returncode  # nosec B603
     finally:
+        server.release_pending.set()
         server.shutdown()
         server.server_close()
         worker.join()
