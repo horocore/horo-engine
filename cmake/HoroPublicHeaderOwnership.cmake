@@ -1141,6 +1141,7 @@ horo_configure_target_header_boundary(HoroXRRuntime PUBLIC_HEADERS
     Horo/XR/XRReprojection.h
     Horo/XR/XRSessionErrors.h
     Horo/XR/XRSessionLifecycle.h
+    Horo/XR/XRSpatialAnchors.h
 )
 horo_configure_target_header_boundary(HoroXRSimulator PUBLIC_HEADERS
     Horo/XR/XRSimulatorScenario.h

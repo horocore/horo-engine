@@ -2508,6 +2508,7 @@ add_library(HoroXRRuntime STATIC
         runtime/xr/runtime/XRReprojection.cpp
         runtime/xr/runtime/XRSessionErrors.cpp
         runtime/xr/runtime/XRSessionLifecycle.cpp
+        runtime/xr/runtime/XRSpatialAnchors.cpp
         runtime/xr/runtime/XRSessionHostControl.cpp
         runtime/xr/runtime/XRTrackingPublication.cpp
 )

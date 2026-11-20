@@ -2,6 +2,7 @@
 #include "Horo/XR/XRProjectSettings.h"
 #include "Horo/XR/XRReprojection.h"
 #include "Horo/XR/XRSessionLifecycle.h"
+#include "Horo/XR/XRSpatialAnchors.h"
 
 #include <type_traits>
 
@@ -12,6 +13,14 @@ static_assert(static_cast<std::uint8_t>(Horo::XR::XRSessionEvent::Ready) == 9);
 using XRLegacyRecordWait = Horo::XR::XRFrameWaitOutcome (Horo::XR::XRFrameLifecycle::*)(Horo::XR::XRRenderPredictionTime, bool) noexcept;
 static_assert(std::is_same_v<decltype(&Horo::XR::XRFrameLifecycle::RecordWait), XRLegacyRecordWait>);
 static_assert(std::is_same_v<decltype(Horo::XR::XRReprojectionPolicy::maximumPredictionIntervalNanoseconds), std::int64_t>);
+static_assert(!std::is_copy_constructible_v<Horo::XR::XRSpatialAnchors>);
+static_assert(std::is_copy_constructible_v<Horo::XR::XRSpatialAnchorId>);
+
+Horo::Result<Horo::XR::XRAnchorSnapshot> ReadXRSpatialAnchor(const Horo::XR::XRSpatialAnchors &anchors,
+                                                             const Horo::XR::XRAnchorScope &scope, const Horo::XR::XRSpatialAnchorId &id,
+                                                             Horo::XR::XRRuntimeTime now) {
+    return anchors.Read(scope, id, now);
+}
 
 void ConsumeXRProjectSettings(const Horo::XR::XRProjectSettings &settings) {
     [[maybe_unused]] const auto revision = settings.Revision();

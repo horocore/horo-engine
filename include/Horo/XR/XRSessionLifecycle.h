@@ -159,6 +159,7 @@ namespace Horo::XR {
 
     private:
         friend class XRFrameLifecycle;
+        friend class XRSpatialAnchors;
         friend class RuntimeInternal::XRSessionHostControl;
         friend class RuntimeInternal::XRTrackingPublication;
         /** @brief Tests immutable control-thread identity before accessing owner state. */

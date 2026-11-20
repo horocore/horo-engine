@@ -987,8 +987,17 @@ states and fallbacks. `XRProjection1_0` and `XRTrackedInteraction1_0` require no
 them.
 
 Baseline passthrough is a runtime compositor-layer intent and exposes no raw camera
-frames. Live anchors use Horo generation-safe localization identity; durable restore is
-a separate capability with opaque protected provider references. Plane/mesh snapshots
+frames. `XRSpatialAnchors` owns live anchor identity on the canonical XR session control
+lane. Its fixed-capacity registry binds one explicitly admitted provider and purpose
+grant to an exact session, target reference space, and World-origin revision. Only
+fresh localized observations carry a pose. Locating, limited, lost, or expired
+observations carry no pose, and explicit access revocation denies reads. A focus or
+session continuity change rejects even results for a restarted native session with
+the same ID. The host withdraws the scope before releasing native resources or changing
+access, space, or origin. A Scene adapter must re-read the live anchor at its own safe
+point before using that pose. The portable contract introduces no provider support
+or migration of existing consumers. Durable restore is a separate capability with
+opaque protected provider references. Plane/mesh snapshots
 are bounded observed evidence and never mutate authored Scene, Physics or Navigation
 without an explicit destination-owned adapter and transaction. The portable plane publication
 authorizes one session and calibrated World origin at a time. It accepts a complete ordered

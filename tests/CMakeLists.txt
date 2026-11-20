@@ -2108,6 +2108,7 @@ add_executable(HoroXRRuntimeTests
         unit/runtime/xr/XRFakeRuntimeSuppliedStepTests.cpp
         unit/runtime/xr/XRFrameLifecycleTests.cpp
         unit/runtime/xr/XRSessionLifecycleTests.cpp
+        unit/runtime/xr/XRSpatialAnchorsTests.cpp
         unit/runtime/xr/XRTrackingPublicationTests.cpp
 )
 target_compile_features(HoroXRRuntimeTests PRIVATE cxx_std_20)
