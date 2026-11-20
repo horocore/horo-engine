@@ -898,6 +898,13 @@ localization, semantic accessibility and action-command model. Renderer owns per
 projection/depth/occlusion/pixels. A native composition layer does not become a second UI
 tree or bypass UI focus.
 
+Stereo canvas projection evaluates the same centered world plane through both live
+eye matrices and the acquired color rectangles. The canvas must intersect both
+views, remain within their near/far depth range, and meet the selected minimum
+projected span in pixels in both eyes. This admission keeps the authored
+plane unchanged for interaction. Opaque scene depth and presentation completion
+remain the consuming renderer and application's responsibilities.
+
 Locomotion produces tick-assigned gameplay intent. Continuous/snap movement and teleport
 reach Character through typed commands; moving the camera or recentering tracking space
 is not a collision-safe teleport. Camera/view composition combines committed Character
