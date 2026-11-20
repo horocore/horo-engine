@@ -413,6 +413,14 @@ namespace Horo::Application::Internal {
         return world ? world->AnimationOwner() : nullptr;
     }
 
+    /** @copydoc QueueHeadlessAnimationAction */
+    Animation::GraphActionCommandOutcome QueueHeadlessAnimationAction(Network::INetworkModeService &service, Runtime::EntityRef actor,
+                                                                      const Animation::GraphActionRequest &request) {
+        auto *world = dynamic_cast<WorldService *>(&service);
+        return world ? world->QueueAnimationAction(actor, request)
+                     : Animation::GraphActionCommandOutcome{Animation::GraphActionFailure::Closed};
+    }
+
     /** @copydoc AcquireHeadlessPublicTransforms */
     std::shared_ptr<const Network::SceneReplicationCommitSource> AcquireHeadlessPublicTransforms(
         const Network::INetworkModeService &service) noexcept {

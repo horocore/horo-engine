@@ -12,7 +12,6 @@
 #include <catch2/reporters/catch_reporter_event_listener.hpp>
 #include <catch2/reporters/catch_reporter_registrars.hpp>
 #include <chrono>
-#include <cmath>
 #include <fstream>
 #include <iostream>
 #include <thread>
@@ -26,6 +25,7 @@ namespace Horo::Network::NativeQualification {
             bool rejectNativeRoot{};
             bool liveScene{};
             bool liveVelocity{};
+            bool liveAction{};
             unsigned side{};
         } input;
 
@@ -381,18 +381,18 @@ namespace Horo::Network::NativeQualification {
                 if (frame.HasError())
                     ReportError(frame.ErrorValue());
                 REQUIRE(frame.HasValue());
+                if (owners.live)
+                    owners.live->StartActionAfterReceipt(owners.observation->snapshotsSent);
                 if (input.side == 1 && owners.live) {
                     const auto value = owners.live->ClientPresentation();
-                    const bool qualified =
-                        value && (input.liveVelocity ? *value > 0.1F && *value < 100.0F : *value != LiveScene::ClientStartY);
-                    if (qualified) {
+                    if (value) {
                         const auto snapshots = owners.observation->snapshotsReceived;
                         // The initial receipt and first live packet can be processed in the same host frame.
-                        if (!firstPresentation) {
+                        if (!firstPresentation && owners.live->FirstValue(*value)) {
                             firstPresentation = value;
                             snapshotsAtFirstValue = snapshots;
-                        } else if (snapshots > snapshotsAtFirstValue &&
-                                   (input.liveVelocity ? std::abs(*value - *firstPresentation) > 5.0F : *value < *firstPresentation)) {
+                        } else if (firstPresentation && snapshots > snapshotsAtFirstValue &&
+                                   owners.live->LaterValue(*firstPresentation, *value)) {
                             appliedSnapshot = true;
                         }
                     }
@@ -400,6 +400,8 @@ namespace Horo::Network::NativeQualification {
                 if (input.side == 1 && !sent && (!owners.live || appliedSnapshot)) {
                     const auto role = owners.host->Role(NetworkModeWorldKind::Client, Runtime::SceneRuntimeId{1702});
                     if (role.HasValue() && role.Value().session.has_value()) {
+                        if (owners.live)
+                            owners.live->VerifyReplicaActionDenied();
                         REQUIRE(role.Value().worldSession.has_value());
                         REQUIRE_FALSE(role.Value().authority.IsValid());
                         REQUIRE(owners.observation->outbound.IsValid());
@@ -420,7 +422,7 @@ namespace Horo::Network::NativeQualification {
             REQUIRE(owners.handler->calls > 0);
             if (owners.live) {
                 if (input.side == 0) {
-                    if (!input.liveVelocity) {
+                    if (input.liveScene) {
                         const auto y = owners.live->SceneY();
                         REQUIRE(y);
                         REQUIRE(*y < LiveScene::AuthorityStartY);
@@ -444,9 +446,14 @@ namespace Horo::Network::NativeQualification {
         REQUIRE(input.side <= 1);
         REQUIRE_FALSE(input.directory.empty());
         ChildOwners owners;
-        if (input.liveScene || input.liveVelocity) {
+        if (input.liveScene || input.liveVelocity || input.liveAction) {
             REQUIRE_FALSE(input.rejectNativeRoot);
-            owners.live = std::make_unique<LiveScene::Product>(owners.fixtures, owners.credentials, input.side == 0, input.liveVelocity);
+            auto projection = LiveScene::Projection::Transform;
+            if (input.liveVelocity)
+                projection = LiveScene::Projection::Velocity;
+            if (input.liveAction)
+                projection = LiveScene::Projection::Action;
+            owners.live = std::make_unique<LiveScene::Product>(owners.fixtures, owners.credentials, input.side == 0, projection);
         }
         CreateHost(owners);
         if (input.rejectNativeRoot)
@@ -465,7 +472,8 @@ int main(int argc, char **argv) {
                Catch::Clara::Opt(Horo::Network::NativeQualification::input.nativeDirectory, "native-directory")["--native-dir"] |
                Catch::Clara::Opt(Horo::Network::NativeQualification::input.rejectNativeRoot)["--reject-native-root"] |
                Catch::Clara::Opt(Horo::Network::NativeQualification::input.liveScene)["--live-scene"] |
-               Catch::Clara::Opt(Horo::Network::NativeQualification::input.liveVelocity)["--live-velocity"];
+               Catch::Clara::Opt(Horo::Network::NativeQualification::input.liveVelocity)["--live-velocity"] |
+               Catch::Clara::Opt(Horo::Network::NativeQualification::input.liveAction)["--live-action"];
     session.cli(cli);
     return session.run(argc, argv);
 }

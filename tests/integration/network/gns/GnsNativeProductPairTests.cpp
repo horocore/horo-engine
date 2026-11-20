@@ -208,6 +208,13 @@ namespace Horo::Network::NativeQualification {
         RunPair(fixture.root, {}, false, "--live-velocity");
     }
 
+    TEST_CASE("Two signed native ProductHost processes animate a replica from a public action tag",
+              "[integration][network][gns][native-pair][replication][action]") {
+        FixtureDirectory fixture;
+        Provision(fixture);
+        RunPair(fixture.root, {}, false, "--live-action");
+    }
+
     TEST_CASE("Distinct native CA roots reject both ProductHost peers before readiness despite a shared Horo proof authority",
               "[integration][network][gns][native-pair][native-rejection]") {
         FixtureDirectory server;

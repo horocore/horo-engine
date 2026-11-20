@@ -1,15 +1,18 @@
 #pragma once
 /** @file GnsLiveSceneSupport.h @brief Test-only authored Scene and exact signed replication grants for the native pair. */
 
+#include "../../../fixtures/gameplay_module/ActionTagTestSchema.h"
 #include "../../../helpers/GameplayModuleTestSupport.h"
 #include "../../../unit/runtime/physics/PhysicsSceneActivationTestSupport.h"
 #include "../NetworkAdmissionProductTestSupport.h"
 #include "../NetworkProductPrefabTestSupport.h"
 #include "GnsEvidenceAssertions.h"
-#include "GnsVelocityAnimationSupport.h"
+#include "GnsPresentationAnimationSupport.h"
 #include "HeadlessInitialStateAuthority.h"
 #include "Horo/Network/NetworkAuthoredScenePage.h"
 #include "Horo/Network/NetworkPrefabLifecycle.h"
+
+#include <cmath>
 
 namespace Horo::Network::NativeQualification {
     namespace LiveScene {
@@ -19,6 +22,11 @@ namespace Horo::Network::NativeQualification {
         inline constexpr Runtime::SceneObjectId Object{1};
         inline constexpr float ClientStartY = -100.0F;
         inline constexpr float AuthorityStartY = 25.0F;
+        enum class Projection {
+            Transform,
+            Velocity,
+            Action
+        };
 
         /** @brief Distinct registered Control/Command/Snapshot routes for the same production admission. */
         struct Routes final {
@@ -127,8 +135,8 @@ namespace Horo::Network::NativeQualification {
         /** @brief Owns one native test module registry, authored resource boundary and observable Scene service. */
         struct Product final {
             Product(const AdmissionTests::ProductPair &fixture, const std::shared_ptr<CredentialObservation> &credentials, bool authority,
-                    bool velocity)
-                : routes(fixture), grants(std::make_shared<Grants>(credentials)), authority(authority), velocity_(velocity) {
+                    Projection projection)
+                : routes(fixture), grants(std::make_shared<Grants>(credentials)), authority(authority), projection_(projection) {
                 auto settings = DefaultNetworkProjectSettings(Id<NetworkProjectSettingsId>(10)).Value();
                 settings.supportedRoles = NetworkProjectRoleSet::Client | NetworkProjectRoleSet::DedicatedServer;
                 settings.defaultRole = NetworkProjectRole::Client;
@@ -138,8 +146,7 @@ namespace Horo::Network::NativeQualification {
                 settings.transport.capabilities.requiredDelivery[static_cast<std::size_t>(DeliveryPolicy::UnreliableUnordered)] = true;
                 settings.transport.capabilities.requiredChannels = 3;
                 settings.transport.capabilities.requiredMaximumMessageBytes = 1200;
-                settings.replication = {.completeness = NetworkReplicationInventoryCompleteness::Complete,
-                                        .declarations = {PrefabProductTestSupport::NativePrefabDeclaration()}};
+                settings.replication = {.completeness = NetworkReplicationInventoryCompleteness::Complete, .declarations = {Declaration()}};
                 project.emplace(NetworkProjectSettings::Create(settings).Value());
                 const auto &profile = project->Profile();
                 const App::HeadlessAuthorityUpdateLimits limits{profile.maxCapturedObjectsPerTick.value,
@@ -150,12 +157,11 @@ namespace Horo::Network::NativeQualification {
             }
 
             [[nodiscard]] Result<App::NetworkProductComposition> Compose(NetworkModeFactories factories) {
-                const auto declaration = PrefabProductTestSupport::NativePrefabDeclaration();
+                const auto declaration = Declaration();
                 const auto target = AssetCookTargetId::Parse("linux-x64").Value();
                 auto definition = Definition(target);
                 loadBoundary = {{}, std::chrono::steady_clock::now() + std::chrono::seconds(5)};
                 const auto field = declaration.schema.fields.front().id;
-                const auto property = velocity_ ? SceneReplicationProperty::LinearVelocityX : SceneReplicationProperty::TranslationY;
                 App::HeadlessSceneActivationInput input{.mode = Physics::PhysicsRuntimeMode::Canonical,
                                                         .settings = Physics::Settings(),
                                                         .registry = registry,
@@ -168,19 +174,27 @@ namespace Horo::Network::NativeQualification {
                                                         .publicTransforms =
                                                             App::HeadlessSceneTransformReplication{declaration.schema.id,
                                                                                                    declaration.schema.version,
-                                                                                                   {{field, property}}},
+                                                                                                   {{field, Property()}}},
                                                         .initialSceneState = state};
-                if (velocity_ && !authority) {
+                if (projection_ == Projection::Action || (projection_ == Projection::Velocity && !authority)) {
                     input.animationTarget = target;
                     input.animationIdentities =
                         std::make_shared<App::AnimationRuntimeIdentitySource>(App::AnimationRuntimeIdentityRange{1001, 1100});
-                    input.replicaAnimationBindings = {{Object, field, VelocityAnimation::SpeedParameter()}};
+                    if (!authority)
+                        input.replicaAnimationBindings = {{Object, field, PresentationAnimation::Parameter()}};
+                    else
+                        input.publicTransforms->action = {Animation::Test::Asset<Animation::AnimationGraphId>(1),
+                                                          Animation::Test::Id<Animation::GraphActionSlotId>(1),
+                                                          {{Animation::Test::Actions::Request().action, PresentationAnimation::PublicTag}}};
                 }
-                const bool movesCharacter = velocity_ && authority;
-                const App::GameplayWorldSelection selection{.moduleId = "game.tests",
-                                                            .nativeArtifact = HORO_TEST_GAME_MODULE_PATH,
-                                                            .descriptorRevision =
-                                                                Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH),
+                const bool movesCharacter = projection_ == Projection::Velocity && authority;
+                const bool action = projection_ == Projection::Action;
+                const App::GameplayWorldSelection selection{.moduleId = action ? Tests::ActionTagModule : "game.tests",
+                                                            .nativeArtifact =
+                                                                action ? HORO_ACTION_TAG_TEST_MODULE_PATH : HORO_TEST_GAME_MODULE_PATH,
+                                                            .descriptorRevision = Tests::ReadDescriptorRevision(
+                                                                action ? HORO_ACTION_TAG_TEST_MODULE_REVISION_PATH
+                                                                       : HORO_TEST_GAME_MODULE_REVISION_PATH),
                                                             .physicsPermission = movesCharacter ? App::GameplayPhysicsPermission::Granted
                                                                                                 : App::GameplayPhysicsPermission::Denied,
                                                             .prefabPermission = App::GameplayPrefabPermission::Granted,
@@ -204,7 +218,7 @@ namespace Horo::Network::NativeQualification {
 
             /** @brief Reads the real published joint produced by the client's selected network-bound graph. */
             [[nodiscard]] std::optional<float> ClientPresentation() const {
-                if (!velocity_)
+                if (projection_ == Projection::Transform)
                     return SceneY();
                 const auto *animation = scene ? App::InspectHeadlessAnimation(*scene) : nullptr;
                 const auto actor = scene ? App::InspectHeadlessAnimationEntity(*scene, Object) : std::nullopt;
@@ -220,13 +234,76 @@ namespace Horo::Network::NativeQualification {
                 return joint.front().translation.x;
             }
 
+            /** @brief Plays once after the initial replica has confirmed its Scene state. */
+            void StartActionAfterReceipt(std::size_t snapshotsSent) {
+                if (projection_ != Projection::Action || !authority || actionQueued_ || snapshotsSent == 0)
+                    return;
+                REQUIRE(scene);
+                const auto actor = App::InspectHeadlessAnimationEntity(*scene, Object);
+                REQUIRE(actor);
+                REQUIRE(App::QueueHeadlessAnimationAction(*scene, *actor, Animation::Test::Actions::Request()).HasValue());
+                actionQueued_ = true;
+            }
+
+            /** @brief The replica's own Scene facade cannot admit authoritative action commands. */
+            void VerifyReplicaActionDenied() const {
+                if (projection_ != Projection::Action)
+                    return;
+                REQUIRE(scene);
+                const auto actor = App::InspectHeadlessAnimationEntity(*scene, Object);
+                REQUIRE(actor);
+                const auto outcome = App::QueueHeadlessAnimationAction(*scene, *actor, Animation::Test::Actions::Request());
+                REQUIRE(outcome.failure == Animation::GraphActionFailure::Closed);
+            }
+
+            [[nodiscard]] bool FirstValue(float value) const noexcept {
+                switch (projection_) {
+                    case Projection::Transform:
+                        return value != ClientStartY;
+                    case Projection::Velocity:
+                        return value > 0.1F && value < 100.0F;
+                    case Projection::Action:
+                        return value > 99.0F && value < 101.0F;
+                }
+                return false;
+            }
+
+            [[nodiscard]] bool LaterValue(float first, float current) const noexcept {
+                switch (projection_) {
+                    case Projection::Transform:
+                        return FirstValue(current) && current < first;
+                    case Projection::Velocity:
+                        return FirstValue(current) && std::abs(current - first) > 5.0F;
+                    case Projection::Action:
+                        return std::abs(current) < 0.01F;
+                }
+                return false;
+            }
+
             Routes routes;
             std::optional<NetworkProjectSettings> project;
             std::shared_ptr<Grants> grants;
             std::shared_ptr<App::HeadlessInitialStateHost> state;
-            const INetworkModeService *scene{};  // Synchronous host-owned view, cleared before host teardown.
+            INetworkModeService *scene{};  // Synchronous host-owned facade, cleared before host teardown.
 
         private:
+            [[nodiscard]] ReplicationDeclaration Declaration() const {
+                return projection_ == Projection::Action ? Tests::ActionTagDeclaration()
+                                                         : PrefabProductTestSupport::NativePrefabDeclaration();
+            }
+
+            [[nodiscard]] SceneReplicationProperty Property() const noexcept {
+                switch (projection_) {
+                    case Projection::Transform:
+                        return SceneReplicationProperty::TranslationY;
+                    case Projection::Velocity:
+                        return SceneReplicationProperty::LinearVelocityX;
+                    case Projection::Action:
+                        return SceneReplicationProperty::AnimationActionTag;
+                }
+                std::terminate();
+            }
+
             void AddAuthorityCharacter(Runtime::RuntimeEntityDefinition &actor, Runtime::SceneDefinitionBuilder &builder) {
                 const auto material = Physics::Asset(91);
                 const auto materialType = Physics::AssetType();
@@ -253,10 +330,14 @@ namespace Horo::Network::NativeQualification {
                 Runtime::SceneDefinitionBuilder builder{{1700}, {1}};
                 Runtime::RuntimeEntityDefinition entity{.object = Object};
                 entity.localTransform.translation.y = authority ? AuthorityStartY : ClientStartY;
-                if (velocity_ && authority)
+                if (projection_ == Projection::Action)
+                    entity.components.animation =
+                        PresentationAnimation::Install(registry, provider, target,
+                                                       authority ? GraphFixture::ActionAuthority : GraphFixture::ActionReplica);
+                else if (projection_ == Projection::Velocity && authority)
                     AddAuthorityCharacter(entity, builder);
-                else if (velocity_)
-                    entity.components.animation = VelocityAnimation::Install(registry, provider, target);
+                else if (projection_ == Projection::Velocity)
+                    entity.components.animation = PresentationAnimation::Install(registry, provider, target, GraphFixture::Velocity);
                 else if (authority)
                     entity.components.behaviors.push_back(
                         {{1}, Gameplay::BehaviorTypeId::Parse("game.tests.replicated_presentation_motion").Value()});
@@ -268,7 +349,8 @@ namespace Horo::Network::NativeQualification {
             }
 
             const bool authority;
-            const bool velocity_;
+            const Projection projection_;
+            bool actionQueued_{};
             JobSystem jobs{{1, 8}};
             Assets::AssetRegistry registry;
             Assets::MemoryAssetProvider provider;

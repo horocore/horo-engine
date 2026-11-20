@@ -714,6 +714,7 @@ if(HORO_BUILD_NETWORK_GNS)
         ${PROJECT_SOURCE_DIR}/tests/unit/runtime/animation)
     target_link_libraries(HoroGnsSecureProductChild PRIVATE HoroGnsNativeQualificationSupport HoroNetworkProductHost
         HoroEngine::NetworkTransportGNS HoroEngine::NetworkTransportNull HoroEngine::Platform HoroEngine::AnimationCookedAssets
+        HoroEngine::AnimationGraphSourceCodec
         MbedTLS::mbedcrypto Catch2::Catch2)
     if(UNIX AND HORO_BUILD_PHYSICS_NATIVE)
         target_sources(HoroNetworkModeHostIntegrationTests PRIVATE integration/network/gns/GnsNativeProductPairTests.cpp)
@@ -2935,10 +2936,19 @@ target_compile_definitions(HoroTestGameModule PRIVATE HORO_TEST_GAMEPLAY_PHYSICS
 target_link_libraries(HoroTestGameModule PRIVATE HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::PrefabRuntime HoroEngine::GameplayNavigationIntegration HoroEngine::RuntimeUi)
 get_property(HORO_TEST_GAME_MODULE_REVISION_FILE TARGET HoroTestGameModule PROPERTY HORO_GAMEPLAY_DESCRIPTOR_REVISION_FILE)
 if(TARGET HoroGnsSecureProductChild)
+    horo_add_gameplay_module(HoroActionTagTestModule
+        MODULE_ID game.action_tag_test
+        INPUT_MANIFEST_OUTPUT "${CMAKE_CURRENT_BINARY_DIR}/HoroActionTagTestModule/input-manifest.txt"
+        NO_MANIFEST
+        SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_module/ActionTagTestModule.cpp
+                ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/gameplay_module/ActionTagTestSchema.h)
+    get_property(HORO_ACTION_TAG_TEST_MODULE_REVISION_FILE TARGET HoroActionTagTestModule PROPERTY HORO_GAMEPLAY_DESCRIPTOR_REVISION_FILE)
     target_compile_definitions(HoroGnsSecureProductChild PRIVATE
         HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"
-        HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}")
-    add_dependencies(HoroGnsSecureProductChild HoroTestGameModule)
+        HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}"
+        HORO_ACTION_TAG_TEST_MODULE_PATH="$<TARGET_FILE:HoroActionTagTestModule>"
+        HORO_ACTION_TAG_TEST_MODULE_REVISION_PATH="${HORO_ACTION_TAG_TEST_MODULE_REVISION_FILE}")
+    add_dependencies(HoroGnsSecureProductChild HoroTestGameModule HoroActionTagTestModule)
 endif()
 target_compile_definitions(HoroNetworkModeHostIntegrationTests PRIVATE
     HORO_TEST_GAME_MODULE_PATH="$<TARGET_FILE:HoroTestGameModule>"

@@ -245,6 +245,10 @@ namespace Horo::Application::Internal {
 
     /** @brief Borrow canonical Animation observation on the service owner lane; no ownership or mutation grant. */
     [[nodiscard]] const Runtime::SceneAnimationRuntime *InspectHeadlessAnimation(const Network::INetworkModeService &service) noexcept;
+    /** @brief Queues an action through the exact active authoritative Scene facade on its owner lane. */
+    [[nodiscard]] Animation::GraphActionCommandOutcome QueueHeadlessAnimationAction(Network::INetworkModeService &service,
+                                                                                    Runtime::EntityRef actor,
+                                                                                    const Animation::GraphActionRequest &request);
     /** @brief Acquires the configured authority world's exact committed transform producer for an existing capture coordinator.
      * @param service Retained world service facade. @return Read-only producer, absent on client/standalone/unconfigured/retired worlds. */
     [[nodiscard]] std::shared_ptr<const Network::SceneReplicationCommitSource> AcquireHeadlessPublicTransforms(

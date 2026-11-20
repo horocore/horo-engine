@@ -45,6 +45,14 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return std::this_thread::get_id() == owners_->owner && record_ ? record_->animation.get() : nullptr;
         }
 
+        /** @brief Admits an action only through the active authoritative Scene facade. */
+        Animation::GraphActionCommandOutcome QueueAnimationAction(Runtime::EntityRef entity, const Animation::GraphActionRequest &request) {
+            if (request_.service != Network::NetworkModeServiceKind::Scene || !IsAuthoritativeWorld() || !ActiveScene() ||
+                !record_->animation)
+                return {Animation::GraphActionFailure::Closed};
+            return record_->animation->QueueAction(entity, request);
+        }
+
         std::shared_ptr<const AI::PerceptionSpatialSnapshot> PerceptionSnapshot() const noexcept {
             if (!IsAuthoritativeWorld() || std::this_thread::get_id() != owners_->owner || !record_ || record_->closeRequested ||
                 record_->closed)
