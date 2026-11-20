@@ -33,6 +33,7 @@ namespace Horo::Application::Internal {
     struct ProjectSceneNavigationSelection;
     struct HeadlessPerceptionPolicy;
     struct CommittedWorldSelection;
+    struct CommittedWorldInitialCell;
     class MountedWorldRenderPacket;
 
     /** @brief Selects the sole descriptor authority for an authored Perception policy. */
@@ -127,6 +128,7 @@ namespace Horo::Application::Internal {
         std::optional<HeadlessPerceptionProjectAdmission>
             perceptionProject; /**< Explicit project-backed endpoint and coordinate policy for the selected cooked definition. */
         std::shared_ptr<const CommittedWorldSelection> mountedWorld; /**< Optional exact standalone World cook selection. */
+        const JobSystem *worldJobs{}; /**< Existing CPU worker owner, required when live mounted work is selected. */
         std::vector<Network::NetworkObjectProvenance>
             replicatedSceneObjects; /**< Explicit stable object/schema bindings for this definition. */
         std::optional<HeadlessSceneTransformReplication> publicTransforms;
@@ -185,6 +187,21 @@ namespace Horo::Application::Internal {
      * @param service Actual headless Scene owner. @return Generation lease when the selected mount is active.
      */
     [[nodiscard]] std::optional<WorldStreaming::OriginFrameLease> InspectHeadlessWorldOrigin(const Network::INetworkModeService &service);
+
+    /** @brief Requests an exact registered CoreEcs cell through the opted-in standalone Scene owner on its lane.
+     * @param service Current standalone Scene facade whose lifetime bounds this request.
+     * @param selected Exact committed cell and authored occurrence.
+     * @param cancellation Optional parent cancellation retained through the live operation.
+     * @return Success after demand admission or an originating typed denial.
+     */
+    [[nodiscard]] Result<void> RequestHeadlessWorldCell(const Network::INetworkModeService &service,
+                                                        const CommittedWorldInitialCell &selected,
+                                                        const CancellationToken &cancellation = {});
+
+    /** @brief Withdraws current live demand through the exact standalone Scene owner on its lane.
+     * @param service Current standalone Scene facade. @return Success after withdrawal or a typed denial.
+     */
+    [[nodiscard]] Result<void> WithdrawHeadlessWorldCell(const Network::INetworkModeService &service);
 
     /** @brief Captures an exact active World camera and procedural geometry on the standalone Scene owner lane.
      * @param service Actual headless Scene service.

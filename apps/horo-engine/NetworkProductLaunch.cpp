@@ -339,7 +339,8 @@ namespace Horo::Application::Internal {
                                                .navigationPath = launch.navigationPath,
                                                .mountedWorld = launch.sceneInput.world ? std::make_shared<const CommittedWorldSelection>(
                                                                                              *launch.sceneInput.world)
-                                                                                       : nullptr};
+                                                                                       : nullptr,
+                                               .worldJobs = &resources->jobs};
             if (initialState) {
                 input.replicatedSceneObjects = initialState->authoredObjects;
                 input.publicTransforms = initialState->transforms;

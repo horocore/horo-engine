@@ -69,12 +69,13 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Rejected();
             DrainResolved();
             if (phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && owners_->configured &&
-                owners_->configured->initialSceneState)
+                (owners_->configured->initialSceneState ||
+                 (owners_->configured->mountedWorld && owners_->configured->mountedWorld->liveCell)))
                 sceneDispatch_ = frame.dispatchEvidence;
             return closed_ ? Rejected() : Result<void>::Success();
         }
 
-        /** @brief Copies the exact current structural dispatch for the configured replica admission. */
+        /** @brief Borrows current structural evidence for the paired generation-owned Scene services. */
         const Runtime::RuntimeDispatchEvidence &SceneDispatch() const noexcept {
             return sceneDispatch_;
         }

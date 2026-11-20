@@ -317,6 +317,31 @@ namespace Horo::Application::Internal {
             return selected;
         }
 
+        /** @brief Parses an exact first live demand and explicit owner limits without admitting a cook or Scene. */
+        Result<CommittedWorldLiveSelection> ReadWorldLiveCell(const std::span<char *> arguments, std::size_t &index) {
+            using Output = Result<CommittedWorldLiveSelection>;
+            constexpr auto count = CommittedWorldCellArgumentCount + 3;
+            if (arguments.size() - index <= count)
+                return Output::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                 "Use --world-live-cell <x> <y> <z> <lod> <layer> <occurrence> <definition> <revision> "
+                                                 "<frame-ns> <unit-ns> <maximum-entities>."));
+            auto selected = ParseCommittedWorldInitialCell(arguments.subspan(index + 1, CommittedWorldCellArgumentCount));
+            if (selected.HasError())
+                return Output::Failure(selected.ErrorValue());
+            const auto number = [](const std::string_view text, auto &value) {
+                const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+                return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
+            };
+            const auto limitsBegin = index + 1 + CommittedWorldCellArgumentCount;
+            MountedWorldLiveLimits limits;
+            if (!number(arguments[limitsBegin], limits.maximumFrameNanoseconds) ||
+                !number(arguments[limitsBegin + 1], limits.maximumUnitNanoseconds) ||
+                !number(arguments[limitsBegin + 2], limits.maximumCellEntities) || !limits.IsValid())
+                return Output::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "Invalid live World frame or entity limits."));
+            index += 1 + count;
+            return Output::Success({limits, std::move(selected).Value()});
+        }
+
         /** @brief Reads the one project-relative policy path without resolving an executable or source file. */
         Result<void> ReadPerceptionPolicy(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
             if (!launch.sceneInput.perceptionPolicyPath.empty() || arguments.size() - index < 2)
@@ -375,6 +400,7 @@ namespace Horo::Application::Internal {
             SeenSceneOptions seen{};
             std::optional<bool> prefabGrant;
             std::optional<CommittedWorldInitialCell> initialCell;
+            std::optional<CommittedWorldLiveSelection> liveCell;
             for (std::size_t index = 0; index < arguments.size();) {
                 const std::string_view key{arguments[index]};
                 if (key == "--transport-qualification") {
@@ -407,6 +433,16 @@ namespace Horo::Application::Internal {
                     if (selected.HasError())
                         return Result<void>::Failure(selected.ErrorValue());
                     initialCell = selected.Value();
+                    continue;
+                }
+                if (key == "--world-live-cell") {
+                    if (liveCell)
+                        return Result<void>::Failure(
+                            MakeError(Net::NetworkErrors::NetworkModeInvalid, "The first live World demand may be selected once."));
+                    auto selected = ReadWorldLiveCell(arguments, index);
+                    if (selected.HasError())
+                        return Result<void>::Failure(selected.ErrorValue());
+                    liveCell.emplace(std::move(selected).Value());
                     continue;
                 }
                 if (key == "--world-mount") {
@@ -448,6 +484,13 @@ namespace Horo::Application::Internal {
                     return Result<void>::Failure(
                         MakeError(Net::NetworkErrors::NetworkModeInvalid, "The startup World cell requires a committed World mount."));
                 launch.sceneInput.world->initialCell = initialCell;
+            }
+            if (liveCell) {
+                if (!launch.sceneInput.world || initialCell || launch.gameplay)
+                    return Result<void>::Failure(
+                        MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                  "Live World demand requires a standalone mount without a startup cell or gameplay module."));
+                launch.sceneInput.world->liveCell = std::move(liveCell);
             }
             if (auto ai = ValidateCookedDecisions(launch); ai.HasError())
                 return ai;

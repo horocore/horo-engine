@@ -2528,8 +2528,11 @@ add_executable(HoroWorldCookIntegrationTests
 )
 target_compile_features(HoroWorldCookIntegrationTests PRIVATE cxx_std_20)
 target_link_libraries(HoroWorldCookIntegrationTests PRIVATE HoroEngine::WorldCookIntegration HoroEngine::Platform
-    HoroNetworkProductHost HoroEditorSceneProductHost)
-target_include_directories(HoroWorldCookIntegrationTests PRIVATE ${PROJECT_SOURCE_DIR}/tests/support)
+    HoroEngine::NetworkTransportNull HoroNetworkModeHostInternal HoroNetworkProductHost HoroEditorSceneProductHost)
+target_include_directories(HoroWorldCookIntegrationTests PRIVATE
+    ${PROJECT_SOURCE_DIR}/tests/support
+    ${PROJECT_SOURCE_DIR}/tests/unit/runtime/networking
+)
 horo_register_catch_test(HoroWorldCookIntegrationTests LABELS "unit;world_streaming;headless;ci-windows")
 
 add_executable(HoroWorldCookIntegrationConsumer support/WorldCookPublicConsumer.cpp)

@@ -1,3 +1,5 @@
+#include "../../integration/network/NetworkModeHostTestSupport.h"
+#include "../runtime/physics/PhysicsSceneActivationTestSupport.h"
 #include "HeadlessSceneLoadBoundary.h"
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Foundation/JobSystem.h"
@@ -8,8 +10,10 @@
 #include "MountedWorldHost.h"
 #include "WorldCookPublicationTestSupport.h"
 
+#include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <iostream>
 #include <thread>
 
 namespace Horo::WorldCook {
@@ -52,6 +56,170 @@ namespace Horo::WorldCook {
             MountedWorld &world_;
             S::RuntimeSceneService &scene_;
         };
+
+        /** @brief Composes the ordinary standalone product over a durable cooked World and observes its exact Scene facade. */
+        class MountedCellProduct final {
+        public:
+            explicit MountedCellProduct(const bool enableLive, const bool firstDemand) {
+                namespace N = Network;
+                const auto published = fixture_.Publish();
+                REQUIRE(published.HasValue());
+                REQUIRE(published.Value().publication);
+                const auto release = fixture_.Release();
+                identity_ = fixture_.inputs.front().expected;
+                demand_ = {identity_.cell, {900}, identity_.scene, identity_.revision};
+                CommittedWorldSelection selection{release.targetRoot,
+                                                  release.target,
+                                                  published.Value().publication->manifestDigest,
+                                                  release.indexArtifact,
+                                                  release.dependencyArtifact,
+                                                  Math::WorldCoordinate64::FromMillimeters(0, 0, 0)};
+                if (enableLive)
+                    selection.liveCell =
+                        CommittedWorldLiveSelection{{20'000'000, 1'000'000, 4}, firstDemand ? std::optional{demand_} : std::nullopt};
+                S::SceneDefinitionBuilder root{{99}, {1}};
+                root.Add({.object = parentObject_});
+                auto built = std::move(root).Build();
+                REQUIRE(built.HasValue());
+                HeadlessSceneActivationInput input{.mode = Physics::PhysicsRuntimeMode::Null,
+                                                   .settings = Physics::Settings(),
+                                                   .registry = registry_,
+                                                   .loads = loads_,
+                                                   .load = load_,
+                                                   .mountedWorld = std::make_shared<const CommittedWorldSelection>(std::move(selection)),
+                                                   .worldJobs = &jobs_};
+                auto composition =
+                    ComposeHeadlessSceneNetworkServices(std::make_shared<const S::RuntimeSceneDefinition>(std::move(built).Value()),
+                                                        std::move(input));
+                REQUIRE(composition.HasValue());
+                auto services = std::move(composition).Value();
+                auto &scene = services.factories.services[static_cast<std::size_t>(N::NetworkModeServiceKind::Scene)];
+                scene = [factory = std::move(scene), this](const N::NetworkModeServiceRequest &request) {
+                    auto owned = factory(request);
+                    if (owned.HasValue())
+                        scene_ = owned.Value().get();
+                    return owned;
+                };
+
+                auto settings = N::DefaultNetworkProjectSettings(N::Id<N::NetworkProjectSettingsId>(10));
+                REQUIRE(settings.HasValue());
+                auto project = N::NetworkProjectSettings::Create(settings.Value());
+                REQUIRE(project.HasValue());
+                constexpr auto role = N::NetworkProjectRole::Standalone;
+                const auto facts = N::ProductFacts(project.Value(), role, false);
+                const std::array worlds{N::World(N::NetworkModeWorldKind::Standalone, runtime_.value)};
+                const auto inputs = NetworkProductHostInputs{.project = project.Value(),
+                                                             .product = facts.product,
+                                                             .inventory = facts.inventory,
+                                                             .hostFacts = facts.host,
+                                                             .requirements = facts.requirements,
+                                                             .selection = facts.selection,
+                                                             .hostGeneration = 5,
+                                                             .worlds = worlds,
+                                                             .fixedParticipant = std::move(services.fixedParticipant),
+                                                             .pollRetirement = std::move(services.pollRetirement)};
+                auto created = NetworkProductHost::Create(clock_, inputs, std::move(services.factories));
+                REQUIRE(created.HasValue());
+                host_ = std::move(created).Value();
+                Check(host_->Startup());
+                REQUIRE(scene_);
+                const auto origin = InspectHeadlessWorldOrigin(*scene_);
+                REQUIRE(origin);
+                const auto frame = origin->Get();
+                REQUIRE(frame.HasValue());
+                epoch_ = IdentityFrom<W::PartitionEpoch>(frame.Value().Binding().identity.Value());
+            }
+
+            void Request() {
+                Check(RequestHeadlessWorldCell(*scene_, demand_));
+            }
+
+            void Withdraw() {
+                Check(WithdrawHeadlessWorldCell(*scene_));
+            }
+
+            Result<void> ProbeRequest() const {
+                return RequestHeadlessWorldCell(*scene_, demand_);
+            }
+
+            void CheckTravelRefusal() {
+                const auto *original = scene_;
+                const std::array replacements{Network::World(Network::NetworkModeWorldKind::Standalone, runtime_.value + 1)};
+                Check(host_->RequestTravel(replacements));
+                static_cast<void>(RunFrame());
+                const auto rejected = host_->TakeTravelFailure();
+                REQUIRE(rejected);
+                INFO(rejected->message);
+                CHECK(rejected->code.Value() == W::WorldArtifactErrors::Unsupported.code.Value());
+                REQUIRE(scene_ == original);
+                REQUIRE(host_->Role(Network::NetworkModeWorldKind::Standalone, runtime_).HasValue());
+                REQUIRE(host_->Role(Network::NetworkModeWorldKind::Standalone, replacements.front().scene).HasError());
+            }
+
+            bool Attached() const {
+                const auto scene = InspectHeadlessScene(*scene_);
+                REQUIRE(scene);
+                REQUIRE(scene->RuntimeId() == runtime_);
+                REQUIRE(scene->Find(parentObject_));
+                return S::FindStreamedSceneInstance(*scene,
+                                                    {runtime_, demand_.occurrence, demand_.definition, S::SceneInstanceMode::Streamed},
+                                                    identity_, epoch_)
+                    .has_value();
+            }
+
+            std::int64_t RunFrame() {
+                clock_.Advance(Duration::FromMilliseconds(17));
+                const auto start = std::chrono::steady_clock::now();
+                const auto advanced = host_->RunFrame();
+                const auto elapsed = std::chrono::steady_clock::now() - start;
+                Check(advanced);
+                return std::chrono::duration_cast<std::chrono::nanoseconds>(elapsed).count();
+            }
+
+            std::int64_t UntilAttached(const bool expected) {
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+                do {
+                    const auto sample = RunFrame();
+                    if (Attached() == expected)
+                        return sample;
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                } while (std::chrono::steady_clock::now() < deadline);
+                FAIL("Standalone mounted frame did not publish the expected residency before the fixture deadline");
+                return 0;
+            }
+
+        private:
+            static void Check(const Result<void> &result) {
+                if (result.HasError())
+                    UNSCOPED_INFO(result.ErrorValue().message);
+                REQUIRE(result.HasValue());
+            }
+
+            static constexpr S::SceneRuntimeId runtime_{71};
+            static constexpr S::SceneObjectId parentObject_{42};
+            Fixture fixture_{false, false};
+            S::SceneCellPayloadIdentity identity_;
+            W::PartitionEpoch epoch_;
+            CommittedWorldInitialCell demand_;
+            DeterministicClock clock_;
+            JobSystem jobs_{{1, 4}};
+            A::MemoryAssetProvider provider_;
+            A::AssetRegistry registry_;
+            A::AssetLoadService loads_{jobs_, provider_};
+            HeadlessSceneLoadBoundary load_{{}, std::chrono::steady_clock::now() + std::chrono::seconds(30)};
+            const Network::INetworkModeService *scene_{};
+            std::unique_ptr<NetworkProductHost> host_;
+        };
+
+        /** @brief Prints observed frame quantiles without filtering out outliers or imposing machine-specific thresholds. */
+        void PrintFrameSamples(const std::string_view stage, std::span<std::int64_t> samples) {
+            std::ranges::sort(samples);
+            const auto percentile = [&](const std::size_t percent) {
+                return samples[(percent * samples.size() + 99) / 100 - 1];
+            };
+            std::cout << stage << ",samples=" << samples.size() << ",p50_ns=" << percentile(50) << ",p95_ns=" << percentile(95)
+                      << ",p99_ns=" << percentile(99) << ",max_ns=" << samples.back() << '\n';
+        }
     }  // namespace
 
     TEST_CASE("Mounted World streams a verified cell through the real structural cutoff and detaches only its occurrence",
@@ -169,5 +337,59 @@ namespace Horo::WorldCook {
         frame();
         stage(Stage::Idle);
         REQUIRE_FALSE(attached());
+    }
+
+    TEST_CASE("Standalone mounted CoreEcs demand starts in the product frame and withdraws through the same Scene owner",
+              "[world_cook][native][mounted_world][live_cell][product]") {
+        SECTION("Legacy mounted worlds stay idle and refuse live demand") {
+            MountedCellProduct product{false, false};
+            W::TestSupport::RequireError(product.ProbeRequest(), W::WorldArtifactErrors::Stale);
+            static_cast<void>(product.RunFrame());
+            REQUIRE_FALSE(product.Attached());
+        }
+        SECTION("An explicitly selected first demand is deferred until real frames, with retirement and fresh demand") {
+            MountedCellProduct product{true, true};
+            REQUIRE_FALSE(product.Attached());
+            static_cast<void>(product.UntilAttached(true));
+            static_cast<void>(product.RunFrame());  // Reconcile the exact positive Scene receipt.
+            product.Withdraw();
+            static_cast<void>(product.UntilAttached(false));
+            static_cast<void>(product.RunFrame());  // Acknowledge retirement before issuing a fresh generation.
+            product.Request();
+            static_cast<void>(product.UntilAttached(true));
+        }
+        SECTION("An in-frame replacement cannot drain a live mounted worker or revoke its parent") {
+            MountedCellProduct product{true, true};
+            REQUIRE_FALSE(product.Attached());
+            product.CheckTravelRefusal();
+            static_cast<void>(product.UntilAttached(true));
+        }
+    }
+
+    TEST_CASE("Measure mounted CoreEcs frame impact through the standalone product", "[.mounted_world_benchmark]") {
+        constexpr std::size_t warmup = 16;
+        constexpr std::size_t sampleCount = 128;
+        MountedCellProduct product{true, false};
+        std::array<std::int64_t, sampleCount> idle{};
+        std::array<std::int64_t, sampleCount> attach{};
+        std::array<std::int64_t, sampleCount> detach{};
+        for (std::size_t index = 0; index < warmup + sampleCount; ++index) {
+            const auto idleFrame = product.RunFrame();
+            product.Request();
+            const auto attachFrame = product.UntilAttached(true);
+            static_cast<void>(product.RunFrame());
+            product.Withdraw();
+            const auto detachFrame = product.UntilAttached(false);
+            static_cast<void>(product.RunFrame());
+            if (index >= warmup) {
+                idle[index - warmup] = idleFrame;
+                attach[index - warmup] = attachFrame;
+                detach[index - warmup] = detachFrame;
+            }
+        }
+        std::cout << "mounted_coreecs,entities_per_cell=1,worker_threads=1,physics=null,provider=memory,clock=steady_clock\n";
+        PrintFrameSamples("idle_frame", idle);
+        PrintFrameSamples("attach_frame", attach);
+        PrintFrameSamples("detach_frame", detach);
     }
 }  // namespace Horo::WorldCook

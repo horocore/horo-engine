@@ -101,6 +101,19 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return std::move(lease).Value();
         }
 
+        /** @brief Requests mounted work through the exact live Scene facade and its existing demand owner. */
+        Result<void> RequestMountedCell(const CommittedWorldInitialCell &selected, const CancellationToken &cancellation) const {
+            auto *mount = LiveMountedScene();
+            return mount ? mount->RequestLiveCell(selected, cancellation)
+                         : Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+        }
+
+        /** @brief Withdraws mounted work only from the exact live Scene facade and its existing demand owner. */
+        Result<void> WithdrawMountedCell() const {
+            auto *mount = LiveMountedScene();
+            return mount ? mount->WithdrawLiveCell() : Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+        }
+
         /** @brief Captures only geometry from the exact active mounted Scene service on this lane. */
         Result<MountedWorldRenderPacket> CaptureWorldRenderGeometry(const Runtime::SceneObjectId camera,
                                                                     std::span<const Runtime::SceneObjectId> meshes,
@@ -206,6 +219,9 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                     if (auto advanced = gameplay_->OnPhase(phase, frame); advanced.HasError())
                         return advanced;
                 }
+                if (phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && SelectsLiveMount())
+                    if (auto advanced = AdvanceLiveMount(); advanced.HasError())
+                        return advanced;
                 if (phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && previous == record_->perception.Current())
                     return PublishConfiguredPerception();
             }
@@ -250,6 +266,36 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         }
 
     private:
+        /** @brief Checks immutable policy before any live scope lookup or Scene phase forwarding. */
+        bool SelectsLiveMount() const noexcept {
+            return owners_->configured && owners_->configured->mountedWorld && owners_->configured->mountedWorld->liveCell.has_value();
+        }
+
+        /** @brief Resolves only the exact active Scene facade. Physics and other roles cannot issue demand. */
+        MountedWorld *LiveMountedScene() const noexcept {
+            return SelectsLiveMount() && ActiveScene() && request_.service == Network::NetworkModeServiceKind::Scene
+                       ? record_->mountedWorld.get()
+                       : nullptr;
+        }
+
+        /** @brief The existing configured Scene/Physics pair owns this one cutoff when no gameplay owner is installed. */
+        Result<void> AdvanceLiveMount() const {
+            if (!record_->mountedWorld || !owners_->fixed)
+                return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+            constexpr auto cutoff = Runtime::RuntimePhase::CommitDeferredLifecycleChanges;
+            const auto &evidence = owners_->fixed->SceneDispatch();
+            Runtime::RuntimeDispatchFacts facts;
+            if (evidence.Read(owners_->fixed->Source(), cutoff, facts) != Runtime::RuntimeDispatchStatus::Valid)
+                return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+            const auto advanced = record_->mountedWorld->AdvanceLiveCell(evidence);
+            if (advanced.HasError() && advanced.ErrorValue().code.Value() != WorldStreaming::WorldArtifactErrors::Cancelled.code.Value())
+                return Result<void>::Failure(advanced.ErrorValue());
+            const Runtime::FrameContext frame{.frameNumber = facts.frame,
+                                              .cancellation = record_->sceneCancellation,
+                                              .dispatchEvidence = evidence};
+            return record_->scenes->OnPhase(cutoff, frame);
+        }
+
         bool IsSceneOwner() const noexcept {
             return record_ && owners_->configured && request_.service == Network::NetworkModeServiceKind::Scene;
         }
@@ -376,6 +422,16 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 if (activated.HasError())
                     return activated;
             }
+            if (const auto &live = input.mountedWorld->liveCell) {
+                if (!owners_->fixed || !input.worldJobs)
+                    return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Invalid));
+                if (auto bound = world.Value()->BindLiveCell(owners_->fixed->Source(), *input.worldJobs, live->limits); bound.HasError())
+                    return bound;
+                if (live->firstDemand)
+                    if (auto requested = world.Value()->RequestLiveCell(*live->firstDemand, record_->sceneCancellation);
+                        requested.HasError())
+                        return requested;
+            }
             record_->mountedWorld = std::move(world).Value();
             return Result<void>::Success();
         }
@@ -392,6 +448,9 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Result<void>::Failure(structural.ErrorValue());
             if (auto added = record_->scenes->AddStructuralParticipant(std::move(structural).Value()); added.HasError())
                 return added;
+            // Live CoreEcs admits no gameplay module. Scene itself rejects any component that needs an absent owner.
+            if (SelectsLiveMount())
+                return Result<void>::Success();
             if (auto added = record_->scenes->AddStructuralParticipant(MakeGameplayStructuralParticipant(record_->activeGameplay));
                 added.HasError())
                 return added;

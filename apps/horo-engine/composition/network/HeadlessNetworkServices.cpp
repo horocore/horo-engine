@@ -34,8 +34,13 @@ namespace Horo::Application::Internal {
             if (owners.configured) {
                 if (!request.scene.IsValid())
                     return Result<std::shared_ptr<WorldRecord>>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
+                const auto &world = owners.configured->mountedWorld;
                 for (auto &known : owners.known) {
                     const auto retained = known.lock();
+                    if (world && world->liveCell && retained && retained->mountedWorld && !retained->closeRequested)
+                        return Result<std::shared_ptr<WorldRecord>>::Failure(
+                            MakeError(WorldStreaming::WorldArtifactErrors::Unsupported,
+                                      "Replacing a live mounted World requires a cold shutdown."));
                     if (retained && retained->request.scene == request.scene)
                         return Result<std::shared_ptr<WorldRecord>>::Failure(
                             MakeError(Network::NetworkErrors::NetworkModeInvalid,
@@ -172,6 +177,17 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Denies unsupported live composition before creating Scene and native owners. */
+        Result<void> ValidateLiveWorldSelection(const HeadlessSceneActivationInput &input,
+                                                const std::optional<GameplayWorldSelection> &gameplay) {
+            if (!input.mountedWorld || !input.mountedWorld->liveCell)
+                return Result<void>::Success();
+            if (!input.worldJobs || input.mountedWorld->initialCell || gameplay)
+                return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Unsupported,
+                                                       "Live mounted CoreEcs requires the standalone Scene structural owner."));
+            return Result<void>::Success();
+        }
+
         Result<void> ValidateAnimationSelection(const HeadlessSceneActivationInput &input) {
             if (input.animationTarget.IsValid() != static_cast<bool>(input.animationIdentities))
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
@@ -223,6 +239,8 @@ namespace Horo::Application::Internal {
             return Result<NetworkProductComposition>::Failure(std::move(valid).ErrorValue());
         if (auto valid = ValidateAnimationSelection(input); valid.HasError())
             return Result<NetworkProductComposition>::Failure(std::move(valid).ErrorValue());
+        if (auto valid = ValidateLiveWorldSelection(input, gameplay); valid.HasError())
+            return Result<NetworkProductComposition>::Failure(std::move(valid).ErrorValue());
         auto owners = std::make_shared<WorldOwners>(std::move(definition), gameplay, replicationAdmission);
         if (auto prepared = owners->PreparePhysicsRuntime(input.mode); prepared.HasError())
             return Result<NetworkProductComposition>::Failure(prepared.ErrorValue());
@@ -238,7 +256,8 @@ namespace Horo::Application::Internal {
                                               [owners](std::uint32_t maximumRecords) {
             return owners->PollRetirement(maximumRecords);
         }};
-        if (owners->configured->animationIdentities || owners->configured->publicTransforms ||
+        const auto &mount = owners->configured->mountedWorld;
+        if (owners->configured->animationIdentities || owners->configured->publicTransforms || (mount && mount->liveCell) ||
             (owners->gameplay && owners->gameplay->vfxScene)) {
             if (owners->configured->animationIdentities && !owners->configured->animationTarget.IsValid())
                 return Result<NetworkProductComposition>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
@@ -309,6 +328,20 @@ namespace Horo::Application::Internal {
     std::optional<WorldStreaming::OriginFrameLease> InspectHeadlessWorldOrigin(const Network::INetworkModeService &service) {
         const auto *world = dynamic_cast<const WorldService *>(&service);
         return world ? world->WorldOrigin() : std::nullopt;
+    }
+
+    /** @copydoc RequestHeadlessWorldCell */
+    Result<void> RequestHeadlessWorldCell(const Network::INetworkModeService &service, const CommittedWorldInitialCell &selected,
+                                          const CancellationToken &cancellation) {
+        const auto *world = dynamic_cast<const WorldService *>(&service);
+        return world ? world->RequestMountedCell(selected, cancellation)
+                     : Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+    }
+
+    /** @copydoc WithdrawHeadlessWorldCell */
+    Result<void> WithdrawHeadlessWorldCell(const Network::INetworkModeService &service) {
+        const auto *world = dynamic_cast<const WorldService *>(&service);
+        return world ? world->WithdrawMountedCell() : Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
     }
 
     /** @copydoc CaptureHeadlessWorldRenderGeometry */

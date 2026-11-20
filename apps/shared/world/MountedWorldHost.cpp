@@ -468,7 +468,7 @@ namespace Horo::Application::Internal {
     }
 
     struct MountedWorld::State final {
-        explicit State(Runtime::RuntimeSceneService &scene) noexcept : scene(scene) {}
+        explicit State(Runtime::RuntimeSceneService &scene) : scene(scene) {}
 
         Runtime::RuntimeSceneService &scene;
         const std::thread::id ownerThread{std::this_thread::get_id()};
@@ -1123,8 +1123,11 @@ namespace Horo::Application::Internal {
         const auto *receipt = live->attachment->Receipt();
         if (!receipt->Complete())
             return Result<Stage>::Success(Stage::Attaching);
-        if (const auto *error = receipt->Failure())
+        if (const auto *error = receipt->Failure()) {
+            if (error->code.Value() == Runtime::SceneCellPayloadErrors::Cancelled.code.Value())
+                return RejectLive(MakeError(WS::WorldArtifactErrors::Cancelled));
             return RejectLive(*error);
+        }
         if (receipt->ResultValue()->baselinesAttached != 1 || !AttachedParent(*live->candidate))
             return RejectLive(MakeError(Runtime::SceneCellPayloadErrors::Stale));
         if (const auto completed = SettleLiveReservation(WS::StreamingCellOperationTransition::Complete); completed.HasError())
@@ -1209,13 +1212,17 @@ namespace Horo::Application::Internal {
         activeCell.reset();
     }
 
+    /** @copydoc MountedWorldLiveLimits::IsValid */
+    bool MountedWorldLiveLimits::IsValid() const noexcept {
+        return maximumUnitNanoseconds > 0 && maximumUnitNanoseconds < maximumFrameNanoseconds && maximumCellEntities > 0 &&
+               maximumCellEntities <= 65536;
+    }
+
     /** @copydoc MountedWorld::BindLiveCell */
     Result<void> MountedWorld::BindLiveCell(const Runtime::RuntimeDispatchSource &dispatch, const JobSystem &jobs,
                                             const MountedWorldLiveLimits &limits) {
         if (std::this_thread::get_id() != state_->ownerThread || dispatch.BindingStatus() != Runtime::RuntimeDispatchStatus::Valid ||
-            state_->initialAttempted || state_->live || limits.maximumUnitNanoseconds == 0 ||
-            limits.maximumUnitNanoseconds > limits.maximumFrameNanoseconds || limits.maximumCellEntities == 0 ||
-            limits.maximumCellEntities > 65536)
+            state_->initialAttempted || state_->live || !limits.IsValid())
             return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Invalid));
         state_->live.emplace(dispatch, jobs, limits);
         return Result<void>::Success();

@@ -65,6 +65,15 @@ namespace Horo::Application::Internal {
         std::uint64_t maximumFrameNanoseconds{};
         std::uint64_t maximumUnitNanoseconds{};
         std::size_t maximumCellEntities{};
+
+        /** @brief Returns whether a complete bounded cell unit can be admitted with positive frame headroom. */
+        [[nodiscard]] bool IsValid() const noexcept;
+    };
+
+    /** @brief Opts a standalone mount into live CoreEcs work with an optional first demand in ordinary frames. */
+    struct CommittedWorldLiveSelection final {
+        MountedWorldLiveLimits limits;
+        std::optional<CommittedWorldInitialCell> firstDemand;
     };
 
     /** @brief Explicit authored native Local placement projected through one exact mounted World origin. */
@@ -82,6 +91,7 @@ namespace Horo::Application::Internal {
         Assets::AssetId dependencies;
         Math::WorldCoordinate64 origin; /**< Explicit authoritative fixed-point startup origin in Horo axes. */
         std::optional<CommittedWorldInitialCell> initialCell;
+        std::optional<CommittedWorldLiveSelection> liveCell;
     };
 
     inline constexpr std::size_t CommittedWorldSelectionArgumentCount = 8;
