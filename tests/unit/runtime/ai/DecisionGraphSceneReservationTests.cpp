@@ -3,6 +3,8 @@
 #include "Horo/AI/DecisionQueryTask.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 
+#include <algorithm>
+#include <array>
 #include <catch2/generators/catch_generators.hpp>
 
 namespace Horo::AI {
@@ -536,9 +538,15 @@ namespace Horo::AI {
             QuerySchemaRegistry schema_;
         };
 
-        TEST_CASE("Cooked Scene query tasks bind through the selected owner and inherit agent retirement",
-                  "[unit][ai][scene][decision_reservation][scheduler][eqs]") {
-            Fixture fixture;
+        struct PointDecision final {
+            BlackboardKeyId key;
+            std::shared_ptr<const CookedDecisionPlan> decision;
+            EnvironmentQueryPlan query;
+            QuerySchemaRegistry registry;
+        };
+
+        /** @brief Admits one reference-free Scene-owned query and its authored cooked decision. */
+        PointDecision PreparePointDecision(Fixture &fixture) {
             const auto key = MakeIdentity<BlackboardKeyId>(22);
             const std::array keys{BlackboardKeyDescriptor{.key = key,
                                                           .kind = BlackboardValueKind::WorldCoordinate,
@@ -568,7 +576,15 @@ namespace Horo::AI {
                 {.key = key, .kind = BlackboardValueKind::WorldCoordinate, .access = BlackboardKeyAccess::ReadWrite, .source = Location()}};
             auto graph = Tree(11, {TreeNode(1, DecisionControlKind::Root), task}, {Edge(1, 1, 2)});
             graph.executionTask = MakeIdentity<TaskId>(9000);
-            const auto plan = fixture.Compile(std::span{&graph, 1}, 11);
+            return {key, fixture.Compile(std::span{&graph, 1}, 11), std::move(queryPlan).Value(), std::move(registry).Value()};
+        }
+
+        TEST_CASE("Cooked Scene query tasks bind through the selected owner and inherit agent retirement",
+                  "[unit][ai][scene][decision_reservation][scheduler][eqs]") {
+            Fixture fixture;
+            auto preparedDecision = PreparePointDecision(fixture);
+            const auto &plan = preparedDecision.decision;
+            const auto key = preparedDecision.key;
             auto scene = SceneFixture(fixture, *plan);
             scene.descriptor.cookedPlan = plan;
             Runtime::SceneDefinitionBuilder builder{{7}, {1}};
@@ -577,8 +593,8 @@ namespace Horo::AI {
             REQUIRE(definition.HasValue());
             const auto live = Runtime::RuntimeScene::Create(definition.Value(), scene.binding.scene);
             REQUIRE(live.HasValue());
-            auto owner =
-                std::make_shared<PointQueryOwner>(*live.Value(), scene.owner, std::move(queryPlan).Value(), std::move(registry).Value());
+            auto owner = std::make_shared<PointQueryOwner>(*live.Value(), scene.owner, std::move(preparedDecision.query),
+                                                           std::move(preparedDecision.registry));
             JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
             auto runtime = std::move(AiSceneRuntime::Create()).Value();
             auto publication = TestSupport::Publish(runtime, scene);
@@ -622,6 +638,177 @@ namespace Horo::AI {
             CHECK_FALSE(owner->task->ActiveAgent().IsValid());
             runtime.BeginShutdown();
             CHECK(owner->observed->IsCancellationRequested());
+        }
+
+        enum class PointReplayBoundary : std::uint8_t {
+            Manifest,
+            SceneInput,
+            QueryOutput,
+            Decision,
+            CanonicalAi
+        };
+        enum class OmittedReplayInput : std::uint8_t {
+            Perception,
+            Navigation,
+            Physics,
+            GameplayCommands,
+            AchievedCharacterMotion
+        };
+
+        /** @brief The deterministic native, reference-free slice admitted by this test profile. */
+        struct PointReplayManifest final {
+            std::uint32_t aiVersion{CurrentAiCanonicalStateVersion};
+            std::uint32_t decisionEvidenceVersion{DecisionTraceHeader::CurrentVersion};
+            Runtime::SceneDefinitionRevision sceneVersion;
+            Sha256Digest plan;
+            QueryId query;
+            QueryResultSchemaId queryResultSchema;
+            std::uint32_t queryResultVersion{};
+            std::array<OmittedReplayInput, 5> omitted{OmittedReplayInput::Perception, OmittedReplayInput::Navigation,
+                                                      OmittedReplayInput::Physics, OmittedReplayInput::GameplayCommands,
+                                                      OmittedReplayInput::AchievedCharacterMotion};
+            bool usesNondeterministicProviders{};
+            bool operator==(const PointReplayManifest &) const = default;
+        };
+
+        struct PointReplayTick final {
+            std::uint64_t tick{};
+            Math::Transform sceneInput;
+            std::uint64_t sceneRevision{};
+            std::optional<BlackboardValue> queryOutput;
+            bool committedQuery{};
+            AiTaskState decision{};
+            std::shared_ptr<const DecisionStepTrace> evidence;
+            Sha256Digest canonicalAi;
+        };
+
+        struct PointReplay final {
+            static constexpr std::size_t TickCount = 6;
+            PointReplayManifest manifest;
+            std::array<PointReplayTick, TickCount> ticks;
+        };
+
+        /** @brief Runs fixed sync, query advance and decision phases on independent real Scene and AI owners. */
+        PointReplay ReplayPointDecision(const bool captureDecisionEvidence, const bool changeLastSceneInput = false) {
+            Fixture fixture;
+            auto setup = PreparePointDecision(fixture);
+            auto selected = SceneFixture(fixture, *setup.decision);
+            Runtime::SceneDefinitionBuilder builder{{7}, {1}};
+            builder.Add({.object = {1}, .components = {.aiAgent = selected.agent.agent, .aiController = selected.agent.controller}});
+            const auto definition = std::move(builder).Build();
+            REQUIRE(definition.HasValue());
+            auto live = Runtime::RuntimeScene::Create(definition.Value(), selected.binding.scene);
+            REQUIRE(live.HasValue());
+            const auto &resultSchema = setup.query.ResultSchema();
+            PointReplay replay{.manifest = {.sceneVersion = live.Value()->View().DefinitionRevision(),
+                                            .plan = setup.decision->Digest(),
+                                            .query = setup.query.Id(),
+                                            .queryResultSchema = resultSchema.id,
+                                            .queryResultVersion = resultSchema.version}};
+            auto owner =
+                std::make_shared<PointQueryOwner>(*live.Value(), selected.owner, std::move(setup.query), std::move(setup.registry));
+            auto runtime = std::move(AiSceneRuntime::Create()).Value();
+            auto publication = TestSupport::Publish(runtime, selected);
+            const auto agent = runtime.Snapshot().Value().Agents().front().handle;
+            const auto rootTask = MakeIdentity<TaskId>(9000);
+            const auto parent = runtime.StartTaskAtSafePoint(agent, rootTask);
+            REQUIRE(parent.HasValue());
+            auto tasks =
+                runtime.ReserveDecisionTaskSlotsAtSafePoint(agent, static_cast<std::uint32_t>(setup.decision->Storage().taskSlots));
+            REQUIRE(tasks.HasValue());
+            auto decision =
+                DecisionGraphInstance::Create(setup.decision, std::move(tasks).Value(), {rootTask, parent.Value(), agent}, owner);
+            REQUIRE(decision.HasValue());
+            REQUIRE(owner->task);
+            constexpr std::size_t CanonicalBudget = 4096;
+            for (std::size_t index = 0; index < replay.ticks.size(); ++index) {
+                auto &frame = replay.ticks[index];
+                frame.tick = index + 1;
+                if (changeLastSceneInput && frame.tick == replay.ticks.size()) {
+                    Runtime::SceneCommandBuffer commands;
+                    commands.SetLocalTransform(selected.owner, {.translation = {4, 0, 0}});
+                    REQUIRE(live.Value()->Commit(commands).HasValue());
+                }
+                const auto scene = live.Value()->View();
+                frame.sceneInput = *scene.Get(selected.owner).Value().localTransform;
+                frame.sceneRevision = scene.StructuralRevision();
+                const auto sync = runtime.SyncDecisionQueryAtBlackboardSync(*owner->task, scene, frame.tick);
+                REQUIRE(sync.HasValue());
+                frame.committedQuery = sync.Value();
+                AiWorkBudget budget{128};
+                owner->task->AdvanceQuery(frame.tick, {budget, budget, budget});
+                const auto snapshot = runtime.CaptureDecisionSnapshotAtSafePoint(agent);
+                REQUIRE(snapshot.HasValue());
+                frame.queryOutput = snapshot.Value().Read(setup.key).Value();
+                const DecisionGraphStepInput input{frame.tick, snapshot.Value().Binding(), snapshot.Value(), {}};
+                auto trace = captureDecisionEvidence ? std::make_shared<DecisionStepTrace>() : nullptr;
+                const auto outcome = trace ? decision.Value()->StepWithTrace(input, *trace) : decision.Value()->Step(input);
+                REQUIRE(outcome.HasValue());
+                frame.decision = outcome.Value();
+                frame.evidence = std::move(trace);
+                if (frame.evidence) {
+                    CHECK(frame.evidence->Header().MatchesObservation(replay.manifest.plan, frame.tick, input.current,
+                                                                      input.blackboard.CapturedRevision()));
+                    CHECK(frame.evidence->DroppedRecords() == 0);
+                }
+                const auto state = runtime.CaptureCanonicalState(scene, CanonicalBudget);
+                REQUIRE(state.HasValue());
+                const auto record = EncodeAiCanonicalStateRecord(state.Value(), CanonicalBudget);
+                REQUIRE(record.HasValue());
+                frame.canonicalAi = ComputeSha256(std::as_bytes(std::span{record.Value()}));
+            }
+            CHECK(owner->admissions == 1);
+            return replay;
+        }
+
+        using PointReplayDivergence = std::pair<std::uint64_t, PointReplayBoundary>;
+
+        /** @brief Compares the observed stages in execution order and reports the first available differing boundary. */
+        std::optional<PointReplayDivergence> FirstPointReplayDifference(const PointReplay &recorded, const PointReplay &replayed) {
+            using enum PointReplayBoundary;
+            if (recorded.manifest.aiVersion != CurrentAiCanonicalStateVersion ||
+                recorded.manifest.decisionEvidenceVersion != DecisionTraceHeader::CurrentVersion ||
+                recorded.manifest.usesNondeterministicProviders || recorded.manifest != replayed.manifest)
+                return PointReplayDivergence{0, Manifest};
+            for (std::size_t i = 0; i < recorded.ticks.size(); ++i) {
+                const auto &left = recorded.ticks[i];
+                const auto &right = replayed.ticks[i];
+                if (left.tick != right.tick || left.sceneInput != right.sceneInput || left.sceneRevision != right.sceneRevision)
+                    return PointReplayDivergence{left.tick, SceneInput};
+                if (left.queryOutput != right.queryOutput || left.committedQuery != right.committedQuery)
+                    return PointReplayDivergence{left.tick, QueryOutput};
+                const bool traceDiffers = left.evidence && right.evidence &&
+                                          (left.evidence->Header().blackboardRevision != right.evidence->Header().blackboardRevision ||
+                                           !std::ranges::equal(left.evidence->Records(), right.evidence->Records()));
+                if (left.decision != right.decision || traceDiffers)
+                    return PointReplayDivergence{left.tick, Decision};
+                if (left.canonicalAi != right.canonicalAi)
+                    return PointReplayDivergence{left.tick, CanonicalAi};
+            }
+            return std::nullopt;
+        }
+
+        TEST_CASE("Scene query and decision replay diagnoses the first changed boundary", "[unit][ai][qualification][replay]") {
+            const auto baseline = ReplayPointDecision(true);
+            const auto repeated = ReplayPointDecision(true);
+            const auto withoutTrace = ReplayPointDecision(false);
+            CHECK_FALSE(FirstPointReplayDifference(baseline, repeated));
+            CHECK_FALSE(FirstPointReplayDifference(baseline, withoutTrace));
+            CHECK(std::ranges::count(baseline.ticks, true, &PointReplayTick::committedQuery) == 1);
+            REQUIRE(baseline.ticks.back().queryOutput);
+            CHECK(baseline.ticks.back().decision == AiTaskState::Succeeded);
+            CHECK(baseline.ticks.front().canonicalAi != baseline.ticks.back().canonicalAi);
+
+            const auto changedInput = ReplayPointDecision(true, true);
+            CHECK(FirstPointReplayDifference(baseline, changedInput) ==
+                  PointReplayDivergence{PointReplay::TickCount, PointReplayBoundary::SceneInput});
+            auto incompatible = repeated;
+            ++incompatible.manifest.decisionEvidenceVersion;
+            CHECK(FirstPointReplayDifference(baseline, incompatible) == PointReplayDivergence{0, PointReplayBoundary::Manifest});
+            CHECK(FirstPointReplayDifference(incompatible, incompatible) == PointReplayDivergence{0, PointReplayBoundary::Manifest});
+            incompatible = repeated;
+            incompatible.manifest.usesNondeterministicProviders = true;
+            CHECK(FirstPointReplayDifference(incompatible, incompatible) == PointReplayDivergence{0, PointReplayBoundary::Manifest});
         }
 
         TEST_CASE("Cooked controller publication rejects a provider retired after Scene preparation",
