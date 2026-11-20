@@ -407,6 +407,32 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual(report["observed"]["lifecycle"]["lifecycleRevision"], 3)
         self.assertNotIn("u10_a200", json.dumps(report))
 
+    def test_vulkan_capture_projects_only_the_latest_attributed_thermal_state(self):
+        log = log_line(LIFECYCLE) + log_line(FRAME)
+        log += log_line("host-thermal revision=4 state=severe")
+        log += log_line("host-thermal revision=6 state=none")
+        log += log_line("host-thermal revision=5 state=inactive", stamp=END)
+        log += log_line("host-thermal revision=7 state=critical raw=private")
+        log += log_line("host-thermal revision=8 state=critical", uid="10200")
+        log += log_line("host-thermal revision=9223372036854775808 state=unsupported")
+        status, report, _ = self.execute({LOGCAT: log}, profile_name=VULKAN_PROFILE)
+        self.assertEqual((status, report["status"]), (0, "complete"))
+        self.assertEqual(report["observed"]["thermal"], {"revision": 6, "state": "none"})
+        self.assertNotIn("raw=private", json.dumps(report))
+
+    def test_vulkan_can_report_an_unsupported_thermal_signal_without_failing(self):
+        log = log_line(LIFECYCLE) + log_line(FRAME) + log_line("host-thermal revision=1 state=unsupported")
+        status, report, _ = self.execute({LOGCAT: log}, profile_name=VULKAN_PROFILE)
+        self.assertEqual((status, report["status"]), (0, "complete"))
+        self.assertEqual(report["observed"]["thermal"], {"revision": 1, "state": "unsupported"})
+
+    def test_vulkan_capture_preserves_thermal_revision_across_diagnostic_polls(self):
+        first = log_line(LIFECYCLE) + log_line("host-thermal revision=2 state=inactive")
+        second = log_line(FRAME) + log_line("host-thermal revision=1 state=severe")
+        status, report, _ = self.execute({LOGCAT: [first, second]}, profile_name=VULKAN_PROFILE)
+        self.assertEqual((status, report["status"]), (0, "complete"))
+        self.assertEqual(report["observed"]["thermal"], {"revision": 2, "state": "inactive"})
+
     def test_device_clock_discontinuity_or_malformed_clock_cannot_supply_evidence(self):
         for final, expected in ((START, "device_log_clock_changed"),
                                 ("1795000000.111000001", "device_log_clock_changed"),

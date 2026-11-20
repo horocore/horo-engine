@@ -64,6 +64,13 @@ that cadence. Pausing or losing presentation prevents frame attempts, and
 resuming never submits missed frames. This fallback is independent of display
 refresh, thermal policy, and presentation completion.
 
+The Vulkan qualification Activity observes Android's thermal status while it
+is resumed. Its optional deployment evidence contains a process-local
+revision and a platform status. A paused Activity publishes `inactive`.
+Missing service or registration failure is reported as `unsupported` or
+`unavailable`. The observer reports state changes only, and it leaves frame
+cadence and authored settings to their existing owners.
+
 ## Nonblocking acquisition and retirement
 
 Availability polling observes the native output and advances retirement. It does
