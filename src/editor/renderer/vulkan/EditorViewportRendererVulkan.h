@@ -45,25 +45,29 @@ namespace Horo::Editor {
         /** @copydoc IEditorViewportRenderer::ColorDiagnostics */
         [[nodiscard]] EditorViewportColorDiagnostics ColorDiagnostics() const noexcept override;
         [[nodiscard]] Result<void> Initialize();
+
+        /** @brief Borrows one canvas recipe during cold preparation. The renderer retains its own native resources. */
+        struct ViewportCanvasPreparation final {
+            const Render::UiPaintProgramDescriptor &paint;
+            const Runtime::Ui::UiRenderSnapshot &prototype;
+            std::span<const Render::RenderTextureHandle> textures;
+            const Render::CookedUiPaintKernel &writer;
+            const EditorVulkanWorldCanvasCook &consumer;
+            Render::UiRenderCompositionSpace space;
+            Render::RenderGraphLimits limits;
+            bool overlay{};
+        };
+
         /** @brief Prepares a sampled canvas and the exact ordinary viewport scene in one owned graph per frame slot.
          * @param pass Exact viewport target, dimensions and renderable mesh topology.
-         * @param paint Finite producer descriptor with the same frame-slot count as the renderer.
-         * @param prototype Current canonical UI geometry used to admit structural roles.
-         * @param textures Exact sampled source inventory.
-         * @param writer Validated native Vulkan paint kernel.
-         * @param consumer Validated Vulkan position/UV sampled-color program.
-         * @param space Camera or World placement contract.
-         * @param overlay Whether the prepared scene also carries its ordinary viewport overlay.
-         * @param limits Explicit limits for the entire producer and scene graph.
+         * @param request Current UI prototype, validated shaders, composition space and graph limits for the selected viewport.
          * @param cancellation Cancelled source admission fence.
          * @return Exact preparation outcome. A failed replacement preserves the previous preparation while its inputs remain current.
          * @pre On the graphics owner, outside an active frame. The ordinary base output is required.
          */
-        [[nodiscard]] Result<void> PrepareViewportCanvas(
-            const Render::StaticMeshPassDescriptor &pass, const Render::UiPaintProgramDescriptor &paint,
-            const Runtime::Ui::UiRenderSnapshot &prototype, std::span<const Render::RenderTextureHandle> textures,
-            const Render::CookedUiPaintKernel &writer, const EditorVulkanWorldCanvasCook &consumer, Render::UiRenderCompositionSpace space,
-            bool overlay, const Render::RenderGraphLimits &limits, const CancellationToken &cancellation = {});
+        [[nodiscard]] Result<void> PrepareViewportCanvas(const Render::StaticMeshPassDescriptor &pass,
+                                                         const ViewportCanvasPreparation &request,
+                                                         const CancellationToken &cancellation = {});
 
         /** @brief Produces an exact submission for an already prepared renderer-owned program and acquired frame slot. */
         using ViewportCanvasSource = std::function<Result<Render::UiRenderSubmission>(const Render::UiPaintProgram &, std::uint32_t)>;
@@ -318,7 +322,7 @@ namespace Horo::Editor {
         /** @brief Uploads the current camera/World matrix to the exact acquired frame's pre-bound slot. */
         [[nodiscard]] Result<void> WriteCanvasQuad(Render::FrameToken frame, const CanvasQuadProgram &program, std::uint32_t slot,
                                                    const Render::StaticMeshPassDescriptor &pass,
-                                                   const std::optional<Math::Mat4> &placement);
+                                                   const std::optional<Math::Mat4> &placement) const;
         /** @brief Creates the closed top-left UV quad shared by all program slots. */
         [[nodiscard]] Result<void> CreateCanvasQuadMesh(CanvasQuadProgram &program);
 

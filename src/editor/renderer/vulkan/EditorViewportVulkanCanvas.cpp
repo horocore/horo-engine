@@ -38,8 +38,7 @@ namespace Horo::Editor {
         const auto metadata = EncodeReflectedShaderArtifact(cook.metadata);
         if (metadata.HasError())
             return Outcome::Failure(metadata.ErrorValue());
-        const auto admitted = LoadEditorVulkanWorldCanvasCook(cook.payload, metadata.Value());
-        if (admitted.HasError())
+        if (const auto admitted = LoadEditorVulkanWorldCanvasCook(cook.payload, metadata.Value()); admitted.HasError())
             return Outcome::Failure(admitted.ErrorValue());
 
         auto program = std::make_unique<CanvasQuadProgram>(*this);
@@ -134,7 +133,7 @@ namespace Horo::Editor {
     /** @copydoc EditorViewportRendererVulkan::WriteCanvasQuad */
     Result<void> EditorViewportRendererVulkan::WriteCanvasQuad(const Render::FrameToken frame, const CanvasQuadProgram &program,
                                                                const std::uint32_t slot, const Render::StaticMeshPassDescriptor &pass,
-                                                               const std::optional<Math::Mat4> &placement) {
+                                                               const std::optional<Math::Mat4> &placement) const {
         if (&program.owner != this || slot >= device_.frames || !program.slots[slot].uniforms.material)
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
         const auto mvp = BuildVulkanEditorCanvasMvp(program.space, placement, pass.scene.camera, pass.extent);

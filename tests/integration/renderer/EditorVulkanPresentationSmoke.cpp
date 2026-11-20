@@ -401,8 +401,8 @@ namespace Horo::Tests::VulkanEditor {
 
         using enum UiRenderCompositionSpace;
         const auto space = GENERATE(Camera, World);
-        Check(host.viewport->PrepareViewportCanvas(pass, {projection, {32, 64, 4}, 2, 32}, snapshot, {}, *writer, consumer, space, false,
-                                                   {16, 64, 192, 32}));
+        const UiPaintProgramDescriptor paint{projection, {32, 64, 4}, 2, 32};
+        Check(host.viewport->PrepareViewportCanvas(pass, {paint, snapshot, {}, *writer, consumer, space, {16, 64, 192, 32}}));
         const auto render = [&](const std::uint64_t number, const std::optional<Math::Mat4> &placement) {
             auto frame = host.Frame(number);
             Check(host.bridge->Port()->PreparePrimaryOutput(frame.Token(), {}));
