@@ -14,23 +14,26 @@ namespace Horo::Render::Detail {
             return capture.ResolveDrawView(found->instance);
         }
 
-        /** @brief Requires an exact whole render attachment. */
-        bool MatchesAttachment(const VulkanGraphResource &texture, const VulkanDrawViewBinding &view, FramebufferExtent extent,
-                               bool depth) noexcept {
+        /** @brief The material renderer uses single-sample 2D images and tracks contents at whole-image granularity. */
+        bool SupportsAttachmentImage(const RenderTextureDescriptor &image, FramebufferExtent extent, bool depth,
+                                     bool loadsExistingContents) noexcept {
+            return image.extent == extent && VulkanResourceConversion::IsDepthFormat(image.format) == depth &&
+                   image.dimension == RenderTextureDimension::TwoD && (image.layerCount == 1 || loadsExistingContents) &&
+                   image.mipCount == 1 && image.sampleCount == 1 && HasTextureUsage(image.usage, RenderTextureUsage::RenderAttachment);
+        }
+
+        /** @brief A material pass accesses exactly one aspect-qualified, single-mip 2D layer. */
+        bool MatchesAttachmentView(const VulkanGraphResource &texture, const VulkanDrawViewBinding &view, bool depth) noexcept {
             using enum RenderTextureFormat;
+            using enum RenderTextureAspect;
             const auto &image = texture.textureDescriptor;
             const auto &subresource = view.descriptor;
             const bool stencil = image.format == Depth24Stencil8 || image.format == Depth32FloatStencil8;
-            const auto aspect = !depth    ? RenderTextureAspect::Color
-                                : stencil ? RenderTextureAspect::DepthStencil
-                                          : RenderTextureAspect::Depth;
-            if (!view.view || view.image != texture.image || image.extent != extent ||
-                VulkanResourceConversion::IsDepthFormat(image.format) != depth || subresource.aspect != aspect)
-                return false;
-            return image.dimension == RenderTextureDimension::TwoD && image.layerCount == 1 && image.mipCount == 1 &&
-                   image.sampleCount == 1 && HasTextureUsage(image.usage, RenderTextureUsage::RenderAttachment) &&
+            const auto depthAspect = stencil ? DepthStencil : Depth;
+            // The native view registry already validates mip ranges. The admitted image has only one mip.
+            return view.view && view.image == texture.image && subresource.aspect == (depth ? depthAspect : Color) &&
                    subresource.dimension == RenderTextureViewDimension::TwoD && subresource.format == image.format &&
-                   subresource.baseMip == 0 && subresource.mipCount == 1 && subresource.baseLayer == 0 && subresource.layerCount == 1;
+                   subresource.baseLayer < image.layerCount && subresource.layerCount == 1;
         }
 
         /** @brief Captures the same graph attachment whose state is transitioned by compiled uses. */
@@ -47,7 +50,10 @@ namespace Horo::Render::Detail {
                 const auto view = ResolveGraphView(request, capture, depth ? raster.depthView : raster.colorView);
                 if (view.HasError())
                     return Outcome::Failure(view.ErrorValue());
-                if (!MatchesAttachment(texture, view.Value(), raster.extent, depth))
+                if (const bool loadsExistingContents =
+                        depth ? !raster.depthClear.has_value() : raster.colorOperations.loadOperation == AttachmentLoadOperation::Load;
+                    !SupportsAttachmentImage(texture.textureDescriptor, raster.extent, depth, loadsExistingContents) ||
+                    !MatchesAttachmentView(texture, view.Value(), depth))
                     return Outcome::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
                 if (depth) {
                     target.depth = texture;

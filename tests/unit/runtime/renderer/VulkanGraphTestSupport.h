@@ -37,6 +37,7 @@ namespace Horo::Render::VulkanGraphTest {
             VkAttachmentLoadOp colorLoad{};
             VkAttachmentStoreOp colorStore{};
             VkClearValue colorClear{};
+            VkImageView depthView{};
         };
 
         std::vector<RenderingCall> renderingCalls;
@@ -92,6 +93,8 @@ namespace Horo::Render::VulkanGraphTest {
             call.colorStore = color.storeOp;
             call.colorClear = color.clearValue;
         }
+        if (info->pDepthAttachment)
+            call.depthView = info->pDepthAttachment->imageView;
         ++encodedGraph->renderingBegins;
     }
 

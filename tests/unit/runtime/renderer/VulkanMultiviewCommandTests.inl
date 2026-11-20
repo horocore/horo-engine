@@ -206,6 +206,109 @@ TEST_CASE("Vulkan stores requested XR projection alpha in both acquired eye atta
     CHECK(fixture.graph.PollDrain().Value() == RenderBackendDrainProgress::Drained);
 }
 
+TEST_CASE("Vulkan material raster preserves prepared stereo layers through single-eye attachments", "[vulkan][multiview][material]") {
+    enum class OverlayMode {
+        LoadBoth,
+        ClearColor,
+        ClearDepth,
+        ForeignView,
+        PartialScene
+    };
+    const auto mode = GENERATE(OverlayMode::LoadBoth, OverlayMode::ClearColor, OverlayMode::ClearDepth, OverlayMode::ForeignView,
+                               OverlayMode::PartialScene);
+    NativeGraphFixture fixture(false);
+    MultiviewPacket packet(fixture, false, true);
+    auto builder = SubmissionTest::Take(RenderGraphBuilder::Create());
+    for (const auto &resource : packet.graph->Resources()) {
+        if (resource.kind == RenderGraphResourceKind::Texture)
+            REQUIRE(builder.ImportTexture(std::get<RenderTextureHandle>(resource.binding), RenderGraphResourceClass::External).HasValue());
+        else
+            REQUIRE(builder.ImportBuffer(std::get<RenderBufferHandle>(resource.binding), RenderGraphResourceClass::Persistent).HasValue());
+    }
+    const auto scene = SubmissionTest::Take(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
+    const auto overlay = SubmissionTest::Take(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
+    for (const auto &use : packet.graph->Usages())
+        REQUIRE(builder.AddUsage({scene, {builder.Owner(), use.resource.value}, use.access, use.kind}).HasValue());
+    REQUIRE(builder.AddDependency({scene, overlay, RenderGraphDependencyKind::ExecutionOrder}).HasValue());
+
+    auto stereo = packet.Workload();
+    for (auto &target : packet.targets) {
+        target.color.owner = builder.Owner();
+        target.depth.owner = builder.Owner();
+    }
+    for (auto &geometry : packet.geometry) {
+        geometry.vertices.owner = builder.Owner();
+        geometry.indices.owner = builder.Owner();
+        geometry.parameters.owner = builder.Owner();
+    }
+    for (auto &entry : packet.resources)
+        entry.resource.owner = builder.Owner();
+    if (mode == OverlayMode::PartialScene)
+        --packet.targets.back().rectangle.width;
+    const auto &eye = packet.targets.back();
+    const bool clearColor = mode == OverlayMode::ClearColor;
+    const bool clearDepth = mode == OverlayMode::ClearDepth;
+    REQUIRE(builder.ExportResource(eye.color).HasValue());
+    REQUIRE(builder.ExportResource(eye.depth).HasValue());
+    REQUIRE(builder
+                .AddUsage({overlay, eye.color, clearColor ? RenderGraphAccess::Write : RenderGraphAccess::ReadWrite,
+                           RenderGraphUsageKind::ColorAttachment})
+                .HasValue());
+    REQUIRE(builder
+                .AddUsage({overlay, eye.depth, clearDepth ? RenderGraphAccess::Write : RenderGraphAccess::ReadWrite,
+                           RenderGraphUsageKind::DepthStencilAttachment})
+                .HasValue());
+    const std::array
+        workloads{RenderGraphPassWorkload{scene, stereo},
+                  RenderGraphPassWorkload{overlay,
+                                          RenderGraphMaterialRaster{.color = eye.color,
+                                                                    .depth = eye.depth,
+                                                                    .colorView =
+                                                                        mode == OverlayMode::ForeignView ? eye.depthView : eye.colorView,
+                                                                    .depthView = eye.depthView,
+                                                                    .extent = {8, 8},
+                                                                    .colorOperations = {.loadOperation =
+                                                                                            clearColor ? AttachmentLoadOperation::Clear
+                                                                                                       : AttachmentLoadOperation::Load},
+                                                                    .depthClear = clearDepth ? std::optional{1.0F} : std::nullopt}}};
+    const auto graph = SubmissionTest::Take(builder.Finalize());
+    const auto schedule = SubmissionTest::Take(CompileRenderGraph(graph));
+    const std::array queues{RenderQueueAssignment{RenderQueueRole::Graphics, {1}}};
+    const auto previousInitial = packet.graph->ImportedStates();
+    auto initial = std::vector(previousInitial.begin(), previousInitial.end());
+    for (auto &entry : initial)
+        entry.resource.owner = scene.owner;
+    const auto sync = SubmissionTest::Take(SynthesizeRenderGraphSynchronization(graph, schedule, queues, initial));
+    const auto compiled = SubmissionTest::Take(CompileRenderGraphExecution(graph, schedule, sync, queues));
+    auto submissions = packet.submissions;
+    submissions.front().passes.count = workloads.size();
+    RenderGraphLeaseTransfer transfer;
+    REQUIRE(fixture.graph.BeginFrame({1}).HasValue());
+    const auto executed = fixture.graph.ExecuteGraph(
+        {{1}, compiled, workloads, packet.resources, &fixture.lease, false, &transfer, submissions, packet.meshes, packet.views});
+    INFO((executed.HasError() ? executed.ErrorValue().message : "stereo overlay recorded"));
+    if (mode != OverlayMode::LoadBoth) {
+        REQUIRE(executed.HasError());
+        const auto &expected =
+            mode == OverlayMode::PartialScene ? VulkanBackendErrors::ResourceRequestInvalid : VulkanBackendErrors::ResourceIdentityInvalid;
+        CHECK(executed.ErrorValue().code.Value() == expected.code.Value());
+        CHECK(fixture.encoded.renderingCalls.empty());
+        fixture.graph.AbortFrame({1});
+        return;
+    }
+    REQUIRE(executed.HasValue());
+    const auto &calls = fixture.encoded.renderingCalls;
+    REQUIRE(calls.size() == 3);
+    CHECK(calls.back().colorView == calls[1].colorView);
+    CHECK(calls.back().colorLoad == VK_ATTACHMENT_LOAD_OP_LOAD);
+    CHECK(calls.back().colorStore == VK_ATTACHMENT_STORE_OP_STORE);
+    CHECK(calls.back().depth);
+    CHECK(calls.back().load == VK_ATTACHMENT_LOAD_OP_LOAD);
+    CHECK(calls.back().depthView == calls[1].depthView);
+    CHECK(calls.back().depthView != calls[0].depthView);
+    REQUIRE(fixture.graph.SubmitFrame({1}).HasValue());
+}
+
 TEST_CASE("Vulkan motion graph records paired floating and depth attachments only with exact forward state",
           "[vulkan][multiview][motion][command]") {
     auto format = RenderTextureFormat::Rgba16Float;
