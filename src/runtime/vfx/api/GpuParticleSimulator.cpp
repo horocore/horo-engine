@@ -254,7 +254,11 @@ namespace Horo::Vfx {
     GpuParticleRenderState GpuParticleSimulator::RenderState() const noexcept {
         if (state_->owner != std::this_thread::get_id())
             return {};
-        return {state_->receipt, state_->nextTick, state_->nextTick + 1, state_->lifetimeToken,
-                state_->active && !state_->stopped && !state_->shutdown};
+        return {state_->receipt,
+                state_->nextTick,
+                state_->nextTick + 1,
+                state_->lifetimeToken,
+                state_->active && !state_->stopped && !state_->shutdown,
+                state_->photosensitiveFlash};
     }
 }  // namespace Horo::Vfx

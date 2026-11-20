@@ -25,6 +25,7 @@ namespace Horo::Vfx::Detail {
         CancellationSource lifetimeSource;
         CancellationToken lifetimeToken{lifetimeSource.Token()};
         std::uint64_t nextTick{};
+        bool photosensitiveFlash{};
         bool active{};
         bool stopped{};
         bool shutdown{};

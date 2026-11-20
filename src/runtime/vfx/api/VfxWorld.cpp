@@ -316,7 +316,7 @@ namespace Horo::Vfx {
         data.scene_ = world.scene_.Value();
         data.frame_ = frame;
         data.originRevision_ = revision;
-        if (!world.AppendCpuEmitters(data, origin, report, flashes) || !AppendGpuEmitters(world, data, origin, report))
+        if (!world.AppendCpuEmitters(data, origin, report, flashes) || !AppendGpuEmitters(world, data, origin, report, flashes))
             return outcome;
         lastFrame_ = frame;
         outcome.snapshot.data_ = *available;

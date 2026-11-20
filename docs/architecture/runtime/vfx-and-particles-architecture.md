@@ -530,8 +530,10 @@ fields preserve existing presentation. The host projects its committed flash
 preference into Scene extraction. Both fixed and spawned CPU emitters omit
 tagged batches before charging frame budgets when suppression is active. Spawn
 results, particle simulation, lifetimes and retained frame snapshots remain intact.
-GPU logical preparation rejects tagged sources until its simulation and draw
-admission can be controlled independently.
+Tagged GPU batches retain their immutable simulation work and observation intent.
+The frontend omits their graphics pass and draw budget charge while suppression
+is active. Resuming presentation uses the same advanced simulation, with no
+restart or replay.
 
 The shapes below are schematic contracts, not installed public headers. FrameSlice
 refers to immutable frame-owned storage, not an unowned span into simulation memory.

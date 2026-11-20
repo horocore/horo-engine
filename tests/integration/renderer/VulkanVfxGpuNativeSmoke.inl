@@ -103,7 +103,8 @@ namespace VulkanVfxGpuSmoke {
     }
 
     /** @brief Authors source readback policy before canonical asset validation; CPU oracle calls retain disabled defaults. */
-    ParticleSystemDescriptor Source(SimulationPreference preference, VfxGpuReadbackDescriptor readback = {}, std::uint32_t count = Count) {
+    ParticleSystemDescriptor Source(SimulationPreference preference, VfxGpuReadbackDescriptor readback = {}, std::uint32_t count = Count,
+                                    bool photosensitiveFlash = false) {
         auto d = Vfx::Tests::ValidParticleDescriptorData();
         d.maximumParticles = count;
         d.shape = ParticleEmitterShape::Box;
@@ -120,6 +121,7 @@ namespace VulkanVfxGpuSmoke {
         d.sortMode = ParticleSortMode::None;
         d.simulationPreference = preference;
         d.gpuReadback = readback;
+        d.photosensitiveFlash = photosensitiveFlash;
         return Vfx::Tests::ParticleDescriptor(d);
     }
 
@@ -249,7 +251,7 @@ namespace VulkanVfxGpuSmoke {
         }
 
         /** @brief Prepares real Vulkan execution exclusively from the validated asset's authored observation policy. */
-        void Prepare(bool observe = true) {
+        void Prepare(bool observe = true, bool photosensitiveFlash = false) {
             auto &frontend = *owner_.frontend;
             const auto bytes = count_ * VfxGpuObservationWords::Bytes;
             if (observe)
@@ -278,7 +280,8 @@ namespace VulkanVfxGpuSmoke {
             const VfxGpuReadbackDescriptor
                 policy{true, 1,      VfxGpuReadbackPurpose::DiagnosticsCapture, VfxGpuReadbackRequirement::RequiredForVisualEffect,
                        1,    count_, count_ * VfxGpuObservationWords::Bytes,    1};
-            const auto source = Source(SimulationPreference::RequireGPU, observe ? policy : VfxGpuReadbackDescriptor{}, count_);
+            const auto source =
+                Source(SimulationPreference::RequireGPU, observe ? policy : VfxGpuReadbackDescriptor{}, count_, photosensitiveFlash);
             const auto admission = CookAdmission(source);
             auto logical = Value(GpuParticleSimulator::Create(admission, info));
             CheckReadbackPolicy(logical->Preparation().descriptor.readback, source.Data().gpuReadback);
@@ -313,15 +316,17 @@ namespace VulkanVfxGpuSmoke {
             }
         }
 
-        RenderWorldSnapshot Capture() {
-            return world_->Extract(++snapshot_, {}, 1).snapshot;
+        RenderWorldSnapshot Capture(VfxFlashPolicy flashes = VfxFlashPolicy::Present) {
+            const auto capture = world_->Extract(++snapshot_, {}, 1, flashes);
+            REQUIRE(capture.report.status == VfxExtractionStatus::Complete);
+            return capture.snapshot;
         }
 
-        void Step(bool partialFailure = false, float deltaSeconds = Delta) {
+        void Step(bool partialFailure = false, float deltaSeconds = Delta, VfxFlashPolicy flashes = VfxFlashPolicy::Present) {
             // Retire the prior acquired CPU result after its consumer lease was released, outside a live frame.
             Pump();
             REQUIRE(world_->PrepareGpuSteps(deltaSeconds).status == GpuParticleStepStatus::Complete);
-            auto snapshot = Capture();
+            auto snapshot = Capture(flashes);
             REQUIRE(snapshot.GpuBatches().size() == 1);
             const auto &batch = snapshot.GpuBatches()[0];
             REQUIRE(batch.pending);
@@ -334,11 +339,7 @@ namespace VulkanVfxGpuSmoke {
             const auto anchor = Value(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
             const auto output = Value(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
             Accepted(builder.AddUsage({anchor, color, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment}));
-            VfxGpuGraphRequest request{.preparation = batch.preparation,
-                                       .generation = batch.generation,
-                                       .pending = batch.pending,
-                                       .lifetimeCancellation = batch.lifetimeCancellation,
-                                       .view = {.originDelta = batch.originDelta, .extent = Extent},
+            VfxGpuGraphRequest request{.view = {.extent = Extent},
                                        .color = color,
                                        .colorOperations = {.loadOperation = AttachmentLoadOperation::Load},
                                        .lightingComplete = anchor,
@@ -347,17 +348,42 @@ namespace VulkanVfxGpuSmoke {
                                        .remainingPasses = 6,
                                        .remainingResources = 7,
                                        .remainingUsages = 15};
+            request.UseBatch(batch);
+            if (request.suppressDraw) {
+                request.color = {};
+                request.lightingComplete = {};
+                request.outputTransform = {};
+                request.remainingDrawCalls = 0;
+                request.remainingPasses = 1;
+                request.remainingUsages = 4;
+                const auto paused = [&] {
+                    auto pausedRequest = request;
+                    pausedRequest.UseBatch(batch, false);
+                    return frame.ScheduleVfxGpu(builder, pausedRequest);
+                }();
+                REQUIRE(paused.HasValue());
+                CHECK(paused.Value().Workloads().empty());
+            }
             request.view.viewProjection.values[14] = .5F;
             auto contribution = frame.ScheduleVfxGpu(builder, request);
             INFO((contribution.HasError() ? contribution.ErrorValue().code.Value() + ": " + contribution.ErrorValue().message
                                           : "Complete canonical GPU graph contribution."));
             REQUIRE(contribution.HasValue());
             REQUIRE(contribution.Value().dispatched);
-            const auto &compute = std::get<RenderGraphVfxGpuCompute>(contribution.Value().records[0].workload);
-            const auto &draw = std::get<RenderGraphVfxGpuDraw>(contribution.Value().records[1].workload);
-            CHECK(draw.particles == compute.destination);
+            CheckContribution(contribution.Value(), request.suppressDraw);
             Execute(frame, builder, contribution.Value(), color, anchor, output, partialFailure);
             Present(frame, partialFailure);
+        }
+
+        /** @brief Checks the actual graph contribution before native execution. */
+        static void CheckContribution(const VfxGpuGraphSchedule &schedule, bool suppressed) {
+            CHECK(schedule.drawCalls == (suppressed ? 0U : 1U));
+            REQUIRE(schedule.recordCount == (suppressed ? 1U : 2U));
+            const auto &compute = std::get<RenderGraphVfxGpuCompute>(schedule.records[0].workload);
+            if (!suppressed) {
+                const auto &draw = std::get<RenderGraphVfxGpuDraw>(schedule.records[1].workload);
+                CHECK(draw.particles == compute.destination);
+            }
         }
 
         void RequireFrameAdmissionClosed() {
@@ -556,6 +582,40 @@ namespace VulkanVfxGpuSmoke {
                 auto result = unit.Observe();
                 unit.CheckOracle(result);
             }
+        }
+        Horo::Render::Test::RequireDrainedOwner(*owner.frontend);
+    }
+
+    TEST_CASE("Vulkan keeps simulating tagged flashes without publishing a graphics pass",
+              "[integration][renderer][vulkan][gpu][vfx][flash-safety]") {
+        const auto package = Package();
+        if (package.empty() || !std::filesystem::is_directory(package))
+            SKIP("Genuine portable Vulkan cooked fixture is absent; no runtime cooking or native substitute.");
+        NativeOwner owner;
+        InitializeCompute(owner);
+        {
+            Unit unit{owner, package};
+            unit.Prepare(true, /*photosensitiveFlash=*/true);
+            const auto hidden = unit.Capture(VfxFlashPolicy::Suppress);
+            REQUIRE(hidden.GpuBatches().size() == 1);
+            CHECK(hidden.GpuBatches()[0].suppressDraw);
+            unit.Step(false, Delta, VfxFlashPolicy::Suppress);
+            {
+                auto observation = unit.Observe();
+                unit.CheckOracle(observation);
+            }
+            unit.Complete();
+            CHECK(hidden.GpuBatches()[0].generation == 1);
+            const auto restored = unit.Capture();
+            REQUIRE(restored.GpuBatches().size() == 1);
+            CHECK_FALSE(restored.GpuBatches()[0].suppressDraw);
+            CHECK(restored.GpuBatches()[0].generation == 2);
+            unit.Step();
+            {
+                auto observation = unit.Observe();
+                unit.CheckOracle(observation);
+            }
+            unit.Complete();
         }
         Horo::Render::Test::RequireDrainedOwner(*owner.frontend);
     }

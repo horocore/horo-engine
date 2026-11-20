@@ -19,7 +19,7 @@ namespace Horo::Vfx::GpuParticleDetail {
             if (info.initialization != GpuParticleInitialization::PreparedParticles ||
                 info.resolution.domain != ResolvedSimulationDomain::GPU || info.requiredFeatures != GpuParticleRequiredFeature::None)
                 return false;
-            return !d.photosensitiveFlash && d.simulationPreference != SimulationPreference::RequireCPU && MotionSubset(d) &&
+            return d.simulationPreference != SimulationPreference::RequireCPU && MotionSubset(d) &&
                    d.renderMode == ParticleRenderMode::Billboard && d.sortMode == ParticleSortMode::None;
         }
 
@@ -158,6 +158,7 @@ namespace Horo::Vfx::GpuParticleDetail {
                                                                             const GpuParticleSimulatorCreateInfo &i,
                                                                             const Render::GpuParticleLayout &layout) {
             auto s = std::make_unique<Detail::GpuParticleSimulatorState>();
+            s->photosensitiveFlash = admission.Descriptor().Data().photosensitiveFlash;
             s->preparation.descriptor = Descriptor(admission, i, layout);
             s->initialWords.resize(layout.wordCount);
             s->forceWords.resize(i.forces.size() * Render::GpuParticleForceWords::Count);

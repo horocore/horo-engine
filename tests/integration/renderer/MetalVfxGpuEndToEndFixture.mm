@@ -395,11 +395,7 @@ namespace Horo::Render::Test {
                 const auto anchor = Value(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
                 const auto output = Value(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
                 Accepted(builder.AddUsage({anchor, color, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment}));
-                VfxGpuGraphRequest request{.preparation = batch.preparation,
-                                           .generation = batch.generation,
-                                           .pending = advance ? batch.pending : std::nullopt,
-                                           .lifetimeCancellation = batch.lifetimeCancellation,
-                                           .view = {.originDelta = batch.originDelta, .extent = Extent},
+                VfxGpuGraphRequest request{.view = {.extent = Extent},
                                            .color = color,
                                            .colorOperations = {.loadOperation = AttachmentLoadOperation::Load},
                                            .lightingComplete = anchor,
@@ -408,6 +404,7 @@ namespace Horo::Render::Test {
                                            .remainingPasses = 6,
                                            .remainingResources = 7,
                                            .remainingUsages = 15};
+                request.UseBatch(batch, advance);
                 request.view.viewProjection.values[14] = .5F;
                 auto contribution = frame.ScheduleVfxGpu(builder, request);
                 INFO((contribution.HasError() ? contribution.ErrorValue().message : "Same-graph contribution admitted."));

@@ -94,6 +94,7 @@ namespace Horo::Vfx {
         std::uint64_t generation{};
         CancellationToken lifetimeCancellation;
         bool active{};
+        bool photosensitiveFlash{}; /**< Immutable authored presentation classification. */
     };
 
     /** @brief Scene-owner logical state with preallocated pending records; never owns a graphics context or encodes/maps GPU work. */

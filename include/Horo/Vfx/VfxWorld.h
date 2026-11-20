@@ -123,10 +123,10 @@ namespace Horo::Vfx {
                                                    std::uint64_t originRevision, VfxFlashPolicy flashes) noexcept;
 
         [[nodiscard]] bool AppendGpuEmitter(EffectSystemId, EmitterId, const GpuParticleSimulator &, std::uint32_t,
-                                            Render::RenderWorldFrameData &, const Math::WorldCoordinate64 &,
-                                            VfxExtractionReport &) const noexcept;
+                                            Render::RenderWorldFrameData &, const Math::WorldCoordinate64 &, VfxExtractionReport &,
+                                            VfxFlashPolicy) const noexcept;
         [[nodiscard]] bool AppendGpuEmitters(const VfxWorld &, Render::RenderWorldFrameData &, const Math::WorldCoordinate64 &,
-                                             VfxExtractionReport &) const noexcept;
+                                             VfxExtractionReport &, VfxFlashPolicy) const noexcept;
 
         /** @brief Copies validated particle values into admitted frame storage; never publishes a partial frame.
          * @param binding Prepared emitter coordinates. @param particles Exact live identity source.
@@ -252,7 +252,7 @@ namespace Horo::Vfx {
         [[nodiscard]] VfxSpawnStatus InspectSpawnAsset(Assets::AssetId asset, VfxSpawnAssetInfo &output) const noexcept;
         /** @brief Captures all live effects into the sole immutable channel.
          * @param frame Increasing frame ordinal. @param origin Captured render origin. @param originRevision Captured revision.
-         * @param flashes Preference to hide tagged CPU particle output. Simulation, lifetime and events continue unchanged.
+         * @param flashes Preference to hide tagged particle output. Simulation, lifetime and events continue unchanged.
          * @return Immutable values and typed bounds/backpressure evidence.
          */
         [[nodiscard]] VfxExtractionOutcome Extract(std::uint64_t frame, const Math::WorldCoordinate64 &origin, std::uint64_t originRevision,
