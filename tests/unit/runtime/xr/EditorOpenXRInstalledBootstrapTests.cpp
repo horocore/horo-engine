@@ -25,6 +25,7 @@ namespace Horo::Editor::Tests {
               "[xr][host][bootstrap][install]") {
         InstalledProductFixture fixture{HORO_TEST_OPENXR_LOADER};
         auto arguments = fixture.BootstrapArguments();
+        arguments.emplace_back("--xr-host-world-canvas-minimum-span-pixels=48");
         fixture.RetireInstaller();
         const auto cache = std::filesystem::canonical(fixture.storage.Path()) / "cache";
         REQUIRE_FALSE(std::filesystem::exists(cache / "native"));
@@ -38,6 +39,8 @@ namespace Horo::Editor::Tests {
         REQUIRE(services.bindings);
         CHECK(services.bindings->schema.actions.size() == 1);
         CHECK(services.trackingRoot == Runtime::SceneObjectId{1});
+        const auto &canvasSpan = services.configuration.invocation.at(SettingKey{"xr.world_canvas.minimum_span_pixels"});
+        CHECK(std::get<std::int64_t>(canvasSpan.value) == 48);
         REQUIRE(services.jobs);
         REQUIRE(services.validateAdmission);
         CHECK(services.validateAdmission().HasValue());

@@ -10,6 +10,7 @@
 
 #include <algorithm>
 #include <array>
+#include <charconv>
 #include <chrono>
 #include <cstdio>
 #include <thread>
@@ -24,6 +25,7 @@ namespace Horo::Editor {
             bool requested{};
             bool allowEyeGazePreview{};
             bool allowPlaneCapturePreview{};
+            std::optional<std::uint16_t> worldCanvasMinimumSpanPixels;
         };
 
         /** @brief Keeps invalid explicit host requests closed, rather than silently continuing as ordinary desktop. */
@@ -63,7 +65,31 @@ namespace Horo::Editor {
             return AdmitCacheDirectory(files, cache);
         }
 
-        /** @brief Parses the actual process's three independent host inputs once, rejecting duplicate/partial requests. */
+        /** @brief Reads an exact positive pixel count before any native package startup. */
+        std::optional<std::uint16_t> ParseCanvasMinimumSpan(const std::string_view text) {
+            std::uint16_t parsed{};
+            const auto end = text.data() + text.size();
+            const auto [stop, error] = std::from_chars(text.data(), end, parsed);
+            return error == std::errc{} && stop == end && parsed > 0 ? std::optional{parsed} : std::nullopt;
+        }
+
+        /** @brief Validates the complete host selection before any filesystem or signature work. */
+        Result<void> ValidateHostArguments(const HostArguments &options) {
+            if (options.requested && std::ranges::any_of(options.paths, [](const auto &path) {
+                return !path;
+            }))
+                return Result<void>::Failure(
+                    BootstrapError("XR host roots, signed catalog and catalog signature must be supplied together."));
+            if (options.allowEyeGazePreview && !options.requested)
+                return Result<void>::Failure(BootstrapError("XR gaze policy requires an explicit signed XR host."));
+            if (options.allowPlaneCapturePreview && !options.requested)
+                return Result<void>::Failure(BootstrapError("XR spatial plane policy requires an explicit signed XR host."));
+            if (options.worldCanvasMinimumSpanPixels.has_value() && !options.requested)
+                return Result<void>::Failure(BootstrapError("XR world canvas policy requires an explicit signed XR host."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Parses explicit native host selection and invocation policy once, rejecting duplicate and partial requests. */
         Result<HostArguments> ParseHostArguments(const std::span<char *> arguments) {
             HostArguments parsed;
             constexpr std::array<std::string_view, 3> flags{"--xr-host-roots", "--xr-host-catalog", "--xr-host-catalog-signature"};
@@ -72,6 +98,14 @@ namespace Horo::Editor {
                 if (arguments[index] == nullptr)
                     return Result<HostArguments>::Failure(BootstrapError("Explicit XR host input contains a null argument."));
                 const std::string_view argument{arguments[index++]};
+                if (constexpr std::string_view canvasOption = "--xr-host-world-canvas-minimum-span-pixels=";
+                    argument.starts_with(canvasOption)) {
+                    const auto span = ParseCanvasMinimumSpan(argument.substr(canvasOption.size()));
+                    if (!span.has_value() || parsed.worldCanvasMinimumSpanPixels.has_value())
+                        return Result<HostArguments>::Failure(BootstrapError("XR world canvas span requires one integer from 1 to 65535."));
+                    parsed.worldCanvasMinimumSpanPixels = span;
+                    continue;
+                }
                 if (argument == "--xr-enable-eye-gaze") {
                     if (parsed.allowEyeGazePreview)
                         return Result<HostArguments>::Failure(BootstrapError("Duplicate XR gaze policy option."));
@@ -99,15 +133,8 @@ namespace Horo::Editor {
                         BootstrapError("XR host paths must be unique explicit normalized absolute paths."));
                 parsed.paths[slot] = path;
             }
-            if (parsed.requested && std::ranges::any_of(parsed.paths, [](const auto &path) {
-                return !path;
-            }))
-                return Result<HostArguments>::Failure(
-                    BootstrapError("XR host roots, signed catalog and catalog signature must be supplied together."));
-            if (parsed.allowEyeGazePreview && !parsed.requested)
-                return Result<HostArguments>::Failure(BootstrapError("XR gaze policy requires an explicit signed XR host."));
-            if (parsed.allowPlaneCapturePreview && !parsed.requested)
-                return Result<HostArguments>::Failure(BootstrapError("XR spatial plane policy requires an explicit signed XR host."));
+            if (const auto valid = ValidateHostArguments(parsed); valid.HasError())
+                return Result<HostArguments>::Failure(valid.ErrorValue());
             return Result<HostArguments>::Success(std::move(parsed));
         }
 
@@ -274,8 +301,7 @@ namespace Horo::Editor {
 
         /** @brief Composes ONE canonical package authority, then copies only verified installed physical declarations. */
         Result<void> Initialize(const std::filesystem::path &project, const std::filesystem::path &cache,
-                                const Runtime::SceneObjectId trackingRoot, const bool allowEyeGazePreview,
-                                const bool allowPlaneCapturePreview) {
+                                const Runtime::SceneObjectId trackingRoot, const HostArguments &options) {
             if (auto prepared = PrepareNativeCacheParents(files, cache); prepared.HasError())
                 return prepared;
             auto platform = Application::Internal::NativePackagePlatform();
@@ -318,10 +344,12 @@ namespace Horo::Editor {
             put("xr.limits.spaces", static_cast<std::int64_t>(catalog.Limits().maximumSpaces));
             put("xr.limits.actions", static_cast<std::int64_t>(catalog.Limits().maximumActions));
             put("xr.limits.devices", static_cast<std::int64_t>(catalog.Limits().maximumDevices));
-            if (allowEyeGazePreview)
+            if (options.allowEyeGazePreview)
                 put("xr.features.eye_gaze", static_cast<std::int64_t>(XR::XRProjectFeaturePolicy::OptionalDisable));
-            if (allowPlaneCapturePreview)
+            if (options.allowPlaneCapturePreview)
                 put("xr.preview.spatial_planes", true);
+            if (options.worldCanvasMinimumSpanPixels.has_value())
+                put("xr.world_canvas.minimum_span_pixels", static_cast<std::int64_t>(*options.worldCanvasMinimumSpanPixels));
             return Current();
         }
     };
@@ -369,9 +397,7 @@ namespace Horo::Editor {
         if (publishers.HasError())
             return Outcome::Failure(publishers.ErrorValue());
         auto impl = std::make_unique<Impl>(std::move(publishers).Value(), std::move(catalog).Value(), now.Value(), rootExpiry.Value());
-        if (auto initialized = impl->Initialize(projectRoot, cacheRoot, trackingRoot, parsed.Value().allowEyeGazePreview,
-                                                parsed.Value().allowPlaneCapturePreview);
-            initialized.HasError())
+        if (auto initialized = impl->Initialize(projectRoot, cacheRoot, trackingRoot, parsed.Value()); initialized.HasError())
             return Outcome::Failure(initialized.ErrorValue());
         return Outcome::Success(std::make_unique<EditorOpenXRBootstrap>(ConstructionKey{}, std::move(impl)));
     }

@@ -615,13 +615,13 @@ namespace Horo::Application::Internal {
     namespace {
         /** @brief Resolves the same eye transforms and minimum raster span for both acquired layers. */
         Result<std::optional<Editor::EditorVulkanXrViewportAccess::CanvasPlacement>> ProjectCanvasPlacement(
-            const OpenXRPlayHost::WorldCanvasFrame *canvas, const XRMultiviewScene &scene, const XRMultiviewOwnerState &owner) {
+            const OpenXRPlayHost::WorldCanvasFrame *canvas, const XRMultiviewScene &scene, const XRMultiviewOwnerState &owner,
+            const std::uint32_t minimumSpanPixels) {
             using Viewport = Editor::EditorVulkanXrViewportAccess;
             using Outcome = Result<std::optional<Viewport::CanvasPlacement>>;
             if (!canvas)
                 return Outcome::Success(std::nullopt);
-            constexpr float minimumRasterSpanPixels = 1.0F;
-            const auto projected = scene.ProjectWorldCanvas({canvas->worldFromCanvas, minimumRasterSpanPixels}, owner);
+            const auto projected = scene.ProjectWorldCanvas({canvas->worldFromCanvas, static_cast<float>(minimumSpanPixels)}, owner);
             if (projected.HasError())
                 return Outcome::Failure(projected.ErrorValue());
             if (!projected.Value().drawable)
@@ -675,7 +675,7 @@ namespace Horo::Application::Internal {
                                           images,
                                           publication,
                                           Render::ResolveMultiviewCapabilities(support)};
-        const auto projected = ProjectCanvasPlacement(canvas, converted.Value(), owner);
+        const auto projected = ProjectCanvasPlacement(canvas, converted.Value(), owner, scene_->projection->worldCanvasMinimumSpanPixels);
         if (projected.HasError())
             return Result<void>::Failure(projected.ErrorValue());
         const auto &placement = projected.Value();

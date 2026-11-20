@@ -330,6 +330,6 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(current.ErrorValue());
         ++lastCapabilityRevision_;
         return Outcome::Success({std::move(capabilities).Value(), std::move(plan).Value(), draft.color, draft.recommended, draft.maximum,
-                                 std::move(draft.writer)});
+                                 std::move(draft.writer), settings_.WorldCanvasMinimumSpanPixels()});
     }
 }  // namespace Horo::Application::Internal

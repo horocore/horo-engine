@@ -83,7 +83,7 @@ namespace Horo::XR {
 
         TEST_CASE("XR settings defaults are inert and disabled", "[unit][xr][settings]") {
             const auto descriptors = XRProjectSettingDescriptors();
-            REQUIRE(descriptors.size() == 19);
+            REQUIRE(descriptors.size() == 20);
             for (const auto &descriptor : descriptors)
                 REQUIRE(descriptor.reloadPolicy == ReloadPolicy::ProjectReopen);
             const auto resolved = ResolveXRProjectSettings(Configuration());
@@ -93,9 +93,25 @@ namespace Horo::XR {
             REQUIRE(resolved.Value().Features().empty());
             CHECK_FALSE(resolved.Value().AllowsEyeGazePreview());
             CHECK_FALSE(resolved.Value().AllowsPlaneCapturePreview());
+            CHECK(resolved.Value().WorldCanvasMinimumSpanPixels() == 1);
             const Evidence evidence;
             REQUIRE(AdmitXRProjectSettings(resolved.Value(), evidence.Admission()).ErrorValue().code.Value() ==
                     XRErrors::OperationUnavailable.code.Value());
+        }
+
+        TEST_CASE("XR canvas readability uses the admitted immutable project pixel floor", "[unit][xr][settings][canvas]") {
+            ConfigurationResolutionRequest request;
+            Project(request, "xr.world_canvas.minimum_span_pixels", std::int64_t{40});
+            const auto project = Enabled(request);
+            CHECK(project.WorldCanvasMinimumSpanPixels() == 40);
+            request.invocation.try_emplace(SettingKey{"xr.world_canvas.minimum_span_pixels"}, std::int64_t{80},
+                                           SourceLocation{"cli", 1, 2});
+            const auto overridden = Enabled(request, 2);
+            CHECK(overridden.WorldCanvasMinimumSpanPixels() == 80);
+            CHECK(project.WorldCanvasMinimumSpanPixels() == 40);
+            const Evidence evidence;
+            CHECK(AdmitXRProjectSettings(project, evidence.Admission(2)).HasError());
+            CHECK(AdmitXRProjectSettings(overridden, evidence.Admission(2)).HasValue());
         }
 
         TEST_CASE("XR settings preserve Foundation precedence and winning source diagnostics", "[unit][xr][settings]") {
@@ -122,6 +138,8 @@ namespace Horo::XR {
                 std::pair{"xr.limits.spaces", std::int64_t{0}},
                 std::pair{"xr.limits.actions", std::int64_t{513}},
                 std::pair{"xr.limits.devices", std::numeric_limits<std::int64_t>::max()},
+                std::pair{"xr.world_canvas.minimum_span_pixels", std::int64_t{0}},
+                std::pair{"xr.world_canvas.minimum_span_pixels", std::int64_t{65'536}},
                 std::pair{"xr.features.depth_composition", std::int64_t{5}},
                 std::pair{"xr.features.hand_tracking", std::int64_t{5}},
             };

@@ -90,6 +90,7 @@ namespace Horo::Application::Internal {
         std::array<Render::FramebufferExtent, 2> recommended;
         std::array<Render::FramebufferExtent, 2> maximum;
         std::optional<OpenXRProjectionWriter> writer;
+        std::uint32_t worldCanvasMinimumSpanPixels; /**< Per-eye minimum from the admitted immutable project settings. */
     };
 
     /** @brief Vendor implementation version observed through the official loader. Independently versioned from the wire API. */

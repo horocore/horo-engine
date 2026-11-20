@@ -18,6 +18,10 @@ The portable schema is:
 | `xr.limits.spaces` | `1..256`; default `2` |
 | `xr.limits.actions` | `1..512`; default `8` |
 | `xr.limits.devices` | `1..64` for projection, `2..64` for interaction; default `2` |
+| `xr.world_canvas.minimum_span_pixels` | `1..65535`; default `1`. Both eyes must meet this projected span before the world canvas is drawn. |
+
+When launching the editor with a signed OpenXR host, use
+`--xr-host-world-canvas-minimum-span-pixels=48` to set the floor for that invocation.
 
 Extra-feature keys are `xr.features.stage_space`, `depth_composition`,
 `fixed_foveation`, `refresh_rate`, `visibility_mask`, `controller_presentation`

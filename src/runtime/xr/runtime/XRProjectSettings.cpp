@@ -1,11 +1,15 @@
 #include "Horo/XR/XRProjectSettings.h"
 
 #include <format>
+#include <limits>
 #include <string_view>
 #include <utility>
 
 namespace Horo::XR {
     namespace {
+        constexpr std::string_view WorldCanvasSpanKey = "xr.world_canvas.minimum_span_pixels";
+        constexpr std::int64_t DefaultWorldCanvasSpan = 1;
+
         struct FeatureSetting final {
             std::string_view key;
             XRCapability capability;
@@ -154,6 +158,7 @@ namespace Horo::XR {
         add("xr.limits.spaces", SettingValueType::Integer, std::int64_t{2});
         add("xr.limits.actions", SettingValueType::Integer, std::int64_t{8});
         add("xr.limits.devices", SettingValueType::Integer, std::int64_t{2});
+        add(std::string(WorldCanvasSpanKey), SettingValueType::Integer, DefaultWorldCanvasSpan);
         for (const auto &feature : FeatureSettings)
             add(std::string(feature.key), SettingValueType::Integer, std::int64_t{0});
         return descriptors;
@@ -185,6 +190,11 @@ namespace Horo::XR {
     /** @copydoc XRProjectSettings::Limits */
     const XRSystemLimits &XRProjectSettings::Limits() const noexcept {
         return limits_;
+    }
+
+    /** @copydoc XRProjectSettings::WorldCanvasMinimumSpanPixels */
+    std::uint32_t XRProjectSettings::WorldCanvasMinimumSpanPixels() const noexcept {
+        return worldCanvasMinimumSpanPixels_;
     }
 
     /** @copydoc XRProjectSettings::AllowsEyeGazePreview */
@@ -250,6 +260,8 @@ namespace Horo::XR {
             LimitSetting{"xr.limits.actions", 1, XRHardLimits::MaximumActions, &settings.limits_.maximumActions},
             LimitSetting{"xr.limits.devices", settings.profile_ == XRFeatureProfile::TrackedInteraction1_0 ? 2U : 1U,
                          XRHardLimits::MaximumDevices, &settings.limits_.maximumDevices},
+            LimitSetting{WorldCanvasSpanKey, DefaultWorldCanvasSpan, std::numeric_limits<std::uint16_t>::max(),
+                         &settings.worldCanvasMinimumSpanPixels_},
         };
         for (const auto &limit : limits) {
             const auto value = Integer(source, limit.key, limit.minimum, limit.maximum);
