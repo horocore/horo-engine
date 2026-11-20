@@ -1,0 +1,260 @@
+#include "AgentContext.h"
+#include "AgentTurnMcp.h"
+#include "Horo/Mcp/McpController.h"
+#include "Horo/Mcp/ProjectCodeQueryTools.h"
+#include "McpAuthorizationTestSupport.h"
+
+#include <array>
+#include <catch2/catch_test_macros.hpp>
+#include <future>
+
+namespace Horo::Agent {
+    namespace {
+        using namespace Application;
+        using namespace Security;
+
+        Platform::ProjectReadContext Project() {
+            return {"project", 4, {}, std::chrono::steady_clock::now() + std::chrono::seconds{10}, {}};
+        }
+
+        AgentContextReaders Readers() {
+            AgentContextReaders readers;
+            readers.isCurrent = [](const auto &) {
+                return true;
+            };
+            readers.redact = [](const auto &, std::string_view text) {
+                std::string result{text};
+                if (const auto start = result.find("secret"); start != std::string::npos)
+                    result.replace(start, 6, "<redacted>");
+                return Result<std::string>::Success(std::move(result));
+            };
+            return readers;
+        }
+    }  // namespace
+
+    TEST_CASE("Agent context dispatch sends exactly the consented redacted preview", "[agent][context]") {
+        using enum AgentContextAttachmentKind;
+        using enum AgentProviderResidence;
+        const auto project = Project();
+        auto readers = Readers();
+        std::size_t sourceReads{};
+        std::size_t queryReads{};
+        readers.existingText = [&](auto path, const auto &context) {
+            ++sourceReads;
+            using Snapshot = std::optional<Platform::ProjectReadTextSnapshot>;
+            return Result<Snapshot>::Success(
+                Platform::ProjectReadTextSnapshot{context.projectIdentity, context.projectGeneration, std::string{path}, "r1",
+                                                  std::make_shared<const std::string>("prefix secret suffix")});
+        };
+        readers.readOnlyQuery = [&](const auto &query, const auto &context) {
+            ++queryReads;
+            CHECK(query.kind == CodeQueryKind::Diagnostics);
+            CHECK(query.expectedRevision == "r2");
+            return Result<CodeQueryPage>::Success({.revision = "r2",
+                                                   .projectGeneration = context.projectGeneration,
+                                                   .records = {{CodeQueryRecordKind::Diagnostic, "src/test.cpp", "warning", 1, 2}},
+                                                   .nextOffset = 1});
+        };
+        const std::array<AgentContextSelection, 3> selected{AgentContextTextRequest{AgentContextKind::SourceRange, "src/test.cpp", "r1", 7,
+                                                                                    6},
+                                                            AgentContextQueryRequest{"r2",
+                                                                                     {.kind = CodeQueryKind::Diagnostics, .limit = 1}},
+                                                            AgentContextAttachment{Selection, "scene selection", "r3", "mesh, light"}};
+        auto capture = AgentContextPreview::Capture(selected, readers, project, Cloud, 21, 8);
+        REQUIRE(capture.HasValue());
+        const auto &preview = capture.Value();
+        REQUIRE(preview.Items().size() == 3);
+        CHECK(preview.Provider() == Cloud);
+        CHECK(preview.Items()[0].provenance.offset == 7);
+        CHECK(preview.Items()[0].provenance.capturedBytes == 6);
+        CHECK(preview.Items()[0].candidate.text.find("<redacted>") != std::string::npos);
+        CHECK(preview.Items()[0].candidate.text.find("prefix") == std::string::npos);
+        CHECK(preview.Items()[1].provenance.truncated);
+        CHECK(preview.Items()[2].provenance.kind == AgentContextKind::Selection);
+
+        AgentPolicy policy;
+        REQUIRE(policy.SetProjectTrust(true, 8));
+        const ModelMessage original{.role = ModelRole::User, .text = "Summarize the selection"};
+        ModelRequest request{.model = "fake", .messages = {original}};
+        CHECK_FALSE(preview.InsertBeforeDispatch(policy, project, readers.isCurrent, Cloud, 21, request).Allowed());
+        REQUIRE(request.messages.size() == 1);
+        REQUIRE(preview.Grant(policy).Allowed());
+        CHECK_FALSE(preview.InsertBeforeDispatch(policy, project, readers.isCurrent, Local, 21, request).Allowed());
+        CHECK_FALSE(preview.InsertBeforeDispatch(policy, project, readers.isCurrent, Cloud, 22, request).Allowed());
+        REQUIRE(preview.InsertBeforeDispatch(policy, project, readers.isCurrent, Cloud, 21, request).Allowed());
+        REQUIRE(request.messages.size() == 4);
+        for (std::size_t i = 0; i < preview.Items().size(); ++i) {
+            CHECK(request.messages[i].role == ModelRole::User);
+            CHECK(request.messages[i].text == preview.Items()[i].candidate.text);
+        }
+        CHECK(request.messages.back().text == original.text);
+        CHECK_FALSE(preview.InsertBeforeDispatch(policy, project, readers.isCurrent, Cloud, 21, request).Allowed());
+        CHECK(sourceReads == 1);
+        CHECK(queryReads == 1);
+    }
+
+    TEST_CASE("Agent context captures only safe current textual selections", "[agent][context]") {
+        using enum AgentProviderResidence;
+        using enum AgentContextKind;
+        const auto project = Project();
+        auto readers = Readers();
+        std::size_t reads{};
+        std::optional<std::string> bytes{std::string{"a\xC3\xA7z"}};
+        readers.existingText = [&](auto path, const auto &context) {
+            ++reads;
+            using Snapshot = std::optional<Platform::ProjectReadTextSnapshot>;
+            if (!bytes)
+                return Result<Snapshot>::Success(std::nullopt);
+            return Result<Snapshot>::Success(Platform::ProjectReadTextSnapshot{context.projectIdentity, context.projectGeneration,
+                                                                               std::string{path}, "fresh",
+                                                                               std::make_shared<const std::string>(*bytes)});
+        };
+        const auto capture = [&](AgentContextSelection chosen) {
+            return AgentContextPreview::Capture(std::span{&chosen, 1}, readers, project, Local, 1, 9);
+        };
+        CHECK(capture(AgentContextTextRequest{File, "../secret", "fresh"}).HasError());
+        CHECK(reads == 0);
+        CHECK(capture(AgentContextTextRequest{File, "src/app.cpp", "stale"}).HasError());
+        CHECK(capture(AgentContextTextRequest{SourceRange, "src/app.cpp", "fresh", 2, 1}).HasError());
+        CHECK(capture(AgentContextTextRequest{SourceRange, "src/app.cpp", "fresh", 1, 2}).HasValue());
+        bytes = std::string{"a\0b", 3};
+        CHECK(capture(AgentContextTextRequest{File, "src/app.cpp", "fresh"}).HasError());
+        bytes = std::string(4097, 'x');
+        CHECK(capture(AgentContextTextRequest{File, "src/app.cpp", "fresh"}).HasError());
+        bytes.reset();
+        CHECK(capture(AgentContextTextRequest{SourceRange, "src/app.cpp", "fresh", 1, 2}).HasError());
+        CHECK(capture(AgentContextQueryRequest{"fresh", {.kind = CodeQueryKind::Files, .limit = 1}}).HasError());
+    }
+
+    TEST_CASE("Agent context revokes consent when the source changes after preview", "[agent][context]") {
+        using enum AgentProviderResidence;
+        const auto project = Project();
+        auto readers = Readers();
+        const std::array<AgentContextSelection, 1> selected{
+            AgentContextAttachment{AgentContextAttachmentKind::Report, "report", "r1", "evidence"}};
+        const auto capture = AgentContextPreview::Capture(selected, readers, project, Local, 42, 2);
+        REQUIRE(capture.HasValue());
+        AgentPolicy policy;
+        REQUIRE(policy.SetProjectTrust(false, 2));
+        REQUIRE(capture.Value().Grant(policy).Allowed());
+        ModelRequest request{.model = "fake", .messages = {{.role = ModelRole::User, .text = "Explain"}}};
+        const auto stale = [](const auto &) {
+            return false;
+        };
+        CHECK(capture.Value().InsertBeforeDispatch(policy, project, stale, Local, 42, request).reason == AgentPolicyReason::StaleAuthority);
+        REQUIRE(request.messages.size() == 1);
+        CHECK_FALSE(capture.Value().InsertBeforeDispatch(policy, project, readers.isCurrent, Local, 42, request).Allowed());
+    }
+
+    TEST_CASE("Agent context dynamic diagnostics use the authenticated read-only MCP query", "[agent][context][mcp]") {
+        using namespace std::chrono_literals;
+        constexpr std::uint64_t generation = 3;
+        constexpr std::string_view project = "project-one";
+        unsigned reads{};
+        CodeQueryProviders providers;
+        providers.diagnostics = [&](const CodeQueryRequest &, const CodeQueryContext &) {
+            ++reads;
+            return Result<CodeQueryObservation>::Success({std::string{project},
+                                                          generation,
+                                                          "current diagnostics",
+                                                          {{CodeQueryRecordKind::Diagnostic, "src/main.cpp", "warning", 5, 2}}});
+        };
+        auto capability = ProjectCodeQuery::Create({}, std::string{project}, generation, std::move(providers));
+        REQUIRE(capability.HasValue());
+        const auto auth = Mcp::Test::Authorization();
+        auto registry = std::make_shared<Mcp::McpToolRegistry>(auth);
+        auto tools = Mcp::MakeProjectCodeQueryTools(std::move(capability).Value(), std::string{project}, generation, [] {
+            return generation;
+        }, Mcp::McpOwnerContext::Editor);
+        REQUIRE(tools.HasValue());
+        const std::vector<std::string> grants{"horo.project.code.query"};
+        const auto revision = registry->Publish(std::move(tools).Value(), grants);
+        REQUIRE(revision.HasValue());
+        const auto controller = Mcp::McpController::Create(registry, {}, auth);
+        REQUIRE(controller.HasValue());
+        REQUIRE(controller.Value()->BindOwner(Mcp::McpOwnerContext::Editor).HasValue());
+        auto manager = Mcp::McpSessionManager::Create(controller.Value(), {}, auth);
+        REQUIRE(manager.HasValue());
+        auto session =
+            Mcp::McpInProcessAdapter::Start(std::move(manager).Value(), Mcp::Test::Authenticate({.clientIdentity = "agent-context-test",
+                                                                                                 .capabilities = grants,
+                                                                                                 .projectIdentity = std::string{project},
+                                                                                                 .authorizationRevision = generation,
+                                                                                                 .registryRevision = revision.Value()},
+                                                                                                auth));
+        REQUIRE(session.HasValue());
+        const AgentTurnMcp bridge{session.Value(), {std::string{project}, generation}};
+        CodeQueryContext context{std::string{project}, generation, {}, std::chrono::steady_clock::now() + 2s};
+        const CodeQueryRequest query{.kind = CodeQueryKind::Diagnostics, .path = "src/main.cpp", .limit = 2};
+        auto foreign = context;
+        foreign.projectIdentity = "different-project";
+        CHECK(bridge.ReadContextQuery(31, 0, query, foreign).HasError());
+        CHECK(bridge.ReadContextQuery(31, 0, {.kind = CodeQueryKind::Text, .limit = 2}, context).HasError());
+        CHECK(reads == 0);
+        auto pending = std::async(std::launch::async, [&] {
+            return bridge.ReadContextQuery(31, 1, query, context);
+        });
+        while (pending.wait_for(1ms) != std::future_status::ready)
+            REQUIRE(controller.Value()->Pump(Mcp::McpOwnerContext::Editor).HasValue());
+        const auto result = pending.get();
+        REQUIRE(result.HasValue());
+        REQUIRE(reads == 1);
+        REQUIRE(result.Value().records.size() == 1);
+        CHECK(result.Value().records.front().label == "warning");
+        CHECK(result.Value().projectGeneration == generation);
+
+        auto readers = Readers();
+        readers.readOnlyQuery = [&](const auto &request, const auto &) {
+            REQUIRE(request.expectedRevision == result.Value().revision);
+            return result;
+        };
+        const std::array<AgentContextSelection, 1> chosen{AgentContextQueryRequest{result.Value().revision, query}};
+        const auto preview = AgentContextPreview::Capture(chosen, readers, context, AgentProviderResidence::Local, 31, generation);
+        REQUIRE(preview.HasValue());
+        CHECK(preview.Value().Items().front().candidate.text.find("src/main.cpp 5:2 warning") != std::string::npos);
+        CHECK(reads == 1);
+    }
+
+    TEST_CASE("Agent runtime dispatches admitted context without publishing it into history", "[agent][context]") {
+        struct RecordingModel final : IModelProvider {
+            std::vector<ModelMessage> sent;
+
+            ProviderDiscovery Discover(std::stop_token) override {
+                return {};
+            }
+
+            ModelOutcome Stream(const ModelRequest &request, const ModelEventSink &sink, std::stop_token) override {
+                sent = request.messages;
+                if (!sink({.kind = ModelEventKind::TextDelta, .text = "Result"}) || !sink({.kind = ModelEventKind::Completed}))
+                    return {ModelError{ModelErrorCode::Cancelled, "Stopped by host", {}}};
+                return {};
+            }
+        } model;
+
+        const auto project = Project();
+        const auto readers = Readers();
+        const std::array<AgentContextSelection, 1> selection{
+            AgentContextAttachment{AgentContextAttachmentKind::BuildOutput, "compiler", "r3", "selected build log"}};
+        const auto preview = AgentContextPreview::Capture(selection, readers, project, AgentProviderResidence::Local, 25, 4);
+        REQUIRE(preview.HasValue());
+        AgentPolicy policy;
+        REQUIRE(policy.SetProjectTrust(true, 4));
+        const AgentTurnContext context{preview.Value(), policy, project, readers.isCurrent, AgentProviderResidence::Local};
+        const ModelRequest request{.model = "fake", .messages = {{.role = ModelRole::User, .text = "Explain this log"}}};
+        AgentTurnRuntime runtime;
+        const auto run = [&] {
+            return runtime.Run(model, nullptr, 25, request, {}, {}, &context);
+        };
+        CHECK(run().status == AgentTurnStatus::ContextDenied);
+        CHECK(model.sent.empty());
+        REQUIRE(preview.Value().Grant(policy).Allowed());
+        const auto result = run();
+        REQUIRE(result.status == AgentTurnStatus::Completed);
+        REQUIRE(model.sent.size() == 2);
+        CHECK(model.sent.front().text == preview.Value().Items().front().candidate.text);
+        CHECK(model.sent.front().role == ModelRole::User);
+        REQUIRE(result.messages.size() == 2);
+        CHECK(result.messages.front().text == request.messages.front().text);
+        CHECK(result.messages.back().text == "Result");
+    }
+}  // namespace Horo::Agent

@@ -453,9 +453,23 @@ struct AgentContext {
 };
 ```
 
-The context is assembled on the C++ side by the `AgentContextProvider` and
-serialized into the system prompt (or tool-call preamble) before each
-request reaches the LLM.
+The C++ context provider assembles the selected evidence before the request
+reaches the model.
+
+The editor Agent turn's explicit attachment path captures an ordered typed preview
+bound to one project generation, trust revision, request and provider residence.
+Source ranges use an already-open immutable source snapshot. A selected file may
+use the bounded rooted file reader. Diagnostics and build status use the
+authenticated read-only MCP query route. An editor owner may use the owned result
+of a query prepared on a worker while the MCP owner pumps its queue. Selected
+scene evidence, build output, notes and reports can arrive as revisioned text
+attachments from their owners. No document is opened during this preparation.
+
+The preview exposes the exact redacted provider payload and its provenance.
+After the user confirms it, the turn rechecks the project, trust and producer
+revisions and consumes the matching consent. Attachment text travels as
+user-role evidence. The completed conversation excludes these ephemeral context
+messages, so a later request must separately confirm its selected context.
 
 ## Request Pipeline
 

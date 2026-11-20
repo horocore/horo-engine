@@ -171,7 +171,8 @@ namespace Horo::Agent {
 
     /** @copydoc AgentTurnRuntime::Run */
     AgentTurnResult AgentTurnRuntime::Run(IModelProvider &provider, const IAgentTurnTools *tools, const std::uint64_t turnId,
-                                          ModelRequest request, const AgentTurnLimits &limits, const std::stop_token cancellation) {
+                                          ModelRequest request, const AgentTurnLimits &limits, const std::stop_token cancellation,
+                                          const AgentTurnContext *context) {
         if (cancellation.stop_requested())
             return {Cancelled, {}};
         if (active_.test_and_set())
@@ -183,6 +184,14 @@ namespace Horo::Agent {
                                           static_cast<std::uint32_t>(ModelFeature::Usage)};
             if (turnId == 0 || !ValidLimits(limits) || (!request.tools.empty() && !tools) || !AdmitModelRequest(request, known).Succeeded())
                 return {InvalidRequest, {}};
+            const auto contextOffset = request.messages.size() - 1;
+            const auto contextCount = context ? context->preview.Items().size() : 0;
+            if (context) {
+                const auto allowed = context->preview.InsertBeforeDispatch(context->policy, context->project, context->isCurrent,
+                                                                           context->provider, turnId, request);
+                if (!allowed.Allowed())
+                    return {.status = ContextDenied, .contextError = allowed.reason};
+            }
             auto remaining = Detail::TurnStreamBudget{limits.maximumEvents, limits.maximumHistoryBytes, limits.maximumToolCalls};
             if (!ChargeRequest(remaining.bytes, request))
                 return {BudgetExceeded, {}};
@@ -194,6 +203,8 @@ namespace Horo::Agent {
             for (std::size_t round = 0; round < limits.maximumRounds && tokens > 0; ++round) {
                 if (const auto stopped = stop.Status())
                     return {*stopped, {}};
+                if (context && !context->preview.IsCurrent(context->policy, context->project, context->isCurrent))
+                    return {.status = ContextDenied, .contextError = Security::AgentPolicyReason::StaleAuthority};
                 request.maximumOutputTokens = std::min(outputPerRound, tokens);
                 if (!AdmitModelRequest(request, known).Succeeded())
                     return {BudgetExceeded, {}};
@@ -211,6 +222,10 @@ namespace Horo::Agent {
                 progress.remaining = stream.Remaining();
                 auto message = std::move(stream).TakeMessage();
                 if (message.toolIntents.empty()) {
+                    if (context) {
+                        const auto firstContext = request.messages.begin() + contextOffset;
+                        request.messages.erase(firstContext, firstContext + contextCount);
+                    }
                     request.messages.push_back(std::move(message));
                     return {Completed, std::move(request.messages)};
                 }

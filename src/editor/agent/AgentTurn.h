@@ -1,5 +1,6 @@
 #pragma once
 
+#include "AgentContext.h"
 #include "Horo/Agent/ModelProvider.h"
 
 #include <atomic>
@@ -26,14 +27,25 @@ namespace Horo::Agent {
         TimedOut,
         ProviderFailed,
         ToolDenied,
-        ToolFailed
+        ToolFailed,
+        ContextDenied
     };
 
     /** @brief Complete response history on success and no partial conversational publication on failure. */
     struct AgentTurnResult final {
         AgentTurnStatus status{AgentTurnStatus::InvalidRequest};
         std::vector<ModelMessage> messages;
-        std::optional<ModelErrorCode> providerError{}; /**< Structured provider failure without response text or credentials. */
+        std::optional<ModelErrorCode> providerError{};             /**< Structured provider failure without response text or credentials. */
+        std::optional<Security::AgentPolicyReason> contextError{}; /**< Structured pre-dispatch context denial. */
+    };
+
+    /** @brief Optional consented evidence borrowed on the synchronous turn caller's Security policy owner lane. */
+    struct AgentTurnContext final {
+        const AgentContextPreview &preview;
+        Security::AgentPolicy &policy;
+        const Platform::ProjectReadContext &project;
+        const std::function<bool(const AgentContextProvenance &)> &isCurrent;
+        Security::AgentProviderResidence provider; /**< Actual host-confirmed residence of the passed provider. */
     };
 
     /** @brief Restricted editor-host bridge for already admitted local authoring tools. */
@@ -71,10 +83,12 @@ namespace Horo::Agent {
          * @param request Initial conversation and host-admitted tools. A model cannot extend the list during the turn.
          * @param limits Host-approved finite budgets. Transient failures terminate the turn without automatic retry.
          * @param cancellation Host-owned signal observed cooperatively by the provider and tools.
+         * @param context Optional exact preview already confirmed by the user. Its policy must be owned by this calling lane.
          * @return One terminal outcome. The tool controller retains authority to reject and cancel operations.
          */
         [[nodiscard]] AgentTurnResult Run(IModelProvider &provider, const IAgentTurnTools *tools, std::uint64_t turnId,
-                                          ModelRequest request, const AgentTurnLimits &limits, std::stop_token cancellation = {});
+                                          ModelRequest request, const AgentTurnLimits &limits, std::stop_token cancellation = {},
+                                          const AgentTurnContext *context = nullptr);
 
     private:
         std::atomic_flag active_{};

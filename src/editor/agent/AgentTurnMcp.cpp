@@ -54,27 +54,26 @@ namespace Horo::Agent {
         }
 
         /** @brief Decodes terminal controller status, with no outcome until the owner settles the operation. */
-        std::optional<AgentTurnStatus> ReadToolOutcome(const Json &value, std::string &result) {
+        std::optional<Result<Json>> ReadToolOutcome(Json value) {
+            using namespace Mcp::McpErrors;
             if (!value.contains("status") || !value["status"].is_string())
-                return ToolFailed;
+                return Result<Json>::Failure(MakeError(ToolOutputInvalid));
             const auto &status = value["status"].get_ref<const std::string &>();
-            if (status == "succeeded" && value.contains("result")) {
-                result = value["result"].dump();
-                return Completed;
-            }
+            if (status == "succeeded" && value.contains("result"))
+                return Result<Json>::Success(std::move(value["result"]));
             if (status == "cancelled")
-                return Cancelled;
+                return Result<Json>::Failure(MakeError(RequestCancelled));
             if (status == "timed_out")
-                return TimedOut;
+                return Result<Json>::Failure(MakeError(RequestTimedOut));
             if (status == "queued" || status == "running")
                 return std::nullopt;
-            return ToolFailed;
+            return Result<Json>::Failure(MakeError(ControllerFailed));
         }
     }  // namespace
 
     /** @copydoc AgentTurnMcp::AgentTurnMcp */
-    AgentTurnMcp::AgentTurnMcp(std::shared_ptr<const Mcp::McpInProcessAdapter> adapter)
-        : adapter_(std::move(adapter)), session_(adapter_ ? adapter_->Session() : Mcp::McpSessionHandle{}) {}
+    AgentTurnMcp::AgentTurnMcp(std::shared_ptr<const Mcp::McpInProcessAdapter> adapter, AgentContextProjectAuthority project)
+        : adapter_(std::move(adapter)), session_(adapter_ ? adapter_->Session() : Mcp::McpSessionHandle{}), project_(std::move(project)) {}
 
     /** @copydoc AgentTurnMcp::ValidArguments */
     bool AgentTurnMcp::ValidArguments(const std::string_view arguments) const {
@@ -93,27 +92,97 @@ namespace Horo::Agent {
             return InvalidModelResponse;
         // The host-issued identity never incorporates provider-controlled names or call IDs.
         const auto id = "editor-agent/" + std::to_string(turnId) + "/" + std::to_string(callOrdinal);
-        auto state =
-            adapter_->Call({.id = id, .method = "tools/call", .params = {{"name", intent.name}, {"arguments", std::move(arguments)}}});
+        auto outcome = CallTool(id, intent.name, std::move(arguments), deadline, [&] {
+            return stop.stop_requested();
+        });
+        if (outcome.HasError())
+            return ErrorStatus(outcome.ErrorValue().code.Value());
+        result = outcome.Value().dump();
+        return Completed;
+    }
+
+    /** @copydoc AgentTurnMcp::CallTool */
+    Result<Json> AgentTurnMcp::CallTool(std::string id, const std::string_view name, Json arguments, const Clock::time_point deadline,
+                                        const std::function<bool()> &stopped) const {
+        using namespace Mcp::McpErrors;
+        using Call = Result<Json>;
+        if (!session_.IsValid() || adapter_->Session() != session_)
+            return Call::Failure(MakeError(AuthorizationDenied));
+        if (Clock::now() >= deadline)
+            return Call::Failure(MakeError(RequestTimedOut));
+        if (stopped())
+            return Call::Failure(MakeError(RequestCancelled));
+        auto state = adapter_->Call({.id = id, .method = "tools/call", .params = {{"name", name}, {"arguments", std::move(arguments)}}});
         std::uint64_t operation{};
         for (;;) {
             if (adapter_->Session() != session_)
-                return ToolDenied;
-            if (stop.stop_requested() || Clock::now() >= deadline) {
+                return Call::Failure(MakeError(AuthorizationDenied));
+            if (stopped() || Clock::now() >= deadline) {
                 static_cast<void>(adapter_->Cancel(id));
-                return Clock::now() >= deadline ? TimedOut : Cancelled;
+                return Call::Failure(MakeError(Clock::now() >= deadline ? RequestTimedOut : RequestCancelled));
             }
             if (state.HasError())
-                return ErrorStatus(state.ErrorValue().code.Value());
-            const auto &value = state.Value();
-            if (!ReadOperationId(value, operation))
-                return ToolFailed;
-            if (const auto outcome = ReadToolOutcome(value, result))
-                return *outcome;
+                return state;
+            if (!ReadOperationId(state.Value(), operation))
+                return Call::Failure(MakeError(ToolOutputInvalid));
+            if (auto outcome = ReadToolOutcome(std::move(state).Value()))
+                return std::move(*outcome);
             std::this_thread::sleep_until(std::min(Clock::now() + 10ms, deadline));
-            if (stop.stop_requested() || Clock::now() >= deadline)
-                continue;
-            state = adapter_->Call({.id = id + "/poll", .method = "operations/get", .params = {{"operationId", operation}}});
+            if (!stopped() && Clock::now() < deadline)
+                state = adapter_->Call({.id = id + "/poll", .method = "operations/get", .params = {{"operationId", operation}}});
+        }
+    }
+
+    /** @copydoc AgentTurnMcp::ReadContextQuery */
+    Result<Application::CodeQueryPage> AgentTurnMcp::ReadContextQuery(const std::uint64_t requestId, const std::size_t itemOrdinal,
+                                                                      const Application::CodeQueryRequest &query,
+                                                                      const Application::CodeQueryContext &context) const {
+        using namespace Application;
+        using Reading = Result<CodeQueryPage>;
+        using enum CodeQueryKind;
+        if (project_.identity.empty() || project_.generation == 0 || context.projectIdentity != project_.identity ||
+            context.projectGeneration != project_.generation)
+            return Reading::Failure(MakeError(CodeQueryErrors::Stale));
+        const bool diagnostic = query.kind == Diagnostics;
+        if (requestId == 0 || (!diagnostic && query.kind != BuildStatus) || !query.pattern.empty() || query.limit == 0 ||
+            query.limit > 32 || (query.offset && !query.expectedRevision))
+            return Reading::Failure(MakeError(CodeQueryErrors::Invalid));
+        if (const auto active = Platform::CheckProjectReadContext(context); active.HasError())
+            return Reading::Failure(active.ErrorValue());
+        Json arguments{{"path", query.path}, {"offset", query.offset}, {"limit", query.limit}};
+        if (query.expectedRevision)
+            arguments["revision"] = *query.expectedRevision;
+        const auto id = "editor-context/" + std::to_string(requestId) + "/" + std::to_string(itemOrdinal);
+        const auto result =
+            CallTool(id, diagnostic ? "project.diagnostics" : "project.build_status", std::move(arguments), context.deadline, [&] {
+            return Platform::CheckProjectReadContext(context).HasError();
+        });
+        if (const auto active = Platform::CheckProjectReadContext(context); active.HasError())
+            return Reading::Failure(active.ErrorValue());
+        if (result.HasError())
+            return Reading::Failure(result.ErrorValue());
+        try {
+            const auto &page = result.Value();
+            const auto &records = page.at("records");
+            if (!records.is_array() || records.size() > query.limit)
+                return Reading::Failure(MakeError(CodeQueryErrors::Invalid));
+            CodeQueryPage owned{.revision = page.at("revision").get<std::string>(),
+                                .projectGeneration = page.at("projectGeneration").get<std::uint64_t>(),
+                                .text = page.at("text").get<std::string>(),
+                                .droppedRecords = page.at("droppedRecords").get<std::uint64_t>()};
+            if (owned.projectGeneration != project_.generation || (query.expectedRevision && owned.revision != *query.expectedRevision))
+                return Reading::Failure(MakeError(CodeQueryErrors::Stale));
+            if (page.at("hasMore").get<bool>())
+                owned.nextOffset = page.at("nextOffset").get<std::size_t>();
+            owned.records.reserve(records.size());
+            for (const auto &row : records)
+                owned.records.emplace_back(row.at("kind").get<CodeQueryRecordKind>(), row.at("path").get<std::string>(),
+                                           row.at("label").get<std::string>(), row.at("line").get<std::uint32_t>(),
+                                           row.at("column").get<std::uint32_t>(), row.at("byteOffset").get<std::uint64_t>(),
+                                           row.at("byteCount").get<std::uint64_t>());
+            return Reading::Success(std::move(owned));
+        } catch (const Json::exception &) {
+            return Reading::Failure(MakeError(CodeQueryErrors::Invalid));
         }
     }
 }  // namespace Horo::Agent
