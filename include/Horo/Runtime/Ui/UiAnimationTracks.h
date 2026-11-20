@@ -98,6 +98,7 @@ namespace Horo::Runtime::Ui {
         std::vector<UiAnimationPropertyTrack> tracks;
         std::vector<UiAnimationMarker> markers;
         UiAnimationMotionIntent motionIntent{UiAnimationMotionIntent::Essential};
+        bool visualFlash{}; /**< Suppression omits its visual tracks while preserving timing and semantic markers. */
     };
 
     /** @brief Lifetime capacity contract; owner construction allocates all mutable instance/candidate/publication storage. */

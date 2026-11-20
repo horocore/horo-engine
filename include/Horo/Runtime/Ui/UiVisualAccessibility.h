@@ -37,7 +37,7 @@ namespace Horo::Runtime::Ui {
                                                                 std::span<UiDrawCommand> output);
 
     /** @brief One immutable configuration revision projected to Runtime UI presentation preferences.
-     * @details The host captures both flags from the same configuration. Colours and focus treatments are selected by the
+     * @details The host captures the preferences from the same configuration. Colours and focus treatments are selected by the
      * ordinary registered style cascade; the UI never changes input focus or visual-safety settings.
      */
     struct UiVisualPresentationPolicy final {
@@ -46,6 +46,7 @@ namespace Horo::Runtime::Ui {
         bool reduceMotion{};
         UiCanvasScaleFactor scale;                /**< Exact bounded per-user uniform presentation scale. */
         std::uint32_t minimumControlTargetDips{}; /**< Positive view target preference, or zero before composition. */
+        bool suppressFlash{};                     /**< Omit tracks explicitly classified as a visual flash. */
         /** @brief Validates a new policy against one exact current value, where revision zero is unconfigured.
          * @param current Last admitted value.
          * @return Success for newer or exactly equal evidence, typed malformed, conflicting or stale failure otherwise.

@@ -623,6 +623,12 @@ preferences. Turning contrast off restores the selected theme's authored colours
 The extension theme frame carries the same contrast, effective motion and
 flash-suppression preferences as the host.
 
+The Runtime UI owner captures the same flash preference before frame work.
+An explicitly tagged visual-flash timeline keeps its clock, semantic marker
+order and completion. With suppression active, its style tracks are omitted
+and the ordinary cascade supplies the display values. Flash tracks must use
+paint-only properties, so suppression leaves layout and targeting intact.
+
 ---
 
 ## Developer Tooling And Conformance

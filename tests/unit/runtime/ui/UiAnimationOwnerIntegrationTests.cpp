@@ -96,6 +96,47 @@ TEST_CASE("Runtime reduced motion completes decorative timelines once and preser
     CheckGeometry(repeated, decorative ? 50 : 200);
 }
 
+TEST_CASE("Runtime flash suppression removes tagged styling and keeps timeline events",
+          "[runtime_ui][animation][integration][accessibility]") {
+    HostFixture fixture{{.flashTrack = true}};
+    auto &owner = *fixture.participant;
+    REQUIRE(owner.Start(Stable<UiAnimationId>(1)).HasValue());
+    REQUIRE(owner.Start(Stable<UiAnimationId>(4)).HasValue());
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    auto initial = Frame(owner);
+    const auto element = initial.Controls().front().source.element;
+    const auto fill = [element](const UiAnimationFrameLease &frame) {
+        const auto record = frame.Styles().Get(element);
+        REQUIRE(record.HasValue());
+        const auto properties = frame.Styles().Properties(record.Value());
+        const auto color =
+            std::ranges::find(properties, CoreUiStylePropertyId(UiCoreStyleProperty::Fill), &UiComputedStyleProperty::property);
+        REQUIRE(color != properties.end());
+        return std::get<UiStyleColor>(color->value).red;
+    };
+    CHECK(fill(initial) == 0.9F);
+    REQUIRE(owner.SetVisualAccessibility({.revision = 1, .suppressFlash = true}).HasValue());
+    CHECK(owner.SetVisualAccessibility({.revision = 1}).HasError());
+    CHECK(fill(initial) == 0.9F);
+    fixture.clock.Advance(Duration::FromMilliseconds(60));
+    const auto before = Horo::Tests::AllocationProbe::Count();
+    const auto updated = fixture.host->RunFrame();
+    CHECK(Horo::Tests::AllocationProbe::Count() == before);
+    REQUIRE(updated.HasValue());
+    auto suppressed = Frame(owner);
+    CHECK(fill(suppressed) == 0.3F);
+    REQUIRE(suppressed.Markers().size() == 1);
+    CHECK(suppressed.Markers().front().marker == Stable<UiAnimationMarkerId>(1));
+    CheckGeometry(suppressed, 110);
+    initial = {};
+    REQUIRE(owner.SetVisualAccessibility({.revision = 2}).HasValue());
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    const auto resumed = Frame(owner);
+    CHECK(fill(resumed) > 0.7F);
+    CHECK(fill(resumed) < 0.9F);
+    CHECK(resumed.Markers().empty());
+}
+
 TEST_CASE("Real host animation publishes matching style layout and clipping while retained geometry remains immutable",
           "[runtime_ui][animation][integration]") {
     HostFixture fixture;

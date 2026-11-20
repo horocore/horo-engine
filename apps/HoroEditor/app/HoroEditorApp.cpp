@@ -1798,22 +1798,17 @@ namespace Horo::Editor {
             bool healthy{false}; /**< Set only after runtime startup and a normal, completed main-loop closure. */
         };
 
-        struct EditorVisualSettings final {
-            Runtime::Ui::UiVisualPresentationPolicy ui;
-            bool suppressFlash{};
-        };
-
         /** @brief Resolves the UI and effect preferences from one configuration revision. */
-        Result<EditorVisualSettings> CaptureEditorVisualSettings(const ConfigurationSnapshot &config) {
-            using Outcome = Result<EditorVisualSettings>;
+        Result<Runtime::Ui::UiVisualPresentationPolicy> CaptureEditorVisualSettings(const ConfigurationSnapshot &config) {
+            using Outcome = Result<Runtime::Ui::UiVisualPresentationPolicy>;
             const auto visual = Runtime::Ui::UiVisualAccessibilitySnapshot::Capture(config);
             if (visual.HasError())
                 return Outcome::Failure(visual.ErrorValue());
             const auto safety = Accessibility::VisualSafetySnapshot::Capture(config);
             if (safety.HasError())
                 return Outcome::Failure(safety.ErrorValue());
-            return Outcome::Success({{config.Revision(), visual.Value().HighContrast(), safety.Value().ReduceMotion(),
-                                      visual.Value().ScaleFactor(), Runtime::Ui::DefaultUiAccessibleTargetDips},
+            return Outcome::Success({config.Revision(), visual.Value().HighContrast(), safety.Value().ReduceMotion(),
+                                     visual.Value().ScaleFactor(), Runtime::Ui::DefaultUiAccessibleTargetDips,
                                      safety.Value().SuppressFlash()});
         }
 
@@ -1826,7 +1821,7 @@ namespace Horo::Editor {
             const auto visual = CaptureEditorVisualSettings(config);
             if (visual.HasError())
                 return Result<void>::Failure(visual.ErrorValue());
-            const auto update = port.UpdateVisualAccessibility(visual.Value().ui);
+            const auto update = port.UpdateVisualAccessibility(visual.Value());
             if (update.HasValue())
                 applied = config.Revision();
             return update;
@@ -1858,7 +1853,7 @@ namespace Horo::Editor {
                     return Result<void>::Failure(visual.ErrorValue());
                 const auto &preferences = visual.Value();
                 applied.scalePercent = ResolveEditorUiScalePercent(config);
-                Theme::ApplyVisualPreferences({preferences.ui.highContrast, preferences.ui.reduceMotion, preferences.suppressFlash});
+                Theme::ApplyVisualPreferences({preferences.highContrast, preferences.reduceMotion, preferences.suppressFlash});
                 applied.revision = config.Revision();
             }
             applied.displayToWindowScale = RefreshDisplayToWindowScale(window, applied.displayToWindowScale);

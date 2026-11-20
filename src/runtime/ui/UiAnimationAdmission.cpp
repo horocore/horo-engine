@@ -39,7 +39,8 @@ namespace Horo::Runtime::Ui::AnimationInternal {
                 return time;
             for (std::size_t index = 0; index < animation.tracks.size(); ++index) {
                 const auto &track = animation.tracks[index];
-                if (const auto valid = ValidatePropertyTrack(track, tree, registry, limits.keyframesPerProperty); valid.HasError())
+                if (const auto valid = ValidatePropertyTrack(track, tree, registry, limits.keyframesPerProperty, animation.visualFlash);
+                    valid.HasError())
                     return Result<void>::Failure(valid.ErrorValue());
                 const auto prior = std::span(animation.tracks).first(index);
                 if (std::ranges::any_of(prior, [&](const auto &other) {

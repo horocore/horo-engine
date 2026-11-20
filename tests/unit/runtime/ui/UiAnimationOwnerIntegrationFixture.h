@@ -195,6 +195,7 @@ namespace Horo::Runtime::Ui::AnimationTests {
         bool contrastVariants{};
         bool focusAccess{}; /**< Test-only quiescent borrow; never exposed by a production owner contract. */
         bool reflowText{};  /**< Let the explicit intrinsic provider determine the test control's block extent. */
+        bool flashTrack{};  /**< Adds an independent flashing fill with a semantic marker. */
     };
 
     inline UiAnimationOwner OwnerAggregate(UiElementSlotAllocator &allocator, const HostOptions &options,
@@ -218,7 +219,18 @@ namespace Horo::Runtime::Ui::AnimationTests {
         auto *routeStack = routeActions ? &*initial.Canvas(canvas.id)->routes : nullptr;
         const auto routeOwner = canvas.controls.front().control.Owner();
         auto resources = Resources(canvas, options.routeMotion, options.deadline, options.busyStyle, options.explicitLayoutOrigins,
-                                   options.contrastVariants);
+                                   options.contrastVariants || options.flashTrack);
+        if (options.flashTrack) {
+            auto flash = resources.definition.animations.front();
+            flash.id = Stable<UiAnimationId>(4);
+            flash.visualFlash = true;
+            flash.tracks.front().property = CoreUiStylePropertyId(UiCoreStyleProperty::Fill);
+            flash.tracks.front().keyframes = {{0, UiStyleColor{0.9F, 0.9F, 0.9F, 1, UiStyleColorRole::Surface}},
+                                              {std::numeric_limits<std::uint32_t>::max(),
+                                               UiStyleColor{0.7F, 0.7F, 0.7F, 1, UiStyleColorRole::Surface}}};
+            flash.markers.push_back({Stable<UiAnimationMarkerId>(1), std::numeric_limits<std::uint32_t>::max() / 2});
+            resources.definition.animations.push_back(std::move(flash));
+        }
         if (options.decorativeMotion)
             for (auto &motion : resources.definition.animations)
                 motion.motionIntent = UiAnimationMotionIntent::Decorative;
