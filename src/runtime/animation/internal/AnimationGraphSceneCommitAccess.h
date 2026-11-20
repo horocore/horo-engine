@@ -17,6 +17,7 @@ namespace Horo::Animation::Detail {
                                                                    const CancellationToken &publicationCancellation) {
             return instance.EvaluateExclusive(input, publicationCancellation);
         }
+
         /** @brief Checks candidate identity, owner thread and cancellation before arming publication. */
         [[nodiscard]] static GraphInstanceOutcome Prepare(AnimationGraphInstance &instance, AnimationTickId tick);
         /** @brief Publishes an already armed candidate without cancellation or other fallible work. */
