@@ -16,6 +16,7 @@ namespace Horo::Physics::Detail {
         PhysicsWorld &physics;
         Character::CharacterWorld &character;
         Runtime::SceneRuntimeId scene;
+        std::span<const PhysicsSceneCharacterBinding> characterBindings; /**< Borrowed from the same published aggregate. */
     };
 
     /** @brief Verifies publication and exact paired lifetime without exporting world ownership to the SDK. */

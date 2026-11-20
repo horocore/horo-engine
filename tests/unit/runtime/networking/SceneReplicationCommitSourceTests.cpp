@@ -2,6 +2,8 @@
 #include "Horo/Runtime/RuntimeHost.h"
 #include "ReplicationCaptureTestSupport.h"
 
+#include <limits>
+
 namespace Horo::Network {
     using namespace CaptureTestSupport;
 
@@ -117,14 +119,17 @@ namespace Horo::Network {
             std::unique_ptr<Runtime::RuntimeHost> runtime =
                 Runtime::RuntimeHost::Create(clock, {.fixedStep = Duration::FromMilliseconds(10)}).Value();
             const NetworkObjectMappingEntry mapping = Object();
-            std::shared_ptr<SceneReplicationCommitSource> source =
-                SceneReplicationCommitSource::CreateObserved(scene.scene->View().RuntimeId(), runtime->DispatchSource(),
-                                                             mapping.provenance.schema, mapping.provenance.schemaVersion,
-                                                             TransformBindings(), owner)
-                    .Value();
+            std::shared_ptr<SceneReplicationCommitSource> source;
             ObservedScene *observer{};
 
-            ObservedSceneFixture() {
+            ObservedSceneFixture() : ObservedSceneFixture(TransformBindings(), {}) {}
+
+            ObservedSceneFixture(std::span<const SceneReplicationFieldBinding> fields, SceneReplicationVelocitySource velocity) {
+                auto selected = SceneReplicationCommitSource::CreateObserved(scene.scene->View().RuntimeId(), runtime->DispatchSource(),
+                                                                             mapping.provenance.schema, mapping.provenance.schemaVersion,
+                                                                             fields, owner, std::move(velocity));
+                REQUIRE(selected.HasValue());
+                source = std::move(selected).Value();
                 auto participant = std::make_unique<ObservedScene>(scene, source);
                 observer = participant.get();
                 REQUIRE(runtime->AddParticipant(std::move(participant)).HasValue());
@@ -142,6 +147,43 @@ namespace Horo::Network {
             }
         };
     }  // namespace
+
+    TEST_CASE("Observed Scene captures only declared Character velocity axes with the committed transform", "[network][capture][scene]") {
+        using enum SceneReplicationProperty;
+        const std::array fields{SceneReplicationFieldBinding{FieldIdValue(1), TranslationX},
+                                SceneReplicationFieldBinding{FieldIdValue(2), LinearVelocityX},
+                                SceneReplicationFieldBinding{FieldIdValue(3), LinearVelocityZ}};
+        Math::Vec3 velocity{6.5F, 9.0F, -2.0F};
+        std::size_t samples{};
+        ObservedSceneFixture fixture{fields, [&](const Runtime::RuntimeEntityView &actor) {
+            CHECK(actor.entity == Object().entity);
+            ++samples;
+            return Result<Math::Vec3>::Success(velocity);
+        }};
+        CHECK(SceneReplicationCommitSource::Create(fixture.scene.scene, fields).HasError());
+        CHECK(fixture.Open().HasError());
+        CHECK(samples == 0);
+        REQUIRE(fixture.Step().HasValue());
+        const std::array targets{ReplicationCaptureTarget{fixture.mapping, fixture.source}};
+        auto capture = ReplicationStateCapture::Prepare(fixture.Open().Value(), fixture.scene.registry, targets).Value();
+        const auto sample = [&] {
+            return fixture.source->CaptureAfterCommit(fixture.scene.lifecycle, *capture, Runtime::RuntimePhase::NetworkFlush);
+        };
+        REQUIRE(sample().Value().published == 1);
+        const auto first = capture->Latest(fixture.mapping.object).Value();
+        REQUIRE(first->Fields().size() == 3);
+        CHECK(std::get<double>(first->Fields()[0].value) == 3.0);
+        CHECK(std::get<double>(first->Fields()[1].value) == 6.5);
+        CHECK(std::get<double>(first->Fields()[2].value) == -2.0);
+        CHECK(samples == 1);
+        REQUIRE(fixture.Step().HasValue());
+        velocity.x = std::numeric_limits<float>::infinity();
+        const auto rejected = sample();
+        REQUIRE(rejected.HasValue());
+        CHECK(rejected.Value().published == 0);
+        CHECK(rejected.Value().failed == 1);
+        CHECK(capture->Latest(fixture.mapping.object).Value() == first);
+    }
 
     TEST_CASE("Application-owned Scene capture rejects attempted and aborted fixed work", "[network][capture][scene]") {
         ObservedSceneFixture fixture;

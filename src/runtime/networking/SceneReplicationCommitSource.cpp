@@ -3,13 +3,15 @@
 #include "SceneReplicationTransformFields.h"
 
 #include <algorithm>
+#include <cmath>
 #include <limits>
 #include <new>
 
 namespace Horo::Network {
     namespace {
         /** @brief Copies the same bounded field contract for either Scene ownership mode. */
-        Result<std::vector<SceneReplicationFieldBinding>> CaptureBindings(std::span<const SceneReplicationFieldBinding> fields) {
+        Result<std::vector<SceneReplicationFieldBinding>> CaptureBindings(std::span<const SceneReplicationFieldBinding> fields,
+                                                                          bool velocity = false) {
             using Bindings = Result<std::vector<SceneReplicationFieldBinding>>;
             if (fields.empty() || fields.size() > 1024)
                 return Bindings::Failure(MakeError(ReplicationCaptureErrors::Invalid));
@@ -17,12 +19,15 @@ namespace Horo::Network {
             std::ranges::sort(bindings, {}, &SceneReplicationFieldBinding::field);
             Detail::SceneTransformProperties properties;
             for (std::size_t index{}; index < bindings.size(); ++index) {
-                if (!bindings[index].field.IsValid() || bindings[index].property > SceneReplicationProperty::RotationW ||
+                if (!bindings[index].field.IsValid() || bindings[index].property > SceneReplicationProperty::LinearVelocityZ ||
                     (index > 0 && bindings[index - 1].field == bindings[index].field))
                     return Bindings::Failure(MakeError(ReplicationCaptureErrors::Invalid));
                 properties.set(Detail::TransformPropertyIndex(bindings[index].property));
             }
-            if (!Detail::HasCompleteRotation(Detail::RotationPropertyCount(properties)))
+            const auto usesVelocity = std::ranges::any_of(bindings, [](const auto &binding) {
+                return Detail::IsVelocityProperty(binding.property);
+            });
+            if (!Detail::HasCompleteRotation(Detail::RotationPropertyCount(properties)) || usesVelocity != velocity)
                 return Bindings::Failure(MakeError(ReplicationCaptureErrors::Invalid));
             return Bindings::Success(std::move(bindings));
         }
@@ -56,9 +61,10 @@ namespace Horo::Network {
                                                                Runtime::RuntimeDispatchSource dispatch, ReplicationSchemaId schema,
                                                                ReplicationSchemaVersion version,
                                                                std::vector<SceneReplicationFieldBinding> fields,
-                                                               std::weak_ptr<const void> sceneOwner)
+                                                               std::weak_ptr<const void> sceneOwner,
+                                                               SceneReplicationVelocitySource velocity)
         : expectedScene_(scene), dispatch_(std::move(dispatch)), schema_(schema), version_(version), fields_(std::move(fields)),
-          sceneOwner_(std::move(sceneOwner)) {}
+          sceneOwner_(std::move(sceneOwner)), velocity_(std::move(velocity)) {}
 
     /** @copydoc SceneReplicationCommitSource::Create */
     Result<std::shared_ptr<SceneReplicationCommitSource>> SceneReplicationCommitSource::Create(
@@ -79,20 +85,20 @@ namespace Horo::Network {
     /** @copydoc SceneReplicationCommitSource::CreateObserved */
     Result<std::shared_ptr<SceneReplicationCommitSource>> SceneReplicationCommitSource::CreateObserved(
         Runtime::SceneRuntimeId scene, Runtime::RuntimeDispatchSource dispatch, ReplicationSchemaId schema,
-        ReplicationSchemaVersion version, const std::span<const SceneReplicationFieldBinding> fields,
-        std::weak_ptr<const void> sceneOwner) {
+        ReplicationSchemaVersion version, const std::span<const SceneReplicationFieldBinding> fields, std::weak_ptr<const void> sceneOwner,
+        SceneReplicationVelocitySource velocity) {
         using Source = Result<std::shared_ptr<SceneReplicationCommitSource>>;
         if (!scene.IsValid() || !dispatch.IsValid() || !schema.IsValid() || !version.IsValid() || sceneOwner.expired())
             return Source::Failure(MakeError(ReplicationCaptureErrors::Invalid));
         try {
-            auto bindings = CaptureBindings(fields);
+            auto bindings = CaptureBindings(fields, static_cast<bool>(velocity));
             if (bindings.HasError())
                 return Source::Failure(std::move(bindings).ErrorValue());
             if (!UniqueObservedAxes(bindings.Value()))
                 return Source::Failure(MakeError(ReplicationCaptureErrors::Invalid));
             return Source::Success(std::make_shared<SceneReplicationCommitSource>(ConstructionKey{}, scene, std::move(dispatch), schema,
                                                                                   version, std::move(bindings).Value(),
-                                                                                  std::move(sceneOwner)));
+                                                                                  std::move(sceneOwner), std::move(velocity)));
         } catch (const std::bad_alloc &) {
             return Source::Failure(MakeError(ReplicationCaptureErrors::Capacity));
         }
@@ -185,15 +191,25 @@ namespace Horo::Network {
             return Result<void>::Failure(entity.ErrorValue());
         auto transform = *entity.Value().localTransform;
         if (std::ranges::any_of(fields_, [](const auto &field) {
-            return field.property >= SceneReplicationProperty::RotationX;
+            return field.property >= SceneReplicationProperty::RotationX && field.property <= SceneReplicationProperty::RotationW;
         })) {
             const auto rotation = transform.rotation.TryNormalized();
             if (rotation.HasError())
                 return Result<void>::Failure(rotation.ErrorValue());
             transform.rotation = rotation.Value();
         }
+        Math::Vec3 velocity{};
+        if (velocity_) {
+            auto sampled = velocity_(entity.Value());
+            if (sampled.HasError())
+                return Result<void>::Failure(sampled.ErrorValue());
+            velocity = sampled.Value();
+            if (!IsCurrent(read) || !std::isfinite(velocity.x) || !std::isfinite(velocity.y) || !std::isfinite(velocity.z))
+                return Result<void>::Failure(MakeError(ReplicationCaptureErrors::Invalid));
+        }
         for (const auto &field : fields_) {
-            const double value = Detail::TransformScalar(transform, field.property);
+            const double value = Detail::IsVelocityProperty(field.property) ? Detail::VelocityScalar(velocity, field.property)
+                                                                            : Detail::TransformScalar(transform, field.property);
             if (const auto written = writer.Write(field.field, value); written.HasError())
                 return written;
         }

@@ -7,6 +7,7 @@
 #include "Horo/Network/ReplicationStateCapture.h"
 #include "Horo/Runtime/RuntimeDispatchEvidence.h"
 
+#include <functional>
 #include <thread>
 
 namespace Horo::Network {
@@ -18,14 +19,23 @@ namespace Horo::Network {
         RotationX,
         RotationY,
         RotationZ,
-        RotationW
+        RotationW,
+        LinearVelocityX,
+        LinearVelocityY,
+        LinearVelocityZ
     };
 
-    /** @brief Declared FieldId binding to one Scene-owned transform scalar. Rotation requires all four components. */
+    /** @brief Declared FieldId binding to one transform or presentation velocity scalar. Rotation requires all four components. */
     struct SceneReplicationFieldBinding final {
         FieldId field;
         SceneReplicationProperty property;
     };
+
+    /** @brief Owner-lane reader of completed world-space velocity in metres per second for an exact authored Scene occurrence.
+     * @details Called synchronously during NetworkFlush only for an admitted velocity schema. Returns an error if the
+     * adjacent owner has no current sample. The reader never grants mutation authority or retains the Scene view.
+     */
+    using SceneReplicationVelocitySource = std::function<Result<Math::Vec3>(const Runtime::RuntimeEntityView &)>;
 
     /** @brief Real RuntimeScene owner adapter and explicit post-commit NetworkFlush composition.
      * The host routes the scene's commands through CommitSimulationTick and keeps all mutation on
@@ -53,7 +63,8 @@ namespace Horo::Network {
         /** @internal Factory-only construction for the application's unmodified Scene owner. */
         SceneReplicationCommitSource(ConstructionKey key, Runtime::SceneRuntimeId scene, Runtime::RuntimeDispatchSource dispatch,
                                      ReplicationSchemaId schema, ReplicationSchemaVersion version,
-                                     std::vector<SceneReplicationFieldBinding> fields, std::weak_ptr<const void> sceneOwner);
+                                     std::vector<SceneReplicationFieldBinding> fields, std::weak_ptr<const void> sceneOwner,
+                                     SceneReplicationVelocitySource velocity);
         /** @brief Composes declared typed Scene bindings outside simulation.
          * @param scene Canonical scene owner pinned for this adapter lifetime.
          * @param fields Exact unique schema FieldIds to publish as floating-point transform scalars.
@@ -65,12 +76,14 @@ namespace Horo::Network {
          * @param scene Expected unique runtime Scene identity.
          * @param dispatch Exact scheduler issuer retained by the owning application participant.
          * @param schema Exact allowed schema. @param version Its exact installed version.
-         * @param fields Complete declared transform fields.
+         * @param fields Complete declared transform and optional velocity fields.
          * @param sceneOwner Exact owner lifetime. A successful read pins this scope only until EndRead.
+         * @param velocity Exact adjacent owner reader, required when the schema declares any velocity axis.
          * @return Owner-lane observation adapter or typed invalid/capacity error. */
         [[nodiscard]] static Result<std::shared_ptr<SceneReplicationCommitSource>> CreateObserved(
             Runtime::SceneRuntimeId scene, Runtime::RuntimeDispatchSource dispatch, ReplicationSchemaId schema,
-            ReplicationSchemaVersion version, std::span<const SceneReplicationFieldBinding> fields, std::weak_ptr<const void> sceneOwner);
+            ReplicationSchemaVersion version, std::span<const SceneReplicationFieldBinding> fields, std::weak_ptr<const void> sceneOwner,
+            SceneReplicationVelocitySource velocity = {});
         /** @brief Observes the exact current Scene in the canonical post-commit fixed callback.
          * @param view Current immutable view supplied by the already owning Scene service.
          * @param evidence Live callback evidence from the bound scheduler.
@@ -124,6 +137,7 @@ namespace Horo::Network {
         ReplicationSchemaVersion version_;
         std::vector<SceneReplicationFieldBinding> fields_;
         std::weak_ptr<const void> sceneOwner_;
+        SceneReplicationVelocitySource velocity_;
         Runtime::RuntimeSceneView committed_;
         std::uint64_t tick_{};
         std::uint64_t revision_{};

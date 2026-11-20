@@ -4,6 +4,8 @@
 #include "Horo/Network/SceneReplicationApplyOwner.h"
 #include "ReplicationStateCodecTestSupport.h"
 
+#include <catch2/generators/catch_generators.hpp>
+
 namespace Horo::Network::AnimationProduct {
     TEST_CASE("Replica animation consumes only committed public fields for its exact Scene actor",
               "[animation][headless][product][replica-inputs]") {
@@ -21,7 +23,9 @@ namespace Horo::Network::AnimationProduct {
             Take(Runtime::RuntimeScene::Create(Take(std::move(builder).Build()), mapping.entity.runtime));
         REQUIRE(scene->View().Find(authored) == mapping.entity);
         const auto field = Rep::FieldIdValue(1);
-        const std::array sceneBindings{SceneReplicationFieldBinding{field, SceneReplicationProperty::TranslationX}};
+        const bool velocity = GENERATE(false, true);
+        const auto property = velocity ? SceneReplicationProperty::LinearVelocityX : SceneReplicationProperty::TranslationX;
+        const std::array sceneBindings{SceneReplicationFieldBinding{field, property}};
         const auto parameter = Take(Animation::GraphParameterId::Create(731));
         const std::array bindings{App::HeadlessReplicaAnimationBinding{authored, field, parameter}};
         const auto inputs = std::make_shared<ReplicaAnimationInputs>(bindings);
@@ -45,7 +49,7 @@ namespace Horo::Network::AnimationProduct {
         CHECK(inputs->Read(mapping.entity, tick).parameters.empty());
         REQUIRE(initial->Commit(live).HasValue());
         CHECK(read() == 1.0F);
-        CHECK(Take(scene->View().Get(mapping.entity)).localTransform->translation.x == 1.0F);
+        CHECK(Take(scene->View().Get(mapping.entity)).localTransform->translation.x == (velocity ? 0.0F : 1.0F));
         CHECK(inputs->Read({Runtime::SceneRuntimeId{90}, mapping.entity.entity}, tick).parameters.empty());
 
         fixture.capture.Capture(2, 2.0);
@@ -57,7 +61,7 @@ namespace Horo::Network::AnimationProduct {
         auto retry = prepare(Take(fixture.codec->Decode(Take(fixture.codec->Encode(fixture.capture.Pin())), mapping)));
         REQUIRE(retry->Commit(live).HasValue());
         CHECK(read() == 2.0F);
-        CHECK(Take(scene->View().Get(mapping.entity)).localTransform->translation.x == 2.0F);
+        CHECK(Take(scene->View().Get(mapping.entity)).localTransform->translation.x == (velocity ? 0.0F : 2.0F));
         world.RequestCancellation();
         CHECK(inputs->Read(mapping.entity, tick).parameters.empty());
     }

@@ -13,6 +13,8 @@ namespace Horo::Network {
      * a single SceneCommandBuffer and preserves every unrelated transform member. This adapter never
      * infers offsets, names or component storage from wire metadata. The host pins it through receipt
      * and safe-point apply, then retires it with its exact Scene/schema generation.
+     * Declared velocity scalars participate in validation and are available to a host presentation
+     * projection after commit. They never write to Scene transforms or Physics.
      */
     class SceneReplicationApplyOwner final : public IReplicationApplyOwner {
         struct ConstructionKey final {

@@ -79,6 +79,12 @@ namespace Horo::Application::Internal {
          * @pre Do not retain the scope in jobs, callbacks, modules or through Scene lifecycle operations.
          */
         [[nodiscard]] Result<Physics::Detail::PhysicsSceneHostScope> Borrow();
+        /** @brief Reads achieved world-space velocity from the selected controller's latest completed tick.
+         * @param scene Exact published Scene incarnation. @param object Authored actor. @param component Its selected controller.
+         * @return Velocity in metres per second or the original admission/snapshot error.
+         */
+        [[nodiscard]] Result<Math::Vec3> ReadCharacterVelocity(Runtime::SceneRuntimeId scene, Runtime::SceneObjectId object,
+                                                               Runtime::PhysicsComponentId component);
         /** @brief Returns only the actual published Physics candidate's issued state target. */
         [[nodiscard]] Result<Physics::Detail::PhysicsSceneStateTarget> PublishedStateTarget();
         /** @brief Returns only the exact actual pending candidate for this receiving Scene; no Scene-ID-only authority. */

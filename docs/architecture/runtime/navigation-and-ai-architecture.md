@@ -3260,6 +3260,15 @@ The execution of AI simulation phases is strictly governed by the host process's
   after the Scene transaction succeeds. Missing fields supply no graph
   override. Reads use the exact Scene entity incarnation, and the
   presentation inputs expire with replication admission or World retirement.
+  A schema can select world-space Character linear velocity axes in metres
+  per second. The headless authority resolves the authored actor's enabled
+  controller and reads its achieved velocity from the matching completed
+  Character and Physics tick. An idle controller contributes zero movement for
+  that tick. An unavailable sample rejects the publication.
+  These fields affect the client's selected graph inputs without writing
+  Physics state.
+  Existing transform-only declarations use the same field identifiers and
+  values. Rebuild native consumers of the observed Scene capture factory.
   Existing Scene animation configurations retain the authoritative default.
   Rebuild native consumers for the appended configuration field.
 - **Server State Privacy**: Agent perception memories (e.g. sight awareness meters, target tracking scores) and `BlackboardState` internal representations (behavior tree execution nodes, patrol indices, threat scoring matrices) are **server-private**.

@@ -425,6 +425,25 @@ namespace Horo::Application::Internal {
             });
         }
 
+        /** @brief Admits the real Character owner only for schemas declaring world-space velocity. */
+        Net::SceneReplicationVelocitySource SelectCharacterVelocity(const std::shared_ptr<WorldRecord> &record,
+                                                                    std::span<const Net::SceneReplicationFieldBinding> fields) {
+            if (std::ranges::none_of(fields, [](const auto &field) {
+                return field.property >= Net::SceneReplicationProperty::LinearVelocityX &&
+                       field.property <= Net::SceneReplicationProperty::LinearVelocityZ;
+            }))
+                return {};
+            return [owner = std::weak_ptr{record}](const Runtime::RuntimeEntityView &entity) -> Result<Math::Vec3> {
+                const auto scoped = owner.lock();
+                if (!scoped || scoped->closeRequested || !entity.authoredObject)
+                    return Result<Math::Vec3>::Failure(MakeError(Net::ReplicationCaptureErrors::Stale));
+                const auto &controller = entity.components->characterController;
+                if (!controller || !controller->enabled)
+                    return Result<Math::Vec3>::Failure(MakeError(Net::ReplicationCaptureErrors::Invalid));
+                return scoped->native.ReadCharacterVelocity(entity.entity.runtime, *entity.authoredObject, controller->id);
+            };
+        }
+
         /** @brief Resolves one object against the committed Scene and the admitted live schema registry. */
         Result<Network::ReplicationAuthoredSceneObject> ResolveAuthoredObject(const Runtime::RuntimeSceneView &scene,
                                                                               const Network::NetworkObjectProvenance &binding,
@@ -851,7 +870,8 @@ namespace Horo::Application::Internal {
             !MatchesPublicTransformFields(*selection, *installed))
             return invalid();
         auto source = Network::SceneReplicationCommitSource::CreateObserved(request_.scene, owners_->fixed->Source(), selection->schema,
-                                                                            selection->version, selection->fields, record_);
+                                                                            selection->version, selection->fields, record_,
+                                                                            SelectCharacterVelocity(record_, selection->fields));
         if (source.HasError())
             return Result<void>::Failure(std::move(source).ErrorValue());
         record_->publicTransforms = std::move(source).Value();

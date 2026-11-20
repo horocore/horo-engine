@@ -2,6 +2,7 @@
 
 #include "Horo/Physics/PhysicsErrors.h"
 
+#include <algorithm>
 #include <new>
 #include <string>
 #include <utility>
@@ -237,5 +238,38 @@ namespace Horo::Application::Internal {
             return Result<Physics::Detail::PhysicsSceneHostScope>::Failure(
                 MakeError(Physics::PhysicsErrors::InvalidState, "No Scene-owned Physics aggregate is published."));
         return Physics::Detail::PhysicsSceneHostAccess::Borrow(*published_);
+    }
+
+    /** @copydoc ScenePhysicsHost::ReadCharacterVelocity */
+    Result<Math::Vec3> ScenePhysicsHost::ReadCharacterVelocity(Runtime::SceneRuntimeId scene, Runtime::SceneObjectId object,
+                                                               Runtime::PhysicsComponentId component) {
+        using Velocity = Result<Math::Vec3>;
+        auto scope = Borrow();
+        if (scope.HasError())
+            return Velocity::Failure(scope.ErrorValue());
+        if (scope.Value().scene != scene)
+            return Velocity::Failure(MakeError(Physics::PhysicsErrors::QuerySnapshotStale));
+        const auto bindings = scope.Value().characterBindings;
+        const auto binding = std::ranges::find_if(bindings, [object, component](const auto &row) {
+            return row.object == object && row.component == component;
+        });
+        if (binding == bindings.end())
+            return Velocity::Failure(MakeError(Physics::PhysicsErrors::HandleStale));
+        const auto &character = scope.Value().character;
+        const auto completed = character.PublishedTick().completedTick;
+        if (completed == 0 || scope.Value().physics.PublishedTick().completedTick != completed)
+            return Velocity::Failure(MakeError(Physics::PhysicsErrors::QuerySnapshotStale));
+        const auto transform = character.ControllerTransform(binding->handle);
+        if (transform.HasError())
+            return Velocity::Failure(transform.ErrorValue());
+        // A resident controller with no movement publication for a completed tick did not advance in that tick.
+        if (transform.Value().sourceTick < completed)
+            return Velocity::Success({});
+        const auto snapshot = character.ControllerLocomotionSnapshot(binding->handle);
+        if (snapshot.HasError())
+            return Velocity::Failure(snapshot.ErrorValue());
+        if (snapshot.Value().tick != completed || transform.Value().sourceTick != completed)
+            return Velocity::Failure(MakeError(Physics::PhysicsErrors::QuerySnapshotStale));
+        return Velocity::Success(snapshot.Value().movement.achievedVelocityMetersPerSecond);
     }
 }  // namespace Horo::Application::Internal

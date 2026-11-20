@@ -8,7 +8,7 @@
 #include <exception>
 
 namespace Horo::Network::Detail {
-    inline constexpr std::size_t SceneTransformPropertyCount = static_cast<std::size_t>(SceneReplicationProperty::RotationW) + 1;
+    inline constexpr std::size_t SceneTransformPropertyCount = static_cast<std::size_t>(SceneReplicationProperty::LinearVelocityZ) + 1;
     using SceneTransformProperties = std::bitset<SceneTransformPropertyCount>;
 
     /** @brief Finds the set entry for a previously validated transform binding. */
@@ -18,6 +18,26 @@ namespace Horo::Network::Detail {
 
     inline constexpr std::array SceneRotationProperties{SceneReplicationProperty::RotationX, SceneReplicationProperty::RotationY,
                                                         SceneReplicationProperty::RotationZ, SceneReplicationProperty::RotationW};
+
+    /** @brief Distinguishes typed presentation velocity from writable transform properties. */
+    [[nodiscard]] constexpr bool IsVelocityProperty(SceneReplicationProperty property) noexcept {
+        return property >= SceneReplicationProperty::LinearVelocityX && property <= SceneReplicationProperty::LinearVelocityZ;
+    }
+
+    /** @brief Selects one validated axis from world-space motion. */
+    [[nodiscard]] inline float VelocityScalar(const Math::Vec3 &velocity, SceneReplicationProperty property) noexcept {
+        using enum SceneReplicationProperty;
+        switch (property) {
+            case LinearVelocityX:
+                return velocity.x;
+            case LinearVelocityY:
+                return velocity.y;
+            case LinearVelocityZ:
+                return velocity.z;
+            default:
+                std::terminate();
+        }
+    }
 
     /** @brief Counts the quaternion components selected in this projection. */
     [[nodiscard]] inline std::size_t RotationPropertyCount(const SceneTransformProperties &properties) noexcept {
@@ -49,7 +69,8 @@ namespace Horo::Network::Detail {
                 return transform.rotation.z;
             case RotationW:
                 return transform.rotation.w;
+            default:
+                std::terminate();
         }
-        std::terminate();
     }
 }  // namespace Horo::Network::Detail

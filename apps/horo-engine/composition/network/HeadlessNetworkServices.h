@@ -128,7 +128,7 @@ namespace Horo::Application::Internal {
         }
     };
 
-    /** @brief Explicit installed schema and public Scene transform fields for authority capture. */
+    /** @brief Explicit installed schema and public Scene fields for authority capture. */
     struct HeadlessSceneTransformReplication final {
         Network::ReplicationSchemaId schema;
         Network::ReplicationSchemaVersion version;

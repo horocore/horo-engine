@@ -66,7 +66,8 @@ namespace Horo::Network {
             const auto *number = std::get_if<double>(&value);
             if (!number || !std::isfinite(*number) || std::abs(*number) > std::numeric_limits<float>::max())
                 return Result<void>::Failure(MakeError(ReplicationStateErrors::Invalid));
-            Detail::TransformScalar(transform, property) = static_cast<float>(*number);
+            if (!Detail::IsVelocityProperty(property))
+                Detail::TransformScalar(transform, property) = static_cast<float>(*number);
             return Result<void>::Success();
         }
 
@@ -87,7 +88,7 @@ namespace Horo::Network {
 
         /** @brief Validates stable sorted field identities before indexing their transform properties. */
         bool ValidField(const SceneReplicationFieldBinding &field, const FieldId previous) noexcept {
-            return field.field.IsValid() && field.field != previous && field.property <= SceneReplicationProperty::RotationW;
+            return field.field.IsValid() && field.field != previous && field.property <= SceneReplicationProperty::LinearVelocityZ;
         }
 
         /** @brief Owns exactly one field per transform property for both Scene ownership modes. */
