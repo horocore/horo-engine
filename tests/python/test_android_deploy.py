@@ -34,11 +34,13 @@ ENTRY = project.DEPLOY_ENTRY_MARKER
 OPENXR_OPTIONS = ("--host", "linux-x64", "--connection", "emulator", "--runtime", "openxr")
 LAUNCH_NONCE = "d" * 32
 LAUNCH_MARKER = f"{project.DEPLOY_LAUNCH_MARKER}{LAUNCH_NONCE} startTicks=123456"
+LAUNCH_CRASH_MARKER = f"{project.DEPLOY_LAUNCH_CRASH_MARKER}{LAUNCH_NONCE} startTicks=123456"
 DEVICE_CLOCK = ("shell", "toybox", "date", "+%s.%N")
 UID_QUERY = ("shell", "toybox", "ps", "-p", "123", "-o", "UID")
 STAT_QUERY = ("shell", "toybox", "cat", "/proc/123/stat")
 LOGCAT = ("logcat", "--pid=123", "-v", "time,epoch,nsec,uid", "-t", "200", "-s",
           "HoroPackageQualification:I", "AndroidRuntime:E")
+QUALIFICATION_LOGCAT = ("logcat", "-v", "time,epoch,nsec,uid", "-t", "200", "-s", "HoroPackageQualification:I")
 START = "1795000000.100000000"
 LOG_TIME = "1795000000.105000000"
 END = "1795000000.110000000"
@@ -314,6 +316,62 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual(report["observed"]["openxr"], {"abi": "arm64-v8a", "stage": "instance-retirement", "result": -2})
         self.assertEqual(report["cleanup"], {"status": "stopped"})
         self.assertEqual(report["qualification"]["physicalXrQualification"], "not_run")
+
+    def test_openxr_crash_before_live_pid_admission_preserves_the_attributed_failure(self):
+        _, profile = project.load_contract(project.OPENXR_DEVELOPMENT_PROFILE, ["arm64-v8a"])
+        application = profile["applicationId"]
+        log = log_line(LAUNCH_MARKER)
+        log += log_line(LAUNCH_CRASH_MARKER, stamp=END)
+        log += log_line("FATAL EXCEPTION: private-data", pid=999, tag="E/AndroidRuntime")
+        status, report, commands = self.execute(
+            {("shell", "pidof", application): (1, ""), QUALIFICATION_LOGCAT: log},
+            OPENXR_OPTIONS, project.OPENXR_DEVELOPMENT_PROFILE)
+        self.assertEqual((status, report["stage"], report["error"]), (1, "launch", "application_crashed"))
+        self.assertEqual(report["observed"], {"crashObserved": True})
+        self.assertEqual(report["cleanup"], {"status": "already_exited"})
+        self.assertIn(QUALIFICATION_LOGCAT, commands)
+        self.assertNotIn(LOGCAT, commands)
+        self.assertFalse(any("force-stop" in cmd for cmd in commands))
+        for private in (LAUNCH_NONCE, "startTicks", "private-data"):
+            self.assertNotIn(private, json.dumps(report))
+
+    def test_openxr_retired_crash_requires_matching_ordered_launch_and_crash_receipts(self):
+        _, profile = project.load_contract(project.OPENXR_DEVELOPMENT_PROFILE, ["arm64-v8a"])
+        application = profile["applicationId"]
+        launch = log_line(LAUNCH_MARKER)
+        for recorded in (
+            launch + log_line(LAUNCH_CRASH_MARKER, stamp=END, uid="10200"),
+            launch + log_line(LAUNCH_CRASH_MARKER, stamp=END, pid=124),
+            launch + log_line(LAUNCH_CRASH_MARKER.replace("123456", "123457"), stamp=END),
+            launch * 2 + log_line(LAUNCH_CRASH_MARKER, stamp=END),
+            launch + log_line(LAUNCH_CRASH_MARKER, stamp="1795000000.101000000"),
+            launch + log_line(LAUNCH_CRASH_MARKER.replace(LAUNCH_NONCE, "f" * 32), stamp=END),
+            log_line(LAUNCH_CRASH_MARKER, stamp=END),
+        ):
+            with self.subTest(log=recorded):
+                status, report, commands = self.execute(
+                    {("shell", "pidof", application): (1, ""), QUALIFICATION_LOGCAT: recorded},
+                    OPENXR_OPTIONS, project.OPENXR_DEVELOPMENT_PROFILE)
+                self.assertEqual((status, report["error"]), (1, "application_process_unavailable"))
+                self.assertNotIn("observed", report)
+                self.assertFalse(any("force-stop" in cmd for cmd in commands))
+
+    def test_openxr_retired_crash_leaves_a_replacement_process_running(self):
+        _, profile = project.load_contract(project.OPENXR_DEVELOPMENT_PROFILE, ["arm64-v8a"])
+        application = profile["applicationId"]
+        replacement_stat = proc_stat(123457).replace("123 (", "124 (", 1)
+        replacement_logcat = (LOGCAT[0], "--pid=124", *LOGCAT[2:])
+        status, report, commands = self.execute({
+            ("shell", "pidof", application): [(1, "")] * 4 + ["124"] * 3,
+            QUALIFICATION_LOGCAT: log_line(LAUNCH_MARKER) + log_line(LAUNCH_CRASH_MARKER, stamp=END),
+            ("shell", "toybox", "cat", "/proc/124/stat"): replacement_stat,
+            ("shell", "toybox", "ps", "-p", "124", "-o", "UID"): "UID\n1010200",
+            replacement_logcat: "",
+        }, OPENXR_OPTIONS, project.OPENXR_DEVELOPMENT_PROFILE)
+        self.assertEqual((status, report["error"]), (1, "application_process_unavailable"))
+        self.assertNotIn("observed", report)
+        self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "launch_process_unattributed"})
+        self.assertFalse(any("force-stop" in cmd for cmd in commands))
 
     def test_explicit_connection_fails_closed_for_contradictory_inventory(self):
         inventory = f"List of devices attached\n{SERIAL} device usb:1-2 transport_id:{TRANSPORT}"

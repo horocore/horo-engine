@@ -742,6 +742,7 @@ class AndroidAssemblyTests(unittest.TestCase):
         tools = self.prepare(arguments)
         paths = [Path("java/org/horocore/qualification") / name for name in
                  ("HoroVulkanQualificationActivity.java", "PowerObservation.java", "DisplayRefreshObservation.java")]
+        crash_observer = Path("java/org/horocore/qualification/OpenXRLaunchCrashObserver.java")
         for renderer_profile in ("qualification-vulkan-development", android_package.OPENXR_DEVELOPMENT_PROFILE):
             with self.subTest(profile=renderer_profile):
                 _, profile = load_contract(renderer_profile, ["arm64-v8a"])
@@ -754,9 +755,13 @@ class AndroidAssemblyTests(unittest.TestCase):
                         source = android_package.ROOT / "apps/android-package-qualification" / path
                         self.assertEqual((stage / path).read_bytes(), source.read_bytes())
                     self.assertIn("extends org.horocore.qualification.HoroVulkanQualificationActivity", entry.read_text())
+                    self.assertFalse((stage / crash_observer).exists())
                 else:
                     self.assertTrue(all(not (stage / path).exists() for path in paths))
                     self.assertIn("extends org.horocore.platform.HoroInputActivity", entry.read_text())
+                    self.assertEqual((stage / crash_observer).read_bytes(),
+                                     (android_package.ROOT / "apps/android-package-qualification" / crash_observer).read_bytes())
+                    self.assertIn("OpenXRLaunchCrashObserver.install(nonce, started)", entry.read_text())
 
 
 if __name__ == "__main__":

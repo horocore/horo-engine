@@ -38,6 +38,7 @@ OPENXR_LOADER_LICENSE = "licenses/openxr-loader.txt"
 OPENXR_PERMISSIONS = ("org.khronos.openxr.permission.OPENXR", "org.khronos.openxr.permission.OPENXR_SYSTEM")
 DEPLOY_LAUNCH_EXTRA = "org.horocore.qualification.LAUNCH"
 DEPLOY_LAUNCH_MARKER = "host-launch nonce="
+DEPLOY_LAUNCH_CRASH_MARKER = "host-launch-crash nonce="
 DEPLOY_ENTRY_MARKER = "host-entry input=accepted"
 
 
@@ -635,6 +636,7 @@ def apk_write_project(stage: Path, tools: dict, profile: dict, abis: list[str], 
     java_root = stage / "java" / Path(*profile["applicationId"].split("."))
     java_root.mkdir(parents=True)
     activity_base = "org.horocore.platform.HoroInputActivity"
+    crash_observer = ""
     if profile["renderer"] == "vulkan-android":
         package = Path("org/horocore/qualification")
         destination = stage / "java" / package
@@ -642,6 +644,12 @@ def apk_write_project(stage: Path, tools: dict, profile: dict, abis: list[str], 
         for source_name in ("HoroVulkanQualificationActivity.java", "PowerObservation.java", "DisplayRefreshObservation.java"):
             shutil.copyfile(ROOT / "apps/android-package-qualification/java" / package / source_name, destination / source_name)
         activity_base = "org.horocore.qualification.HoroVulkanQualificationActivity"
+    if "openxrProfile" in profile:
+        observer = Path("org/horocore/qualification/OpenXRLaunchCrashObserver.java")
+        destination = stage / "java" / observer
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ROOT / "apps/android-package-qualification/java" / observer, destination)
+        crash_observer = "                org.horocore.qualification.OpenXRLaunchCrashObserver.install(nonce, started);\n"
     source = (f"package {profile['applicationId']};\n"
               f"public final class PackageActivity extends {activity_base} {{\n"
               f"    static {{ System.loadLibrary(\"{profile['nativeLibrary']}\"); }}\n"
@@ -667,6 +675,7 @@ def apk_write_project(stage: Path, tools: dict, profile: dict, abis: list[str], 
               "            String started = processStartTicks();\n"
               "            if (started != null) {\n"
               f"                android.util.Log.i(\"HoroPackageQualification\", \"{DEPLOY_LAUNCH_MARKER}\" + nonce + \" startTicks=\" + started);\n"
+              f"{crash_observer}"
               "            }\n"
               "        }\n"
               "    }\n}\n")
@@ -1257,10 +1266,11 @@ def openxr_log_evidence(message: str) -> dict:
     raise AndroidDeployError("openxr_diagnostic_invalid")
 
 
-def process_log_entries(log: str, process: DeployedProcess, after: int, through: int) -> Iterator[tuple[int, str, str, str]]:
-    """Yield only entries from the exact UID, PID and admitted time interval."""
-    user, app = divmod(process.uid, 100_000)
-    accepted_uids = {str(process.uid)}
+def qualification_uid_log_entries(log: str, expected_uid: int, after: int,
+                                  through: int) -> Iterator[tuple[int, str, str, int, str]]:
+    """Read log fields for one installed UID inside the verified device-clock interval."""
+    user, app = divmod(expected_uid, 100_000)
+    accepted_uids = {str(expected_uid)}
     if app >= 10_000:
         accepted_uids.add(f"u{user}_a{app - 10_000}")
     for line in log.splitlines():
@@ -1268,10 +1278,17 @@ def process_log_entries(log: str, process: DeployedProcess, after: int, through:
         if not header:
             continue
         stamp, priority, tag, uid, pid, message = header.groups()
-        if uid not in accepted_uids or int(pid) != process.pid:
+        if uid not in accepted_uids:
             continue
         logged = log_epoch_nanoseconds(stamp)
         if after < logged <= through:
+            yield logged, priority, tag, int(pid), message
+
+
+def process_log_entries(log: str, process: DeployedProcess, after: int, through: int) -> Iterator[tuple[int, str, str, str]]:
+    """Yield only entries from the exact UID, PID and admitted time interval."""
+    for logged, priority, tag, pid, message in qualification_uid_log_entries(log, process.uid, after, through):
+        if pid == process.pid:
             yield logged, priority, tag, message
 
 
@@ -1428,9 +1445,11 @@ class AndroidPackageLaunch:
     application: str
     user: str
     digest: str
+    capture_retired_openxr: bool = False
     process: DeployedProcess | None = None
     attempted: bool = False
     recovery: AndroidLaunchRecovery | None = None
+    retired_crash: bool = False
 
     def start(self) -> tuple[DeployedProcess, AndroidLogClock]:
         uid = deployed_uid(self.device, self.application, self.user)
@@ -1455,7 +1474,14 @@ class AndroidPackageLaunch:
             if not exact_activity or states != ["COLD"] or not_started:
                 self.recovery = None
             raise AndroidDeployError("launch_unconfirmed")
-        self.process = self.recover_process(self.device, uid)
+        try:
+            self.process = self.recover_process(self.device, uid)
+        except AndroidDeployError as error:
+            if (self.capture_retired_openxr and states == ["COLD"] and error.code == "application_process_unavailable"
+                    and self.device.process_id(self.application) is None and self.confirm_retired_crash()):
+                self.retired_crash = True
+                raise AndroidDeployError("application_crashed") from None
+            raise
         return self.process, start
 
     def recover_process(self, device: AdmittedAdbDevice, uid: int) -> DeployedProcess:
@@ -1474,8 +1500,36 @@ class AndroidPackageLaunch:
             raise AndroidDeployError("application_process_changed")
         return process
 
+    def confirm_retired_crash(self) -> bool:
+        """Read exact app receipts for a cold OpenXR Activity that exited before PID admission."""
+        recovery = self.recovery
+        if recovery is None:
+            return False
+        raw = self.device.run("logcat", "-v", "time,epoch,nsec,uid", "-t", "200", "-s", "HoroPackageQualification:I")
+        through = AndroidLogClock.read(self.device)
+        through.require_continuity(recovery.started)
+        markers = {
+            name: re.compile(re.escape(prefix + recovery.nonce) + r" startTicks=([1-9][0-9]{0,19})")
+            for name, prefix in (("launch", DEPLOY_LAUNCH_MARKER), ("crash", DEPLOY_LAUNCH_CRASH_MARKER))
+        }
+        receipts = {}
+        for logged, priority, tag, pid, message in qualification_uid_log_entries(
+                raw, recovery.uid, recovery.started.nanoseconds, through.nanoseconds):
+            if priority != "I" or tag != "HoroPackageQualification" or not 0 < pid < 2**31:
+                continue
+            for name, pattern in markers.items():
+                if (match := pattern.fullmatch(message)) and int(match[1]) < 2**64:
+                    if name in receipts:
+                        return False
+                    receipts[name] = (logged, pid, int(match[1]))
+        launch, crash = receipts.get("launch"), receipts.get("crash")
+        return bool(launch and crash and launch[0] < crash[0] and launch[1:] == crash[1:]
+                    and self.device.process_id(self.application) is None)
+
     def rollback(self) -> dict:
         """Use a separate deadline to stop only a provably attributed package process."""
+        if self.retired_crash:
+            return {"status": "already_exited"}
         if self.process is None and self.recovery is None:
             return {"status": "unconfirmed", "reason": "launch_process_unattributed"}
         device = AdmittedAdbDevice(self.device.executable, self.device.serial, self.device.transport,
@@ -1622,7 +1676,7 @@ def android_deploy_main(argv=None) -> int:
             report["stage"] = "verify_install"
             deploy_verified_install(device, application, user, artifact.apk_sha256)
             report["stage"] = "launch"
-            launch = AndroidPackageLaunch(device, application, user, artifact.apk_sha256)
+            launch = AndroidPackageLaunch(device, application, user, artifact.apk_sha256, capture_retired_openxr=openxr)
             process, launch_time = launch.start()
             report["stage"] = "diagnostics"
             observed, applicable = await_deploy_diagnostics(device, application, process, launch_time, profile)
@@ -1652,6 +1706,8 @@ def android_deploy_main(argv=None) -> int:
     except (OSError, ValueError, KeyError, TypeError, AttributeError, zipfile.BadZipFile):
         report["error"] = "artifact_invalid" if report["stage"] == "artifact" else "host_operation_failed"
     if exit_code != 0 and launch is not None and launch.attempted and "cleanup" not in report:
+        if launch.retired_crash:
+            report["observed"] = {"crashObserved": True}
         if report["error"] == "device_transport_changed":
             report["cleanup"] = {"status": "unconfirmed", "reason": "device_transport_changed"}
         else:

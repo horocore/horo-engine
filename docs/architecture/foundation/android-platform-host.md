@@ -311,6 +311,14 @@ owner chain the exact Activity into instance creation. A missing host lease,
 unavailable loader entry point or failed initialization prevents native
 discovery.
 
+If a confirmed cold OpenXR launch exits before the host can read its live
+process identity, the deploy command looks for the Activity's launch receipt
+and its uncaught Java crash receipt in a bounded qualification-tag log read.
+The two receipts must match the private nonce, package UID, PID, and process
+start ticks. A confirmed crash remains a failed launch. The command reports
+that the original process exited without attempting to stop a replacement.
+The Java observer forwards the original exception to Android's crash handler.
+
 The signed `qualification-openxr-development` APK compiles the same Android
 loader initialization and Activity instance ABI used by `HoroXROpenXR`. Its
 GameActivity queues one cold diagnostic on resume and consumes it after pending
