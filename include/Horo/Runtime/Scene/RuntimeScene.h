@@ -964,9 +964,11 @@ namespace Horo::Runtime {
         }
 
         /** @brief Captures the sole live-effect render channel on the owning extraction phase.
-         * @param frame One-based host frame. @return Retained immutable values and complete overload report.
+         * @param frame One-based host frame. @param flashes Host-projected policy for tagged effects.
+         * @return Retained immutable values and complete overload report.
          */
-        [[nodiscard]] Vfx::VfxExtractionOutcome CaptureVfx(std::uint64_t frame) noexcept;
+        [[nodiscard]] Vfx::VfxExtractionOutcome CaptureVfx(std::uint64_t frame,
+                                                           Vfx::VfxFlashPolicy flashes = Vfx::VfxFlashPolicy::Present) noexcept;
 
         struct ResolvedAsset {
             SceneAssetDependency dependency;
@@ -1251,6 +1253,12 @@ namespace Horo::Runtime {
 
         [[nodiscard]] Result<void> Startup(const CancellationToken &cancellation) override;
 
+        /** @brief Stages the host's committed preference for the next extraction.
+         * @param policy Visibility of tagged VFX output. Published frames and live simulation retain their state.
+         * @pre Called on the Scene owner thread before RenderExtraction.
+         */
+        void StageVfxFlashPolicy(Vfx::VfxFlashPolicy policy) noexcept;
+
         /** @brief Returns the current extraction phase's retained VFX frame and typed overload evidence.
          * @return Scene-owner-thread borrowed result; renderer consumers copy its immutable snapshot lease.
          * @details A failed/blocked extraction publishes an empty snapshot, never a stale prior frame.
@@ -1353,6 +1361,7 @@ namespace Horo::Runtime {
         std::thread::id restoreRetirementOwner_{std::this_thread::get_id()};
         SceneAggregate active_;
         Vfx::VfxExtractionOutcome vfxFrame_;
+        Vfx::VfxFlashPolicy vfxFlashPolicy_{Vfx::VfxFlashPolicy::Present};
         std::unique_ptr<Detail::ActivatedSceneInstances> activatedInstances_;
         std::unique_ptr<Detail::InitialActivatedSceneChildren> initialActivatedChildren_;
         const RuntimeSceneService *activationParent_{}; /**< Private one-use Activated child publication fence. */

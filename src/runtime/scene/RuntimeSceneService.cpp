@@ -492,11 +492,16 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
+    /** @copydoc RuntimeSceneService::StageVfxFlashPolicy */
+    void RuntimeSceneService::StageVfxFlashPolicy(Vfx::VfxFlashPolicy policy) noexcept {
+        vfxFlashPolicy_ = policy;
+    }
+
     /** @copydoc RuntimeSceneService::OnPhase */
     Result<void> RuntimeSceneService::OnPhase(const RuntimePhase phase, const FrameContext &context) {
         if (phase == RuntimePhase::RenderExtraction) {
             vfxFrame_ = {};
-            vfxFrame_ = active_.scene ? active_.scene->CaptureVfx(context.frameNumber) : Vfx::VfxExtractionOutcome{};
+            vfxFrame_ = active_.scene ? active_.scene->CaptureVfx(context.frameNumber, vfxFlashPolicy_) : Vfx::VfxExtractionOutcome{};
         }
         if (phase == RuntimePhase::CommitDeferredLifecycleChanges) {
             if (mutatingLifecycle_)

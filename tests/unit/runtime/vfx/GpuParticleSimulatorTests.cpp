@@ -55,6 +55,9 @@ TEST_CASE("GPU prepared unit rejects every unsupported authored feature before n
     SECTION("CPU requirement cannot be relabeled GPU") {
         source.simulationPreference = SimulationPreference::RequireCPU;
     }
+    SECTION("tagged flashes require an extraction owner that can suppress their draws") {
+        source.photosensitiveFlash = true;
+    }
     Horo::Tests::RequireActionableError(GpuParticleSimulator::Create(Vfx::Tests::CookGpuParticleSource(source), info),
                                         VfxErrors::GpuSimulationUnsupported);
 }

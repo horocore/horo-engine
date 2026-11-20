@@ -40,8 +40,8 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc RuntimeScene::CaptureVfx */
-    Vfx::VfxExtractionOutcome RuntimeScene::CaptureVfx(std::uint64_t frame) noexcept {
-        return vfxWorld_ ? vfxWorld_->Extract(frame, vfxOrigin_, vfxOriginRevision_) : Vfx::VfxExtractionOutcome{};
+    Vfx::VfxExtractionOutcome RuntimeScene::CaptureVfx(std::uint64_t frame, Vfx::VfxFlashPolicy flashes) noexcept {
+        return vfxWorld_ ? vfxWorld_->Extract(frame, vfxOrigin_, vfxOriginRevision_, flashes) : Vfx::VfxExtractionOutcome{};
     }
 
     namespace {

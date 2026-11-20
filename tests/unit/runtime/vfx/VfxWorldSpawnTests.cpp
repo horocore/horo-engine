@@ -20,7 +20,7 @@ namespace Horo::Vfx {
             return Tests::ParticleMaterial(second ? "17490000-0000-4000-8000-000000000002" : "17490000-0000-4000-8000-000000000001");
         }
 
-        [[nodiscard]] VfxSpawnAssetPreparation SpawnRecipe(const bool second = false) {
+        [[nodiscard]] VfxSpawnAssetPreparation SpawnRecipe(const bool second = false, const bool photosensitiveFlash = false) {
             auto data = Tests::ValidParticleDescriptorData();
             data.maximumParticles = 8;
             data.simulationPreference = SimulationPreference::RequireCPU;
@@ -32,6 +32,7 @@ namespace Horo::Vfx {
             data.initialOpacity = {1.0, 1.0};
             data.sortMode = ParticleSortMode::None;
             data.collisionMode = ParticleCollisionMode::None;
+            data.photosensitiveFlash = photosensitiveFlash;
             return {.asset = SpawnAsset(second),
                     .particles = std::make_shared<const ParticleSystemDescriptor>(Tests::ParticleDescriptor(data)),
                     .simulation = {.effectSeed = 7, .maximumBurstParticles = 8, .maximumDeltaSeconds = 1.0F},
@@ -122,6 +123,27 @@ namespace Horo::Vfx {
         CHECK(frame.snapshot.Instances()[0].position == Math::Vec3{10.0F, 20.0F, 30.0F});
         CHECK(frame.snapshot.Instances()[0].size == Math::Vec2{4.0F, 6.0F});
         CHECK(frame.snapshot.Batches()[0].id.effectGeneration == 1);
+    }
+
+    TEST_CASE("Flash suppression changes spawned particle rendering without stopping their live kernels", "[unit][vfx][spawn-world]") {
+        const auto recipe = SpawnRecipe(false, /*photosensitiveFlash=*/true);
+        auto world = SpawnWorld(std::span{&recipe, 1});
+        REQUIRE(Enqueue(*world, SpawnCommand()).status == VfxSpawnStatus::Accepted);
+        REQUIRE(world->UpdateSpawns(1, 0.25F).live == 1);
+        REQUIRE(world->SpawnResults().size() == 1);
+
+        const auto normal = world->Extract(1, {}, 1).snapshot;
+        REQUIRE(normal.Batches().size() == 1);
+        const auto safe = world->Extract(2, {}, 1, VfxFlashPolicy::Suppress);
+        REQUIRE(safe.report.status == VfxExtractionStatus::Complete);
+        CHECK(safe.report.omittedBatches == 0);
+        CHECK(safe.snapshot.Batches().empty());
+        CHECK(normal.Instances().size() == 2);
+        CHECK(world->UpdateSpawns(2, 0.25F).live == 1);
+        const auto resumed = world->Extract(3, {}, 1).snapshot;
+        REQUIRE(resumed.Batches().size() == 1);
+        CHECK(resumed.Batches()[0].id == normal.Batches()[0].id);
+        CHECK(world->UpdateSpawns(3, 0.5F).retired == 1);
     }
 
     TEST_CASE("World validates every authored layer before any queue or source watermark mutation", "[unit][vfx][spawn-world]") {

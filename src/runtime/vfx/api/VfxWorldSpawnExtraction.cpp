@@ -71,13 +71,16 @@ namespace Horo::Vfx {
     }
 
     bool VfxWorld::AppendSpawnEmitters(Render::RenderWorldFrameData &data, const Math::WorldCoordinate64 &origin,
-                                       VfxExtractionReport &report) const noexcept {
+                                       VfxExtractionReport &report, VfxFlashPolicy flashes) const noexcept {
         if (!spawn_)
             return true;
-        for (auto &asset : spawn_->assets)
+        for (auto &asset : spawn_->assets) {
+            if (asset.photosensitiveFlash && flashes == VfxFlashPolicy::Suppress)
+                continue;
             for (auto &instance : asset.instances)
                 if (instance.live && !extractor_.AppendSpawnEmitter(asset, instance, data, origin, report))
                     return false;
+        }
         return true;
     }
 }  // namespace Horo::Vfx

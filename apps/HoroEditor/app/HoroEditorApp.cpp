@@ -1819,19 +1819,22 @@ namespace Horo::Editor {
                                      safety.Value().SuppressFlash()});
         }
 
-        /** @brief Forwards one committed preference to the Runtime UI presentation owner. */
-        Result<void> RefreshRuntimeUiAccessibility(const ConfigurationService &configuration,
-                                                   const Application::Internal::RuntimeUiPaintPort &port, ConfigurationRevision &applied) {
+        /** @brief Projects one committed revision into Runtime UI and any attached Scene VFX owner. */
+        Result<void> RefreshRuntimeVisualAccessibility(const ConfigurationService &configuration,
+                                                       const Application::Internal::RuntimeUiPaintPort &port,
+                                                       ConfigurationRevision &applied, Runtime::RuntimeSceneService *scene = nullptr) {
             const auto config = configuration.Snapshot();
             if (config.Revision() == applied)
                 return Result<void>::Success();
             const auto visual = CaptureEditorVisualSettings(config);
             if (visual.HasError())
                 return Result<void>::Failure(visual.ErrorValue());
-            const auto update = port.UpdateVisualAccessibility(visual.Value());
-            if (update.HasValue())
-                applied = config.Revision();
-            return update;
+            if (const auto update = port.UpdateVisualAccessibility(visual.Value()); update.HasError())
+                return update;
+            if (scene)
+                scene->StageVfxFlashPolicy(visual.Value().suppressFlash ? Vfx::VfxFlashPolicy::Suppress : Vfx::VfxFlashPolicy::Present);
+            applied = config.Revision();
+            return Result<void>::Success();
         }
 
         struct EditorThemeAccessibilityState final {
@@ -2183,7 +2186,8 @@ namespace Horo::Editor {
             Result<void> DispatchControlPhase(const Runtime::RuntimePhase phase, const Runtime::FrameContext &context) {
                 switch (phase) {
                     case Runtime::RuntimePhase::BeginFrame:
-                        if (auto updated = RefreshRuntimeUiAccessibility(p_->configuration, authorities_.ui, uiAccessibilityRevision_);
+                        if (auto updated = RefreshRuntimeVisualAccessibility(p_->configuration, authorities_.ui, uiAccessibilityRevision_,
+                                                                             authorities_.scene);
                             updated.HasError())
                             return updated;
                         PollShaderReload();
@@ -3832,7 +3836,7 @@ namespace Horo::Editor {
             if (uiComposition.HasError())
                 return std::nullopt;
             ConfigurationRevision initialAccessibility{};
-            if (auto updated = RefreshRuntimeUiAccessibility(p.configuration, uiComposition.Value().port, initialAccessibility);
+            if (auto updated = RefreshRuntimeVisualAccessibility(p.configuration, uiComposition.Value().port, initialAccessibility);
                 updated.HasError())
                 return std::nullopt;
             auto allocator = Runtime::Ui::UiElementSlotAllocator::Create(Runtime::Ui::UiOwnershipGeneration::Create(1).Value());

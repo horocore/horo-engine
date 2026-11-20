@@ -19,7 +19,7 @@ namespace Horo::Vfx::GpuParticleDetail {
             if (info.initialization != GpuParticleInitialization::PreparedParticles ||
                 info.resolution.domain != ResolvedSimulationDomain::GPU || info.requiredFeatures != GpuParticleRequiredFeature::None)
                 return false;
-            return d.simulationPreference != SimulationPreference::RequireCPU && MotionSubset(d) &&
+            return !d.photosensitiveFlash && d.simulationPreference != SimulationPreference::RequireCPU && MotionSubset(d) &&
                    d.renderMode == ParticleRenderMode::Billboard && d.sortMode == ParticleSortMode::None;
         }
 

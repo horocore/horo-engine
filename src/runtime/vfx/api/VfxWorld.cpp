@@ -198,8 +198,9 @@ namespace Horo::Vfx {
     }
 
     /** @copydoc VfxWorld::Extract */
-    VfxExtractionOutcome VfxWorld::Extract(std::uint64_t frame, const Math::WorldCoordinate64 &origin, std::uint64_t revision) noexcept {
-        return extractor_.Extract(*this, frame, origin, revision);
+    VfxExtractionOutcome VfxWorld::Extract(std::uint64_t frame, const Math::WorldCoordinate64 &origin, std::uint64_t revision,
+                                           VfxFlashPolicy flashes) noexcept {
+        return extractor_.Extract(*this, frame, origin, revision, flashes);
     }
 
     /** @copydoc VfxWorld::Shutdown */
@@ -273,17 +274,20 @@ namespace Horo::Vfx {
         return true;
     }
 
-    bool VfxWorld::AppendCpuEmitters(Render::RenderWorldFrameData &data, const Math::WorldCoordinate64 &origin,
-                                     VfxExtractionReport &report) const noexcept {
-        for (const auto &emitter : emitters_)
+    bool VfxWorld::AppendCpuEmitters(Render::RenderWorldFrameData &data, const Math::WorldCoordinate64 &origin, VfxExtractionReport &report,
+                                     VfxFlashPolicy flashes) const noexcept {
+        for (const auto &emitter : emitters_) {
+            if (emitter.binding.photosensitiveFlash && flashes == VfxFlashPolicy::Suppress)
+                continue;
             if (emitter.live && !extractor_.AppendEmitter(emitter.binding, emitter.particles, data, origin, report))
                 return false;
-        return AppendSpawnEmitters(data, origin, report);
+        }
+        return AppendSpawnEmitters(data, origin, report, flashes);
     }
 
     /** @copydoc VfxRenderExtractor::Extract */
     VfxExtractionOutcome VfxRenderExtractor::Extract(const VfxWorld &world, std::uint64_t frame, const Math::WorldCoordinate64 &origin,
-                                                     std::uint64_t revision) noexcept {
+                                                     std::uint64_t revision, VfxFlashPolicy flashes) noexcept {
         VfxExtractionOutcome outcome;
         auto &report = outcome.report;
         if (owner_ != std::this_thread::get_id() || world.owner_ != owner_) {
@@ -312,7 +316,7 @@ namespace Horo::Vfx {
         data.scene_ = world.scene_.Value();
         data.frame_ = frame;
         data.originRevision_ = revision;
-        if (!world.AppendCpuEmitters(data, origin, report) || !AppendGpuEmitters(world, data, origin, report))
+        if (!world.AppendCpuEmitters(data, origin, report, flashes) || !AppendGpuEmitters(world, data, origin, report))
             return outcome;
         lastFrame_ = frame;
         outcome.snapshot.data_ = *available;

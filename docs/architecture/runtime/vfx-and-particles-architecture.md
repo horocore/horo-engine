@@ -525,6 +525,14 @@ the renderer, not native handles. Every slice is bounds/layout checked against i
 retained storage, with checked offset/count/stride arithmetic. GPU buffers and
 indirect arguments require correct admitted usage/size and current resource generation.
 
+An authored particle source can declare `photosensitiveFlash: true`. Omitted
+fields preserve existing presentation. The host projects its committed flash
+preference into Scene extraction. Both fixed and spawned CPU emitters omit
+tagged batches before charging frame budgets when suppression is active. Spawn
+results, particle simulation, lifetimes and retained frame snapshots remain intact.
+GPU logical preparation rejects tagged sources until its simulation and draw
+admission can be controlled independently.
+
 The shapes below are schematic contracts, not installed public headers. FrameSlice
 refers to immutable frame-owned storage, not an unowned span into simulation memory.
 GpuVfxStateHandle identifies a renderer-owned state bundle (particle ping-pong,
