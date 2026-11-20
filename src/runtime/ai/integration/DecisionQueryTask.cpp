@@ -13,6 +13,15 @@ namespace Horo::AI {
             return Result<T>::Failure(MakeError(error));
         }
 
+        /** @brief Copies the retained cause through the task callback's no-throw boundary. */
+        Result<AiTaskState> TaskFailure(const Error &error) noexcept {
+            try {
+                return Result<AiTaskState>::Failure(error);
+            } catch (const std::bad_alloc &) {
+                return Failure<AiTaskState>(AIErrors::EnvironmentQueryLimitExceeded);
+            }
+        }
+
         /** @brief Resolves only a compiled task with the given semantic identity. */
         const BehaviorTreeExecutionNode *FindTask(const BehaviorTreeExecutionPlan &tree, DecisionNodeId id) {
             const auto node = std::ranges::find(tree.Nodes(), id, [](const auto &entry) {
@@ -142,6 +151,7 @@ namespace Horo::AI {
         resolvedTick_ = 0;
         ready_ = false;
         outputCommitted_ = false;
+        outputFailure_.reset();
     }
 
     /** @copydoc DecisionQueryTask::Start */
@@ -188,6 +198,8 @@ namespace Horo::AI {
         }
         if (outputCommitted_)
             return Result<AiTaskState>::Success(AiTaskState::Succeeded);
+        if (outputFailure_)
+            return TaskFailure(*outputFailure_);
         if (ready_) {
             if (context.tick == resolvedTick_)
                 return Result<AiTaskState>::Success(AiTaskState::Running);
@@ -204,12 +216,8 @@ namespace Horo::AI {
             result->status == QueryExecutionStatus::TimedOut)
             return Result<AiTaskState>::Success(AiTaskState::Cancelled);
         if (result->status != QueryExecutionStatus::Completed || result->winners.empty()) {
-            try {
-                if (result->error)
-                    return Result<AiTaskState>::Failure(*result->error);
-            } catch (const std::bad_alloc &) {
-                return Failure<AiTaskState>(AIErrors::EnvironmentQueryLimitExceeded);
-            }
+            if (result->error)
+                return TaskFailure(*result->error);
             return Result<AiTaskState>::Success(AiTaskState::Failed);
         }
         const bool point = std::holds_alternative<Math::WorldCoordinate64>(result->winners.front().item);
@@ -267,6 +275,13 @@ namespace Horo::AI {
             Discard();
     }
 
+    /** @copydoc DecisionQueryTask::RejectOutput */
+    Result<bool> DecisionQueryTask::RejectOutput(Error error) {
+        ready_ = false;
+        outputFailure_.emplace(std::move(error));
+        return Result<bool>::Success(false);
+    }
+
     /** @copydoc DecisionQueryTask::CommitOutput */
     Result<bool> DecisionQueryTask::CommitOutput(const std::uint64_t tick, const Runtime::RuntimeSceneView &scene,
                                                  BlackboardInstance &blackboard) {
@@ -285,19 +300,19 @@ namespace Horo::AI {
         }
         auto batch = blackboard.BeginWriteBatch();
         if (batch.HasError())
-            return Result<bool>::Failure(std::move(batch).ErrorValue());
+            return RejectOutput(std::move(batch).ErrorValue());
         auto write = std::move(batch).Value();
         if (auto staged = write.Stage({descriptor_.output, BlackboardValue{std::move(value).Value()}}); staged.HasError())
-            return Result<bool>::Failure(std::move(staged).ErrorValue());
+            return RejectOutput(std::move(staged).ErrorValue());
         // Hide the pending output while notifying observers, which may synchronously call back.
         const auto task = operation_.task;
         ready_ = false;
         auto committed = blackboard.CommitAtBlackboardSync(std::move(write));
-        if (committed.HasError()) {
-            ready_ = query_ && operation_.task == task;
-            return Result<bool>::Failure(std::move(committed).ErrorValue());
-        }
-        outputCommitted_ = query_ && operation_.task == task;
+        if (!query_ || operation_.task != task)
+            return Result<bool>::Success(committed.HasValue());
+        if (committed.HasError())
+            return RejectOutput(std::move(committed).ErrorValue());
+        outputCommitted_ = true;
         return Result<bool>::Success(true);
     }
 }  // namespace Horo::AI

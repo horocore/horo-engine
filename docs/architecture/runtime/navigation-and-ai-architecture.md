@@ -3033,6 +3033,16 @@ before applying a selection.
 Native consumers rebuild against the extended scheduler report and evaluator
 interface. Existing evaluators inherit the empty advisory implementation.
 
+Recovery follows the lifetime that admitted the work. Navigation and gameplay
+capability admission reject unavailable services or full request storage with
+typed errors. An admitted query retires on cancellation or stale inputs and
+keeps provider failures on the requesting task. Cooperative scheduler yields
+use the next admitted slice. A failed callback follows the owning node's
+terminal or fallback policy. Native sensing suspends the failed recipient for
+its activation lifetime. A rejected query output remains on the owning task
+through its next decision evaluation. These failures leave unrelated Scene
+owners and their budgets active.
+
 Positive finite per-agent and global evaluation/work/command/submission limits
 are validated before registration. Deterministic admission requires interval one
 and reserves the complete work, command and evaluation allowances for every
@@ -3172,6 +3182,7 @@ following variable-rate presentation bridge.
 2. **`BlackboardSync`**:
    - Ingests staged stimulus buffers into each agent's `BlackboardState`.
    - Evaluates stimulus decay over time, updates last known target locations, adjusts agent alert levels, and processes incoming team/squad broadcast events.
+   - A rejected EQS destination write remains attached to the exact task and is reported with its original cause when that task resumes. The owner does not retry the rejected output or interrupt publication for unrelated agents. Rebuild native consumers of the updated `DecisionQueryTask` type.
    - Invariant: All blackboard mutations are completed within this phase; blackboards become read-only during subsequent decision evaluation.
 3. **`AiDecisionEvaluate`**:
    - Evaluates behavior trees, finite state machines, or utility AI models against current blackboard state.

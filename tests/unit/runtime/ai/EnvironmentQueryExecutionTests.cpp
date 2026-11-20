@@ -265,11 +265,15 @@ namespace Horo::AI {
             DecisionNodeId node{MakeIdentity<DecisionNodeId>(5)};
             TaskId task{MakeIdentity<TaskId>(6)};
             BlackboardKeyId output{MakeIdentity<BlackboardKeyId>(7)};
+            BlackboardKeyId unrelated{MakeIdentity<BlackboardKeyId>(9)};
             std::unique_ptr<BlackboardInstance> blackboard;
             DecisionQueryTask *executor{};
 
             std::shared_ptr<const BehaviorTreeExecutionPlan> BuildTree(const BlackboardValueKind kind) {
-                const std::array keys{BlackboardKeyDescriptor{.key = output, .kind = kind, .presence = BlackboardKeyPresence::Optional}};
+                const std::array keys{BlackboardKeyDescriptor{.key = output, .kind = kind, .presence = BlackboardKeyPresence::Optional},
+                                      BlackboardKeyDescriptor{.key = unrelated,
+                                                              .kind = BlackboardValueKind::Boolean,
+                                                              .presence = BlackboardKeyPresence::Optional}};
                 auto schema = BlackboardSchema::Capture({.identity = MakeIdentity<BlackboardSchemaId>(8), .keys = keys});
                 REQUIRE(schema.HasValue());
                 auto owned = std::make_shared<const BlackboardSchema>(std::move(schema).Value());
@@ -436,6 +440,51 @@ namespace Horo::AI {
             REQUIRE(value.HasValue());
             REQUIRE(value.Value().has_value());
             CHECK(std::get<Math::WorldCoordinate64>(std::get<BlackboardScalarValue>(*value.Value())).Millimeters()[0] == 2);
+        }
+
+        TEST_CASE("A rejected EQS destination write terminates only the owning task and is never retried", "[unit][ai][eqs][task]") {
+            QueryTaskFixture fixture;
+            auto tree = fixture.Start();
+            REQUIRE(fixture.Evaluate(*tree, 4) == AiTaskState::Running);
+            for (std::uint64_t tick = 5; tick <= 6; ++tick) {
+                fixture.executor->SyncQuery(tick);
+                REQUIRE(fixture.Evaluate(*tree, tick) == AiTaskState::Running);
+                AiWorkBudget budget{64};
+                fixture.executor->AdvanceQuery(tick, {budget, budget, budget});
+            }
+            fixture.executor->SyncQuery(7);
+            REQUIRE(fixture.Evaluate(*tree, 7) == AiTaskState::Running);
+
+            struct PublicationProbe {
+                QueryTaskFixture &fixture;
+                bool rejectedWithoutFailingSync{};
+            };
+
+            PublicationProbe probe{fixture};
+            const BlackboardObserverCallback publishQuery = [](auto *context, const BlackboardNotificationBatch &) noexcept {
+                auto &observed = *static_cast<PublicationProbe *>(context);
+                auto &owner = observed.fixture;
+                const auto sync = owner.executor->CommitOutput(8, owner.scene->View(), *owner.blackboard);
+                observed.rejectedWithoutFailingSync = sync.HasValue() && !sync.Value();
+            };
+            const auto registered = fixture.blackboard->RegisterObserverAtBlackboardSync(
+                {fixture.agent, {fixture.agent.incarnation, {1, 1}}, fixture.unrelated, publishQuery, &probe});
+            REQUIRE(registered.HasValue());
+            auto batch = fixture.blackboard->BeginWriteBatch().Value();
+            REQUIRE(batch.Stage({fixture.unrelated, BlackboardValue{BlackboardScalarValue{true}}}).HasValue());
+            REQUIRE(fixture.blackboard->CommitAtBlackboardSync(std::move(batch)).HasValue());
+            REQUIRE(probe.rejectedWithoutFailingSync);
+            CHECK_FALSE(fixture.executor->CommitOutput(8, fixture.scene->View(), *fixture.blackboard).Value());
+            REQUIRE(fixture.Evaluate(*tree, 8) == AiTaskState::Failed);
+            const auto terminal = tree->TaskResult(fixture.node);
+            REQUIRE(terminal.HasValue());
+            REQUIRE(terminal.Value());
+            REQUIRE(terminal.Value()->failure);
+            CHECK(terminal.Value()->failure->cause.code.Value() == AIErrors::BlackboardReentrantMutation.code.Value());
+            CHECK_FALSE(fixture.executor->ActiveAgent().IsValid());
+            const auto snapshot = fixture.blackboard->Snapshot().Value();
+            CHECK_FALSE(snapshot.Read(fixture.output).Value().has_value());
+            CHECK(snapshot.Read(fixture.unrelated).Value() == std::optional{BlackboardValue{BlackboardScalarValue{true}}});
         }
 
         TEST_CASE("EQS native admission refuses a registry that declares actor output for a point lattice", "[unit][ai][eqs][task]") {

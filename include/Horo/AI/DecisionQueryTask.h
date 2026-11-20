@@ -90,7 +90,8 @@ namespace Horo::AI {
         /** @brief Applies one eligible result to the exact active destination before the task succeeds.
          * @param tick Current BlackboardSync tick. @param scene Fresh destination Scene.
          * @param blackboard Exact destination admitted by the decision node.
-         * @return True once on commit, false when no output is ready, or typed stale/write failure.
+         * @return True once on commit, false when no output is ready or the task retains a write failure, or a typed stale error.
+         * @details A rejected Blackboard write is reported by the task's next Resume and is never retried.
          */
         [[nodiscard]] Result<bool> CommitOutput(std::uint64_t tick, const Runtime::RuntimeSceneView &scene, BlackboardInstance &blackboard);
 
@@ -100,6 +101,8 @@ namespace Horo::AI {
                           BlackboardValueKind kind, IDecisionQueryTaskHost &host) noexcept;
         [[nodiscard]] bool Matches(const AiTaskOperationContext &operation) const noexcept;
         [[nodiscard]] bool Accepts(const BehaviorTreeEvaluationContext &context) const noexcept;
+        /** @brief Transfers a rejected write into the next decision evaluation without failing BlackboardSync. */
+        [[nodiscard]] Result<bool> RejectOutput(Error error);
         void Discard() noexcept;
         DecisionQueryTaskDescriptor descriptor_;
         BlackboardSchemaId schema_;
@@ -109,6 +112,7 @@ namespace Horo::AI {
         AiTaskOperationContext operation_;
         BlackboardInstanceBinding destination_;
         std::unique_ptr<QueryExecution> query_;
+        std::optional<Error> outputFailure_;
         std::uint64_t deadline_{};
         std::uint64_t resolvedTick_{};
         bool ready_{};
