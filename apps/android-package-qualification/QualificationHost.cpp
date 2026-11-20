@@ -8,6 +8,7 @@
 
 #include <android/log.h>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <exception>
 #include <game-activity/native_app_glue/android_native_app_glue.h>
@@ -25,6 +26,7 @@ namespace Horo::AndroidQualification {
         constexpr auto MinimumFrameAttemptInterval = std::chrono::milliseconds{16};
         constexpr auto ThermalFrameAttemptInterval = std::chrono::milliseconds{32};
         ThermalPacingMailbox ThermalPacingPublications;
+        std::atomic_uint64_t PacingDiagnosticRevision{};
 
         /** @brief Cold JNI binding to one Activity's latest attempt policy; no JNI calls from frame admission. */
         class ThermalPacingBinding final {
@@ -169,16 +171,19 @@ namespace Horo::AndroidQualification {
         std::uint64_t presentAccepted{}; /**< At most one accepted Present per bounded frame request; never completion evidence. */
         std::optional<HostObservation> observation;
         std::optional<FramePacing::Mode> observedPacing;
-        std::uint64_t pacingRevision{};
         bool reportNextOutcome{true}, reportFirstPresent{true};
 
         /** @brief Publishes the policy selected by the real frame owner when it changes. */
         void ObservePacing(const FramePacing::Mode mode) noexcept {
-            if (observedPacing == mode || pacingRevision == std::numeric_limits<std::uint64_t>::max())
+            if (observedPacing == mode)
+                return;
+            auto previous = PacingDiagnosticRevision.load(std::memory_order_relaxed);
+            if (previous == static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
+                !PacingDiagnosticRevision.compare_exchange_strong(previous, previous + 1, std::memory_order_relaxed))
                 return;
             observedPacing = mode;
             __android_log_print(ANDROID_LOG_INFO, "HoroPackageQualification", "host-pacing revision=%llu state=%s",
-                                static_cast<unsigned long long>(++pacingRevision),
+                                static_cast<unsigned long long>(previous + 1),
                                 mode == FramePacing::Mode::ThermalConservation ? "thermal-conservation" : "baseline");
         }
 
