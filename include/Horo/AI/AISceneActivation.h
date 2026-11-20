@@ -496,6 +496,13 @@ namespace Horo::AI {
          * Scheduler budgets, callbacks and evaluation order are unchanged. */
         [[nodiscard]] Result<void> ArmDecisionReplayAtSafePoint(AgentHandle agent, std::uint64_t tick) const;
 
+        /** @brief Drops an unconsumed replay arm or observation on the simulation owner.
+         * @param agent Exact agent generation originally armed.
+         * @param tick Exact fixed tick originally armed.
+         * @details A mismatched request has no effect. This releases only recording storage and preserves
+         * decisions, scheduler state and detached evidence. */
+        void DiscardDecisionReplayAtSafePoint(AgentHandle agent, std::uint64_t tick) const noexcept;
+
         /** @brief Detaches the actual armed decision trace and canonical base-agent population after committed simulation.
          * @param scene Current committed Scene after the host completed its fixed tick.
          * @param tick Exact armed tick with completed AI intent dispatch.

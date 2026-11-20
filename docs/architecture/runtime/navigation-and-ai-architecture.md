@@ -3283,6 +3283,14 @@ tick. The scheduler records the trace during that agent's original budgeted
 decision step. After intent dispatch and the committed Scene tick, the owner
 can detach the trace and canonical AI population for off-owner comparison.
 
+The configured standalone headless product can opt in with
+`--ai-replay <agent-id> <fixed-tick>`, using the cooked Scene and its
+native gameplay decision bindings. Both arguments are positive decimal
+identities. The host stages the capture during fixed preparation and publishes
+it only when that fixed attempt commits. After the run, the command reports
+the selected trace identity and the canonical AI state hash. A selection that
+produces no committed evidence is reported as an error.
+
 ### Scene decision scheduling tiers
 
 Hosts can compose an `AiDecisionSimulationProfile` through

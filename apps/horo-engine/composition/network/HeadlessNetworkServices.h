@@ -16,6 +16,8 @@
 
 #include <functional>
 #include <memory>
+#include <optional>
+#include <thread>
 
 namespace Horo::Render {
     class RenderOriginSceneAdapter;
@@ -30,6 +32,12 @@ namespace Horo::Vfx {
 }
 
 namespace Horo::Application::Internal {
+    namespace HeadlessNetworkDetail {
+        struct WorldRecord;
+        class WorldService;
+        class HeadlessFixedParticipant;
+    }  // namespace HeadlessNetworkDetail
+
     struct ProjectSceneNavigationSelection;
     struct HeadlessPerceptionPolicy;
     struct CommittedWorldSelection;
@@ -49,6 +57,54 @@ namespace Horo::Application::Internal {
         HeadlessPerceptionProvider provider{HeadlessPerceptionProvider::CapturedRegistry};
     };
     struct HeadlessCookedDecisionInput;
+
+    /** @brief Explicit one-shot diagnostic selection for a configured standalone World. */
+    struct HeadlessDecisionReplaySelection final {
+        AI::AgentId agent;
+        std::uint64_t tick{};
+
+        [[nodiscard]] bool IsValid() const noexcept {
+            return agent.IsValid() && tick != 0;
+        }
+    };
+
+    /** @brief Product-owned mailbox for one exact committed tick; no concurrent access or file storage. */
+    class HeadlessDecisionReplay final {
+    public:
+        static constexpr std::size_t CanonicalBudget = 1U << 20U;
+        using Capture = Result<AI::AiSceneDecisionReplayCapture>;
+
+        explicit HeadlessDecisionReplay(HeadlessDecisionReplaySelection selection) noexcept : selection_(selection) {}
+
+        HeadlessDecisionReplay(const HeadlessDecisionReplay &) = delete;
+        HeadlessDecisionReplay &operator=(const HeadlessDecisionReplay &) = delete;
+
+        /** @brief Reports the immutable selected subject and fixed tick. */
+        [[nodiscard]] const HeadlessDecisionReplaySelection &Selection() const noexcept {
+            return selection_;
+        }
+
+        /** @brief Takes the one published capture or diagnostic on the fixed owner's lane. */
+        [[nodiscard]] std::optional<Capture> TakeCommitted() noexcept;
+
+    private:
+        friend class HeadlessNetworkDetail::HeadlessFixedParticipant;
+        void Arm(HeadlessNetworkDetail::WorldRecord &world, const Runtime::FixedStepContext &context);
+        void Prepare(const HeadlessNetworkDetail::WorldRecord &world, const Runtime::FixedStepContext &context);
+        void Commit(const Runtime::FixedStepContext &context) noexcept;
+        void Abort(const Runtime::FixedStepContext &context) noexcept;
+        /** @brief Clears only the exact opt-in held by the pinned Scene owner. */
+        void DiscardArm() noexcept;
+
+        HeadlessDecisionReplaySelection selection_;
+        const std::thread::id owner_{std::this_thread::get_id()};
+        const HeadlessNetworkDetail::WorldRecord *attemptWorld_{};
+        AI::AgentHandle armedAgent_;
+        std::uint64_t attempt_{};
+        std::optional<Capture> pending_;
+        std::optional<Capture> committed_;
+        bool published_{};
+    };
 
     /** @brief Exact registered traversal filter and bounded deadline for the standalone best-effort path grant. */
     struct HeadlessNavigationPathPolicy final {
@@ -133,6 +189,7 @@ namespace Horo::Application::Internal {
             replicatedSceneObjects; /**< Explicit stable object/schema bindings for this definition. */
         std::optional<HeadlessSceneTransformReplication> publicTransforms;
         std::shared_ptr<HeadlessInitialStateHost> initialSceneState;
+        std::shared_ptr<HeadlessDecisionReplay> decisionReplay; /**< Optional explicit one-shot standalone replay capture. */
     };
 
     /** @brief Composes actual project Scene services and their sole aggregate-owned Physics/Character pair.

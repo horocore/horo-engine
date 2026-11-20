@@ -763,6 +763,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return JobCancelled();
             if (record_->decisionTick != 0 && record_->decisionTick == context.simulationTick)
                 return Result<void>::Success();
+            if (owners_->configured->decisionReplay && owners_->fixed && request_.world == Network::NetworkModeWorldKind::Standalone)
+                owners_->fixed->ArmDecisionReplay(*record_, context);
             auto result = record_->decisionQueries ? RunConfiguredDecisionQueries(context.simulationTick)
                                                    : EvaluateConfiguredDecisions(context.simulationTick);
             if (result.HasValue())

@@ -3,6 +3,7 @@
 #include "HeadlessInitialStateAuthority.h"
 #include "HeadlessNetworkServices.h"
 #include "HeadlessProjectScene.h"
+#include "Horo/AI/AiReplayEvidence.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/Network/NetworkAddress.h"
 #include "Horo/Network/NetworkErrors.h"
@@ -341,6 +342,7 @@ namespace Horo::Application::Internal {
                                                                                              *launch.sceneInput.world)
                                                                                        : nullptr,
                                                .worldJobs = &resources->jobs};
+            input.decisionReplay = launch.decisionReplay;
             if (initialState) {
                 input.replicatedSceneObjects = initialState->authoredObjects;
                 input.publicTransforms = initialState->transforms;
@@ -586,6 +588,24 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Hashes detached replay state after the frame loop and reports its original trace identity. */
+        [[nodiscard]] Result<void> PrintDecisionReplay(HeadlessDecisionReplay &replay) {
+            auto captured = replay.TakeCommitted();
+            if (!captured)
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeUnavailable, "Selected AI replay tick did not commit."));
+            if (captured->HasError())
+                return Result<void>::Failure(std::move(*captured).ErrorValue());
+            const auto &capture = captured->Value();
+            auto hash = AI::HashAiReplayCanonicalState(capture.canonical, HeadlessDecisionReplay::CanonicalBudget);
+            if (hash.HasError())
+                return Result<void>::Failure(std::move(hash).ErrorValue());
+            std::cout << "AI replay scene " << capture.scene.value << " tick " << capture.tick << " agent " << capture.subject.Value()
+                      << " blackboard-revision " << capture.blackboardRevision << " plan "
+                      << FormatSha256(capture.trace->Header().planDigest) << " canonical-ai-state " << FormatSha256(hash.Value()) << '\n';
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] int RunProductFrames(NetworkProductHost &runtime, const ProductLaunch &launch, const ProductWorlds &worlds) {
             if (auto started = runtime.Startup(); started.HasError()) {
                 std::cerr << "horo-engine: product startup failed: " << started.ErrorValue().message << '\n';
@@ -603,6 +623,13 @@ namespace Horo::Application::Internal {
                 if (auto valid = ValidateProductRolePurpose(launch, role); valid.HasError()) {
                     std::cerr << "horo-engine: product world purpose failed (" << valid.ErrorValue().code.Value()
                               << "): " << valid.ErrorValue().message << '\n';
+                    return 3;
+                }
+            }
+            if (launch.decisionReplay) {
+                if (auto replay = PrintDecisionReplay(*launch.decisionReplay); replay.HasError()) {
+                    std::cerr << "horo-engine: AI replay failed (" << replay.ErrorValue().code.Value()
+                              << "): " << replay.ErrorValue().message << '\n';
                     return 3;
                 }
             }

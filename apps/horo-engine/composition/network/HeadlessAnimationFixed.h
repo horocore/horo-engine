@@ -106,6 +106,15 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return record->animation->OnFixedUpdate(context);
         }
 
+        /** @brief Arms only the current opaque fixed dispatch for the configured standalone World. */
+        void ArmDecisionReplay(WorldRecord &record, const Runtime::FixedStepContext &context) {
+            if (auto *replay = DecisionReplay(); replay && replay->Selection().tick == context.simulationTick && attempting_ && !closed_ &&
+                                                 Valid(context) && Same(context) && std::ranges::any_of(pins_, [&record](const auto &pin) {
+                return pin.get() == &record;
+            }))
+                replay->Arm(record, context);
+        }
+
         /** @brief Tracks the actual attempted gameplay owner before its fallible callback; unrelated pinned Worlds stay untouched. */
         Result<void> TrackGameplay(const std::shared_ptr<WorldRecord> &record, const Runtime::FixedStepContext &context) {
             if (!Valid(context) || !Same(context) || !attempting_ || closed_)
@@ -127,7 +136,14 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 if (prepared.HasError())
                     return prepared;
             }
-            return PrepareGameplay(context);
+            if (auto prepared = PrepareGameplay(context); prepared.HasError())
+                return prepared;
+            if (auto *replay = DecisionReplay()) {
+                for (const auto &record : pins_)
+                    if (record)
+                        replay->Prepare(*record, context);
+            }
+            return Result<void>::Success();
         }
 
         void CommitFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
@@ -141,6 +157,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             for (std::size_t index = 0; index < count_; ++index)
                 evaluated_[index]->animation->CommitFixedUpdate(context);
             CommitGameplay(context);
+            if (auto *replay = DecisionReplay())
+                replay->Commit(context);
             Resolve();  // Keep every strong pin until a safe phase/Shutdown, never cold teardown in nofail publication.
         }
 
@@ -152,6 +170,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 status != Runtime::RuntimeDispatchStatus::Valid && status != Runtime::RuntimeDispatchStatus::Retired)
                 return;
             AbortGameplay(context);
+            if (auto *replay = DecisionReplay())
+                replay->Abort(context);
             for (std::size_t index = count_; index > 0; --index)
                 evaluated_[index - 1]->animation->AbortFixedUpdate(context);
             Resolve();
@@ -170,6 +190,11 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         }
 
     private:
+        /** @brief Reads only the optional configured diagnostic mailbox. */
+        HeadlessDecisionReplay *DecisionReplay() const noexcept {
+            return owners_->configured ? owners_->configured->decisionReplay.get() : nullptr;
+        }
+
         static Result<void> Rejected() {
             return Result<void>::Failure(MakeError(Animation::AnimationErrors::GraphAdmissionRejected));
         }

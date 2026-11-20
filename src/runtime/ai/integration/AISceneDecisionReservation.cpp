@@ -117,6 +117,15 @@ namespace Horo::AI {
         }
     }
 
+    /** @copydoc AiSceneRuntime::DiscardDecisionReplayAtSafePoint */
+    void AiSceneRuntime::DiscardDecisionReplayAtSafePoint(const AgentHandle agent, const std::uint64_t tick) const noexcept {
+        if (!active_ || std::this_thread::get_id() != active_->owner || active_->closed)
+            return;
+        auto &pending = active_->decisionReplay;
+        if (pending && pending->agent == agent && pending->tick == tick)
+            pending.reset();
+    }
+
     /** @copydoc AiSceneRuntime::CaptureDecisionReplayAtSafePoint */
     Result<AiSceneDecisionReplayCapture> AiSceneRuntime::CaptureDecisionReplayAtSafePoint(const Runtime::RuntimeSceneView scene,
                                                                                           const std::uint64_t tick,

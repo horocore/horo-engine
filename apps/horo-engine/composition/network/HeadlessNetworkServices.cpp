@@ -17,6 +17,68 @@
 #include <utility>
 
 namespace Horo::Application::Internal {
+    /** @copydoc HeadlessDecisionReplay::TakeCommitted */
+    std::optional<HeadlessDecisionReplay::Capture> HeadlessDecisionReplay::TakeCommitted() noexcept {
+        return owner_ == std::this_thread::get_id() ? std::exchange(committed_, std::nullopt) : std::nullopt;
+    }
+
+    void HeadlessDecisionReplay::Arm(HeadlessNetworkDetail::WorldRecord &world, const Runtime::FixedStepContext &context) {
+        if (owner_ != std::this_thread::get_id() || published_ || attemptWorld_ || context.simulationTick != selection_.tick || !world.ai)
+            return;
+        attemptWorld_ = &world;
+        attempt_ = context.attemptNumber;
+        const auto agent = world.ai->CapabilityAtSafePoint().ResolveAgent(selection_.agent);
+        if (agent.HasError()) {
+            pending_ = Capture::Failure(agent.ErrorValue());
+            return;
+        }
+        const auto armed = world.ai->ArmDecisionReplayAtSafePoint(agent.Value(), selection_.tick);
+        if (armed.HasError())
+            pending_ = Capture::Failure(armed.ErrorValue());
+        else
+            armedAgent_ = agent.Value();
+    }
+
+    void HeadlessDecisionReplay::Prepare(const HeadlessNetworkDetail::WorldRecord &world, const Runtime::FixedStepContext &context) {
+        if (owner_ != std::this_thread::get_id() || pending_ || attemptWorld_ != &world || attempt_ != context.attemptNumber ||
+            selection_.tick != context.simulationTick)
+            return;
+        const auto scene = world.closeRequested ? std::nullopt : world.scenes->ActiveScene();
+        pending_ = scene ? world.ai->CaptureDecisionReplayAtSafePoint(*scene, selection_.tick, CanonicalBudget)
+                         : Capture::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+        if (pending_->HasError())
+            DiscardArm();
+        else
+            armedAgent_ = {};
+    }
+
+    void HeadlessDecisionReplay::Commit(const Runtime::FixedStepContext &context) noexcept {
+        static_assert(std::is_nothrow_move_constructible_v<Capture>);
+        if (owner_ != std::this_thread::get_id() || !pending_ || attempt_ != context.attemptNumber ||
+            selection_.tick != context.simulationTick)
+            return;
+        committed_.emplace(std::move(*pending_));
+        published_ = true;
+        pending_.reset();
+        attemptWorld_ = nullptr;
+    }
+
+    void HeadlessDecisionReplay::Abort(const Runtime::FixedStepContext &context) noexcept {
+        if (owner_ == std::this_thread::get_id() && attemptWorld_ && attempt_ == context.attemptNumber &&
+            selection_.tick == context.simulationTick) {
+            pending_.reset();
+            DiscardArm();
+            attemptWorld_ = nullptr;
+        }
+    }
+
+    /** @copydoc HeadlessDecisionReplay::DiscardArm */
+    void HeadlessDecisionReplay::DiscardArm() noexcept {
+        if (armedAgent_.IsValid())
+            attemptWorld_->ai->DiscardDecisionReplayAtSafePoint(armedAgent_, selection_.tick);
+        armedAgent_ = {};
+    }
+
     namespace {
         using HeadlessNetworkDetail::HeadlessFixedParticipant;
         using HeadlessNetworkDetail::WorldOwners;
@@ -155,6 +217,9 @@ namespace Horo::Application::Internal {
             if (input.publicTransforms && (!gameplay || !gameplay->enabled))
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::ReplicationDescriptorIncompatible));
             const auto &decisions = input.cookedDecisions;
+            if (input.decisionReplay && (!input.decisionReplay->Selection().IsValid() || !decisions || !decisions->execution))
+                return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid,
+                                                       "AI replay requires an exact agent, tick and configured cooked execution."));
             if (decisions && decisions->provider == HeadlessDecisionProvider::SelectedNativeGameplay &&
                 (!decisions->execution || decisions->environment.nodes || !gameplay || !gameplay->enabled ||
                  gameplay->nativeArtifact.empty() || !gameplay->moduleRetirements))
@@ -257,8 +322,8 @@ namespace Horo::Application::Internal {
             return owners->PollRetirement(maximumRecords);
         }};
         const auto &mount = owners->configured->mountedWorld;
-        if (owners->configured->animationIdentities || owners->configured->publicTransforms || (mount && mount->liveCell) ||
-            (owners->gameplay && owners->gameplay->vfxScene)) {
+        if (owners->configured->decisionReplay || owners->configured->animationIdentities || owners->configured->publicTransforms ||
+            (mount && mount->liveCell) || (owners->gameplay && owners->gameplay->vfxScene)) {
             if (owners->configured->animationIdentities && !owners->configured->animationTarget.IsValid())
                 return Result<NetworkProductComposition>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
             composition.fixedParticipant = [owners](Runtime::RuntimeDispatchSource source) {

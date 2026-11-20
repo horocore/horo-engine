@@ -26,6 +26,10 @@ namespace Horo::Application::PrefabAtomicTest {
 #if HORO_TEST_PHYSICS_NATIVE
     using enum Fault;
 
+    /** @brief Drives the actual headless fixed lifecycle through its replay publication or abort boundary. */
+    void ExpectDecisionReplay(std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition,
+                              Internal::HeadlessSceneActivationInput input, AI::AgentId agent, const Sha256Digest &planDigest, bool abort);
+
     namespace {
         /** @brief Captures a declared registry for both real host and prefab admission. */
         std::shared_ptr<const AI::AiControllerPerceptionEndpoints> PerceptionEndpoints() {
@@ -1005,6 +1009,8 @@ namespace Horo::Application::PrefabAtomicTest {
             bool prepareNative = false;
             bool cancelBeforeNativeActivation = false;
             bool runTerminal = false;
+            bool captureReplay = false;
+            bool abortReplay = false;
             bool selectNativePerception = false;
             std::optional<AI::PerceptionSenseContract> nativeSense;
             bool prefabOnly = false;
@@ -1012,6 +1018,15 @@ namespace Horo::Application::PrefabAtomicTest {
             bool rollbackPrefab = false;
             bool preserveInactive = false;
             auto selectedPrefab = prefabId;
+            SECTION("standalone captures one selected decision only after the real fixed commit") {
+                executionBudget = 100;
+                captureReplay = true;
+            }
+            SECTION("standalone rejection after replay preparation cannot publish the attempted tick") {
+                executionBudget = 100;
+                captureReplay = true;
+                abortReplay = true;
+            }
             SECTION("degraded prefab preserves a missing child controller while only its registered sibling obtains a native task") {
                 prepareNative = true;
                 prefabOnly = true;
@@ -1479,9 +1494,12 @@ namespace Horo::Application::PrefabAtomicTest {
                     Internal::HeadlessPerceptionProjectAdmission{.policy = std::move(captured).Value(),
                                                                  .provider = Internal::HeadlessPerceptionProvider::SelectedNativeGameplay};
             }
-            const auto composed = Internal::ComposeHeadlessSceneNetworkServices(std::make_shared<const Runtime::RuntimeSceneDefinition>(
-                                                                                    std::move(definition).Value()),
-                                                                                std::move(input), {}, gameplay);
+            auto scene = std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(definition).Value());
+            if (captureReplay) {
+                ExpectDecisionReplay(std::move(scene), std::move(input), controller.agent.agent.agent, plan->Digest(), abortReplay);
+                return;
+            }
+            const auto composed = Internal::ComposeHeadlessSceneNetworkServices(std::move(scene), std::move(input), {}, gameplay);
             REQUIRE(composed.HasValue());
             const auto built = composed.Value().factories.services[static_cast<std::size_t>(NetworkModeServiceKind::Scene)](
                 {NetworkModeServiceKind::Scene, NetworkProjectRole::Standalone, {}, NetworkModeWorldKind::Standalone, {7}});

@@ -392,6 +392,9 @@ namespace Horo::Application::Internal {
 
         /** @brief Requires the authoritative terminal path and the matching native/cooked authority. */
         Result<void> ValidateCookedDecisions(const ProductLaunch &launch) {
+            if (launch.decisionReplay && launch.cookedDecisionBindings.empty())
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI replay requires explicit cooked controller selection."));
             if (!launch.sceneInput.perceptionPolicyPath.empty() && launch.cookedDecisionBindings.empty())
                 return Result<void>::Failure(
                     MakeError(Net::NetworkErrors::NetworkModeInvalid,
@@ -411,6 +414,25 @@ namespace Horo::Application::Internal {
             }))
                 return Result<void>::Failure(
                     MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI prefab selection requires explicit --prefab grant."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Parses a positive decimal replay identity or fixed tick. */
+        [[nodiscard]] bool ReadReplayNumber(const std::string_view text, std::uint64_t &value) noexcept {
+            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+            return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() && value != 0;
+        }
+
+        /** @brief Selects one stable agent and one committed fixed tick. */
+        Result<void> ReadDecisionReplay(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
+            std::uint64_t agent{}, tick{};
+            if (launch.decisionReplay || arguments.size() - index < 3 || !ReadReplayNumber(arguments[index + 1], agent) ||
+                !ReadReplayNumber(arguments[index + 2], tick))
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Use --ai-replay <positive agent id> <positive fixed tick> once."));
+            launch.decisionReplay =
+                std::make_shared<HeadlessDecisionReplay>(HeadlessDecisionReplaySelection{AI::AgentId::Create(agent).Value(), tick});
+            index += 3;
             return Result<void>::Success();
         }
 
@@ -492,6 +514,11 @@ namespace Horo::Application::Internal {
                 }
                 if (key == "--ai-decision" || key == "--ai-prefab-decision") {
                     if (auto selected = ReadCookedDecision(arguments, index, launch, key == "--ai-prefab-decision"); selected.HasError())
+                        return selected;
+                    continue;
+                }
+                if (key == "--ai-replay") {
+                    if (auto selected = ReadDecisionReplay(arguments, index, launch); selected.HasError())
                         return selected;
                     continue;
                 }

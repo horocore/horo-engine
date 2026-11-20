@@ -3033,12 +3033,16 @@ add_executable(HoroGameplayPhysicsTests unit/gameplay/GameplayPhysicsContextTest
     integration/gameplay/GameplayRetirementHostTests.cpp
     integration/gameplay/PrefabGameplayHostTests.cpp
     integration/gameplay/PrefabAtomicOwnerTests.cpp
+    integration/gameplay/HeadlessDecisionReplayProductProof.cpp
     integration/gameplay/PrefabNetworkPublicationTests.cpp
     integration/gameplay/GameplayCharacterSlopeTests.cpp
     integration/gameplay/GameplayCharacterAirborneTests.cpp
     integration/gameplay/GameplayCharacterGeometryTests.cpp
     integration/gameplay/GameplayCharacterStepTests.cpp
     integration/gameplay/LuaPhysicsLifecycleTests.cpp)
+# This cooked Scene integration fixture exceeds the standard MSVC COFF section limit.
+set_property(SOURCE integration/gameplay/PrefabAtomicOwnerTests.cpp APPEND PROPERTY
+    COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:MSVC>:/bigobj>")
 target_compile_features(HoroGameplayPhysicsTests PRIVATE cxx_std_20)
 target_include_directories(HoroGameplayPhysicsTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/support" "${PROJECT_SOURCE_DIR}/tests/helpers" "${PROJECT_SOURCE_DIR}/tests/unit/runtime/physics"
     "${PROJECT_SOURCE_DIR}/tests/unit/runtime/ai")
