@@ -217,7 +217,7 @@ TEST_CASE("Local inference distinguishes a stopped service and a loading model",
 
     auto loading = CreateOllamaModelProvider({.endpoint = Endpoint(), .timeout = std::chrono::milliseconds{200}});
     std::vector<ModelEvent> events;
-    const auto status = loading->Stream(Request("editor-local-loading"), [&](const ModelEvent &event) {
+    const auto status = loading->Stream(Request("editor-local-loading"), [&events](const ModelEvent &event) {
         events.push_back(event);
         return true;
     }, {});
@@ -232,7 +232,7 @@ TEST_CASE("Local cancellation interrupts a quiet stream before it can publish co
     std::stop_source source;
     std::vector<ModelEventKind> events;
     const auto started = std::chrono::steady_clock::now();
-    const auto status = provider->Stream(Request("editor-local-idle"), [&](const ModelEvent &event) {
+    const auto status = provider->Stream(Request("editor-local-idle"), [&events, &source](const ModelEvent &event) {
         events.push_back(event.kind);
         source.request_stop();
         return true;
