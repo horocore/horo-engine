@@ -16,6 +16,8 @@ namespace Horo::AI::AIErrors {
     extern const ErrorCodeDescriptor SchedulerPolicyInvalid;
     /** @brief A cooperative owner or worker slice attempted work beyond its admitted allowance. */
     extern const ErrorCodeDescriptor SchedulerBudgetExhausted;
+    /** @brief An admitted decision script failed to execute or returned an invalid callback result. */
+    extern const ErrorCodeDescriptor DecisionScriptCallbackFailed;
     /** @brief Scheduler was called reentrantly, after closure, or with an invalid phase/clock. */
     extern const ErrorCodeDescriptor SchedulerPhaseInvalid;
     /** @brief Deterministic admission requires owner evaluation instead of timing-dependent worker jobs. */

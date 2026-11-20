@@ -128,7 +128,13 @@ return {
                                                             MakeIdentity<DecisionProviderId>(501), 1, {__FILE__, 0, 0},
                                                             {128U * 1024U, 1000})
                       .HasError());
-            auto program = Program("return {role='condition',check=function() while true do end end}");
+            auto program = Program(R"(
+                assert(pcall == nil and xpcall == nil)
+                return {role='condition',check=function(self, context)
+                    if context.tick == '1' then while true do end end
+                    return true
+                end}
+            )");
             auto acquired = program->Acquire();
             REQUIRE(acquired.HasValue());
             Fixture fixture({Node(1, BehaviorTreeOperation::BlackboardCheck, {2}), Node(2, BehaviorTreeOperation::Task)});
@@ -138,7 +144,60 @@ return {
             auto snapshot = fixture.blackboard->Snapshot();
             REQUIRE(snapshot.HasValue());
             const BehaviorTreeEvaluationContext context{MakeIdentity<DecisionNodeId>(1), {}, snapshot.Value(), 1};
-            CHECK(executor.Value()->Check(context).HasError());
+            TestSupport::ExpectError(executor.Value()->Check(context), AIErrors::SchedulerBudgetExhausted);
+            const BehaviorTreeEvaluationContext later{context.node, {}, snapshot.Value(), 2};
+            const auto checked = executor.Value()->Check(later);
+            REQUIRE(checked.HasValue());
+            CHECK(checked.Value());
+        }
+
+        TEST_CASE("Lua decision callback errors and VM capacity failures preserve distinct causes", "[ai][decision-node][lua]") {
+            const ErrorCodeDescriptor *expected = &AIErrors::DecisionScriptCallbackFailed;
+            std::string callback;
+            SECTION("runtime error") {
+                callback = "error('invalid callback state')";
+            }
+            SECTION("invalid result") {
+                callback = "return 'true'";
+            }
+            SECTION("VM capacity") {
+                callback = "return string.rep('x', 8388608)";
+                expected = &AIErrors::TaskCapacityExceeded;
+            }
+            auto program = Program("return {role='condition',check=function() " + callback + " end}");
+            auto acquired = program->Acquire();
+            REQUIRE(acquired.HasValue());
+            Fixture fixture({Node(1, BehaviorTreeOperation::Task)});
+            auto bindings = Bindings(fixture, *acquired.Value());
+            auto executor = acquired.Value()->CreateExecutor(acquired.Value(), *bindings, {});
+            REQUIRE(executor.HasValue());
+            auto snapshot = fixture.blackboard->Snapshot();
+            REQUIRE(snapshot.HasValue());
+            const BehaviorTreeEvaluationContext context{MakeIdentity<DecisionNodeId>(1), {}, snapshot.Value(), 1};
+            TestSupport::ExpectError(executor.Value()->Check(context), *expected);
+        }
+
+        TEST_CASE("A Lua task cutoff preserves its terminal cause and the Selector runs its fallback", "[ai][decision-node][lua]") {
+            auto program = Program(R"(
+                return {role='task',
+                    start=function(self, context)
+                        if context.node == '2' then while true do end end
+                        return 2
+                    end,
+                    resume=function() return 2 end, abort=function() end, cleanup=function() end}
+            )");
+            auto generation = program->Acquire();
+            REQUIRE(generation.HasValue());
+            Fixture fixture({Node(1, BehaviorTreeOperation::Selector, {2, 3}), Node(2, BehaviorTreeOperation::Task),
+                             Node(3, BehaviorTreeOperation::Task)});
+            auto instance = Instance(fixture, generation.Value());
+            CHECK(fixture.Evaluate(*instance, 1) == AiTaskState::Succeeded);
+            const auto terminal = instance->TaskResult(MakeIdentity<DecisionNodeId>(2));
+            REQUIRE(terminal.HasValue());
+            REQUIRE(terminal.Value());
+            REQUIRE(terminal.Value()->failure);
+            CHECK(terminal.Value()->failure->cause.code.Value() == AIErrors::SchedulerBudgetExhausted.code.Value());
+            CHECK(instance->Status(MakeIdentity<DecisionNodeId>(3)).Value() == AiTaskState::Succeeded);
         }
 
         TEST_CASE("Lua condition callbacks observe frozen typed blackboard values and reject wrong return kinds",

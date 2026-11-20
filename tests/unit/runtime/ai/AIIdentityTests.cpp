@@ -145,6 +145,7 @@ namespace Horo::AI {
                 &AIErrors::TaskFailureInvalid,
                 &AIErrors::RuntimeUnavailable,
                 &AIErrors::TaskCapacityExceeded,
+                &AIErrors::DecisionScriptCallbackFailed,
                 &AIErrors::BlackboardSchemaInvalid,
                 &AIErrors::BlackboardLimitExceeded,
                 &AIErrors::BlackboardValueTypeMismatch,

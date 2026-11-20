@@ -13,13 +13,29 @@ namespace Horo::Gameplay {
     namespace {
         using namespace AI;
         using Detail::DecisionScript::Protected;
+        using Detail::DecisionScript::ProtectedStatus;
 
         template <typename T> Result<T> Invalid() {
             return Result<T>::Failure(MakeError(AIErrors::DecisionAssetSchemaInvalid));
         }
 
+        /** @brief Records the host instruction cutoff independently of script error text. */
         void BudgetHook(lua_State *state, lua_Debug *) {
+            *static_cast<unsigned char *>(lua_getextraspace(state)) = 1;
             luaL_error(state, "Decision node instruction budget exceeded");
+        }
+
+        /** @brief Only the host can catch a decision VM's budget cutoff. */
+        void OpenDecisionSandbox(lua_State *state) {
+            Detail::OpenLuaBehaviorSandbox(state);
+            for (const char *name : {"pcall", "xpcall"}) {
+                lua_pushnil(state);
+                lua_setglobal(state, name);
+            }
+        }
+
+        template <typename T> Result<T> CallbackFailed() {
+            return Result<T>::Failure(MakeError(AIErrors::DecisionScriptCallbackFailed));
         }
 
         void RawField(lua_State *state, int table, const char *name) {
@@ -295,7 +311,7 @@ namespace Horo::Gameplay {
                 if (!state)
                     return false;
                 return Protected(state, [this, &source, &location](lua_State *inner) {
-                    Detail::OpenLuaBehaviorSandbox(inner);
+                    OpenDecisionSandbox(inner);
                     lua_sethook(inner, BudgetHook, LUA_MASKCOUNT, static_cast<int>(limits.maximumInstructionsPerCallback));
                     if (luaL_loadbufferx(inner, source.data(), source.size(), location.source.c_str(), "t") != LUA_OK)
                         return lua_error(inner);
@@ -498,7 +514,7 @@ namespace Horo::Gameplay {
             if (result.HasError())
                 return Result<bool>::Failure(result.ErrorValue());
             if (result.Value() != -2 && result.Value() != -3)
-                return Invalid<bool>();
+                return CallbackFailed<bool>();
             return Result<bool>::Success(result.Value() == -3);
         }
 
@@ -514,7 +530,7 @@ namespace Horo::Gameplay {
                 return Result<AI::AiTaskState>::Failure(result.ErrorValue());
             if (result.Value() < static_cast<int>(AI::AiTaskState::Running) ||
                 result.Value() > static_cast<int>(AI::AiTaskState::Cancelled))
-                return Invalid<AI::AiTaskState>();
+                return CallbackFailed<AI::AiTaskState>();
             return Result<AI::AiTaskState>::Success(static_cast<AI::AiTaskState>(result.Value()));
         }
 
@@ -551,7 +567,9 @@ namespace Horo::Gameplay {
                 if (auto values = ReadBlackboard(context, values_); values.HasError())
                     return Result<int>::Failure(values.ErrorValue());
                 lua_settop(vm_.state, 0);
-                const bool called = Protected(vm_.state, [this, name, context, status, &result](lua_State *state) {
+                auto &instructionsExhausted = *static_cast<unsigned char *>(lua_getextraspace(vm_.state));
+                instructionsExhausted = 0;
+                const int called = ProtectedStatus(vm_.state, [this, name, context, status, &result](lua_State *state) {
                     lua_sethook(state, BudgetHook, LUA_MASKCOUNT, static_cast<int>(vm_.limits.maximumInstructionsPerCallback));
                     lua_rawgeti(state, LUA_REGISTRYINDEX, vm_.table);
                     RawField(state, -1, name);
@@ -561,9 +579,15 @@ namespace Horo::Gameplay {
                     result = CallbackResult(state);
                     return 0;
                 });
-                return called ? Result<int>::Success(result) : Invalid<int>();
+                if (instructionsExhausted != 0)
+                    return Result<int>::Failure(MakeError(AIErrors::SchedulerBudgetExhausted));
+                if (called == LUA_ERRMEM)
+                    return Result<int>::Failure(MakeError(AIErrors::TaskCapacityExceeded));
+                return called == LUA_OK ? Result<int>::Success(result) : CallbackFailed<int>();
+            } catch (const std::bad_alloc &) {
+                return Result<int>::Failure(MakeError(AIErrors::TaskCapacityExceeded));
             } catch (...) {
-                return Invalid<int>();
+                return CallbackFailed<int>();
             }
         }
 

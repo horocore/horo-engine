@@ -3176,6 +3176,7 @@ following variable-rate presentation bridge.
 3. **`AiDecisionEvaluate`**:
    - Evaluates behavior trees, finite state machines, or utility AI models against current blackboard state.
    - Selects agent actions, targets, and tactical states.
+   - Lua decision callbacks report an instruction cutoff as scheduler budget exhaustion, an allocation refusal as task capacity exhaustion, and an invalid result or runtime script error as a callback failure. The decision graph owns fallback selection. Decision VMs omit `pcall` and `xpcall` so the host can enforce the instruction cutoff through the entire callback. Existing decision scripts using these functions should express recoverable conditions through ordinary return values or graph branches.
    - Invariant: Pure decision evaluation. Does NOT directly manipulate physics bodies, apply forces, or invoke rendering commands. Emits high-level movement/action intent.
 4. **`NavIntentCommit`**:
    - Translates movement intent into concrete navigation actions: submits asynchronous pathfinding requests, follows active waypoints, and evaluates the selected local safe-velocity capability.
