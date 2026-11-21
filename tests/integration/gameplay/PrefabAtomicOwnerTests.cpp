@@ -1,7 +1,6 @@
 #include "DecisionGraphCompilerTestSupport.h"
 #include "HeadlessCookedDecisionAdmission.h"
 #include "HeadlessNetworkServices.h"
-#include "HeadlessPerceptionPolicy.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/AIScenePerceptionSource.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
@@ -17,6 +16,7 @@
 #include "Horo/Scene/CookedSceneDefinition.h"
 #include "OwnedTestDirectory.h"
 #include "PrefabAtomicOwnerTestSupport.h"
+#include "ProjectScenePerception.h"
 
 #include <cstring>
 #include <fstream>
@@ -553,7 +553,7 @@ namespace Horo::Application::PrefabAtomicTest {
         };
 
         /** @brief Captures test-authored bytes through the same native project read owner as product composition. */
-        Result<std::shared_ptr<const Internal::HeadlessPerceptionPolicy>> CaptureProjectPerception(
+        Result<std::shared_ptr<const Internal::ProjectScenePerceptionPolicy>> CaptureProjectPerception(
             const Runtime::RuntimeSceneDefinition &definition, const Assets::AssetId asset, const std::string &source) {
             Horo::Tests::OwnedTestDirectory directory{"native-perception-placement"};
             constexpr std::string_view path = "perception.json";
@@ -566,7 +566,7 @@ namespace Horo::Application::PrefabAtomicTest {
             const Platform::ProjectReadContext context{.projectIdentity = "perception-test",
                                                        .projectGeneration = 1,
                                                        .deadline = std::chrono::steady_clock::now() + std::chrono::seconds{3}};
-            return Internal::CaptureHeadlessPerceptionPolicy(*files.Value(), context, path, asset, definition);
+            return Internal::CaptureProjectScenePerception(*files.Value(), context, path, asset, definition);
         }
 
         /** @brief Populates explicit stable selectors and a nonzero origin without native provider defaults. */

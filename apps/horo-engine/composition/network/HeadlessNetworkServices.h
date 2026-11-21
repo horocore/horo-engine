@@ -50,7 +50,7 @@ namespace Horo::Application::Internal {
     }  // namespace HeadlessNetworkDetail
 
     struct ProjectSceneNavigationSelection;
-    struct HeadlessPerceptionPolicy;
+    struct ProjectScenePerceptionPolicy;
     struct CommittedWorldSelection;
     struct CommittedWorldInitialCell;
     class MountedWorldRenderPacket;
@@ -63,7 +63,7 @@ namespace Horo::Application::Internal {
 
     /** @brief Exact authored selection and descriptor authority granted by the configured host. */
     struct HeadlessPerceptionProjectAdmission final {
-        std::shared_ptr<const HeadlessPerceptionPolicy> policy;
+        std::shared_ptr<const ProjectScenePerceptionPolicy> policy;
         std::shared_ptr<const AI::PerceptionDescriptorRegistry> registry;
         HeadlessPerceptionProvider provider{HeadlessPerceptionProvider::CapturedRegistry};
     };

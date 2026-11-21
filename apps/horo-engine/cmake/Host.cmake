@@ -16,7 +16,6 @@ add_library(HoroNetworkProductHost STATIC
     horo-engine/composition/network/HeadlessPrefabReplica.cpp
     horo-engine/composition/network/HeadlessDecisionQueries.cpp
     horo-engine/composition/network/HeadlessNavigationPathScope.cpp
-    horo-engine/composition/network/HeadlessPerceptionPolicy.cpp
     horo-engine/composition/network/HeadlessAnimationFixed.h
     horo-engine/composition/network/NetworkProductComposition.h
     horo-engine/composition/network/HeadlessSceneLoadBoundary.cpp
@@ -40,6 +39,7 @@ target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::NetworkRuntime H
     HoroEngine::ProjectCollisionSettings HoroEngine::PlatformProjectReadFiles HoroEngine::SceneRuntimeConversion HoroEngine::AISceneIntegration)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroScenePhysicsHost HoroEngine::WorldStreaming HoroMountedWorldHostInternal)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroCookedDecisionSceneAdmissionInternal)
+target_link_libraries(HoroNetworkProductHost PUBLIC HoroProjectScenePerceptionInternal)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::AnimationSceneIntegration HoroAnimationHostIdentityInternal)
 if(HORO_BUILD_NETWORK_GNS)
     target_sources(HoroNetworkProductHost PRIVATE horo-engine/composition/network/NetworkProductGnsSelection.cpp)

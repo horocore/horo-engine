@@ -1,6 +1,5 @@
 #include "HeadlessInitialStateAuthority.h"
 #include "HeadlessNetworkWorldService.h"
-#include "HeadlessPerceptionPolicy.h"
 #include "HeadlessReplicaAnimationInputs.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Gameplay/GameplayVfxScene.h"
@@ -11,6 +10,7 @@
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 #include "Horo/Scene/CookedSceneDefinition.h"
 #include "PhysicsStateHostLifecycle.h"
+#include "ProjectScenePerception.h"
 
 #include <algorithm>
 #include <array>
@@ -805,7 +805,7 @@ namespace Horo::Application::Internal {
             }
             if (definition->Id() != policy->definition || definition->Revision() != policy->revision)
                 return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionSpatialStale));
-            auto sources = MakeHeadlessPerceptionPositionSources(policy);
+            auto sources = MakeProjectPerceptionPositionSources(policy);
             input.perceptionPositions = std::move(sources.scene);
             input.perceptionGroupPositions = std::move(sources.group);
             return Result<void>::Success();

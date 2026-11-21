@@ -1,6 +1,5 @@
 #include "GameplayWorldComposition.h"
 
-#include "HeadlessPerceptionPolicy.h"
 #include "Horo/AI/AISceneActivation.h"
 #include "Horo/Gameplay/GameplayAnimationScene.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
@@ -10,6 +9,7 @@
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Runtime/Ui/RuntimeUiClient.h"
 #include "Horo/Scene/PrefabComponentProjection.h"
+#include "ProjectScenePerception.h"
 
 #include <array>
 #include <new>

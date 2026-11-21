@@ -242,12 +242,14 @@ add_library(HoroEditorSceneProductHost STATIC
     HoroEditor/composition/scene/EditorPlayDecisionComposition.cpp
     HoroEditor/composition/scene/EditorPlayNavigationComposition.cpp
     HoroEditor/composition/scene/EditorProjectSceneHost.cpp
-    HoroEditor/composition/scene/EditorProjectSceneHostResources.cpp)
+    HoroEditor/composition/scene/EditorProjectSceneHostResources.cpp
+    HoroEditor/composition/scene/EditorPlayPerceptionComposition.cpp)
 target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlaySaveHostInternal HoroCookedDecisionSceneAdmissionInternal)
 target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroAnimationSceneHostInternal HoroMountedWorldHostInternal)
 target_link_libraries(HoroEditorSceneProductHost PRIVATE HoroEngine::EditorServices HoroEngine::PrefabProjectSettings
         HoroEngine::ProjectSurfaceSettings)
 target_link_libraries(HoroEditorSceneProductHost PRIVATE HoroProjectSceneNavigationHostInternal HoroEngine::GameplayAnimationScene)
+target_link_libraries(HoroEditorSceneProductHost PRIVATE HoroProjectScenePerceptionInternal)
 target_compile_features(HoroEditorSceneProductHost PUBLIC cxx_std_20)
 target_include_directories(HoroEditorSceneProductHost PUBLIC "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")
 target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlayXrHostInterface HoroEditorPlaySceneHostInternal HoroScenePhysicsHost

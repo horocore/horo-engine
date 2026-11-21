@@ -3473,6 +3473,12 @@ Running tasks in the selected cooked decision include their graph and node
 identity. The inspector copies these directly from the live task lifecycles
 after a completed Decision tick, retains at most 32, and counts any additional
 tasks.
+For cooked Editor Play, `--play-ai-perception-policy <project-relative file>`
+selects the same project Perception schema used by standalone. The policy
+must identify the exact committed Scene and admitted native sense generation.
+Sensing runs before Decision using the Play fixed quantum. The inspector reads
+memory after the completed tick and exposes ages and identities without
+sensed coordinates or provider payloads.
 
 ### Scene decision scheduling tiers
 

@@ -359,6 +359,7 @@ namespace Horo::Editor {
             std::optional<Assets::AssetId> playDecisionScene;
             std::vector<Application::Internal::CookedDecisionSceneBinding> playDecisionBindings;
             std::vector<Application::Internal::EditorPlayInspectionKey> playInspectionKeys;
+            std::string playPerceptionPolicy;
             bool playDecisionSelectionValid{true};
             std::optional<Application::Internal::CommittedWorldSelection> playWorld;
             std::optional<Error> playWorldError;
@@ -983,6 +984,15 @@ namespace Horo::Editor {
                 }
                 continue;
             }
+            if (argument == "--play-ai-perception-policy") {
+                if (index + 1 >= args.size() || !opts.playPerceptionPolicy.empty() || !*args[index + 1] ||
+                    std::string_view{args[index + 1]}.starts_with("--")) {
+                    opts.playDecisionSelectionValid = false;
+                    break;
+                }
+                opts.playPerceptionPolicy = args[++index];
+                continue;
+            }
             if (argument == "--play-world-cell") {
                 if (auto cell = ReadEditorPlayWorldCell(args, index, opts); cell.HasError()) {
                     opts.playWorldError = cell.ErrorValue();
@@ -1120,6 +1130,8 @@ namespace Horo::Editor {
                 for (const auto &key : options.playInspectionKeys)
                     arguments.insert(arguments.end(),
                                      {"--play-ai-inspect-key", std::to_string(key.schema.Value()), std::to_string(key.key.Value())});
+                if (!options.playPerceptionPolicy.empty())
+                    arguments.insert(arguments.end(), {"--play-ai-perception-policy", options.playPerceptionPolicy});
             }
             std::vector<char *> nativeArguments;
             nativeArguments.reserve(arguments.size() + 1);
@@ -4130,7 +4142,8 @@ namespace Horo::Editor {
             if (p.options.playDecisionScene)
                 playPolicy.decisions.emplace(
                     Application::Internal::EditorPlayDecisionSelection{previewProjectRoot, *p.options.playDecisionScene,
-                                                                       p.options.playDecisionBindings, p.options.playInspectionKeys});
+                                                                       p.options.playDecisionBindings, p.options.playInspectionKeys,
+                                                                       p.options.playPerceptionPolicy, schedulerConfig.fixedStep});
             Application::Internal::ConfigureEditorPlaySavePolicy(playPolicy, p.background.jobs, p.operationServices.operationStore, clock,
                                                                  wallClock);
             playPolicy.xrHost = SelectedEditorPlayHost(p.presentation.composition);
@@ -4395,14 +4408,16 @@ namespace Horo::Editor {
                          "--play-navigation-scene requires an exact Scene AssetId, --project, --cooked-root and --cook-target.");
             return false;
         }
-        if (!options.playDecisionSelectionValid || (!options.playInspectionKeys.empty() && !options.playDecisionScene) ||
+        if (!options.playDecisionSelectionValid ||
+            ((!options.playInspectionKeys.empty() || !options.playPerceptionPolicy.empty()) && !options.playDecisionScene) ||
             options.playDecisionScene.has_value() != !options.playDecisionBindings.empty() ||
             (options.playDecisionScene &&
              (options.projectRoot.empty() || options.cookedRoot.empty() || options.playWorld || options.prefabGranted.value_or(false)))) {
             LOG_CRITICAL("editor.runtime",
                          "Use --play-ai-scene <Scene AssetId> and --play-ai-decision <controller id> <Decision AssetId> "
                          "with --project, --cooked-root and --cook-target. Optional --play-ai-inspect-key <schema id> <key id> "
-                         "discloses one Blackboard key in the selected Play scene.");
+                         "discloses one Blackboard key. --play-ai-perception-policy <project-relative settings file> enables native "
+                         "sensing.");
             return false;
         }
         if (!options.physicsMode || !options.prefabGranted.has_value() || !options.cookOptionsValid ||

@@ -6,13 +6,13 @@
  */
 #include "CommittedSceneAssets.h"
 #include "HeadlessNetworkServices.h"
-#include "HeadlessPerceptionPolicy.h"
 #include "HeadlessSimulationAssets.h"
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Platform/ProjectReadFiles.h"
 #include "Horo/Scene/SceneSource.h"
 #include "MountedWorldHost.h"
+#include "ProjectScenePerception.h"
 
 namespace Horo::Application::Internal {
     enum class HeadlessNavigationMode : std::uint8_t {
@@ -61,7 +61,7 @@ namespace Horo::Application::Internal {
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition;
         Assets::AssetId sceneAsset; /**< Exact selected cooked Scene identity, including the full UUID. */
         std::shared_ptr<const ProjectSceneNavigationSelection> navigation;
-        std::shared_ptr<const HeadlessPerceptionPolicy>
+        std::shared_ptr<const ProjectScenePerceptionPolicy>
             perceptionPolicy; /**< Matched source and definition, without provider activation. */
         std::optional<Physics::PhysicsSceneActivationSettings> settings;
         Prefab::PrefabMetricHandles prefabMetrics; /**< Process-prebound numeric observations retained by host resources. */

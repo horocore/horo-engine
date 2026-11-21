@@ -3207,6 +3207,10 @@ target_compile_definitions(HoroEditorPlaySessionControllerTests PRIVATE
 target_link_libraries(HoroEditorPlaySessionControllerTests PRIVATE HoroEditorPlayXrHostInterface HoroEngine::EditorRenderExtraction HoroEditorSceneProductHost
         HoroEngine::PhysicsTriggerVolumeHost nlohmann_json::nlohmann_json miniz)
 target_compile_features(HoroEditorPlaySessionControllerTests PRIVATE cxx_std_20)
+target_compile_definitions(HoroEditorPlaySessionControllerTests PRIVATE
+    HORO_TEST_AI_MODULE_PATH="$<TARGET_FILE:HoroTestAiGameModule>"
+    HORO_TEST_AI_MODULE_REVISION_PATH="${HORO_TEST_AI_MODULE_REVISION_FILE}")
+add_dependencies(HoroEditorPlaySessionControllerTests HoroTestAiGameModule)
 target_link_libraries(HoroEditorPlaySessionControllerTests PRIVATE HoroEngine::EditorServices)
 target_link_libraries(HoroEditorPlaySessionControllerTests PRIVATE HoroEngine::ProjectSurfaceSettings HoroEngine::ProjectSettings
         HoroEngine::NavigationApi)

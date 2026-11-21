@@ -220,8 +220,8 @@ namespace Horo::Application::Internal {
                 MakeError(Net::NetworkErrors::NetworkModeInvalid,
                           "This Scene requires committed asset payloads; provide --cooked-root and --cook-target."));
         if (!launch.perceptionPolicyPath.empty()) {
-            auto policy = CaptureHeadlessPerceptionPolicy(*resources->sourceFiles, resources->sourceContext, launch.perceptionPolicyPath,
-                                                          resources->sceneAsset, *resources->definition);
+            auto policy = CaptureProjectScenePerception(*resources->sourceFiles, resources->sourceContext, launch.perceptionPolicyPath,
+                                                        resources->sceneAsset, *resources->definition);
             if (policy.HasError())
                 return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(policy.ErrorValue());
             resources->perceptionPolicy = std::move(policy).Value();

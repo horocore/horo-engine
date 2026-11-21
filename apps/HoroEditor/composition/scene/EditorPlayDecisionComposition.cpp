@@ -98,7 +98,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
     Result<void> ProjectPlaySceneHost::ConfigureDecisionProviders(const Runtime::RuntimeSceneDefinition &definition,
                                                                   const Editor::EditorPlayDecisionProviderSource &providerSource,
                                                                   const CancellationToken &cancellation) {
-        if (!pendingDecisionPolicy_ || !decisionJobs_ || !providerSource || sceneClosed_ || std::this_thread::get_id() != ownerLane_)
+        if (!pendingDecisionPolicy_ || !decisionJobs_ || !providerSource.decision || sceneClosed_ ||
+            std::this_thread::get_id() != ownerLane_)
             return Result<void>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
         if (cancellation.IsCancellationRequested())
             return JobCancelled();
@@ -109,7 +110,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             return Result<void>::Failure(cooked.ErrorValue());
         if (auto matched = MatchCommittedPlayProjection(definition, cooked.Value(), InvalidProjectScene); matched.HasError())
             return matched;
-        const auto providers = providerSource();
+        const auto providers = providerSource.decision();
         if (providers.HasError())
             return Result<void>::Failure(providers.ErrorValue());
         const auto limits = Prefab::PrefabLimitProfile::Create({});
@@ -122,6 +123,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         if (selected.HasError())
             return Result<void>::Failure(selected.ErrorValue());
         policy.aiControllers = std::move(selected).Value();
+        if (auto perception = PrepareDecisionPerception(policy, cooked.Value(), definition, providerSource); perception.HasError())
+            return perception;
         if (cancellation.IsCancellationRequested())
             return JobCancelled();
         auto admitted = RegisterPresentationParticipants(policy, AI::AiSceneCookedDecisionExecution{*decisionJobs_, {}, {}, {}});
@@ -144,6 +147,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         if (scheduler.HasError())
             return Evaluation::Failure(scheduler.ErrorValue());
         const auto tick = committedDecisionTick_ + 1;
+        if (auto perception = PollDecisionPerception(tick, context.fixedDelta); perception.HasError())
+            return Evaluation::Failure(perception.ErrorValue());
         if (const auto evaluated = scheduler.Value()->EvaluateAtDecision(tick); evaluated.HasError())
             return Evaluation::Failure(evaluated.ErrorValue());
         if (const auto committed = scheduler.Value()->CommitAtIntentDispatch(tick); committed.HasError())

@@ -6,10 +6,10 @@
 #include "HeadlessCookedDecisionAdmission.h"
 #include "HeadlessDecisionQueries.h"
 #include "HeadlessNetworkWorldOwners.h"
-#include "HeadlessPerceptionPolicy.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/AINavigationIntentDispatch.h"
 #include "Horo/WorldStreaming/WorldArtifactErrors.h"
+#include "ProjectScenePerception.h"
 
 namespace Horo::Application::Internal::HeadlessNetworkDetail {
     class WorldService final : public Network::INetworkModeService {
@@ -605,16 +605,16 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             std::span<const AI::AiControllerDescriptor> catalog, const HeadlessPerceptionProjectAdmission &project) const {
             using Output = Result<std::vector<AI::AiControllerDescriptor>>;
             if (!SelectsNativePerception())
-                return BindHeadlessPerceptionEndpoints(*project.policy, project.registry, catalog);
+                return BindProjectPerceptionEndpoints(*project.policy, project.registry, catalog);
             if (!record_->preparedGameplay)
                 return Output::Failure(MakeError(AI::AIErrors::PerceptionDependencyMissing));
             const auto contracts = record_->preparedGameplay->DescribePerceptionSenses();
             if (contracts.HasError())
                 return Output::Failure(contracts.ErrorValue());
-            auto registry = FreezeHeadlessNativePerceptionRegistry(*project.policy->native, contracts.Value());
+            auto registry = FreezeProjectNativePerceptionRegistry(*project.policy->native, contracts.Value());
             if (registry.HasError())
                 return Output::Failure(registry.ErrorValue());
-            return BindHeadlessPerceptionEndpoints(*project.policy, std::move(registry).Value(), catalog);
+            return BindProjectPerceptionEndpoints(*project.policy, std::move(registry).Value(), catalog);
         }
 
         /** @brief Captures exact native provider metadata before any platform scope or game callback is exposed. */

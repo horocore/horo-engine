@@ -26,6 +26,7 @@
 namespace Horo::AI {
     class DecisionBlackboardProviderMetadata;
     class DecisionNodeGeneration;
+    class PerceptionSenseGeneration;
 }  // namespace Horo::AI
 
 namespace Horo::Gameplay {
@@ -150,6 +151,8 @@ namespace Horo::Editor {
         /** @brief Temporarily acquires the current native and script Decision declarations for source compilation.
          * @return The admitted generation or a typed unavailable result. Callers release it before returning to the workspace. */
         [[nodiscard]] Result<std::shared_ptr<const AI::DecisionNodeGeneration>> AcquireDecisionAuthoringGeneration() const;
+        /** @brief Pins the selected current native module's independently admitted sense providers for Play. */
+        [[nodiscard]] Result<std::shared_ptr<const AI::PerceptionSenseGeneration>> AcquirePlayPerceptionGeneration() const;
 
         /** @brief Atomically updates package contributions to the detached authoring catalog at the owner's safe point.
          * @param source Read-only source bound to the exact live package activation. An empty source withdraws all package contributions.

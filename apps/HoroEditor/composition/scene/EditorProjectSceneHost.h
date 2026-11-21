@@ -40,6 +40,8 @@ namespace Horo::Application::Internal {
         Assets::AssetId scene;
         std::vector<CookedDecisionSceneBinding> controllers;
         std::vector<EditorPlayInspectionKey> inspectionKeys;
+        std::string perceptionPolicy;
+        Duration fixedStep{Duration::FromNanoseconds(16'666'667)};
     };
 
     /** @brief Application policy captured before workspace creation; no backend inference or fallback. */

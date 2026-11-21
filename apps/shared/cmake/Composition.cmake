@@ -93,6 +93,16 @@ target_include_directories(HoroCookedDecisionSceneAdmissionInternal PUBLIC "${HO
 target_link_libraries(HoroCookedDecisionSceneAdmissionInternal PUBLIC HoroEngine::AISceneIntegration HoroEngine::PrefabRuntime
     PRIVATE HoroScenePhysicsHost HoroEngine::SceneRuntimeConversion)
 
+# Project Perception admission and position capture are shared by both application hosts.
+set(HORO_PROJECT_SCENE_PERCEPTION_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/project_scene_perception_headers")
+file(GENERATE OUTPUT "${HORO_PROJECT_SCENE_PERCEPTION_HEADERS}/ProjectScenePerception.h"
+    CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/shared/scene/ProjectScenePerception.h\"\n")
+add_library(HoroProjectScenePerceptionInternal STATIC shared/scene/ProjectScenePerception.cpp)
+target_compile_features(HoroProjectScenePerceptionInternal PUBLIC cxx_std_20)
+target_include_directories(HoroProjectScenePerceptionInternal PUBLIC "${HORO_PROJECT_SCENE_PERCEPTION_HEADERS}")
+target_link_libraries(HoroProjectScenePerceptionInternal PUBLIC HoroEngine::AISceneIntegration HoroEngine::PlatformProjectIo
+    PRIVATE nlohmann_json::nlohmann_json)
+
 # The installed standalone and Editor Play hosts share a canonical mounted-World adapter.
 set(HORO_MOUNTED_WORLD_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/mounted_world_host_headers")
 file(MAKE_DIRECTORY "${HORO_MOUNTED_WORLD_HOST_HEADERS}")

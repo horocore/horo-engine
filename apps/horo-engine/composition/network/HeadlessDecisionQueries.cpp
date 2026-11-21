@@ -1,7 +1,7 @@
 #include "HeadlessDecisionQueries.h"
 
-#include "HeadlessPerceptionPolicy.h"
 #include "Horo/AI/AIErrors.h"
+#include "ProjectScenePerception.h"
 
 #include <algorithm>
 #include <bit>
@@ -119,7 +119,7 @@ namespace Horo::Application::Internal {
         const auto owner = scope_->runtime.ResolveDecisionQueryOwnerAtSafePoint(operation.agent);
         if (owner.HasError())
             return Execution::Failure(owner.ErrorValue());
-        const auto position = CaptureHeadlessWorldPosition(scope_->scene, owner.Value(), scope_->origin);
+        const auto position = CaptureProjectSceneWorldPosition(scope_->scene, owner.Value(), scope_->origin);
         if (position.HasError())
             return Execution::Failure(position.ErrorValue());
         AI::QueryContextCapture capture;

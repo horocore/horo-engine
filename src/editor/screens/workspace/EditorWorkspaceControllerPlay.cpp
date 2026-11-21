@@ -183,9 +183,11 @@ namespace Horo::Editor {
                                 m_triggerBinding, m_selectedXrPlayHost ? m_selectedXrPlayHost->ViewSource() : desktopView,
                                 m_selectedXrPlayHost,
                                 m_defaultScenePath ? m_defaultScenePath->lexically_relative(ProjectRoot()) : std::filesystem::path{},
-                                &m_primitiveMeshCache, [this] {
+                                &m_primitiveMeshCache, {.decision = [this] {
             return m_gameplayRegistry->AcquireDecisionAuthoringGeneration();
-        });
+        }, .perception = [this] {
+            return m_gameplayRegistry->AcquirePlayPerceptionGeneration();
+        }});
         m_viewModel.activeDocumentPanelId = "horo.game";
         SyncPanelHost(WorkspaceDockArea::Document, "horo.game");
         if (started.HasError())

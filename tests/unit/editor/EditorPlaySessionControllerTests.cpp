@@ -1,7 +1,10 @@
+#include "../../helpers/GameplayModuleTestSupport.h"
 #include "DecisionGraphCompilerTestSupport.h"
 #include "EditorPlayXrHost.h"
 #include "EditorProjectSceneHost.h"
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/PerceptionSenseProvider.h"
+#include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Runtime/RuntimeHost.h"
 #include "Horo/Runtime/Scene/PrimitiveMesh.h"
@@ -860,6 +863,11 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     constexpr auto sceneType = "core.scene";
     constexpr auto treeType = "core.behavior_tree";
     constexpr auto scenePath = "assets/level.horo";
+    constexpr auto perceptionPath = "play-perception.json";
+    bool livePerception = false;
+    SECTION("Prepared native sensing reaches the selected agent's committed inspection memory") {
+        livePerception = true;
+    }
     SceneSource::SceneSourceDocument source;
     source.objects.push_back({.id = {7},
                               .name = "Owned AI and camera",
@@ -868,6 +876,15 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
                                              .aiController = AI::AiControllerComponent{.controller = controller,
                                                                                        .decisionAsset = graph.asset,
                                                                                        .blackboardSchema = inputs.schema->Identity()}}});
+    if (livePerception) {
+        auto *configured = &*source.objects.front().components.aiController;
+        configured->requiredCapabilities = AI::AiCapabilitySet::Of(AI::AiCapability::Perception);
+        source.objects.push_back({.id = {8},
+                                  .name = "Sensed peer",
+                                  .localTransform = {.translation = {1.0F, 0.0F, 0.0F}},
+                                  .components = {.aiAgent = AI::AiAgentComponent{.agent = Decisions::MakeIdentity<AI::AgentId>(404)},
+                                                 .aiController = *configured}});
+    }
     const SceneSource::SceneSourceView view{source.objects, source.prefabInstances};
     const auto runtime = SceneSource::ConvertSceneSourceToRuntime(view, SceneCook::SceneDefinitionIdForAsset(project.sceneId), {1});
     REQUIRE(runtime.HasValue());
@@ -937,12 +954,37 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
         disclosure.push_back({inputs.schema->Identity(), disclosed.key});
     if (authorizeForeignSchema)
         disclosure.push_back({Decisions::MakeIdentity<AI::BlackboardSchemaId>(inputs.schema->Identity().Value() + 1), disclosed.key});
+    std::unique_ptr<Gameplay::LoadedGameModule> senseModule;
+    std::shared_ptr<const AI::PerceptionSenseGeneration> senses;
+    if (livePerception) {
+        const Gameplay::GameModuleLoadExpectation expected{"game.ai.tests", Gameplay::CurrentGameplayBuildFingerprint(),
+                                                           Horo::Tests::ReadDescriptorRevision(HORO_TEST_AI_MODULE_REVISION_PATH)};
+        auto loaded = Gameplay::GameModuleHost{}.Load(HORO_TEST_AI_MODULE_PATH, expected);
+        REQUIRE(loaded.HasValue());
+        REQUIRE_FALSE(loaded.Value().diagnostic);
+        senseModule = std::move(loaded).Value().owner;
+        auto generation = senseModule->AcquirePerceptionSenses();
+        REQUIRE(generation.HasValue());
+        senses = std::move(generation).Value();
+        REQUIRE(senses->Contracts().size() == 1);
+        const auto &contract = senses->Contracts().front();
+        const auto sense = std::to_string(contract.sense.identity.Value());
+        const auto units = (contract.workUnits + AI::PerceptionSenseGeneration::ValidationWorkUnits + 1) * 3;
+        project.WriteText(perceptionPath,
+                          "{\"schema\":2,\"sceneAsset\":\"" + project.sceneId.ToString() +
+                              "\",\"sceneRevision\":1,\"worldOriginMillimeters\":[0,0,0],\"controllers\":[{\"controller\":" +
+                              std::to_string(controller.Value()) + ",\"listeners\":[91],\"sources\":[" + sense +
+                              "],\"layers\":1,\"mask\":1}],\"native\":{\"listeners\":[{\"id\":91,\"sense\":" + sense +
+                              "}],\"radiusMillimeters\":4000,\"visibleLayers\":1,\"workUnitsPerTick\":" + std::to_string(units) + "}}");
+    }
     const auto projectFactory =
         MakeEditorProjectSceneFactory(project.jobs, {.cooked = SceneCookSelection{project.cooked.path, target},
                                                      .decisions = EditorPlayDecisionSelection{project.project.dir.path,
                                                                                               project.sceneId,
                                                                                               {{controller, decisionId, {}}},
-                                                                                              std::move(disclosure)}});
+                                                                                              std::move(disclosure),
+                                                                                              livePerception ? perceptionPath : "",
+                                                                                              Duration::FromMilliseconds(10)}});
     const Editor::EditorPlaySceneFactory factory = [&](Runtime::SceneRuntimeId id, const Runtime::RuntimeSceneDefinition &definition) {
         return projectFactory(project.project.dir.path, id, definition);
     };
@@ -956,10 +998,12 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     REQUIRE(scheduler.HasValue());
     REQUIRE(play.BindRuntimeDispatch(scheduler.Value()->DispatchSource()).HasValue());
     const Editor::SceneDocumentSnapshot document{{1}, {1}, source.objects};
-    const auto started =
-        play.Start(document, registry, components, factory, {}, Editor::EditorPlayViewSource::AuthoredCamera, nullptr, {}, nullptr, [&] {
+    const auto started = play.Start(document, registry, components, factory, {}, Editor::EditorPlayViewSource::AuthoredCamera, nullptr, {},
+                                    nullptr, {.decision = [&] {
         return Result<std::shared_ptr<const AI::DecisionNodeGeneration>>::Success(inputs.providers);
-    });
+    }, .perception = [&] {
+        return Result<std::shared_ptr<const AI::PerceptionSenseGeneration>>::Success(senses);
+    }});
     if (changed) {
         REQUIRE(started.HasError());
         CHECK(providerState->factories == 0);
@@ -1020,6 +1064,21 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     REQUIRE(inspection.snapshot);
     CHECK(inspection.snapshot->agent == inspection.agent);
     CHECK(inspection.snapshot->decisionTick == 1);
+    if (livePerception) {
+        CHECK_FALSE(inspection.snapshot->perceptionFailure);
+        REQUIRE(inspection.snapshot->stimuli.size() == 1);
+        const auto &stimulus = inspection.snapshot->stimuli.front();
+        REQUIRE(play.SceneView()->Find({8}));
+        CHECK(stimulus.key.source.slot == play.SceneView()->Find({8})->entity.index);
+        CHECK(stimulus.key.sense == senses->Contracts().front().sense.identity);
+        CHECK(stimulus.firstSensedTick == 1);
+        CHECK(stimulus.lastSensedTick == 1);
+        CHECK(stimulus.ageSeconds == 0);
+        CHECK(stimulus.sensed);
+        play.Stop();
+        lifecycle.Shutdown();
+        return;
+    }
     CHECK(inspection.snapshot->omittedDecisionTasks == 0);
     if (providerState->failure == FailedCallback::Start) {
         CHECK(inspection.snapshot->decisionTasks.empty());

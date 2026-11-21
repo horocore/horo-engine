@@ -91,12 +91,12 @@ namespace Horo::Application::Internal {
         CancellationToken cancellation;
     };
 
-    struct HeadlessNativePerceptionPolicy;
+    struct ProjectNativePerceptionPolicy;
 
     /** @brief Exact spatial publisher and authored settings, borrowed until this private Scene activates. */
     struct GameplayPreparedPerception final {
         const AI::PerceptionSpatialBroadphase &spatial;
-        const HeadlessNativePerceptionPolicy &policy;
+        const ProjectNativePerceptionPolicy &policy;
     };
 
     /** @brief Borrows an exact private Scene and its prepared native provider until startup completes. */

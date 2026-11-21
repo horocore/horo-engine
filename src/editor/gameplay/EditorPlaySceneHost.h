@@ -24,6 +24,7 @@ namespace Horo::Gameplay {
 namespace Horo::AI {
     struct AiAgentInspectionSnapshot;
     class DecisionNodeGeneration;
+    class PerceptionSenseGeneration;
 }  // namespace Horo::AI
 
 namespace Horo::Runtime {
@@ -109,8 +110,11 @@ namespace Horo::Editor {
         std::optional<EditorPlayAgentNavigation> navigation;
     };
 
-    /** @brief Synchronous acquisition from the current Project's existing provider owner. */
-    using EditorPlayDecisionProviderSource = std::function<Result<std::shared_ptr<const AI::DecisionNodeGeneration>>()>;
+    /** @brief Independent synchronous acquisitions from the current Project's existing provider owner. */
+    struct EditorPlayDecisionProviderSource final {
+        std::function<Result<std::shared_ptr<const AI::DecisionNodeGeneration>>()> decision;
+        std::function<Result<std::shared_ptr<const AI::PerceptionSenseGeneration>>()> perception;
+    };
 
     class EditorPlaySceneHost {
     public:

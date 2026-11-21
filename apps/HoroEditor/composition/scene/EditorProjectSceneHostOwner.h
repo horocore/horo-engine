@@ -8,6 +8,7 @@
 #include "EditorPlaySavePhysicsServices.h"
 #include "EditorPlaySavePrefabServices.h"
 #include "EditorProjectSceneHost.h"
+#include "Horo/AI/PerceptionSpatialBroadphase.h"
 #include "Horo/Application/PrefabProjectSettings.h"
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
@@ -16,6 +17,7 @@
 #include "Horo/Prefab/PrefabSpawnService.h"
 #include "Horo/Scene/PrefabComponentProjection.h"
 #include "PhysicsStateHostLifecycle.h"
+#include "ProjectScenePerception.h"
 #include "RuntimeUiPaintProjectSources.h"
 #include "ScenePhysicsHost.h"
 
@@ -411,11 +413,19 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 };
             }
             controllers_ = policy.aiControllers;
+            std::optional<AI::AiScenePerceptionActivationInput> perception;
+            std::optional<AI::AiScenePerceptionGroupInput> perceptionGroups;
+            if (playPerception_) {
+                auto &capture = *playPerception_;
+                perception.emplace(AI::AiScenePerceptionActivationInput{capture.spatial, {}, capture.positions.scene, capture.execution});
+                perceptionGroups.emplace(AI::AiScenePerceptionGroupInput{capture.spatial, {}, capture.positions.group});
+            }
             if (auto added = scenes_->AddActivationParticipant(
-                    std::make_unique<AI::AiSceneActivationParticipant>(*ai_, controllers_, std::nullopt, std::move(restore)));
+                    std::make_unique<AI::AiSceneActivationParticipant>(*ai_, controllers_, std::move(perception), std::move(restore)));
                 added.HasError())
                 return added;
-            if (auto added = scenes_->AddStructuralParticipant(ai_->MakeStructuralParticipant(controllers_)); added.HasError())
+            if (auto added = scenes_->AddStructuralParticipant(ai_->MakeStructuralParticipant(controllers_, std::move(perceptionGroups)));
+                added.HasError())
                 return added;
             selectedXrHost_ = policy.xrHost;
             if (policy.xrHost) {
@@ -630,6 +640,20 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         }
 
     private:
+        /** @brief Owns Play's exact sensing generation and spatial publication for the Scene lifetime. */
+        struct PlayPerception final {
+            AI::PerceptionSpatialBroadphase spatial;
+            ProjectPerceptionPositionSources positions;
+            AI::AiScenePerceptionExecution execution;
+        };
+
+        /** @brief Admits project-authored sensing from the same active provider generation as the Play project. */
+        [[nodiscard]] Result<void> PrepareDecisionPerception(EditorProjectScenePolicy &policy,
+                                                             const Runtime::RuntimeSceneDefinition &cooked,
+                                                             const Runtime::RuntimeSceneDefinition &live,
+                                                             const Editor::EditorPlayDecisionProviderSource &source);
+        /** @brief Publishes current positions and polls sensing before the selected Play Decision tick. */
+        [[nodiscard]] Result<void> PollDecisionPerception(std::uint64_t tick, Duration fixedStep);
         /** @brief Resolves the saved parent Scene and verifies that its cook still matches the selected source.
          * @param source Exact saved Scene path and content digest.
          * @return Decoded parent with cooked child references, or a path, identity, or decode error.
@@ -683,6 +707,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                                                             const EditorProjectScenePolicy &policy);
         std::optional<EditorProjectScenePolicy> pendingDecisionPolicy_;
         JobSystem *decisionJobs_{};
+        std::unique_ptr<PlayPerception> playPerception_;
         std::vector<EditorPlayInspectionKey> inspectionKeys_;
         std::uint64_t committedDecisionTick_{};
         bool decisionTickPending_{};
