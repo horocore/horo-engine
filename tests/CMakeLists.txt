@@ -3210,6 +3210,12 @@ target_compile_features(HoroEditorPlaySessionControllerTests PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorPlaySessionControllerTests PRIVATE HoroEngine::EditorServices)
 target_link_libraries(HoroEditorPlaySessionControllerTests PRIVATE HoroEngine::ProjectSurfaceSettings HoroEngine::ProjectSettings
         HoroEngine::NavigationApi)
+if(HORO_BUILD_PHYSICS_NATIVE)
+    target_include_directories(HoroEditorPlaySessionControllerTests PRIVATE
+            ${CMAKE_CURRENT_SOURCE_DIR}/integration/network ${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/networking)
+    target_link_libraries(HoroEditorPlaySessionControllerTests PRIVATE
+            HoroNetworkProductHost HoroNetworkModeHostInternal HoroEngine::NetworkTransportNull)
+endif()
 add_executable(HoroEditorAnimationProductTests
         support/AllocationProbe.cpp unit/editor/EditorAnimationSceneProductTests.cpp)
 target_compile_features(HoroEditorAnimationProductTests PRIVATE cxx_std_20)

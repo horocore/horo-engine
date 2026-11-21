@@ -133,8 +133,8 @@ namespace Horo::Application::Internal {
                 case Timeout: {
                     std::uint32_t milliseconds{};
                     if (const auto parsed = std::from_chars(value.data(), value.data() + value.size(), milliseconds);
-                        parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() || milliseconds == 0 ||
-                        std::chrono::milliseconds{milliseconds} > MaximumHeadlessSceneLoadTimeout)
+                        parsed.ec != std::errc{} || parsed.ptr != value.data() + value.size() ||
+                        !IsHeadlessSceneLoadTimeoutValid(std::chrono::milliseconds{milliseconds}))
                         return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid));
                     input.loadTimeout = std::chrono::milliseconds{milliseconds};
                     break;

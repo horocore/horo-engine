@@ -4,6 +4,16 @@
 #include "editor/gameplay/EditorPlaySessionController.h"
 #include "navigation/ProjectSceneNavigationFixture.h"
 
+#if HORO_TEST_PHYSICS_NATIVE
+#include "HeadlessProjectScene.h"
+#include "Horo/Network/NetworkErrors.h"
+#include "NetworkModeHostTestSupport.h"
+#include "OwnedTestDirectory.h"
+
+#include <catch2/catch_approx.hpp>
+#include <fstream>
+#endif
+
 #include <chrono>
 #include <thread>
 
@@ -45,6 +55,243 @@ namespace Horo::Application::CharacterSceneProductTest {
     }  // namespace
 
 #if HORO_TEST_PHYSICS_NATIVE
+    namespace {
+        constexpr auto ParityActor = Runtime::SceneObjectId{3};
+        constexpr std::size_t ParityTicks = 4;
+        constexpr auto ParityStep = Duration::FromNanoseconds(16'666'667);
+
+        struct AuthoritySample final {
+            float characterHeight;
+            float gameplayPosition;
+        };
+
+        /** @brief Runs the graphical host's Play callbacks using actual scheduler-issued attempt evidence. */
+        class EditorAuthorityParticipant final : public Runtime::RuntimeLifecycleParticipant {
+        public:
+            explicit EditorAuthorityParticipant(Editor::EditorPlaySessionController &play) : play_(play) {}
+
+            Result<void> Startup(const CancellationToken &) override {
+                return Result<void>::Success();
+            }
+
+            Result<void> OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &) override {
+                if (phase == Runtime::RuntimePhase::VariableUpdate)
+                    play_.PresentationUpdate({0});
+                return Result<void>::Success();
+            }
+
+            Result<void> OnFixedUpdate(const Runtime::FixedStepContext &context) override {
+                return play_.OnRuntimeFixedUpdate({}, context);
+            }
+
+            Result<void> PrepareFixedCommit(const Runtime::FixedStepContext &context) override {
+                return play_.PrepareRuntimeFixedCommit(context);
+            }
+
+            void CommitFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+                play_.CommitRuntimeFixedUpdate(context);
+            }
+
+            void AbortFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+                play_.AbortRuntimeFixedUpdate(context);
+            }
+
+            void Shutdown() noexcept override {
+                play_.Stop();
+            }
+
+        private:
+            Editor::EditorPlaySessionController &play_;
+        };
+
+        /** @brief Reads committed outputs of canonical Character recovery and the gameplay module. */
+        AuthoritySample CaptureAuthority(const Runtime::RuntimeSceneView &scene) {
+            const auto read = [&](Runtime::SceneObjectId object) {
+                const auto entity = scene.Find(object);
+                REQUIRE(entity);
+                const auto value = scene.Get(*entity);
+                REQUIRE(value.HasValue());
+                return value.Value().localTransform->translation;
+            };
+            return {read({1}).y, read(ParityActor).x};
+        }
+
+        /** @brief Authors and cooks a Scene that exposes each actual fixed gameplay callback as a committed transform. */
+        Internal::GameplayWorldSelection AuthorParityScene(Fixture &fixture, const std::filesystem::path &directory) {
+            constexpr std::string_view behaviorName = "game.tests.authority_parity";
+            Internal::GameplayWorldSelection gameplay{.moduleId = "game.tests",
+                                                      .scriptSource = directory / "parity.horo_script",
+                                                      .scriptSidecar = directory / "parity.horo_script.meta"};
+            std::ofstream{gameplay.scriptSource} << R"(
+local step
+return horo.behavior {
+    display_name = 'Authority parity',
+    on_create = function() step = 10 end,
+    on_fixed_update = function(ctx)
+        step = step + 1
+        ctx.transform.set_position(step, 0, 0)
+    end
+})";
+            std::ofstream{gameplay.scriptSidecar} << R"({"schemaVersion":1,"runtime":"lua","behaviorTypeId":")" << behaviorName << R"("})";
+            const auto program = Gameplay::LuaBehaviorProgram::LoadFiles(gameplay.scriptSource, gameplay.scriptSidecar);
+            REQUIRE(program.HasValue());
+            Gameplay::ComponentRegistry components;
+            REQUIRE(components.Freeze().HasValue());
+            const auto schema = PrefabCookSchemaContext::Capture(components, std::span{&program.Value()->Descriptor(), 1});
+            REQUIRE(schema.HasValue());
+            fixture.project.request.schemas = schema.Value();
+            fixture.source.objects.back().components.behaviors.push_back({Gameplay::BehaviorInstanceId{1},
+                                                                          program.Value()->Descriptor().typeId,
+                                                                          program.Value()->Descriptor().schemaVersion,
+                                                                          true,
+                                                                          {}});
+            fixture.project.WriteText("assets/level.horo", SceneSource::EncodeSceneSource({fixture.source.objects, {}}));
+            fixture.Cook();
+            return gameplay;
+        }
+
+        /** @brief Runs the real configured Editor Play services over the authored project and its committed cook generation. */
+        std::array<AuthoritySample, ParityTicks + 1> CaptureEditorAuthority(Fixture &fixture,
+                                                                            const Internal::GameplayWorldSelection &gameplay) {
+            auto program = Gameplay::LuaBehaviorProgram::LoadFiles(gameplay.scriptSource, gameplay.scriptSidecar);
+            REQUIRE(program.HasValue());
+            Gameplay::BehaviorRegistry registry;
+            REQUIRE(registry.Register(program.Value()->Registration()).HasValue());
+            REQUIRE(registry.Freeze().HasValue());
+            Editor::EditorPlaySessionController play;
+            DeterministicClock clock;
+            auto runtime = Runtime::RuntimeHost::Create(clock);
+            REQUIRE(runtime.HasValue());
+            REQUIRE(play.BindRuntimeDispatch(runtime.Value()->DispatchSource()).HasValue());
+            REQUIRE(runtime.Value()->AddParticipant(std::make_unique<EditorAuthorityParticipant>(play)).HasValue());
+            REQUIRE(runtime.Value()->Startup().HasValue());
+            REQUIRE(runtime.Value()->RunFrame().HasValue());
+            RequirePlayStarted(play.Start({{1}, {1}, fixture.source.objects}, registry,
+                                          BindProjectFactory(fixture, Physics::PhysicsRuntimeMode::Canonical)));
+            FinishPlayPreparation(play);
+            REQUIRE(play.State() == Editor::EditorPlaySessionState::Playing);
+            std::array<AuthoritySample, ParityTicks + 1> samples;
+            REQUIRE(play.SceneView());
+            samples.front() = CaptureAuthority(*play.SceneView());
+            for (auto &sample : std::span{samples}.subspan(1)) {
+                clock.Advance(ParityStep);
+                RequirePlayStarted(runtime.Value()->RunFrame());
+                REQUIRE(play.SceneView());
+                sample = CaptureAuthority(*play.SceneView());
+            }
+            runtime.Value()->Shutdown();
+            return samples;
+        }
+
+        /** @brief Uses the product host's actual dedicated scheduler and rejects any accidental presentation construction. */
+        std::array<AuthoritySample, ParityTicks + 1> CaptureDedicatedAuthority(const Fixture &fixture,
+                                                                               const Internal::GameplayWorldSelection &gameplay) {
+            using namespace Network;
+            auto prepared =
+                Internal::PrepareHeadlessProjectSceneResources({.projectRoot = fixture.project.project.dir.path,
+                                                                .scene = "cooked:" + fixture.project.sceneId.ToString(),
+                                                                .cookedRoot = fixture.project.cooked.path,
+                                                                .cookTarget = std::string{fixture.project.request.assets.target.Value()},
+                                                                .physicsMode = Physics::PhysicsRuntimeMode::Canonical});
+            if (prepared.HasError())
+                UNSCOPED_INFO(prepared.ErrorValue().message);
+            REQUIRE(prepared.HasValue());
+            auto resources = std::move(prepared).Value();
+            const auto owners = std::make_shared<ProductOwners>();
+            auto factories = ProductFactories(owners);
+            for (const auto kind : {NetworkModeServiceKind::Audio, NetworkModeServiceKind::Renderer, NetworkModeServiceKind::Gui,
+                                    NetworkModeServiceKind::Input, NetworkModeServiceKind::LocalPlayer})
+                factories.services[static_cast<std::size_t>(kind)] = [](const NetworkModeServiceRequest &) {
+                    FAIL_CHECK("Dedicated host attempted to construct a presentation service");
+                    return Result<std::unique_ptr<INetworkModeService>>::Failure(MakeError(NetworkErrors::NetworkModeInvalid));
+                };
+            auto input = DefaultNetworkProjectSettings(NetworkProjectSettingsId::Create(10).Value()).Value();
+            input.supportedRoles = NetworkProjectRoleSet::Standalone | NetworkProjectRoleSet::DedicatedServer;
+            input.transport.requirement = NetworkProjectTransportRequirement::Required;
+            input.transport.capabilities.requiredDelivery[static_cast<std::size_t>(DeliveryPolicy::ReliableOrdered)] = true;
+            input.transport.capabilities.requiredChannels = 2;
+            input.transport.capabilities.requiredMaximumMessageBytes = 1024;
+            input.replication.completeness = NetworkReplicationInventoryCompleteness::Complete;
+            const auto project = NetworkProjectSettings::Create(input);
+            if (project.HasError())
+                UNSCOPED_INFO(project.ErrorValue().message);
+            REQUIRE(project.HasValue());
+            const auto mode = NetworkProjectRole::DedicatedServer;
+            const auto facts = ProductFacts(project.Value(), mode, false);
+            auto composition =
+                Internal::ComposeHeadlessSceneNetworkServices(resources->definition,
+                                                              {Physics::PhysicsRuntimeMode::Canonical, *resources->settings,
+                                                               resources->registry, *resources->loads, resources->load},
+                                                              std::move(factories), gameplay,
+                                                              Gameplay::GameplayReplicationAdmissionPolicy{.inventory = input.replication});
+            REQUIRE(composition.HasValue());
+            auto configured = std::move(composition).Value();
+            const INetworkModeService *scene{};
+            auto &sceneFactory = configured.factories.services[static_cast<std::size_t>(NetworkModeServiceKind::Scene)];
+            sceneFactory = [create = std::move(sceneFactory), &scene](const NetworkModeServiceRequest &request) {
+                auto service = create(request);
+                if (service.HasValue())
+                    scene = service.Value().get();
+                return service;
+            };
+            const std::array worlds{World(NetworkModeWorldKind::AuthorityServer, 31)};
+            DeterministicClock clock;
+            auto created = Internal::NetworkProductHost::Create(clock,
+                                                                {project.Value(),
+                                                                 facts.product,
+                                                                 facts.inventory,
+                                                                 facts.host,
+                                                                 facts.requirements,
+                                                                 facts.selection,
+                                                                 6,
+                                                                 worlds,
+                                                                 {},
+                                                                 owners->sessions,
+                                                                 NetworkWorldCompositionPurpose::Gameplay,
+                                                                 owners->worldSetup,
+                                                                 {},
+                                                                 std::move(configured.pollRetirement)},
+                                                                std::move(configured.factories));
+            REQUIRE(created.HasValue());
+            auto host = std::move(created).Value();
+            RequirePlayStarted(host->Startup());
+            REQUIRE(host->RunFrame().HasValue());
+            REQUIRE(host->Role(worlds.front().kind, worlds.front().scene).HasValue());
+            REQUIRE(scene);
+            const auto capture = [&] {
+                const auto active = Internal::InspectHeadlessScene(*scene);
+                REQUIRE(active);
+                return CaptureAuthority(*active);
+            };
+            std::array<AuthoritySample, ParityTicks + 1> samples;
+            samples.front() = capture();
+            for (auto &sample : std::span{samples}.subspan(1)) {
+                clock.Advance(ParityStep);
+                RequirePlayStarted(host->RunFrame());
+                sample = capture();
+            }
+            host->Shutdown();
+            CHECK(host->Role(worlds.front().kind, worlds.front().scene).HasError());
+            return samples;
+        }
+    }  // namespace
+
+    TEST_CASE("Dedicated simulation matches configured Editor Play for cooked Character and fixed Lua gameplay",
+              "[character][scene][editor][product][canonical][dedicated]") {
+        Fixture fixture{1};
+        const Tests::OwnedTestDirectory scripts{"authority parity"};
+        const auto gameplay = AuthorParityScene(fixture, scripts.Path());
+        const auto editor = CaptureEditorAuthority(fixture, gameplay);
+        const auto dedicated = CaptureDedicatedAuthority(fixture, gameplay);
+        REQUIRE(editor.front().characterHeight > fixture.source.objects.front().localTransform.translation.y);
+        for (std::size_t tick = 0; tick < editor.size(); ++tick) {
+            CAPTURE(tick);
+            CHECK(editor[tick].gameplayPosition == (tick == 0 ? 0.0F : static_cast<float>(10 + tick)));
+            CHECK(dedicated[tick].gameplayPosition == editor[tick].gameplayPosition);
+            CHECK(dedicated[tick].characterHeight == Catch::Approx(editor[tick].characterHeight).margin(0.00001));
+        }
+    }
+
     TEST_CASE("Actual configured Editor Play recovers Character before readiness and keeps authored root unchanged",
               "[character][scene][editor][product][canonical]") {
         Fixture fixture;

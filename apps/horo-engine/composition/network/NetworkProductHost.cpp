@@ -279,8 +279,7 @@ namespace Horo::Application::Internal {
                                                                            Network::NetworkModeFactories factories,
                                                                            Network::NetworkTargetDiagnostic *diagnostic,
                                                                            std::shared_ptr<NetworkDebuggerService> debugger) {
-        if (inputs.sceneTravelLoad && (inputs.sceneTravelLoad->timeout <= std::chrono::milliseconds::zero() ||
-                                       inputs.sceneTravelLoad->timeout > MaximumHeadlessSceneLoadTimeout))
+        if (inputs.sceneTravelLoad && !IsHeadlessSceneLoadTimeoutValid(inputs.sceneTravelLoad->timeout))
             return Result<std::unique_ptr<NetworkProductHost>>::Failure(MakeError(HeadlessSceneLoadErrors::Invalid));
         if (!FitsSnapshotBudget(inputs))
             return Result<std::unique_ptr<NetworkProductHost>>::Failure(MakeError(Network::NetworkErrors::AdmissionPolicyInvalid));

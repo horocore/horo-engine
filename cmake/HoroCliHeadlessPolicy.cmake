@@ -1,7 +1,7 @@
 include_guard(GLOBAL)
 include(HoroDependencyDirection)
 
-# These hosts currently declare no GUI or concrete graphics command capability.
+# CPU-only hosts may use offline processing but cannot link presentation device backends.
 function(horo_verify_cli_headless_dependencies root)
     set(pending "${root}")
     set(visited)
@@ -15,7 +15,8 @@ function(horo_verify_cli_headless_dependencies root)
             continue()
         endif()
         list(APPEND visited "${target}")
-        if(target MATCHES "^(HoroGui|HoroEditor|HoroThirdPartyImGui.*|HoroRender(OpenGL|Metal|Vulkan|D3D12)|imgui|glfw|glfw3|OpenGL::.*|Vulkan::.*)$")
+        if(target MATCHES "^(HoroGui|HoroEditor|HoroThirdPartyImGui.*|HoroRender(OpenGL|Metal|Vulkan|D3D12)|imgui|glfw|glfw3|OpenGL::.*|Vulkan::.*)$"
+           OR target MATCHES "^HoroAudio(Sdl3|PipeWire|NativeRuntime)$")
             message(FATAL_ERROR "CLI headless dependency violation: ${root} reaches ${target}")
         endif()
         if(root STREQUAL "horopak" AND target MATCHES "^Horo(Render.*|RuntimeScene.*|GameplayRuntime.*|Runtime|Physics.*|Audio.*|Network.*|Mcp.*)$")

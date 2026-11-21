@@ -23,7 +23,8 @@ function(cli_policy_case root forbidden)
     endif()
 endfunction()
 
-foreach(forbidden none HoroGui HoroEditor HoroRenderOpenGL HoroRenderMetal HoroRenderVulkan HoroRenderD3D12 HoroThirdPartyImGui imgui glfw OpenGL::GL Vulkan::Vulkan)
+foreach(forbidden none HoroGui HoroEditor HoroRenderOpenGL HoroRenderMetal HoroRenderVulkan HoroRenderD3D12
+        HoroThirdPartyImGui imgui glfw OpenGL::GL Vulkan::Vulkan HoroAudioSdl3 HoroAudioPipeWire HoroAudioNativeRuntime)
     cli_policy_case(host "${forbidden}")
 endforeach()
 
