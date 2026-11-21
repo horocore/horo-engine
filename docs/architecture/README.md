@@ -564,6 +564,8 @@ dependency direction in [System Design](./foundation/system-design.md).
   - [Gameplay Module Boundary](./extensions/gameplay-module-boundary.md):
     native module ABI, registration, capability context, services, hot reload,
     and diagnostics.
+  - [Gameplay Module Composition Policy](./extensions/gameplay-module-composition-policy.md):
+    supported module roles, trust, ownership, and requirements for future mod support.
   - [Gameplay Behavior Authoring](./extensions/gameplay-behavior-authoring.md):
     editor/IDE workflow, object-attached behaviors, script discovery, visual
     scripting, and iteration-speed goals.
