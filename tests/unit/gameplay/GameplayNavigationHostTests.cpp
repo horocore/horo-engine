@@ -13,11 +13,15 @@
 #include <chrono>
 #include <cstring>
 #include <filesystem>
+#include <fstream>
 #include <iterator>
 using namespace Horo;
 using namespace Horo::Gameplay;
 using namespace Horo::Navigation;
 using namespace Horo::Navigation::CoordinatorTestSupport;
+
+BehaviorDescriptor HoroGeneratedBehaviorDescriptor_GuardTargetBeacon();
+BehaviorFactoryBinding HoroGeneratedBehaviorFactory_GuardTargetBeacon();
 
 namespace {
     std::unique_ptr<INavigationQueryBackend> Provider() {
@@ -57,7 +61,7 @@ namespace {
         std::unique_ptr<NavigationMovementController> movement;
         std::shared_ptr<GameplayNavigationContext> context;
 
-        Fixture() {
+        explicit Fixture(std::string moduleId = "game.tests") {
             Activate(world, Provider());
             const std::array descriptors{NavigationAgentDescriptor{.owner = {binding.scene, 0, 1},
                                                                    .profile = NavigationAgentProfileId::Create(1).Value(),
@@ -68,8 +72,8 @@ namespace {
                                                              registry.Snapshot().Value().Agents().front().handle, Caller());
             REQUIRE(made.HasValue());
             movement = std::move(made).Value();
-            auto bound =
-                GameplayNavigationContext::Create({"game.tests", binding, true, true}, &world, &coordinator, movement.get(), Input());
+            auto bound = GameplayNavigationContext::Create({std::move(moduleId), binding, true, true}, &world, &coordinator, movement.get(),
+                                                           Input());
             REQUIRE(bound.HasValue());
             context = std::move(bound).Value();
             REQUIRE(context->Refresh(Now()).HasValue());
@@ -122,6 +126,40 @@ namespace {
         REQUIRE(runtime.HasValue());
         return {std::move(scene), std::move(runtime).Value()};
     }
+
+    /** @brief Places the shipped beacon and pursuit behavior on two root entities. */
+    Runtime::RuntimeSceneDefinition GuardPursuitScene(const BehaviorTypeId &pursuit, const BehaviorTypeId &beacon) {
+        const std::vector<BehaviorField> channel{{"channel", std::string{"test guard"}}};
+        Runtime::RuntimeComponentSet guardComponents, beaconComponents;
+        guardComponents.behaviors.emplace_back(BehaviorInstanceId{1}, pursuit, 1, true, channel);
+        beaconComponents.behaviors.emplace_back(BehaviorInstanceId{2}, beacon, 1, true, channel);
+        Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
+        builder.Add({Runtime::SceneObjectId{2}, std::nullopt, {}, std::nullopt, std::move(guardComponents)});
+        Math::Transform position;
+        position.translation = {9, 0, 9};
+        builder.Add({Runtime::SceneObjectId{3}, std::nullopt, position, std::nullopt, std::move(beaconComponents)});
+        auto definition = std::move(builder).Build();
+        REQUIRE(definition.HasValue());
+        return std::move(definition).Value();
+    }
+
+#ifdef HORO_TEST_NAVIGATION_DETOUR
+    /** @brief Runs the commissioned route through Detour and checks its canonical movement intent. */
+    void VerifyPursuitRoute(Fixture &fixture, NavigationMovementObservation current) {
+        const auto querying = fixture.movement->Update(current);
+        REQUIRE(querying.HasValue());
+        REQUIRE(querying.Value().state == NavigationMovementState::Querying);
+        REQUIRE(fixture.coordinator.Dispatch(1) == 1);
+        fixture.jobs.Shutdown(ShutdownPolicy::Drain);
+        const std::array callers{Caller()};
+        REQUIRE(fixture.coordinator.Commit(Current(callers, 2)) == 1);
+        current.path.tick = 2;
+        const auto following = fixture.movement->Update(current);
+        REQUIRE(following.HasValue());
+        REQUIRE(following.Value().state == NavigationMovementState::Following);
+        CHECK(following.Value().desiredVelocity.x > 0);
+    }
+#endif
 }  // namespace
 
 TEST_CASE("Loaded native module reload and shutdown revoke pending navigation delivery before unload") {
@@ -309,6 +347,50 @@ TEST_CASE("Lua move-to and follow expose canonical replacement and explicit canc
     BehaviorRegistry registry;
     auto active = ActivateScript(*program.Value(), registry, fixture.context);
     CHECK(Tests::FixedUpdateAndReadPosition(*active.scene, *active.runtime, Runtime::SceneObjectId{2}).x == 5);
+}
+
+TEST_CASE("guard pursuit follows the shipped beacon generation and cancels after the signal expires") {
+    Fixture fixture("game.example.guard");
+    const auto script = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "examples/gameplay-ai/Assets/Scripts/GuardPursuit.horo_script";
+    std::ifstream input{script, std::ios::binary};
+    REQUIRE(input.is_open());
+    const std::string source{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+    const auto pursuit = BehaviorTypeId::Parse("game.example.guard.pursuit").Value();
+    auto program = LuaBehaviorProgram::Compile(source, pursuit, "GuardPursuit.horo_script");
+    REQUIRE(program.HasValue());
+    auto beacon = HoroGeneratedBehaviorDescriptor_GuardTargetBeacon();
+    const auto definition = GuardPursuitScene(pursuit, beacon.typeId);
+    BehaviorRegistry registry;
+    REQUIRE(registry.Register({std::move(beacon), HoroGeneratedBehaviorFactory_GuardTargetBeacon()}).HasValue());
+    REQUIRE(registry.Register(program.Value()->Registration()).HasValue());
+    REQUIRE(registry.Freeze().HasValue());
+    auto scene = Runtime::RuntimeScene::Create(definition, Runtime::SceneRuntimeId{fixture.binding.scene.Value()});
+    REQUIRE(scene.HasValue());
+    auto runtime = BehaviorRuntime::Create(*scene.Value(), registry, {}, {.navigation = fixture.context});
+    REQUIRE(runtime.HasValue());
+    const auto target = scene.Value()->View().Find(Runtime::SceneObjectId{3});
+    REQUIRE(target);
+    auto now = fixture.Now(1);
+    now.target = NavigationMovementTarget{{fixture.binding.scene, target->entity.index, target->entity.generation}, {9, 0, 9}, 1};
+    REQUIRE(fixture.context->Refresh(now).HasValue());
+
+    REQUIRE(runtime.Value()->FixedUpdate({}, FixedDeltaTime{0.1}).HasValue());
+    CHECK(fixture.movement->Status().state == NavigationMovementState::Idle);
+    REQUIRE(runtime.Value()->FixedUpdate({}, FixedDeltaTime{0.1}).HasValue());
+    REQUIRE(fixture.movement->Status().state == NavigationMovementState::Querying);
+    const auto operation = fixture.movement->Status().id;
+#ifdef HORO_TEST_NAVIGATION_DETOUR
+    VerifyPursuitRoute(fixture, now);
+#endif
+    const auto retainedState = fixture.movement->Status().state;
+    Runtime::SceneCommandBuffer commands;
+    commands.Destroy(*target);
+    REQUIRE(scene.Value()->Commit(std::move(commands)).HasValue());
+    REQUIRE(runtime.Value()->FixedUpdate({}, FixedDeltaTime{0.1}).HasValue());
+    CHECK(fixture.movement->Status().state == retainedState);
+    CHECK(fixture.movement->Status().id == operation);
+    REQUIRE(runtime.Value()->FixedUpdate({}, FixedDeltaTime{0.1}).HasValue());
+    CHECK(fixture.movement->Status().state == NavigationMovementState::Cancelled);
 }
 
 TEST_CASE("Pending actual native behavior navigation keeps SDK code alive through retired host drain") {

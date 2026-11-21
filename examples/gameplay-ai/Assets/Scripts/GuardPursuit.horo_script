@@ -1,0 +1,63 @@
+local observed
+local target
+local follow
+
+local function stop_following()
+    if follow then
+        follow:cancel()
+        follow = nil
+    end
+    target = nil
+end
+
+local function on_event(ctx, event)
+    if event.type_id ~= "game.example.guard.target" or event.schema_version ~= 1 then
+        return
+    end
+    local fields = event.fields
+    if fields.channel == ctx.fields.get("channel")
+        and math.type(fields.index) == "integer" and math.type(fields.generation) == "integer"
+        and type(fields.x) == "number" and type(fields.y) == "number" and type(fields.z) == "number" then
+        observed = fields
+    end
+end
+
+local function on_fixed_update(ctx)
+    local next_target = observed
+    observed = nil
+    if not next_target then
+        stop_following()
+        return
+    end
+    if not target or target.index ~= next_target.index or target.generation ~= next_target.generation then
+        stop_following()
+        target = next_target
+        local err
+        follow, err = ctx.navigation.follow(target.x, target.y, target.z, target.index, target.generation)
+        if err then
+            ctx.log.info("Guard pursuit: " .. err.code)
+        end
+        return
+    end
+    if follow then
+        local completion, err = follow:poll()
+        if completion or err then
+            follow = nil
+        end
+        local failure = err or (completion and completion.movement and completion.movement.error)
+        if failure then
+            ctx.log.info("Guard pursuit: " .. failure.code)
+        end
+    end
+end
+
+return horo.behavior {
+    type_id = "game.example.guard.pursuit",
+    display_name = "Guard pursuit",
+    category = "Guard example",
+    schema_version = 1,
+    fields = {{name = "channel", default = "guard"}},
+    on_event = on_event,
+    on_fixed_update = on_fixed_update,
+    on_destroy = stop_following,
+}

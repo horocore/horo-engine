@@ -57,6 +57,18 @@ BlackboardSync during that window, the recovery branch fails and a reactive
 selector can give pursuit priority. The project's Perception-to-Blackboard
 policy supplies the key.
 
+For the pursuit example, attach **Guard target beacon** to a root target
+entity and **Guard pursuit** to the guard. Copy the Lua behavior and its
+`.meta` sidecar together. Set the same `channel` on both behaviors and use
+one beacon per channel. Run them in a host that grants Navigation movement
+to the guard under `game.example.guard` and supplies the current target
+observation. The beacon publishes
+the target's live entity generation and position after each fixed update.
+The Lua behavior submits one follow request, retains its opaque handle, and
+cancels when the signal stops or its target generation changes.
+The Navigation host test loads the shipped behavior on a real runtime Scene
+and exercises request admission and cancellation.
+
 If the node is unavailable, verify that the gameplay module built successfully
 and that the loaded module matches the project's SDK fingerprint. In cooked
 Editor Play, select the guard and open the Game panel's **AI agent inspector**.

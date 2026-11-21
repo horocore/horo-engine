@@ -2982,7 +2982,10 @@ target_compile_definitions(HoroCinematicRuntimeTests PRIVATE
         HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}"
 )
 add_dependencies(HoroCinematicRuntimeTests HoroTestGameModule)
-add_executable(HoroGameplayNavigationTests unit/gameplay/GameplayNavigationContextTests.cpp unit/gameplay/GameplayNavigationHostTests.cpp)
+add_executable(HoroGameplayNavigationTests
+        unit/gameplay/GameplayNavigationContextTests.cpp
+        unit/gameplay/GameplayNavigationHostTests.cpp
+        ${PROJECT_SOURCE_DIR}/examples/gameplay-ai/source/gameplay/GuardTargetBeacon.cpp)
 target_compile_features(HoroGameplayNavigationTests PRIVATE cxx_std_20)
 target_include_directories(HoroGameplayNavigationTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/support" "${CMAKE_CURRENT_SOURCE_DIR}/helpers")
 target_link_libraries(HoroGameplayNavigationTests PRIVATE HoroEngine::GameplayNavigationIntegration HoroEngine::GameplayLua HoroEngine::GameplayModuleHost HoroEngine::Platform)

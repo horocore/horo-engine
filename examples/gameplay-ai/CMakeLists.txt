@@ -6,6 +6,7 @@ horo_add_gameplay_module(HoroGameGameplay
     MODULE_ID game.example.guard
     SOURCES source/gameplay/GuardModule.cpp
             source/gameplay/GuardProximitySense.cpp
+            source/gameplay/GuardTargetBeacon.cpp
 )
 
 include(CTest)
