@@ -278,8 +278,11 @@ namespace Horo::WorldCook {
     TEST_CASE("Mounted World streams a verified cell through the real structural cutoff and detaches only its occurrence",
               "[world_cook][native][mounted_world][live_cell]") {
         const auto parentPoint = Math::WorldCoordinate64::FromMillimeters(-1000, 0, 0);
-        const W::WorldSpatialAssignmentCandidate parent{Endpoint(3).address, Endpoint(3).revision, {parentPoint, parentPoint},
-                                                         W::TestSupport::Layer(), 0};
+        const W::WorldSpatialAssignmentCandidate parent{Endpoint(3).address,
+                                                        Endpoint(3).revision,
+                                                        {parentPoint, parentPoint},
+                                                        W::TestSupport::Layer(),
+                                                        0};
         Fixture fixture{false, false, parent};
         const auto controller = AI::TestSupport::MakeFixture(813, 812, 101, 0);
         auto agentEntity = fixture.entities.front();

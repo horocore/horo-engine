@@ -59,8 +59,9 @@ namespace Horo::WorldCook::PublicationTestSupport {
 
         explicit Fixture(const bool nonspatial = false, const bool hardDependency = true,
                          const std::optional<W::WorldSpatialAssignmentCandidate> additionalObject = std::nullopt)
-            : assignments(Assignments(world.manifest.Descriptor(), nonspatial, additionalObject)), placements(Placements(assignments, nonspatial)),
-              dependencies(Dependencies(assignments, hardDependency)), packages(Packages(nonspatial)) {
+            : assignments(Assignments(world.manifest.Descriptor(), nonspatial, additionalObject)),
+              placements(Placements(assignments, nonspatial)), dependencies(Dependencies(assignments, hardDependency)),
+              packages(Packages(nonspatial)) {
             files.root = directory.path;
             if (nonspatial) {
                 baseArtifacts.push_back(T::MakePayload(Asset(8), 16));
@@ -68,8 +69,9 @@ namespace Horo::WorldCook::PublicationTestSupport {
             }
         }
 
-        static W::WorldSpatialAssignment Assignments(const W::WorldPartitionDescriptor &partition, const bool nonspatial = false,
-                                                       const std::optional<W::WorldSpatialAssignmentCandidate> additionalObject = std::nullopt) {
+        static W::WorldSpatialAssignment Assignments(
+            const W::WorldPartitionDescriptor &partition, const bool nonspatial = false,
+            const std::optional<W::WorldSpatialAssignmentCandidate> additionalObject = std::nullopt) {
             const auto bounds = [](const std::int64_t x) {
                 const auto point = Math::WorldCoordinate64::FromMillimeters(x, 0, 0);
                 return W::WorldPartitionBounds{point, point};
