@@ -14,7 +14,6 @@ add_library(HoroNetworkProductHost STATIC
     horo-engine/composition/network/HeadlessReplicaAnimationInputs.cpp
     horo-engine/composition/network/HeadlessPrefabIntent.cpp
     horo-engine/composition/network/HeadlessPrefabReplica.cpp
-    horo-engine/composition/network/HeadlessDecisionQueries.cpp
     horo-engine/composition/network/HeadlessNavigationPathScope.cpp
     horo-engine/composition/network/HeadlessAnimationFixed.h
     horo-engine/composition/network/NetworkProductComposition.h
@@ -38,7 +37,7 @@ target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::NetworkRuntime H
     HoroEngine::GameplayPhysicsIntegration HoroEngine::GameplayCharacterIntegration HoroEngine::GameplayNavigationIntegration HoroEngine::PrefabRuntime HoroEngine::NetworkDebuggerApplication
     HoroEngine::ProjectCollisionSettings HoroEngine::PlatformProjectReadFiles HoroEngine::SceneRuntimeConversion HoroEngine::AISceneIntegration)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroScenePhysicsHost HoroEngine::WorldStreaming HoroMountedWorldHostInternal)
-target_link_libraries(HoroNetworkProductHost PUBLIC HoroCookedDecisionSceneAdmissionInternal HoroEngine::AISightIntegration HoroEngine::AINavigationIntegration)
+target_link_libraries(HoroNetworkProductHost PUBLIC HoroSceneDecisionQueriesInternal)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroProjectScenePerceptionInternal)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::AnimationSceneIntegration HoroAnimationHostIdentityInternal)
 if(HORO_BUILD_NETWORK_GNS)

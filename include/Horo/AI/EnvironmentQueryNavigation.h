@@ -89,17 +89,18 @@ namespace Horo::AI {
     class IQueryNavigationOwner {
     public:
         virtual ~IQueryNavigationOwner() = default;
-        [[nodiscard]] virtual std::optional<QueryNavigationAccess> ReadQueryNavigation(
-            const Runtime::RuntimeSceneView &scene) const noexcept = 0;
+        [[nodiscard]] virtual std::optional<QueryNavigationAccess> ReadQueryNavigation(const Runtime::RuntimeSceneView &scene,
+                                                                                       Runtime::EntityRef querier) const noexcept = 0;
     };
 
     /** @brief Admits the native path test through the existing asynchronous Navigation coordinator. */
     [[nodiscard]] Result<std::unique_ptr<QueryExecution>> AdmitBuiltinPointNavigationQuery(
         const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
-        QueryExecutionInputs inputs, QueryExecutionSettings settings, const IQueryNavigationOwner &owner);
+        Runtime::EntityRef querier, QueryExecutionInputs inputs, QueryExecutionSettings settings, const IQueryNavigationOwner &owner);
 
     /** @brief Prepares one bounded asynchronous Navigation stage. */
     [[nodiscard]] Result<PreparedPointQueryTest> PrepareBuiltinPointNavigationTest(
         const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
-        const QueryExecutionInputs &inputs, const QueryExecutionSettings &settings, const IQueryNavigationOwner &owner);
+        Runtime::EntityRef querier, const QueryExecutionInputs &inputs, const QueryExecutionSettings &settings,
+        const IQueryNavigationOwner &owner);
 }  // namespace Horo::AI

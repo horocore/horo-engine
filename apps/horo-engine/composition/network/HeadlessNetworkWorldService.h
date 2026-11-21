@@ -4,12 +4,12 @@
  */
 #include "HeadlessAnimationFixed.h"
 #include "HeadlessCookedDecisionAdmission.h"
-#include "HeadlessDecisionQueries.h"
 #include "HeadlessNetworkWorldOwners.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/AINavigationIntentDispatch.h"
 #include "Horo/WorldStreaming/WorldArtifactErrors.h"
 #include "ProjectScenePerception.h"
+#include "SceneDecisionQueries.h"
 
 namespace Horo::Application::Internal::HeadlessNetworkDetail {
     class WorldService final : public Network::INetworkModeService {
@@ -515,9 +515,9 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 catalog = record_->admittedControllers;
                 if (OwnsCookedDecisionExecution() && !queries.empty()) {
                     auto driver =
-                        HeadlessDecisionQueries::Create(std::move(queries), input.cookedDecisions->querySchema,
-                                                        ConfiguredDecisionExecution().scheduler, input.cookedDecisions->queryWorkUnitsLimit,
-                                                        input.decisionReplay ? std::nullopt : input.cookedDecisions->queryCacheLimits);
+                        SceneDecisionQueries::Create(std::move(queries), input.cookedDecisions->querySchema,
+                                                     ConfiguredDecisionExecution().scheduler, input.cookedDecisions->queryWorkUnitsLimit,
+                                                     input.decisionReplay ? std::nullopt : input.cookedDecisions->queryCacheLimits);
                     if (driver.HasError())
                         return Result<void>::Failure(driver.ErrorValue());
                     record_->decisionQueries = std::move(driver).Value();
@@ -886,8 +886,13 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                     return Result<void>::Failure(frame.ErrorValue());
                 origin = frame.Value().Origin();
             }
-            return record_->decisionQueries->RunAtFixedTick(*record_->ai, *scene, origin, tick, &record_->native,
-                                                            record_->navigationPath.get());
+            const SceneQueryNavigationSource navigation{record_->navigationPath.get(),
+                                                        [](const void *owner, const Runtime::RuntimeSceneView &, Runtime::EntityRef,
+                                                           const std::uint64_t tick) noexcept -> std::optional<AI::QueryNavigationAccess> {
+                const auto *paths = static_cast<const HeadlessNavigationPathScope *>(owner);
+                return paths ? paths->ReadQueryAccess(tick) : std::nullopt;
+            }};
+            return record_->decisionQueries->RunAtFixedTick(*record_->ai, *scene, origin, tick, &record_->native, navigation);
         }
 
         /** @brief Executes the registered decision phases for worlds without authored query tasks. */

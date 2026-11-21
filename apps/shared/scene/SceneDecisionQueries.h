@@ -1,7 +1,7 @@
 #pragma once
-/** @file HeadlessDecisionQueries.h @brief Exact committed query execution for a headless Scene owner. */
+/** @file SceneDecisionQueries.h @brief Exact committed query execution for an authoritative Scene owner. */
 
-#include "HeadlessCookedDecisionAdmission.h"
+#include "CookedDecisionSceneAdmission.h"
 #include "Horo/AI/DecisionNodeRegistration.h"
 #include "Horo/AI/DecisionQueryTask.h"
 #include "Horo/AI/EnvironmentQueryNavigation.h"
@@ -13,17 +13,29 @@ namespace Horo::Physics {
 
 namespace Horo::Application::Internal {
     class ScenePhysicsHost;
-    class HeadlessNavigationPathScope;
+
+    /** @brief Synchronous owner-thread projection of the host's committed Navigation authority. */
+    struct SceneQueryNavigationSource final {
+        const void *owner{};
+        std::optional<AI::QueryNavigationAccess> (*read)(const void *, const Runtime::RuntimeSceneView &, Runtime::EntityRef,
+                                                         std::uint64_t) noexcept {};
+    };
+
+    /** @brief Optional host Decision phase, including its debugger and intent-dispatch behavior. */
+    struct SceneQueryDecisionPhase final {
+        void *owner{};
+        Result<void> (*run)(void *, AI::AiTaskScheduler &, std::uint64_t){};
+    };
 
     /** @brief Owns the query binding and fixed-step phases for one authoritative runtime world. */
-    class HeadlessDecisionQueries final : public AI::IDecisionQueryTaskBinder,
-                                          private AI::IDecisionQueryTaskHost,
-                                          private AI::IQueryPhysicsVisibilityOwner,
-                                          private AI::IQueryNavigationOwner {
+    class SceneDecisionQueries final : public AI::IDecisionQueryTaskBinder,
+                                       private AI::IDecisionQueryTaskHost,
+                                       private AI::IQueryPhysicsVisibilityOwner,
+                                       private AI::IQueryNavigationOwner {
     public:
         /** @brief Freezes the matching query plans and allocates bounded phase state before Scene activation. */
-        [[nodiscard]] static Result<std::shared_ptr<HeadlessDecisionQueries>> Create(
-            HeadlessQueryPlanCatalog plans, std::shared_ptr<const AI::QuerySchemaRegistry> registry,
+        [[nodiscard]] static Result<std::shared_ptr<SceneDecisionQueries>> Create(
+            CookedSceneQueryPlanCatalog plans, std::shared_ptr<const AI::QuerySchemaRegistry> registry,
             const AI::AiTaskSchedulerSettings &settings, std::size_t workUnitsLimit,
             std::optional<AI::QueryResultCacheLimits> cacheLimits = std::nullopt);
 
@@ -34,7 +46,7 @@ namespace Horo::Application::Internal {
         /** @brief Publishes eligible results, evaluates decisions, and advances admitted queries on the same fixed tick. */
         [[nodiscard]] Result<void> RunAtFixedTick(AI::AiSceneRuntime &runtime, const Runtime::RuntimeSceneView &scene,
                                                   Math::WorldCoordinate64 origin, std::uint64_t tick, ScenePhysicsHost *physics = nullptr,
-                                                  const HeadlessNavigationPathScope *navigation = nullptr);
+                                                  SceneQueryNavigationSource navigation = {}, SceneQueryDecisionPhase decision = {});
 
         /** @brief Observes terminal results for one exact live agent and tick without changing query execution. */
         void ArmReplay(AI::AgentHandle agent, std::uint64_t tick) noexcept;
@@ -52,7 +64,7 @@ namespace Horo::Application::Internal {
             Math::WorldCoordinate64 origin;
             std::uint64_t tick;
             ScenePhysicsHost *physics;
-            const HeadlessNavigationPathScope *navigation;
+            SceneQueryNavigationSource navigation;
             std::size_t active{};
         };
 
@@ -80,8 +92,8 @@ namespace Horo::Application::Internal {
         /** @copydoc AI::IQueryPhysicsVisibilityOwner::CaptureVisibility */
         [[nodiscard]] Result<std::optional<AI::QueryPhysicsVisibilityResult>> CaptureVisibility(
             const AI::QueryPhysicsVisibilityRequest &request) override;
-        [[nodiscard]] std::optional<AI::QueryNavigationAccess> ReadQueryNavigation(
-            const Runtime::RuntimeSceneView &scene) const noexcept override;
+        [[nodiscard]] std::optional<AI::QueryNavigationAccess> ReadQueryNavigation(const Runtime::RuntimeSceneView &scene,
+                                                                                   Runtime::EntityRef querier) const noexcept override;
         /** @brief Acquires a revocable capability only when the exact published Scene or Physics world changes. */
         [[nodiscard]] Result<void> PrepareVisibilityCapability(Physics::PhysicsWorld &world);
         /** @brief Publishes at most one result per active query through the Scene-owned BlackboardSync lane. */
@@ -91,7 +103,7 @@ namespace Horo::Application::Internal {
         /** @brief Allocates retention once per active Scene incarnation. */
         [[nodiscard]] Result<void> PrepareCache(const Runtime::RuntimeSceneView &scene);
 
-        HeadlessQueryPlanCatalog plans_;
+        CookedSceneQueryPlanCatalog plans_;
         std::shared_ptr<const AI::QuerySchemaRegistry> registry_;
         std::optional<AI::QueryContextProviderRegistry> contexts_;
         std::vector<std::weak_ptr<AI::DecisionQueryTask>> tasks_;

@@ -3,6 +3,8 @@
 #include "EditorPlayXrHost.h"
 #include "EditorProjectSceneHost.h"
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/EnvironmentQueryGenerators.h"
+#include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/AI/PerceptionSenseProvider.h"
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayErrors.h"
@@ -15,6 +17,12 @@
 #include "editor/document/EditorAssetMeshCache.h"
 #include "editor/gameplay/EditorPlaySessionController.h"
 #include "editor/renderer/xr/EditorXrSceneGeometry.h"
+#if HORO_TEST_NAVIGATION_NATIVE
+#include "navigation/ProjectSceneNavigationFixture.h"
+#if HORO_TEST_PHYSICS_NATIVE
+#include "CharacterSceneProductFixture.h"
+#endif
+#endif
 
 #include <array>
 #include <atomic>
@@ -1241,6 +1249,213 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     CHECK_FALSE(play.ReadDecisionProblem());
     lifecycle.Shutdown();
 }
+
+#if HORO_TEST_NAVIGATION_NATIVE
+TEST_CASE("Editor Play publishes cooked tactical path output through its admitted Navigation agent", "[editor][play][ai][product][eqs]") {
+    using namespace Horo::AI;
+    using namespace Horo::Application::Internal;
+    namespace Decisions = Horo::AI::DecisionGraphTestSupport;
+    namespace Cook = Horo::Application::PrefabCookTestSupport;
+    using Fixture = Horo::Application::CharacterSceneProductTest::NavigationProductFixture;
+    using Decisions::MakeIdentity;
+
+    Fixture fixture;
+    bool mixed = false;
+#if HORO_TEST_PHYSICS_NATIVE
+    SECTION("Navigation reachability alone publishes the first reachable candidate") {}
+    SECTION("Real Physics visibility eliminates the first reachable candidate") {
+        mixed = true;
+    }
+    using CollisionFixture = Horo::Application::CharacterSceneProductTest::Fixture;
+    std::optional<CollisionFixture> collision;
+    if (mixed)
+        collision.emplace();
+#endif
+    const auto agent = MakeIdentity<AgentId>(403);
+    const auto controller = MakeIdentity<ControllerTypeId>(402);
+    const auto key = MakeIdentity<BlackboardKeyId>(4);
+    const std::array keys{
+        BlackboardKeyDescriptor{.key = key, .kind = BlackboardValueKind::WorldCoordinate, .presence = BlackboardKeyPresence::Optional}};
+    auto admitted = BlackboardSchema::Capture({.identity = Decisions::SchemaId(), .keys = keys});
+    REQUIRE(admitted.HasValue());
+    auto schema = std::make_shared<const BlackboardSchema>(std::move(admitted).Value());
+    auto schemaBytes = BlackboardSchemaCodec::Encode(*schema);
+    REQUIRE(schemaBytes.HasValue());
+
+    auto lattice =
+        CreateBuiltinLatticeQuery(MakeIdentity<QueryId>(29), MakeIdentity<QueryStageId>(1), MakeIdentity<QueryResultSchemaId>(30),
+                                  "Editor Play path", {.stepMillimeters = 4'000, .outerSteps = 1, .innerSteps = 1}, 1);
+    REQUIRE(lattice.HasValue());
+    auto query = AddBuiltinPointNavigationTest(lattice.Value(), MakeIdentity<QueryStageId>(2));
+    REQUIRE(query.HasValue());
+#if HORO_TEST_PHYSICS_NATIVE
+    if (collision)
+        query = AddBuiltinPointVisibilityTest(query.Value(), MakeIdentity<QueryStageId>(3), collision->channel.Bytes());
+    REQUIRE(query.HasValue());
+#endif
+    auto queries = CaptureBuiltinQuerySchema();
+    REQUIRE(queries.HasValue());
+    auto queryBytes = EnvironmentQueryCookedCodec::Encode(query.Value(), queries.Value());
+    REQUIRE(queryBytes.HasValue());
+    const Gameplay::GameModuleLoadExpectation expected{"game.ai.tests", Gameplay::CurrentGameplayBuildFingerprint(),
+                                                       Horo::Tests::ReadDescriptorRevision(HORO_TEST_AI_MODULE_REVISION_PATH)};
+    auto image = Gameplay::GameModuleHost{}.Load(HORO_TEST_AI_MODULE_PATH, expected);
+    REQUIRE(image.HasValue());
+    REQUIRE_FALSE(image.Value().diagnostic);
+    auto providers = image.Value().owner->AcquireDecisionNodes();
+    REQUIRE(providers.HasValue());
+    auto task = Decisions::TreeNode(2, DecisionControlKind::Task);
+    task.type = MakeIdentity<BehaviorTreeNodeTypeId>(102);
+    task.requirements = {{.key = key,
+                          .kind = BlackboardValueKind::WorldCoordinate,
+                          .access = BlackboardKeyAccess::ReadWrite,
+                          .source = Decisions::Location()}};
+    const auto &result = query.Value().ResultSchema();
+    task.properties.emplace_back(MakeIdentity<BehaviorTreePropertyId>(10), "output", BehaviorTreePropertyKind::QueryOutput,
+                                 BehaviorTreeQueryOutput{query.Value().Id(), result.id, result.version, result.itemType, key, 80});
+    auto graph = Decisions::Tree(19, {Decisions::TreeNode(1, DecisionControlKind::Root), std::move(task)}, {Decisions::Edge(1, 1, 2)});
+    graph.executionTask = MakeIdentity<TaskId>(401);
+    auto compiled = DecisionGraphCompiler::Compile(graph.asset, std::span{&graph, 1}, {providers.Value(), {schema}, {}, 1});
+    REQUIRE(compiled.HasValue());
+    REQUIRE(compiled.Value().plan);
+    auto graphBytes = DecisionPlanCodec::EncodeCooked(*compiled.Value().plan);
+    REQUIRE(graphBytes.HasValue());
+    const auto add = [&](std::uint8_t serial, std::string_view type, const std::string &path, std::vector<std::uint8_t> bytes) {
+        const auto id = Assets::AssetId::FromBytes({serial});
+        fixture.project.WriteText(path, "Cooked fixture source");
+        fixture.project.WriteText(path + ".horo", Cook::SidecarJson(id.ToString(), type));
+        return Fixture::AddedAsset{{id, Cook::Type(type), ProjectPath::Parse(path).Value(), ProjectPath::Parse(path + ".horo").Value()},
+                                   std::move(bytes)};
+    };
+    std::vector assets{add(121, DecisionAssetType(DecisionPlanKind::BehaviorTree), "assets/path.horo_bt", std::move(graphBytes).Value()),
+                       add(122, BlackboardSchemaAssetType, "assets/path.horo_bb", std::move(schemaBytes).Value()),
+                       add(123, EnvironmentQuerySourceAssetType, "assets/path.horo_eqs", std::move(queryBytes).Value())};
+    const auto root = fixture.project.project.dir.path;
+#if HORO_TEST_PHYSICS_NATIVE
+    if (collision) {
+        const auto collisionRoot = collision->project.project.dir.path;
+        for (const auto *relative :
+             {".horo/collision.json", ".horo/surfaces.json", "assets/controller.horoasset", "assets/controller.horoasset.horo"})
+            std::filesystem::copy_file(collisionRoot / relative, root / relative, std::filesystem::copy_options::overwrite_existing);
+        std::ifstream material{root / "assets/controller.horoasset", std::ios::binary};
+        REQUIRE(material.is_open());
+        assets.push_back({CollisionFixture::Record(collision->materialId, "core.physics_material", "assets/controller.horoasset"),
+                          {std::istreambuf_iterator<char>{material}, {}}});
+    }
+#endif
+    fixture.Publish(Fixture::Input::Valid, Fixture::Client::None, assets, [&](auto &scene) {
+        auto &actor = scene.objects.back();
+        actor.localTransform.translation = {1, 0, 1};
+        actor.components.aiAgent = AiAgentComponent{.agent = agent};
+        actor.components.aiController =
+            AiControllerComponent{.controller = controller, .decisionAsset = graph.asset, .blackboardSchema = schema->Identity()};
+#if HORO_TEST_PHYSICS_NATIVE
+        if (collision) {
+            auto blocker = collision->source.objects[1];
+            blocker.id = {4};
+            blocker.localTransform.translation = {3, 0, 1};
+            auto &collider = blocker.components.colliders.front();
+            collider.body.object = {4};
+            collider.source = Runtime::PhysicsAnalyticCollider{Runtime::PhysicsSphereCollider{0.2F}};
+            scene.objects.push_back(std::move(blocker));
+
+            // The Character's default material declares the exact Scene dependency used by the collider.
+            auto materialOwner = collision->source.objects.front();
+            materialOwner.id = {5};
+            materialOwner.components.camera.reset();
+            materialOwner.localTransform.translation = {8, 0.5F, 8};
+            scene.objects.push_back(std::move(materialOwner));
+        }
+#endif
+    });
+    std::ifstream metadataSource{root / ".horo/project.json"};
+    REQUIRE(metadataSource.is_open());
+    std::string metadata{std::istreambuf_iterator<char>{metadataSource}, {}};
+    metadataSource.close();
+    constexpr std::string_view render = R"("renderBackend":"opengl")";
+    const auto insertion = metadata.find(render);
+    REQUIRE(insertion != std::string::npos);
+    metadata.insert(insertion + render.size(), R"(,"ai":{"schemaVersion":1,"scheduler":{"mode":"bestEffort"}})");
+    fixture.project.WriteText(".horo/project.json", metadata);
+
+    constexpr auto fixedStep = Duration::FromNanoseconds(16'666'667);
+    const auto projectFactory =
+        MakeEditorProjectSceneFactory(fixture.project.jobs,
+                                      {.physicsMode = mixed ? Physics::PhysicsRuntimeMode::Canonical : Physics::PhysicsRuntimeMode::Null,
+                                       .cooked = SceneCookSelection{fixture.project.cooked.path, fixture.project.request.assets.target},
+                                       .playNavigationScene = fixture.project.sceneId,
+                                       .decisions = EditorPlayDecisionSelection{root,
+                                                                                fixture.project.sceneId,
+                                                                                {{controller, assets.front().record.id}},
+                                                                                {{schema->Identity(), key}},
+                                                                                {},
+                                                                                fixedStep}});
+    const Editor::EditorPlaySceneFactory factory = [&](Runtime::SceneRuntimeId id, const Runtime::RuntimeSceneDefinition &definition) {
+        return projectFactory(root, id, definition);
+    };
+    Gameplay::BehaviorRegistry registry;
+    Gameplay::ComponentRegistry components;
+    REQUIRE(registry.Freeze().HasValue());
+    REQUIRE(components.Freeze().HasValue());
+    Editor::EditorPlaySessionController play;
+    DeterministicClock clock;
+    auto scheduler = Runtime::FrameScheduler::Create(clock, {.fixedStep = fixedStep});
+    REQUIRE(scheduler.HasValue());
+    REQUIRE(play.BindRuntimeDispatch(scheduler.Value()->DispatchSource()).HasValue());
+    const Editor::SceneDocumentSnapshot document{{1}, {1}, fixture.source.objects};
+    const auto started = play.Start(document, registry, components, factory, {}, Editor::EditorPlayViewSource::AuthoredCamera, nullptr, {},
+                                    nullptr, {.decision = [&] {
+        return Result<std::shared_ptr<const DecisionNodeGeneration>>::Success(providers.Value());
+    }});
+    if (started.HasError())
+        UNSCOPED_INFO(started.ErrorValue().code.Value() << ": " << started.ErrorValue().message);
+    REQUIRE(started.HasValue());
+    const auto readinessDeadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+    while (play.State() == Editor::EditorPlaySessionState::Starting && std::chrono::steady_clock::now() < readinessDeadline) {
+        play.PresentationUpdate({0});
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    if (play.LastError())
+        UNSCOPED_INFO(play.LastError()->message);
+    REQUIRE(play.SceneView());
+    const auto owner = play.SceneView()->Find({3});
+    REQUIRE(owner);
+    Runtime::RuntimeLifecycle lifecycle;
+    auto fixed = std::make_unique<PlayFixedParticipant>(play);
+    const auto *fixedState = fixed.get();
+    REQUIRE(lifecycle.AddParticipant(std::move(fixed)).HasValue());
+    const CancellationSource cancellation;
+    REQUIRE(lifecycle.Startup(cancellation.Token()).HasValue());
+    REQUIRE(scheduler.Value()->RunFrame(lifecycle, cancellation.Token(), false).HasValue());
+    std::optional<BlackboardValue> winner;
+    for (std::size_t frame = 0; frame < 64 && !winner; ++frame) {
+        clock.Advance(fixedStep);
+        REQUIRE(scheduler.Value()->RunFrame(lifecycle, cancellation.Token(), false).HasValue());
+        CAPTURE(mixed, frame);
+        if (play.LastError())
+            UNSCOPED_INFO(play.LastError()->code.Value() << ": " << play.LastError()->message);
+        REQUIRE_FALSE(fixedState->localFailure);
+        if (const auto problem = play.ReadDecisionProblem())
+            UNSCOPED_INFO(problem->error.code.Value() << ": " << problem->error.message);
+        REQUIRE_FALSE(play.ReadDecisionProblem());
+        play.RefreshAgentInspection(*owner);
+        REQUIRE_FALSE(play.AgentInspectionHistory().empty());
+        const auto &snapshot = play.AgentInspectionHistory().back().snapshot;
+        REQUIRE(snapshot);
+        REQUIRE(snapshot->keys.size() == 1);
+        winner = snapshot->keys.front().value;
+        if (frame < 2)
+            CHECK_FALSE(winner);
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    REQUIRE(winner);
+    const auto expectedPoint =
+        mixed ? Math::WorldCoordinate64::FromMillimeters(1000, 0, 5000) : Math::WorldCoordinate64::FromMillimeters(5000, 0, 1000);
+    CHECK(std::get<Math::WorldCoordinate64>(std::get<BlackboardScalarValue>(*winner)) == expectedPoint);
+    play.Stop();
+    lifecycle.Shutdown();
+}
+#endif
 
 TEST_CASE("Play typed fixed path publishes only after actual same-attempt commitment", "[editor][play][fixed-commit]") {
     PlayFixedFixture fixture;

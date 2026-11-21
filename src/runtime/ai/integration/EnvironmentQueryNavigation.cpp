@@ -74,11 +74,12 @@ namespace Horo::AI {
 
         class PointNavigationSource final : public IQueryExecutionSource {
         public:
-            PointNavigationSource(BuiltinPointNavigationPlan plan, Runtime::RuntimeSceneView scene, Math::WorldCoordinate64 start,
-                                  std::uint64_t deadline, const IQueryNavigationOwner &owner, const QueryNavigationAccess &access)
-                : plan_(plan), scene_(scene), start_(StaticNavigationPoint(start)), deadline_(deadline), owner_(owner),
+            PointNavigationSource(BuiltinPointNavigationPlan plan, Runtime::RuntimeSceneView scene, Runtime::EntityRef querier,
+                                  Math::WorldCoordinate64 start, std::uint64_t deadline, const IQueryNavigationOwner &owner,
+                                  const QueryNavigationAccess &access)
+                : plan_(plan), scene_(scene), querier_(querier), start_(StaticNavigationPoint(start)), deadline_(deadline), owner_(owner),
                   activation_(access.publication.activation), root_(access.publication.source), caller_(access.caller),
-                  probe_(access.requests) {}
+                  filter_(access.filter), probe_(access.requests) {}
 
             bool IsCurrent(const QueryExecutionInputs &inputs) const noexcept override {
                 return inputs.contexts->MatchesScene(scene_) && CurrentAccess().has_value();
@@ -141,21 +142,23 @@ namespace Horo::AI {
 
         private:
             std::optional<QueryNavigationAccess> CurrentAccess() const noexcept {
-                const auto access = owner_.ReadQueryNavigation(scene_);
+                const auto access = owner_.ReadQueryNavigation(scene_, querier_);
                 if (!access || access->publication.activation != activation_ || !SameRoot(access->publication.source, root_) ||
-                    access->caller != caller_)
+                    access->caller != caller_ || access->filter != filter_)
                     return std::nullopt;
                 return access;
             }
 
             BuiltinPointNavigationPlan plan_;
             Runtime::RuntimeSceneView scene_;
+            Runtime::EntityRef querier_;
             Math::Vec3 start_;
             std::uint64_t deadline_;
             const IQueryNavigationOwner &owner_;
             Navigation::NavigationWorldActivationDescriptor activation_;
             Navigation::NavigationOutcomeProvenance root_;
             Navigation::NavigationPathCaller caller_;
+            Navigation::NavigationFilterId filter_;
             QueryNavigationProbe probe_;
         };
     }  // namespace
@@ -271,12 +274,10 @@ namespace Horo::AI {
     }
 
     /** @copydoc AdmitBuiltinPointNavigationQuery */
-    Result<std::unique_ptr<QueryExecution>> AdmitBuiltinPointNavigationQuery(const EnvironmentQueryPlan &plan,
-                                                                             const QuerySchemaRegistry &registry,
-                                                                             const Runtime::RuntimeSceneView &scene,
-                                                                             QueryExecutionInputs inputs, QueryExecutionSettings settings,
-                                                                             const IQueryNavigationOwner &owner) {
-        auto prepared = PrepareBuiltinPointNavigationTest(plan, registry, scene, inputs, settings, owner);
+    Result<std::unique_ptr<QueryExecution>> AdmitBuiltinPointNavigationQuery(
+        const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
+        Runtime::EntityRef querier, QueryExecutionInputs inputs, QueryExecutionSettings settings, const IQueryNavigationOwner &owner) {
+        auto prepared = PrepareBuiltinPointNavigationTest(plan, registry, scene, querier, inputs, settings, owner);
         if (prepared.HasError())
             return Result<std::unique_ptr<QueryExecution>>::Failure(prepared.ErrorValue());
         auto test = std::move(prepared).Value();
@@ -285,12 +286,12 @@ namespace Horo::AI {
 
     /** @copydoc PrepareBuiltinPointNavigationTest */
     Result<PreparedPointQueryTest> PrepareBuiltinPointNavigationTest(const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry,
-                                                                     const Runtime::RuntimeSceneView &scene,
+                                                                     const Runtime::RuntimeSceneView &scene, Runtime::EntityRef querier,
                                                                      const QueryExecutionInputs &inputs,
                                                                      const QueryExecutionSettings &settings,
                                                                      const IQueryNavigationOwner &owner) {
         using Admission = Result<PreparedPointQueryTest>;
-        if (!inputs.contexts || !inputs.contexts->MatchesScene(scene))
+        if (!inputs.contexts || !inputs.contexts->MatchesScene(scene) || scene.Get(querier).HasError())
             return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
         const auto captured = CaptureBuiltinPointNavigation(plan, registry, *inputs.contexts);
         if (captured.HasError())
@@ -299,7 +300,7 @@ namespace Horo::AI {
         const auto *start = context ? std::get_if<Math::WorldCoordinate64>(&context->value) : nullptr;
         if (!start)
             return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextMissing));
-        const auto access = owner.ReadQueryNavigation(scene);
+        const auto access = owner.ReadQueryNavigation(scene, querier);
         if (!access)
             return Admission::Failure(MakeError(Navigation::NavigationErrors::NoNavigationData));
         if (access->deadlineTicks == 0 || !access->filter.IsValid() || !access->publication.activation.IsValid())
@@ -309,7 +310,8 @@ namespace Horo::AI {
         if (const auto cost = captured.Value().maximumScoredCost)
             rule.score = QueryScoreRange{.maximum = *cost, .direction = QueryScoreDirection::Lower};
         const std::size_t width = 2U * captured.Value().lattice.outerSteps + 1U;
-        auto source = std::make_unique<PointNavigationSource>(captured.Value(), scene, *start, settings.deadlineTick, owner, *access);
+        auto source =
+            std::make_unique<PointNavigationSource>(captured.Value(), scene, querier, *start, settings.deadlineTick, owner, *access);
         return Admission::Success(
             {captured.Value().generator, rule, 2U * width * width, settings.maximumCandidates, settings.testWorkUnits, std::move(source)});
     }

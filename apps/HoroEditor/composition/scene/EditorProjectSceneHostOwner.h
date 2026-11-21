@@ -19,6 +19,7 @@
 #include "PhysicsStateHostLifecycle.h"
 #include "ProjectScenePerception.h"
 #include "RuntimeUiPaintProjectSources.h"
+#include "SceneDecisionQueries.h"
 #include "ScenePhysicsHost.h"
 
 #include <cmath>
@@ -615,7 +616,10 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             if (animation_)
                 if (auto prepared = animation_->PrepareFixedCommit(context); prepared.HasError())
                     return prepared;
-            return native_.PrepareAnimationFixedCommit(context);
+            auto prepared = native_.PrepareAnimationFixedCommit(context);
+            if (prepared.HasValue() && decisionTickPending_ && decisionQueries_ && decisionQueries_->UsesNavigation() && navigation_)
+                static_cast<void>(navigation_->coordinator.Dispatch(committedDecisionTick_ + 1));
+            return prepared;
         }
 
         void CommitRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
@@ -661,7 +665,12 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 return Result<bool>::Failure(MakeError(Physics::PhysicsErrors::ThreadAffinityViolation));
             if (!sceneClosed_)
                 return Result<bool>::Failure(MakeError(Physics::PhysicsErrors::InvalidState));
-            return PollProductPhysicsRetirement(physics_, physicsRetirement_, maximumNativeRecords);
+            if (navigation_)
+                navigation_->coordinator.CollectRetiredAtSafePoint();
+            const auto physics = PollProductPhysicsRetirement(physics_, physicsRetirement_, maximumNativeRecords);
+            if (physics.HasError())
+                return physics;
+            return Result<bool>::Success(physics.Value() && (!navigation_ || navigation_->coordinator.IsDrained()));
         }
 
     private:
@@ -676,6 +685,11 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         [[nodiscard]] bool SetDecisionBreakpoint(const Editor::EditorPlayDecisionDebugCommand &command);
         /** @brief Evaluates and dispatches one Decision tick with its optional hold and trace. */
         [[nodiscard]] Result<void> RunDecisionScheduler(AI::AiTaskScheduler &scheduler, std::uint64_t tick);
+        [[nodiscard]] Result<void> RunDecisionQueries(const Runtime::RuntimeSceneView &scene, std::uint64_t tick);
+        void CommitQueryNavigation(std::uint64_t tick);
+        [[nodiscard]] std::optional<AI::QueryNavigationAccess> ReadQueryNavigation(const Runtime::RuntimeSceneView &scene,
+                                                                                   Runtime::EntityRef querier,
+                                                                                   std::uint64_t tick) const noexcept;
         /** @brief Commits a consumed step or a visited breakpoint at the full fixed boundary. */
         void CommitDecisionDebugTick() noexcept;
         /** @brief Detaches the exact observed trace after scheduler commit, before fixed publication. */
@@ -747,6 +761,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         ScenePhysicsHost native_;
         std::vector<AI::AiControllerDescriptor> controllers_;
         std::shared_ptr<AI::AiSceneRuntime> ai_;
+        std::shared_ptr<SceneDecisionQueries> decisionQueries_;
         [[nodiscard]] Result<void> PrepareDecisionSelection(const std::filesystem::path &root, JobSystem &jobs,
                                                             const Runtime::RuntimeSceneDefinition &definition,
                                                             const EditorProjectScenePolicy &policy);
@@ -767,6 +782,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         CancellationSource animationLifetime_;
         std::shared_ptr<Runtime::SceneAnimationRuntime> animation_;
         std::unique_ptr<ProjectSceneNavigationWorld> navigation_;
+        std::shared_ptr<const ProjectSceneNavigationSelection> navigationSelection_;
+        std::array<Navigation::NavigationPathCaller, 1> queryNavigationCallers_;
+        std::optional<Navigation::NavigationPathPublication> queryNavigationPublication_;
         std::unique_ptr<Runtime::RuntimeSceneService> scenes_;
         std::optional<CommittedWorldSelection> worldSelection_;
         std::unique_ptr<MountedWorld> mountedWorld_;

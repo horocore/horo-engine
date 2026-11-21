@@ -24,7 +24,7 @@
 #include <utility>
 
 namespace Horo::Application::Internal {
-    class HeadlessDecisionQueries;
+    class SceneDecisionQueries;
 }
 
 namespace Horo::AI {
@@ -76,7 +76,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         std::shared_ptr<Network::SceneReplicationCommitSource> publicTransforms;
         std::optional<InitialTransformCapture> initialTransformCapture;
         std::optional<ReplayAuthoredScene> replayAuthoredScene;
-        std::shared_ptr<HeadlessDecisionQueries> decisionQueries; /**< Keeps task binding and phase inventory scoped to this world. */
+        std::shared_ptr<SceneDecisionQueries> decisionQueries; /**< Keeps task binding and phase inventory scoped to this world. */
         std::shared_ptr<AI::AiNavigationIntentDispatch> decisionMotion;
         AI::PerceptionSpatialBroadphase perception;
         std::unique_ptr<ProjectSceneNavigationWorld> navigation;

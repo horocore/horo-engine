@@ -1,6 +1,5 @@
-#include "HeadlessDecisionQueries.h"
+#include "SceneDecisionQueries.h"
 
-#include "HeadlessNavigationPathScope.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryCache.h"
 #include "Horo/AI/EnvironmentQueryPerception.h"
@@ -78,14 +77,22 @@ namespace Horo::Application::Internal {
 
         constexpr auto Candidates = EnvironmentQuerySchemaLimits::MaximumResults;
         constexpr auto AgentUnits = Candidates * (3U + std::bit_width(Candidates));
+
+        Result<void> RunDecisionPhase(AI::AiTaskScheduler &scheduler, const std::uint64_t tick) {
+            const auto evaluated = scheduler.EvaluateAtDecision(tick);
+            if (evaluated.HasError())
+                return Result<void>::Failure(evaluated.ErrorValue());
+            const auto committed = scheduler.CommitAtIntentDispatch(tick);
+            return committed.HasValue() ? Result<void>::Success() : Result<void>::Failure(committed.ErrorValue());
+        }
     }  // namespace
 
-    /** @copydoc HeadlessDecisionQueries::Create */
-    Result<std::shared_ptr<HeadlessDecisionQueries>> HeadlessDecisionQueries::Create(
-        HeadlessQueryPlanCatalog plans, std::shared_ptr<const AI::QuerySchemaRegistry> registry,
+    /** @copydoc SceneDecisionQueries::Create */
+    Result<std::shared_ptr<SceneDecisionQueries>> SceneDecisionQueries::Create(
+        CookedSceneQueryPlanCatalog plans, std::shared_ptr<const AI::QuerySchemaRegistry> registry,
         const AI::AiTaskSchedulerSettings &settings, const std::size_t workUnitsLimit,
         const std::optional<AI::QueryResultCacheLimits> cacheLimits) {
-        using Created = Result<std::shared_ptr<HeadlessDecisionQueries>>;
+        using Created = Result<std::shared_ptr<SceneDecisionQueries>>;
         if (!registry || plans.empty() || settings.evaluationsPerTick == 0 ||
             settings.evaluationsPerTick > AI::AiTaskSchedulerSettings::HardAgents || workUnitsLimit == 0 ||
             workUnitsLimit > AI::AiTaskSchedulerSettings::HardWorkUnits)
@@ -94,7 +101,7 @@ namespace Horo::Application::Internal {
         if (contexts.HasError())
             return Created::Failure(contexts.ErrorValue());
         try {
-            auto owner = std::make_shared<HeadlessDecisionQueries>();
+            auto owner = std::make_shared<SceneDecisionQueries>();
             owner->plans_ = std::move(plans);
             owner->registry_ = std::move(registry);
             owner->contexts_.emplace(std::move(contexts).Value());
@@ -110,9 +117,9 @@ namespace Horo::Application::Internal {
         }
     }
 
-    /** @copydoc HeadlessDecisionQueries::BindQueryTask */
-    Executor HeadlessDecisionQueries::BindQueryTask(const AI::BehaviorTreeExecutionPlan &tree,
-                                                    const AI::DecisionNodeConfiguration &configuration) {
+    /** @copydoc SceneDecisionQueries::BindQueryTask */
+    Executor SceneDecisionQueries::BindQueryTask(const AI::BehaviorTreeExecutionPlan &tree,
+                                                 const AI::DecisionNodeConfiguration &configuration) {
         if (scope_)
             return Executor::Failure(MakeError(AI::AIErrors::TaskContextInvalid));
         const auto property =
@@ -142,9 +149,9 @@ namespace Horo::Application::Internal {
         return Executor::Success(std::move(executor));
     }
 
-    /** @copydoc HeadlessDecisionQueries::Admit */
-    Execution HeadlessDecisionQueries::Admit(const AI::DecisionQueryTaskDescriptor &descriptor, const AI::AiTaskOperationContext &operation,
-                                             std::uint64_t submitted, std::uint64_t deadline) {
+    /** @copydoc SceneDecisionQueries::Admit */
+    Execution SceneDecisionQueries::Admit(const AI::DecisionQueryTaskDescriptor &descriptor, const AI::AiTaskOperationContext &operation,
+                                          std::uint64_t submitted, std::uint64_t deadline) {
         if (!scope_ || submitted != scope_->tick)
             return Execution::Failure(MakeError(AI::AIErrors::TaskContextInvalid));
         if (scope_->active >= maximumActive_ || operation.agent.slot.index >= budgets_.size())
@@ -158,9 +165,9 @@ namespace Horo::Application::Internal {
         return admitted;
     }
 
-    /** @copydoc HeadlessDecisionQueries::AdmitPlan */
-    Execution HeadlessDecisionQueries::AdmitPlan(const CookedSceneQueryPlan &plan, const AiTaskOperationContext &operation,
-                                                 const std::uint64_t submitted, const std::uint64_t deadline) {
+    /** @copydoc SceneDecisionQueries::AdmitPlan */
+    Execution SceneDecisionQueries::AdmitPlan(const CookedSceneQueryPlan &plan, const AiTaskOperationContext &operation,
+                                              const std::uint64_t submitted, const std::uint64_t deadline) {
         const auto owner = scope_->runtime.ResolveDecisionQueryOwnerAtSafePoint(operation.agent);
         if (owner.HasError())
             return Execution::Failure(owner.ErrorValue());
@@ -188,7 +195,8 @@ namespace Horo::Application::Internal {
                                                         *this);
         }
         if (AI::UsesBuiltinPointNavigation(*plan.plan))
-            return AI::AdmitBuiltinPointNavigationQuery(*plan.plan, *registry_, scope_->scene, std::move(inputs), settings, *this);
+            return AI::AdmitBuiltinPointNavigationQuery(*plan.plan, *registry_, scope_->scene, owner.Value(), std::move(inputs), settings,
+                                                        *this);
         if (!perception)
             return AI::AdmitBuiltinPointQuery(*plan.plan, *registry_, scope_->scene, std::move(inputs), settings, {cache_, plan.digest});
 
@@ -198,21 +206,21 @@ namespace Horo::Application::Internal {
         return AI::AdmitBuiltinPerceptionQuery(*plan.plan, *registry_, std::move(inputs), std::move(observations).Value(), settings);
     }
 
-    /** @copydoc HeadlessDecisionQueries::AdmitMixedPointPlan */
-    Execution HeadlessDecisionQueries::AdmitMixedPointPlan(const AI::EnvironmentQueryPlan &plan, Runtime::EntityRef querier,
-                                                           AI::QueryExecutionInputs inputs, AI::QueryExecutionSettings settings) {
+    /** @copydoc SceneDecisionQueries::AdmitMixedPointPlan */
+    Execution SceneDecisionQueries::AdmitMixedPointPlan(const AI::EnvironmentQueryPlan &plan, Runtime::EntityRef querier,
+                                                        AI::QueryExecutionInputs inputs, AI::QueryExecutionSettings settings) {
         auto visibility = AI::PrepareBuiltinPointVisibilityTest(plan, *registry_, scope_->scene, querier, inputs, settings, *this);
         if (visibility.HasError())
             return Execution::Failure(visibility.ErrorValue());
-        auto navigation = AI::PrepareBuiltinPointNavigationTest(plan, *registry_, scope_->scene, inputs, settings, *this);
+        auto navigation = AI::PrepareBuiltinPointNavigationTest(plan, *registry_, scope_->scene, querier, inputs, settings, *this);
         if (navigation.HasError())
             return Execution::Failure(navigation.ErrorValue());
         std::array tests{std::move(visibility).Value(), std::move(navigation).Value()};
         return AI::AdmitPreparedPointQuery(plan, *registry_, std::move(inputs), settings, tests);
     }
 
-    /** @copydoc HeadlessDecisionQueries::PrepareVisibilityCapability */
-    Result<void> HeadlessDecisionQueries::PrepareVisibilityCapability(Physics::PhysicsWorld &world) {
+    /** @copydoc SceneDecisionQueries::PrepareVisibilityCapability */
+    Result<void> SceneDecisionQueries::PrepareVisibilityCapability(Physics::PhysicsWorld &world) {
         if (visibilityScene_.SameIncarnation(scope_->scene) && visibility_.Identity().world == world.Identity())
             return Result<void>::Success();
         auto capability = world.IssueQueryEventCapability();
@@ -223,9 +231,9 @@ namespace Horo::Application::Internal {
         return Result<void>::Success();
     }
 
-    /** @copydoc HeadlessDecisionQueries::RetainsVisibilityAuthority */
-    bool HeadlessDecisionQueries::RetainsVisibilityAuthority(const Runtime::RuntimeSceneView &scene,
-                                                             const QueryPhysicsPublication &publication) const noexcept {
+    /** @copydoc SceneDecisionQueries::RetainsVisibilityAuthority */
+    bool SceneDecisionQueries::RetainsVisibilityAuthority(const Runtime::RuntimeSceneView &scene,
+                                                          const QueryPhysicsPublication &publication) const noexcept {
         if (!scope_ || !scope_->physics || !visibilityScene_.SameIncarnation(scene) || !scope_->scene.SameIncarnation(scene))
             return false;
         const auto identity = visibility_.Identity();
@@ -244,8 +252,8 @@ namespace Horo::Application::Internal {
         }
     }
 
-    /** @copydoc HeadlessDecisionQueries::CaptureVisibility */
-    Result<std::optional<QueryPhysicsVisibilityResult>> HeadlessDecisionQueries::CaptureVisibility(
+    /** @copydoc SceneDecisionQueries::CaptureVisibility */
+    Result<std::optional<QueryPhysicsVisibilityResult>> SceneDecisionQueries::CaptureVisibility(
         const QueryPhysicsVisibilityRequest &request) {
         using Captured = Result<std::optional<QueryPhysicsVisibilityResult>>;
         if (!scope_ || !scope_->physics)
@@ -288,8 +296,8 @@ namespace Horo::Application::Internal {
         return Captured::Success(result);
     }
 
-    /** @copydoc HeadlessDecisionQueries::PublishOutputs */
-    Result<void> HeadlessDecisionQueries::PublishOutputs(TickScope &scope) {
+    /** @copydoc SceneDecisionQueries::PublishOutputs */
+    Result<void> SceneDecisionQueries::PublishOutputs(TickScope &scope) {
         for (const auto &entry : tasks_) {
             const auto task = entry.lock();
             if (!task || !task->ActiveAgent().IsValid())
@@ -311,24 +319,24 @@ namespace Horo::Application::Internal {
         return Result<void>::Success();
     }
 
-    /** @copydoc HeadlessDecisionQueries::ArmReplay */
-    void HeadlessDecisionQueries::ArmReplay(const AI::AgentHandle agent, const std::uint64_t tick) noexcept {
+    /** @copydoc SceneDecisionQueries::ArmReplay */
+    void SceneDecisionQueries::ArmReplay(const AI::AgentHandle agent, const std::uint64_t tick) noexcept {
         replayAgent_ = agent;
         replayTick_ = tick;
         replayCount_ = 0;
         replayOverflow_ = false;
     }
 
-    /** @copydoc HeadlessDecisionQueries::ReadReplay */
-    Result<std::span<const AI::DecisionQueryPublication>> HeadlessDecisionQueries::ReadReplay(const std::uint64_t tick) const {
+    /** @copydoc SceneDecisionQueries::ReadReplay */
+    Result<std::span<const AI::DecisionQueryPublication>> SceneDecisionQueries::ReadReplay(const std::uint64_t tick) const {
         using Replay = Result<std::span<const AI::DecisionQueryPublication>>;
         if (tick == 0 || tick != replayTick_ || replayOverflow_)
             return Replay::Failure(MakeError(AI::AIErrors::EnvironmentQueryLimitExceeded));
         return Replay::Success(std::span{replayPublications_}.first(replayCount_));
     }
 
-    /** @copydoc HeadlessDecisionQueries::ReplayProfile */
-    Sha256Digest HeadlessDecisionQueries::ReplayProfile() const noexcept {
+    /** @copydoc SceneDecisionQueries::ReplayProfile */
+    Sha256Digest SceneDecisionQueries::ReplayProfile() const noexcept {
         Sha256Builder hash;
         for (const auto &entry : plans_)
             (void)hash.Update(std::as_bytes(std::span{entry.second.digest.bytes}));
@@ -341,8 +349,8 @@ namespace Horo::Application::Internal {
         return hash.Finalize();
     }
 
-    /** @copydoc HeadlessDecisionQueries::AdvanceQueries */
-    void HeadlessDecisionQueries::AdvanceQueries(std::uint64_t tick) {
+    /** @copydoc SceneDecisionQueries::AdvanceQueries */
+    void SceneDecisionQueries::AdvanceQueries(std::uint64_t tick) {
         if (tasks_.empty())
             return;
         AI::AiWorkBudget global{workUnitsLimit_};
@@ -364,24 +372,24 @@ namespace Horo::Application::Internal {
         cursor_ = (cursor_ + 1) % tasks_.size();
     }
 
-    std::optional<AI::QueryNavigationAccess> HeadlessDecisionQueries::ReadQueryNavigation(
-        const Runtime::RuntimeSceneView &scene) const noexcept {
-        if (!scope_ || !scope_->navigation || !scope_->scene.SameIncarnation(scene))
+    std::optional<AI::QueryNavigationAccess> SceneDecisionQueries::ReadQueryNavigation(const Runtime::RuntimeSceneView &scene,
+                                                                                       const Runtime::EntityRef querier) const noexcept {
+        if (!scope_ || !scope_->navigation.read || !scope_->scene.SameIncarnation(scene))
             return std::nullopt;
-        return scope_->navigation->ReadQueryAccess(scope_->tick);
+        return scope_->navigation.read(scope_->navigation.owner, scene, querier, scope_->tick);
     }
 
-    /** @copydoc HeadlessDecisionQueries::UsesNavigation */
-    bool HeadlessDecisionQueries::UsesNavigation() const noexcept {
+    /** @copydoc SceneDecisionQueries::UsesNavigation */
+    bool SceneDecisionQueries::UsesNavigation() const noexcept {
         return std::ranges::any_of(plans_, [](const auto &entry) {
             return AI::UsesBuiltinPointNavigation(*entry.second.plan);
         });
     }
 
-    /** @copydoc HeadlessDecisionQueries::RunAtFixedTick */
-    Result<void> HeadlessDecisionQueries::RunAtFixedTick(AI::AiSceneRuntime &runtime, const Runtime::RuntimeSceneView &scene,
-                                                         Math::WorldCoordinate64 origin, std::uint64_t tick, ScenePhysicsHost *physics,
-                                                         const HeadlessNavigationPathScope *navigation) {
+    /** @copydoc SceneDecisionQueries::RunAtFixedTick */
+    Result<void> SceneDecisionQueries::RunAtFixedTick(AI::AiSceneRuntime &runtime, const Runtime::RuntimeSceneView &scene,
+                                                      Math::WorldCoordinate64 origin, std::uint64_t tick, ScenePhysicsHost *physics,
+                                                      SceneQueryNavigationSource navigation, SceneQueryDecisionPhase decision) {
         if (scope_ || !scene.IsCurrent() || tick == 0)
             return Result<void>::Failure(MakeError(AI::AIErrors::TaskContextInvalid));
         if (auto prepared = PrepareCache(scene); prepared.HasError())
@@ -405,15 +413,15 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(scheduler.ErrorValue());
         if (auto published = PublishOutputs(current); published.HasError())
             return published;
-        if (const auto evaluated = scheduler.Value()->EvaluateAtDecision(tick); evaluated.HasError())
-            return Result<void>::Failure(evaluated.ErrorValue());
-        if (const auto committed = scheduler.Value()->CommitAtIntentDispatch(tick); committed.HasError())
-            return Result<void>::Failure(committed.ErrorValue());
+        if (auto evaluated =
+                decision.run ? decision.run(decision.owner, *scheduler.Value(), tick) : RunDecisionPhase(*scheduler.Value(), tick);
+            evaluated.HasError())
+            return evaluated;
         AdvanceQueries(tick);
         return Result<void>::Success();
     }
 
-    Result<void> HeadlessDecisionQueries::PrepareCache(const Runtime::RuntimeSceneView &scene) {
+    Result<void> SceneDecisionQueries::PrepareCache(const Runtime::RuntimeSceneView &scene) {
         if (!cacheLimits_ || (cache_ && cache_->IsFor(scene)))
             return Result<void>::Success();
         cache_.reset();

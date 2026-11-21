@@ -20,6 +20,61 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         return Editor::EditorPlayAgentNavigation{record.Value().profile.Value(), record.Value().filter.Value(), record.Value().enabled};
     }
 
+    void ProjectPlaySceneHost::CommitQueryNavigation(const std::uint64_t tick) {
+        queryNavigationPublication_.reset();
+        if (!navigation_ || !navigationSelection_ || !navigation_->assets)
+            return;
+        const auto world = navigation_->assets->ActiveWorld();
+        if (!world || world->State() != Navigation::NavigationWorldLifecycleState::Active)
+            return;
+        const auto active = world->ActiveDescriptor();
+        if (active.HasError())
+            return;
+        const auto &identity = active.Value();
+        const auto epoch = identity.topology.Value();
+        // The cooked static provider seals obstacle, filter and coordinate revisions with its topology.
+        const Navigation::NavigationOutcomeProvenance root{.snapshot = Navigation::NavigationSnapshotToken::Create(epoch).Value(),
+                                                           .world = identity.world,
+                                                           .topology = identity.topology,
+                                                           .obstacleRevision = epoch,
+                                                           .filterRevision = epoch,
+                                                           .profileRevision = navigationSelection_->policy.Revision().Value(),
+                                                           .originRevision = epoch};
+        queryNavigationCallers_.front() = {Navigation::NavigationDynamicOwnerId::Create(identity.world.Value()).Value(),
+                                           Navigation::NavigationDynamicOwnerGeneration::Create(identity.sceneGeneration.Value()).Value()};
+        queryNavigationPublication_.emplace(identity, root, queryNavigationCallers_, tick);
+        static_cast<void>(navigation_->coordinator.Commit(*queryNavigationPublication_));
+    }
+
+    std::optional<AI::QueryNavigationAccess> ProjectPlaySceneHost::ReadQueryNavigation(const Runtime::RuntimeSceneView &scene,
+                                                                                       Runtime::EntityRef querier,
+                                                                                       const std::uint64_t tick) const noexcept {
+        if (!queryNavigationPublication_ || queryNavigationPublication_->tick != tick ||
+            queryNavigationPublication_->activation.scene.Value() != scene.RuntimeId().value)
+            return std::nullopt;
+        try {
+            const auto agent = ReadAgentNavigation(querier);
+            if (!agent || !agent->enabled)
+                return std::nullopt;
+            const auto filter = Navigation::NavigationFilterId::Create(agent->filter);
+            const auto world = navigation_->assets->ActiveWorld();
+            if (filter.HasError() || !world || world->State() != Navigation::NavigationWorldLifecycleState::Active)
+                return std::nullopt;
+            const auto current = world->ActiveDescriptor();
+            if (current.HasError() || current.Value() != queryNavigationPublication_->activation)
+                return std::nullopt;
+            return AI::QueryNavigationAccess{*world,
+                                             navigation_->coordinator.ObservePathRequests(),
+                                             *queryNavigationPublication_,
+                                             queryNavigationCallers_.front(),
+                                             filter.Value(),
+                                             navigationSelection_->policy.MaximumQuery(),
+                                             std::numeric_limits<std::uint64_t>::max()};
+        } catch (const std::bad_alloc &) {
+            return std::nullopt;
+        }
+    }
+
     namespace {
         /** @brief Re-encodes the active projection with the committed identity so unrelated live revisions cannot admit its topology. */
         [[nodiscard]] Result<std::vector<std::uint8_t>> EncodePlayProjection(const Runtime::RuntimeSceneDefinition &live,
@@ -89,6 +144,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         if (navigation.HasError())
             return Result<void>::Failure(navigation.ErrorValue());
         navigation_ = std::move(navigation).Value();
-        return RegisterProjectSceneNavigation(*scenes_, *navigation_, captured.Value());
+        navigationSelection_ = captured.Value();
+        return RegisterProjectSceneNavigation(*scenes_, *navigation_, navigationSelection_);
     }
 }  // namespace Horo::Application::Internal::EditorProjectSceneDetail

@@ -246,6 +246,7 @@ add_library(HoroEditorSceneProductHost STATIC
     HoroEditor/composition/scene/EditorProjectSceneHostResources.cpp
     HoroEditor/composition/scene/EditorPlayPerceptionComposition.cpp)
 target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlaySaveHostInternal HoroCookedDecisionSceneAdmissionInternal)
+target_link_libraries(HoroEditorSceneProductHost PRIVATE HoroSceneDecisionQueriesInternal)
 target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroAnimationSceneHostInternal HoroMountedWorldHostInternal)
 target_link_libraries(HoroEditorSceneProductHost PRIVATE HoroEngine::EditorServices HoroEngine::PrefabProjectSettings
         HoroEngine::ProjectSurfaceSettings)

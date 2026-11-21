@@ -1,6 +1,5 @@
 #include "DecisionGraphCompilerTestSupport.h"
 #include "HeadlessCookedDecisionAdmission.h"
-#include "HeadlessDecisionQueries.h"
 #include "HeadlessNetworkServices.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/AIScenePerceptionSource.h"
@@ -19,6 +18,7 @@
 #include "OwnedTestDirectory.h"
 #include "PrefabAtomicOwnerTestSupport.h"
 #include "ProjectScenePerception.h"
+#include "SceneDecisionQueries.h"
 
 #include <cstring>
 #include <fstream>
@@ -854,9 +854,9 @@ namespace Horo::Application::PrefabAtomicTest {
             const Internal::HeadlessQueryPlanCatalog plans{
                 {query.Value().Id(), {std::make_shared<const AI::EnvironmentQueryPlan>(std::move(compiled).Value()), digest}}};
             const auto schema = std::make_shared<const AI::QuerySchemaRegistry>(registry.Value());
-            const auto defaults = Internal::HeadlessDecisionQueries::Create(plans, schema, {}, AI::AiTaskSchedulerSettings::HardWorkUnits);
-            const auto limited = Internal::HeadlessDecisionQueries::Create(plans, schema, {}, 1024);
-            const auto smaller = Internal::HeadlessDecisionQueries::Create(plans, schema, {}, 512);
+            const auto defaults = Internal::SceneDecisionQueries::Create(plans, schema, {}, AI::AiTaskSchedulerSettings::HardWorkUnits);
+            const auto limited = Internal::SceneDecisionQueries::Create(plans, schema, {}, 1024);
+            const auto smaller = Internal::SceneDecisionQueries::Create(plans, schema, {}, 512);
             REQUIRE(defaults.HasValue());
             REQUIRE(limited.HasValue());
             REQUIRE(smaller.HasValue());

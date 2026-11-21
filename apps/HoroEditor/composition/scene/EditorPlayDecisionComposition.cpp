@@ -14,6 +14,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             bool debugGranted{};
             std::size_t perceptionWorkUnitsLimit{AI::AiTaskSchedulerSettings::HardWorkUnits};
             bool schedulerModeAuthored{};
+            std::size_t queryWorkUnitsLimit{AI::AiTaskSchedulerSettings::HardWorkUnits};
+            std::optional<AI::QueryResultCacheLimits> queryCacheLimits;
         };
 
         /** @brief Resolves the selected project's policy before any provider admission. */
@@ -28,13 +30,11 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             if (!resolved.Value())
                 return Policy::Success({{}, selection.decisionDebugGranted});
             const auto &settings = *resolved.Value();
-            if (selection.perceptionPolicy.empty() && settings.Scheduler().mode != AI::AiSchedulingMode::Deterministic)
-                return Policy::Failure(
-                    MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Editor Decision Play requires a deterministic project AI scheduler."));
             return Policy::Success({settings.Scheduler(),
                                     selection.decisionDebugGranted &&
                                         settings.AllowsDebug(AiProjectRuntimeKind::Development, AiProjectDebugOperation::LiveMutation),
-                                    settings.PerceptionWorkUnitsLimit(), settings.HasAuthoredSchedulerMode()});
+                                    settings.PerceptionWorkUnitsLimit(), settings.HasAuthoredSchedulerMode(),
+                                    settings.QueryWorkUnitsLimit(), settings.QueryCacheLimits()});
         }
     }  // namespace
 
@@ -291,9 +291,14 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         if (limits.HasError())
             return Result<void>::Failure(limits.ErrorValue());
         const AI::DecisionCompilationEnvironment environment{.nodes = providers.Value()};
+        auto registered = AI::CaptureBuiltinQuerySchema();
+        if (registered.HasError())
+            return Result<void>::Failure(registered.ErrorValue());
+        auto schema = std::make_shared<const AI::QuerySchemaRegistry>(std::move(registered).Value());
+        CookedSceneQueryPlanCatalog queries;
         auto selected = AdmitCookedSceneControllers(policy.aiControllers, cooked.Value(),
-                                                    {*resources_.assets_, environment, policy.decisions->controllers, {}, {}},
-                                                    limits.Value(), cancellation);
+                                                    {*resources_.assets_, environment, policy.decisions->controllers, {}, schema},
+                                                    limits.Value(), cancellation, &queries);
         if (selected.HasError())
             return Result<void>::Failure(selected.ErrorValue());
         policy.aiControllers = std::move(selected).Value();
@@ -306,15 +311,26 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         const bool reactive = std::ranges::any_of(policy.aiControllers, [](const auto &controller) {
             return controller.perceptionEndpoints && !controller.perceptionEndpoints->decisionWatches.empty();
         });
-        const auto mode = reactive ? AI::AiSchedulingMode::BestEffort : AI::AiSchedulingMode::Deterministic;
         const auto &configured = settings.Value();
-        if (configured.schedulerModeAuthored && configured.scheduler.mode != mode)
+        const auto mode = reactive ? AI::AiSchedulingMode::BestEffort : configured.scheduler.mode;
+        if ((reactive && configured.schedulerModeAuthored && configured.scheduler.mode != mode) ||
+            (!reactive && queries.empty() && mode == AI::AiSchedulingMode::BestEffort))
             return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid,
                                                    "Editor Decision Play scheduler mode must match the authored Perception watches."));
         AI::AiSceneCookedDecisionExecution execution{*decisionJobs_, configured.scheduler, {}, {}};
         execution.scheduler.mode = mode;
         if (reactive)
             execution.timing = AI::AiCookedDecisionTiming::BestEffortReactive;
+        if (!queries.empty()) {
+            auto driver = SceneDecisionQueries::Create(std::move(queries), std::move(schema), execution.scheduler,
+                                                       configured.queryWorkUnitsLimit, configured.queryCacheLimits);
+            if (driver.HasError())
+                return Result<void>::Failure(driver.ErrorValue());
+            decisionQueries_ = std::move(driver).Value();
+            execution.queryTasks = decisionQueries_;
+            if (!reactive && mode == AI::AiSchedulingMode::BestEffort)
+                execution.timing = AI::AiCookedDecisionTiming::BestEffortQueries;
+        }
         auto admitted = RegisterPresentationParticipants(policy, std::move(execution));
         if (admitted.HasValue()) {
             inspectionKeys_ = std::move(policy.decisions->inspectionKeys);
@@ -342,6 +358,29 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         return Result<void>::Success();
     }
 
+    Result<void> ProjectPlaySceneHost::RunDecisionQueries(const Runtime::RuntimeSceneView &scene, const std::uint64_t tick) {
+        Math::WorldCoordinate64 origin;
+        if (mountedWorld_) {
+            const auto lease = mountedWorld_->Origin().Lease();
+            if (lease.HasError())
+                return Result<void>::Failure(lease.ErrorValue());
+            const auto frame = lease.Value().Get();
+            if (frame.HasError())
+                return Result<void>::Failure(frame.ErrorValue());
+            origin = frame.Value().Origin();
+        }
+        if (decisionQueries_->UsesNavigation())
+            CommitQueryNavigation(tick);
+        const SceneQueryNavigationSource navigation{this, [](const void *owner, const Runtime::RuntimeSceneView &current,
+                                                             Runtime::EntityRef querier, std::uint64_t now) noexcept {
+            return static_cast<const ProjectPlaySceneHost *>(owner)->ReadQueryNavigation(current, querier, now);
+        }};
+        const SceneQueryDecisionPhase evaluate{this, [](void *owner, AI::AiTaskScheduler &scheduler, std::uint64_t now) {
+            return static_cast<ProjectPlaySceneHost *>(owner)->RunDecisionScheduler(scheduler, now);
+        }};
+        return decisionQueries_->RunAtFixedTick(*ai_, scene, origin, tick, &native_, navigation, evaluate);
+    }
+
     /** @copydoc Editor::EditorPlaySceneHost::EvaluateDecisionBeforeGameplay */
     Result<bool> ProjectPlaySceneHost::EvaluateDecisionBeforeGameplay(const Runtime::FixedStepContext &context) {
         using Evaluation = Result<bool>;
@@ -358,7 +397,11 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         const auto tick = committedDecisionTick_ + 1;
         if (auto perception = PollDecisionPerception(tick, context.fixedDelta); perception.HasError())
             return Evaluation::Failure(perception.ErrorValue());
-        if (auto decision = RunDecisionScheduler(*scheduler.Value(), tick); decision.HasError())
+        const auto scene = scenes_->ActiveScene();
+        if (!scene)
+            return Evaluation::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+        const auto decision = decisionQueries_ ? RunDecisionQueries(*scene, tick) : RunDecisionScheduler(*scheduler.Value(), tick);
+        if (decision.HasError())
             return Evaluation::Failure(decision.ErrorValue());
         decisionTickPending_ = true;
         return Evaluation::Success(true);

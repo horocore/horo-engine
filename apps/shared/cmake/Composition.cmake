@@ -103,6 +103,16 @@ target_include_directories(HoroProjectScenePerceptionInternal PUBLIC "${HORO_PRO
 target_link_libraries(HoroProjectScenePerceptionInternal PUBLIC HoroEngine::AISceneIntegration HoroEngine::PlatformProjectIo
     PRIVATE nlohmann_json::nlohmann_json)
 
+set(HORO_SCENE_QUERY_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/scene_query_headers")
+file(GENERATE OUTPUT "${HORO_SCENE_QUERY_HEADERS}/SceneDecisionQueries.h"
+    CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/shared/scene/SceneDecisionQueries.h\"\n")
+add_library(HoroSceneDecisionQueriesInternal STATIC shared/scene/SceneDecisionQueries.cpp)
+target_compile_features(HoroSceneDecisionQueriesInternal PUBLIC cxx_std_20)
+target_include_directories(HoroSceneDecisionQueriesInternal PUBLIC "${HORO_SCENE_QUERY_HEADERS}")
+target_link_libraries(HoroSceneDecisionQueriesInternal
+    PUBLIC HoroCookedDecisionSceneAdmissionInternal HoroEngine::AISightIntegration HoroEngine::AINavigationIntegration
+    PRIVATE HoroScenePhysicsHost HoroProjectScenePerceptionInternal)
+
 # The installed standalone and Editor Play hosts share a canonical mounted-World adapter.
 set(HORO_MOUNTED_WORLD_HOST_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/mounted_world_host_headers")
 file(MAKE_DIRECTORY "${HORO_MOUNTED_WORLD_HOST_HEADERS}")
