@@ -39,8 +39,8 @@ namespace {
     /** @brief Reports a typed failure for a live clone entity through the workspace's normal Play host port. */
     class DecisionNavigationTestHost final : public EditorPlaySceneHost {
     public:
-        DecisionNavigationTestHost(Runtime::SceneRuntimeId scene, SceneObjectId object, AI::AgentId agent,
-                                   AI::DecisionGraphAssetId graph, AI::DecisionNodeId node)
+        DecisionNavigationTestHost(Runtime::SceneRuntimeId scene, SceneObjectId object, AI::AgentId agent, AI::DecisionGraphAssetId graph,
+                                   AI::DecisionNodeId node)
             : scenes_(scene), object_(object), agent_(agent), graph_(graph), node_(node) {}
 
         Runtime::RuntimeSceneService &Scenes() noexcept override {
@@ -446,7 +446,8 @@ namespace {
             std::ofstream stream(sidecar, std::ios::binary);
             stream << nlohmann::json{{"schemaVersion", 1},
                                      {"assetId", Assets::AssetId::FromBytes({0x60}).ToString()},
-                                     {"assetType", "core.scene"}}.dump();
+                                     {"assetType", "core.scene"}}
+                          .dump();
             REQUIRE(stream.good());
         }
         using namespace AI::DecisionGraphTestSupport;
@@ -464,7 +465,8 @@ namespace {
             std::ofstream sidecar(project.Path() / (path + ".horo"), std::ios::binary);
             sidecar << nlohmann::json{{"schemaVersion", 1},
                                       {"assetId", asset.ToString()},
-                                      {"assetType", Application::DecisionStateMachineSourceType}}.dump();
+                                      {"assetType", Application::DecisionStateMachineSourceType}}
+                           .dump();
             REQUIRE(sidecar.good());
         };
         writeGraph("runtime", graphAsset);
@@ -510,9 +512,10 @@ namespace {
         CHECK(emitted->records.front().stage == "ai.decision_play");
         CHECK(emitted->records.front().code.Value() == first.error.code.Value());
         CHECK_FALSE(emitted->records.front().source);
-        EditorWorkspaceViewCommandData graphNavigation{
-            .command = EditorWorkspaceViewCommand::NavigatePlayDecisionGraphProblem,
-            .playDecisionGraphNavigation = PlayDecisionGraphNavigationRequest{first.scene, first.tick, first.agent, first.graph, Node(999)}};
+        EditorWorkspaceViewCommandData graphNavigation{.command = EditorWorkspaceViewCommand::NavigatePlayDecisionGraphProblem,
+                                                       .playDecisionGraphNavigation =
+                                                           PlayDecisionGraphNavigationRequest{first.scene, first.tick, first.agent,
+                                                                                              first.graph, Node(999)}};
         workspace.ProcessCommand(graphNavigation);
         CHECK(workspace.ViewModel().decisionGraphDocuments.empty());
         graphNavigation.playDecisionGraphNavigation->node = node;
