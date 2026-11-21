@@ -260,6 +260,11 @@ namespace Horo::Character::Detail {
         if (!clear.Value())
             return rejected;
         motion.position = landing.Value()->position;
+        if (motion.rootTravel.has_value()) {
+            auto &root = motion.rootTravel->remaining;
+            root -= descriptor.up * Math::Dot(root, descriptor.up);
+            ConsumeRootTravel(motion, 1.0F);
+        }
         motion.remaining = {};
         result.collisions = result.collisions | CharacterCollisionFlags::Step;
         PublishGroundSupport(result, landing.Value()->floor, descriptor, landing.Value()->descent);
@@ -319,12 +324,16 @@ namespace Horo::Character::Detail {
         const float ascent = Math::Dot(motion.remaining, descriptor.up);
         if (ascent <= maximumAscent)
             return;
-        motion.remaining -= descriptor.up * (ascent - maximumAscent);
+        ProjectSweepTravel(motion, [&descriptor, maximumAscent](Math::Vec3 value) {
+            return value - descriptor.up * std::max(0.0F, Math::Dot(value, descriptor.up) - maximumAscent);
+        });
         for (std::uint32_t index{}; index < evidence.hitCount; ++index) {
             const auto &hit = evidence.hits[index];
             if (IsBlockingSweepHit(hit, descriptor) && hit.distanceMeters <= nearest + GroundDistanceTolerance &&
                 Math::Dot(motion.remaining, hit.normal) < -GroundNormalTolerance)
-                motion.remaining = {};
+                ProjectSweepTravel(motion, [](Math::Vec3) {
+                    return Math::Vec3{};
+                });
         }
     }
 

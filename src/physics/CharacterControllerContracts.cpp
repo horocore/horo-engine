@@ -95,6 +95,20 @@ namespace Horo::Character {
             return Result<void>::Success();
         }
 
+        /** @brief Checks source correlation and finite rigid travel without resolving the receiving controller. */
+        [[nodiscard]] bool ValidRootIntent(const CharacterRootMotionIntent &intent) noexcept {
+            return intent.source.simulationTick != 0 && intent.source.attempt != 0 && Math::IsFinite(intent.delta.translation) &&
+                   IsUnit(intent.delta.rotation) && intent.translation <= CharacterRootTranslation::Override &&
+                   intent.rotation <= CharacterRootRotation::Override;
+        }
+
+        /** @brief Checks detached root feedback before it can be stored in a locomotion publication. */
+        [[nodiscard]] bool ValidRootFeedback(const CharacterRootMotionFeedback &feedback) noexcept {
+            return feedback.source.simulationTick != 0 && feedback.source.attempt != 0 && Math::IsFinite(feedback.applied.translation) &&
+                   IsUnit(feedback.applied.rotation) && Math::IsFinite(feedback.remaining.translation) &&
+                   IsUnit(feedback.remaining.rotation);
+        }
+
         /** @brief Checks that a stance discriminator is one of the supported typed values. */
         [[nodiscard]] Result<void> ValidateStance(const CharacterStanceIntent stance) {
             switch (stance) {
@@ -479,6 +493,8 @@ namespace Horo::Character {
             return owner;
         if (const auto intent = ValidateRequestIntent(request); intent.HasError())
             return intent;
+        if (request.rootMotion.has_value() && !ValidRootIntent(*request.rootMotion))
+            return Result<void>::Failure(MakeError(CharacterErrors::RequestInvalid));
         return ValidateStance(request.stance);
     }
 
@@ -538,6 +554,8 @@ namespace Horo::Character {
             return owner;
         if (const auto metadata = ValidateResultMetadata(result); metadata.HasError())
             return metadata;
+        if (result.rootMotion.has_value() && !ValidRootFeedback(*result.rootMotion))
+            return Result<void>::Failure(MakeError(CharacterErrors::RequestInvalid));
         if (const auto bounds = ValidateResultBounds(result, descriptor); bounds.HasError())
             return bounds;
         if (const auto ground = ValidateGroundEvidence(result, descriptor); ground.HasError())

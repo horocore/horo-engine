@@ -164,6 +164,11 @@ namespace Horo::Character::Detail {
         bool blocked{};
     };
 
+    struct SweepRootTravel final {
+        Math::Vec3 remaining{};
+        Math::Vec3 applied{};
+    };
+
     struct SweepMotionState final {
         Math::Vec3 position{};
         Math::Vec3 remaining{};
@@ -174,7 +179,25 @@ namespace Horo::Character::Detail {
         bool airbornePass{};
         SweepPlanes planes{};
         bool steepConstraint{};
+        std::optional<SweepRootTravel> rootTravel;
     };
+
+    /** @brief Attributes the admitted fraction of this sweep's travel to its root contribution. */
+    inline void ConsumeRootTravel(SweepMotionState &motion, float fraction) noexcept {
+        if (!motion.rootTravel.has_value())
+            return;
+        const auto consumed = motion.rootTravel->remaining * fraction;
+        motion.rootTravel->applied += consumed;
+        motion.rootTravel->remaining -= consumed;
+    }
+
+    /** @brief Applies the same active geometry to total and ordinary intent and retains the resulting root share. */
+    void ProjectSweepTravel(SweepMotionState &motion, const auto &project) noexcept {
+        const auto projected = project(motion.remaining);
+        if (motion.rootTravel.has_value())
+            motion.rootTravel->remaining = projected - project(motion.remaining - motion.rootTravel->remaining);
+        motion.remaining = projected;
+    }
 
     /** @brief Applies identical physical eligibility to movement, contact projection and ground selection. */
     [[nodiscard]] bool IsBlockingSweepHit(const CharacterSweepHit &hit, const CharacterControllerDescriptor &descriptor) noexcept {
@@ -281,6 +304,8 @@ namespace Horo::Character::Detail {
             motion.gravityVelocity = {};
         const auto impactDisplacement = remaining;
         const float travel = std::max(0.0F, nearest - descriptor.skinWidthMeters);
+        if (motion.rootTravel.has_value())
+            ConsumeRootTravel(motion, travel / Math::Length(impactDisplacement));
         position += direction * travel;
         remaining -= direction * travel;
         const float slopeRadians = descriptor.maximumSlopeDegrees * Math::Pi / 180.0F;
@@ -289,7 +314,9 @@ namespace Horo::Character::Detail {
         const auto normals =
             RetainSweepConstraints(result, evidence, descriptor, direction, nearest, walkableCosine, impactDisplacement, motion);
         for (std::uint32_t index{}; index < normals.count; ++index) {
-            remaining = ClipSlopeMotion(remaining, normals.active[index], descriptor, walkableCosine);
+            ProjectSweepTravel(motion, [&normals, index, &descriptor, walkableCosine](Math::Vec3 value) {
+                return ClipSlopeMotion(value, normals.active[index], descriptor, walkableCosine);
+            });
             if (motion.airbornePass) {
                 const float forbidden = Math::Dot(motion.gravityVelocity, normals.active[index]);
                 if (forbidden < 0.0F)
@@ -299,11 +326,15 @@ namespace Horo::Character::Detail {
         motion.steepConstraint = motion.steepConstraint || normals.steep;
         // Use the post-slope intent, but preserve constraints from earlier casts as well as
         // this hit set. A two-plane crease is valid travel, not a reason to stop indefinitely.
-        remaining = motion.planes.ClipTravel(remaining, descriptor.up, maximumAscent, motion.steepConstraint);
+        ProjectSweepTravel(motion, [&motion, &descriptor, maximumAscent](Math::Vec3 value) {
+            return motion.planes.ClipTravel(value, descriptor.up, maximumAscent, motion.steepConstraint);
+        });
         if (motion.airbornePass)
             motion.gravityVelocity = motion.planes.Clip(motion.gravityVelocity);
         if (result.termination == CharacterMovementTermination::ConstraintLimit) {
             remaining = {};
+            if (motion.rootTravel.has_value())
+                motion.rootTravel->remaining = {};
             motion.gravityVelocity = {};
         }
     }
@@ -313,6 +344,8 @@ namespace Horo::Character::Detail {
         if (result.termination == CharacterMovementTermination::Complete)
             result.termination = CharacterMovementTermination::IterationLimit;
         motion.remaining = {};
+        if (motion.rootTravel.has_value())
+            motion.rootTravel->remaining = {};
         motion.gravityVelocity = {};
         result.gravityVelocityMetersPerSecond = {};
     }

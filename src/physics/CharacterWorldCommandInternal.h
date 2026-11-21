@@ -22,6 +22,12 @@ namespace Horo::Character::Detail {
                                                   const CharacterMovementRequest &request) noexcept {
         if (queued.controller != request.controller)
             return false;
+        if (queued.rootMotion.has_value() && request.rootMotion.has_value() && queued.tick != request.tick) {
+            const auto &earlier = queued.tick < request.tick ? queued.rootMotion->source : request.rootMotion->source;
+            const auto &later = queued.tick < request.tick ? request.rootMotion->source : queued.rootMotion->source;
+            if (earlier.simulationTick >= later.simulationTick || earlier.attempt >= later.attempt)
+                return true;
+        }
         return (queued.tick == request.tick && queued.sequence == request.sequence) ||
                (queued.tick < request.tick && queued.sequence >= request.sequence) ||
                (queued.tick > request.tick && queued.sequence <= request.sequence);
@@ -51,9 +57,14 @@ namespace Horo::Character::Detail {
             (request.shapeChange.has_value() || request.stance != CharacterStanceIntent::Keep || request.filterChange.has_value()))
             return Result<void>::Failure(
                 MakeError(CharacterErrors::InvalidState, "Shape and filter changes require a spawned controller."));
+        if (!record.spawned && request.rootMotion.has_value())
+            return Result<void>::Failure(MakeError(CharacterErrors::InvalidState, "Root motion requires a spawned controller."));
         if (record.reservedTeleportTick == request.tick || record.lastTeleportTick == request.tick)
             return Result<void>::Failure(
                 MakeError(CharacterErrors::CommandOrderInvalid, "Move and teleport cannot target one Character tick."));
+        if (request.rootMotion.has_value() && (request.rootMotion->source.simulationTick <= record.lastRootMotion.simulationTick ||
+                                               request.rootMotion->source.attempt <= record.lastRootMotion.attempt))
+            return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid, "Root motion source has already been committed."));
         return Result<void>::Success();
     }
 
@@ -202,6 +213,19 @@ namespace Horo::Character::Detail {
         result.achievedVelocityMetersPerSecond = {};
         result.up = previous.up;
         ClearGroundEvidence(result, previous.up);
+        if (command.rootMotion.has_value()) {
+            const auto root = PlanRootMotion(command, previous);
+            const auto admitted =
+                AdmitSweepMotion(command, previous, input, {}, impl.settings.Values().work.maximumDisplacementMetersPerTick, root);
+            if (admitted.HasError())
+                return Result<CharacterMovementResult>::Failure(admitted.ErrorValue());
+            result.finalPosition += admitted.Value().remaining;
+            result.achievedVelocityMetersPerSecond = admitted.Value().remaining / admitted.Value().elapsedSeconds;
+            result.finalHeading = (root.basis * root.twist).Normalized();
+            if (const auto feedback = FinishRootMotion(result, command, root, root.worldTravel); feedback.HasError())
+                return Result<CharacterMovementResult>::Failure(feedback.ErrorValue());
+            return FinalizeMovementResult(impl, std::move(result), previous.position);
+        }
         if (command.desiredVelocityMetersPerSecond.has_value()) {
             const double seconds = static_cast<double>(input.fixedDelta.ToNanoseconds()) / 1'000'000'000.0;
             if (!std::isfinite(seconds) || seconds > static_cast<double>(std::numeric_limits<float>::max()))
@@ -236,6 +260,10 @@ namespace Horo::Character::Detail {
         if (result.controller != command.controller || result.tick != input.tick || result.sequence != command.sequence)
             return Result<CharacterMovementResult>::Failure(
                 MakeError(CharacterErrors::RequestInvalid, "Movement result identity does not match its admitted command."));
+        if (result.rootMotion.has_value() != command.rootMotion.has_value() ||
+            (command.rootMotion.has_value() && result.rootMotion->source != command.rootMotion->source))
+            return Result<CharacterMovementResult>::Failure(
+                MakeError(CharacterErrors::RequestInvalid, "Root motion feedback source does not match."));
         if (result.up != descriptor.up)
             return Result<CharacterMovementResult>::Failure(
                 MakeError(CharacterErrors::PlacementInvalid, "Movement result changed the controller up axis."));
@@ -533,6 +561,8 @@ namespace Horo::Character::Detail {
         record.Value()->publication = committed.transform;
         record.Value()->stateRevision = committed.stateRevision;
         record.Value()->locomotion = std::move(committed);
+        if (command.rootMotion.has_value())
+            record.Value()->lastRootMotion = command.rootMotion->source;
         impl.debug.Commit(command.controller, input.tick, impl.descriptor.physicsSnapshotRevision);
         return Result<void>::Success();
     }

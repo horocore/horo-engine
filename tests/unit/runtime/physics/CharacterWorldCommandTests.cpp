@@ -289,6 +289,74 @@ namespace Horo::Character {
             REQUIRE(Math::LengthSquared(forward.movement.achievedVelocityMetersPerSecond) <= 72.0F + 1.0e-4F);
         }
 
+        TEST_CASE("Character reports attributed root travel through the actual capsule wall sweep", "[physics][character][root-motion]") {
+            auto spawned = SpawnedActiveWorldWithController();
+            SweepProbe probe;
+            probe.configuredHits[0] = SweepHit(spawned.world->Descriptor(), 7, {-1, 0, 0}, 0.05F);
+            probe.configuredHitCount = 1;
+            auto request = Movement(spawned.controller, 1, 1);
+            request.desiredVelocityMetersPerSecond = Math::Vec3{0, 0, 6};
+            request.rootMotion = CharacterRootMotionIntent{{7, 11}, {{0.1F, 0, 0}, {}}, CharacterRootTranslation::Additive};
+            auto input = FixedTick(1);
+            input.query = probe.Context(spawned.world->Descriptor(), 1);
+            REQUIRE(spawned.world->QueueMovementCommand(request).HasValue());
+            REQUIRE(spawned.world->AdvanceFixedTick(input).HasValue());
+            const auto snapshot = spawned.world->ControllerLocomotionSnapshot(spawned.controller);
+            REQUIRE(snapshot.HasValue());
+            const auto &movement = snapshot.Value().movement;
+            REQUIRE(movement.rootMotion.has_value());
+            const auto &feedback = *movement.rootMotion;
+            CHECK(feedback.source == request.rootMotion->source);
+            CHECK(movement.finalPosition.x == Catch::Approx(0.03F / std::sqrt(2.0F)));
+            CHECK(movement.finalPosition.z == Catch::Approx(0.1F));
+            CHECK(feedback.applied.translation.x == Catch::Approx(movement.finalPosition.x));
+            CHECK(feedback.applied.translation.z == Catch::Approx(0.0F).margin(1.0e-6F));
+            CHECK((feedback.applied.translation + feedback.remaining.translation).x == Catch::Approx(0.1F));
+
+            request.tick = 2;
+            request.sequence = 2;
+            CHECK(spawned.world->QueueMovementCommand(request).HasError());
+        }
+
+        TEST_CASE("Character root motion distinguishes explicit zero intent and preserves capsule up",
+                  "[physics][character][root-motion]") {
+            auto spawned = SpawnedActiveWorldWithController();
+            auto request = Movement(spawned.controller, 1, 1);
+            request.desiredVelocityMetersPerSecond = Math::Vec3{};
+            const auto rootSwing = Math::Quaternion::FromAxisAngle({1, 0, 0}, Math::Pi / 3.0F);
+            request.rootMotion = CharacterRootMotionIntent{{7, 11},
+                                                           {{0.1F, 0, 0}, rootSwing},
+                                                           CharacterRootTranslation::Suggest,
+                                                           CharacterRootRotation::Additive};
+            REQUIRE(spawned.world->QueueMovementCommand(request).HasValue());
+            REQUIRE(spawned.world->AdvanceFixedTick(FixedTick(1)).HasValue());
+            const auto first = spawned.world->ControllerLocomotionSnapshot(spawned.controller);
+            REQUIRE(first.HasValue());
+            REQUIRE(first.Value().movement.rootMotion.has_value());
+            CHECK(first.Value().movement.finalPosition == Math::Vec3{});
+            CHECK(first.Value().movement.finalHeading == Math::Quaternion::Identity());
+            CHECK(first.Value().movement.rootMotion->remaining.translation.x == Catch::Approx(0.1F));
+            CHECK(first.Value().movement.rootMotion->remaining.rotation.x == Catch::Approx(rootSwing.x));
+
+            request.tick = 2;
+            request.sequence = 2;
+            request.desiredHeading = Math::Quaternion::FromAxisAngle({0, 1, 0}, Math::Pi);
+            const auto yaw = Math::Quaternion::FromAxisAngle({0, 1, 0}, Math::Pi / 2.0F);
+            request.rootMotion = CharacterRootMotionIntent{{8, 12},
+                                                           {{0.1F, 0, 0}, yaw},
+                                                           CharacterRootTranslation::Override,
+                                                           CharacterRootRotation::Override};
+            REQUIRE(spawned.world->QueueMovementCommand(request).HasValue());
+            REQUIRE(spawned.world->AdvanceFixedTick(FixedTick(2)).HasValue());
+            const auto second = spawned.world->ControllerLocomotionSnapshot(spawned.controller);
+            REQUIRE(second.HasValue());
+            REQUIRE(second.Value().movement.rootMotion.has_value());
+            CHECK(second.Value().movement.finalPosition.x == Catch::Approx(0.1F));
+            CHECK(second.Value().movement.finalHeading.y == Catch::Approx(yaw.y));
+            CHECK(second.Value().movement.up == Math::Vec3{0, 1, 0});
+            CHECK(second.Value().movement.rootMotion->remaining.rotation.w == Catch::Approx(1.0F));
+        }
+
         TEST_CASE("Character capsule sweep rejects stale snapshots and malformed hit evidence without publication",
                   "[physics][character][world][sweep][validation]") {
             auto spawned = SpawnedActiveWorldWithController();

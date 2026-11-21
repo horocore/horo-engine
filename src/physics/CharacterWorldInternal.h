@@ -33,6 +33,7 @@ namespace Horo::Character {
             bool spawned{};
             Physics::PhysicsCapsuleShape capsule;
             CharacterStance stance{CharacterStance::Standing};
+            CharacterRootMotionSource lastRootMotion;
         };
 
         /** @brief Process-owned synchronization and non-wrapping Character world identity source. */
