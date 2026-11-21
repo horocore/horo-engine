@@ -420,7 +420,7 @@ namespace Horo::Editor {
             if (current.HasError())
                 return current;
             auto &record = *storage_->Find(instance);
-            if (expectedRevision != record.root->revision)
+            if (expectedRevision != record.root->revision || record.root->draft)
                 return Failure<SourceDocumentSnapshot>(SourceDocumentErrors::Stale);
             auto loaded = storage_->ReadRecord(record, cancellation);
             if (loaded.HasError())

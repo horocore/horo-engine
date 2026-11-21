@@ -787,6 +787,11 @@ directories and distinguishes absent leaves, occupied names, missing parents,
 case aliases and redirects. The destination grants read-only review scope.
 New file text is shown as a bounded excerpt. Restoring a saved review checks
 its structural destinations again before restoring accepted decisions.
+Applying one accepted creation stages an ordinary dirty Source tab without a
+disk base. Even an empty draft stays dirty until an explicit Save or Save All
+publishes the file with an exclusive rename. The grouped Undo action can close
+the exact unchanged draft. A later user edit or save retires that undo
+authority, and rejected creation leaves the live document registry intact.
 
 The Local Model panel can explicitly replace the recovery checkpoint at
 `.horo/local/agent/source-review` with the admitted proposal and its current decisions. The

@@ -294,6 +294,14 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<SourceDocumentSnapshot> Open(const DocumentIdentity &identity, const std::filesystem::path &absolutePath,
                                                           CancellationToken cancellation = {});
+
+        /** @brief Opens one unsaved source draft at an absent project path without writing any file.
+         * @param identity Reserved workspace document identity. @param absolutePath Exact absent source path.
+         * @param text Complete validated source content. @param cancellation Cooperative cancellation.
+         * @return Dirty initial draft, or failure preserving the current owner and disk.
+         */
+        [[nodiscard]] Result<SourceDocumentSnapshot> StageNew(const DocumentIdentity &identity, const std::filesystem::path &absolutePath,
+                                                              std::string text, CancellationToken cancellation = {});
         /** @brief Queries an owner session without I/O. @param instance Exact session identity.
          * @return Snapshot or typed unknown/closed/thread failure.
          */

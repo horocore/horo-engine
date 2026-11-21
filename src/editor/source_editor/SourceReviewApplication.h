@@ -7,6 +7,8 @@
 namespace Horo::Editor {
     struct EditorWorkspaceViewCommandData;
     class ProjectMutationCoordinator;
+    class SourceFileOpenService;
+    class WorkspacePanelHost;
 
     /** @brief Owns the exact review decisions and evidence until the workspace safely dispatches the command. */
     struct SourceReviewApplication final {
@@ -28,12 +30,19 @@ namespace Horo::Editor {
          * @param command Deferred owner-lane request. @param documents Live source owner.
          * @param jobs Host job system. @param root Authorized workspace root.
          * @param files Host filesystem authority, retained by the host until its job system drains.
+         * @param open Source and registry owner for staged file operations.
          * @return True for a recognized command.
          */
         bool Process(const EditorWorkspaceViewCommandData &command, SourceDocumentService &documents, const JobSystem *jobs,
-                     const std::filesystem::path &root, const DurableFileSystem *files);
-        /** @brief Polls one preparing job without waiting. @return True if a buffer group was published. */
-        bool Poll(SourceDocumentService &documents, const DurableFileSystem *files);
+                     const std::filesystem::path &root, const DurableFileSystem *files, SourceFileOpenService *open = nullptr);
+        /** @brief Polls one preparing job without waiting.
+         * @param documents Current source owner. @param files Host filesystem authority.
+         * @param open Source and registry owner for staged file operations.
+         * @param host Workspace presentation using the same registry, when present.
+         * @return True if a source draft or buffer group was published.
+         */
+        bool Poll(SourceDocumentService &documents, const DurableFileSystem *files, SourceFileOpenService *open = nullptr,
+                  WorkspacePanelHost *host = nullptr);
         /** @brief Polls history jobs and requests the initial read once for this workspace.
          * @param jobs Host job system. @param root Authorized project root.
          * @param mutations Shared project mutation owner. @param files Tracked filesystem.
@@ -73,15 +82,23 @@ namespace Horo::Editor {
                    const DurableFileSystem *files, const CancellationToken &lifetime);
         /** @brief Replays the current source review as one group. */
         void Undo(const SourceEditBatch &receipt, SourceDocumentService &documents, const CancellationToken &lifetime);
+        /** @brief Directs an exact unchanged draft undo through the owning document registry. */
+        void UndoDraft(const SourceDocumentSnapshot &receipt, SourceFileOpenService *open, const CancellationToken &lifetime);
+        /** @brief Stages and presents one draft or retires the draft if the workspace rejects its tab. */
+        bool CommitDraft(Proposals::PreparedSourceCreate &creation, SourceFileOpenService *open, WorkspacePanelHost *host,
+                         const CancellationToken &lifetime);
         SourceEditBatch batch_;
+        SourceDocumentSnapshot draft_;
         std::shared_ptr<const Proposals::SourceReviewAudit> audit_;
         Proposals::SourceTransactionFeedback feedback_{};
         bool reverted_{};
 
+        using Candidate = std::variant<Proposals::PreparedSourceReview, Proposals::PreparedSourceCreate>;
+
         struct Preparation final {
             JobHandle job;
             CancellationToken lifetime;
-            std::shared_ptr<std::optional<Proposals::PreparedSourceReview>> output;
+            std::shared_ptr<std::optional<Candidate>> output;
         };
 
         std::optional<Preparation> preparing_;

@@ -145,6 +145,12 @@ namespace Horo::Editor {
      */
     class SourceFileOpenService final {
     public:
+        /** @brief Reserves and opens one unsaved source at the proposed destination.
+         * @param path Admitted project-relative source key. @param text Complete draft text.
+         * @param cancellation Cooperative observer. @return New source snapshot or failure leaving the workspace intact.
+         */
+        [[nodiscard]] Result<SourceDocumentSnapshot> StageNew(const SourceDocumentId &path, std::string text,
+                                                              CancellationToken cancellation = {});
         /**
          * @brief Creates a source-open service for one project root.
          * @param projectRoot Project root containing the source files.

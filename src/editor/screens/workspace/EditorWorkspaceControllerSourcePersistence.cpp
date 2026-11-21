@@ -10,7 +10,7 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::UpdateSourceAutosave */
     void EditorWorkspaceController::UpdateSourceAutosave(const float elapsedSeconds, const int delaySeconds) {
         m_sourceReviews.UpdateAuditHistory(m_sourceRecoveryJobs, ProjectRoot(), m_mutations, m_durableFiles);
-        if (m_sourceReviews.Poll(m_sourceOpenService.Documents(), m_durableFiles)) {
+        if (m_sourceReviews.Poll(m_sourceOpenService.Documents(), m_durableFiles, &m_sourceOpenService, &m_viewModel.workspacePanelHost)) {
             m_sourceReviews.RecordAppliedAudit(m_sourceRecoveryJobs, ProjectRoot(), m_mutations, m_durableFiles);
             RefreshSourceDocumentProjection();
         }
@@ -282,8 +282,12 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::ProcessSourceDocumentCommand */
     bool EditorWorkspaceController::ProcessSourceDocumentCommand(const EditorWorkspaceViewCommandData &command) {
-        if (m_sourceReviews.Process(command, m_sourceOpenService.Documents(), m_sourceRecoveryJobs, ProjectRoot(), m_durableFiles))
+        if (m_sourceReviews.Process(command, m_sourceOpenService.Documents(), m_sourceRecoveryJobs, ProjectRoot(), m_durableFiles,
+                                    &m_sourceOpenService)) {
+            if (command.command == EditorWorkspaceViewCommand::UndoSourceReview)
+                RefreshSourceDocumentProjection();
             return true;
+        }
         NativeDurableFileSystem files;
         switch (command.command) {
             case EditorWorkspaceViewCommand::SourceDocumentInteraction:

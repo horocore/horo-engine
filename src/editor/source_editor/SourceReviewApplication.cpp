@@ -1,5 +1,7 @@
 #include "SourceReviewApplication.h"
 
+#include "Horo/Editor/SourceFileOpenService.h"
+#include "Horo/Editor/WorkspacePanelHost.h"
 #include "SourceReviewHistory.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 
@@ -40,10 +42,11 @@ namespace Horo::Editor {
 
     /** @copydoc SourceReviewTransactions::Status */
     Proposals::SourceTransactionStatus SourceReviewTransactions::Status() const noexcept {
-        const bool canUndo = !preparing_ && batch_.CanUndo() && std::ranges::all_of(batch_.Items(), [](const auto &item) {
+        const bool groupUndo = batch_.CanUndo() && std::ranges::all_of(batch_.Items(), [](const auto &item) {
             return !item.changed || item.snapshot.IsCurrent();
         });
-        return {feedback_, canUndo, audit_, auditWrite_.has_value(), auditHistoryError_, Disposition()};
+        return {feedback_,    !preparing_ && (groupUndo || draft_.IsCurrent()), audit_, auditWrite_.has_value(), auditHistoryError_,
+                Disposition()};
     }
 
     /** @copydoc SourceReviewTransactions::Disposition */
@@ -51,6 +54,11 @@ namespace Horo::Editor {
         using enum Proposals::SourceReviewDisposition;
         if (reverted_)
             return Reverted;
+        if (draft_.Revision()) {
+            if (draft_.WasSavedInPlace())
+                return Saved;
+            return draft_.IsCurrent() ? Applied : Stale;
+        }
         if (batch_.Items().empty()) {
             const auto previous = audit_ ? audit_->disposition : Historical;
             return previous == Applied ? Stale : previous;
@@ -76,6 +84,7 @@ namespace Horo::Editor {
         if (command.command != EditorWorkspaceViewCommand::None || !Status().canUndo || lifetime.IsCancellationRequested())
             return false;
         command.sourceReviewUndo = batch_;
+        command.sourceReviewDraftUndo = draft_;
         command.sourceReviewLifetime = lifetime;
         command.command = EditorWorkspaceViewCommand::UndoSourceReview;
         return true;
@@ -83,13 +92,18 @@ namespace Horo::Editor {
 
     /** @copydoc SourceReviewTransactions::Process */
     bool SourceReviewTransactions::Process(const EditorWorkspaceViewCommandData &command, SourceDocumentService &documents,
-                                           const JobSystem *jobs, const std::filesystem::path &root, const DurableFileSystem *files) {
+                                           const JobSystem *jobs, const std::filesystem::path &root, const DurableFileSystem *files,
+                                           SourceFileOpenService *open) {
         switch (command.command) {
             case EditorWorkspaceViewCommand::ApplySourceReview:
                 Start(command.sourceReviewApplication, jobs, root, files, command.sourceReviewLifetime);
                 return true;
             case EditorWorkspaceViewCommand::UndoSourceReview:
-                if (!preparing_)
+                if (preparing_)
+                    return true;
+                if (command.sourceReviewDraftUndo.Revision())
+                    UndoDraft(command.sourceReviewDraftUndo, open, command.sourceReviewLifetime);
+                else
                     Undo(command.sourceReviewUndo, documents, command.sourceReviewLifetime);
                 return true;
             default:
@@ -107,10 +121,17 @@ namespace Horo::Editor {
         if (feedback_ == Feedback::Cancelled || auditWrite_ || !jobs || !files || !request || !request->plan)
             return;
         try {
-            auto output = std::make_shared<std::optional<Proposals::PreparedSourceReview>>();
+            auto output = std::make_shared<std::optional<Candidate>>();
             auto job =
                 jobs->SubmitResult({.parentCancellation = lifetime, .priority = JobPriority::Interactive, .resource = JobResource::Io},
                                    [request = std::move(request), output, root, files](const CancellationToken &stop) {
+                auto creation = request->decisions.PrepareCreate(request->policy, *request->plan, stop);
+                if (creation.HasError())
+                    return Result<void>::Failure(std::move(creation).ErrorValue());
+                if (auto draft = std::move(creation).Value()) {
+                    output->emplace(std::move(*draft));
+                    return Result<void>::Success();
+                }
                 auto prepared = request->decisions.PrepareAccepted(request->policy, *request->plan, stop);
                 if (prepared.HasError())
                     return Result<void>::Failure(std::move(prepared).ErrorValue());
@@ -130,7 +151,8 @@ namespace Horo::Editor {
     }
 
     /** @copydoc SourceReviewTransactions::Poll */
-    bool SourceReviewTransactions::Poll(SourceDocumentService &documents, const DurableFileSystem *files) {
+    bool SourceReviewTransactions::Poll(SourceDocumentService &documents, const DurableFileSystem *files, SourceFileOpenService *open,
+                                        WorkspacePanelHost *host) {
         if (!preparing_)
             return false;
         const auto job = preparing_->job.Snapshot();
@@ -146,14 +168,53 @@ namespace Horo::Editor {
             feedback_ = error ? FailureFeedback(*error, Feedback::ApplyFailed) : Feedback::ApplyFailed;
             return false;
         }
-        auto applied = preparation.output->value().CommitObserved(documents, *files, preparation.lifetime);
+        if (auto *creation = std::get_if<Proposals::PreparedSourceCreate>(&**preparation.output))
+            return CommitDraft(*creation, open, host, preparation.lifetime);
+        auto applied =
+            std::get<Proposals::PreparedSourceReview>(**preparation.output).CommitObserved(documents, *files, preparation.lifetime);
         if (applied.HasError()) {
             feedback_ = FailureFeedback(applied.ErrorValue(), Feedback::ApplyFailed);
             return false;
         }
         auto outcome = std::move(applied).Value();
         batch_ = std::move(outcome.batch);
+        draft_ = {};
         audit_ = std::move(outcome.audit);
+        reverted_ = false;
+        auditSequence_ = 0;
+        feedback_ = Feedback::Applied;
+        return true;
+    }
+
+    /** @copydoc SourceReviewTransactions::CommitDraft */
+    bool SourceReviewTransactions::CommitDraft(Proposals::PreparedSourceCreate &creation, SourceFileOpenService *open,
+                                               WorkspacePanelHost *host, const CancellationToken &lifetime) {
+        feedback_ = Feedback::ApplyFailed;
+        if (!open)
+            return false;
+        const DocumentOpenKey key{DocumentKind::Source, creation.file.path};
+        auto staged = open->StageNew(creation.file.path, std::move(creation.file.text), lifetime);
+        if (staged.HasError()) {
+            feedback_ = FailureFeedback(staged.ErrorValue(), Feedback::ApplyFailed);
+            return false;
+        }
+        if (host) {
+            const auto instance = staged.Value().Identity().instance;
+            bool presented{};
+            try {
+                presented = host->OpenDocument(key).HasValue();
+            } catch (const std::bad_alloc &) {
+                // A partially inserted tab is reconciled from the registry below.
+            }
+            if (!presented) {
+                static_cast<void>(open->CloseDocument(instance, true));
+                host->RefreshDocuments();
+                return false;
+            }
+        }
+        draft_ = std::move(staged).Value();
+        batch_ = {};
+        audit_ = std::move(creation.audit);
         reverted_ = false;
         auditSequence_ = 0;
         feedback_ = Feedback::Applied;
@@ -278,6 +339,26 @@ namespace Horo::Editor {
             return;
         }
         batch_ = {};
+        reverted_ = true;
+        feedback_ = Feedback::Undone;
+    }
+
+    /** @copydoc SourceReviewTransactions::UndoDraft */
+    void SourceReviewTransactions::UndoDraft(const SourceDocumentSnapshot &receipt, SourceFileOpenService *open,
+                                             const CancellationToken &lifetime) {
+        if (lifetime.IsCancellationRequested()) {
+            feedback_ = Feedback::Cancelled;
+            return;
+        }
+        feedback_ = Feedback::Conflict;
+        if (!open || !draft_.SharesStateWith(receipt) || !draft_.IsCurrent())
+            return;
+        const auto undone = open->CloseDocument(receipt.Identity().instance, true);
+        if (undone.HasError()) {
+            feedback_ = FailureFeedback(undone.ErrorValue(), Feedback::UndoFailed);
+            return;
+        }
+        draft_ = {};
         reverted_ = true;
         feedback_ = Feedback::Undone;
     }

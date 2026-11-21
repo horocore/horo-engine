@@ -1,4 +1,5 @@
 #include "../../support/SourceDocumentTestProject.h"
+#include "Horo/Editor/SourceFileOpenService.h"
 #include "Horo/Foundation/Platform.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/source_editor/SourceReviewApplication.h"
@@ -174,6 +175,81 @@ namespace {
                   .HasError());
         std::ifstream stored(path, std::ios::binary);
         CHECK((std::string{std::istreambuf_iterator<char>{stored}, {}} == "interrupted"));
+    }
+
+    TEST_CASE("A reviewed creation stages an unsaved source with exact undo and explicit save", "[editor][source][review][create]") {
+        TestSupport::SourceProject project;
+        SourceFileOpenService open{project.directory};
+        WorkspacePanelHost host;
+        host.AttachDocumentIdentityRegistry(open.DocumentRegistry());
+        NativeDurableFileSystem files;
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
+        SourceReviewTransactions reviews;
+        CancellationSource lifetime;
+        const auto path = SourceDocumentId::Parse("new.cpp").Value();
+        const auto native = project.directory / path.Value();
+        const auto policy = ProjectPolicy::Capture("workspace", 1, {{path, false}}).Value();
+        const auto proposal = ChangeSet::Capture(policy, {"proposal", 1, {"provider", "model", "request"}, {CreateFile{path, {}}}}).Value();
+        const std::array observed{SourcePathObservation{path, SourcePathState::Absent}};
+        const auto plan = std::make_shared<const WorkspaceEditPlan>(PlanWorkspaceEdits(proposal, policy, observed).Value());
+        ReviewDecisions decisions{proposal};
+        REQUIRE(decisions.Decide(*plan, {0}, ReviewChoice::Accept).HasValue());
+        EditorWorkspaceViewCommandData apply;
+        REQUIRE(QueueSourceReviewApplication(policy.Project(), decisions, policy, plan, lifetime.Token(), apply));
+        REQUIRE(reviews.Process(apply, open.Documents(), &jobs, project.directory, &files, &open));
+        bool occupied{};
+        SECTION("Late arrival cancels staging before tab admission") {
+            project.Put("user file", path.Value().c_str());
+            occupied = true;
+        }
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (reviews.Status().feedback == SourceTransactionFeedback::Preparing && std::chrono::steady_clock::now() < deadline) {
+            static_cast<void>(reviews.Poll(open.Documents(), &files, &open, &host));
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+        const auto id = open.DocumentRegistry().Find({DocumentKind::Source, path});
+        if (occupied) {
+            CHECK(reviews.Status().feedback == SourceTransactionFeedback::Conflict);
+            CHECK_FALSE(id);
+            CHECK(std::filesystem::file_size(native) == 9);
+            return;
+        }
+        REQUIRE(reviews.Status().feedback == SourceTransactionFeedback::Applied);
+        REQUIRE(id);
+        CHECK(host.ActiveDocument() == id->instance);
+        const auto draft = open.Documents().Snapshot(id->instance).Value();
+        CHECK(draft.Dirty());
+        CHECK(draft.BaseRevision() == 0);
+        CHECK_FALSE(open.Documents().UpdateAutosave(120, 1, files));
+        CHECK_FALSE(open.Documents().UpdateAutosave(120, 1, files));
+        CHECK_FALSE(std::filesystem::exists(native));
+        CHECK(EncodeSourceReviewAudit(*reviews.Status().audit).HasValue());
+
+        SECTION("An explicit save materializes even an empty source") {
+            const auto saved = open.Documents().Save({id->instance, draft.Revision(), {}}, files);
+            REQUIRE(saved.HasValue());
+            CHECK_FALSE(saved.Value().snapshot.Dirty());
+            CHECK(std::filesystem::is_regular_file(native));
+            CHECK(reviews.Status().disposition == SourceReviewDisposition::Saved);
+        }
+        SECTION("Undo retires the exact unsaved draft") {
+            EditorWorkspaceViewCommandData undo;
+            REQUIRE(reviews.QueueUndo(lifetime.Token(), undo));
+            REQUIRE(reviews.Process(undo, open.Documents(), &jobs, project.directory, &files, &open));
+            CHECK(reviews.Status().disposition == SourceReviewDisposition::Reverted);
+            CHECK_FALSE(open.DocumentRegistry().Find(id->instance));
+            host.RefreshDocuments();
+            CHECK_FALSE(host.ActiveDocument());
+            CHECK_FALSE(std::filesystem::exists(native));
+        }
+        SECTION("A stale undo cannot discard later authored text") {
+            EditorWorkspaceViewCommandData undo;
+            REQUIRE(reviews.QueueUndo(lifetime.Token(), undo));
+            REQUIRE(open.Documents().Edit(id->instance, {draft.Revision(), 0, 0, "authored"}).HasValue());
+            REQUIRE(reviews.Process(undo, open.Documents(), &jobs, project.directory, &files, &open));
+            CHECK(reviews.Status().feedback == SourceTransactionFeedback::Conflict);
+            CHECK(open.Documents().Snapshot(id->instance).Value().Text() == "authored");
+        }
     }
 
     TEST_CASE("Overlapping review applications and group undo produce deterministic revisions", "[editor][source][review][concurrency]") {

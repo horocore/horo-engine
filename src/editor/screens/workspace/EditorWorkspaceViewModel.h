@@ -861,6 +861,7 @@ namespace Horo::Editor {
         std::optional<AssetSceneDropRequest> assetSceneDrop = std::nullopt;
         std::shared_ptr<const SourceReviewApplication> sourceReviewApplication;
         SourceEditBatch sourceReviewUndo;
+        SourceDocumentSnapshot sourceReviewDraftUndo;
         CancellationToken sourceReviewLifetime;
     };
 

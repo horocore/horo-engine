@@ -437,6 +437,34 @@ namespace Horo::Editor {
         });
     }
 
+    /** @copydoc SourceFileOpenService::StageNew */
+    Result<SourceDocumentSnapshot> SourceFileOpenService::StageNew(const SourceDocumentId &path, std::string text,
+                                                                   const CancellationToken cancellation) {
+        using Output = Result<SourceDocumentSnapshot>;
+        try {
+            if (publishing_)
+                return Output::Failure(MakeError(SourceDocumentErrors::Busy));
+            if (!projectRootValid_ || !policy_.embeddedEditorAvailable || !path.IsValid())
+                return Output::Failure(MakeError(SourceOpenErrors::Unsafe));
+            const auto &name = path.Value();
+            const auto destination = projectRoot_ / std::filesystem::path{std::u8string{name.begin(), name.end()}};
+            if (const auto admitted = AdmitSaveDestination(*this, destination); admitted.HasError())
+                return Output::Failure(admitted.ErrorValue());
+            auto registry = *documentRegistry_;
+            const auto opened = registry.Open({DocumentKind::Source, path});
+            if (opened.HasError())
+                return Output::Failure(opened.ErrorValue());
+            if (opened.Value().disposition != DocumentOpenDisposition::Opened)
+                return Output::Failure(MakeError(SourceDocumentErrors::SaveConflict));
+            auto staged = sourceDocuments_.StageNew(opened.Value().identity, destination, std::move(text), cancellation);
+            if (staged.HasValue())
+                *documentRegistry_ = std::move(registry);
+            return staged;
+        } catch (const std::bad_alloc &) {
+            return Output::Failure(MakeError(SourceDocumentErrors::TooLarge));
+        }
+    }
+
     /** @copydoc SourceFileOpenService::SaveAs */
     Result<SourceSaveResult> SourceFileOpenService::SaveAs(const SourceSaveRequest &request, const std::filesystem::path &destination,
                                                            DurableFileSystem &files, const CancellationToken cancellation) {

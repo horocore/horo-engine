@@ -1165,6 +1165,9 @@ namespace Horo::Editor {
 
             /** @brief Prevents dispatch through the text transaction when a structural decision is included. */
             bool HasAcceptedFileOperation(const EditorLocalAgentPatchReview &review) const {
+                // One creation can be staged as a normal unsaved document.
+                if (review.files.size() == 1 && review.files.front().kind == EditorPatchFileKind::Create)
+                    return false;
                 for (std::size_t index = 0; index < review.files.size(); ++index) {
                     if (review.files[index].kind != EditorPatchFileKind::Edit &&
                         review.decisions.State({index}).Value() == Proposals::ReviewState::Accepted)

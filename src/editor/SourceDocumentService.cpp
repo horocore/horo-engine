@@ -140,6 +140,44 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc SourceDocumentService::StageNew */
+    Result<SourceDocumentSnapshot> SourceDocumentService::StageNew(const DocumentIdentity &identity,
+                                                                   const std::filesystem::path &absolutePath, std::string text,
+                                                                   const CancellationToken cancellation) {
+        using Output = Result<SourceDocumentSnapshot>;
+        try {
+            if (const auto valid = CheckAccess(); valid.HasError())
+                return Output::Failure(valid.ErrorValue());
+            const auto path = Detail::SourcePath(storage_->projectRoot, identity, absolutePath);
+            if (path.HasError() || path.Value() != absolutePath || storage_->Find(identity.instance))
+                return Failure<SourceDocumentSnapshot>(SourceDocumentErrors::Invalid);
+            std::error_code error;
+            if (!std::filesystem::is_directory(absolutePath.parent_path(), error) || error)
+                return Failure<SourceDocumentSnapshot>(SourceDocumentErrors::ReadFailed);
+            if (std::filesystem::symlink_status(absolutePath, error).type() != std::filesystem::file_type::not_found ||
+                (error && error != std::errc::no_such_file_or_directory))
+                return Failure<SourceDocumentSnapshot>(SourceDocumentErrors::SaveConflict);
+            if (const auto admitted = storage_->AdmitNew(identity); admitted.HasError())
+                return Output::Failure(admitted.ErrorValue());
+            auto bytes = Detail::CaptureSourceText(std::move(text), storage_->limits.maximumDocumentBytes, cancellation);
+            if (bytes.HasError())
+                return Output::Failure(bytes.ErrorValue());
+            auto root = std::make_shared<Detail::SourceDocumentRoot>();
+            root->identity = identity;
+            root->currentRevision = std::make_shared<std::atomic<std::uint64_t>>(root->revision);
+            root->text = std::move(bytes).Value();
+            root->base = std::make_shared<const Detail::SourceText>();
+            root->baseRevision = 0;
+            root->draft = true;
+            if (cancellation.IsCancellationRequested())
+                return Failure<SourceDocumentSnapshot>(SourceDocumentErrors::Cancelled);
+            storage_->records.emplace_back(absolutePath, root);
+            return Output::Success(SourceDocumentSnapshot{std::move(root)});
+        } catch (const std::bad_alloc &) {
+            return Failure<SourceDocumentSnapshot>(SourceDocumentErrors::TooLarge);
+        }
+    }
+
     /** @copydoc SourceDocumentService::Storage::AdmitNew */
     Result<void> SourceDocumentService::Storage::AdmitNew(const DocumentIdentity &identity) const {
         if (records.size() == limits.maximumDocuments || std::ranges::any_of(records, [&](const auto &record) {

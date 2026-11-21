@@ -20,7 +20,7 @@ namespace Horo::Editor::Detail {
         explicit SourceDocumentRoot(const SourceDocumentRoot &previous)
             : identity(previous.identity), currentRevision(previous.currentRevision), revision(previous.revision),
               baseRevision(previous.baseRevision), text(previous.text), base(previous.base), external(previous.external),
-              saveUnconfirmed(previous.saveUnconfirmed) {}
+              saveUnconfirmed(previous.saveUnconfirmed), draft(previous.draft) {}
 
         DocumentIdentity identity;
         /** @brief Shared per-incarnation witness. The owner writes the exact revision before publication and zero before retirement.
@@ -33,6 +33,7 @@ namespace Horo::Editor::Detail {
         std::shared_ptr<const SourceText> base;
         SourceExternalState external{SourceExternalState::InSync};
         bool saveUnconfirmed{};
+        bool draft{}; /**< A new source without a durable base, including an empty draft. */
         /** @brief Owner-lane write-once receipt for this exact revision, observed by immutable readers. */
         mutable std::atomic_bool savedInPlace{};
     };

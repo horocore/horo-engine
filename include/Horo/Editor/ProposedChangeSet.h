@@ -350,6 +350,12 @@ namespace Horo::Editor::Proposals {
         std::shared_ptr<const SourceReviewAudit> audit;
     };
 
+    /** @brief One accepted creation and its logical initial source revision, detached from the editor owner. */
+    struct PreparedSourceCreate final {
+        CreateFile file;
+        std::shared_ptr<const SourceReviewAudit> audit;
+    };
+
     /** @brief Detached accepted text and exact immutable leases, suitable for worker-to-editor handoff. */
     class PreparedSourceReview final {
     public:
@@ -414,6 +420,11 @@ namespace Horo::Editor::Proposals {
          */
         [[nodiscard]] Result<PreparedSourceReview> PrepareAccepted(const ProjectPolicy &policy, const WorkspaceEditPlan &plan,
                                                                    CancellationToken cancellation = {}) const;
+        /** @brief Prepares the exact single accepted creation for the owner to stage without writing files.
+         * @return A detached draft, absence for a text-only review, or failure for stale or mixed create decisions.
+         */
+        [[nodiscard]] Result<std::optional<PreparedSourceCreate>> PrepareCreate(const ProjectPolicy &policy, const WorkspaceEditPlan &plan,
+                                                                                CancellationToken cancellation = {}) const;
         /** @brief Applies only accepted text hunks through the current source owner.
          * @param documents Owner of the live source snapshots. @param policy Active captured policy for this proposal.
          * @param plan Exact proposal preview with current source evidence. @param cancellation Cooperative observer.
@@ -435,6 +446,8 @@ namespace Horo::Editor::Proposals {
         [[nodiscard]] bool Matches(const WorkspaceEditPlan &plan) const noexcept;
         [[nodiscard]] bool CanAccept(const WorkspaceEditPlan &plan, std::size_t file) const;
         [[nodiscard]] bool AcceptancesCurrent(const WorkspaceEditPlan &plan, const Units &units) const;
+        /** @brief Captures redacted proposal and unit attribution before any owner mutation. */
+        [[nodiscard]] Result<std::shared_ptr<SourceReviewAudit>> BuildAudit() const;
         void Publish(Units units);
         ChangeSet proposal_;
         Units units_;

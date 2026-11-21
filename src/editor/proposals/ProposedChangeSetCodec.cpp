@@ -405,12 +405,18 @@ namespace Horo::Editor::Proposals {
         /** @brief Requires one ordered revision witness for each file with accepted units. */
         bool SourceReviewRevisionsValid(const SourceReviewAudit &audit) {
             auto revision = audit.revisions.begin();
+            auto creations = audit.proposal.operationCounts[0];
             for (std::size_t file = 0; file < audit.choices.size(); ++file) {
                 const auto &choices = audit.choices[file];
                 if (std::ranges::find(choices, ReviewState::Accepted) == choices.end())
                     continue;
-                if (revision == audit.revisions.end() || revision->file != file || !revision->before || revision->after < revision->before)
+                if (revision == audit.revisions.end() || revision->file != file || revision->after < revision->before)
                     return false;
+                if (!revision->before) {
+                    if (!creations || revision->after != 1 || choices.size() != 1)
+                        return false;
+                    --creations;
+                }
                 ++revision;
             }
             return revision == audit.revisions.end();

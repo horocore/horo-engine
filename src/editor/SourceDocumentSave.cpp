@@ -25,7 +25,7 @@ namespace Horo::Editor {
             }
             if (record.autosaveRevision != record.root->revision) {
                 record.autosaveRevision = record.root->revision;
-                record.autosaveDirty = SourceDocumentSnapshot{record.root}.Dirty();
+                record.autosaveDirty = !record.root->draft && SourceDocumentSnapshot{record.root}.Dirty();
                 record.autosaveElapsed = 0;
             } else if (record.autosaveDirty) {
                 record.autosaveElapsed = std::min(300.0F, record.autosaveElapsed + elapsedSeconds);
@@ -204,6 +204,7 @@ namespace Horo::Editor {
                 } else {
                     prepared.base = prepared.text;
                     prepared.baseRevision = prepared.revision;
+                    prepared.draft = false;
                     prepared.external = SourceExternalState::InSync;
                     prepared.saveUnconfirmed = false;
                 }
@@ -250,6 +251,8 @@ namespace Horo::Editor {
             return Result<std::filesystem::path>::Failure(MakeError(SourceDocumentErrors::Stale));
         if (record.root->saveUnconfirmed && !request.approvedDiskBytes)
             return Result<std::filesystem::path>::Failure(MakeError(SourceDocumentErrors::SaveOutcomeUnknown));
+        if (record.root->draft && !record.root->saveUnconfirmed && request.approvedDiskBytes)
+            return Result<std::filesystem::path>::Failure(MakeError(SourceDocumentErrors::SaveConflict));
         if (request.approvedDiskBytes && request.approvedDiskBytes->size() > limits.maximumDocumentBytes)
             return Result<std::filesystem::path>::Failure(MakeError(SourceDocumentErrors::TooLarge));
         auto safe = Detail::SourcePath(projectRoot, identity, path);
@@ -279,7 +282,7 @@ namespace Horo::Editor {
                 return Result<SourceSaveResult>::Failure(safe.ErrorValue());
             path = std::move(safe).Value();
             const std::string_view expected = request.approvedDiskBytes ? *request.approvedDiskBytes : record.root->base->bytes;
-            const bool absentAllowed = path != record.path && !request.approvedDiskBytes;
+            const bool absentAllowed = (path != record.path || record.root->draft) && !request.approvedDiskBytes;
             auto next = Detail::NextRoot(*record.root);
             if (next.HasError())
                 return Result<SourceSaveResult>::Failure(next.ErrorValue());
