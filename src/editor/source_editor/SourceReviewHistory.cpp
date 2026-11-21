@@ -86,10 +86,13 @@ namespace Horo::Editor {
             return Sequence::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
         }
 
-        /** @brief Once a completed outcome is stored, only an idempotent write may retain it. */
+        /** @brief Retains completed outcomes and admits a later explicitly observed restoration or recovery. */
         bool CanRecordOutcome(const History &history, const std::uint64_t sequence, const Proposals::SourceReviewDisposition next) {
-            return !sequence || history.latest->disposition == Proposals::SourceReviewDisposition::Applied ||
-                   history.latest->disposition == next;
+            using enum Proposals::SourceReviewDisposition;
+            if (!sequence)
+                return true;
+            const auto previous = history.latest->disposition;
+            return previous == next || previous == Applied || (previous == Saved && (next == Reverted || next == Stale));
         }
 
         /** @brief Retires only the reserved, single-link staging file under the held publication lease. */

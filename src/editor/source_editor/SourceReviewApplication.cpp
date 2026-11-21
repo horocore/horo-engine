@@ -82,6 +82,23 @@ namespace Horo::Editor {
                 return Feedback::Conflict;
             return fallback;
         }
+
+        /** @brief Moves a reviewed file while holding project mutation authority. */
+        Result<SourceDocumentSnapshot> MoveReviewSource(SourceFileOpenService &open, const ProjectMutationCoordinator &mutations,
+                                                        const SourceDocumentSnapshot &from, const SourceDocumentId &to, std::string text,
+                                                        const SourceBatchDiskEvidence &disk, DurableFileSystem &files,
+                                                        const CancellationToken &lifetime) {
+            const auto lease = mutations.TryAcquire({open.ProjectRoot(), ProjectMutationOwner::Asset, "source-review-rename"});
+            if (lease.HasError())
+                return Result<SourceDocumentSnapshot>::Failure(lease.ErrorValue());
+            return open.RenameReviewed(from, to, std::move(text), disk, files, lifetime);
+        }
+
+        /** @brief Surfaces uncertainty after either direction of a reviewed rename. */
+        Feedback RenameFailure(const Error &error, const Feedback fallback) {
+            return error.code.Value() == SourceDocumentErrors::SaveOutcomeUnknown.code.Value() ? Feedback::RenameRecovery
+                                                                                               : FailureFeedback(error, fallback);
+        }
     }  // namespace
 
     /** @copydoc QueueSourceReviewApplication */
@@ -103,7 +120,12 @@ namespace Horo::Editor {
         const bool groupUndo = batch_.CanUndo() && std::ranges::all_of(batch_.Items(), [](const auto &item) {
             return !item.changed || item.snapshot.IsCurrent();
         });
-        return {feedback_,    !preparing_ && (groupUndo || draft_.IsCurrent()), audit_, auditWrite_.has_value(), auditHistoryError_,
+        const bool renameUndo = renamed_.IsCurrent() && feedback_ != Feedback::RenameRecovery;
+        return {feedback_,
+                !preparing_ && (groupUndo || draft_.IsCurrent() || renameUndo),
+                audit_,
+                auditWrite_.has_value(),
+                auditHistoryError_,
                 Disposition()};
     }
 
@@ -146,6 +168,7 @@ namespace Horo::Editor {
             return false;
         command.sourceReviewUndo = batch_;
         command.sourceReviewDraftUndo = draft_;
+        command.sourceReviewRenameUndo = renamed_;
         command.sourceReviewLifetime = lifetime;
         command.command = EditorWorkspaceViewCommand::UndoSourceReview;
         return true;
@@ -164,11 +187,51 @@ namespace Horo::Editor {
                     return true;
                 if (command.sourceReviewDraftUndo.Revision())
                     UndoDraft(command.sourceReviewDraftUndo, open, command.sourceReviewLifetime);
+                else if (command.sourceReviewRenameUndo.Revision())
+                    StartRenameRestore(command.sourceReviewRenameUndo, jobs, root, files, command.sourceReviewLifetime);
                 else
                     Undo(command.sourceReviewUndo, documents, command.sourceReviewLifetime);
                 return true;
             default:
                 return false;
+        }
+    }
+
+    /** @copydoc SourceReviewTransactions::StartRenameRestore */
+    void SourceReviewTransactions::StartRenameRestore(const SourceDocumentSnapshot &receipt, const JobSystem *jobs,
+                                                      const std::filesystem::path &root, const DurableFileSystem *files,
+                                                      const CancellationToken &lifetime) {
+        if (lifetime.IsCancellationRequested()) {
+            feedback_ = Feedback::Cancelled;
+            return;
+        }
+        if (feedback_ == Feedback::RenameRecovery)
+            return;
+        feedback_ = Feedback::Conflict;
+        if (!renamed_.SharesStateWith(receipt) || !renamed_.IsCurrent())
+            return;
+        feedback_ = Feedback::UndoFailed;
+        if (!jobs || !files)
+            return;
+        try {
+            auto output = std::make_shared<std::optional<Candidate>>();
+            auto job =
+                jobs->SubmitResult({.parentCancellation = lifetime, .priority = JobPriority::Interactive, .resource = JobResource::Io},
+                                   [restore = RenameRestore{renamed_, beforeRename_, {}}, output, root,
+                                    files](const CancellationToken &stop) mutable {
+                auto disk = SourceBatchDiskEvidence::Capture(root, std::span{&restore.current, 1}, *files, stop);
+                if (disk.HasError())
+                    return Result<void>::Failure(std::move(disk).ErrorValue());
+                restore.disk = std::move(disk).Value();
+                output->emplace(std::move(restore));
+                return Result<void>::Success();
+            });
+            if (job.HasValue()) {
+                preparing_.emplace(Preparation{std::move(job).Value(), lifetime, std::move(output), Feedback::UndoFailed});
+                feedback_ = Feedback::Preparing;
+            }
+        } catch (const std::bad_alloc &) {
+            // A rejected preparation retains the last committed rename receipt.
         }
     }
 
@@ -237,9 +300,11 @@ namespace Horo::Editor {
             return false;
         }
         if (const auto &error = job->terminalResult->error; error || !*preparation.output || !files) {
-            feedback_ = error ? FailureFeedback(*error, Feedback::ApplyFailed) : Feedback::ApplyFailed;
+            feedback_ = error ? FailureFeedback(*error, preparation.failure) : preparation.failure;
             return false;
         }
+        if (const auto *restore = std::get_if<RenameRestore>(&**preparation.output))
+            return CommitRenameRestore(*restore, open, *files, mutations, preparation.lifetime);
         if (auto *operation = std::get_if<Proposals::PreparedSourceFileOperation>(&**preparation.output)) {
             if (auto *creation = std::get_if<Proposals::PreparedSourceCreate>(operation))
                 return CommitDraft(*creation, open, host, preparation.lifetime);
@@ -257,6 +322,7 @@ namespace Horo::Editor {
         batch_ = std::move(outcome.batch);
         draft_ = {};
         renamed_ = {};
+        beforeRename_ = {};
         committedFileOutcome_.reset();
         audit_ = std::move(outcome.audit);
         reverted_ = false;
@@ -293,6 +359,7 @@ namespace Horo::Editor {
         }
         draft_ = std::move(staged).Value();
         renamed_ = {};
+        beforeRename_ = {};
         batch_ = {};
         committedFileOutcome_.reset();
         audit_ = std::move(creation.audit);
@@ -375,6 +442,7 @@ namespace Horo::Editor {
         batch_ = {};
         draft_ = {};
         renamed_ = {};
+        beforeRename_ = {};
         committedFileOutcome_ = closed ? Proposals::SourceReviewDisposition::Saved : Proposals::SourceReviewDisposition::Stale;
         audit_ = std::move(deletion.audit);
         reverted_ = false;
@@ -390,20 +458,16 @@ namespace Horo::Editor {
         feedback_ = Feedback::ApplyFailed;
         if (!open || !mutations)
             return false;
-        const auto lease = mutations->TryAcquire({open->ProjectRoot(), ProjectMutationOwner::Asset, "source-review-rename"});
-        if (lease.HasError())
-            return false;
-        auto moved = open->RenameReviewed(rename.source, rename.destination, std::move(rename.text), rename.disk, files, lifetime);
+        auto moved =
+            MoveReviewSource(*open, *mutations, rename.source, rename.destination, std::move(rename.text), rename.disk, files, lifetime);
         if (moved.HasError()) {
-            const auto &error = moved.ErrorValue();
-            feedback_ = error.code.Value() == SourceDocumentErrors::SaveOutcomeUnknown.code.Value()
-                            ? Feedback::RenameRecovery
-                            : FailureFeedback(error, Feedback::ApplyFailed);
+            feedback_ = RenameFailure(moved.ErrorValue(), Feedback::ApplyFailed);
             return false;
         }
         batch_ = {};
         draft_ = {};
         renamed_ = std::move(moved).Value();
+        beforeRename_ = std::move(rename.source);
         committedFileOutcome_.reset();
         if (!renamed_.Dirty())
             committedFileOutcome_ = Proposals::SourceReviewDisposition::Saved;
@@ -412,6 +476,34 @@ namespace Horo::Editor {
         auditSequence_ = 0;
         feedback_ = Feedback::Renamed;
         return true;
+    }
+
+    /** @copydoc SourceReviewTransactions::CommitRenameRestore */
+    bool SourceReviewTransactions::CommitRenameRestore(const RenameRestore &restore, SourceFileOpenService *open, DurableFileSystem &files,
+                                                       const ProjectMutationCoordinator *mutations, const CancellationToken &lifetime) {
+        feedback_ = Feedback::UndoFailed;
+        if (!open || !mutations)
+            return false;
+        try {
+            const auto restored = MoveReviewSource(*open, *mutations, restore.current, restore.original.Identity().key.source,
+                                                   std::string{restore.original.Text()}, restore.disk, files, lifetime);
+            if (restored.HasError()) {
+                feedback_ = RenameFailure(restored.ErrorValue(), Feedback::UndoFailed);
+                if (feedback_ == Feedback::RenameRecovery) {
+                    committedFileOutcome_ = Proposals::SourceReviewDisposition::Stale;
+                    renamed_ = {};
+                    beforeRename_ = {};
+                }
+                return false;
+            }
+            renamed_ = {};
+            beforeRename_ = {};
+            reverted_ = true;
+            feedback_ = Feedback::Undone;
+            return true;
+        } catch (const std::bad_alloc &) {
+            return false;
+        }
     }
 
     /** @copydoc SourceReviewTransactions::UpdateAuditHistory */

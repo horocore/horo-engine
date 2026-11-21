@@ -804,6 +804,11 @@ only after a durable move, retaining the open tab and text history. Accepted
 rename hunks and existing unsaved edits stay in the resulting buffer. A later
 source save publishes the buffer at its new name. On failure the owner keeps
 the original routing and attempts an exclusive rollback after a visible move.
+The grouped Undo action can restore the old spelling and pre-review buffer
+while the rename's published document state is current. A worker verifies the
+renamed disk base before the owner moves it back. Undo uses the same exclusive
+move and leaves either path intact when the old name has acquired a new
+occupant. Saving or editing the renamed document retires its grouped undo.
 
 The Local Model panel can explicitly replace the recovery checkpoint at
 `.horo/local/agent/source-review` with the admitted proposal and its current decisions. The

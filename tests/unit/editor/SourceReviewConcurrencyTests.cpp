@@ -421,6 +421,15 @@ namespace {
         EditorWorkspaceViewCommandData apply;
         REQUIRE(QueueSourceReviewApplication("workspace", decisions, policy, plan, lifetime.Token(), apply));
         REQUIRE(reviews.Process(apply, open.Documents(), &jobs, project.directory, &files, &open));
+        const auto drain = [&] {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+            while (reviews.Status().feedback == SourceTransactionFeedback::Preparing && std::chrono::steady_clock::now() < deadline) {
+                static_cast<void>(reviews.Poll(open.Documents(), &files, &open, &host, &mutations));
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+            REQUIRE(reviews.Status().feedback != SourceTransactionFeedback::Preparing);
+            host.RefreshDocuments();
+        };
         auto expected = SourceTransactionFeedback::Renamed;
         SECTION("A late portable alias prevents commit") {
             project.Put("other author", "nested/Moved.cpp");
@@ -430,14 +439,8 @@ namespace {
             files.failAfterCommit = true;
             expected = SourceTransactionFeedback::Conflict;
         }
-        SECTION("A confirmed move preserves unsaved text and its independent disk base") {}
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
-        while (reviews.Status().feedback == SourceTransactionFeedback::Preparing && std::chrono::steady_clock::now() < deadline) {
-            static_cast<void>(reviews.Poll(open.Documents(), &files, &open, &host, &mutations));
-            std::this_thread::sleep_for(std::chrono::milliseconds{1});
-        }
+        drain();
         REQUIRE(reviews.Status().feedback == expected);
-        host.RefreshDocuments();
         CHECK(host.ActiveDocument() == identity.instance);
         const auto current = open.Documents().Snapshot(identity.instance).Value();
         if (expected != SourceTransactionFeedback::Renamed) {
@@ -462,10 +465,57 @@ namespace {
             std::ifstream disk(movedPath, std::ios::binary);
             CHECK((std::string{std::istreambuf_iterator<char>{disk}, {}} == "alpha beta"));
         }
-        const auto undo = open.Documents().Undo(identity.instance, current.Revision());
-        REQUIRE(undo.HasValue());
-        CHECK(undo.Value().snapshot.Text() == "alpha user");
-        CHECK(undo.Value().snapshot.Identity().key.source == destination);
+        SECTION("Document undo reverses text while the confirmed path stays current") {
+            const auto undo = open.Documents().Undo(identity.instance, current.Revision());
+            REQUIRE(undo.HasValue());
+            CHECK(undo.Value().snapshot.Text() == "alpha user");
+            CHECK(undo.Value().snapshot.Identity().key.source == destination);
+            CHECK_FALSE(reviews.Status().canUndo);
+        }
+        SECTION("Review undo moves the saved file back and restores the pre-review dirty buffer") {
+            EditorWorkspaceViewCommandData revert;
+            REQUIRE(reviews.QueueUndo(lifetime.Token(), revert));
+            REQUIRE(reviews.Process(revert, open.Documents(), &jobs, project.directory, &files, &open));
+            drain();
+            REQUIRE(reviews.Status().feedback == SourceTransactionFeedback::Undone);
+            CHECK(reviews.Status().disposition == SourceReviewDisposition::Reverted);
+            CHECK_FALSE(reviews.Status().canUndo);
+            CHECK_FALSE(std::filesystem::exists(movedPath));
+            CHECK(host.ActiveDocument() == identity.instance);
+            CHECK(host.DocumentTabs().front().identity == identity);
+            const auto restored = open.Documents().Snapshot(identity.instance).Value();
+            CHECK(restored.Text() == "alpha user");
+            CHECK(restored.DiskBase() == "alpha beta");
+            CHECK(restored.Dirty());
+            std::ifstream disk(project.directory / "code.cpp", std::ios::binary);
+            CHECK((std::string{std::istreambuf_iterator<char>{disk}, {}} == "alpha beta"));
+        }
+        SECTION("Review undo rejects a source edit made after it was queued") {
+            EditorWorkspaceViewCommandData revert;
+            REQUIRE(reviews.QueueUndo(lifetime.Token(), revert));
+            REQUIRE(reviews.Process(revert, open.Documents(), &jobs, project.directory, &files, &open));
+            const auto authored = open.Documents().Edit(identity.instance, {current.Revision(), 0, 7, "authored"});
+            REQUIRE(authored.HasValue());
+            drain();
+            CHECK(reviews.Status().feedback == SourceTransactionFeedback::Conflict);
+            CHECK_FALSE(reviews.Status().canUndo);
+            CHECK(open.Documents().Snapshot(identity.instance).Value().SharesStateWith(authored.Value()));
+            CHECK(std::filesystem::is_regular_file(movedPath));
+            CHECK_FALSE(std::filesystem::exists(project.directory / "code.cpp"));
+        }
+        SECTION("Review undo leaves a new occupant of the original name intact") {
+            project.Put("another source", "code.cpp");
+            EditorWorkspaceViewCommandData revert;
+            REQUIRE(reviews.QueueUndo(lifetime.Token(), revert));
+            REQUIRE(reviews.Process(revert, open.Documents(), &jobs, project.directory, &files, &open));
+            drain();
+            CHECK(reviews.Status().feedback == SourceTransactionFeedback::Conflict);
+            CHECK(reviews.Status().canUndo);
+            CHECK(open.Documents().Snapshot(identity.instance).Value().SharesStateWith(current));
+            CHECK(std::filesystem::is_regular_file(movedPath));
+            std::ifstream original(project.directory / "code.cpp", std::ios::binary);
+            CHECK((std::string{std::istreambuf_iterator<char>{original}, {}} == "another source"));
+        }
     }
 
     TEST_CASE("Overlapping review applications and group undo produce deterministic revisions", "[editor][source][review][concurrency]") {

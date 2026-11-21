@@ -85,6 +85,9 @@ namespace Horo::Editor {
         void Undo(const SourceEditBatch &receipt, SourceDocumentService &documents, const CancellationToken &lifetime);
         /** @brief Directs an exact unchanged draft undo through the owning document registry. */
         void UndoDraft(const SourceDocumentSnapshot &receipt, SourceFileOpenService *open, const CancellationToken &lifetime);
+        /** @brief Observes the exact current renamed file before restoring its original name and buffer. */
+        void StartRenameRestore(const SourceDocumentSnapshot &receipt, const JobSystem *jobs, const std::filesystem::path &root,
+                                const DurableFileSystem *files, const CancellationToken &lifetime);
         /** @brief Stages and presents one draft or retires the draft if the workspace rejects its tab. */
         bool CommitDraft(Proposals::PreparedSourceCreate &creation, SourceFileOpenService *open, WorkspacePanelHost *host,
                          const CancellationToken &lifetime);
@@ -94,20 +97,32 @@ namespace Horo::Editor {
         /** @brief Applies the confirmed rename through the source owner and its routing registry. */
         bool CommitRename(Proposals::PreparedSourceRename &rename, SourceFileOpenService *open, DurableFileSystem &files,
                           const ProjectMutationCoordinator *mutations, const CancellationToken &lifetime);
+
+        struct RenameRestore final {
+            SourceDocumentSnapshot current;
+            SourceDocumentSnapshot original;
+            SourceBatchDiskEvidence disk;
+        };
+
+        /** @brief Reverses a confirmed rename after its live document and disk evidence are rechecked. */
+        bool CommitRenameRestore(const RenameRestore &restore, SourceFileOpenService *open, DurableFileSystem &files,
+                                 const ProjectMutationCoordinator *mutations, const CancellationToken &lifetime);
         SourceEditBatch batch_;
         SourceDocumentSnapshot draft_;
         SourceDocumentSnapshot renamed_;
+        SourceDocumentSnapshot beforeRename_;
         std::shared_ptr<const Proposals::SourceReviewAudit> audit_;
         Proposals::SourceTransactionFeedback feedback_{};
         bool reverted_{};
         std::optional<Proposals::SourceReviewDisposition> committedFileOutcome_;
 
-        using Candidate = std::variant<Proposals::PreparedSourceReview, Proposals::PreparedSourceFileOperation>;
+        using Candidate = std::variant<Proposals::PreparedSourceReview, Proposals::PreparedSourceFileOperation, RenameRestore>;
 
         struct Preparation final {
             JobHandle job;
             CancellationToken lifetime;
             std::shared_ptr<std::optional<Candidate>> output;
+            Proposals::SourceTransactionFeedback failure{Proposals::SourceTransactionFeedback::ApplyFailed};
         };
 
         std::optional<Preparation> preparing_;
