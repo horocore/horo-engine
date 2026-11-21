@@ -26,7 +26,7 @@ namespace Horo::Animation::Test::Instance {
         std::shared_ptr<const AnimationGraphProgram> program;
         GraphInstanceCreateContext context;
 
-        explicit Prepared(AnimationGraphData graph = Graph::Simple(), std::uint64_t clipGeneration = 6) {
+        explicit Prepared(const AnimationGraphData &graph = Graph::Simple(), std::uint64_t clipGeneration = 6, bool rootMotion = false) {
             skeleton = std::make_shared<const SkeletonAsset>(Graph::GraphTestDependencies::MakeSkeleton());
             for (std::uint8_t id = 3; id <= 4; ++id) {
                 AnimationClipData data;
@@ -39,7 +39,8 @@ namespace Horo::Animation::Test::Instance {
                 Math::Transform first;
                 first.translation.x = id == 3 ? 0.0F : 100.0F;
                 auto last = first;
-                last.translation.x += 100.0F;
+                last.translation.x += rootMotion ? 100.0F * static_cast<float>(id - 2) : 100.0F;
+                data.descriptor.hasRootMotion = rootMotion;
                 data.tracks = {{Id<JointId>(1), {{{0}, first}, {{100}, last}}}};
                 auto clip = AnimationClipAsset::Create(std::move(data), *skeleton);
                 REQUIRE(clip.HasValue());
@@ -61,6 +62,10 @@ namespace Horo::Animation::Test::Instance {
             REQUIRE(compiled.HasValue());
             program = std::make_shared<const AnimationGraphProgram>(std::move(compiled).Value());
             context.instance = {Id<AnimationRuntimeId>(1), Id<AnimationComponentId>(2), {0, 1}};
+            if (rootMotion) {
+                context.evaluationDomain = AnimationEvaluationDomain::AuthoritativeSimulation;
+                context.extractRootMotion = true;
+            }
         }
 
         [[nodiscard]] GraphInstanceAssets Assets() const {

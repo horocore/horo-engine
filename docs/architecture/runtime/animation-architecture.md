@@ -808,6 +808,19 @@ from the last key to the first, and PingPong turns compose the reverse segment.
 The result includes the traversal cursor. Extraction uses caller-owned scratch
 storage and does not commit the cursor or produce a movement request.
 
+An authoritative graph instance can explicitly opt in to extraction for its
+single skeleton root. The instance reserves storage for clip traversal, motion per
+pose writer, and action travel when it is created. Normalized layers, blend trees,
+and state transitions blend the directed deltas with their admitted weights.
+Layer masks and coverage participate at the exact root joint. Synchronization
+alignment and frozen poses contribute no travel. Action sections accumulate
+weighted deltas in traversal order.
+
+The fixed commit publishes the output delta beside its exact pose generation.
+`CopyRootMotion` reads either resident publication without consuming it. An
+aborted attempt leaves the last committed delta and cursor intact. The read
+provides data for the movement owner and carries no movement authority.
+
 Rules:
 
 - root motion is optional per clip

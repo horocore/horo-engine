@@ -607,6 +607,11 @@ namespace Horo::Animation {
         return data_;
     }
 
+    /** @copydoc AnimationClipAsset::HasRootMotionTrack */
+    bool AnimationClipAsset::HasRootMotionTrack() const noexcept {
+        return rootMotionTrack_.has_value() && *rootMotionTrack_ < data_.tracks.size();
+    }
+
     /** @copydoc AnimationClipAsset::TraversePrepared */
     AnimationClipOutcome<AnimationClipTraversal> AnimationClipAsset::TraversePrepared(const AnimationClipCursor cursor,
                                                                                       const AnimationTimeDelta delta,
@@ -727,7 +732,7 @@ namespace Horo::Animation {
         using Outcome = AnimationClipOutcome<AnimationClipRootMotion>;
         if (const auto admitted = ValidateAdmission(admission); admitted.HasError())
             return Outcome::Failure(admitted.ErrorValue());
-        if (!rootMotionTrack_.has_value())
+        if (!HasRootMotionTrack())
             return HotReject<AnimationClipRootMotion>(AnimationErrors::ClipUnsupported,
                                                       "Root motion requires a flagged absolute clip with a single tracked root.");
         const auto trace = TraceRegionPrepared(cursor, delta, region, scratch, limits, admission);

@@ -30,9 +30,9 @@ namespace Horo::Animation {
     }  // namespace
 
     TEST_CASE("Cooked graph declarations reconstruct the actual immutable compiler program", "[animation][graph][cooked]") {
-        for (auto graph : {Test::Graph::Simple(), Test::Graph::Blended(), Test::Graph::Subgraphs(), Test::Graph::RepeatedCalls(),
-                           Test::StateGraph::Data()}) {
-            Test::Instance::Prepared fixture(std::move(graph));
+        for (const auto &graph : {Test::Graph::Simple(), Test::Graph::Blended(), Test::Graph::Subgraphs(), Test::Graph::RepeatedCalls(),
+                                  Test::StateGraph::Data()}) {
+            Test::Instance::Prepared fixture(graph);
             const auto cooked = Cooked(*fixture.program);
             const auto loaded = AnimationGraphProgram::FromCooked(cooked, Context(fixture));
             REQUIRE(loaded.HasValue());

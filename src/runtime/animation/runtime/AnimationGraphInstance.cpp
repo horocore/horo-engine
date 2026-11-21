@@ -210,7 +210,8 @@ namespace Horo::Animation {
         /** @brief Charges notify values and the existing base workspace as one checked admission category. */
         bool AdmitPreparedStorage(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context,
                                   StorageBudget &charge) noexcept {
-            return charge(Detail::ClipNotifyStorageBytes(assets, context), 1) && AdmitBaseStorage(assets, charge, context.actions);
+            return charge(Detail::ClipNotifyStorageBytes(assets, context), 1) &&
+                   charge(Detail::RootMotionStorageBytes(*assets.program, context), 1) && AdmitBaseStorage(assets, charge, context.actions);
         }
 
         /** @brief Resolves one immutable state declaration for both storage and
@@ -287,7 +288,7 @@ namespace Horo::Animation {
             using enum GraphInstanceFailure;
             if (context.maximumControlOperations > 64ULL * 1024ULL * 1024ULL)
                 return LimitExceeded;
-            std::uint64_t control = Detail::ClipNotifyOperations(assets, context) +
+            std::uint64_t control = Detail::ClipNotifyOperations(assets, context) + Detail::RootMotionOperations(*assets.program, context) +
                                     assets.program->Occurrences().size() * (4ULL * assets.program->Memory().callDepth + 4ULL);
             control += 2048ULL * assets.program->Memory().blendMembers;
             control += Detail::ActionControlOperations(*assets.program, context.actions);
@@ -320,6 +321,8 @@ namespace Horo::Animation {
             if (const auto failure = AdmitStorage(assets, context); failure != None)
                 return failure;
             if (const auto failure = AdmitClipBindings(assets, context.clipLimits); failure != None)
+                return failure;
+            if (const auto failure = Detail::AdmitRootMotion(assets, context); failure != None)
                 return failure;
             if (const auto failure = AdmitCurves(assets, context); failure != None)
                 return failure;
@@ -431,6 +434,7 @@ namespace Horo::Animation {
             }
             if (const auto failure = PrepareWorkspace(*state, assets, context.actions); failure != GraphInstanceFailure::None)
                 return Result<AnimationGraphInstance>::Failure(DescribeGraphInstanceFailure({failure}));
+            Detail::PrepareRootMotion(*state, context);
             if (const auto failure = Detail::PrepareClipNotifies(*state, context); failure != GraphInstanceFailure::None)
                 return Result<AnimationGraphInstance>::Failure(DescribeGraphInstanceFailure({failure}));
             if (context.cancellation.IsCancellationRequested())
@@ -532,6 +536,8 @@ namespace Horo::Animation {
                                 {slot, static_cast<std::uint32_t>(generation)},
                                 PoseGeneration::Create(generation).Value()};
         std::ranges::copy(state_->Pose(state_->program->OutputSlot()), state_->published.poses[slot].begin());
+        if (!state_->rootMotion.poses.empty())
+            state_->published.rootMotion[slot] = state_->rootMotion.poses[state_->program->OutputSlot().index];
         std::ranges::copy(state_->candidate.parameters, state_->published.parameters[slot].begin());
         std::ranges::fill(state_->queuedTriggers, 0);
         PublishBlendMembers(*state_, slot);
@@ -612,6 +618,16 @@ namespace Horo::Animation {
             return {GraphInstanceFailure::LimitExceeded};
         for (std::size_t index = 0; index < output.size(); ++index)
             output[index] = {declarations[index].id, state_->published.parameters[publication.slot.index][index]};
+        return {};
+    }
+
+    /** @copydoc AnimationGraphInstance::CopyRootMotion */
+    GraphInstanceOutcome AnimationGraphInstance::CopyRootMotion(const PoseHandle &publication, AnimationRootMotionDelta &output) const {
+        if (const auto resident = ResidentPublication(state_.get(), publication); resident.HasError())
+            return resident;
+        if (state_->rootMotion.poses.empty())
+            return {GraphInstanceFailure::AdmissionRejected};
+        output = state_->published.rootMotion[publication.slot.index];
         return {};
     }
 

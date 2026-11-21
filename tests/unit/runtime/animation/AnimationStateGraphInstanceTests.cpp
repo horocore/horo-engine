@@ -59,6 +59,23 @@ namespace Horo::Animation::Test {
         CHECK(completed.events[completed.count - 1].kind == GraphStateEventKind::TransitionCompleted);
     }
 
+    TEST_CASE("Graph root motion transitions blend active intervals without including pose offsets",
+              "[animation][state_graph][root-motion]") {
+        Prepared fixture(StateGraph::Data(), 6, true);
+        auto instance = fixture.Create();
+        AnimationRootMotionDelta motion;
+        Tick initial(instance, 1, 10);
+        REQUIRE(instance.CopyRootMotion(instance.Publication().currentPose, motion).HasValue());
+        CHECK(motion.translation.x == 10.0F);
+        const std::array<GraphParameterInput, 1> speed{{{Id<GraphParameterId>(1), 2.0F}}};
+        Tick started(instance, 2, 10, speed);
+        REQUIRE(instance.CopyRootMotion(instance.Publication().currentPose, motion).HasValue());
+        CHECK(motion.translation.x == 10.0F);
+        Tick blended(instance, 3, 25, speed);
+        REQUIRE(instance.CopyRootMotion(instance.Publication().currentPose, motion).HasValue());
+        CHECK(motion.translation.x == 31.25F);
+    }
+
     TEST_CASE("Animation compiled state cut self transitions restart the exact entered lane", "[animation][state_graph]") {
         auto graph = StateGraph::Data();
         auto &transition = StateGraph::Machine(graph).transitions[0];

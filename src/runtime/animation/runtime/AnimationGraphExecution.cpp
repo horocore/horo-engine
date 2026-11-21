@@ -89,6 +89,14 @@ namespace Horo::Animation::Detail {
             return std::ranges::all_of(pose, ValidPoseTransform);
         }
 
+        /** @brief Additive sampling retains its authored base's travel while absolute sampling owns its travel. */
+        void WriteClipRootMotion(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
+                                 const GraphInstruction &instruction, AnimationClipKind kind, AnimationRootMotionDelta delta) noexcept {
+            if (auto &motion = state.rootMotion.poses; !motion.empty())
+                motion[occurrence.output.index] =
+                    kind == AnimationClipKind::Additive ? motion[Operand(occurrence, instruction, GraphPinRole::FirstPose).index] : delta;
+        }
+
         /** @brief Samples one actual immutable clip with its independent occurrence
          * player candidate. */
         GraphInstanceOutcome SampleClip(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
@@ -98,10 +106,12 @@ namespace Horo::Animation::Detail {
             if (delta.HasError())
                 return {GraphInstanceFailure::ClipFailure, delta.ErrorValue()};
             const auto &clip = *state.clips[*occurrence.clipBindingIndex];
-            const auto traversal = clip.TraversePrepared(player.cursor, delta.Value(), state.clipLimits);
-            if (traversal.HasError())
-                return {GraphInstanceFailure::ClipFailure, traversal.ErrorValue()};
             const auto &binding = clip.Data().descriptor;
+            const AnimationClipRegion region{{0}, {binding.duration.ticks}, binding.wrapMode};
+            const auto rootTravel = TraverseRootMotion(state, clip, player.cursor, delta.Value(), region);
+            if (rootTravel.HasError())
+                return {GraphInstanceFailure::ClipFailure, rootTravel.ErrorValue()};
+            const auto &traversal = rootTravel.Value().traversal;
             AnimationClipSampleContext sample{.skeleton = binding.skeleton,
                                               .skeletonGeneration = binding.skeletonGeneration,
                                               .clipGeneration = binding.generation,
@@ -111,7 +121,7 @@ namespace Horo::Animation::Detail {
                 sample.referenceLocalPose = state.Pose(Operand(occurrence, instruction, GraphPinRole::ReferencePose));
                 sample.referencePose = binding.referencePose;
             }
-            if (const auto sampled = clip.SamplePrepared(traversal.Value().sampleTime, sample); sampled.HasError())
+            if (const auto sampled = clip.SamplePrepared(traversal.sampleTime, sample); sampled.HasError())
                 return {GraphInstanceFailure::ClipFailure, sampled.ErrorValue()};
             if (!SampledPoseValid(state.Pose(occurrence.output)))
                 return {GraphInstanceFailure::Malformed};
@@ -122,12 +132,12 @@ namespace Horo::Animation::Detail {
                 for (std::size_t joint = 0; joint < coverage.size(); ++joint)
                     coverage[joint] = static_cast<std::uint8_t>(coverage[joint] != 0 || baseCoverage[joint] != 0);
             }
-            if (const auto notified =
-                    StageClipNotifies(state, *occurrence.clipPlayer, *occurrence.clipBindingIndex, player.cursor, delta.Value(),
-                                      {{0}, {binding.duration.ticks}, binding.wrapMode}, ClipNotifyEligible(state, occurrence));
+            if (const auto notified = StageClipNotifies(state, *occurrence.clipPlayer, *occurrence.clipBindingIndex, player.cursor,
+                                                        delta.Value(), region, ClipNotifyEligible(state, occurrence));
                 notified.HasError())
                 return notified;
-            player.cursor = traversal.Value().cursor;
+            WriteClipRootMotion(state, occurrence, instruction, binding.kind, rootTravel.Value().delta);
+            player.cursor = traversal.cursor;
             return {};
         }
 
@@ -149,26 +159,32 @@ namespace Horo::Animation::Detail {
         GraphInstanceOutcome BlendPose(GraphInstanceState &state, const GraphInstructionOccurrence &occurrence,
                                        const GraphInstruction &instruction) {
             using enum GraphPinRole;
-            const auto first = state.Pose(Operand(occurrence, instruction, FirstPose));
-            const auto second = state.Pose(Operand(occurrence, instruction, SecondPose));
-            const auto firstCoverage = state.Coverage(Operand(occurrence, instruction, FirstPose));
-            const auto secondCoverage = state.Coverage(Operand(occurrence, instruction, SecondPose));
+            const auto baseSlot = Operand(occurrence, instruction, FirstPose);
+            const auto overlaySlot = Operand(occurrence, instruction, SecondPose);
+            const auto firstCoverage = state.Coverage(baseSlot);
+            const auto secondCoverage = state.Coverage(overlaySlot);
             const auto &policy = std::get<GraphBlendNode>(instruction.payload);
             const auto weightSlot = Operand(occurrence, instruction, Weight);
             const auto weight =
                 std::clamp(std::get<float>(
                                state.scalars.values[state.scalars.offsets[static_cast<std::size_t>(weightSlot.type)] + weightSlot.index]),
                            0.0F, 1.0F);
-            PoseCompositionInput composition{.base = first,
-                                             .overlay = second,
+            PoseCompositionInput composition{.base = state.Pose(baseSlot),
+                                             .overlay = state.Pose(overlaySlot),
                                              .mask = occurrence.jointMask,
                                              .mode = policy.mode,
                                              .weight = weight};
-            if (policy.mode != GraphBlendMode::Normalized)
-                composition.reference = state.Pose(Operand(occurrence, instruction, ReferencePose));
+            GraphWorkingSlot referenceSlot;
+            if (policy.mode != GraphBlendMode::Normalized) {
+                referenceSlot = Operand(occurrence, instruction, ReferencePose);
+                composition.reference = state.Pose(referenceSlot);
+            }
             if (policy.missingJoint == GraphMissingJointPolicy::PreserveBase)
                 composition.coverage = secondCoverage;
             if (const auto failure = ComposePose(composition, state.Pose(occurrence.output)); failure != GraphInstanceFailure::None)
+                return {failure};
+            if (const auto failure = LayerRootMotion(state, occurrence.output, baseSlot, overlaySlot, referenceSlot, composition);
+                failure != GraphInstanceFailure::None)
                 return {failure};
             LayerCoverage(policy, occurrence.jointMask, weight, firstCoverage, secondCoverage, state.Coverage(occurrence.output));
             return {};
@@ -207,6 +223,8 @@ namespace Horo::Animation::Detail {
             std::ranges::copy(state.machines, state.candidate.machines.begin());
             std::ranges::copy(state.latches, state.candidate.latches.begin());
             state.candidate.eventCount = 0;
+            std::ranges::fill(state.rootMotion.poses, AnimationRootMotionDelta{});
+            std::ranges::fill(state.rootMotion.actions, GraphActionRootMotion{});
             for (auto &machine : state.candidate.machines) {
                 machine.visited = false;
                 machine.retiring = false;

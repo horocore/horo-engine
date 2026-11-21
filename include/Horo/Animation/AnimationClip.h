@@ -490,6 +490,9 @@ namespace Horo::Animation {
          * by this asset. */
         [[nodiscard]] const AnimationClipData &Data() const noexcept;
 
+        /** @brief Reports whether this publication has a usable root motion track. @return True for a tracked absolute root. */
+        [[nodiscard]] bool HasRootMotionTrack() const noexcept;
+
         /**
          * @brief Advances one canonical cursor by an exact signed amount without
          * mutating player state.

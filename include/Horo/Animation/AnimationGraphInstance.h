@@ -108,6 +108,7 @@ namespace Horo::Animation {
         AnimationEvaluationDomain evaluationDomain{
             AnimationEvaluationDomain::Count}; /**< Adapters must forward the actual component domain when clips contain event metadata;
                                                   Count only preserves event-empty legacy instances. */
+        bool extractRootMotion{};              /**< Explicit opt-in for an authoritative instance with one tracked skeleton root. */
     };
 
     /** @brief One attempted fixed tick; caller views are copied before execution
@@ -488,6 +489,12 @@ namespace Horo::Animation {
          * supplied.
          */
         [[nodiscard]] GraphInstanceOutcome CopyParameters(const PoseHandle &publication, std::span<GraphParameterInput> output) const;
+        /** @brief Copies the graph's composed rigid motion for one exact resident pose.
+         * @param publication Exact current or previous committed handle. @param output Receives the motion on success.
+         * @return Typed owner, admission or residency outcome. Failure preserves output.
+         * @details Requires explicit authoritative extraction at creation. The value carries no movement authority.
+         */
+        [[nodiscard]] GraphInstanceOutcome CopyRootMotion(const PoseHandle &publication, AnimationRootMotionDelta &output) const;
         /** @brief Copies the complete state lifecycle event block for an exact
          * resident committed publication.
          * @param publication Exact pose publication returned by Commit; both retained

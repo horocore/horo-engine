@@ -2025,7 +2025,8 @@ add_library(HoroAnimationRuntime STATIC
         runtime/animation/runtime/AnimationParameterCurve.cpp
         runtime/animation/runtime/AnimationGraphInstance.cpp
         runtime/animation/runtime/AnimationPoseComposition.cpp
-        runtime/animation/runtime/AnimationGraphExecution.cpp)
+        runtime/animation/runtime/AnimationGraphExecution.cpp
+        runtime/animation/runtime/AnimationGraphRootMotion.cpp)
 add_library(HoroEngine::AnimationRuntime ALIAS HoroAnimationRuntime)
 target_compile_features(HoroAnimationRuntime PUBLIC cxx_std_20)
 target_link_libraries(HoroAnimationRuntime PUBLIC HoroEngine::AnimationApi)
