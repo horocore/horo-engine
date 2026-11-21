@@ -5,6 +5,12 @@
 #include "CharacterWorldShapeInternal.h"
 
 namespace Horo::Character::Detail {
+    /** @brief Includes a Scene frame that is closed to producers pending the scheduler decision. */
+    [[nodiscard]] std::uint64_t ClosedAdmissionTick(const auto &impl) noexcept {
+        const auto frozen = impl.frozenSceneTick.load();
+        return std::max(frozen, impl.closedTick.load());
+    }
+
     /** @brief Validates immutable request evidence before attempting queue ownership. */
     [[nodiscard]] Result<void> ValidateAdmissionRequest(const auto &impl, const CharacterMovementRequest &request) {
         if (!impl.acceptingCommands.load())
@@ -12,7 +18,7 @@ namespace Horo::Character::Detail {
         if (const auto valid = ValidateCharacterMovementRequest(request, impl.descriptor.sceneGeneration, impl.descriptor.identity);
             valid.HasError())
             return valid;
-        if (request.tick <= impl.closedTick.load())
+        if (request.tick <= ClosedAdmissionTick(impl))
             return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
         return Result<void>::Success();
     }
@@ -40,7 +46,7 @@ namespace Horo::Character::Detail {
         const std::uint32_t slot = request.controller.slot.index;
         if (slot >= impl.controllerGenerations.size() || impl.controllerGenerations[slot] != request.controller.slot.generation)
             return Result<void>::Failure(MakeError(CharacterErrors::HandleStale));
-        if (request.tick <= impl.closedTick.load() || request.sequence <= impl.closedSequences[slot])
+        if (request.tick <= ClosedAdmissionTick(impl) || request.sequence <= impl.closedSequences[slot])
             return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
         if (request.filterChange) {
             if (const auto valid = ValidateCharacterCollisionSelectors(*request.filterChange, impl.descriptor.physicsWorld);
@@ -93,21 +99,36 @@ namespace Horo::Character::Detail {
         return left.sequence < right.sequence;
     }
 
-    /** @brief Restores the non-reentrant tick guard and completes deferred owner shutdown. */
+    /** @brief Releases the attempted tick exclusion and completes deferred owner shutdown. */
+    void ReleaseTick(auto &impl) noexcept {
+        impl.debug.End();
+        impl.frozenSceneTick.store(0);
+        impl.ticking.store(false);
+        DrainDeferredShutdown(impl);
+    }
+
+    /** @brief Holds the non-reentrant tick guard or transfers it to the Scene transaction. */
     template <typename Impl> struct TickGuard final {
-        explicit TickGuard(Impl &impl) noexcept : impl_(impl), previous_(impl_.ticking.exchange(true)) {}
+        explicit TickGuard(Impl &impl) noexcept : impl_(impl) {
+            impl_.ticking.store(true);
+        }
 
         ~TickGuard() noexcept {
-            impl_.debug.End();
-            impl_.ticking.store(previous_);
-            DrainDeferredShutdown(impl_);
+            if (!retained_)
+                ReleaseTick(impl_);
         }
 
         TickGuard(const TickGuard &) = delete;
         TickGuard &operator=(const TickGuard &) = delete;
 
+        /** @brief Transfers release of the active tick exclusion to Scene commit or abort. */
+        void RetainForScene() noexcept {
+            retained_ = true;
+        }
+
+    private:
         Impl &impl_;
-        bool previous_{};
+        bool retained_{};
     };
 
     /** @brief Validates a frozen frame completely before queue or controller publication changes. */
@@ -129,8 +150,19 @@ namespace Horo::Character::Detail {
         return Result<void>::Success();
     }
 
-    /** @brief Canonicalizes and removes one validated eligible frame while holding queue ownership. */
-    [[nodiscard]] Result<void> FreezeCommandFrame(auto &impl, const CharacterFixedTickInput &input) {
+    /** @brief Retires the frozen frame's queue entries and advances the producer watermark under the queue lock. */
+    void CloseCommandFrame(auto &impl, const std::uint64_t tick) noexcept {
+        for (const CharacterMovementRequest &command : impl.fastPath.CommandScratch())
+            impl.closedSequences[command.controller.slot.index] = command.sequence;
+        std::erase_if(impl.fastPath.Commands(), [tick](const CharacterQueuedMovement &queued) {
+            return queued.request.tick == tick;
+        });
+        impl.pendingCommands.store(static_cast<std::uint32_t>(impl.fastPath.Commands().size()));
+        impl.closedTick.store(tick);
+    }
+
+    /** @brief Canonicalizes the eligible frame and freezes it to producers under the queue lock. */
+    [[nodiscard]] Result<void> FreezeCommandFrame(auto &impl, const CharacterFixedTickInput &input, const bool retainForScene = false) {
         if (const auto targets = ValidatePlatformTargets(impl, input); targets.HasError())
             return targets;
         const auto queueLock = impl.synchronization.LockCommands();
@@ -157,13 +189,10 @@ namespace Horo::Character::Detail {
         std::ranges::sort(impl.fastPath.CommandScratch(), CommandLess);
         if (const auto valid = ValidateFrozenCommands(impl); valid.HasError())
             return valid;
-        for (const CharacterMovementRequest &command : impl.fastPath.CommandScratch())
-            impl.closedSequences[command.controller.slot.index] = command.sequence;
-        std::erase_if(impl.fastPath.Commands(), [&input](const CharacterQueuedMovement &queued) {
-            return queued.request.tick == input.tick;
-        });
-        impl.pendingCommands.store(static_cast<std::uint32_t>(impl.fastPath.Commands().size()));
-        impl.closedTick.store(input.tick);
+        if (retainForScene)
+            impl.frozenSceneTick.store(input.tick);
+        else
+            CloseCommandFrame(impl, input.tick);
         return Result<void>::Success();
     }
 
@@ -393,7 +422,7 @@ namespace Horo::Character::Detail {
     [[nodiscard]] Result<CharacterLocomotionSnapshot> BuildLocomotionSnapshot(const CharacterControllerRecord &record,
                                                                               const CharacterMovementRequest &command,
                                                                               const CharacterMovementResult &movement,
-                                                                              const CharacterFixedTickInput &input) {
+                                                                              const std::uint64_t tick) {
         if (record.publication.publicationRevision == std::numeric_limits<std::uint64_t>::max() ||
             record.stateRevision == std::numeric_limits<std::uint64_t>::max())
             return Result<CharacterLocomotionSnapshot>::Failure(MakeError(CharacterErrors::PublicationRevisionExhausted));
@@ -401,7 +430,7 @@ namespace Horo::Character::Detail {
         const std::uint64_t nextPublicationRevision = record.publication.publicationRevision + 1;
         const std::uint64_t nextStateRevision = record.stateRevision + 1;
         const CharacterTransformPublication publication{command.controller,
-                                                        input.tick,
+                                                        tick,
                                                         nextPublicationRevision,
                                                         movement.finalPosition,
                                                         movement.finalHeading,
@@ -410,7 +439,7 @@ namespace Horo::Character::Detail {
                                                         movement.platformAttached,
                                                         movement.groundingRevalidationRequired,
                                                         CharacterTransformAuthority::CharacterController};
-        CharacterLocomotionSnapshot snapshot{command.controller, input.tick,     nextStateRevision, movement,
+        CharacterLocomotionSnapshot snapshot{command.controller, tick,           nextStateRevision, movement,
                                              publication,        record.capsule, record.stance};
         snapshot.selectors = command.filterChange.value_or(record.descriptor.selectors);
         if (movement.shapeChange.has_value()) {
@@ -473,7 +502,7 @@ namespace Horo::Character::Detail {
     }
 
     /** @brief Validates all staged publications while registry and publication state are frozen. */
-    [[nodiscard]] Result<void> PreflightCommandFrame(auto &impl, const CharacterFixedTickInput &input) {
+    [[nodiscard]] Result<void> PreflightCommandFrame(auto &impl, const std::uint64_t tick) {
         if (impl.published.publicationRevision == std::numeric_limits<std::uint64_t>::max())
             return Result<void>::Failure(MakeError(CharacterErrors::PublicationRevisionExhausted));
         std::size_t movementResultIndex{};
@@ -489,7 +518,7 @@ namespace Horo::Character::Detail {
             if (movementResultIndex >= impl.fastPath.MovementResults().size())
                 return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
             if (const auto snapshot =
-                    BuildLocomotionSnapshot(*record.Value(), command, impl.fastPath.MovementResults()[movementResultIndex], input);
+                    BuildLocomotionSnapshot(*record.Value(), command, impl.fastPath.MovementResults()[movementResultIndex], tick);
                 snapshot.HasError())
                 return Result<void>::Failure(snapshot.ErrorValue());
             ++movementResultIndex;
@@ -537,7 +566,7 @@ namespace Horo::Character::Detail {
     }
 
     /** @brief Commits one final command and its already-preflighted immutable publication. */
-    [[nodiscard]] Result<void> CommitCommand(auto &impl, const CharacterMovementRequest &command, const CharacterFixedTickInput &input,
+    [[nodiscard]] Result<void> CommitCommand(auto &impl, const CharacterMovementRequest &command, const std::uint64_t tick,
                                              std::size_t &movementResultIndex) {
         const auto record = impl.controllers.ResolveMutable(command.controller);
         if (record.HasError())
@@ -549,7 +578,7 @@ namespace Horo::Character::Detail {
         if (movementResultIndex >= impl.fastPath.MovementResults().size())
             return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
         const auto snapshot =
-            BuildLocomotionSnapshot(*record.Value(), command, impl.fastPath.MovementResults()[movementResultIndex++], input);
+            BuildLocomotionSnapshot(*record.Value(), command, impl.fastPath.MovementResults()[movementResultIndex++], tick);
         if (snapshot.HasError())
             return Result<void>::Failure(snapshot.ErrorValue());
         CharacterLocomotionSnapshot committed = std::move(snapshot).Value();
@@ -563,22 +592,18 @@ namespace Horo::Character::Detail {
         record.Value()->locomotion = std::move(committed);
         if (command.rootMotion.has_value())
             record.Value()->lastRootMotion = command.rootMotion->source;
-        impl.debug.Commit(command.controller, input.tick, impl.descriptor.physicsSnapshotRevision);
+        impl.debug.Commit(command.controller, tick, impl.descriptor.physicsSnapshotRevision);
         return Result<void>::Success();
     }
 
-    /** @brief Preflights and commits all resolved movement candidates under one publication lock. */
-    [[nodiscard]] Result<void> CommitCommandFrame(auto &impl, const CharacterFixedTickInput &input) {
-        const auto registryLock = impl.synchronization.LockRegistry();
-        const auto publicationLock = impl.synchronization.LockPublication();
-        if (const auto valid = PreflightCommandFrame(impl, input); valid.HasError())
-            return valid;
+    /** @brief Adopts the preflighted frame while registry and publication ownership are held. */
+    [[nodiscard]] Result<void> CommitPreflightedFrame(auto &impl, const std::uint64_t tick) {
         impl.fastPath.BeginEventFrame();
         std::size_t movementResultIndex{};
         for (std::size_t index = 0; index < impl.fastPath.CommandScratch().size(); ++index) {
             if (!IsFinalCommand(impl.fastPath.CommandScratch(), index))
                 continue;
-            if (const auto committed = CommitCommand(impl, impl.fastPath.CommandScratch()[index], input, movementResultIndex);
+            if (const auto committed = CommitCommand(impl, impl.fastPath.CommandScratch()[index], tick, movementResultIndex);
                 committed.HasError())
                 return committed;
         }
@@ -591,15 +616,18 @@ namespace Horo::Character::Detail {
         const auto resolved = ResolveCommandFrame(impl, input);
         if (resolved.HasError())
             return Result<std::uint32_t>::Failure(resolved.ErrorValue());
-        if (const auto committed = CommitCommandFrame(impl, input); committed.HasError())
+        const auto registryLock = impl.synchronization.LockRegistry();
+        const auto publicationLock = impl.synchronization.LockPublication();
+        if (const auto valid = PreflightCommandFrame(impl, input.tick); valid.HasError())
+            return Result<std::uint32_t>::Failure(valid.ErrorValue());
+        if (const auto committed = CommitPreflightedFrame(impl, input.tick); committed.HasError())
             return Result<std::uint32_t>::Failure(committed.ErrorValue());
         return resolved;
     }
 
-    /** @brief Atomically replaces the coherent Character publication marker. */
-    void PublishTick(auto &impl, const CharacterFixedTickInput &input, const std::uint32_t applied) noexcept {
-        const auto publicationLock = impl.synchronization.LockPublication();
-        impl.published.completedTick = input.tick;
+    /** @brief Replaces the coherent tick marker with publication ownership held. */
+    void PublishTick(auto &impl, const std::uint64_t tick, const std::uint32_t applied) noexcept {
+        impl.published.completedTick = tick;
         ++impl.published.publicationRevision;
         impl.published.appliedCommands = applied;
         CharacterEventCapture frame;
@@ -607,7 +635,7 @@ namespace Horo::Character::Detail {
         frame.sceneGeneration = impl.descriptor.sceneGeneration;
         frame.world = impl.descriptor.identity;
         frame.physicsWorld = impl.descriptor.physicsWorld;
-        frame.tick = input.tick;
+        frame.tick = tick;
         frame.publicationRevision = impl.published.publicationRevision;
         impl.fastPath.PublishEventFrame(frame);
     }

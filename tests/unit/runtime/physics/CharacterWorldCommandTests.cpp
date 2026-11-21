@@ -1,5 +1,6 @@
 #include "AllocationProbe.h"
 #include "CharacterWorldTestHelpers.h"
+#include "PhysicsSceneHostAccess.h"
 
 #include <array>
 #include <barrier>
@@ -355,6 +356,72 @@ namespace Horo::Character {
             CHECK(second.Value().movement.finalHeading.y == Catch::Approx(yaw.y));
             CHECK(second.Value().movement.up == Math::Vec3{0, 1, 0});
             CHECK(second.Value().movement.rootMotion->remaining.rotation.w == Catch::Approx(1.0F));
+        }
+
+        TEST_CASE("Scene Character root feedback stays private until the exact attempt commits", "[physics][character][root-motion]") {
+            using Detail::CharacterSceneFixedAccess;
+            auto spawned = SpawnedActiveWorldWithController();
+            auto &world = *spawned.world;
+            const auto original = world.ControllerTransform(spawned.controller);
+            REQUIRE(original.HasValue());
+            const auto fixed = FixedTick(1);
+            const Detail::CharacterSceneFixedInput input{.delta = fixed.fixedDelta};
+            const Detail::CharacterSceneTickAttempt first{1, 11};
+            const Detail::CharacterSceneTickAttempt staleIntent{1, 12};
+            const Detail::CharacterSceneTickAttempt retry{1, 13};
+            auto request = Movement(spawned.controller, 1, 1);
+            request.rootMotion = CharacterRootMotionIntent{{7, first.attempt}, {{0.1F, 0, 0}, {}}};
+            REQUIRE(world.QueueMovementCommand(request).HasValue());
+            REQUIRE(CharacterSceneFixedAccess::Stage(world, first, input).HasValue());
+            const auto pending = CharacterSceneFixedAccess::ReadRootMotion(world, first, spawned.controller);
+            REQUIRE(pending.HasValue());
+            REQUIRE(pending.Value().has_value());
+            CHECK(pending.Value()->applied.translation.x == Catch::Approx(0.1F));
+            const auto beforeCommit = world.ControllerTransform(spawned.controller);
+            REQUIRE(beforeCommit.HasValue());
+            CHECK(beforeCommit.Value().position == original.Value().position);
+            CHECK(beforeCommit.Value().publicationRevision == original.Value().publicationRevision);
+            CHECK(world.PublishedTick().completedTick == 0);
+            CHECK(world.TickStatistics().pendingCommands == 1);
+            CHECK(world.AdvanceFixedTick(fixed).HasError());
+
+            ++request.sequence;
+            request.rootMotion->source.attempt = retry.attempt;
+            CHECK(world.QueueMovementCommand(request).HasError());
+            CharacterSceneFixedAccess::Abort(world, first);
+            CHECK(CharacterSceneFixedAccess::ReadRootMotion(world, first, spawned.controller).HasError());
+            CHECK(CharacterSceneFixedAccess::Stage(world, first, input).HasError());
+            CHECK(CharacterSceneFixedAccess::Stage(world, staleIntent, input).HasError());
+            REQUIRE(world.QueueMovementCommand(request).HasValue());
+            REQUIRE(CharacterSceneFixedAccess::Stage(world, retry, input).HasValue());
+            CharacterSceneFixedAccess::Abort(world, first);
+            CHECK(CharacterSceneFixedAccess::ReadRootMotion(world, first, spawned.controller).HasError());
+            const auto replacement = CharacterSceneFixedAccess::ReadRootMotion(world, retry, spawned.controller);
+            REQUIRE(replacement.HasValue());
+            REQUIRE(replacement.Value().has_value());
+            CHECK(replacement.Value()->source == request.rootMotion->source);
+            CharacterSceneFixedAccess::Commit(world, retry);
+            CHECK(world.ControllerTransform(spawned.controller).Value().position.x == Catch::Approx(0.1F));
+            CHECK(world.PublishedTick().completedTick == 1);
+            CHECK(world.PublishedTick().appliedCommands == 1);
+            CHECK(world.TickStatistics().pendingCommands == 0);
+            CHECK(CharacterSceneFixedAccess::ReadRootMotion(world, retry, spawned.controller).HasError());
+        }
+
+        TEST_CASE("Scene Character shutdown retires the staged attempt and drains commands", "[physics][character][root-motion]") {
+            using Detail::CharacterSceneFixedAccess;
+            auto spawned = SpawnedActiveWorldWithController();
+            auto &world = *spawned.world;
+            const Detail::CharacterSceneTickAttempt attempt{1, 1};
+            REQUIRE(world.QueueMovementCommand(Movement(spawned.controller, 1, 1)).HasValue());
+            REQUIRE(CharacterSceneFixedAccess::Stage(world, attempt, {.delta = FixedTick(1).fixedDelta}).HasValue());
+            world.Shutdown();
+            CharacterSceneFixedAccess::Abort(world, attempt);
+            CHECK(world.State() == CharacterWorldState::Destroyed);
+            CHECK(world.ActiveControllerCount() == 0);
+            CHECK(world.TickStatistics().pendingCommands == 0);
+            CHECK(world.PublishedTick().completedTick == 0);
+            CHECK(CharacterSceneFixedAccess::ReadRootMotion(world, attempt, spawned.controller).HasError());
         }
 
         TEST_CASE("Character capsule sweep rejects stale snapshots and malformed hit evidence without publication",

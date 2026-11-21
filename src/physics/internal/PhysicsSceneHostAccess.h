@@ -4,7 +4,7 @@
  * @brief Non-installed application-owner access to the one aggregate-owned published Physics/Character pair.
  */
 #include "../PhysicsSceneStateTarget.h"
-#include "Horo/Physics/CharacterWorld.h"
+#include "CharacterSceneFixedAccess.h"
 #include "Horo/Physics/PhysicsSceneActivation.h"
 
 namespace Horo::Physics::Detail {

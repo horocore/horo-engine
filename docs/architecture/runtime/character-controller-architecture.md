@@ -862,6 +862,13 @@ are invalid. Reverse player traversal may submit the inverse directed delta when
 animation and gameplay policy admit it; the controller still performs ordinary
 forward collision resolution and does not reverse physics.
 
+The non-installed Scene fixed-tick boundary keeps a resolved candidate private
+until the host commits the exact tick and scheduler attempt. The paired Scene
+owner can copy candidate root feedback before publication. Controller transforms,
+events, and the tick watermark become visible together at commit. An aborted
+attempt releases the queue for retry and retains its gameplay commands. A root
+command must carry the current scheduler attempt before the world can stage it.
+
 Gameplay selects the admitted translation/rotation mode before command closure.
 `Suggest` uses an explicit gameplay-translation presence bit, not a velocity
 epsilon. Platform carry applies first. Desired gameplay heading establishes the

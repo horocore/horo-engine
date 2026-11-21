@@ -1,6 +1,7 @@
 #include "CharacterWorldCommandInternal.h"
 
 #include <chrono>
+#include <exception>
 
 namespace Horo::Character {
     namespace {
@@ -16,7 +17,7 @@ namespace Horo::Character {
                 return owner;
             if (input.metrics != nullptr)
                 input.metrics->snapshot = {};
-            if (impl.state.load() != CharacterWorldState::Active || impl.ticking.load())
+            if (impl.state.load() != CharacterWorldState::Active || impl.ticking.load() || impl.placementActive)
                 return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
             if (input.tick == 0 || input.sceneGeneration != impl.descriptor.sceneGeneration || input.fixedDelta <= Duration{} ||
                 input.tick != impl.closedTick.load() + 1)
@@ -143,12 +144,102 @@ namespace Horo::Character {
             return Result<void>::Failure(MakeError(CharacterErrors::InvalidState));
 
         impl_->fastPath.Canonicalize();
-        Detail::PublishTick(*impl_, input, applied.Value());
+        {
+            const auto publicationLock = impl_->synchronization.LockPublication();
+            Detail::PublishTick(*impl_, input.tick, applied.Value());
+        }
         impl_->completedTicks.fetch_add(1);
         Detail::ObservePhase(input, CharacterTickPhase::PublishCompletedTick);
         metrics.FinishPhase(CharacterMetricPhase::PublishCompletedTick);
         metrics.Commit(impl_->published.publicationRevision);
         return Result<void>::Success();
+    }
+
+    /** @copydoc Detail::CharacterSceneFixedAccess::Stage */
+    Result<void> Detail::CharacterSceneFixedAccess::Stage(CharacterWorld &world, const CharacterSceneTickAttempt attempt,
+                                                          const CharacterSceneFixedInput &source) {
+        auto &impl = *world.impl_;
+        const CharacterFixedTickInput input{.tick = attempt.tick,
+                                            .sceneGeneration = impl.descriptor.sceneGeneration,
+                                            .fixedDelta = source.delta,
+                                            .query = source.query,
+                                            .platformTargets = source.platformTargets};
+        if (const auto valid = ValidateTickAdmission(impl, input); valid.HasError())
+            return valid;
+        if (attempt.attempt <= impl.lastSceneAttempt)
+            return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
+        impl.lastSceneAttempt = attempt.attempt;
+
+        TickGuard ticking{impl};
+        impl.fastPath.ResetTransient();
+        impl.tickQueries = 0;
+        if (const auto frozen = FreezeCommandFrame(impl, input, true); frozen.HasError())
+            return frozen;
+        const auto resolved = ResolveCommandFrame(impl, input);
+        if (resolved.HasError())
+            return Result<void>::Failure(resolved.ErrorValue());
+        if (std::ranges::any_of(impl.fastPath.MovementResults(), [attempt](const auto &movement) {
+            return movement.rootMotion.has_value() && movement.rootMotion->source.attempt != attempt.attempt;
+        }))
+            return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
+
+        const auto registryLock = impl.synchronization.LockRegistry();
+        const auto publicationLock = impl.synchronization.LockPublication();
+        if (const auto valid = PreflightCommandFrame(impl, attempt.tick); valid.HasError())
+            return valid;
+        impl.stagedSceneTick = StagedCharacterSceneTick{attempt, resolved.Value()};
+        ticking.RetainForScene();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc Detail::CharacterSceneFixedAccess::ReadRootMotion */
+    Result<std::optional<CharacterRootMotionFeedback>> Detail::CharacterSceneFixedAccess::ReadRootMotion(
+        const CharacterWorld &world, const CharacterSceneTickAttempt attempt, const CharacterControllerHandle controller) {
+        using Output = Result<std::optional<CharacterRootMotionFeedback>>;
+        const auto &impl = *world.impl_;
+        if (const auto owner = RequireOwnerThread(impl.ownerThread); owner.HasError())
+            return Output::Failure(owner.ErrorValue());
+        if (!impl.stagedSceneTick || impl.stagedSceneTick->attempt != attempt)
+            return Output::Failure(MakeError(CharacterErrors::InvalidState));
+        const auto registryLock = impl.synchronization.LockRegistry();
+        if (const auto record = impl.controllers.Resolve(controller); record.HasError())
+            return Output::Failure(record.ErrorValue());
+
+        const auto &results = impl.fastPath.MovementResults();
+        const auto found = std::ranges::lower_bound(results, controller, {}, &CharacterMovementResult::controller);
+        if (found == results.end() || found->controller != controller)
+            return Output::Success(std::nullopt);
+        return Output::Success(found->rootMotion);
+    }
+
+    /** @copydoc Detail::CharacterSceneFixedAccess::Commit */
+    void Detail::CharacterSceneFixedAccess::Commit(CharacterWorld &world, const CharacterSceneTickAttempt attempt) noexcept {
+        auto &impl = *world.impl_;
+        if (impl.ownerThread != std::this_thread::get_id() || !impl.stagedSceneTick || impl.stagedSceneTick->attempt != attempt)
+            std::terminate();
+        {
+            const auto queueLock = impl.synchronization.LockCommands();
+            const auto registryLock = impl.synchronization.LockRegistry();
+            const auto publicationLock = impl.synchronization.LockPublication();
+            CloseCommandFrame(impl, attempt.tick);
+            if (const auto committed = CommitPreflightedFrame(impl, attempt.tick); committed.HasError())
+                std::terminate();
+            impl.fastPath.Canonicalize();
+            PublishTick(impl, attempt.tick, impl.stagedSceneTick->applied);
+        }
+        impl.completedTicks.fetch_add(1);
+        impl.stagedSceneTick.reset();
+        ReleaseTick(impl);
+    }
+
+    /** @copydoc Detail::CharacterSceneFixedAccess::Abort */
+    void Detail::CharacterSceneFixedAccess::Abort(CharacterWorld &world, const CharacterSceneTickAttempt attempt) noexcept {
+        auto &impl = *world.impl_;
+        if (impl.ownerThread != std::this_thread::get_id() || !impl.stagedSceneTick || impl.stagedSceneTick->attempt != attempt)
+            return;
+        impl.stagedSceneTick.reset();
+        impl.fastPath.ResetTransient();
+        ReleaseTick(impl);
     }
 
     /** @copydoc CharacterWorld::PublishedTick */

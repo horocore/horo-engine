@@ -6,6 +6,7 @@
 #include "CharacterFastPathStorage.h"
 #include "Horo/Physics/CharacterWorld.h"
 #include "Horo/Physics/PhysicsWorldSettings.h"
+#include "internal/CharacterSceneFixedAccess.h"
 
 #include <algorithm>
 #include <array>
@@ -20,6 +21,12 @@
 
 namespace Horo::Character {
     namespace Detail {
+        /** @brief Owner-lane identity and count retained between staging and the scheduler fence. */
+        struct StagedCharacterSceneTick final {
+            CharacterSceneTickAttempt attempt;
+            std::uint32_t applied{};
+        };
+
         /** @brief Target-private owned controller state prepared for later fixed-tick behavior. */
         struct CharacterControllerRecord final {
             CharacterControllerDescriptor descriptor;
@@ -134,6 +141,9 @@ namespace Horo::Character {
         Detail::CharacterWorldSynchronization synchronization;
         CharacterPublishedTick published;
         std::atomic<std::uint64_t> closedTick{};
+        std::atomic<std::uint64_t> frozenSceneTick{}; /**< Producer admission fence while the staged queue is retained. */
+        std::optional<Detail::StagedCharacterSceneTick> stagedSceneTick; /**< Read and resolved only on the owner lane. */
+        std::uint64_t lastSceneAttempt{}; /**< Owner-lane watermark includes aborted attempts so they cannot be reopened. */
         std::atomic<bool> acceptingCommands{};
         std::atomic<std::uint64_t> admittedCommands{};
         std::atomic<std::uint64_t> rejectedCommands{};
