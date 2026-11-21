@@ -32,7 +32,8 @@ namespace {
             const auto envelope = "{\"jsonrpc\":\"2.0\",\"id\":\"1\"," + std::string{body} + "}";
             auto decoded = DecodeLspMessage(envelope);
             REQUIRE(decoded.HasValue());
-            const LspIncoming incoming{std::move(decoded).Value(), SourceLanguageReply{kind, source}, 1};
+            const LspIncoming incoming{std::move(decoded).Value(), SourceLanguageReply{kind, source}, 1,
+                                       static_cast<std::int32_t>(source.Revision())};
             return ProjectLspReply(incoming, "file:///project");
         }
     };

@@ -7,6 +7,8 @@
 #include "LspRequests.h"
 #include "LspResultProjection.h"
 
+#include <map>
+
 namespace Horo::Editor::Language {
     struct LspDocumentUpdate;
 
@@ -15,6 +17,7 @@ namespace Horo::Editor::Language {
         LspMessage message;
         std::optional<SourceLanguageReply> reply;
         std::uint64_t session{};
+        std::int32_t wireVersion{};
     };
 
     /** @brief Transport operations used on the editor lane. Native process ownership stays with the host. */
@@ -108,6 +111,11 @@ namespace Horo::Editor::Language {
         [[nodiscard]] Incoming Dispatch(LspMessage message, Clock::time_point now);
         /** @brief Correlates feature responses against the current session and source revision. */
         [[nodiscard]] Incoming ReadFeature(LspMessage message);
+        /** @brief Binds a versioned diagnostic notification to the exact live document. */
+        [[nodiscard]] Incoming ReadPublishedDiagnostics(LspMessage message);
+        /** @brief Commits the new wire version only when the source owner admits the same baseline. */
+        [[nodiscard]] Result<void> BindWireDocument(const SourceDocumentSnapshot &snapshot, DocumentInstanceId instance,
+                                                    std::int32_t version);
         /** @brief Queues an owned frame, retiring the connection on backpressure or failure. */
         [[nodiscard]] Result<void> Send(std::string frame);
         /** @brief Sends a rekey's close before the new open, retiring the connection after either refusal. */
@@ -123,6 +131,8 @@ namespace Horo::Editor::Language {
         LspLifecycle lifecycle_;
         LspFeatures features_;
         std::string rootUri_;
+        std::map<DocumentInstanceId, std::int32_t> wireVersions_;
+        std::int32_t lastWireVersion_{};
         std::uint64_t stamp_{};
         bool stopped_{};
     };

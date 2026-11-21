@@ -218,6 +218,13 @@ Only current-document code-action edits with a matching version or a
 request-bound unversioned change are offered as proposals; commands and file
 operations carry no execution authority.
 
+The connection advertises support for versioned diagnostic notifications.
+Each accepted source update uses a connection-unique wire version, even when
+the editor reopens a file at revision one. A publication must match the
+project-relative URI, the wire version and the current snapshot. An empty
+matching publication clears diagnostics. Publications without a usable
+version do not replace current diagnostics.
+
 The Platform runner exposes a worker-side raw stdin/stdout channel for
 language processes. Protocol bytes and bounded stderr logs use separate paths.
 Process-tree ownership stays with Platform, including when a queue refuses

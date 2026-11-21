@@ -1,6 +1,5 @@
 #include "LspDocumentSync.h"
 
-#include <limits>
 #include <new>
 
 namespace Horo::Editor::Language {
@@ -62,22 +61,21 @@ namespace Horo::Editor::Language {
         }
 
         /** @brief Sends the complete current bytes when introducing a document URI. */
-        Result<std::string> Open(std::string uri, const std::string_view languageId, const SourceDocumentSnapshot &source) {
-            return Notify("textDocument/didOpen", {{"textDocument",
-                                                    {{"uri", std::move(uri)},
-                                                     {"languageId", languageId},
-                                                     {"version", source.Revision()},
-                                                     {"text", source.Text()}}}});
+        Result<std::string> Open(std::string uri, const std::string_view languageId, const SourceDocumentSnapshot &source,
+                                 const std::int32_t version) {
+            return Notify("textDocument/didOpen",
+                          {{"textDocument",
+                            {{"uri", std::move(uri)}, {"languageId", languageId}, {"version", version}, {"text", source.Text()}}}});
         }
 
         /** @brief Uses a single replacement over the previous peer baseline for incremental servers. */
         Result<std::string> Change(std::string uri, const SourceDocumentSnapshot &source, const SourceDocumentSnapshot &previous,
-                                   const LspTextSync mode) {
+                                   const LspTextSync mode, const std::int32_t version) {
             nlohmann::json content{{"text", source.Text()}};
             if (mode == LspTextSync::Incremental)
                 content["range"] = {{"start", {{"line", 0}, {"character", 0}}},
                                     {"end", LspPositionAt(previous.Text(), previous.Text().size()).value()}};
-            return Notify("textDocument/didChange", {{"textDocument", {{"uri", std::move(uri)}, {"version", source.Revision()}}},
+            return Notify("textDocument/didChange", {{"textDocument", {{"uri", std::move(uri)}, {"version", version}}},
                                                      {"contentChanges", nlohmann::json::array({std::move(content)})}});
         }
 
@@ -91,14 +89,15 @@ namespace Horo::Editor::Language {
         /** @brief Resolves the current and prior names once before assembling wire frames. */
         Result<LspDocumentUpdate> PrepareUpdate(const std::string_view rootUri, const std::string_view languageId,
                                                 const SourceDocumentSnapshot &current,
-                                                const std::optional<SourceDocumentSnapshot> &previous, const LspTextSync mode) {
+                                                const std::optional<SourceDocumentSnapshot> &previous, const LspTextSync mode,
+                                                const std::int32_t version) {
             using Output = Result<LspDocumentUpdate>;
             const auto currentId = current.Identity().key.source;
             const auto previousId = previous ? previous->Identity().key.source : SourceDocumentId{};
             auto uri = DocumentUri(rootUri, currentId.Value());
             const bool replacesUri = previous && previousId != currentId;
-            auto frame =
-                previous && !replacesUri ? Change(std::move(uri), current, *previous, mode) : Open(std::move(uri), languageId, current);
+            auto frame = previous && !replacesUri ? Change(std::move(uri), current, *previous, mode, version)
+                                                  : Open(std::move(uri), languageId, current, version);
             if (frame.HasError())
                 return Output::Failure(std::move(frame).ErrorValue());
             LspDocumentUpdate update{std::nullopt, std::move(frame).Value()};
@@ -126,14 +125,15 @@ namespace Horo::Editor::Language {
     /** @copydoc BuildLspDocumentUpdate */
     Result<LspDocumentUpdate> BuildLspDocumentUpdate(const std::string_view rootUri, const std::string_view languageId,
                                                      const SourceDocumentSnapshot &current,
-                                                     const std::optional<SourceDocumentSnapshot> &previous, const LspTextSync mode) {
+                                                     const std::optional<SourceDocumentSnapshot> &previous, const LspTextSync mode,
+                                                     const std::int32_t version) {
         using Output = Result<LspDocumentUpdate>;
         if (mode == LspTextSync::Disabled || !ValidRoot(rootUri) || languageId.empty() || languageId.size() > 128)
             return Output::Failure(MakeError(SourceDocumentErrors::Invalid));
-        if (current.Revision() > std::numeric_limits<std::int32_t>::max() || current.Text().size() >= MaximumLspBodyBytes)
+        if (version <= 0 || current.Text().size() >= MaximumLspBodyBytes)
             return Output::Failure(MakeError(SourceDocumentErrors::TooLarge));
         try {
-            return PrepareUpdate(rootUri, languageId, current, previous, mode);
+            return PrepareUpdate(rootUri, languageId, current, previous, mode, version);
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(SourceDocumentErrors::TooLarge));
         }

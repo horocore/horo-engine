@@ -31,6 +31,18 @@ namespace {
         return request;
     }
 
+    /** @brief Waits for one incoming protocol item while checking transport health. */
+    std::optional<LspIncoming> AwaitIncoming(LspProcess &process) {
+        std::optional<LspIncoming> output;
+        REQUIRE(Await([&] {
+            auto result = process.Poll(LspProcess::Clock::now());
+            REQUIRE(result.HasValue());
+            output = std::move(result).Value();
+            return output.has_value();
+        }));
+        return output;
+    }
+
     TEST_CASE("Native LSP worker initializes requests and shuts down over a real child process") {
         TestSupport::SourceProject project;
         project.Put("int answer;", "source.cpp");
@@ -50,14 +62,14 @@ namespace {
             return source.State() == SourceLanguageSessionState::Ready;
         }));
         REQUIRE(process.Connection().SyncSource(snapshot, "cpp").HasValue());
+        const auto diagnostics = AwaitIncoming(process);
+        REQUIRE(diagnostics.has_value());
+        const auto publication = process.Connection().ProjectReply(*diagnostics);
+        REQUIRE(publication.HasValue());
+        CHECK(std::get<LanguageDiagnostics>(publication.Value().payload).items.empty());
         REQUIRE(process.Connection().Request(snapshot, SourceLanguageRequestKind::Hover).HasValue());
-        std::optional<LspIncoming> reply;
-        REQUIRE(Await([&] {
-            auto result = process.Poll(LspProcess::Clock::now());
-            REQUIRE(result.HasValue());
-            reply = std::move(result).Value();
-            return reply.has_value();
-        }));
+        const auto reply = AwaitIncoming(process);
+        REQUIRE(reply.has_value());
         REQUIRE(reply->reply.has_value());
         CHECK(reply->reply->source.SharesStateWith(snapshot));
         const auto projected = process.Connection().ProjectReply(*reply);

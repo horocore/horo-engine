@@ -167,4 +167,6 @@ TEST_CASE("LSP lifecycle rejects invalid launch metadata before opening a connec
     const auto frame = ReadFrame(rootless.Value());
     CHECK(frame.envelope.Get().at("params").at("rootUri").is_null());
     CHECK(frame.envelope.Get().at("params").at("processId").is_null());
+    const auto &capabilities = frame.envelope.Get().at("params").at("capabilities");
+    CHECK(capabilities.at("textDocument").at("publishDiagnostics").at("versionSupport") == true);
 }

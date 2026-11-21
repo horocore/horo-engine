@@ -9,6 +9,15 @@
 
 namespace Horo::Editor::Language {
     struct LspIncoming;
+    struct LspMessage;
+
+    inline constexpr std::string_view PublishDiagnosticsMethod = "textDocument/publishDiagnostics";
+
+    /** @brief Validated routing key for a versioned diagnostic notification. */
+    struct LspDiagnosticTarget final {
+        SourceDocumentId source;
+        std::int32_t wireVersion{};
+    };
 
     /** @brief Half-open byte span in the retained source snapshot. Empty spans are valid. */
     struct LanguageByteSpan final {
@@ -121,9 +130,12 @@ namespace Horo::Editor::Language {
         LanguagePayload payload;
     };
 
-    /** @brief Projects a correlated reply into editor values without opening files or applying edits.
-     * @param incoming Reply and its exact source snapshot. @param rootUri Host-owned project URI.
+    /** @brief Projects a correlated reply or diagnostic publication without opening files or applying edits.
+     * @param incoming Message, exact source snapshot and wire version. @param rootUri Host-owned project URI.
      * @return A mapped value, an empty payload for null, or a refusal for stale or malformed data.
      */
     [[nodiscard]] Result<LanguageResult> ProjectLspReply(const LspIncoming &incoming, std::string_view rootUri);
+
+    /** @brief Returns a project-scoped target only when the peer supplies a usable document version. */
+    [[nodiscard]] std::optional<LspDiagnosticTarget> ReadLspDiagnosticTarget(const LspMessage &message, std::string_view rootUri);
 }  // namespace Horo::Editor::Language

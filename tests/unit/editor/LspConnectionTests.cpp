@@ -48,9 +48,10 @@ namespace {
     }
 
     /** @brief Opens a native source document for pending-work tests. */
-    SourceDocumentSnapshot OpenSource(TestSupport::SourceProject &project, SourceFileOpenService &open) {
-        project.Put("int speed;", "source.cpp");
-        auto result = open.Open({.path = "source.cpp"});
+    SourceDocumentSnapshot OpenSource(TestSupport::SourceProject &project, SourceFileOpenService &open, const char *path = "source.cpp",
+                                      const std::string_view text = "int speed;") {
+        project.Put(text, path);
+        auto result = open.Open({.path = path});
         REQUIRE(result.HasValue());
         REQUIRE(result.Value().sourceSnapshot.has_value());
         return *result.Value().sourceSnapshot;
@@ -86,6 +87,24 @@ namespace {
         }
     };
 
+    /** @brief Reads the exact LSP version from a real outgoing open or change notification. */
+    std::int32_t SynchronizedVersion(const TestTransport &transport) {
+        const auto message = Inspect(transport.writes.back());
+        return message.envelope.Get().at("params").at("textDocument").at("version").get<std::int32_t>();
+    }
+
+    /** @brief Forms a push notification with optional version and a valid or cleared diagnostic list. */
+    std::string Publication(const std::string_view uri, const std::optional<std::int32_t> version, const bool empty = false) {
+        nlohmann::json diagnostics = nlohmann::json::array();
+        if (!empty)
+            diagnostics.push_back({{"message", "test diagnostic"},
+                                   {"range", {{"start", {{"line", 0}, {"character", 0}}}, {"end", {{"line", 0}, {"character", 3}}}}}});
+        nlohmann::json params{{"uri", uri}, {"diagnostics", std::move(diagnostics)}};
+        if (version)
+            params["version"] = *version;
+        return nlohmann::json{{"jsonrpc", "2.0"}, {"method", PublishDiagnosticsMethod}, {"params", std::move(params)}}.dump();
+    }
+
     TEST_CASE("LSP transport gates feature dispatch until initialized is queued and retires work during shutdown") {
         SourceLanguageSession source;
         TestTransport transport;
@@ -96,7 +115,7 @@ namespace {
         REQUIRE(transport.writes.size() == 1);
         CHECK(transport.writes.back().find("\"method\":\"initialize\"") != std::string::npos);
 
-        constexpr std::string_view notification = R"({"jsonrpc":"2.0","method":"textDocument/publishDiagnostics","params":{}})";
+        constexpr std::string_view notification = R"({"jsonrpc":"2.0","method":"window/logMessage","params":{}})";
         const auto tooSoon = Deliver(connection, notification);
         REQUIRE(tooSoon.HasValue());
         CHECK_FALSE(tooSoon.Value());
@@ -339,11 +358,7 @@ namespace {
         TestSupport::SourceProject project;
         SourceFileOpenService open{project.directory};
         const auto first = OpenSource(project, open);
-        project.Put("int second;", "second.cpp");
-        auto opened = open.Open({.path = "second.cpp"});
-        REQUIRE(opened.HasValue());
-        REQUIRE(opened.Value().sourceSnapshot.has_value());
-        const auto second = *opened.Value().sourceSnapshot;
+        const auto second = OpenSource(project, open, "second.cpp", "int second;");
         QueryConnection fixture{first};
         auto &connection = fixture.connection;
         REQUIRE(connection.SyncSource(second, "cpp").HasValue());
@@ -372,5 +387,65 @@ namespace {
         CHECK(result.Value()->reply->kind == References);
         CHECK(result.Value()->reply->source.SharesStateWith(second));
         CHECK_FALSE(Deliver(connection, Reply(live.Value())).Value());
+    }
+
+    TEST_CASE("LSP pushes only admit the current wire version and URI and support clearing diagnostics") {
+        TestSupport::SourceProject project;
+        SourceFileOpenService open{project.directory};
+        const auto first = OpenSource(project, open);
+        QueryConnection fixture{first};
+        auto &connection = fixture.connection;
+        const auto firstVersion = SynchronizedVersion(fixture.transport);
+        const auto second = OpenSource(project, open, "second.cpp", "int second;");
+        REQUIRE(connection.SyncSource(second, "cpp").HasValue());
+        const auto secondVersion = SynchronizedVersion(fixture.transport);
+        REQUIRE(secondVersion > firstVersion);
+        constexpr std::string_view uri = "file:///project/source.cpp";
+        CHECK_FALSE(Deliver(connection, Publication(uri, std::nullopt)).Value());
+        CHECK_FALSE(Deliver(connection, Publication(uri, secondVersion)).Value());
+        CHECK_FALSE(Deliver(connection, Publication("file:///outside/source.cpp", firstVersion)).Value());
+
+        const auto routed = Deliver(connection, Publication(uri, firstVersion));
+        REQUIRE(routed.HasValue());
+        REQUIRE(routed.Value().has_value());
+        const auto projected = connection.ProjectReply(*routed.Value());
+        REQUIRE(projected.HasValue());
+        CHECK(projected.Value().context.source.SharesStateWith(first));
+        REQUIRE(std::get<LanguageDiagnostics>(projected.Value().payload).items.size() == 1);
+
+        const auto cleared = Deliver(connection, Publication(uri, firstVersion, true));
+        REQUIRE(cleared.HasValue());
+        REQUIRE(cleared.Value().has_value());
+        const auto clear = connection.ProjectReply(*cleared.Value());
+        REQUIRE(clear.HasValue());
+        CHECK(std::get<LanguageDiagnostics>(clear.Value().payload).items.empty());
+        REQUIRE(open.Documents().Edit(first.Identity().instance, {first.Revision(), 0, 3, "float"}).HasValue());
+        CHECK_FALSE(Deliver(connection, Publication(uri, firstVersion)).Value());
+        CHECK(connection.ProjectReply(*routed.Value()).HasError());
+    }
+
+    TEST_CASE("LSP diagnostic wire versions are never reused after reopening the same URI") {
+        TestSupport::SourceProject project;
+        SourceFileOpenService open{project.directory};
+        const auto first = OpenSource(project, open);
+        QueryConnection fixture{first};
+        const auto previous = SynchronizedVersion(fixture.transport);
+        const auto firstInstance = first.Identity().instance;
+        REQUIRE(fixture.connection.CloseSource(firstInstance).HasValue());
+        REQUIRE(open.CloseDocument(firstInstance).HasValue());
+        const auto reopened = OpenSource(project, open);
+        REQUIRE(reopened.Revision() == first.Revision());
+        REQUIRE(reopened.Identity().instance != firstInstance);
+        REQUIRE(fixture.connection.SyncSource(reopened, "cpp").HasValue());
+        const auto current = SynchronizedVersion(fixture.transport);
+        REQUIRE(current > previous);
+        constexpr std::string_view uri = "file:///project/source.cpp";
+        CHECK_FALSE(Deliver(fixture.connection, Publication(uri, previous)).Value());
+        const auto fresh = Deliver(fixture.connection, Publication(uri, current));
+        REQUIRE(fresh.HasValue());
+        REQUIRE(fresh.Value().has_value());
+        const auto typed = fixture.connection.ProjectReply(*fresh.Value());
+        REQUIRE(typed.HasValue());
+        CHECK(typed.Value().context.source.SharesStateWith(reopened));
     }
 }  // namespace

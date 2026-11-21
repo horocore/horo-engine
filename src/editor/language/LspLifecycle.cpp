@@ -107,7 +107,9 @@ namespace Horo::Editor::Language {
         try {
             const nlohmann::json params{{"processId", processId ? nlohmann::json(*processId) : nlohmann::json(nullptr)},
                                         {"rootUri", rootUri.empty() ? nlohmann::json(nullptr) : nlohmann::json(rootUri)},
-                                        {"capabilities", {{"general", {{"positionEncodings", nlohmann::json::array({"utf-16"})}}}}}};
+                                        {"capabilities",
+                                         {{"general", {{"positionEncodings", nlohmann::json::array({"utf-16"})}}},
+                                          {"textDocument", {{"publishDiagnostics", {{"versionSupport", true}}}}}}}};
             auto frame = EncodeLspMessage({{"jsonrpc", "2.0"}, {"id", InitializeId}, {"method", "initialize"}, {"params", params}});
             if (frame.HasError())
                 return frame;

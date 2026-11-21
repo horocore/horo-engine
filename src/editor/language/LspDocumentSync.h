@@ -24,11 +24,13 @@ namespace Horo::Editor::Language {
     /** @brief Prepares document frames without advancing the source session.
      * @param rootUri Host-supplied absolute project file URI. @param languageId Adapter-selected LSP language ID.
      * @param current Current source snapshot. @param previous Exact peer baseline, if any.
-     * @param mode Negotiated writable synchronization strategy. @return Prepared frames or a typed refusal.
+     * @param mode Negotiated writable synchronization strategy. @param version Connection-unique wire version.
+     * @return Prepared frames or a typed refusal.
      */
     [[nodiscard]] Result<LspDocumentUpdate> BuildLspDocumentUpdate(std::string_view rootUri, std::string_view languageId,
                                                                    const SourceDocumentSnapshot &current,
-                                                                   const std::optional<SourceDocumentSnapshot> &previous, LspTextSync mode);
+                                                                   const std::optional<SourceDocumentSnapshot> &previous, LspTextSync mode,
+                                                                   std::int32_t version);
 
     /** @brief Encodes retirement of one exact project-relative source URI.
      * @param rootUri Host-supplied absolute project file URI. @param source Canonical source identity.

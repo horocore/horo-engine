@@ -144,11 +144,9 @@ namespace Horo::Editor::Language {
             return output;
         }
 
-        /** @brief Maps a pulled full diagnostic report onto current source bytes. */
-        std::optional<LanguagePayload> ProjectDiagnostics(const Json &value, SourceCoordinates &coordinates) {
-            if (Field(value, "kind") != "full")
-                return std::nullopt;
-            auto items = Items<LanguageDiagnostic>(Field(value, "items"), [&](const Json &item) -> std::optional<LanguageDiagnostic> {
+        /** @brief Maps diagnostics onto current source bytes for either protocol delivery mode. */
+        std::optional<LanguagePayload> ProjectDiagnosticItems(const Json &value, SourceCoordinates &coordinates) {
+            auto items = Items<LanguageDiagnostic>(value, [&](const Json &item) -> std::optional<LanguageDiagnostic> {
                 const auto message = Text(Field(item, "message"));
                 const auto range = coordinates.Span(Field(item, "range"));
                 const auto severity = Integer(Field(item, "severity")).value_or(0);
@@ -159,6 +157,13 @@ namespace Horo::Editor::Language {
             if (!items)
                 return std::nullopt;
             return LanguageDiagnostics{std::move(*items)};
+        }
+
+        /** @brief Maps a complete pull response using the same model as push diagnostics. */
+        std::optional<LanguagePayload> ProjectDiagnosticReport(const Json &value, SourceCoordinates &coordinates) {
+            if (Field(value, "kind") != "full")
+                return std::nullopt;
+            return ProjectDiagnosticItems(Field(value, "items"), coordinates);
         }
 
         /** @brief Appends plain or marked hover text as inert display content. */
@@ -358,22 +363,21 @@ namespace Horo::Editor::Language {
         }
 
         /** @brief Resolves a versioned single-document edit, excluding file operations. */
-        const Json *VersionedEdits(const Json &changes, const std::string_view uri, const std::uint64_t revision) {
+        const Json *VersionedEdits(const Json &changes, const std::string_view uri, const std::int32_t wireVersion) {
             if (!changes.is_array() || changes.size() != 1)
                 return nullptr;
             const auto &change = changes.front();
             const auto &document = Field(change, "textDocument");
             const auto version = Integer(Field(document, "version"));
-            if (Text(Field(document, "uri")).value_or("") != uri || !version || *version < 0 ||
-                static_cast<std::uint64_t>(*version) != revision)
+            if (Text(Field(document, "uri")).value_or("") != uri || !version || *version != wireVersion)
                 return nullptr;
             return &Field(change, "edits");
         }
 
         /** @brief Resolves a single current-document workspace edit without falling back from a stale version. */
-        const Json *WorkspaceEdits(const Json &value, const std::string_view uri, const std::uint64_t revision) {
+        const Json *WorkspaceEdits(const Json &value, const std::string_view uri, const std::int32_t wireVersion) {
             if (value.contains("documentChanges"))
-                return VersionedEdits(Field(value, "documentChanges"), uri, revision);
+                return VersionedEdits(Field(value, "documentChanges"), uri, wireVersion);
             const auto &changes = Field(value, "changes");
             if (!changes.is_object() || changes.size() != 1)
                 return nullptr;
@@ -383,7 +387,8 @@ namespace Horo::Editor::Language {
 
         /** @brief Projects code action titles and current-document edit proposals without executing commands. */
         std::optional<LanguagePayload> ProjectCodeActions(const Json &value, SourceCoordinates &coordinates,
-                                                          const SourceDocumentSnapshot &source, const std::string_view uri) {
+                                                          const SourceDocumentSnapshot &source, const std::string_view uri,
+                                                          const std::int32_t wireVersion) {
             auto items = Items<LanguageCodeAction>(value, [&](const Json &entry) -> std::optional<LanguageCodeAction> {
                 const auto title = Text(Field(entry, "title"));
                 if (!title)
@@ -392,7 +397,7 @@ namespace Horo::Editor::Language {
                 if (entry.contains("disabled"))
                     return result;
                 const auto &edit = Field(entry, "edit");
-                if (const auto *list = WorkspaceEdits(edit, uri, source.Revision())) {
+                if (const auto *list = WorkspaceEdits(edit, uri, wireVersion)) {
                     auto edits = Items<LanguageTextEdit>(*list, [&](const Json &item) {
                         return Edit(item, coordinates, source.Metadata().utf8Bom);
                     });
@@ -408,14 +413,15 @@ namespace Horo::Editor::Language {
         }
 
         /** @brief Dispatches validated JSON to the correlated feature's model. */
-        std::optional<LanguagePayload> Map(const Json &value, const SourceLanguageReply &reply, const std::string_view root) {
+        std::optional<LanguagePayload> Map(const Json &value, const SourceLanguageReply &reply, const std::string_view root,
+                                           const std::int32_t wireVersion) {
             if (value.is_null())
                 return std::monostate{};
             using enum SourceLanguageRequestKind;
             SourceCoordinates coordinates{reply.source.Text()};
             switch (reply.kind) {
                 case Diagnostics:
-                    return ProjectDiagnostics(value, coordinates);
+                    return ProjectDiagnosticReport(value, coordinates);
                 case Hover:
                     return ProjectHover(value, coordinates);
                 case Completion:
@@ -431,7 +437,7 @@ namespace Horo::Editor::Language {
                 }
                 case CodeActions:
                     return ProjectCodeActions(value, coordinates, reply.source,
-                                              DocumentUri(root, reply.source.Identity().key.source.Value()));
+                                              DocumentUri(root, reply.source.Identity().key.source.Value()), wireVersion);
             }
             return std::nullopt;
         }
@@ -444,6 +450,34 @@ namespace Horo::Editor::Language {
                 return std::nullopt;
             return LanguageServerFailure{*code, std::string{*message}};
         }
+
+        /** @brief Projects a diagnostic publication already routed by the connection. */
+        std::optional<LanguagePayload> MapPublication(const LspIncoming &incoming) {
+            const auto &envelope = incoming.message.envelope.Get();
+            const auto &params = Field(envelope, "params");
+            if (incoming.reply->kind != SourceLanguageRequestKind::Diagnostics ||
+                Text(Field(envelope, "method")).value_or("") != PublishDiagnosticsMethod ||
+                Integer(Field(params, "version")) != incoming.wireVersion)
+                return std::nullopt;
+            SourceCoordinates coordinates{incoming.reply->source.Text()};
+            return ProjectDiagnosticItems(Field(params, "diagnostics"), coordinates);
+        }
+
+        /** @brief Dispatches responses and revision-bound notifications through one projection boundary. */
+        std::optional<LanguagePayload> ProjectEnvelope(const LspIncoming &incoming, const std::string_view rootUri) {
+            const auto &envelope = incoming.message.envelope.Get();
+            switch (incoming.message.kind) {
+                case LspMessageKind::Notification:
+                    return MapPublication(incoming);
+                case LspMessageKind::Error:
+                    return MapError(Field(envelope, "error"));
+                case LspMessageKind::Result:
+                    return Map(Field(envelope, "result"), *incoming.reply, rootUri, incoming.wireVersion);
+                case LspMessageKind::Request:
+                    return std::nullopt;
+            }
+            return std::nullopt;
+        }
     }  // namespace
 
     /** @copydoc ProjectLspReply */
@@ -451,19 +485,34 @@ namespace Horo::Editor::Language {
         using Output = Result<LanguageResult>;
         if (!incoming.reply || !incoming.reply->source.IsCurrent())
             return Output::Failure(MakeError(SourceDocumentErrors::Stale));
-        if (incoming.message.kind != LspMessageKind::Result && incoming.message.kind != LspMessageKind::Error)
-            return Output::Failure(MakeError(SourceDocumentErrors::Invalid));
+        if (incoming.wireVersion <= 0)
+            return Output::Failure(MakeError(SourceDocumentErrors::Stale));
         if (incoming.reply->source.Text().size() >= MaximumLspBodyBytes)
             return Output::Failure(MakeError(SourceDocumentErrors::TooLarge));
         try {
-            const auto &envelope = incoming.message.envelope.Get();
-            auto payload = incoming.message.kind == LspMessageKind::Error ? MapError(Field(envelope, "error"))
-                                                                          : Map(Field(envelope, "result"), *incoming.reply, rootUri);
+            auto payload = ProjectEnvelope(incoming, rootUri);
             if (!payload)
                 return Output::Failure(MakeError(SourceDocumentErrors::Invalid));
             return Output::Success({*incoming.reply, std::move(*payload)});
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(SourceDocumentErrors::TooLarge));
+        }
+    }
+
+    /** @copydoc ReadLspDiagnosticTarget */
+    std::optional<LspDiagnosticTarget> ReadLspDiagnosticTarget(const LspMessage &message, const std::string_view rootUri) {
+        try {
+            const auto &params = Field(message.envelope.Get(), "params");
+            const auto version = Integer(Field(params, "version"));
+            const auto uri = Text(Field(params, "uri"));
+            if (!version || *version <= 0 || !uri)
+                return std::nullopt;
+            auto source = ProjectSource(rootUri, *uri);
+            if (!source)
+                return std::nullopt;
+            return LspDiagnosticTarget{std::move(*source), *version};
+        } catch (const std::bad_alloc &) {
+            return std::nullopt;
         }
     }
 }  // namespace Horo::Editor::Language

@@ -40,13 +40,27 @@ namespace {
         return message;
     }
 
-    /** @brief Returns a standard result associated with the actual incoming ID. */
-    bool Respond(const LspMessage &message, nlohmann::json result) {
-        auto frame = EncodeLspMessage({{"jsonrpc", "2.0"}, {"id", message.envelope.Get().at("id")}, {"result", std::move(result)}});
+    /** @brief Emits one complete frame over the child process output. */
+    bool Send(const nlohmann::json &message) {
+        auto frame = EncodeLspMessage(message);
         if (frame.HasError())
             return false;
         const auto &bytes = frame.Value();
         return static_cast<bool>(std::cout.write(bytes.data(), static_cast<std::streamsize>(bytes.size())).flush());
+    }
+
+    /** @brief Returns a standard result associated with the actual incoming ID. */
+    bool Respond(const LspMessage &message, nlohmann::json result) {
+        return Send({{"jsonrpc", "2.0"}, {"id", message.envelope.Get().at("id")}, {"result", std::move(result)}});
+    }
+
+    /** @brief Echoes a diagnostic notification for the actual document and wire version. */
+    bool Publish(const LspMessage &open) {
+        const auto &document = open.envelope.Get().at("params").at("textDocument");
+        return Send(
+            {{"jsonrpc", "2.0"},
+             {"method", "textDocument/publishDiagnostics"},
+             {"params", {{"uri", document.at("uri")}, {"version", document.at("version")}, {"diagnostics", nlohmann::json::array()}}}});
     }
 
     /** @brief Runs one complete project and source request lifecycle over raw stdio. */
@@ -54,7 +68,10 @@ namespace {
         const auto initialize = Expect("initialize");
         if (!initialize || !Respond(*initialize, {{"capabilities", {{"textDocumentSync", 1}, {"hoverProvider", true}}}}))
             return false;
-        if (!Expect("initialized") || !Expect("textDocument/didOpen"))
+        if (!Expect("initialized"))
+            return false;
+        const auto opened = Expect("textDocument/didOpen");
+        if (!opened || !Publish(*opened))
             return false;
         const auto request = Expect("textDocument/hover");
         if (!request || !Respond(*request, {{"contents", {{"kind", "plaintext"}, {"value", "hover fixture"}}}}))

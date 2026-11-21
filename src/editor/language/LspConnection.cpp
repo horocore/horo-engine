@@ -2,6 +2,8 @@
 
 #include "LspDocumentSync.h"
 
+#include <algorithm>
+#include <limits>
 #include <new>
 #include <utility>
 
@@ -67,7 +69,12 @@ namespace Horo::Editor::Language {
             Abort();
             return Incoming::Failure(std::move(message).ErrorValue());
         }
-        return Dispatch(std::move(message).Value(), now);
+        try {
+            return Dispatch(std::move(message).Value(), now);
+        } catch (const std::bad_alloc &) {
+            Abort();
+            return Incoming::Failure(MakeError(SourceDocumentErrors::TooLarge));
+        }
     }
 
     /** @copydoc LspConnection::Dispatch */
@@ -98,6 +105,9 @@ namespace Horo::Editor::Language {
 
     /** @copydoc LspConnection::ReadFeature */
     LspConnection::Incoming LspConnection::ReadFeature(LspMessage message) {
+        if (message.kind == LspMessageKind::Notification &&
+            message.envelope.Get().at("method").get_ref<const std::string &>() == PublishDiagnosticsMethod)
+            return ReadPublishedDiagnostics(std::move(message));
         if (message.kind != LspMessageKind::Result && message.kind != LspMessageKind::Error)
             return Incoming::Success(LspIncoming{std::move(message), std::nullopt, stamp_});
         const auto id = ReadLspRequestId(message);
@@ -106,7 +116,43 @@ namespace Horo::Editor::Language {
         auto reply = source_.Complete({stamp_, *id});
         if (reply.HasError())
             return Incoming::Success(std::nullopt);
-        return Incoming::Success(LspIncoming{std::move(message), std::move(reply).Value(), stamp_});
+        const auto version = wireVersions_.find(reply.Value().source.Identity().instance);
+        if (version == wireVersions_.end())
+            return Incoming::Success(std::nullopt);
+        return Incoming::Success(LspIncoming{std::move(message), std::move(reply).Value(), stamp_, version->second});
+    }
+
+    /** @copydoc LspConnection::ReadPublishedDiagnostics */
+    LspConnection::Incoming LspConnection::ReadPublishedDiagnostics(LspMessage message) {
+        const auto target = ReadLspDiagnosticTarget(message, rootUri_);
+        if (!target)
+            return Incoming::Success(std::nullopt);
+        const auto version = std::ranges::find_if(wireVersions_, [&](const auto &entry) {
+            return entry.second == target->wireVersion;
+        });
+        if (version == wireVersions_.end())
+            return Incoming::Success(std::nullopt);
+        auto snapshot = source_.SynchronizedSource(stamp_, version->first);
+        if (!snapshot || !snapshot->IsCurrent() || snapshot->Identity().key.source != target->source)
+            return Incoming::Success(std::nullopt);
+        return Incoming::Success(LspIncoming{std::move(message),
+                                             SourceLanguageReply{SourceLanguageRequestKind::Diagnostics, std::move(*snapshot)}, stamp_,
+                                             target->wireVersion});
+    }
+
+    /** @copydoc LspConnection::BindWireDocument */
+    Result<void> LspConnection::BindWireDocument(const SourceDocumentSnapshot &snapshot, const DocumentInstanceId instance,
+                                                 const std::int32_t version) {
+        auto [wire, inserted] = wireVersions_.try_emplace(instance);
+        auto sync = source_.Sync(stamp_, snapshot);
+        if (sync.HasError()) {
+            if (inserted)
+                wireVersions_.erase(wire);
+            return Result<void>::Failure(std::move(sync).ErrorValue());
+        }
+        wire->second = version;
+        lastWireVersion_ = version;
+        return Result<void>::Success();
     }
 
     /** @copydoc LspConnection::SyncSource */
@@ -114,15 +160,19 @@ namespace Horo::Editor::Language {
         if (stopped_ || lifecycle_.State() != LspLifecycleState::Ready || !snapshot.IsCurrent())
             return Result<void>::Failure(MakeError(SourceDocumentErrors::Stale));
         try {
-            const auto previous = source_.SynchronizedSource(stamp_, snapshot.Identity().instance);
+            const auto instance = snapshot.Identity().instance;
+            const auto previous = source_.SynchronizedSource(stamp_, instance);
             if (previous && previous->SharesStateWith(snapshot))
                 return Result<void>::Success();
-            auto outgoing = BuildLspDocumentUpdate(rootUri_, languageId, snapshot, previous, lifecycle_.TextSync());
+            if (lastWireVersion_ == std::numeric_limits<std::int32_t>::max())
+                return Result<void>::Failure(MakeError(SourceDocumentErrors::TooLarge));
+            const auto version = lastWireVersion_ + 1;
+            auto outgoing = BuildLspDocumentUpdate(rootUri_, languageId, snapshot, previous, lifecycle_.TextSync(), version);
             if (outgoing.HasError())
                 return Result<void>::Failure(std::move(outgoing).ErrorValue());
-            auto sync = source_.Sync(stamp_, snapshot);
-            if (sync.HasError())
-                return Result<void>::Failure(std::move(sync).ErrorValue());
+            auto bound = BindWireDocument(snapshot, instance, version);
+            if (bound.HasError())
+                return bound;
             return SendUpdate(std::move(outgoing).Value());
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(SourceDocumentErrors::TooLarge));
@@ -141,6 +191,7 @@ namespace Horo::Editor::Language {
                 return Result<void>::Failure(std::move(closing).ErrorValue());
             }
             source_.Close(stamp_, instance);
+            wireVersions_.erase(instance);
             return Send(std::move(closing).Value());
         } catch (const std::bad_alloc &) {
             Abort();
@@ -180,9 +231,16 @@ namespace Horo::Editor::Language {
 
     /** @copydoc LspConnection::ProjectReply */
     Result<LanguageResult> LspConnection::ProjectReply(const LspIncoming &incoming) const {
-        if (stamp_ == 0 || incoming.session != stamp_)
+        if (stamp_ == 0 || incoming.session != stamp_ || !incoming.reply)
             return Result<LanguageResult>::Failure(MakeError(SourceDocumentErrors::Stale));
-        return ProjectLspReply(incoming, rootUri_);
+        try {
+            const auto found = wireVersions_.find(incoming.reply->source.Identity().instance);
+            if (found == wireVersions_.end() || found->second != incoming.wireVersion)
+                return Result<LanguageResult>::Failure(MakeError(SourceDocumentErrors::Stale));
+            return ProjectLspReply(incoming, rootUri_);
+        } catch (const std::bad_alloc &) {
+            return Result<LanguageResult>::Failure(MakeError(SourceDocumentErrors::TooLarge));
+        }
     }
 
     /** @copydoc LspConnection::Shutdown */
@@ -261,6 +319,7 @@ namespace Horo::Editor::Language {
 
     /** @copydoc LspConnection::RetireSource */
     void LspConnection::RetireSource() noexcept {
+        wireVersions_.clear();
         if (stamp_ != 0)
             source_.Stop(std::exchange(stamp_, 0));
     }
