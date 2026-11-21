@@ -42,7 +42,7 @@ namespace Horo::Editor {
         const bool canUndo = !preparing_ && batch_.CanUndo() && std::ranges::all_of(batch_.Items(), [](const auto &item) {
             return !item.changed || item.snapshot.IsCurrent();
         });
-        return {feedback_, canUndo};
+        return {feedback_, canUndo, audit_};
     }
 
     /** @copydoc SourceReviewTransactions::QueueUndo */
@@ -125,7 +125,9 @@ namespace Horo::Editor {
             feedback_ = FailureFeedback(applied.ErrorValue(), Feedback::ApplyFailed);
             return false;
         }
-        batch_ = std::move(applied).Value();
+        auto outcome = std::move(applied).Value();
+        batch_ = std::move(outcome.batch);
+        audit_ = std::move(outcome.audit);
         feedback_ = Feedback::Applied;
         return true;
     }

@@ -45,6 +45,7 @@ namespace Horo::Editor {
         /** @brief Replays the current source review as one group. */
         void Undo(const SourceEditBatch &receipt, SourceDocumentService &documents, const CancellationToken &lifetime);
         SourceEditBatch batch_;
+        std::shared_ptr<const Proposals::SourceReviewAudit> audit_;
         Proposals::SourceTransactionFeedback feedback_{};
 
         struct Preparation final {

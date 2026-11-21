@@ -619,6 +619,24 @@ namespace {
         CHECK(appliedTwo.Text() == "new two\n");
         CHECK(appliedOne.Dirty());
         CHECK(appliedTwo.Dirty());
+        const auto audit = transactions.Status().audit;
+        REQUIRE(audit);
+        CHECK(fixture.DrawnText().find("Last applied proposal") != std::string::npos);
+        REQUIRE(audit->choices.size() == 2);
+        CHECK(audit->choices[0] == std::vector{Proposals::ReviewState::Rejected, Proposals::ReviewState::Accepted});
+        CHECK(audit->choices[1] == std::vector{Proposals::ReviewState::Accepted});
+        REQUIRE(audit->revisions.size() == 2);
+        CHECK(audit->revisions[0].file == 0);
+        CHECK(audit->revisions[0].before == one.Revision());
+        CHECK(audit->revisions[0].after == appliedOne.Revision());
+        CHECK(audit->revisions[1].file == 1);
+        CHECK(audit->revisions[1].before == two.Revision());
+        CHECK(audit->revisions[1].after == appliedTwo.Revision());
+        const auto redacted = Proposals::EncodeAudit(audit->proposal);
+        REQUIRE(redacted.HasValue());
+        CHECK(redacted.Value().find("one.cpp") == std::string::npos);
+        CHECK(redacted.Value().find("new two") == std::string::npos);
+        CHECK(redacted.Value().find("ollama") == std::string::npos);
         SourceDocumentService disk(project.directory);
         CHECK(disk.Open(project.Identity("one.cpp", 1), project.directory / "one.cpp").Value().Text() == one.Text());
         CHECK(disk.Open(project.Identity(longPath, 2), project.directory / longPath).Value().Text() == two.Text());
@@ -636,6 +654,7 @@ namespace {
         REQUIRE(transactions.Process(std::exchange(fixture.command, {}), owner, &sourceJobs, project.directory, &fixture.files));
         CHECK(fixture.DrawnText().find("Applied changes were undone together.") != std::string::npos);
         CHECK_FALSE(transactions.Status().canUndo);
+        CHECK(transactions.Status().audit == audit);
         CHECK(owner.Snapshot(one.Identity().instance).Value().Text() == one.Text());
         CHECK(owner.Snapshot(two.Identity().instance).Value().Text() == two.Text());
     }

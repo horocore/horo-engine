@@ -814,6 +814,12 @@ can advance a source while the job is running. In that case the owner rejects
 the stale preparation before publishing any buffer.
 Missing native file identity evidence also prevents publication.
 
+Successful review application attaches content-free attribution to the exact
+source owner receipt. It contains proposal and policy commitments, canonical
+decision states, and the previous and published revisions of accepted files by
+proposal index. Source paths, ranges, text, and provider responses stay outside
+the attribution. The panel identifies the last successful proposal by its digest.
+
 ## Backend Providers
 
 The system supports pluggable LLM backends:

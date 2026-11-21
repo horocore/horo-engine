@@ -988,8 +988,17 @@ namespace Horo::Editor {
                                                            "source_patch_transaction_preparing"};
                 if (const auto *key = keys[static_cast<std::size_t>(state.feedback)])
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, key), Theme::Text(), fonts);
+                if (state.audit)
+                    DrawSourceAudit(*state.audit, locale, fonts);
                 if (requestSourceReviewUndo_ && contextLifetime_ && state.canUndo && Button(locale, "source_patch_revert", true))
                     status_ = requestSourceReviewUndo_(contextLifetime_->Token(), command) ? nullptr : "source_patch_revert_failed";
+            }
+
+            /** @brief Presents the content-free proposal identifier for the latest successful application. */
+            void DrawSourceAudit(const Proposals::SourceReviewAudit &audit, const ILocalizationService &locale, const Theme::Fonts &fonts) {
+                const auto label =
+                    std::format("{} {}", LocalizedText(locale, "source_patch_audit_proposal"), FormatSha256(audit.proposal.digest));
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, label, Theme::Muted(), fonts);
             }
 
             /** @brief Explicitly checkpoints the exact inert proposal and current unit decisions on the storage worker. */

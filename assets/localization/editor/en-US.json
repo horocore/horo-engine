@@ -225,6 +225,7 @@
     "workspace.local_agent.source_patch_transaction_conflict": {"text": "The source review conflicts with newer changes. Review the current files before trying again."},
     "workspace.local_agent.source_patch_transaction_cancelled": {"text": "The source review action was cancelled."},
     "workspace.local_agent.source_patch_transaction_preparing": {"text": "Preparing accepted source changes…"},
+    "workspace.local_agent.source_patch_audit_proposal": {"text": "Last applied proposal"},
     "workspace.local_agent.source_patch_hunks": {"text": "Change range decisions"},
     "workspace.local_agent.source_patch_checkpoint_save": {"text": "Save proposal and decisions locally"},
     "workspace.local_agent.source_patch_checkpoint_load": {"text": "Restore saved source review"},

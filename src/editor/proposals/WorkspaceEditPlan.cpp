@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <map>
 #include <new>
+#include <type_traits>
 
 namespace Horo::Editor::Proposals {
     namespace {
@@ -317,6 +318,15 @@ namespace Horo::Editor::Proposals {
         try {
             PreparedSourceReview prepared;
             prepared.edits_.reserve(units_.size());
+            auto redacted = Audit(proposal_);
+            if (redacted.HasError())
+                return Output::Failure(redacted.ErrorValue());
+            auto audit = std::make_shared<SourceReviewAudit>();
+            audit->proposal = std::move(redacted).Value();
+            const auto decisions = Encode();
+            audit->decisionDigest = ComputeSha256(std::as_bytes(std::span{decisions}));
+            audit->choices = units_;
+            audit->revisions.reserve(units_.size());
             const Limits limits;
             Budget budget{limits, ReviewSourceMatch::CurrentRevision};
             for (std::size_t file = 0; file < units_.size(); ++file) {
@@ -330,9 +340,11 @@ namespace Horo::Editor::Proposals {
                 if (replacement.HasError())
                     return Output::Failure(replacement.ErrorValue());
                 prepared.edits_.push_back({source, std::move(replacement).Value()});
+                audit->revisions.push_back({static_cast<std::uint32_t>(file), source.Revision(), 0});
             }
             if (prepared.edits_.empty())
                 return Output::Failure(MakeError(Errors::Invalid));
+            prepared.audit_ = std::move(audit);
             return Output::Success(std::move(prepared));
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(Errors::Bounds));
@@ -380,9 +392,25 @@ namespace Horo::Editor::Proposals {
     }
 
     /** @copydoc PreparedSourceReview::CommitObserved */
-    Result<SourceEditBatch> PreparedSourceReview::CommitObserved(SourceDocumentService &documents, const DurableFileSystem &files,
-                                                                 const CancellationToken cancellation) const {
-        return Publish(documents, &files, cancellation);
+    Result<SourceReviewApplied> PreparedSourceReview::CommitObserved(SourceDocumentService &documents, const DurableFileSystem &files,
+                                                                     const CancellationToken cancellation) const {
+        using Output = Result<SourceReviewApplied>;
+        static_assert(std::is_nothrow_move_constructible_v<Output>);
+        try {
+            if (!audit_)
+                return Output::Failure(MakeError(Errors::Invalid));
+            auto audit = std::make_shared<SourceReviewAudit>(*audit_);
+            auto applied = Publish(documents, &files, cancellation);
+            if (applied.HasError())
+                return Output::Failure(std::move(applied).ErrorValue());
+            auto batch = std::move(applied).Value();
+            const auto items = batch.Items();
+            for (std::size_t index = 0; index < items.size(); ++index)
+                audit->revisions[index].after = items[index].snapshot.Revision();
+            return Output::Success({std::move(batch), std::move(audit)});
+        } catch (const std::bad_alloc &) {
+            return Output::Failure(MakeError(Errors::Bounds));
+        }
     }
 
     /** @copydoc ReviewDecisions::ApplyAccepted */

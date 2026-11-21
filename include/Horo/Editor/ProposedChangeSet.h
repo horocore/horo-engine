@@ -313,10 +313,19 @@ namespace Horo::Editor::Proposals {
         Preparing
     };
 
+    struct SourceReviewAudit;
+
     /** @brief Owner-published status for the latest explicit application or group undo. */
     struct SourceTransactionStatus final {
         SourceTransactionFeedback feedback{};
         bool canUndo{};
+        std::shared_ptr<const SourceReviewAudit> audit;
+    };
+
+    /** @brief Exact owner receipt and its redacted attribution, returned together after publication. */
+    struct SourceReviewApplied final {
+        SourceEditBatch batch;
+        std::shared_ptr<const SourceReviewAudit> audit;
     };
 
     /** @brief Detached accepted text and exact immutable leases, suitable for worker-to-editor handoff. */
@@ -336,8 +345,8 @@ namespace Horo::Editor::Proposals {
          * @param documents Current source owner. @param files The same active host filesystem authority.
          * @param cancellation Current workspace admission. @return Atomic receipt or typed refusal.
          */
-        [[nodiscard]] Result<SourceEditBatch> CommitObserved(SourceDocumentService &documents, const DurableFileSystem &files,
-                                                             CancellationToken cancellation = {}) const;
+        [[nodiscard]] Result<SourceReviewApplied> CommitObserved(SourceDocumentService &documents, const DurableFileSystem &files,
+                                                                 CancellationToken cancellation = {}) const;
 
     private:
         friend class ReviewDecisions;
@@ -349,6 +358,7 @@ namespace Horo::Editor::Proposals {
 
         std::vector<Edit> edits_;
         SourceBatchDiskEvidence disk_;
+        std::shared_ptr<const SourceReviewAudit> audit_;
         /** @brief Builds the borrowed batch inputs and dispatches the requested verification mode. */
         [[nodiscard]] Result<SourceEditBatch> Publish(SourceDocumentService &documents, const DurableFileSystem *files,
                                                       CancellationToken cancellation) const;
@@ -458,6 +468,21 @@ namespace Horo::Editor::Proposals {
         std::optional<ApplicationState> application;
         std::uint32_t appliedOperations{};
         std::optional<DiskSaveState> save;
+    };
+
+    /** @brief Revisions of an accepted file, in canonical proposal coordinates. */
+    struct SourceReviewRevision final {
+        std::uint32_t file{};
+        std::uint64_t before{};
+        std::uint64_t after{};
+    };
+
+    /** @brief Detached application evidence with no paths, source text or provider response content. */
+    struct SourceReviewAudit final {
+        AuditRecord proposal;
+        Sha256Digest decisionDigest;                   /**< Commitment to the complete canonical review. */
+        std::vector<std::vector<ReviewState>> choices; /**< Canonical per-file unit decisions, without ranges or text. */
+        std::vector<SourceReviewRevision> revisions;
     };
 
     /** @brief Builds bounded content-free audit data. @param proposal Admitted values. @param review Optional exact review.
