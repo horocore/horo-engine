@@ -1869,10 +1869,16 @@ namespace Horo::Tests::OpenXRApplication {
         const std::array devices{XR::XRTrackedDeviceRecord{{session, {1, 3}},
                                                            XR::XRTrackedDeviceRole::LeftController,
                                                            XR::XRTrackedDeviceState::TrackingLost,
+                                                           features},
+                                 XR::XRTrackedDeviceRecord{{session, {2, 3}},
+                                                           XR::XRTrackedDeviceRole::RightController,
+                                                           XR::XRTrackedDeviceState::TrackingLost,
                                                            features}};
+
         std::array<XR::XRTrackedActionRecord, Editor::EditorXrInspectionSnapshot::MaximumDisplayedActions + 1> actions{};
-        for (std::size_t index = 0; index < actions.size(); ++index)
-            actions[index] = {devices.front().id, static_cast<std::uint32_t>(index), XR::XRTrackedActionKind::Scalar, true, 1.0F, 0};
+        actions.front() = {devices[0].id, 0, XR::XRTrackedActionKind::Scalar, true, 1.0F, 0};
+        for (std::size_t index = 1; index < actions.size(); ++index)
+            actions[index] = {devices[1].id, static_cast<std::uint32_t>(index - 1), XR::XRTrackedActionKind::Scalar, true, 1.0F, 0};
         const auto revision = RequireValue(XR::XRTrackingSnapshotRevision::Create(1));
         const auto origin = RequireValue(XR::XRWorldOriginRevision::Create(1));
         const XR::XRTrackingSnapshotDescriptor descriptor{.session = session,
@@ -1883,7 +1889,7 @@ namespace Horo::Tests::OpenXRApplication {
                                                           .focus = XR::XRTrackingFocusState::Focused,
                                                           .visibility = XR::XRTrackingVisibilityState::Visible,
                                                           .state = XR::XRTrackingState::TrackingLost,
-                                                          .limits = {1, 1, static_cast<std::uint32_t>(actions.size())},
+                                                          .limits = {2, 1, static_cast<std::uint32_t>(actions.size())},
                                                           .devices = devices,
                                                           .bindingRevision = 8,
                                                           .actions = actions};
@@ -1896,8 +1902,13 @@ namespace Horo::Tests::OpenXRApplication {
             CHECK(report.actionCount == actions.size());
             CHECK(report.activeActionCount == actions.size());
             CHECK(report.omittedActionCount == 1);
-            CHECK(report.actions.back().bindingIndex == report.actions.size() - 1);
-            CHECK(report.actions.front().deviceGeneration == 3);
+            CHECK(report.actions.back().bindingIndex == report.actions.size() - 2);
+            CHECK(report.actions[0].bindingIndex == report.actions[1].bindingIndex);
+            CHECK(report.actions[0].deviceGeneration == report.actions[1].deviceGeneration);
+            CHECK(report.actions[0].deviceSlot == 1);
+            CHECK(report.actions[1].deviceSlot == 2);
+            CHECK(report.actions[0].role == XR::XRTrackedDeviceRole::LeftController);
+            CHECK(report.actions[1].role == XR::XRTrackedDeviceRole::RightController);
             CHECK(report.actions.front().active);
         }
     }

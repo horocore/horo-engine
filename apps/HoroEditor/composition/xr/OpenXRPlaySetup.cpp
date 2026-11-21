@@ -147,6 +147,7 @@ namespace Horo::Application::Internal {
         }
         for (const auto &joint : tracking.HandJoints())
             AddValidity(out.hands[static_cast<std::size_t>(joint.hand)].validity, joint.sample->Components());
+        const auto devices = tracking.Devices();
         const auto actions = tracking.Actions();
         const auto count = std::min(actions.size(), out.actions.size());
         out.actionCount = static_cast<std::uint16_t>(actions.size());
@@ -154,7 +155,14 @@ namespace Horo::Application::Internal {
         out.omittedActionCount = static_cast<std::uint16_t>(actions.size() - count);
         for (std::size_t index = 0; index < count; ++index) {
             const auto &action = actions[index];
-            out.actions[index] = {action.bindingIndex, action.device.slot.generation, action.kind, action.active};
+            const auto device = std::ranges::lower_bound(devices, action.device, {}, &XR::XRTrackedDeviceRecord::id);
+            out.actions[index] = {.bindingIndex = action.bindingIndex,
+                                  .deviceSlot = action.device.slot.index,
+                                  .deviceGeneration = action.device.slot.generation,
+                                  .role =
+                                      device != devices.end() && device->id == action.device ? std::optional{device->role} : std::nullopt,
+                                  .kind = action.kind,
+                                  .active = action.active};
         }
     }
 

@@ -89,6 +89,9 @@ namespace Horo::Editor {
                                           "inspect_optional_disabled", "inspect_projection_fallback"};
         constexpr std::array SpaceKeys{"inspect_view", "inspect_local", "inspect_stage", "inspect_world", "inspect_action_space"};
         constexpr std::array ActionKeys{"inspect_boolean", "inspect_scalar", "inspect_vector"};
+        constexpr std::array DeviceRoleKeys{"inspect_source_head",    "inspect_source_left_controller", "inspect_source_right_controller",
+                                            "inspect_source_tracker", "inspect_source_left_hand",       "inspect_source_right_hand"};
+        static_assert(DeviceRoleKeys.size() == static_cast<std::size_t>(XR::XRTrackedDeviceRole::Count));
         constexpr std::array HandKeys{"inspect_left_hand", "inspect_right_hand"};
         constexpr std::array DeviceKeys{"inspect_tracked", "inspect_tracking_lost", "inspect_disconnected"};
 
@@ -273,8 +276,9 @@ namespace Horo::Editor {
             for (std::size_t index = 0; index < visibleActions; ++index) {
                 const auto &action = report.actions[index];
                 rows.Begin(Text(InspectionKey(action.kind, ActionKeys)));
+                rows.Cell(Text(action.role ? InspectionKey(*action.role, DeviceRoleKeys) : "inspect_not_available"));
                 rows.Cell(Text("inspect_binding_source"));
-                rows.Numbers("{} / {}", action.bindingIndex, action.deviceGeneration);
+                rows.Numbers("{} / {} / {}", action.bindingIndex, action.deviceSlot, action.deviceGeneration);
                 rows.Cell(Text(action.active ? "inspect_active" : "inspect_session_inactive"));
             }
             if (report.omittedActionCount) {

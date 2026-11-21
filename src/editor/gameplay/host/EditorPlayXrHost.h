@@ -33,6 +33,7 @@ namespace Horo::XR {
     enum class XRFeatureDecisionState : std::uint8_t;
     enum class XRTrackedActionKind : std::uint8_t;
     enum class XRTrackedDeviceState : std::uint8_t;
+    enum class XRTrackedDeviceRole : std::uint8_t;
 }  // namespace Horo::XR
 
 namespace Horo::Editor {
@@ -137,7 +138,9 @@ namespace Horo::Editor {
     /** @brief One binding-plan sample's typed presence; native paths and payload values are excluded. */
     struct EditorXrInspectionAction final {
         std::uint32_t bindingIndex{};
+        std::uint32_t deviceSlot{}; /**< Session-local source slot. */
         std::uint32_t deviceGeneration{};
+        std::optional<XR::XRTrackedDeviceRole> role;
         XR::XRTrackedActionKind kind;
         bool active{};
     };
