@@ -3279,6 +3279,13 @@ The execution of AI simulation phases is strictly governed by the host process's
 | **Dedicated Server** | Authoritative simulation owner for all AI agents. | AI/navigation stages and the host's admitted canonical Animation/Character/Physics pipeline; no presentation extraction. | Replicates entity `NetworkId`, transform, velocity, and public animation tags. |
 | **Client** | Presentation-only consumer for server-replicated AI. | Client animation update plus the variable-rate extraction bridge; no authoritative AI phases for server-owned agents. | Receives replication; submits no AI authority. |
 
+The configured dedicated host verifies the selected cook generation, then builds its
+runtime providers from the selected Scene, typed asset dependencies and explicitly
+admitted gameplay catalogs. Animation and prefab dependency tables come from their
+own payload codecs. Unreferenced presentation payloads stay outside the runtime
+providers. Headless AI health reports bounded counters from the last committed
+decision tick for the published authority world.
+
 ### Authority, Privacy, And Security Boundaries
 
 - **Clients Never Run Authoritative AI**: Connected clients NEVER run `PerceptionSensePoll`, `BlackboardSync`, `AiDecisionEvaluate`, or `NavIntentCommit` for server-owned AI agents. Clients receive replicated transform, velocity, and state tags from the server.

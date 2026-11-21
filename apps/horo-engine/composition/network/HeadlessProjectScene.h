@@ -7,6 +7,7 @@
 #include "CommittedSceneAssets.h"
 #include "HeadlessNetworkServices.h"
 #include "HeadlessPerceptionPolicy.h"
+#include "HeadlessSimulationAssets.h"
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Platform/ProjectReadFiles.h"
@@ -33,6 +34,7 @@ namespace Horo::Application::Internal {
         std::string perceptionPolicyPath;             /**< Explicit project-relative source for one selected committed Scene. */
         bool captureNetworkSettings{};                /**< Authenticated network gameplay selects the existing project settings. */
         std::size_t cpuWorkerCount{1};                /**< Explicit process CPU worker allocation selected before preparation. */
+        std::optional<HeadlessSimulationAssets> simulationAssets; /**< Explicit dedicated payload retention policy. */
     };
 
     /** @brief Owns all borrowed assets/jobs/project captures until every world service has retired.

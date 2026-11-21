@@ -19,6 +19,7 @@ add_library(HoroNetworkProductHost STATIC
     horo-engine/composition/network/NetworkProductComposition.h
     horo-engine/composition/network/HeadlessSceneLoadBoundary.cpp
     horo-engine/composition/network/HeadlessProjectScene.cpp
+    horo-engine/composition/network/HeadlessSimulationAssets.cpp
     horo-engine/composition/network/GameplayWorldComposition.cpp
 )
 target_compile_features(HoroNetworkProductHost PUBLIC cxx_std_20)
@@ -27,6 +28,7 @@ target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::GameplayVfxScen
 target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::GameplayAnimationScene)
 target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::Platform HoroEngine::PlatformProjectIo)
 target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::PrefabProjectSettings HoroEngine::ProjectSurfaceSettings HoroEngine::ProjectSettings)
+target_link_libraries(HoroNetworkProductHost PRIVATE HoroAnimationCookedAssets)
 target_link_libraries(HoroNetworkProductHost PRIVATE HoroProjectSceneNavigationHostInternal)
 target_link_libraries(HoroNetworkProductHost PRIVATE HoroSceneAiNavigationMotionInternal HoroEngine::AINavigationIntegration)
 target_include_directories(HoroNetworkProductHost PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/horo-engine/composition/network)

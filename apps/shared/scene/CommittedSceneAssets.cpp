@@ -62,7 +62,8 @@ namespace Horo::Application::Internal {
     /** @copydoc CommittedSceneAssets::Capture */
     Result<std::unique_ptr<CommittedSceneAssets>> CommittedSceneAssets::Capture(const DurableFileSystem &files,
                                                                                 const SceneCookSelection &selection,
-                                                                                const Assets::AssetRegistrySnapshot &registry) {
+                                                                                const Assets::AssetRegistrySnapshot &registry,
+                                                                                const SceneAssetRetention &retain) {
         auto generation = Assets::ResolveCurrentCookGeneration(files, selection.targetRoot);
         if (generation.HasError())
             return Result<std::unique_ptr<CommittedSceneAssets>>::Failure(generation.ErrorValue());
@@ -73,7 +74,6 @@ namespace Horo::Application::Internal {
             return Result<std::unique_ptr<CommittedSceneAssets>>::Failure(contents.ErrorValue());
         auto published = std::move(contents).Value();
         auto result = std::make_unique<CommittedSceneAssets>();
-        std::vector<Assets::AssetId> enveloped;
         result->artifacts_.reserve(published.entries.size());
         for (std::size_t index = 0; index < published.entries.size(); ++index) {
             const auto &entry = published.entries[index];
@@ -83,16 +83,32 @@ namespace Horo::Application::Internal {
                 return Result<std::unique_ptr<CommittedSceneAssets>>::Failure(artifact.ErrorValue());
             if (!MatchesCommittedIdentity(record, entry, artifact.Value(), selection.target))
                 return Result<std::unique_ptr<CommittedSceneAssets>>::Failure(MakeError(InvalidCook));
-            if (RequiresSceneEnvelope(entry.assetType))
-                enveloped.push_back(entry.assetId);
-            // Keep the actual verified metadata and bytes. This provider is populated only from
-            // committed envelopes, never from synthetic material or Scene artifacts.
-            result->provider_.Insert(entry.assetId, artifact.Value().payload);
-            // Transfer the original verified envelope, including its framing and whole-artifact digest input.
-            // The decoded payload provider retains its established Scene/material loading semantics.
-            result->artifactProvider_.Insert(entry.assetId, std::move(published.artifacts[index]));
             result->artifacts_.push_back(std::move(artifact).Value());
         }
+        std::set<Assets::AssetId> selected;
+        if (retain) {
+            auto ids = retain(*result);
+            if (ids.HasError())
+                return Result<std::unique_ptr<CommittedSceneAssets>>::Failure(std::move(ids).ErrorValue());
+            selected.insert(ids.Value().begin(), ids.Value().end());
+        }
+        std::vector<Assets::AssetId> enveloped;
+        std::size_t kept{};
+        for (std::size_t index = 0; index < result->artifacts_.size(); ++index) {
+            auto &artifact = result->artifacts_[index];
+            if (retain && selected.erase(artifact.id) == 0)
+                continue;
+            if (RequiresSceneEnvelope(artifact.type))
+                enveloped.push_back(artifact.id);
+            result->provider_.Insert(artifact.id, artifact.payload);
+            result->artifactProvider_.Insert(artifact.id, std::move(published.artifacts[index]));
+            if (kept != index)
+                result->artifacts_[kept] = std::move(artifact);
+            ++kept;
+        }
+        if (!selected.empty())
+            return Result<std::unique_ptr<CommittedSceneAssets>>::Failure(MakeError(InvalidCook, "A selected payload is missing."));
+        result->artifacts_.resize(kept);
         result->sceneProvider_ = std::make_unique<SceneBytes>(result->provider_, result->artifactProvider_, std::move(enveloped));
         return Result<std::unique_ptr<CommittedSceneAssets>>::Success(std::move(result));
     }
@@ -114,8 +130,8 @@ namespace Horo::Application::Internal {
 
     /** @copydoc CommittedSceneAssets::Find */
     const Assets::AssetCookArtifact *CommittedSceneAssets::Find(const Assets::AssetId id) const noexcept {
-        const auto found = std::ranges::find(artifacts_, id, &Assets::AssetCookArtifact::id);
-        return found == artifacts_.end() ? nullptr : std::to_address(found);
+        const auto found = std::ranges::lower_bound(artifacts_, id, {}, &Assets::AssetCookArtifact::id);
+        return found == artifacts_.end() || found->id != id ? nullptr : std::to_address(found);
     }
 
     /** @copydoc CommittedSceneAssets::Artifacts */

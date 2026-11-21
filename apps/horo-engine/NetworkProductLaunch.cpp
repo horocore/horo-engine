@@ -270,6 +270,13 @@ namespace Horo::Application::Internal {
             if (launch.role == Net::NetworkProjectRole::DedicatedServer) {
                 constexpr unsigned maximumCpuWorkers = 4;
                 selection.cpuWorkerCount = std::clamp(std::thread::hardware_concurrency(), 1U, maximumCpuWorkers);
+                auto &assets = selection.simulationAssets.emplace();
+                assets.runtimePrefabs = launch.gameplay && launch.gameplay->prefabPermission == GameplayPrefabPermission::Granted;
+                for (const auto &binding : launch.cookedDecisionBindings) {
+                    assets.decisions.push_back(binding.artifact);
+                    if (binding.prefab)
+                        assets.decisions.push_back(*binding.prefab);
+                }
             }
             auto prepared = PrepareHeadlessProjectSceneResources(selection);
             if (prepared.HasError())

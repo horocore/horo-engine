@@ -131,13 +131,15 @@ namespace Horo::Application::CharacterSceneProductTest {
                                Physics::PhysicsRuntimeMode mode = Physics::PhysicsRuntimeMode::Null,
                                const std::function<void(Internal::HeadlessSceneActivationInput &,
                                                         Internal::HeadlessProjectSceneResources &)> &configure = {},
-                               Network::NetworkProjectRole role = Network::NetworkProjectRole::Standalone) {
+                               Network::NetworkProjectRole role = Network::NetworkProjectRole::Standalone,
+                               std::optional<Internal::HeadlessSimulationAssets> simulationAssets = std::nullopt) {
                 const Internal::HeadlessProjectSceneOptions options{.projectRoot = fixture.project.project.dir.path,
                                                                     .scene = "cooked:" + fixture.project.sceneId.ToString(),
                                                                     .cookedRoot = fixture.project.cooked.path,
                                                                     .cookTarget = fixture.project.request.assets.target.Value(),
                                                                     .physicsMode = mode,
-                                                                    .navigationMode = Internal::HeadlessNavigationMode::RecastDetour};
+                                                                    .navigationMode = Internal::HeadlessNavigationMode::RecastDetour,
+                                                                    .simulationAssets = std::move(simulationAssets)};
                 auto prepared = Internal::PrepareHeadlessProjectSceneResources(options);
                 if (prepared.HasError())
                     return Result<void>::Failure(std::move(prepared).ErrorValue());
@@ -390,6 +392,7 @@ namespace Horo::Application::CharacterSceneProductTest {
 #if HORO_TEST_PHYSICS_NATIVE
     namespace {
         namespace DecisionFixture = AI::DecisionGraphTestSupport;
+        constexpr std::array<std::uint8_t, 16> PreviewTextureId{104};
 
         /** @brief Adds generated Animation artifacts with their cooker-issued dependency identities. */
         Animation::AnimationAuthoringComponent AddMotionGraph(NavigationProductFixture &project,
@@ -462,6 +465,12 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                                                    "assets/controller.horoasset"),
                                                                    material},
                               NavigationProductFixture::AddedAsset{Fixture::Record(asset, type, "assets/move.horo_bt"), payload.Value()}};
+            const auto texture = Assets::AssetId::FromBytes(PreviewTextureId);
+            constexpr std::string_view preview = "assets/preview.horoasset";
+            const std::vector<std::uint8_t> pixels{0, 128, 255, 255};
+            WriteFile(root / preview, pixels);
+            project.WriteText(std::string{preview} + ".horo", SidecarJson(texture.ToString(), "core.texture"));
+            added.push_back({Fixture::Record(texture, "core.texture", preview), pixels});
             const auto animation = trigger ? std::optional{AddMotionGraph(navigation, added, *trigger)} : std::nullopt;
             navigation.Publish(NavigationProductFixture::Input::Valid, NavigationProductFixture::Client::None, added,
                                [&](SceneSource::SceneSourceDocument &scene) {
@@ -576,10 +585,17 @@ namespace Horo::Application::CharacterSceneProductTest {
                 input.animationIdentities =
                     std::make_shared<Internal::AnimationRuntimeIdentitySource>(Internal::AnimationRuntimeIdentityRange{1001, 1100});
             }
-        }, role);
+        }, role, dedicated ? std::optional{Internal::HeadlessSimulationAssets{.decisions = {decisionAsset}}} : std::nullopt);
         if (started.HasError())
             UNSCOPED_INFO(started.ErrorValue().code.Value() + ": " + started.ErrorValue().message);
         REQUIRE(started.HasValue());
+        const auto preview = Assets::AssetId::FromBytes(PreviewTextureId);
+        const auto &committed = *product.resources->committed;
+        CHECK(product.resources->registry.Snapshot().Find(preview));
+        CHECK((committed.Find(preview) != nullptr) == !dedicated);
+        CHECK(committed.SceneProvider().Exists(preview, {}).Value() == !dedicated);
+        CHECK(committed.ArtifactProvider().Exists(preview, {}).Value() == !dedicated);
+        CHECK(committed.Find(decisionAsset));
         if (dedicated) {
             const auto health = product.scheduled->AiHealth(authority);
             REQUIRE(health);
