@@ -66,9 +66,7 @@ namespace Horo::Editor::Proposals {
                     return !preview.before.Revision() && preview.after == file.text;
                 } else {
                     const bool expectsText = !std::is_same_v<File, DeleteFile>;
-                    return preview.after.has_value() == expectsText && preview.before.IsCurrent() &&
-                           preview.before.ExternalState() == SourceExternalState::InSync &&
-                           ValidateAgainstSnapshot(file.base, Hunks(file), preview.before).HasValue();
+                    return preview.after.has_value() == expectsText && preview.ValidateSource(file.base, Hunks(file)).HasValue();
                 }
             }, operation);
         }

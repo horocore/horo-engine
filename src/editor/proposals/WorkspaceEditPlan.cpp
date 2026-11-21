@@ -136,6 +136,7 @@ namespace Horo::Editor::Proposals {
 
         struct Budget final {
             const Limits &limits;
+            ReviewSourceMatch sourceMatch;
             std::size_t input{};
             std::size_t output{};
 
@@ -174,22 +175,23 @@ namespace Horo::Editor::Proposals {
                 return Entry::Success(PlanConflict{path, *problem});
             if (!budget.Charge(snapshot.Text().size(), budget.input) || !budget.Charge(snapshot.DiskBase().size(), budget.input))
                 return Entry::Failure(MakeError(Errors::Bounds));
-            const auto validation = ValidateAgainstSnapshot(*operation.base, operation.hunks, snapshot);
+            FilePreview preview{std::move(snapshot), {}, budget.sourceMatch};
+            const auto validation = preview.ValidateSource(*operation.base, operation.hunks);
             if (validation.HasError()) {
                 if (validation.ErrorValue().code.Value() == Errors::Bounds.code.Value())
                     return Entry::Failure(validation.ErrorValue());
                 return Entry::Success(PlanConflict{path, PlanConflictReason::SourceStale});
             }
             if (!operation.destination)
-                return Entry::Success(FilePreview{std::move(snapshot), {}});
-            const auto text = snapshot.Text();
+                return Entry::Success(std::move(preview));
+            const auto text = preview.before.Text();
             auto bytes = text.size();
             for (const auto &hunk : operation.hunks)
                 bytes = bytes - hunk.before.size() + hunk.after.size();
             if (!budget.Charge(bytes, budget.output))
                 return Entry::Failure(MakeError(Errors::Bounds));
-            auto result = Render(text, operation.hunks, bytes);
-            return Entry::Success(FilePreview{std::move(snapshot), std::move(result)});
+            preview.after = Render(text, operation.hunks, bytes);
+            return Entry::Success(std::move(preview));
         }
 
         /** @brief Rejects conflicting operands before any text is copied. */
@@ -228,34 +230,46 @@ namespace Horo::Editor::Proposals {
             if (preview && preview->before.Revision() && !preview->before.IsCurrent())
                 entry = PlanConflict{preview->before.Identity().key.source, PlanConflictReason::SourceStale};
         }
+
+        /** @brief Builds a read-only plan using the evidence required by the caller's review flow. */
+        PlanResult Plan(const ChangeSet &proposal, const ProjectPolicy &policy, const std::span<const SourcePathObservation> observations,
+                        const Limits &limits, const ReviewSourceMatch sourceMatch) {
+            if (!limits.IsValid() || proposal.Files().size() > limits.maximumFiles || observations.size() > 2 * Limits{}.maximumFiles)
+                return PlanResult::Failure(MakeError(Errors::Bounds));
+            if (proposal.PolicyDigest() != policy.Digest())
+                return PlanResult::Failure(MakeError(Errors::PolicyDenied));
+            try {
+                ObservationIndex index;
+                if (!IndexObservations(observations, index))
+                    return PlanResult::Failure(MakeError(Errors::Invalid));
+                const auto paths = AffectedPaths(proposal.Files());
+                Budget budget{limits, sourceMatch};
+                WorkspaceEditPlan plan{proposal.Digest(), {}};
+                plan.entries.reserve(proposal.Files().size());
+                for (const auto &file : proposal.Files()) {
+                    auto entry = Prepare(Describe(file), index, paths, budget);
+                    if (entry.HasError())
+                        return PlanResult::Failure(entry.ErrorValue());
+                    plan.entries.push_back(std::move(entry).Value());
+                }
+                for (auto &entry : plan.entries)
+                    Refresh(entry);
+                return PlanResult::Success(std::move(plan));
+            } catch (const std::bad_alloc &) {
+                return PlanResult::Failure(MakeError(Errors::Bounds));
+            }
+        }
     }  // namespace
 
     /** @copydoc PlanWorkspaceEdits */
     Result<WorkspaceEditPlan> PlanWorkspaceEdits(const ChangeSet &proposal, const ProjectPolicy &policy,
                                                  const std::span<const SourcePathObservation> observations, const Limits &limits) {
-        if (!limits.IsValid() || proposal.Files().size() > limits.maximumFiles || observations.size() > 2 * Limits{}.maximumFiles)
-            return PlanResult::Failure(MakeError(Errors::Bounds));
-        if (proposal.PolicyDigest() != policy.Digest())
-            return PlanResult::Failure(MakeError(Errors::PolicyDenied));
-        try {
-            ObservationIndex index;
-            if (!IndexObservations(observations, index))
-                return PlanResult::Failure(MakeError(Errors::Invalid));
-            const auto paths = AffectedPaths(proposal.Files());
-            Budget budget{limits};
-            WorkspaceEditPlan plan{proposal.Digest(), {}};
-            plan.entries.reserve(proposal.Files().size());
-            for (const auto &file : proposal.Files()) {
-                auto entry = Prepare(Describe(file), index, paths, budget);
-                if (entry.HasError())
-                    return PlanResult::Failure(entry.ErrorValue());
-                plan.entries.push_back(std::move(entry).Value());
-            }
-            for (auto &entry : plan.entries)
-                Refresh(entry);
-            return PlanResult::Success(std::move(plan));
-        } catch (const std::bad_alloc &) {
-            return PlanResult::Failure(MakeError(Errors::Bounds));
-        }
+        return Plan(proposal, policy, observations, limits, ReviewSourceMatch::CurrentRevision);
+    }
+
+    /** @copydoc PlanRecoveredWorkspaceEdits */
+    Result<WorkspaceEditPlan> PlanRecoveredWorkspaceEdits(const ChangeSet &proposal, const ProjectPolicy &policy,
+                                                          const std::span<const SourcePathObservation> observations, const Limits &limits) {
+        return Plan(proposal, policy, observations, limits, ReviewSourceMatch::RecoveredContent);
     }
 }  // namespace Horo::Editor::Proposals

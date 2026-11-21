@@ -38,6 +38,7 @@ namespace Horo::Editor {
         Proposals::WorkspaceEditPlan plan;
         std::vector<EditorPatchFileCard> files;
         Proposals::ReviewDecisions decisions;
+        std::vector<SourceDocumentId> offeredPaths;
         std::optional<std::size_t> expandedFile;
         std::size_t displayedHunk{};
     };

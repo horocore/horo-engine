@@ -262,7 +262,7 @@ namespace Horo::Editor::Proposals {
 
         /** @brief Compares stable file identity and both independently observed revisions. */
         bool SameBaseRevision(const FileBase &base, const FileBase &current) {
-            return base.path == current.path && base.revision == current.revision && base.diskRevision == current.diskRevision;
+            return base.revision == current.revision && base.diskRevision == current.diskRevision;
         }
 
         /** @brief Compares exact current/saved content evidence and the current encoding marker. */
@@ -303,6 +303,24 @@ namespace Horo::Editor::Proposals {
             if (hunk.offset < (base.utf8Bom ? 3U : 0U) || !ScalarBoundary(text, hunk.offset) ||
                 !ScalarBoundary(text, hunk.offset + hunk.before.size()) || text.substr(hunk.offset, hunk.before.size()) != hunk.before)
                 return Fail<void>(Errors::StaleBase);
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates exact source bytes, with revision counters required for non-recovered evidence. */
+        Result<void> ValidateSnapshot(const FileBase &base, const std::span<const TextHunk> hunks, const SourceDocumentSnapshot &current,
+                                      const ReviewSourceMatch sourceMatch) {
+            const auto actual = FileBase::Capture(current);
+            if (actual.HasError())
+                return Result<void>::Failure(actual.ErrorValue());
+            const auto &observed = actual.Value();
+            if (base.path != observed.path || !SameBaseContent(base, observed) ||
+                (sourceMatch != ReviewSourceMatch::RecoveredContent && !SameBaseRevision(base, observed)))
+                return Fail<void>(Errors::StaleBase);
+            if (const auto structure = ValidateSnapshotHunkStructure(base, hunks); structure.HasError())
+                return structure;
+            for (const auto &hunk : hunks)
+                if (const auto valid = ValidateSnapshotHunk(base, hunk, current.Text()); valid.HasError())
+                    return valid;
             return Result<void>::Success();
         }
 
@@ -481,19 +499,14 @@ namespace Horo::Editor::Proposals {
 
     /** @copydoc ValidateAgainstSnapshot */
     Result<void> ValidateAgainstSnapshot(const FileBase &base, std::span<const TextHunk> hunks, const SourceDocumentSnapshot &current) {
-        const auto actual = FileBase::Capture(current);
-        if (actual.HasError())
-            return Result<void>::Failure(actual.ErrorValue());
-        if (!SameBaseRevision(base, actual.Value()) || !SameBaseContent(base, actual.Value()))
+        return ValidateSnapshot(base, hunks, current, ReviewSourceMatch::CurrentRevision);
+    }
+
+    /** @copydoc FilePreview::ValidateSource */
+    Result<void> FilePreview::ValidateSource(const FileBase &base, const std::span<const TextHunk> hunks) const {
+        if (!before.IsCurrent() || before.ExternalState() != SourceExternalState::InSync)
             return Fail<void>(Errors::StaleBase);
-        if (const auto structure = ValidateSnapshotHunkStructure(base, hunks); structure.HasError())
-            return structure;
-        for (const auto &hunk : hunks) {
-            const auto valid = ValidateSnapshotHunk(base, hunk, current.Text());
-            if (valid.HasError())
-                return valid;
-        }
-        return Result<void>::Success();
+        return ValidateSnapshot(base, hunks, before, sourceMatch);
     }
 
     /** @copydoc Review */

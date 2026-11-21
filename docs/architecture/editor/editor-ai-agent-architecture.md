@@ -778,6 +778,18 @@ The chat shows one change range at a time for each selected edit. Its
 controls use the original byte range and the canonical hunk index for the
 decision, even if the displayed file later becomes stale.
 
+The Local Model panel can explicitly replace the recovery checkpoint at
+`.horo/local/agent/source-review` with the admitted proposal and its current decisions. The
+checkpoint keeps the exact proposal, including the reviewed change text, and
+the allowed path identities. It excludes the provider conversation and its
+request context. The editor publishes the file durably on its storage worker
+under an exclusive project-file lease. Restoring builds a new read-only plan
+from current open source snapshots. Each restored acceptance requires matching
+path, buffer and saved-base digests, and valid original ranges. Editor
+revision counters may differ after reopening a byte-identical source. The
+checkpoint preserves the decisions at save time. Undo tracks decisions made
+in the current review session.
+
 ## Backend Providers
 
 The system supports pluggable LLM backends:

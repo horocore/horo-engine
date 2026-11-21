@@ -12,6 +12,7 @@ if(HORO_BUILD_EDITOR_GUI)
         HoroEditor/app/EditorNavigationBakeHost.cpp
         HoroEditor/app/EditorLocalAgentPanel.cpp
         HoroEditor/app/EditorLocalAgentPatch.cpp
+        HoroEditor/app/EditorLocalAgentPatchCheckpoint.cpp
         HoroEditor/app/EditorLocalAgentContext.cpp
         HoroEditor/app/EditorLocalAgentHistory.cpp
         HoroEditor/app/EditorWorkerShutdown.cpp
@@ -33,7 +34,7 @@ if(HORO_BUILD_EDITOR_GUI)
         target_link_libraries(HoroEditor PRIVATE dwmapi)
     endif()
 
-    target_link_libraries(HoroEditor PRIVATE HoroEngine::PlatformProjectReadFiles HoroShaderHotReloadHostInternal)
+    target_link_libraries(HoroEditor PRIVATE HoroEngine::PlatformProjectReadFiles HoroShaderHotReloadHostInternal HoroEngine::Assets)
     target_link_libraries(HoroEditor PRIVATE HoroEditorAgentTurnInternal HoroMcpEditorAgentToolsInternal HoroEditorAgentHistoryInternal HoroEngine::ModelProviderAdapters)
     target_link_libraries(HoroEditor PRIVATE HoroXRSimulatorPlayHost HoroEngine::VisualAccessibility)
     target_link_libraries(HoroEditor PRIVATE HoroXRSimulatorProjectArtifacts HoroEngine::PlatformProjectIo)

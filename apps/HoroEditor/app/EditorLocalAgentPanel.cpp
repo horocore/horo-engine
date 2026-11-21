@@ -6,6 +6,7 @@
 #include "EditorLocalAgentContext.h"
 #include "EditorLocalAgentHistory.h"
 #include "EditorLocalAgentPatch.h"
+#include "EditorLocalAgentPatchCheckpoint.h"
 #include "Horo/Agent/ReferenceModelProviders.h"
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Editor/EditorUiComponents.h"
@@ -31,6 +32,8 @@ namespace Horo::Editor {
 
         using Reply = std::variant<ProviderDiscovery, AgentTurnResult, ContextReview>;
         using BackgroundTurn = AgentBackgroundTurn<Reply>;
+        using PatchLoad = Result<std::optional<EditorLocalAgentPatchReview>>;
+        using PatchWorker = AgentBackgroundTurn<std::variant<Result<void>, PatchLoad>>;
 
         /** @brief Resolves the localized operation label from the admitted file kind. */
         const char *PatchFileLabel(const EditorPatchFileKind kind) {
@@ -174,7 +177,7 @@ namespace Horo::Editor {
         class LocalAgentPanel final : public IWorkspacePanel {
         public:
             LocalAgentPanel(const JobSystem &jobs, DurableFileSystem &files, std::shared_ptr<BackgroundTurn> background)
-                : IWorkspacePanel("workspace.local_agent"), background_(std::move(background)), history_(jobs, files) {}
+                : IWorkspacePanel("workspace.local_agent"), background_(std::move(background)), history_(jobs, files), files_(files) {}
 
             ~LocalAgentPanel() override {
                 RevokeContext();
@@ -249,6 +252,7 @@ namespace Horo::Editor {
                     awaitingCheckpoint_ = false;
                 }
                 PollReply();
+                PollPatchCheckpoint();
                 PollLiveResponse();
             }
 
@@ -312,7 +316,8 @@ namespace Horo::Editor {
 
             /** @brief Checks the common prerequisites for dispatch at the currently selected destination. */
             [[nodiscard]] bool CanRunTurn() const {
-                return !Busy() && !awaitingCheckpoint_ && !history_.HasRecovery() && !endpoint_.empty() && !model_.empty();
+                return !Busy() && !patchCheckpoint_.Busy() && !awaitingCheckpoint_ && !history_.HasRecovery() && !endpoint_.empty() &&
+                       !model_.empty();
             }
 
             /** @brief Enables composer actions only when a prompt has been entered. */
@@ -335,6 +340,7 @@ namespace Horo::Editor {
                 requestSourceReview_ = {};
                 patchSource_ = {};
                 patchReview_.reset();
+                patchCheckpoint_.Abandon();
                 captureSceneSelection_ = {};
                 captureEditorDiagnostics_ = {};
                 sourcePicker_ = SourcePickerMode::None;
@@ -937,10 +943,84 @@ namespace Horo::Editor {
                     status_ = review.decisions.Undo(review.plan).HasError() ? "source_patch_stale" : nullptr;
             }
 
+            /** @brief Explicitly checkpoints the exact inert proposal and current unit decisions on the storage worker. */
+            void SavePatchReview(const EditorLocalAgentPatchReview &review) {
+                EditorPatchCheckpoint checkpoint{review.proposal, review.decisions, review.offeredPaths};
+                const auto started =
+                    patchCheckpoint_.Start(PatchWorker::Operation{[root = buildRoot_, files = &files_, checkpoint = std::move(checkpoint)](
+                                                                      const std::stop_token stop) -> PatchWorker::Reply {
+                    const CancellationSource cancellation;
+                    const std::stop_callback cancel{stop, [&] {
+                        cancellation.RequestCancellation();
+                    }};
+                    return SaveEditorPatchCheckpoint(*files, root, checkpoint, cancellation.Token());
+                }});
+                status_ = started ? "working" : "source_patch_checkpoint_error";
+            }
+
+            /** @brief Captures current immutable source evidence before restoring the last explicit checkpoint. */
+            void LoadPatchReview() {
+                const auto snapshots = openSources_();
+                std::vector<SourceDocumentSnapshot> sources{snapshots.begin(), snapshots.end()};
+                const auto started = patchCheckpoint_.Start(
+                    PatchWorker::Operation{[root = buildRoot_, project = contextProject_,
+                                            sources = std::move(sources)](const std::stop_token stop) -> PatchWorker::Reply {
+                    const CancellationSource cancellation;
+                    const std::stop_callback cancel{stop, [&] {
+                        cancellation.RequestCancellation();
+                    }};
+                    return LoadEditorPatchCheckpoint(root, project, sources, cancellation.Token());
+                }});
+                status_ = started ? "working" : "source_patch_checkpoint_error";
+            }
+
+            /** @brief Adopts storage completion only for the project incarnation that initiated it. */
+            void PollPatchCheckpoint() {
+                using State = PatchWorker::CompletionState;
+                auto result = patchCheckpoint_.Poll();
+                if (!result || result->state == State::Abandoned)
+                    return;
+                if (result->state != State::Ready) {
+                    status_ = "source_patch_checkpoint_error";
+                    return;
+                }
+                std::visit([this](auto &reply) {
+                    AdoptPatchCheckpoint(reply);
+                }, *result->reply);
+            }
+
+            /** @brief Reports whether the explicitly selected proposal and decisions reached durable storage. */
+            void AdoptPatchCheckpoint(const Result<void> &saved) {
+                status_ = saved.HasValue() ? "source_patch_checkpoint_saved" : "source_patch_checkpoint_error";
+            }
+
+            /** @brief Displays revalidated decisions without dispatching a model turn or editing source. */
+            void AdoptPatchCheckpoint(PatchLoad &loaded) {
+                if (loaded.HasError()) {
+                    status_ = loaded.ErrorValue().code.Value() == Proposals::Errors::StaleBase.code.Value()
+                                  ? "source_patch_checkpoint_stale"
+                                  : "source_patch_checkpoint_error";
+                    return;
+                }
+                if (!loaded.Value()) {
+                    status_ = "source_patch_checkpoint_missing";
+                    return;
+                }
+                patchReview_ = std::move(loaded).Value();
+                response_.clear();
+                status_ = "source_patch_checkpoint_loaded";
+            }
+
             /** @brief Renders file summaries in proposal order and stages only the selected current operation. */
             void DrawPatchReview(const ILocalizationService &locale, const Theme::Fonts &fonts, EditorWorkspaceViewCommandData &command) {
+                const bool canCheckpoint = !Busy() && !patchCheckpoint_.Busy() && !awaitingCheckpoint_ && !contextPreview_ &&
+                                           !buildRoot_.empty() && !contextProject_.empty();
+                if (openSources_ && requestSourceReview_ && !buildRoot_.empty() &&
+                    Button(locale, "source_patch_checkpoint_load", canCheckpoint && !patchReview_))
+                    LoadPatchReview();
                 if (!patchReview_)
                     return;
+                ImGui::BeginDisabled(patchCheckpoint_.Busy());
                 auto &review = *patchReview_;
                 for (std::size_t index = 0; index < review.files.size(); ++index) {
                     if (review.files.size() > 1)
@@ -950,6 +1030,9 @@ namespace Horo::Editor {
                         ImGui::PopID();
                 }
                 DrawPatchDecisions(review, locale);
+                if (!buildRoot_.empty() && Button(locale, "source_patch_checkpoint_save", canCheckpoint))
+                    SavePatchReview(review);
+                ImGui::EndDisabled();
             }
 
             void Send(std::string_view prompt, std::optional<std::size_t> sceneCount = {}, bool recoverable = false,
@@ -1161,6 +1244,8 @@ namespace Horo::Editor {
             bool reviewingOpenSource_{};
             std::size_t sourcePage_{};
             std::vector<SourceDocumentSnapshot> selectedOpenFiles_;
+            DurableFileSystem &files_;
+            PatchWorker patchCheckpoint_; /**< Joins before panel teardown while the host's file service is alive. */
         };
     }  // namespace
 

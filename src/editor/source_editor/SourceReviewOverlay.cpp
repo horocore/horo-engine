@@ -80,7 +80,7 @@ namespace Horo::Editor {
         if (!base)
             return ResultType::Failure(MakeError(Proposals::Errors::Invalid));
         const auto hunks = Hunks(operation);
-        const auto validated = Proposals::ValidateAgainstSnapshot(*base, hunks, preview->before);
+        const auto validated = preview->ValidateSource(*base, hunks);
         if (validated.HasError())
             return ResultType::Failure(validated.ErrorValue());
         SourceReviewOverlay overlay;

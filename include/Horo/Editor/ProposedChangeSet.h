@@ -224,10 +224,25 @@ namespace Horo::Editor::Proposals {
         PlanConflictReason reason;
     };
 
+    /** @brief Selects the evidence a detached review preview uses to match its original source. */
+    enum class ReviewSourceMatch : std::uint8_t {
+        CurrentRevision,
+        RecoveredContent
+    };
+
     /** @brief Detached preview. The original immutable lease is empty for creates and the result is absent for deletes. */
     struct FilePreview final {
         SourceDocumentSnapshot before;
         std::optional<std::string> after;
+        ReviewSourceMatch sourceMatch{ReviewSourceMatch::CurrentRevision};
+
+        /** @brief Checks source identity, freshness, both content digests and exact hunk text.
+         * @param base Original proposal evidence. @param hunks Ranges against the original source.
+         * @return Success or a typed validation failure.
+         * @details A recovered review can match byte-identical source across editor sessions with different revision counters.
+         * This evidence only supports preview and review.
+         */
+        [[nodiscard]] Result<void> ValidateSource(const FileBase &base, std::span<const TextHunk> hunks) const;
     };
 
     /** @brief A read-only projection bound to the exact proposal digest. Entries follow ChangeSet::Files() order. */
@@ -245,6 +260,14 @@ namespace Horo::Editor::Proposals {
      */
     Result<WorkspaceEditPlan> PlanWorkspaceEdits(const ChangeSet &proposal, const ProjectPolicy &policy,
                                                  std::span<const SourcePathObservation> observations, const Limits &limits = {});
+
+    /** @brief Projects an exact restored proposal against current source content and saved-base evidence.
+     * @param proposal Exact decoded proposal. @param policy Policy matching the persisted proposal digest.
+     * @param observations Current workspace evidence. @param limits Finite per-file and aggregate limits.
+     * @return Read-only review previews or conflicts, with no application or save authority.
+     */
+    Result<WorkspaceEditPlan> PlanRecoveredWorkspaceEdits(const ChangeSet &proposal, const ProjectPolicy &policy,
+                                                          std::span<const SourcePathObservation> observations, const Limits &limits = {});
 
     enum class ReviewChoice : std::uint8_t {
         Accept,

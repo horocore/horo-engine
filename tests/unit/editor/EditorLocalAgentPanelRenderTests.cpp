@@ -1,6 +1,7 @@
 #include "../../../apps/HoroEditor/app/EditorLocalAgentContext.h"
 #include "../../../apps/HoroEditor/app/EditorLocalAgentPanel.h"
 #include "../../../apps/HoroEditor/app/EditorLocalAgentPatch.h"
+#include "../../../apps/HoroEditor/app/EditorLocalAgentPatchCheckpoint.h"
 #include "../../support/OwnedTestDirectory.h"
 #include "../../support/SourceDocumentTestProject.h"
 #include "EditorWorkspaceViewModel.h"
@@ -438,6 +439,62 @@ namespace {
         CHECK(SourceReviewOverlay::Capture(review.Value().proposal, review.Value().plan, 0).HasValue());
     }
 
+    TEST_CASE("A source review checkpoint restores after reopening exact content and rejects different evidence", "[editor][agent][gui]") {
+        using namespace Proposals;
+        TestSupport::SourceProject project;
+        project.Put("one two\n", "file.cpp");
+        const auto path = project.directory / "file.cpp";
+        SourceDocumentService first{project.directory};
+        const auto identity = project.Identity("file.cpp", 1);
+        REQUIRE(first.Open(identity, path).HasValue());
+        REQUIRE(first.Edit(identity.instance, {1, 0, 3, "new"}).HasValue());
+        auto original = first.Undo(identity.instance, 2).Value().snapshot;
+        REQUIRE(original.Revision() == 3);
+        auto review = PrepareEditorLocalPatchReview(
+                          R"({"version":1,"files":[{"kind":"edit","path":"file.cpp","hunks":[
+                            {"offset":0,"before":"one","after":"three"},{"offset":4,"before":"two","after":"four"}
+                          ]}]})",
+                          {{original}, "test", 1}, "layout-test", 3)
+                          .Value();
+        NativeDurableFileSystem files;
+        const auto stored = project.directory / ".horo/local/agent/source-review";
+        REQUIRE_FALSE(LoadEditorPatchCheckpoint(project.directory, "layout-test", {}, {}).Value());
+        REQUIRE(review.decisions.Decide(review.plan, {0, 0}, ReviewChoice::Accept).HasValue());
+        REQUIRE(review.decisions.Decide(review.plan, {0, 1}, ReviewChoice::Reject).HasValue());
+        CHECK_FALSE(std::filesystem::exists(stored));
+        REQUIRE(
+            SaveEditorPatchCheckpoint(files, project.directory, {review.proposal, review.decisions, review.offeredPaths}, {}).HasValue());
+
+        SourceDocumentService reopened{project.directory};
+        const auto latest = reopened.Open(identity, path).Value();
+        CHECK(latest.Revision() == 1);
+        auto loaded = LoadEditorPatchCheckpoint(project.directory, "layout-test", std::span{&latest, 1}, {});
+        REQUIRE(loaded.HasValue());
+        REQUIRE(loaded.Value());
+        auto restored = std::move(loaded).Value().value();
+        CHECK(restored.proposal.Digest() == review.proposal.Digest());
+        CHECK(restored.decisions.State().Value() == ReviewState::Mixed);
+        CHECK(restored.decisions.State({0, 0}).Value() == ReviewState::Accepted);
+        CHECK(restored.decisions.State({0, 1}).Value() == ReviewState::Rejected);
+        REQUIRE(SourceReviewOverlay::Capture(restored.proposal, restored.plan, 0).HasValue());
+        REQUIRE(restored.decisions.Decide(restored.plan, {0, 1}, ReviewChoice::Accept).HasValue());
+        REQUIRE(restored.decisions.Undo(restored.plan).Value());
+        CHECK(restored.decisions.State().Value() == ReviewState::Mixed);
+        CHECK(latest.IsCurrent());
+        CHECK(latest.Text() == "one two\n");
+        CHECK(LoadEditorPatchCheckpoint(project.directory, "other-project", std::span{&latest, 1}, {}).HasError());
+        CHECK(LoadEditorPatchCheckpoint(project.directory, "layout-test", {}, {}).HasError());
+
+        const auto changed = reopened.Edit(identity.instance, {1, 0, 3, "new"}).Value();
+        CHECK(LoadEditorPatchCheckpoint(project.directory, "layout-test", std::span{&changed, 1}, {}).HasError());
+        {
+            std::ofstream corrupt{stored, std::ios::binary | std::ios::app};
+            corrupt << "trailing bytes";
+            REQUIRE(corrupt.good());
+        }
+        CHECK(LoadEditorPatchCheckpoint(project.directory, "layout-test", std::span{&latest, 1}, {}).HasError());
+    }
+
     TEST_CASE("The file picker sends the selected sources and routes each returned card", "[.][chat-http]") {
         const auto *endpoint = std::getenv("HORO_MODEL_TEST_ENDPOINT");
         REQUIRE(endpoint);
@@ -450,7 +507,8 @@ namespace {
         const auto two = owner.Open(project.Identity(longPath, 2), project.directory / longPath).Value();
         const std::array open{one, two};
         std::vector<DocumentInstanceId> selections;
-        LocalAgentFixture fixture{"en-US", [&](PanelContext &context) {
+        const auto configure = [&](PanelContext &context) {
+            context.projectFileRoot = &project.directory;
             context.openSourceSnapshots = [&]() -> std::span<const SourceDocumentSnapshot> {
                 return open;
             };
@@ -461,7 +519,8 @@ namespace {
                 selections.push_back(overlay.Value().Source().Identity().instance);
                 return true;
             };
-        }};
+        };
+        LocalAgentFixture fixture{"en-US", configure};
         fixture.Draw(420);
         fixture.Enter("##Endpoint", endpoint);
         fixture.Enter("##Model", "editor-multi-inline-patch");
@@ -505,6 +564,23 @@ namespace {
         select(fixture.ChatWindow()->GetID(0), "###source_patch_review");
         CHECK(selections.size() == 2);
         fixture.Activate("###source_patch_undo");
+        CHECK(fixture.DrawnText().find("Accepted") != std::string::npos);
+        fixture.Activate("###source_patch_checkpoint_save");
+        REQUIRE(Await([&] {
+            return fixture.DrawnText().find("Source review saved in this project.") != std::string::npos;
+        }));
+        fixture.panels.DetachAll();
+        PanelContext next{.dataBus = fixture.gui.editorEvents,
+                          .inputRouter = &fixture.gui.input,
+                          .workspaceInputContext = &fixture.workspace,
+                          .projectIdentity = "layout-test"};
+        configure(next);
+        fixture.panels.AttachAll(next);
+        CHECK(fixture.DrawnText().find("Accepted") == std::string::npos);
+        fixture.Activate("###source_patch_checkpoint_load");
+        REQUIRE(Await([&] {
+            return fixture.DrawnText().find("Saved source review restored.") != std::string::npos;
+        }));
         CHECK(fixture.DrawnText().find("Accepted") != std::string::npos);
         CHECK(one.IsCurrent());
         CHECK(two.IsCurrent());

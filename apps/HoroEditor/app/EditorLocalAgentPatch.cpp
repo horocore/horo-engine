@@ -92,10 +92,12 @@ namespace Horo::Editor {
             return ReviewResult::Failure(MakeError(Errors::Malformed));
         std::vector<PathRule> rules;
         std::vector<SourcePathObservation> observations;
+        std::vector<SourceDocumentId> offeredPaths;
         for (const auto &source : offered.sources) {
             const auto path = source.Identity().key.source;
             rules.push_back({path, false});
             observations.push_back({path, source});
+            offeredPaths.push_back(path);
         }
         auto policy = ProjectPolicy::Capture(std::string{project}, generation, std::move(rules));
         if (policy.HasError())
@@ -112,6 +114,7 @@ namespace Horo::Editor {
             return ReviewResult::Failure(plan.ErrorValue());
         auto cards = DescribeEditorPatchFiles(proposal.Value());
         ReviewDecisions decisions{proposal.Value()};
-        return ReviewResult::Success({std::move(proposal).Value(), std::move(plan).Value(), std::move(cards), std::move(decisions), {}, 0});
+        return ReviewResult::Success(
+            {std::move(proposal).Value(), std::move(plan).Value(), std::move(cards), std::move(decisions), std::move(offeredPaths), {}, 0});
     }
 }  // namespace Horo::Editor
