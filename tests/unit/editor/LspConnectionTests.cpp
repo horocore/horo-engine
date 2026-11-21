@@ -17,6 +17,8 @@ namespace {
     constexpr std::string_view FullSync = R"({"jsonrpc":"2.0","id":-1,"result":{"capabilities":{"textDocumentSync":1}}})";
     constexpr std::string_view IncrementalSync =
         R"({"jsonrpc":"2.0","id":-1,"result":{"capabilities":{"textDocumentSync":{"openClose":true,"change":2}}}})";
+    constexpr std::string_view QuerySupport =
+        R"({"jsonrpc":"2.0","id":-1,"result":{"capabilities":{"textDocumentSync":1,"hoverProvider":true,"referencesProvider":true,"codeActionProvider":{}}}})";
 
     /** @brief Records the complete frames offered to the process worker. */
     struct TestTransport final : ILspTransport {
@@ -37,7 +39,7 @@ namespace {
     };
 
     /** @brief Delivers a complete UTF-8 body over the same byte path used by the process. */
-    Result<std::optional<LspMessage>> Deliver(LspConnection &connection, const std::string_view body) {
+    Result<std::optional<LspIncoming>> Deliver(LspConnection &connection, const std::string_view body) {
         const auto frame = "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + std::string{body};
         auto bytes = std::string_view{frame};
         auto result = connection.Read(bytes, Now);
@@ -66,6 +68,24 @@ namespace {
         return std::move(decoded).Value();
     }
 
+    /** @brief Generates a reply for an actual wire request ID. */
+    std::string Reply(const SourceLanguageRequestId id, const std::string_view fields = R"("result":null)") {
+        return "{\"jsonrpc\":\"2.0\",\"id\":\"" + std::to_string(id.request) + "\"," + std::string{fields} + "}";
+    }
+
+    /** @brief Owns one negotiated query connection with an initial synchronized source. */
+    struct QueryConnection final {
+        SourceLanguageSession source;
+        TestTransport transport;
+        LspConnection connection{source, transport};
+
+        explicit QueryConnection(const SourceDocumentSnapshot &snapshot) {
+            REQUIRE(connection.Start("file:///project", std::nullopt, Now).HasValue());
+            REQUIRE(Deliver(connection, QuerySupport).HasValue());
+            REQUIRE(connection.SyncSource(snapshot, "cpp").HasValue());
+        }
+    };
+
     TEST_CASE("LSP transport gates feature dispatch until initialized is queued and retires work during shutdown") {
         SourceLanguageSession source;
         TestTransport transport;
@@ -87,7 +107,7 @@ namespace {
         const auto eligible = Deliver(connection, notification);
         REQUIRE(eligible.HasValue());
         REQUIRE(eligible.Value().has_value());
-        CHECK(eligible.Value()->kind == LspMessageKind::Notification);
+        CHECK(eligible.Value()->message.kind == LspMessageKind::Notification);
 
         REQUIRE(connection.Shutdown(Now).HasValue());
         CHECK(source.State() == SourceLanguageSessionState::Disconnected);
@@ -275,5 +295,82 @@ namespace {
         CHECK(source.State() == SourceLanguageSessionState::Ready);
         CHECK(transport.writes.size() == 3);
         CHECK(transport.cancellations == 0);
+    }
+
+    TEST_CASE("LSP document requests use negotiated features and exact UTF-16 source positions") {
+        TestSupport::SourceProject project;
+        SourceFileOpenService open{project.directory};
+        project.Put("x\r\n\xF0\x9F\x98\x80"
+                    "yz",
+                    "utf.cpp");
+        auto opened = open.Open({.path = "utf.cpp"});
+        REQUIRE(opened.HasValue());
+        REQUIRE(opened.Value().sourceSnapshot.has_value());
+        const auto snapshot = *opened.Value().sourceSnapshot;
+        QueryConnection fixture{snapshot};
+        auto &connection = fixture.connection;
+        const auto &writes = fixture.transport.writes;
+        using enum SourceLanguageRequestKind;
+        CHECK(connection.Request(snapshot, Completion).HasError());
+        CHECK(connection.Request(snapshot, Hover, {.offset = 2}).HasError());
+        CHECK(connection.Request(snapshot, Hover, {.offset = 4}).HasError());
+        CHECK(connection.Request(snapshot, CodeActions, {.offset = 7, .length = 9}).HasError());
+        CHECK(writes.size() == 3);
+
+        auto references = connection.Request(snapshot, References, {.offset = 7, .includeDeclaration = true});
+        REQUIRE(references.HasValue());
+        const auto wire = Inspect(writes.back());
+        const auto &envelope = wire.envelope.Get();
+        CHECK(envelope.at("method") == "textDocument/references");
+        CHECK(envelope.at("id").get<std::string>() == std::to_string(references.Value().request));
+        const auto &params = envelope.at("params");
+        CHECK(params.at("position").at("line") == 1);
+        CHECK(params.at("position").at("character") == 2);
+        CHECK(params.at("context").at("includeDeclaration") == true);
+
+        REQUIRE(connection.Request(snapshot, CodeActions, {.offset = 7, .length = 1}).HasValue());
+        const auto actions = Inspect(writes.back());
+        const auto &range = actions.envelope.Get().at("params").at("range");
+        CHECK(range.at("start").at("character") == 2);
+        CHECK(range.at("end").at("character") == 3);
+    }
+
+    TEST_CASE("LSP replies remain correlated across documents and discard cancelled duplicate and stale results") {
+        TestSupport::SourceProject project;
+        SourceFileOpenService open{project.directory};
+        const auto first = OpenSource(project, open);
+        project.Put("int second;", "second.cpp");
+        auto opened = open.Open({.path = "second.cpp"});
+        REQUIRE(opened.HasValue());
+        REQUIRE(opened.Value().sourceSnapshot.has_value());
+        const auto second = *opened.Value().sourceSnapshot;
+        QueryConnection fixture{first};
+        auto &connection = fixture.connection;
+        REQUIRE(connection.SyncSource(second, "cpp").HasValue());
+        using enum SourceLanguageRequestKind;
+        auto stale = connection.Request(first, Hover);
+        auto cancelled = connection.Request(second, Hover);
+        auto live = connection.Request(second, References);
+        REQUIRE(stale.HasValue());
+        REQUIRE(cancelled.HasValue());
+        REQUIRE(live.HasValue());
+
+        REQUIRE(connection.CancelRequest(cancelled.Value()).HasValue());
+        const auto cancellation = Inspect(fixture.transport.writes.back());
+        CHECK(cancellation.envelope.Get().at("method") == "$/cancelRequest");
+        CHECK(cancellation.envelope.Get().at("params").at("id").get<std::string>() == std::to_string(cancelled.Value().request));
+        const auto instance = first.Identity().instance;
+        REQUIRE(open.Documents().Edit(instance, {first.Revision(), 0, 3, "float"}).HasValue());
+        CHECK_FALSE(Deliver(connection, Reply(stale.Value())).Value());
+        CHECK_FALSE(Deliver(connection, Reply(cancelled.Value())).Value());
+        CHECK_FALSE(Deliver(connection, R"({"jsonrpc":"2.0","id":"01","result":null})").Value());
+        const auto result = Deliver(connection, Reply(live.Value(), R"("error":{"code":-32603,"message":"failed"})"));
+        REQUIRE(result.HasValue());
+        REQUIRE(result.Value().has_value());
+        REQUIRE(result.Value()->reply.has_value());
+        CHECK(result.Value()->message.kind == LspMessageKind::Error);
+        CHECK(result.Value()->reply->kind == References);
+        CHECK(result.Value()->reply->source.SharesStateWith(second));
+        CHECK_FALSE(Deliver(connection, Reply(live.Value())).Value());
     }
 }  // namespace

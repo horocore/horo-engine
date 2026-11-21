@@ -4,9 +4,16 @@
 
 #include "Horo/Editor/SourceLanguageSession.h"
 #include "LspLifecycle.h"
+#include "LspRequests.h"
 
 namespace Horo::Editor::Language {
     struct LspDocumentUpdate;
+
+    /** @brief Feature traffic, carrying exact editor revision evidence when it answers a document request. */
+    struct LspIncoming final {
+        LspMessage message;
+        std::optional<SourceLanguageReply> reply;
+    };
 
     /** @brief Transport operations used on the editor lane. Native process ownership stays with the host. */
     class ILspTransport {
@@ -49,7 +56,7 @@ namespace Horo::Editor::Language {
          * @param bytes Unconsumed transport bytes. @param now Monotonic observation time.
          * @return A validated feature message, no feature work, or an error that retires the connection.
          */
-        [[nodiscard]] Result<std::optional<LspMessage>> Read(std::string_view &bytes, Clock::time_point now);
+        [[nodiscard]] Result<std::optional<LspIncoming>> Read(std::string_view &bytes, Clock::time_point now);
 
         /** @brief Queues the current source revision using the peer's negotiated document synchronization mode.
          * @param snapshot Current source lease. @param languageId Stable language ID from this project's adapter.
@@ -61,6 +68,18 @@ namespace Horo::Editor::Language {
          * @param instance Source instance being closed. @return Success if already closed or retirement was queued.
          */
         [[nodiscard]] Result<void> CloseSource(DocumentInstanceId instance);
+
+        /** @brief Issues a negotiated request against the exact synchronized document revision.
+         * @param snapshot Source lease. @param kind Requested feature. @param query Byte position and options.
+         * @return Session-bound correlation ID if the request entered the transport queue.
+         */
+        [[nodiscard]] Result<SourceLanguageRequestId> Request(const SourceDocumentSnapshot &snapshot, SourceLanguageRequestKind kind,
+                                                              LspSourceQuery query = {});
+
+        /** @brief Cancels one in-flight request locally before notifying the peer.
+         * @param id Session-bound request ID. @return Success for retired or unknown IDs and queued cancellation.
+         */
+        [[nodiscard]] Result<void> CancelRequest(SourceLanguageRequestId id);
 
         /** @brief Stops new source work and queues graceful shutdown for a ready connection.
          * @param now Monotonic observation time. @return Queue admission or an error.
@@ -78,10 +97,12 @@ namespace Horo::Editor::Language {
         [[nodiscard]] Result<void> TransportStopped(bool cleanExit);
 
     private:
-        using Incoming = Result<std::optional<LspMessage>>;
+        using Incoming = Result<std::optional<LspIncoming>>;
 
         /** @brief Consumes lifecycle responses before forwarding any ready feature message. */
         [[nodiscard]] Incoming Dispatch(LspMessage message, Clock::time_point now);
+        /** @brief Correlates feature responses against the current session and source revision. */
+        [[nodiscard]] Incoming ReadFeature(LspMessage message);
         /** @brief Queues an owned frame, retiring the connection on backpressure or failure. */
         [[nodiscard]] Result<void> Send(std::string frame);
         /** @brief Sends a rekey's close before the new open, retiring the connection after either refusal. */
@@ -95,6 +116,7 @@ namespace Horo::Editor::Language {
         ILspTransport &transport_;
         LspFrameReader reader_;
         LspLifecycle lifecycle_;
+        LspFeatures features_;
         std::string rootUri_;
         std::uint64_t stamp_{};
         bool stopped_{};

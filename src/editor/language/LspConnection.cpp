@@ -88,11 +88,25 @@ namespace Horo::Editor::Language {
                     Abort();
                     return Incoming::Failure(std::move(ready).ErrorValue());
                 }
+                features_ = ReadLspFeatures(message.envelope.Get().at("result").at("capabilities"));
             }
         }
         if (!dispatch.handled && lifecycle_.State() == LspLifecycleState::Ready)
-            return Incoming::Success(std::move(message));
+            return ReadFeature(std::move(message));
         return Incoming::Success(std::nullopt);
+    }
+
+    /** @copydoc LspConnection::ReadFeature */
+    LspConnection::Incoming LspConnection::ReadFeature(LspMessage message) {
+        if (message.kind != LspMessageKind::Result && message.kind != LspMessageKind::Error)
+            return Incoming::Success(LspIncoming{std::move(message), std::nullopt});
+        const auto id = ReadLspRequestId(message);
+        if (!id)
+            return Incoming::Success(std::nullopt);
+        auto reply = source_.Complete({stamp_, *id});
+        if (reply.HasError())
+            return Incoming::Success(std::nullopt);
+        return Incoming::Success(LspIncoming{std::move(message), std::move(reply).Value()});
     }
 
     /** @copydoc LspConnection::SyncSource */
@@ -132,6 +146,36 @@ namespace Horo::Editor::Language {
             Abort();
             return Result<void>::Failure(MakeError(SourceDocumentErrors::TooLarge));
         }
+    }
+
+    /** @copydoc LspConnection::Request */
+    Result<SourceLanguageRequestId> LspConnection::Request(const SourceDocumentSnapshot &snapshot, const SourceLanguageRequestKind kind,
+                                                           const LspSourceQuery query) {
+        using Output = Result<SourceLanguageRequestId>;
+        if (!SupportsLspRequest(features_, kind))
+            return Output::Failure(MakeError(SourceDocumentErrors::Invalid, "Language server does not offer this document request."));
+        auto id = source_.Request(stamp_, kind, snapshot);
+        if (id.HasError())
+            return id;
+        auto frame = BuildLspRequest(rootUri_, snapshot, kind, id.Value().request, query);
+        if (frame.HasError()) {
+            source_.Cancel(id.Value());
+            return Output::Failure(std::move(frame).ErrorValue());
+        }
+        auto sent = Send(std::move(frame).Value());
+        if (sent.HasError())
+            return Output::Failure(std::move(sent).ErrorValue());
+        return id;
+    }
+
+    /** @copydoc LspConnection::CancelRequest */
+    Result<void> LspConnection::CancelRequest(const SourceLanguageRequestId id) {
+        if (id.session != stamp_ || !source_.Cancel(id))
+            return Result<void>::Success();
+        auto frame = BuildLspCancellation(id.request);
+        if (frame.HasError())
+            return Result<void>::Failure(std::move(frame).ErrorValue());
+        return Send(std::move(frame).Value());
     }
 
     /** @copydoc LspConnection::Shutdown */

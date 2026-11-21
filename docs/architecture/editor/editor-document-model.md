@@ -205,6 +205,11 @@ extent of the exact previously synchronized text using UTF-16 positions.
 Rekeys close the previous URI before opening the new one. Frame preparation
 validates the byte budget before changing the synchronized baseline.
 
+Document requests are selected from the peer's declared capabilities and send
+UTF-16 positions derived from the synchronized snapshot. The adapter retires
+cancelled requests before queueing cancellation. A response is delivered once
+with its original source lease and only while that exact revision is current.
+
 ### Source Save Publication (EDT-003.5)
 
 `SourceDocumentService::Save` captures one exact current revision on the owner thread.

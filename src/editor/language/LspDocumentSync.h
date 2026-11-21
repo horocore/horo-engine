@@ -6,6 +6,15 @@
 #include "LspLifecycle.h"
 
 namespace Horo::Editor::Language {
+    /** @brief Constructs a wire name from a validated file root URI and project-relative source identity. */
+    [[nodiscard]] std::string DocumentUri(std::string_view root, std::string_view path);
+
+    /** @brief Translates a byte boundary in validated UTF-8 source text to UTF-16 coordinates.
+     * @param text Snapshot bytes. @param offset Byte boundary in that snapshot.
+     * @return Position object or no position for an offset inside a code point or CRLF pair.
+     */
+    [[nodiscard]] std::optional<nlohmann::json> LspPositionAt(std::string_view text, std::size_t offset);
+
     /** @brief An open or change frame, optionally preceded by retirement of the previous URI. */
     struct LspDocumentUpdate final {
         std::optional<std::string> close;
