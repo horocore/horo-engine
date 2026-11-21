@@ -1,6 +1,7 @@
 #include "EditorLocalAgentContext.h"
 
 #include "AgentHistoryReview.h"
+#include "AgentTurnMcp.h"
 
 #include <algorithm>
 #include <format>
@@ -68,6 +69,38 @@ namespace Horo::Editor {
             return Output::Failure(std::move(preview).ErrorValue());
         return Output::Success(EditorLocalAgentContext{std::move(source), std::move(project), std::move(policy), std::move(preview).Value(),
                                                        std::move(readers.isCurrent), range, buildOperation, historyReference});
+    }
+
+    /** @copydoc EditorLocalAgentContext::PrepareBuildDiagnostics */
+    Result<EditorLocalAgentContext> EditorLocalAgentContext::PrepareBuildDiagnostics(BuildOutputOperationTail tail,
+                                                                                     Platform::ProjectReadContext project,
+                                                                                     const std::uint64_t requestId,
+                                                                                     std::shared_ptr<Security::SecureRandomSource> entropy,
+                                                                                     std::stop_token stop) {
+        using namespace Agent;
+        using Output = Result<EditorLocalAgentContext>;
+        const auto witness = tail.witness;
+        const auto operation = tail.operation;
+        const auto sequence = tail.lastSequence;
+        auto queryContext = project;
+        queryContext.deadline = std::min(project.deadline, std::chrono::steady_clock::now() + std::chrono::seconds{2});
+        queryContext.authorityStopped = [authority = std::exchange(project.authorityStopped, {}), stop] {
+            return stop.stop_requested() || (authority && authority());
+        };
+        const auto page = ReadLocalBuildDiagnostics(std::move(tail), queryContext, requestId, std::move(entropy));
+        if (page.HasError())
+            return Output::Failure(page.ErrorValue());
+        const auto &revision = page.Value().revision;
+        const AgentContextSelection selected = AgentContextQueryRequest{revision,
+                                                                        {.kind = Application::CodeQueryKind::Diagnostics,
+                                                                         .limit = std::max(std::size_t{1}, page.Value().records.size())}};
+        AgentContextReaders readers{.readOnlyQuery = [&page](const auto &, const auto &) {
+            return page;
+        }, .redact = RedactEvidence, .isCurrent = [witness, revision](const AgentContextProvenance &item) {
+            return witness.IsCurrent() && item.kind == AgentContextKind::Diagnostic && item.revision == revision;
+        }};
+        return Capture(selected, std::move(readers), std::move(project), requestId, {}, {}, operation,
+                       {AgentHistoryReferenceKind::BuildOutput, operation, sequence});
     }
 
     /** @copydoc EditorLocalAgentContext::PrepareSavedFile */
@@ -152,7 +185,8 @@ namespace Horo::Editor {
         using namespace Agent;
         if (!tail.witness.IsCurrent() || lifetime.IsCancellationRequested())
             return Output::Failure(MakeError(Application::CodeQueryErrors::Stale));
-        if (!tail.operation || !tail.lastSequence || tail.messages.empty() || tail.messages.size() > 16)
+        if (tail.kind != BuildOutputTailKind::Messages || !tail.operation || !tail.lastSequence || tail.messages.empty() ||
+            tail.messages.size() > 16)
             return Output::Failure(MakeError(Application::CodeQueryErrors::Invalid));
         constexpr std::size_t MaximumBytes = 3U << 10U;
         std::string text;
@@ -167,9 +201,8 @@ namespace Horo::Editor {
         auto current = [witness = std::move(tail.witness), origin, revision](const AgentContextProvenance &provenance) {
             return witness.IsCurrent() && provenance.origin == origin && provenance.revision == revision;
         };
-        const auto kind = tail.kind == BuildOutputTailKind::Diagnostics ? AgentContextAttachmentKind::BuildDiagnostics
-                                                                        : AgentContextAttachmentKind::BuildOutput;
-        const AgentContextSelection selected = AgentContextAttachment{kind, origin, revision, std::move(text), tail.truncated};
+        const AgentContextSelection selected =
+            AgentContextAttachment{AgentContextAttachmentKind::BuildOutput, origin, revision, std::move(text), tail.truncated};
         AgentContextReaders readers{.redact = RedactEvidence, .isCurrent = std::move(current)};
         return Capture(selected, std::move(readers), ProjectContext(std::move(projectIdentity), workspaceGeneration, std::move(lifetime)),
                        requestId, {}, {}, tail.operation, {AgentHistoryReferenceKind::BuildOutput, tail.operation, tail.lastSequence});

@@ -240,14 +240,15 @@ if(HORO_BUILD_EDITOR_GUI OR BUILD_TESTING)
         PRIVATE HoroEngine::Assets HoroThirdParty::SQLite nlohmann_json::nlohmann_json)
 endif()
 
-add_library(HoroMcpEditorAgentToolsInternal STATIC editor/agent/AgentTurnMcp.cpp editor/agent/AgentLocalSceneTurn.cpp)
+add_library(HoroMcpEditorAgentToolsInternal STATIC editor/agent/AgentTurnMcp.cpp editor/agent/AgentLocalSceneTurn.cpp
+    editor/agent/AgentLocalDiagnostics.cpp)
 target_compile_features(HoroMcpEditorAgentToolsInternal PUBLIC cxx_std_20)
 configure_file(editor/agent/AgentTurnMcp.h "${_horo_agent_turn_headers}/AgentTurnMcp.h" COPYONLY)
 configure_file(editor/agent/AgentLocalSceneTurn.h "${_horo_agent_turn_headers}/AgentLocalSceneTurn.h" COPYONLY)
 target_include_directories(HoroMcpEditorAgentToolsInternal INTERFACE "${_horo_agent_turn_headers}")
 target_link_libraries(HoroMcpEditorAgentToolsInternal
     PUBLIC HoroEditorAgentTurnInternal HoroEngine::McpSession
-    PRIVATE HoroEngine::McpController HoroEngine::ModelProviderAdapters)
+    PRIVATE HoroEngine::McpController HoroEngine::McpProjectCodeQuery HoroEngine::ModelProviderAdapters)
 
 add_library(HoroModelProviderAdapters STATIC editor/agent/ReferenceModelProviders.cpp editor/agent/ReferenceModelStream.cpp)
 add_library(HoroEngine::ModelProviderAdapters ALIAS HoroModelProviderAdapters)

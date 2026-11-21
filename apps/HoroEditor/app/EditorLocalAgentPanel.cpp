@@ -21,8 +21,13 @@
 namespace Horo::Editor {
     namespace {
         using namespace Agent;
-        using SavedFileReview = Result<EditorLocalAgentContext>;
-        using Reply = std::variant<ProviderDiscovery, AgentTurnResult, SavedFileReview>;
+
+        struct ContextReview final {
+            Result<EditorLocalAgentContext> outcome;
+            const char *unavailable;
+        };
+
+        using Reply = std::variant<ProviderDiscovery, AgentTurnResult, ContextReview>;
         using BackgroundTurn = AgentBackgroundTurn<Reply>;
 
         /** @brief Runs one user-initiated discovery or inference on an isolated worker. */
@@ -169,6 +174,7 @@ namespace Horo::Editor {
         private:
             enum class BuildContextChoice {
                 ActiveOutput,
+                ActiveDiagnostics,
                 CompletedOutput,
                 CompletedDiagnostics
             };
@@ -381,7 +387,9 @@ namespace Horo::Editor {
                     Platform::ProjectReadContext project{projectReadIdentity_, 1, contextLifetime_->Token(), deadline};
                     BackgroundTurn::Operation task{[files = projectFiles_, path = savedFilePath_, project = std::move(project),
                                                     requestId = turn_ + 1](std::stop_token stop) mutable -> Reply {
-                        return EditorLocalAgentContext::PrepareSavedFile(std::move(files), path, std::move(project), requestId, stop);
+                        return ContextReview{EditorLocalAgentContext::PrepareSavedFile(std::move(files), path, std::move(project),
+                                                                                       requestId, stop),
+                                             "context_saved_file_unavailable"};
                     }};
                     if (background_->Start(std::move(task))) {
                         status_ = "context_saved_file_reading";
@@ -425,6 +433,10 @@ namespace Horo::Editor {
                     PrepareBuildReview(BuildContextChoice::ActiveOutput, "context_build_unavailable");
                     return true;
                 }
+                if (Button(locale, "context_active_build_diagnostics_offer", enabled)) {
+                    PrepareBuildReview(BuildContextChoice::ActiveDiagnostics, "context_active_build_diagnostics_unavailable");
+                    return true;
+                }
                 if (Button(locale, "context_completed_build_offer", enabled)) {
                     PrepareBuildReview(BuildContextChoice::CompletedOutput, "context_completed_build_unavailable");
                     return true;
@@ -438,7 +450,7 @@ namespace Horo::Editor {
 
             /** @brief Resolves the separately selected active or terminal operation within the committed project. */
             std::optional<OperationId> BuildOperation(const BuildContextChoice choice) const {
-                if (choice != BuildContextChoice::ActiveOutput)
+                if (choice == BuildContextChoice::CompletedOutput || choice == BuildContextChoice::CompletedDiagnostics)
                     return gameplayBuilds_->QueryLatestCompletedOutput(buildRoot_);
                 const auto build = gameplayBuilds_->QueryActiveProject(buildRoot_);
                 return build ? build->operationId : std::nullopt;
@@ -452,11 +464,17 @@ namespace Horo::Editor {
                     status_ = unavailable;
                     return;
                 }
-                auto tail = choice == BuildContextChoice::CompletedDiagnostics
-                                ? buildOutput_->CaptureOperationDiagnostics(*operation, Records, Bytes)
-                                : buildOutput_->CaptureOperationTail(*operation, Records, Bytes);
+                const bool diagnostics =
+                    choice == BuildContextChoice::ActiveDiagnostics || choice == BuildContextChoice::CompletedDiagnostics;
+                auto tail = diagnostics ? buildOutput_->CaptureOperationDiagnostics(*operation, Records, Bytes)
+                                        : buildOutput_->CaptureOperationTail(*operation, Records, Bytes);
                 if (!tail) {
                     status_ = unavailable;
+                    return;
+                }
+                buildContextChoice_ = choice;
+                if (diagnostics) {
+                    StartDiagnosticReview(std::move(*tail), unavailable);
                     return;
                 }
                 auto prepared = EditorLocalAgentContext::PrepareBuildOutput(std::move(*tail), contextProject_, contextGeneration_,
@@ -466,8 +484,30 @@ namespace Horo::Editor {
                     return;
                 }
                 contextPreview_.emplace(std::move(prepared).Value());
-                buildContextChoice_ = choice;
                 status_ = nullptr;
+            }
+
+            /** @brief Transfers only the selected owned capture into the authenticated MCP worker. */
+            void StartDiagnosticReview(BuildOutputOperationTail tail, const char *unavailable) {
+                try {
+                    Platform::ProjectReadContext project{contextProject_, contextGeneration_, contextLifetime_->Token(),
+                                                         std::chrono::steady_clock::now() + std::chrono::minutes{5}};
+                    BackgroundTurn::Operation task{[tail = std::move(tail), project = std::move(project), requestId = turn_ + 1,
+                                                    unavailable](std::stop_token stop) mutable -> Reply {
+                        return ContextReview{EditorLocalAgentContext::PrepareBuildDiagnostics(std::move(tail), std::move(project),
+                                                                                              requestId,
+                                                                                              Platform::CreateNativeSecureRandomSource(),
+                                                                                              stop),
+                                             unavailable};
+                    }};
+                    if (background_->Start(std::move(task))) {
+                        status_ = "context_build_diagnostics_reading";
+                        return;
+                    }
+                } catch (const std::bad_alloc &) {
+                    // Preparing the bounded worker inputs may allocate.
+                }
+                status_ = unavailable;
             }
 
             /** @brief Rechecks widget byte offsets only on approval, avoiding whole-document scans during preview drawing. */
@@ -627,12 +667,12 @@ namespace Horo::Editor {
             }
 
             /** @brief Publishes the completed worker preview for explicit consent on the editor lane. */
-            void Adopt(SavedFileReview &review) {
-                if (review.HasError()) {
-                    status_ = "context_saved_file_unavailable";
+            void Adopt(ContextReview &review) {
+                if (review.outcome.HasError()) {
+                    status_ = review.unavailable;
                     return;
                 }
-                contextPreview_.emplace(std::move(review).Value());
+                contextPreview_.emplace(std::move(review.outcome).Value());
                 status_ = nullptr;
             }
 

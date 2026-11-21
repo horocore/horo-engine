@@ -8,6 +8,10 @@
 #include "Horo/Editor/SourceDocumentService.h"
 #include "Horo/Foundation/BuildOutputStore.h"
 
+namespace Horo::Security {
+    class SecureRandomSource;
+}  // namespace Horo::Security
+
 namespace Horo::Editor {
     /** @brief Owns one source preview and its exclusive policy until the approved request moves to the worker.
      * @details Approval runs on the editor lane. The worker observes immutable evidence and revocation witnesses,
@@ -48,6 +52,20 @@ namespace Horo::Editor {
         [[nodiscard]] static Result<EditorLocalAgentContext> PrepareBuildOutput(BuildOutputOperationTail tail, std::string projectIdentity,
                                                                                 std::uint64_t workspaceGeneration,
                                                                                 CancellationToken lifetime, std::uint64_t requestId);
+
+        /** @brief Reads the selected build's diagnostic capture through the authenticated MCP worker route.
+         * @param tail Owned exact-operation diagnostic capture.
+         * @param project Project generation, cancellation and preview deadline.
+         * @param requestId Exact upcoming local turn.
+         * @param entropy Host entropy for the private query session.
+         * @param stop Stop condition for the query worker.
+         * @return Redacted review or typed admission or read failure.
+         */
+        [[nodiscard]] static Result<EditorLocalAgentContext> PrepareBuildDiagnostics(BuildOutputOperationTail tail,
+                                                                                     Platform::ProjectReadContext project,
+                                                                                     std::uint64_t requestId,
+                                                                                     std::shared_ptr<Security::SecureRandomSource> entropy,
+                                                                                     std::stop_token stop = {});
         /** @brief Prepares the selected Scene IDs and exact revision from the existing scene owner.
          * @param selection Bounded snapshot and owner revocation witness.
          * @param projectIdentity Exact committed project identity.

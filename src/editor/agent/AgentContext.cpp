@@ -110,7 +110,12 @@ namespace Horo::Agent {
                     return CaptureResult::Failure(MakeError(CodeQueryErrors::Invalid));
                 if (row.label.size() > ContextLimits.maximumItemBytes)
                     return CaptureResult::Failure(MakeError(CodeQueryErrors::Capacity));
-                text += std::format("{} {}:{} {}\n", row.path, row.line, row.column, row.label);
+                if (row.path.empty()) {
+                    text += row.label;
+                    text.push_back('\n');
+                } else {
+                    text += std::format("{} {}:{} {}\n", row.path, row.line, row.column, row.label);
+                }
                 if (text.size() > ContextLimits.maximumItemBytes)
                     return CaptureResult::Failure(MakeError(CodeQueryErrors::Capacity));
             }

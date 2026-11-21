@@ -1,6 +1,7 @@
 #include "../../../apps/HoroEditor/app/EditorLocalAgentContext.h"
 #include "../../support/SourceDocumentTestProject.h"
 #include "Horo/Platform/NativeProjectReadFiles.h"
+#include "McpAuthorizationTestSupport.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -357,15 +358,15 @@ namespace Horo::Editor {
         CHECK_FALSE(retained->witness.IsCurrent());
     }
 
-    TEST_CASE("The diagnostics preview sends only the approved warning and error tail for the selected build",
-              "[unit][agent][context][build_output]") {
+    TEST_CASE("The MCP diagnostics preview sends only the approved warning and error tail for the selected build",
+              "[unit][agent][context][build_output][mcp]") {
         using namespace Agent;
         constexpr OperationId selected = 31;
         BuildOutputStore output{12};
         output.Append({.operationId = selected, .severity = DiagnosticSeverity::Warning, .message = "Earlier diagnostic"});
         output.Append({.operationId = selected, .severity = DiagnosticSeverity::Error, .message = "Compiler error\nApi-Key: fake-secret"});
         output.Append({.operationId = 32, .severity = DiagnosticSeverity::Fatal, .message = "Unrelated operation"});
-        output.Append({.operationId = selected, .severity = DiagnosticSeverity::Fatal, .message = "Linker failure"});
+        output.Append({.operationId = selected, .severity = DiagnosticSeverity::Fatal, .message = "A linker failure"});
         output.Append({.operationId = selected, .message = "Informational output"});
         auto tail = output.CaptureOperationDiagnostics(selected, 2, 1024);
         REQUIRE(tail);
@@ -374,7 +375,10 @@ namespace Horo::Editor {
         CHECK_FALSE(output.CaptureOperationDiagnostics(99, 2, 1024));
 
         CancellationSource workspace;
-        auto preview = EditorLocalAgentContext::PrepareBuildOutput(std::move(*tail), "project", 3, workspace.Token(), 51);
+        const Platform::ProjectReadContext project{"project", 3, workspace.Token(),
+                                                   std::chrono::steady_clock::now() + std::chrono::minutes{1}};
+        auto preview =
+            EditorLocalAgentContext::PrepareBuildDiagnostics(std::move(*tail), project, 51, std::make_shared<Mcp::Test::Entropy>());
         REQUIRE(preview.HasValue());
         auto context = std::move(preview).Value();
         const auto &item = context.Items().front();
@@ -383,16 +387,34 @@ namespace Horo::Editor {
         const auto text = item.candidate.text;
         CHECK(text.find("Compiler error") != std::string::npos);
         CHECK(text.find("[redacted]") != std::string::npos);
-        CHECK(text.find("Linker failure") != std::string::npos);
+        REQUIRE(text.find("A linker failure") != std::string::npos);
+        CHECK(text.find("Compiler error") < text.find("A linker failure"));
         for (const auto *excluded : {"Earlier diagnostic", "fake-secret", "Unrelated operation", "Informational output"})
             CHECK(text.find(excluded) == std::string::npos);
 
         REQUIRE(context.Approve());
+        bool shouldSend{true};
+        SECTION("A newer diagnostic for the selected build revokes consent") {
+            output.Append({.operationId = selected, .severity = DiagnosticSeverity::Error, .message = "New compiler error"});
+            shouldSend = false;
+        }
+        SECTION("A new diagnostic of another operation leaves the selected capture current") {
+            output.Append({.operationId = 32, .severity = DiagnosticSeverity::Error, .message = "Still outside scope"});
+        }
+        SECTION("Closing the workspace revokes the owned diagnostic capture") {
+            workspace.RequestCancellation();
+            shouldSend = false;
+        }
         RecordingModel model;
         AgentTurnRuntime runtime;
         const auto dispatch = context.Dispatch();
         const ModelRequest request{.model = "local", .messages = {{.role = ModelRole::User, .text = "Explain these diagnostics"}}};
         const auto result = runtime.Run(model, nullptr, 51, request, {}, {}, &dispatch);
+        if (!shouldSend) {
+            CHECK(result.status == AgentTurnStatus::ContextDenied);
+            CHECK(model.sent.empty());
+            return;
+        }
         REQUIRE(result.status == AgentTurnStatus::Completed);
         REQUIRE(model.sent.size() == 2);
         CHECK(model.sent.front().text == text);

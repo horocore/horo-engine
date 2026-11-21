@@ -2,14 +2,30 @@
 
 #include "AgentContext.h"
 #include "AgentTurn.h"
+#include "Horo/Foundation/BuildOutputStore.h"
 #include "Horo/Mcp/McpInProcessAdapter.h"
+#include "Horo/Security/SecureMemory.h"
 
 namespace Horo::Agent {
+    inline constexpr std::string_view ProjectDiagnosticsTool = "project.diagnostics"; /**< Shared name of the diagnostic Query. */
+
     /** @brief Captured by the host alongside the exact authenticated project-bound MCP session. */
     struct AgentContextProjectAuthority final {
         std::string identity;
         std::uint64_t generation{};
     };
+
+    /** @brief Reads one bounded diagnostic capture through a private, authenticated MCP query session.
+     * @param tail Owned warning/error capture for the operation explicitly selected in the workspace.
+     * @param context Current project and synchronous worker stop fence.
+     * @param requestId Exact host preview turn.
+     * @param entropy Host entropy for the one-use local credential.
+     * @return An owned revisioned page or typed failure. No model or other capability receives the session.
+     */
+    [[nodiscard]] Result<Application::CodeQueryPage> ReadLocalBuildDiagnostics(BuildOutputOperationTail tail,
+                                                                               const Application::CodeQueryContext &context,
+                                                                               std::uint64_t requestId,
+                                                                               std::shared_ptr<Security::SecureRandomSource> entropy);
 
     /** @brief Editor-host adapter over one already authenticated in-process MCP session generation. */
     class AgentTurnMcp final : public IAgentTurnTools {

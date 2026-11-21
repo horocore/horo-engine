@@ -162,7 +162,7 @@ namespace Horo::Agent {
             arguments["revision"] = *query.expectedRevision;
         const auto id = "editor-context/" + std::to_string(requestId) + "/" + std::to_string(itemOrdinal);
         const auto result =
-            CallTool(id, diagnostic ? "project.diagnostics" : "project.build_status", std::move(arguments), context.deadline, [&] {
+            CallTool(id, diagnostic ? ProjectDiagnosticsTool : "project.build_status", std::move(arguments), context.deadline, [&] {
             return Platform::CheckProjectReadContext(context).HasError();
         });
         if (const auto active = Platform::CheckProjectReadContext(context); active.HasError())

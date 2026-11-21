@@ -882,8 +882,11 @@ These saved-file attachments and responses remain ephemeral.
 The panel offers separate previews for the active gameplay build and the last
 completed build of the current project. It reads only the retained output for
 the selected operation, marks omitted output, and redacts the text before review.
-The completed build also offers a separate diagnostics preview filtered to
-warnings and errors from that operation.
+The active and completed builds also offer separate diagnostics previews. The
+selected operation contributes a bounded capture of its warnings and errors to
+an authenticated, read-only MCP session on the agent worker. The session exposes
+only the project's diagnostic query for that capture and is closed before model
+inference. The worker returns the revisioned page for redaction and review.
 Changes to the selected operation's output invalidate its approval. Other
 builds and process logs have no effect while the selected output is retained.
 
