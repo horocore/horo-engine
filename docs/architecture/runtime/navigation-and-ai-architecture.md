@@ -3450,6 +3450,13 @@ The sample counts source identities it cannot project back to the authored
 Scene and reports an unavailable read separately from empty memory. These
 observations are diagnostic and do not alter deterministic spatial comparison.
 
+At the Scene safe point, the live agent inspection API copies the selected
+agent generation, Blackboard schema and revision, directly owned task, and
+Perception memory identity and age. Hosts pass an explicit set of Blackboard
+keys approved for display. Other rows keep their type and identity with no
+value. Opaque values, revoked reads, and diagnostic messages stay out of the
+snapshot. A fresh capture refuses a retired agent or a foreign Scene.
+
 ### Scene decision scheduling tiers
 
 Hosts can compose an `AiDecisionSimulationProfile` through

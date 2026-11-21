@@ -125,6 +125,61 @@ namespace Horo::AI {
         std::optional<Runtime::EntityRef> entity; /**< Present only while the original agent and entity generations are live. */
     };
 
+    /** @brief Read disposition of one key in a detached, permission-filtered inspector snapshot. */
+    enum class AiInspectionValueStatus : std::uint8_t {
+        Redacted,
+        Unset,
+        Present,
+        Unavailable
+    };
+
+    /** @brief One schema-typed inspector row. Denied, missing, opaque and revoked values carry no payload. */
+    struct AiInspectionBlackboardRow final {
+        BlackboardKeyId key;
+        BlackboardValueKind kind;
+        BlackboardValueCardinality cardinality;
+        AiInspectionValueStatus status;
+        std::optional<BlackboardValue> value;
+    };
+
+    /** @brief Typed failure identity with no message, diagnostic payload, or provider-owned cause. */
+    struct AiInspectionFailure final {
+        ErrorDomainId domain;
+        ErrorCode code;
+    };
+
+    /** @brief Bounded copied task observation with no authority to resume or cancel work. */
+    struct AiInspectionTask final {
+        TaskId definition;
+        TaskHandle occurrence;
+        AiTaskState state;
+        std::optional<AiInspectionFailure> failure;
+    };
+
+    /** @brief Memory identification and fixed-time age without sensory payloads or coordinates. */
+    struct AiInspectionStimulus final {
+        PerceptionMemoryKey key;
+        std::uint64_t firstSensedTick{};
+        std::uint64_t lastSensedTick{};
+        double ageSeconds{};
+        bool sensed{};
+    };
+
+    /** @brief Entirely owned inspection data scoped to an exact Scene and agent generation. */
+    struct AiAgentInspectionSnapshot final {
+        AgentHandle agent;
+        Runtime::EntityRef owner;
+        std::uint64_t sceneRevision{};
+        std::uint64_t decisionTick{}; /**< Zero until this Scene's scheduler publishes a completed report. */
+        BlackboardInstanceBinding blackboard;
+        std::uint64_t blackboardRevision{};
+        std::vector<AiInspectionBlackboardRow> keys;
+        std::optional<AiInspectionTask> task;
+        std::optional<AiInspectionFailure> decisionFailure;
+        std::vector<AiInspectionStimulus> stimuli;
+        std::optional<AiInspectionFailure> perceptionFailure;
+    };
+
     /** @brief Detached evidence from one selected decision and the canonical AI population at a completed tick. */
     struct AiSceneDecisionReplayCapture final {
         Runtime::SceneRuntimeId scene;
@@ -521,6 +576,16 @@ namespace Horo::AI {
          * @details Call on the simulation owner after BlackboardSync; no mutable blackboard or Scene pointer escapes.
          */
         [[nodiscard]] Result<BlackboardSnapshot> CaptureDecisionSnapshotAtSafePoint(AgentHandle agent) const;
+
+        /** @brief Copies read-only inspection data for one exact live Scene agent on the simulation owner.
+         * @param scene Current committed Scene incarnation and structural revision.
+         * @param agent Exact selected agent generation.
+         * @param disclosedKeys Explicit host-approved Blackboard key identities; an empty list redacts all values.
+         * @return Detached bounded data or a typed selection, owner or storage failure.
+         */
+        [[nodiscard]] Result<AiAgentInspectionSnapshot> CaptureAgentInspectionAtSafePoint(const Runtime::RuntimeSceneView &scene,
+                                                                                          AgentHandle agent,
+                                                                                          std::span<const BlackboardKeyId> disclosedKeys);
 
         /** @brief Reserves evidence for one selected cooked decision before its next scheduled tick.
          * @param agent Exact active Scene agent generation selected by the host.

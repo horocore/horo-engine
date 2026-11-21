@@ -1896,6 +1896,7 @@ add_library(HoroAISceneIntegration STATIC
         runtime/ai/integration/AISceneStructural.cpp
         runtime/ai/integration/AISceneRestore.cpp
         runtime/ai/integration/AISceneDecisionReservation.cpp
+        runtime/ai/integration/AISceneInspection.cpp
         runtime/ai/integration/AIScenePerceptionSource.cpp
         runtime/ai/integration/PerceptionSenseScene.cpp
         runtime/ai/integration/EnvironmentQueryContexts.cpp

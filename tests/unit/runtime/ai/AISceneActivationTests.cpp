@@ -180,6 +180,36 @@ namespace Horo::AI {
             CHECK(snapshot.Value().Agents().front().owner.runtime == Runtime::SceneRuntimeId{47});
             CHECK(snapshot.Value().Agents().front().owner.entity.generation == 1);
 
+            SECTION("Agent inspection owns only explicitly disclosed values and rejects stale generations") {
+                const auto &record = snapshot.Value().Agents().front();
+                const auto key = fixture.schema->Keys().front().key;
+                const auto task = MakeIdentity<TaskId>(41);
+                const auto started = runtime.StartTaskAtSafePoint(record.handle, task);
+                REQUIRE(started.HasValue());
+                const auto hidden = runtime.CaptureAgentInspectionAtSafePoint(scene.Value()->View(), record.handle, {});
+                REQUIRE(hidden.HasValue());
+                REQUIRE(hidden.Value().keys.size() == 1);
+                CHECK(hidden.Value().keys.front().key == key);
+                CHECK(hidden.Value().keys.front().status == AiInspectionValueStatus::Redacted);
+                CHECK_FALSE(hidden.Value().keys.front().value);
+                REQUIRE(hidden.Value().task);
+                CHECK(hidden.Value().task->definition == task);
+                CHECK(hidden.Value().task->occurrence == started.Value());
+                CHECK(hidden.Value().task->state == AiTaskState::Running);
+
+                const auto visible = runtime.CaptureAgentInspectionAtSafePoint(scene.Value()->View(), record.handle, std::array{key});
+                REQUIRE(visible.HasValue());
+                CHECK(visible.Value().blackboardRevision == hidden.Value().blackboardRevision);
+                CHECK(visible.Value().keys.front().status == AiInspectionValueStatus::Present);
+                CHECK(visible.Value().keys.front().value == fixture.schema->Keys().front().defaultValue);
+                const auto foreign = Runtime::RuntimeScene::Create(definition.Value(), Runtime::SceneRuntimeId{48});
+                REQUIRE(foreign.HasValue());
+                ExpectError(runtime.CaptureAgentInspectionAtSafePoint(foreign.Value()->View(), record.handle, {}), AIErrors::HandleInvalid);
+                REQUIRE(runtime.RetireOwnerAtSafePoint(record.owner).Value() == 1);
+                ExpectError(runtime.CaptureAgentInspectionAtSafePoint(scene.Value()->View(), record.handle, {}), AIErrors::HandleInvalid);
+                CHECK(visible.Value().keys.front().value == fixture.schema->Keys().front().defaultValue);
+            }
+
             SECTION("A failed Decision callback is attributable only to its exact live entity generation") {
                 const auto &agent = snapshot.Value().Agents().front();
                 REQUIRE(runtime.ConfigureTaskSchedulerAtSafePoint(jobs).HasValue());
@@ -201,6 +231,11 @@ namespace Horo::AI {
                 CHECK(failure.Value()->origin.identity == agent.agent.agent);
                 CHECK(failure.Value()->entity == agent.owner);
                 CHECK(failure.Value()->error.code.Value() == AIErrors::CapabilityUnavailable.code.Value());
+                const auto inspection = runtime.CaptureAgentInspectionAtSafePoint(scene.Value()->View(), agent.handle, {});
+                REQUIRE(inspection.HasValue());
+                REQUIRE(inspection.Value().decisionFailure);
+                CHECK(inspection.Value().decisionTick == 1);
+                CHECK(inspection.Value().decisionFailure->code.Value() == AIErrors::CapabilityUnavailable.code.Value());
                 auto foreign = Runtime::RuntimeScene::Create(definition.Value(), Runtime::SceneRuntimeId{48});
                 REQUIRE(foreign.HasValue());
                 ExpectError(runtime.ReadDecisionFailureAtSafePoint(foreign.Value()->View()), AIErrors::TaskContextInvalid);
