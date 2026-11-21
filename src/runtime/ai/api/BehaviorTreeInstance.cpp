@@ -142,6 +142,35 @@ namespace Horo::AI {
         return !shutdown_ && !evaluating_ && mailbox_->HasPending();
     }
 
+    /** @copydoc BehaviorTreeInstance::NextFixedWakeTick */
+    std::optional<std::uint64_t> BehaviorTreeInstance::NextFixedWakeTick() const noexcept {
+        if (shutdown_ || evaluating_ || states_[0].status != AiTaskState::Running)
+            return std::nullopt;
+        std::optional<std::uint64_t> earliest;
+        const auto include = [&](const std::uint64_t base, const std::uint64_t offset) {
+            if (offset > std::numeric_limits<std::uint64_t>::max() - base)
+                return;
+            const auto due = base + offset;
+            if (!earliest || due < *earliest)
+                earliest = due;
+        };
+        const auto nodes = plan_->Nodes();
+        const auto services = plan_->Services();
+        for (std::size_t index = 0; index < nodes.size(); ++index) {
+            const auto &state = states_[index];
+            if (state.status != AiTaskState::Running)
+                continue;
+            const auto &node = nodes[index];
+            if (node.execution.operation == BehaviorTreeOperation::TimeLimit)
+                include(state.startedTick, node.execution.durationTicks);
+            for (std::size_t service = node.firstService; service < node.firstService + node.serviceCount; ++service) {
+                if (services[service].mode == BehaviorTreeServiceMode::Periodic && services_[service].active)
+                    include(services_[service].tick, services[service].intervalTicks);
+            }
+        }
+        return earliest;
+    }
+
     /** @copydoc BehaviorTreeInstance::Evaluate */
     Result<AiTaskState> BehaviorTreeInstance::Evaluate(const std::uint64_t tick, const BlackboardSnapshot &blackboard,
                                                        const AgentHandle activeAgent, const AiTaskResumeReason reason) {

@@ -633,7 +633,7 @@ namespace Horo::AI {
     }
 
     /** @copydoc AiTaskScheduler::Order */
-    void AiTaskScheduler::Order(const bool admitTaskWakes) {
+    void AiTaskScheduler::Order(const bool admitReactiveWakes) {
         order_.clear();
         for (std::size_t i = 0; i < entries_.size(); ++i) {
             auto &entry = entries_[i];
@@ -646,18 +646,31 @@ namespace Horo::AI {
                     entry.waitingSince = entry.nextTick;
                 entry.pending.polling = true;
             }
-            if (admitTaskWakes && entry.policy.intervalTicks == 0 && !entry.pending.task && entry.tier != AiSimulationTier::Suspended &&
-                entry.executor->HasPendingTaskWake()) {
-                if (!entry.pending.Any())
-                    entry.waitingSince = report_.tick;
-                entry.pending.task = true;
-            }
+            if (admitReactiveWakes)
+                AdmitReactiveWakes(entry);
             if (entry.pending.Any() || entry.intents)
                 order_.push_back(i);
         }
         std::ranges::sort(order_, [this](const auto lhs, const auto rhs) {
             return Before(entries_[lhs], entries_[rhs]);
         });
+    }
+
+    /** @copydoc AiTaskScheduler::AdmitReactiveWakes */
+    void AiTaskScheduler::AdmitReactiveWakes(Entry &entry) noexcept {
+        if (entry.policy.intervalTicks != 0 || entry.tier == AiSimulationTier::Suspended)
+            return;
+        const auto deadline = entry.executor->NextFixedWakeTick();
+        if (deadline && *deadline <= report_.tick) {
+            if (!entry.pending.Any())
+                entry.waitingSince = *deadline;
+            entry.pending.polling = true;
+        }
+        if (!entry.pending.task && entry.executor->HasPendingTaskWake()) {
+            if (!entry.pending.Any())
+                entry.waitingSince = report_.tick;
+            entry.pending.task = true;
+        }
     }
 
     /** @copydoc AiTaskScheduler::Before */

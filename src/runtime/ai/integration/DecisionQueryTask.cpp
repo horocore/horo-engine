@@ -162,6 +162,8 @@ namespace Horo::AI {
             query_->Cancel();
         query_.reset();
         operation_ = {};
+        continuation_ = {};
+        wakePending_ = false;
         resolvedTick_ = 0;
         ready_ = false;
         outputCommitted_ = false;
@@ -190,6 +192,7 @@ namespace Horo::AI {
             if (!query || !query->MatchesAdmission(descriptor_.query, operation.agent, context.tick, deadline))
                 return Failure<AiTaskState>(AIErrors::EnvironmentQueryContextInvalid);
             operation_ = operation;
+            continuation_ = context.continuation;
             destination_ = context.blackboard.Binding();
             deadline_ = deadline;
             query_ = std::move(query);
@@ -283,16 +286,29 @@ namespace Horo::AI {
     void DecisionQueryTask::SyncQuery(const std::uint64_t tick, std::optional<DecisionQueryPublication> *publication) {
         if (!query_)
             return;
-        if (!operation_.IsCancellationRequested() && query_->Sync(tick) && publication)
-            *publication = ObservePublication(descriptor_, *query_->Published());
+        if (!operation_.IsCancellationRequested() && query_->Sync(tick)) {
+            wakePending_ = true;
+            if (publication)
+                *publication = ObservePublication(descriptor_, *query_->Published());
+        }
         if (operation_.IsCancellationRequested())
             Discard();
+        else
+            FlushWake();
+    }
+
+    /** @copydoc DecisionQueryTask::FlushWake */
+    void DecisionQueryTask::FlushWake() noexcept {
+        if (wakePending_)
+            wakePending_ = continuation_.NotifyEvent() == AiTaskPublicationDisposition::Contended;
     }
 
     /** @copydoc DecisionQueryTask::RejectOutput */
     Result<bool> DecisionQueryTask::RejectOutput(Error error) {
         ready_ = false;
         outputFailure_.emplace(std::move(error));
+        wakePending_ = true;
+        FlushWake();
         return Result<bool>::Success(false);
     }
 
@@ -332,6 +348,8 @@ namespace Horo::AI {
         if (committed.HasError())
             return RejectOutput(std::move(committed).ErrorValue());
         outputCommitted_ = true;
+        wakePending_ = true;
+        FlushWake();
         return Result<bool>::Success(true);
     }
 }  // namespace Horo::AI

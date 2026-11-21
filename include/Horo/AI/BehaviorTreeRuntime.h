@@ -328,6 +328,8 @@ namespace Horo::AI {
         friend class DecisionGraphInstance;
         /** @brief Reads the current task mailbox hint without draining native payloads. */
         [[nodiscard]] bool HasPendingTaskWake() const noexcept;
+        /** @brief Returns the earliest active service or execution deadline on the fixed clock. */
+        [[nodiscard]] std::optional<std::uint64_t> NextFixedWakeTick() const noexcept;
         /** @brief Tries only the compatible no-callback branch, leaving incompatible state untouched. */
         [[nodiscard]] Result<bool> TryRetainCompatiblePlan(const std::shared_ptr<const BehaviorTreeExecutionPlan> &candidate);
         /** @brief Validates replacement ownership, schema, task range and executor binding before any cancellation. */

@@ -119,6 +119,8 @@ namespace Horo::AI {
         [[nodiscard]] bool Accepts(const BehaviorTreeEvaluationContext &context) const noexcept;
         /** @brief Transfers a rejected write into the next decision evaluation without failing BlackboardSync. */
         [[nodiscard]] Result<bool> RejectOutput(Error error);
+        /** @brief Retries a transition wake while the exact continuation is contended. */
+        void FlushWake() noexcept;
         void Discard() noexcept;
         DecisionQueryTaskDescriptor descriptor_;
         BlackboardSchemaId schema_;
@@ -126,6 +128,7 @@ namespace Horo::AI {
         BlackboardValueKind kind_;
         IDecisionQueryTaskHost &host_;
         AiTaskOperationContext operation_;
+        AiTaskContinuation continuation_;
         BlackboardInstanceBinding destination_;
         std::unique_ptr<QueryExecution> query_;
         std::optional<Error> outputFailure_;
@@ -133,5 +136,6 @@ namespace Horo::AI {
         std::uint64_t resolvedTick_{};
         bool ready_{};
         bool outputCommitted_{};
+        bool wakePending_{};
     };
 }  // namespace Horo::AI

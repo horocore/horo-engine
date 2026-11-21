@@ -44,6 +44,7 @@ namespace Horo::AI::DecisionGraphTestSupport {
         std::size_t factories{};
         std::size_t starts{};
         std::size_t resumes{};
+        std::size_t services{};
         std::size_t aborts{};
         std::size_t cleanups{};
         AiTaskState lastTerminal{AiTaskState::Idle};
@@ -103,6 +104,7 @@ namespace Horo::AI::DecisionGraphTestSupport {
         }
 
         Result<void> Service(const BehaviorTreeEvaluationContext &) noexcept override {
+            ++probe_.services;
             return Result<void>::Success();
         }
 

@@ -206,6 +206,14 @@ namespace Horo::AI {
         return root.active && root.tree && root.tree->HasPendingTaskWake();
     }
 
+    /** @copydoc DecisionGraphInstance::NextFixedWakeTick */
+    std::optional<std::uint64_t> DecisionGraphInstance::NextFixedWakeTick() const noexcept {
+        if (!Available() || evaluating_ || occurrences_.size() != 1)
+            return std::nullopt;
+        const auto &root = *occurrences_.front();
+        return root.active && root.tree ? root.tree->NextFixedWakeTick() : std::nullopt;
+    }
+
     /** @copydoc DecisionGraphInstance::TryRetainCompatibleFlatPlan */
     Result<bool> DecisionGraphInstance::TryRetainCompatibleFlatPlan(const std::shared_ptr<const CookedDecisionPlan> &candidate) {
         using Retained = Result<bool>;

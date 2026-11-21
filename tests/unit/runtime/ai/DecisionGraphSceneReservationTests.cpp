@@ -287,6 +287,63 @@ namespace Horo::AI {
             runtime.BeginShutdown();
         }
 
+        TEST_CASE("Event-only cooked graphs wake for active service and timeout deadlines",
+                  "[unit][ai][scene][decision_reservation][scheduler]") {
+            Fixture fixture;
+            fixture.probe.succeedTick = 100;
+            auto service = Registration(fixture.probe, 502);
+            service.contract.role = DecisionNodeRole::Service;
+            const std::array registrations{Registration(fixture.probe), service};
+            const auto generation = DecisionNodeGeneration::Capture(registrations, fixture.admission);
+            REQUIRE(generation.HasValue());
+            fixture.providers = generation.Value();
+
+            auto timer = TreeNode(2, DecisionControlKind::TimeLimit);
+            timer.kind = BehaviorTreeNodeKind::Decorator;
+            timer.minimumChildren = timer.maximumChildren = 1;
+            timer.control.durationTicks = 4;
+            auto periodic = TreeNode(4, DecisionControlKind::Service);
+            periodic.kind = BehaviorTreeNodeKind::Service;
+            periodic.type = MakeIdentity<BehaviorTreeNodeTypeId>(502);
+            periodic.control.intervalTicks = 2;
+            auto attached = Edge(3, 2, 4);
+            attached.kind = BehaviorTreeEdgeKind::ServiceAttachment;
+            auto source = Tree(11, {TreeNode(1, DecisionControlKind::Root), timer, TreeNode(3, DecisionControlKind::Task), periodic},
+                               {Edge(1, 1, 2), Edge(2, 2, 3), attached});
+            source.executionTask = MakeIdentity<TaskId>(9000);
+            const auto plan = fixture.Compile(std::span{&source, 1}, 11);
+            auto scene = SceneFixture(fixture, *plan);
+            scene.descriptor.cookedPlan = plan;
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            auto runtime = std::move(AiSceneRuntime::Create()).Value();
+            auto publication = TestSupport::Publish(runtime, scene);
+            REQUIRE(runtime.ActivateCookedDecisionsAtSafePoint({.jobs = jobs, .scheduler = {.mode = AiSchedulingMode::BestEffort},
+                                                               .agent = {.intervalTicks = 0},
+                                                               .timing = AiCookedDecisionTiming::BestEffortReactive})
+                        .HasValue());
+            auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();
+            const auto evaluate = [&](const std::uint64_t tick) {
+                const auto decision = scheduler->EvaluateAtDecision(tick);
+                REQUIRE(decision.HasValue());
+                CHECK(decision.Value().failed == 0);
+                REQUIRE(scheduler->CommitAtIntentDispatch(tick).HasValue());
+                return decision.Value().evaluated;
+            };
+            CHECK(evaluate(1) == 1);
+            CHECK(fixture.probe.services == 1);
+            CHECK(evaluate(2) == 0);
+            CHECK(evaluate(3) == 1);
+            CHECK(fixture.probe.services == 2);
+            CHECK(fixture.probe.lastResumeReason == AiTaskResumeReason::FixedTick);
+            CHECK(evaluate(4) == 0);
+            CHECK(evaluate(5) == 1);
+            CHECK(fixture.probe.services == 2);
+            REQUIRE(fixture.probe.abortReasons.size() == 1);
+            CHECK(fixture.probe.abortReasons.front() == AiTaskCancellationReason::TimedOut);
+            CHECK(evaluate(6) == 0);
+            runtime.BeginShutdown();
+        }
+
         class WakeSense final : public IPerceptionSenseProvider {
         public:
             explicit WakeSense(const bool &sees) : sees_(sees) {}
@@ -799,8 +856,9 @@ namespace Horo::AI {
                     ComputeSha256(std::as_bytes(std::span{cookedQuery.Value()}))};
         }
 
-        TEST_CASE("Cooked Scene query tasks bind through the selected owner and inherit agent retirement",
+        TEST_CASE("Cooked Scene query tasks wake on both publication boundaries and inherit agent retirement",
                   "[unit][ai][scene][decision_reservation][scheduler][eqs]") {
+            const bool eventOnly = GENERATE(false, true);
             Fixture fixture;
             auto preparedDecision = PreparePointDecision(fixture);
             const auto &plan = preparedDecision.decision;
@@ -822,7 +880,13 @@ namespace Horo::AI {
             TestSupport::ExpectError(runtime.ActivateCookedDecisionsAtSafePoint({jobs, {}, {}}), AIErrors::CapabilityUnavailable);
             CHECK(runtime.TaskSchedulerAtSafePoint().HasError());
             CHECK(fixture.probe.factories == 0);
-            REQUIRE(runtime.ActivateCookedDecisionsAtSafePoint({jobs, {}, {}, owner}).HasValue());
+            AiSceneCookedDecisionExecution execution{jobs, {}, {}, owner};
+            if (eventOnly) {
+                execution.scheduler.mode = AiSchedulingMode::BestEffort;
+                execution.agent.intervalTicks = 0;
+                execution.timing = AiCookedDecisionTiming::BestEffortReactive;
+            }
+            REQUIRE(runtime.ActivateCookedDecisionsAtSafePoint(std::move(execution)).HasValue());
             CHECK(owner->bindings == 1);
             CHECK(owner->admissions == 0);
             const auto scheduler = runtime.TaskSchedulerAtSafePoint();
@@ -836,6 +900,7 @@ namespace Horo::AI {
             REQUIRE(owner->task);
             const auto agent = owner->observed->agent;
             bool published = false;
+            std::size_t resumedSlices{};
             for (std::uint64_t tick = 1; tick < 16 && !published; ++tick) {
                 if (tick != 1) {
                     const auto sync = runtime.SyncDecisionQueryAtBlackboardSync(*owner->task, live.Value()->View(), tick);
@@ -848,13 +913,20 @@ namespace Horo::AI {
                     CHECK(value.Value().has_value() == published);
                     if (published)
                         CHECK(std::holds_alternative<Math::WorldCoordinate64>(std::get<BlackboardScalarValue>(*value.Value())));
-                    REQUIRE(scheduler.Value()->EvaluateAtDecision(tick).HasValue());
+                    const auto decision = scheduler.Value()->EvaluateAtDecision(tick);
+                    REQUIRE(decision.HasValue());
+                    CHECK(decision.Value().failed == 0);
+                    if (eventOnly && tick <= 3)
+                        CHECK(decision.Value().evaluated == 0);
+                    resumedSlices += decision.Value().evaluated;
                     REQUIRE(scheduler.Value()->CommitAtIntentDispatch(tick).HasValue());
                 }
-                AiWorkBudget budget{128};
+                AiWorkBudget budget{tick < 3 ? 0U : 128U};
                 owner->task->AdvanceQuery(tick, {budget, budget, budget});
             }
             REQUIRE(published);
+            if (eventOnly)
+                CHECK(resumedSlices == 2);
             CHECK_FALSE(owner->task->ActiveAgent().IsValid());
             runtime.BeginShutdown();
             CHECK(owner->observed->IsCancellationRequested());

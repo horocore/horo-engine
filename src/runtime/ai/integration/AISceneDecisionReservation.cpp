@@ -30,9 +30,9 @@ namespace Horo::AI {
             ScheduledCookedDecision(const std::shared_ptr<Detail::AiSceneRuntimeState> &state,
                                     std::unique_ptr<DecisionGraphInstance> decision, AgentHandle agent,
                                     std::shared_ptr<IAiCookedDecisionIntentSink> intents,
-                                    std::vector<PerceptionListenerTypeId> watches) noexcept
+                                    std::vector<PerceptionListenerTypeId> watches, bool reactive) noexcept
                 : state_(state), decision_(std::move(decision)), agent_(agent), intents_(std::move(intents)),
-                  watches_(std::move(watches)) {}
+                  watches_(std::move(watches)), reactive_(reactive) {}
 
             Result<AiSliceOutcome> Evaluate(const AiDecisionSliceContext &context, AiWorkBudget &budget) noexcept override {
                 providerFailure_.reset();
@@ -63,6 +63,8 @@ namespace Horo::AI {
                 }
                 if (step.HasError())
                     return Result<AiSliceOutcome>::Failure(step.ErrorValue());
+                if (reactive_ && step.Value())
+                    nextFixedWake_ = decision_->NextFixedWakeTick();
                 return Result<AiSliceOutcome>::Success(step.Value() ? AiSliceOutcome::Complete : AiSliceOutcome::BudgetExhausted);
             }
 
@@ -78,6 +80,7 @@ namespace Horo::AI {
                 if (intents_)
                     intents_->Discard(agent_);
                 providerFailure_.reset();
+                nextFixedWake_.reset();
                 static_cast<void>(decision_->Cancel(AiTaskCancellationReason::AgentGenerationRetired));
             }
 
@@ -85,11 +88,16 @@ namespace Horo::AI {
                 if (intents_)
                     intents_->Discard(agent_);
                 providerFailure_.reset();
+                nextFixedWake_.reset();
                 static_cast<void>(decision_->Cancel(AiTaskCancellationReason::PlanReplaced));
             }
 
             bool HasPendingTaskWake() const noexcept override {
                 return decision_->HasPendingTaskWake();
+            }
+
+            std::optional<std::uint64_t> NextFixedWakeTick() const noexcept override {
+                return nextFixedWake_;
             }
 
             std::span<const PerceptionListenerTypeId> DeclaredPerceptionWatches() const noexcept override {
@@ -112,6 +120,8 @@ namespace Horo::AI {
             std::vector<PerceptionListenerTypeId> watches_;
             std::optional<DecisionProviderFailure> providerFailure_;
             std::uint64_t evaluationTick_{};
+            std::optional<std::uint64_t> nextFixedWake_;
+            bool reactive_{};
         };
     }  // namespace
 
@@ -330,7 +340,7 @@ namespace Horo::AI {
             bounded.workUnitsPerTick = *limit;
             auto executor =
                 std::make_shared<ScheduledCookedDecision>(state, std::move(decision).Value(), handle, decisionExecution_->intents,
-                                                           std::move(watches));
+                                                           std::move(watches), bounded.intervalTicks == 0);
             nextTaskSlot += count + 1;
             return Output::Success({handle, identity, bounded, plan, std::move(executor), cancellation});
         } catch (const std::bad_alloc &) {

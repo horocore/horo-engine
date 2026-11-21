@@ -114,6 +114,8 @@ namespace Horo::AI {
         [[nodiscard]] Result<AiTaskState> StepWithTrace(const DecisionGraphStepInput &input, DecisionStepTrace &trace);
         /** @brief Tests the owner-lane mailbox of the flat tree admitted by the scheduler. */
         [[nodiscard]] bool HasPendingTaskWake() const noexcept;
+        /** @brief Copies the earliest fixed deadline from the active flat tree after evaluation. */
+        [[nodiscard]] std::optional<std::uint64_t> NextFixedWakeTick() const noexcept;
         [[nodiscard]] Result<void> Cancel(AiTaskCancellationReason reason);
         ~DecisionGraphInstance();
 

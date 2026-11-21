@@ -174,6 +174,11 @@ namespace Horo::AI {
             return false;
         }
 
+        /** @brief Reads an already cached fixed deadline without invoking any provider. */
+        [[nodiscard]] virtual std::optional<std::uint64_t> NextFixedWakeTick() const noexcept {
+            return std::nullopt;
+        }
+
         /** @brief Borrows the immutable listener declarations admitted with this exact executable. */
         [[nodiscard]] virtual std::span<const PerceptionListenerTypeId> DeclaredPerceptionWatches() const noexcept {
             return {};
@@ -426,7 +431,9 @@ namespace Horo::AI {
         /** @brief Resolves periodic cadence; zero means external events only or suspension. */
         [[nodiscard]] std::uint64_t PeriodicInterval(const Entry &entry) const noexcept;
         /** @brief Builds stable priority/age/identity order into reserved storage. */
-        void Order(bool admitTaskWakes);
+        void Order(bool admitReactiveWakes);
+        /** @brief Admits eligible timer and mailbox wakes at the frozen decision boundary. */
+        void AdmitReactiveWakes(Entry &entry) noexcept;
         /** @brief Runs an eligible entry without charging a held generation or losing its wake. */
         void EvaluateReadyEntry(Entry &entry, std::uint64_t tick, AgentHandle pausedAgent);
         /** @brief Rechecks lifetime immediately around callbacks. @param entry Owned slot. @return Whether retired. */
