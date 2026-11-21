@@ -19,6 +19,7 @@
 #include "editor/screens/workspace/DecisionGraphCanvas.h"
 #include "editor/screens/workspace/DecisionGraphCanvasModel.h"
 #include "editor/screens/workspace/DecisionGraphDocumentHistory.h"
+#include "editor/screens/workspace/DecisionSaveJournal.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/WorkspacePathText.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
@@ -34,6 +35,7 @@
 #include <format>
 #include <fstream>
 #include <limits>
+#include <memory>
 #include <thread>
 #include <vector>
 
@@ -148,13 +150,15 @@ namespace {
         enum class Failure {
             None,
             BeforeLayoutReplace,
-            AfterLayoutReplace
+            AfterLayoutReplace,
+            AfterGraphReplace
         };
         static constexpr auto BeforeMessage = "Injected layout replacement refusal";
         static constexpr auto AfterMessage = "Injected layout durability failure";
         std::filesystem::path graph;
         std::filesystem::path layout;
         Failure failure{};
+        std::optional<std::string_view> foreignGraphBytes;
         std::vector<std::filesystem::path> leases;
         std::size_t graphWrites{};
         std::size_t layoutWrites{};
@@ -171,13 +175,26 @@ namespace {
 
         Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
                                           AtomicFileReplacementReceipt &receipt) override {
-            if (destination == graph)
+            if (destination == graph) {
                 ++graphWrites;
+                auto result = native.AtomicReplaceTracked(prepared, destination, receipt);
+                if (result.HasValue() && receipt.WasCommitted() && failure == Failure::AfterGraphReplace)
+                    return Result<void>::Failure(
+                        MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed, "Injected graph interruption"));
+                return result;
+            }
             if (destination != layout)
                 return native.AtomicReplaceTracked(prepared, destination, receipt);
             ++layoutWrites;
-            if (failure == Failure::BeforeLayoutReplace)
+            if (failure == Failure::BeforeLayoutReplace) {
+                if (foreignGraphBytes) {
+                    std::ofstream external(graph, std::ios::binary | std::ios::trunc);
+                    external << *foreignGraphBytes;
+                    external.close();
+                    REQUIRE(external.good());
+                }
                 return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::ReadFailed, BeforeMessage));
+            }
             auto result = native.AtomicReplaceTracked(prepared, destination, receipt);
             if (result.HasValue() && receipt.WasCommitted() && failure == Failure::AfterLayoutReplace)
                 return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed, AfterMessage));
@@ -532,14 +549,168 @@ TEST_CASE("Recent AI assets resolve current registered identity after an ordinar
     }
 }
 
+TEST_CASE("Decision autosave preserves graph and layout without replacing registered source", "[unit][editor][decision][workspace]") {
+    BlackboardWorkspaceFixture project;
+    project.Write("Observer", AI::BlackboardKeyPresence::Optional);
+    const auto makeController = [&](const EditorWorkspaceDependencies &dependencies) {
+        return std::make_unique<EditorWorkspaceController>(project.root, project.runtime, project.registry.Snapshot(), dependencies);
+    };
+    AssetBrowserInteractionSession browser;
+    browser.OpenCreateStateMachine(WorkspacePathText(project.root / "assets"));
+    auto &draft = browser.State().createStateMachine;
+    draft.name = "Terminal state";
+    draft.schema = project.asset;
+    draft.outcome = AI::DecisionStateTerminal::Failed;
+    const auto command = AssetBrowserInteractionSession::ConfirmStateMachine(draft);
+    REQUIRE(command.has_value());
+    constexpr auto path = "assets/Terminal state.horo_sm";
+
+    JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 8, .ioWorkerCount = 1}};
+    const auto session = Assets::AssetId::FromBytes({37});
+    const auto workspaceOwner = makeController({.assets = {.mutableAssetRegistry = &project.registry},
+                                                .world = {.documentSessionOwner = session},
+                                                .mutations = &project.mutations,
+                                                .durableFiles = &project.files,
+                                                .jobs = &jobs});
+    auto &workspace = *workspaceOwner;
+    workspace.ProcessCommand(*command);
+    REQUIRE(workspace.ViewModel().decisionGraphDocuments.size() == 1);
+    const auto &view = workspace.ViewModel().decisionGraphDocuments.front();
+    const auto node = std::get<AI::StateMachineAssetDescriptor>(view.graph->body).initial;
+    const auto instance = view.identity.instance;
+    const auto source = project.root / path;
+    const auto accepted = Assets::CaptureAssetSource(project.root, source, AI::DecisionCodecLimits{}.maximumBytes);
+    REQUIRE(accepted.HasValue());
+    workspace.ProcessCommand({.command = EditorWorkspaceViewCommand::EditDecisionStateMachine,
+                              .stateMachineEdit = StateMachineEditRequest{instance,
+                                                                          view.revision,
+                                                                          StateMachineEditOperation::SetTerminal,
+                                                                          node,
+                                                                          {},
+                                                                          AI::DecisionStateTerminal::Succeeded}});
+    REQUIRE_FALSE(view.diagnostic);
+    workspace.ProcessCommand(
+        {.command = EditorWorkspaceViewCommand::EditDecisionLayout,
+         .decisionLayoutEdit = DecisionGraphLayoutRequest{{instance, view.revision}, DecisionLayoutOperation::Move, {{node, 4, 8}}}});
+    REQUIRE(view.dirty);
+    bool sourceChanged = false;
+    bool layoutChanged = false;
+    SECTION("matching source and layout restore a dirty draft") {}
+    SECTION("newer canonical source rejects restoration") {
+        sourceChanged = true;
+    }
+    SECTION("newer canonical layout rejects restoration") {
+        layoutChanged = true;
+    }
+    if (sourceChanged) {
+        const auto changed = AI::DecisionPlanCodec::EncodeSource(std::span{view.graph.get(), 1}, view.graph->asset);
+        REQUIRE(changed.HasValue());
+        const auto &bytes = changed.Value();
+        std::ofstream external(source, std::ios::binary);
+        external.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        REQUIRE(static_cast<bool>(external));
+    }
+    if (layoutChanged) {
+        const auto external = EncodeDecisionLayout({{node, 16, 32}}, view.asset, view.graph->asset);
+        REQUIRE(external.HasValue());
+        const auto &bytes = external.Value();
+        std::ofstream stream(DecisionLayoutPath(source), std::ios::binary);
+        stream.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+        REQUIRE(static_cast<bool>(stream));
+    }
+    const auto newer = Assets::CaptureAssetSource(project.root, source, AI::DecisionCodecLimits{}.maximumBytes);
+    REQUIRE(newer.HasValue());
+    CHECK((newer.Value().identity != accepted.Value().identity) == sourceChanged);
+    const auto diskLayout = Assets::CaptureAssetSource(project.root, DecisionLayoutPath(source), MaximumDecisionLayoutBytes);
+    REQUIRE(diskLayout.HasValue());
+    DocumentRecoveryService recovery(project.root, project.mutations, project.files);
+    workspace.UpdateAutosave(60.0F, 1);
+    for (int attempt = 0; attempt < 300; ++attempt) {
+        const auto record = recovery.Inspect(view.asset, view.identity.key);
+        REQUIRE(record.HasValue());
+        if (record.Value())
+            break;
+        std::this_thread::sleep_for(std::chrono::milliseconds{10});
+    }
+    const auto recovered = recovery.Inspect(view.asset, view.identity.key);
+    REQUIRE(recovered.HasValue());
+    REQUIRE(recovered.Value());
+    CHECK(recovered.Value()->sessionOwner == session);
+    CHECK(recovered.Value()->revision == view.revision);
+    CHECK(recovered.Value()->acceptedSource == accepted.Value().identity);
+    CHECK(recovered.Value()->state == ComputeSha256(recovered.Value()->payload));
+    CHECK(recovered.Value()->payload.size() > accepted.Value().bytes.size());
+    const auto canonical = Assets::CaptureAssetSource(project.root, source, AI::DecisionCodecLimits{}.maximumBytes);
+    REQUIRE(canonical.HasValue());
+    CHECK(canonical.Value().identity == newer.Value().identity);
+    CHECK(std::filesystem::exists(DecisionLayoutPath(source)) == layoutChanged);
+    CHECK(view.dirty);
+
+    const auto asset = view.asset;
+    const auto key = view.identity.key;
+    const auto nextSession = Assets::AssetId::FromBytes({38});
+    const auto restartedOwner = makeController({.assets = {.mutableAssetRegistry = &project.registry},
+                                                .world = {.documentSessionOwner = nextSession},
+                                                .mutations = &project.mutations,
+                                                .durableFiles = &project.files,
+                                                .jobs = &jobs});
+    auto &restarted = *restartedOwner;
+    restarted.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                              .sourceOpenRequest = SourceOpenRequest{.path = path, .origin = SourceOpenOrigin::AssetActivation}});
+    REQUIRE(restarted.ViewModel().decisionGraphDocuments.size() == 1);
+    const auto &opened = restarted.ViewModel().decisionGraphDocuments.front();
+    REQUIRE(opened.recovery);
+    REQUIRE(*opened.recovery == *recovered.Value());
+    const auto request = [&](EditorWorkspaceViewCommand action) {
+        restarted.ProcessCommand({.command = action,
+                                  .decisionGraphFence = DecisionGraphDocumentFence{opened.identity.instance, opened.revision},
+                                  .decisionGraphRecovery = opened.recovery});
+    };
+    request(EditorWorkspaceViewCommand::RestoreDecisionGraphRecovery);
+    if (sourceChanged || layoutChanged) {
+        REQUIRE(opened.diagnostic);
+        CHECK(opened.diagnostic->code.Value() == Assets::AssetSourceErrors::Conflict.code.Value());
+        CHECK_FALSE(opened.dirty);
+        REQUIRE(opened.recovery);
+        CHECK(recovery.Inspect(asset, key).Value() == recovered.Value());
+        const auto preservedSource = Assets::CaptureAssetSource(project.root, source, AI::DecisionCodecLimits{}.maximumBytes);
+        const auto preservedLayout = Assets::CaptureAssetSource(project.root, DecisionLayoutPath(source), MaximumDecisionLayoutBytes);
+        REQUIRE(preservedSource.HasValue());
+        REQUIRE(preservedLayout.HasValue());
+        CHECK(preservedSource.Value().identity == newer.Value().identity);
+        CHECK(preservedLayout.Value().identity == diskLayout.Value().identity);
+        request(EditorWorkspaceViewCommand::DiscardDecisionGraphRecovery);
+    } else {
+        CHECK_FALSE(opened.recovery);
+        REQUIRE(opened.dirty);
+        CHECK(*opened.layout == *view.layout);
+        CHECK(std::get<AI::StateMachineAssetDescriptor>(opened.graph->body).states.front().terminal ==
+              AI::DecisionStateTerminal::Succeeded);
+        CHECK_FALSE(std::filesystem::exists(DecisionLayoutPath(source)));
+        const auto afterRestore = Assets::CaptureAssetSource(project.root, source, AI::DecisionCodecLimits{}.maximumBytes);
+        REQUIRE(afterRestore.HasValue());
+        CHECK(afterRestore.Value().identity == accepted.Value().identity);
+        restarted.FlushAutosave();
+        const auto replaced = recovery.Inspect(asset, key);
+        REQUIRE(replaced.HasValue());
+        REQUIRE(replaced.Value());
+        CHECK(replaced.Value()->sessionOwner == nextSession);
+        restarted.ProcessCommand(MakeDecisionHistoryCommand(opened, DecisionHistoryAction::Save));
+        CHECK_FALSE(opened.dirty);
+    }
+    CHECK_FALSE(recovery.Inspect(asset, key).Value());
+}
+
 TEST_CASE("State Machine New publishes a canonical Decision source bound to the selected saved Blackboard",
           "[unit][editor][decision][workspace]") {
     BlackboardWorkspaceFixture project;
     project.Write("Observer", AI::BlackboardKeyPresence::Optional);
-    EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(),
-                                         {.assets = {.mutableAssetRegistry = &project.registry},
-                                          .mutations = &project.mutations,
-                                          .durableFiles = &project.files});
+    const auto makeController = [&](const EditorWorkspaceDependencies &dependencies) {
+        return std::make_unique<EditorWorkspaceController>(project.root, project.runtime, project.registry.Snapshot(), dependencies);
+    };
+    const auto controllerOwner = makeController(
+        {.assets = {.mutableAssetRegistry = &project.registry}, .mutations = &project.mutations, .durableFiles = &project.files});
+    auto &controller = *controllerOwner;
     REQUIRE(controller.ViewModel().decisionSchemaChoices.size() == 1);
     CHECK(controller.ViewModel().decisionSchemaChoices.front().asset == project.asset);
     AssetBrowserInteractionSession browser;
@@ -552,143 +723,6 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
     auto command = AssetBrowserInteractionSession::ConfirmStateMachine(draft);
     REQUIRE(command.has_value());
     constexpr auto path = "assets/Terminal state.horo_sm";
-
-    SECTION("Decision autosave preserves graph and layout without replacing registered source") {
-        JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 8, .ioWorkerCount = 1}};
-        const auto session = Assets::AssetId::FromBytes({37});
-        EditorWorkspaceController workspace(project.root, project.runtime, project.registry.Snapshot(),
-                                            {.assets = {.mutableAssetRegistry = &project.registry},
-                                             .world = {.documentSessionOwner = session},
-                                             .mutations = &project.mutations,
-                                             .durableFiles = &project.files,
-                                             .jobs = &jobs});
-        workspace.ProcessCommand(*command);
-        REQUIRE(workspace.ViewModel().decisionGraphDocuments.size() == 1);
-        const auto &view = workspace.ViewModel().decisionGraphDocuments.front();
-        const auto node = std::get<AI::StateMachineAssetDescriptor>(view.graph->body).initial;
-        const auto instance = view.identity.instance;
-        const auto source = project.root / path;
-        const auto accepted = Assets::CaptureAssetSource(project.root, source, AI::DecisionCodecLimits{}.maximumBytes);
-        REQUIRE(accepted.HasValue());
-        workspace.ProcessCommand({.command = EditorWorkspaceViewCommand::EditDecisionStateMachine,
-                                  .stateMachineEdit = StateMachineEditRequest{instance,
-                                                                              view.revision,
-                                                                              StateMachineEditOperation::SetTerminal,
-                                                                              node,
-                                                                              {},
-                                                                              AI::DecisionStateTerminal::Succeeded}});
-        REQUIRE_FALSE(view.diagnostic);
-        workspace.ProcessCommand(
-            {.command = EditorWorkspaceViewCommand::EditDecisionLayout,
-             .decisionLayoutEdit = DecisionGraphLayoutRequest{{instance, view.revision}, DecisionLayoutOperation::Move, {{node, 4, 8}}}});
-        REQUIRE(view.dirty);
-        bool sourceChanged = false;
-        bool layoutChanged = false;
-        SECTION("matching source and layout restore a dirty draft") {}
-        SECTION("newer canonical source rejects restoration") {
-            sourceChanged = true;
-        }
-        SECTION("newer canonical layout rejects restoration") {
-            layoutChanged = true;
-        }
-        if (sourceChanged) {
-            const auto changed = AI::DecisionPlanCodec::EncodeSource(std::span{view.graph.get(), 1}, view.graph->asset);
-            REQUIRE(changed.HasValue());
-            const auto &bytes = changed.Value();
-            std::ofstream external(source, std::ios::binary);
-            external.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-            REQUIRE(static_cast<bool>(external));
-        }
-        if (layoutChanged) {
-            const auto external = EncodeDecisionLayout({{node, 16, 32}}, view.asset, view.graph->asset);
-            REQUIRE(external.HasValue());
-            const auto &bytes = external.Value();
-            std::ofstream stream(DecisionLayoutPath(source), std::ios::binary);
-            stream.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
-            REQUIRE(static_cast<bool>(stream));
-        }
-        const auto newer = Assets::CaptureAssetSource(project.root, source, AI::DecisionCodecLimits{}.maximumBytes);
-        REQUIRE(newer.HasValue());
-        CHECK((newer.Value().identity != accepted.Value().identity) == sourceChanged);
-        const auto diskLayout = Assets::CaptureAssetSource(project.root, DecisionLayoutPath(source), MaximumDecisionLayoutBytes);
-        REQUIRE(diskLayout.HasValue());
-        DocumentRecoveryService recovery(project.root, project.mutations, project.files);
-        workspace.UpdateAutosave(60.0F, 1);
-        for (int attempt = 0; attempt < 300; ++attempt) {
-            const auto record = recovery.Inspect(view.asset, view.identity.key);
-            REQUIRE(record.HasValue());
-            if (record.Value())
-                break;
-            std::this_thread::sleep_for(std::chrono::milliseconds{10});
-        }
-        const auto recovered = recovery.Inspect(view.asset, view.identity.key);
-        REQUIRE(recovered.HasValue());
-        REQUIRE(recovered.Value());
-        CHECK(recovered.Value()->sessionOwner == session);
-        CHECK(recovered.Value()->revision == view.revision);
-        CHECK(recovered.Value()->acceptedSource == accepted.Value().identity);
-        CHECK(recovered.Value()->state == ComputeSha256(recovered.Value()->payload));
-        CHECK(recovered.Value()->payload.size() > accepted.Value().bytes.size());
-        const auto canonical = Assets::CaptureAssetSource(project.root, source, AI::DecisionCodecLimits{}.maximumBytes);
-        REQUIRE(canonical.HasValue());
-        CHECK(canonical.Value().identity == newer.Value().identity);
-        CHECK(std::filesystem::exists(DecisionLayoutPath(source)) == layoutChanged);
-        CHECK(view.dirty);
-
-        const auto asset = view.asset;
-        const auto key = view.identity.key;
-        const auto nextSession = Assets::AssetId::FromBytes({38});
-        EditorWorkspaceController restarted(project.root, project.runtime, project.registry.Snapshot(),
-                                            {.assets = {.mutableAssetRegistry = &project.registry},
-                                             .world = {.documentSessionOwner = nextSession},
-                                             .mutations = &project.mutations,
-                                             .durableFiles = &project.files,
-                                             .jobs = &jobs});
-        restarted.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
-                                  .sourceOpenRequest = SourceOpenRequest{.path = path, .origin = SourceOpenOrigin::AssetActivation}});
-        REQUIRE(restarted.ViewModel().decisionGraphDocuments.size() == 1);
-        const auto &opened = restarted.ViewModel().decisionGraphDocuments.front();
-        REQUIRE(opened.recovery);
-        REQUIRE(*opened.recovery == *recovered.Value());
-        const auto request = [&](EditorWorkspaceViewCommand action) {
-            restarted.ProcessCommand({.command = action,
-                                      .decisionGraphFence = DecisionGraphDocumentFence{opened.identity.instance, opened.revision},
-                                      .decisionGraphRecovery = opened.recovery});
-        };
-        request(EditorWorkspaceViewCommand::RestoreDecisionGraphRecovery);
-        if (sourceChanged || layoutChanged) {
-            REQUIRE(opened.diagnostic);
-            CHECK(opened.diagnostic->code.Value() == Assets::AssetSourceErrors::Conflict.code.Value());
-            CHECK_FALSE(opened.dirty);
-            REQUIRE(opened.recovery);
-            CHECK(recovery.Inspect(asset, key).Value() == recovered.Value());
-            const auto preservedSource = Assets::CaptureAssetSource(project.root, source, AI::DecisionCodecLimits{}.maximumBytes);
-            const auto preservedLayout = Assets::CaptureAssetSource(project.root, DecisionLayoutPath(source), MaximumDecisionLayoutBytes);
-            REQUIRE(preservedSource.HasValue());
-            REQUIRE(preservedLayout.HasValue());
-            CHECK(preservedSource.Value().identity == newer.Value().identity);
-            CHECK(preservedLayout.Value().identity == diskLayout.Value().identity);
-            request(EditorWorkspaceViewCommand::DiscardDecisionGraphRecovery);
-        } else {
-            CHECK_FALSE(opened.recovery);
-            REQUIRE(opened.dirty);
-            CHECK(*opened.layout == *view.layout);
-            CHECK(std::get<AI::StateMachineAssetDescriptor>(opened.graph->body).states.front().terminal ==
-                  AI::DecisionStateTerminal::Succeeded);
-            CHECK_FALSE(std::filesystem::exists(DecisionLayoutPath(source)));
-            const auto afterRestore = Assets::CaptureAssetSource(project.root, source, AI::DecisionCodecLimits{}.maximumBytes);
-            REQUIRE(afterRestore.HasValue());
-            CHECK(afterRestore.Value().identity == accepted.Value().identity);
-            restarted.FlushAutosave();
-            const auto replaced = recovery.Inspect(asset, key);
-            REQUIRE(replaced.HasValue());
-            REQUIRE(replaced.Value());
-            CHECK(replaced.Value()->sessionOwner == nextSession);
-            restarted.ProcessCommand(MakeDecisionHistoryCommand(opened, DecisionHistoryAction::Save));
-            CHECK_FALSE(opened.dirty);
-        }
-        CHECK_FALSE(recovery.Inspect(asset, key).Value());
-    }
 
     SECTION("intrinsic topology commands validate complete drafts before undo, redo or durable save") {
         controller.ProcessCommand(*command);
@@ -956,6 +990,92 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
         CHECK(documents.front().identity.instance != instance);
         CHECK(transition(documents.front(), edge).priority == minimum);
         CHECK(transition(documents.front(), other).priority == 0);
+    }
+
+    SECTION("an external layout change is noticed without modifying the graph source") {
+        controller.ProcessCommand(*command);
+        const auto &documents = controller.ViewModel().decisionGraphDocuments;
+        REQUIRE(documents.size() == 1);
+        const auto &view = documents.front();
+        REQUIRE(view.layoutWritable);
+        const auto initial = std::get<AI::StateMachineAssetDescriptor>(view.graph->body).initial;
+        const DecisionNodePlacement disk{initial, 245.0F, 102.0F};
+        const DecisionNodePlacement draft{initial, 71.0F, 38.0F};
+        const DecisionGraphLayoutRequest edit{{view.identity.instance, view.revision}, DecisionLayoutOperation::Move, {draft}};
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::EditDecisionLayout, .decisionLayoutEdit = edit});
+        REQUIRE(view.dirty);
+        REQUIRE(view.canUndo);
+        SECTION("a clean document reloads the changed metadata and retires previous undo history") {
+            REQUIRE(controller.SaveSourceDocuments().HasValue());
+            REQUIRE_FALSE(view.dirty);
+            REQUIRE(view.canUndo);
+        }
+        SECTION("an edited document keeps its draft and reports conflict") {}
+        const auto previous = view.revision;
+        const bool wasDirty = view.dirty;
+        const auto encoded = EncodeDecisionLayout({disk}, view.asset, view.graph->asset);
+        REQUIRE(encoded.HasValue());
+        {
+            std::ofstream file(DecisionLayoutPath(project.root / path), std::ios::binary | std::ios::trunc);
+            file.write(reinterpret_cast<const char *>(encoded.Value().data()), static_cast<std::streamsize>(encoded.Value().size()));
+            REQUIRE(file.good());
+        }
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                                   .sourceOpenRequest = SourceOpenRequest{.path = path, .origin = SourceOpenOrigin::AssetActivation}});
+        REQUIRE(documents.size() == 1);
+        REQUIRE(documents.front().layout->size() == 1);
+        CHECK(documents.front().layout->front() == (wasDirty ? draft : disk));
+        CHECK(documents.front().revision == previous + static_cast<std::uint64_t>(!wasDirty));
+        CHECK(documents.front().conflict == wasDirty);
+        CHECK(documents.front().dirty == wasDirty);
+        CHECK(documents.front().canUndo == wasDirty);
+        if (wasDirty) {
+            const auto rejected = controller.SaveSourceDocuments();
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == Assets::AssetSourceErrors::Conflict.code.Value());
+            const auto persisted = CaptureDecisionLayout(project.root, project.root / path, view.asset, view.graph->asset);
+            REQUIRE(persisted.HasValue());
+            CHECK(persisted.Value().layout == DecisionGraphLayout{disk});
+        }
+    }
+
+    SECTION("a malformed external layout does not replace a clean working view") {
+        controller.ProcessCommand(*command);
+        const auto &documents = controller.ViewModel().decisionGraphDocuments;
+        REQUIRE(documents.size() == 1);
+        const auto &view = documents.front();
+        const auto node = std::get<AI::StateMachineAssetDescriptor>(view.graph->body).initial;
+        const DecisionGraphLayoutRequest move{{view.identity.instance, view.revision}, DecisionLayoutOperation::Move, {{node, 7, 11}}};
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::EditDecisionLayout, .decisionLayoutEdit = move});
+        REQUIRE(controller.SaveSourceDocuments().HasValue());
+        const auto accepted = view.layout;
+        const auto revision = view.revision;
+        {
+            std::ofstream external(DecisionLayoutPath(project.root / path), std::ios::binary | std::ios::trunc);
+            external << "{}";
+            REQUIRE(external.good());
+        }
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                                   .sourceOpenRequest = SourceOpenRequest{.path = path, .origin = SourceOpenOrigin::AssetActivation}});
+        REQUIRE(documents.size() == 1);
+        CHECK(view.layout == accepted);
+        CHECK(view.revision == revision);
+        CHECK(view.conflict);
+        CHECK(view.diagnostic.has_value());
+
+        const auto bytes = EncodeDecisionLayout(*accepted, view.asset, view.graph->asset);
+        REQUIRE(bytes.HasValue());
+        {
+            std::ofstream external(DecisionLayoutPath(project.root / path), std::ios::binary | std::ios::trunc);
+            external.write(reinterpret_cast<const char *>(bytes.Value().data()), static_cast<std::streamsize>(bytes.Value().size()));
+            REQUIRE(external.good());
+        }
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                                   .sourceOpenRequest = SourceOpenRequest{.path = path, .origin = SourceOpenOrigin::AssetActivation}});
+        CHECK_FALSE(view.conflict);
+        CHECK_FALSE(view.diagnostic);
+        CHECK(view.layout == accepted);
+        CHECK(view.revision == revision);
     }
 
     SECTION("a native canvas drag goes through workspace history and is fenced at mouse-down") {
@@ -1250,6 +1370,130 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
         CHECK_FALSE(documents.front().canUndo);
     }
 
+    SECTION("autosave and explicit restart recovery retain graph and layout without writing source") {
+        const bool legacyCheckpoint = GENERATE(false, true);
+        controller.ProcessCommand(*command);
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        const auto open = EditorWorkspaceViewCommandData{.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                                                         .sourceOpenRequest =
+                                                             SourceOpenRequest{.path = path, .origin = SourceOpenOrigin::AssetActivation}};
+        const auto dependencies = [&](std::uint8_t owner) {
+            return EditorWorkspaceDependencies{.assets = {.mutableAssetRegistry = &project.registry},
+                                               .world = {.documentSessionOwner = Assets::AssetId::FromBytes({owner})},
+                                               .mutations = &project.mutations,
+                                               .durableFiles = &project.files};
+        };
+        DocumentRecoveryService recovery(project.root, project.mutations, project.files);
+        const auto sourcePath = project.root / path;
+        constexpr auto bound = AI::DecisionCodecLimits{}.maximumBytes;
+        const auto initial = Assets::CaptureAssetSource(project.root, sourcePath, bound);
+        REQUIRE(initial.HasValue());
+
+        DecisionNodePlacement moved;
+        {
+            const auto writerOwner = makeController(dependencies(31));
+            auto &writer = *writerOwner;
+            writer.ProcessCommand(open);
+            REQUIRE(writer.ViewModel().decisionGraphDocuments.size() == 1);
+            const auto &view = writer.ViewModel().decisionGraphDocuments.front();
+            moved = {std::get<AI::StateMachineAssetDescriptor>(view.graph->body).initial, 100, 200};
+            writer.ProcessCommand(
+                {.command = EditorWorkspaceViewCommand::EditDecisionLayout,
+                 .decisionLayoutEdit =
+                     DecisionGraphLayoutRequest{{view.identity.instance, view.revision}, DecisionLayoutOperation::Move, {moved}}});
+            writer.ProcessCommand({.command = EditorWorkspaceViewCommand::EditDecisionStateMachine,
+                                   .stateMachineEdit = StateMachineEditRequest{view.identity.instance,
+                                                                               view.revision,
+                                                                               StateMachineEditOperation::SetTerminal,
+                                                                               moved.node,
+                                                                               {},
+                                                                               AI::DecisionStateTerminal::Succeeded}});
+            REQUIRE(view.dirty);
+            REQUIRE_FALSE(view.diagnostic);
+            writer.UpdateAutosave(60, 1);
+            const auto saved = recovery.Inspect(view.asset, view.identity.key);
+            REQUIRE(saved.HasValue());
+            REQUIRE(saved.Value());
+            CHECK(saved.Value()->acceptedSource == initial.Value().identity);
+            const auto graph = AI::DecisionPlanCodec::EncodeSource(std::span{view.graph.get(), 1}, view.graph->asset);
+            const auto layout = EncodeDecisionLayout(*view.layout, view.asset, view.graph->asset);
+            REQUIRE(graph.HasValue());
+            REQUIRE(layout.HasValue());
+            const auto graphBytes = std::as_bytes(std::span{graph.Value()});
+            constexpr std::size_t canonicalHeader = 46;
+            const auto payload = std::span{saved.Value()->payload};
+            REQUIRE(payload.size() == canonicalHeader + graphBytes.size() + layout.Value().size());
+            CHECK(std::ranges::equal(payload.subspan(canonicalHeader, graphBytes.size()), graphBytes));
+            CHECK(std::ranges::equal(payload.last(layout.Value().size()), layout.Value()));
+            if (legacyCheckpoint) {
+                auto old = *saved.Value();
+                // Version one also existed with an absent-layout digest, then layout bytes before the graph.
+                old.payload.assign(34, std::byte{0});
+                old.payload.front() = std::byte{1};
+                for (const unsigned shift : {24U, 16U, 8U, 0U})
+                    old.payload.push_back(static_cast<std::byte>((layout.Value().size() >> shift) & 0xff));
+                old.payload.insert(old.payload.end(), layout.Value().begin(), layout.Value().end());
+                old.payload.insert(old.payload.end(), graphBytes.begin(), graphBytes.end());
+                old.state = ComputeSha256(old.payload);
+                REQUIRE(recovery.ReplaceAccepted(old, *saved.Value()).HasValue());
+            }
+        }
+
+        const auto restartedOwner = makeController(dependencies(32));
+        auto &restarted = *restartedOwner;
+        restarted.ProcessCommand(open);
+        REQUIRE(restarted.ViewModel().decisionGraphDocuments.size() == 1);
+        const auto &view = restarted.ViewModel().decisionGraphDocuments.front();
+        REQUIRE(view.recovery);
+        REQUIRE_FALSE(view.dirty);
+        const auto recover = [&](EditorWorkspaceViewCommand action) {
+            restarted.ProcessCommand({.command = action,
+                                      .decisionGraphFence = DecisionGraphDocumentFence{view.identity.instance, view.revision},
+                                      .decisionGraphRecovery = view.recovery});
+        };
+        SECTION("restores only an unsaved draft until explicit save") {
+            recover(EditorWorkspaceViewCommand::RestoreDecisionGraphRecovery);
+            REQUIRE_FALSE(view.diagnostic);
+            REQUIRE_FALSE(view.recovery);
+            REQUIRE(view.dirty);
+            CHECK(*view.layout == DecisionGraphLayout{moved});
+            CHECK(std::get<AI::StateMachineAssetDescriptor>(view.graph->body).states.front().terminal ==
+                  AI::DecisionStateTerminal::Succeeded);
+            const auto unchanged = Assets::CaptureAssetSource(project.root, sourcePath, bound);
+            REQUIRE(unchanged.HasValue());
+            CHECK(unchanged.Value().identity == initial.Value().identity);
+            CHECK_FALSE(std::filesystem::exists(DecisionLayoutPath(sourcePath)));
+            restarted.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Save));
+            REQUIRE_FALSE(view.diagnostic);
+            CHECK_FALSE(view.dirty);
+            const auto removed = recovery.Inspect(view.asset, view.identity.key);
+            REQUIRE(removed.HasValue());
+            CHECK_FALSE(removed.Value().has_value());
+        }
+        SECTION("retains recovery and rejects a layout changed after opening") {
+            const auto external = DecisionLayoutPath(sourcePath);
+            {
+                std::ofstream file(external, std::ios::binary);
+                file << "externally edited";
+                REQUIRE(static_cast<bool>(file));
+            }
+            const auto prior = view.recovery;
+            recover(EditorWorkspaceViewCommand::RestoreDecisionGraphRecovery);
+            REQUIRE(view.diagnostic);
+            CHECK(view.diagnostic->code.Value() == Assets::AssetSourceErrors::Conflict.code.Value());
+            CHECK(view.recovery == prior);
+            CHECK_FALSE(view.dirty);
+            CHECK_FALSE(view.canUndo);
+            CHECK(view.layout->empty());
+            const auto preserved = Assets::CaptureAssetSource(project.root, external, MaximumDecisionLayoutBytes);
+            REQUIRE(preserved.HasValue());
+            CHECK(preserved.Value().bytes.size() == std::string_view("externally edited").size());
+            recover(EditorWorkspaceViewCommand::DiscardDecisionGraphRecovery);
+            CHECK_FALSE(view.recovery);
+            CHECK_FALSE(view.diagnostic);
+        }
+    }
+
     SECTION("layout publication rejects a new external sidecar without dropping the draft") {
         controller.ProcessCommand(*command);
         REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
@@ -1397,7 +1641,178 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
         }
     }
 
-    SECTION("tracked save receipts retain the last durable graph when layout recording fails") {
+    SECTION("reviewed external decisions rebase only the exact graph and layout without writing them") {
+        controller.ProcessCommand(*command);
+        REQUIRE(controller.ViewModel().decisionGraphDocuments.size() == 1);
+        const auto &view = controller.ViewModel().decisionGraphDocuments.front();
+        const auto node = std::get<AI::StateMachineAssetDescriptor>(view.graph->body).initial;
+        const auto source = project.root / path;
+        const auto metadata = DecisionLayoutPath(source);
+        const DecisionNodePlacement remote{node, 12, 18};
+        const DecisionNodePlacement local{node, 22, 28};
+        const auto writeLayout = [&](DecisionNodePlacement placement) {
+            const auto bytes = EncodeDecisionLayout({placement}, view.asset, view.graph->asset);
+            REQUIRE(bytes.HasValue());
+            std::ofstream file(metadata, std::ios::binary);
+            file.write(reinterpret_cast<const char *>(bytes.Value().data()), static_cast<std::streamsize>(bytes.Value().size()));
+            REQUIRE(static_cast<bool>(file));
+        };
+        const auto resolve = [&](DecisionExternalAction action, std::optional<DecisionExternalReview> reviewed = std::nullopt) {
+            controller.ProcessCommand({
+                .command = EditorWorkspaceViewCommand::ResolveDecisionExternalChange,
+                .decisionExternal = DecisionExternalRequest{{view.identity.instance, view.revision}, action, reviewed},
+            });
+        };
+        const bool bothMoved = GENERATE(false, true);
+        if (bothMoved) {
+            controller.ProcessCommand(
+                {.command = EditorWorkspaceViewCommand::EditDecisionLayout,
+                 .decisionLayoutEdit =
+                     DecisionGraphLayoutRequest{{view.identity.instance, view.revision}, DecisionLayoutOperation::Move, {local}}});
+        } else {
+            controller.ProcessCommand({.command = EditorWorkspaceViewCommand::EditDecisionStateMachine,
+                                       .stateMachineEdit = StateMachineEditRequest{view.identity.instance,
+                                                                                   view.revision,
+                                                                                   StateMachineEditOperation::SetTerminal,
+                                                                                   node,
+                                                                                   {},
+                                                                                   AI::DecisionStateTerminal::Succeeded}});
+        }
+        REQUIRE(view.dirty);
+        writeLayout(remote);
+        controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Save));
+        REQUIRE(view.conflict);
+        resolve(DecisionExternalAction::Review);
+        REQUIRE(view.externalReview);
+        CHECK(view.externalReview->layoutChanged);
+        CHECK_FALSE(view.externalReview->graphChanged);
+        const auto reviewed = view.externalReview;
+        const auto before = view.revision;
+        SECTION("refuses a newer external edit until reviewed again") {
+            const DecisionNodePlacement newer{node, 32, 38};
+            writeLayout(newer);
+            resolve(DecisionExternalAction::Reload, reviewed);
+            CHECK_FALSE(view.externalReview);
+            CHECK(view.conflict);
+            CHECK(view.revision == before);
+            CHECK(view.dirty);
+            resolve(DecisionExternalAction::Review);
+            REQUIRE(view.externalReview);
+            resolve(DecisionExternalAction::Reload, view.externalReview);
+            CHECK_FALSE(view.conflict);
+            CHECK_FALSE(view.dirty);
+            CHECK_FALSE(view.canUndo);
+            CHECK(*view.layout == DecisionGraphLayout{newer});
+        }
+        SECTION("merges a semantic edit with an external layout and refuses overlapping placements") {
+            resolve(DecisionExternalAction::Merge, reviewed);
+            if (bothMoved) {
+                REQUIRE(view.diagnostic);
+                CHECK(view.diagnostic->code.Value() == DecisionExternalErrors::Overlap.code.Value());
+                CHECK(view.revision == before);
+                CHECK(*view.layout == DecisionGraphLayout{local});
+                resolve(DecisionExternalAction::KeepDraft, reviewed);
+                CHECK(*view.layout == DecisionGraphLayout{local});
+            } else {
+                CHECK(*view.layout == DecisionGraphLayout{remote});
+                CHECK(std::get<AI::StateMachineAssetDescriptor>(view.graph->body).states.front().terminal ==
+                      AI::DecisionStateTerminal::Succeeded);
+            }
+            CHECK_FALSE(view.diagnostic);
+            CHECK_FALSE(view.conflict);
+            CHECK(view.dirty);
+            CHECK_FALSE(view.canUndo);
+            CHECK(view.revision == before + 1);
+            const auto unchanged = CaptureDecisionLayout(project.root, source, view.asset, view.graph->asset);
+            REQUIRE(unchanged.HasValue());
+            CHECK(unchanged.Value().layout == DecisionGraphLayout{remote});
+            controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Save));
+            CHECK_FALSE(view.diagnostic);
+            CHECK_FALSE(view.dirty);
+        }
+    }
+
+    SECTION("three-way source merge combines independent states and rejects a competing state edit") {
+        controller.ProcessCommand(*command);
+        REQUIRE(controller.ViewModel().decisionGraphDocuments.size() == 1);
+        const auto &view = controller.ViewModel().decisionGraphDocuments.front();
+        const auto initial = std::get<AI::StateMachineAssetDescriptor>(view.graph->body).initial;
+        const auto edit = [&](StateMachineEditOperation operation, AI::DecisionNodeId node, AI::DecisionStateTerminal terminal) {
+            controller.ProcessCommand(
+                {.command = EditorWorkspaceViewCommand::EditDecisionStateMachine,
+                 .stateMachineEdit = StateMachineEditRequest{view.identity.instance, view.revision, operation, node, {}, terminal}});
+            REQUIRE_FALSE(view.diagnostic);
+        };
+        edit(StateMachineEditOperation::SetTerminal, initial, AI::DecisionStateTerminal::None);
+        edit(StateMachineEditOperation::AddState, initial, AI::DecisionStateTerminal::Failed);
+        controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Save));
+        REQUIRE_FALSE(view.dirty);
+
+        auto external = *view.graph;
+        auto &remote = std::get<AI::StateMachineAssetDescriptor>(external.body);
+        REQUIRE(remote.states.size() == 2);
+        REQUIRE(remote.transitions.size() == 1);
+        const auto edited = remote.states.back().id;
+        const auto added = AI::DecisionNodeId::Create(remote.transitions.back().id.Value() + 1).Value();
+        const auto addedTransition = AI::DecisionNodeId::Create(added.Value() + 1).Value();
+        const bool overlaps = GENERATE(false, true);
+        if (overlaps) {
+            remote.states.back().terminal = AI::DecisionStateTerminal::None;
+        } else {
+            remote.states.push_back({.id = added, .terminal = AI::DecisionStateTerminal::Failed, .source = external.location});
+            remote.transitions.push_back({.id = addedTransition, .source = initial, .target = added, .location = external.location});
+        }
+        const auto bytes = AI::DecisionPlanCodec::EncodeSource(std::span{&external, 1}, external.asset);
+        REQUIRE(bytes.HasValue());
+
+        edit(StateMachineEditOperation::SetTerminal, edited, AI::DecisionStateTerminal::Succeeded);
+        REQUIRE(view.dirty);
+        const auto source = project.root / path;
+        {
+            std::ofstream file(source, std::ios::binary | std::ios::trunc);
+            file.write(reinterpret_cast<const char *>(bytes.Value().data()), static_cast<std::streamsize>(bytes.Value().size()));
+            REQUIRE(static_cast<bool>(file));
+        }
+        controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Save));
+        REQUIRE(view.conflict);
+        const auto resolve = [&](DecisionExternalAction action, std::optional<DecisionExternalReview> reviewed = std::nullopt) {
+            controller.ProcessCommand({
+                .command = EditorWorkspaceViewCommand::ResolveDecisionExternalChange,
+                .decisionExternal = DecisionExternalRequest{{view.identity.instance, view.revision}, action, reviewed},
+            });
+        };
+        resolve(DecisionExternalAction::Review);
+        REQUIRE(view.externalReview);
+        REQUIRE(view.externalReview->graphChanged);
+        const auto revision = view.revision;
+        resolve(DecisionExternalAction::Merge, view.externalReview);
+        const auto &merged = std::get<AI::StateMachineAssetDescriptor>(view.graph->body);
+        const auto editedState = std::ranges::find(merged.states, edited, &AI::StateMachineState::id);
+        REQUIRE(editedState != merged.states.end());
+        REQUIRE(editedState->terminal == AI::DecisionStateTerminal::Succeeded);
+        if (overlaps) {
+            CHECK(view.conflict);
+            REQUIRE(view.diagnostic);
+            CHECK(view.diagnostic->code.Value() == DecisionExternalErrors::Overlap.code.Value());
+            CHECK(view.revision == revision);
+            CHECK(merged.states.size() == 2);
+            CHECK(merged.transitions.size() == 1);
+        } else {
+            CHECK_FALSE(view.conflict);
+            CHECK_FALSE(view.diagnostic);
+            CHECK_FALSE(view.canUndo);
+            CHECK(view.dirty);
+            REQUIRE(merged.states.size() == 3);
+            REQUIRE(merged.transitions.size() == 2);
+            CHECK(merged.states.back().id == added);
+            CHECK(merged.transitions.back().id == addedTransition);
+        }
+        const auto disk = Assets::CaptureAssetSource(project.root, source, AI::DecisionCodecLimits{}.maximumBytes);
+        REQUIRE(disk.HasValue());
+        CHECK(disk.Value().identity.digest == ComputeSha256(std::as_bytes(std::span{bytes.Value()})));
+    }
+
+    SECTION("tracked save receipts distinguish layout refusal from uncertain committed replacement") {
         controller.ProcessCommand(*command);
         REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
         REQUIRE(controller.ViewModel().decisionGraphDocuments.size() == 1);
@@ -1409,10 +1824,9 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
         files.graph = project.root / path;
         files.layout = DecisionLayoutPath(files.graph);
         ProjectMutationCoordinator mutations{files};
-        EditorWorkspaceController faulted(project.root, project.runtime, project.registry.Snapshot(),
-                                          {.assets = {.mutableAssetRegistry = &project.registry},
-                                           .mutations = &mutations,
-                                           .durableFiles = &files});
+        const auto faultedOwner =
+            makeController({.assets = {.mutableAssetRegistry = &project.registry}, .mutations = &mutations, .durableFiles = &files});
+        auto &faulted = *faultedOwner;
         faulted.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
                                 .sourceOpenRequest = SourceOpenRequest{.path = path, .origin = SourceOpenOrigin::AssetActivation}});
         REQUIRE(faulted.ViewModel().decisionGraphDocuments.size() == 1);
@@ -1446,8 +1860,126 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
         REQUIRE(view.dirty);
         const auto positions = view.layout;
 
-        SECTION("precommit layout refusal is retryable without replacing the accepted graph again") {
+        SECTION("reopening rolls back a graph replacement interrupted before the layout commit point") {
+            files.failure = DecisionSaveFaultFiles::Failure::AfterGraphReplace;
+            save();
+            REQUIRE(view.diagnostic);
+            CHECK(view.diagnostic->code.Value() == Assets::AssetSourceErrors::DurabilityUnconfirmed.code.Value());
+            CHECK(view.dirty);
+            CHECK(files.graphWrites == 1);
+            CHECK(files.layoutWrites == 0);
+            CHECK_FALSE(std::filesystem::exists(files.layout));
+            const auto interrupted = Assets::CaptureAssetSource(project.root, files.graph, AI::DecisionCodecLimits{}.maximumBytes);
+            REQUIRE(interrupted.HasValue());
+            REQUIRE(interrupted.Value().identity.digest != original);
+
+            files.failure = DecisionSaveFaultFiles::Failure::None;
+            const auto reopenedOwner = makeController({.mutations = &mutations, .durableFiles = &files});
+            auto &reopened = *reopenedOwner;
+            reopened.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                                     .sourceOpenRequest = SourceOpenRequest{.path = path, .origin = SourceOpenOrigin::AssetActivation}});
+            REQUIRE(reopened.ViewModel().decisionGraphDocuments.size() == 1);
+            const auto &restored = reopened.ViewModel().decisionGraphDocuments.front();
+            CHECK(restored.source == original);
+            CHECK(restored.layout->empty());
+            CHECK_FALSE(restored.dirty);
+            CHECK_FALSE(restored.canUndo);
+            CHECK(files.graphWrites == 2);
+            CHECK(files.layoutWrites == 0);
+            return;
+        }
+        SECTION("explicit acceptance fences the reviewed disk pair and never writes external files") {
+            files.failure = DecisionSaveFaultFiles::Failure::AfterGraphReplace;
+            save();
+            REQUIRE(view.diagnostic);
+            REQUIRE(files.graphWrites == 1);
+            REQUIRE(files.layoutWrites == 0);
+            files.failure = DecisionSaveFaultFiles::Failure::None;
+
+            auto externalGraph = *view.graph;
+            auto &machine = std::get<AI::StateMachineAssetDescriptor>(externalGraph.body);
+            machine.states.front().terminal = AI::DecisionStateTerminal::None;
+            const auto bytes = AI::DecisionPlanCodec::EncodeSource(std::span{&externalGraph, 1}, externalGraph.asset);
+            REQUIRE(bytes.HasValue());
+            {
+                std::ofstream external(files.graph, std::ios::binary | std::ios::trunc);
+                external.write(reinterpret_cast<const char *>(bytes.Value().data()), static_cast<std::streamsize>(bytes.Value().size()));
+                REQUIRE(external.good());
+            }
+            const auto thirdGraph = Assets::CaptureAssetSource(project.root, files.graph, AI::DecisionCodecLimits{}.maximumBytes);
+            REQUIRE(thirdGraph.HasValue());
+            REQUIRE(thirdGraph.Value().identity.digest != original);
+
+            const EditorWorkspaceViewCommandData open{.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                                                      .sourceOpenRequest =
+                                                          SourceOpenRequest{.path = path, .origin = SourceOpenOrigin::AssetActivation}};
+            const auto reopenedOwner = makeController({.mutations = &mutations, .durableFiles = &files});
+            auto &reopened = *reopenedOwner;
+            reopened.ProcessCommand(open);
+            REQUIRE(reopened.ViewModel().decisionGraphDocuments.size() == 1);
+            const auto &disk = reopened.ViewModel().decisionGraphDocuments.front();
+            REQUIRE(disk.interruptedSave);
+            REQUIRE(disk.conflict);
+            const auto resolve = [&](DecisionExternalAction action, std::optional<DecisionExternalReview> review = std::nullopt) {
+                reopened.ProcessCommand({
+                    .command = EditorWorkspaceViewCommand::ResolveDecisionExternalChange,
+                    .decisionExternal = DecisionExternalRequest{{disk.identity.instance, disk.revision}, action, review},
+                });
+            };
+            const auto pending = ReadDecisionSaveJournalIdentity(project.root, disk.asset);
+            REQUIRE(pending.HasValue());
+            REQUIRE(pending.Value());
+            resolve(DecisionExternalAction::Review);
+            REQUIRE(disk.externalReview);
+
+            const DecisionGraphLayout externalLayout{{initial, 75, 90}};
+            const auto layoutBytes = EncodeDecisionLayout(externalLayout, disk.asset, disk.graph->asset);
+            REQUIRE(layoutBytes.HasValue());
+            {
+                std::ofstream external(files.layout, std::ios::binary);
+                external.write(reinterpret_cast<const char *>(layoutBytes.Value().data()),
+                               static_cast<std::streamsize>(layoutBytes.Value().size()));
+                REQUIRE(external.good());
+            }
+            resolve(DecisionExternalAction::AcceptDiskPair, disk.externalReview);
+            REQUIRE(disk.diagnostic);
+            CHECK(disk.interruptedSave == pending.Value());
+            CHECK_FALSE(disk.externalReview);
+            const auto unchanged = ReadDecisionSaveJournalIdentity(project.root, disk.asset);
+            REQUIRE(unchanged.HasValue());
+            CHECK(unchanged.Value() == pending.Value());
+
+            resolve(DecisionExternalAction::Review);
+            REQUIRE(disk.externalReview);
+            REQUIRE(disk.externalReview->layoutChanged);
+            resolve(DecisionExternalAction::AcceptDiskPair, disk.externalReview);
+            CHECK_FALSE(disk.diagnostic);
+            CHECK_FALSE(disk.interruptedSave);
+            CHECK(disk.conflict);
+            const auto retired = ReadDecisionSaveJournalIdentity(project.root, disk.asset);
+            REQUIRE(retired.HasValue());
+            CHECK_FALSE(retired.Value());
+            const auto preserved = CaptureDecisionLayout(project.root, files.graph, disk.asset, disk.graph->asset);
+            REQUIRE(preserved.HasValue());
+            CHECK(preserved.Value().layout == externalLayout);
+            CHECK(files.graphWrites == 1);
+            CHECK(files.layoutWrites == 0);
+            resolve(DecisionExternalAction::Review);
+            REQUIRE(disk.externalReview);
+            resolve(DecisionExternalAction::Reload, disk.externalReview);
+            CHECK_FALSE(disk.conflict);
+            CHECK_FALSE(disk.dirty);
+            CHECK_FALSE(disk.canUndo);
+            CHECK(*disk.layout == externalLayout);
+            CHECK(disk.source == thirdGraph.Value().identity.digest);
+            return;
+        }
+        SECTION("precommit layout refusal restores the graph and leaves both changes retryable") {
             files.failure = DecisionSaveFaultFiles::Failure::BeforeLayoutReplace;
+        }
+        SECTION("compensation preserves an intervening nonparticipating graph writer") {
+            files.failure = DecisionSaveFaultFiles::Failure::BeforeLayoutReplace;
+            files.foreignGraphBytes = "external writer kept its exact bytes";
         }
         SECTION("a committed layout with unconfirmed durability keeps its error and requires reconciliation") {
             files.failure = DecisionSaveFaultFiles::Failure::AfterLayoutReplace;
@@ -1459,7 +1991,8 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
         const auto layoutLock = Assets::AssetSourcePublicationLockPath(project.root, files.layout);
         REQUIRE(sourceLock.HasValue());
         REQUIRE(layoutLock.HasValue());
-        REQUIRE(files.leases.size() == 3);
+        const bool rolledBack = !committed && !files.foreignGraphBytes;
+        REQUIRE(files.leases.size() == (rolledBack ? 5 : 4));
         CHECK(files.leases[0] == project.root / ".horo/local/project-mutation.lock");
         CHECK(files.leases[1] == sourceLock.Value());
         CHECK(files.leases[2] == layoutLock.Value());
@@ -1467,27 +2000,54 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
         const auto &expected = committed ? Assets::AssetSourceErrors::DurabilityUnconfirmed : Assets::AssetSourceErrors::ReadFailed;
         CHECK(view.diagnostic->code.Value() == expected.code.Value());
         CHECK(view.diagnostic->message == (committed ? DecisionSaveFaultFiles::AfterMessage : DecisionSaveFaultFiles::BeforeMessage));
-        CHECK(view.conflict == committed);
+        CHECK(view.conflict == (committed || files.foreignGraphBytes.has_value()));
         CHECK(view.dirty);
         CHECK(faulted.HasDirtySourceDocuments());
         CHECK(view.layout == positions);
-        CHECK(files.graphWrites == 1);
         CHECK(files.layoutWrites == 1);
         const auto graph = Assets::CaptureAssetSource(project.root, files.graph, AI::DecisionCodecLimits{}.maximumBytes);
         REQUIRE(graph.HasValue());
+        if (files.foreignGraphBytes) {
+            CHECK(files.graphWrites == 1);
+            const auto &bytes = graph.Value().bytes;
+            CHECK(std::string_view(reinterpret_cast<const char *>(bytes.data()), bytes.size()) == *files.foreignGraphBytes);
+            CHECK(view.source == original);
+            REQUIRE(view.diagnostic->cause);
+            CHECK(view.diagnostic->cause.Get()->code.Value() == Assets::AssetSourceErrors::Conflict.code.Value());
+            files.failure = DecisionSaveFaultFiles::Failure::None;
+            const auto reopenedOwner = makeController({.mutations = &mutations, .durableFiles = &files});
+            auto &reopened = *reopenedOwner;
+            reopened.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                                     .sourceOpenRequest = SourceOpenRequest{.path = path, .origin = SourceOpenOrigin::AssetActivation}});
+            CHECK(reopened.ViewModel().decisionGraphDocuments.empty());
+            CHECK(reopened.ViewModel().contentBrowserOperationError == "workspace.decision_graph.reconciliation_required");
+            CHECK(files.graphWrites == 1);
+            return;
+        }
+        CHECK(files.graphWrites == (committed ? 1 : 2));
         CHECK(graph.Value().identity.digest == view.source);
-        CHECK(view.source != original);
+        CHECK((view.source != original) == committed);
         CHECK(std::filesystem::exists(files.layout) == committed);
 
         files.failure = DecisionSaveFaultFiles::Failure::None;
         save();
-        CHECK(files.graphWrites == 1);
+        CHECK(files.graphWrites == (committed ? 1 : 3));
         if (committed) {
             REQUIRE(view.diagnostic.has_value());
             CHECK(view.diagnostic->code.Value() == Assets::AssetSourceErrors::Conflict.code.Value());
             CHECK(view.conflict);
             CHECK(view.dirty);
             CHECK(files.layoutWrites == 1);
+            const auto reopenedOwner = makeController({.mutations = &mutations, .durableFiles = &files});
+            auto &reopened = *reopenedOwner;
+            reopened.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                                     .sourceOpenRequest = SourceOpenRequest{.path = path, .origin = SourceOpenOrigin::AssetActivation}});
+            REQUIRE(reopened.ViewModel().decisionGraphDocuments.size() == 1);
+            const auto &accepted = reopened.ViewModel().decisionGraphDocuments.front();
+            CHECK(accepted.source == view.source);
+            CHECK(*accepted.layout == *positions);
+            CHECK_FALSE(accepted.dirty);
+            CHECK(files.graphWrites == 1);
         } else {
             CHECK_FALSE(view.diagnostic.has_value());
             CHECK_FALSE(view.conflict);

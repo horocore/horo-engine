@@ -276,6 +276,7 @@ namespace Horo::Editor {
         EditDecisionBehaviorTree,
         EditDecisionUtilityGraph,
         EditDecisionLayout,
+        ResolveDecisionExternalChange,
         OpenDecisionDiagnosticKey,
         ReloadExternalDecisionGraph,
         MergeExternalDecisionGraph,
@@ -617,6 +618,35 @@ namespace Horo::Editor {
         std::optional<DecisionTaskSelection> task;
     };
 
+    /** @brief Explicit choices for the reviewed Decision source pair. */
+    enum class DecisionExternalAction : std::uint8_t {
+        Review,
+        Reload,
+        Merge,
+        KeepDraft,
+        AcceptDiskPair
+    };
+
+    namespace DecisionExternalErrors {
+        extern const ErrorCodeDescriptor Overlap;
+    }
+
+    struct DecisionExternalReview final {
+        Assets::AssetSourceIdentity source;
+        Assets::AssetSourceIdentity layout;
+        std::uint64_t revision{};
+        bool graphChanged{};
+        bool layoutChanged{};
+        std::optional<Assets::AssetSourceIdentity> interruptedSave;
+        bool operator==(const DecisionExternalReview &) const = default;
+    };
+
+    struct DecisionExternalRequest final {
+        DecisionGraphDocumentFence fence;
+        DecisionExternalAction action{DecisionExternalAction::Review};
+        std::optional<DecisionExternalReview> reviewed;
+    };
+
     /** @brief Immutable authored source projection independently of runtime graphs. */
     struct DecisionGraphWorkspaceDocument final {
         DocumentIdentity identity;
@@ -637,6 +667,8 @@ namespace Horo::Editor {
         std::shared_ptr<const AI::DecisionAssetValidationReport> validation; /**< Typed targets from the last failed validation. */
         bool conflict{};
         std::shared_ptr<const DocumentRecoveryRecord> recovery;
+        std::optional<DecisionExternalReview> externalReview;
+        std::optional<Assets::AssetSourceIdentity> interruptedSave;
     };
 
     /** @brief Confirmed first Blackboard asset and an explicitly authored initial key. */
@@ -789,6 +821,7 @@ namespace Horo::Editor {
         std::optional<BehaviorTreeEditRequest> behaviorTreeEdit = std::nullopt;
         std::optional<UtilityGraphEditRequest> utilityGraphEdit = std::nullopt;
         std::optional<DecisionGraphLayoutRequest> decisionLayoutEdit = std::nullopt;
+        std::optional<DecisionExternalRequest> decisionExternal;
         std::optional<DecisionDiagnosticKeyRequest> decisionDiagnosticKey;
         std::optional<DecisionGraphDocumentFence> decisionGraphFence;
         std::shared_ptr<const DocumentRecoveryRecord> decisionGraphRecovery;

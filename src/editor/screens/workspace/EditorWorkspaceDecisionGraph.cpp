@@ -1,13 +1,14 @@
 #include "AuthoredAiSourceInventory.h"
 #include "DecisionGraphCanvasModel.h"
+#include "DecisionSaveJournal.h"
 #include "DecisionTreeSubtreeCatalog.h"
 #include "EnvironmentQueryWorkspaceSource.h"
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Application/ProjectAssetImportCommitter.h"
-#include "Horo/Editor/DocumentRecoveryService.h"
 #include "Horo/Foundation/BuildOutputStore.h"
+#include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/PathUtils.h"
 #include "UtilityGraphAuthoring.h"
 #include "WorkspacePathText.h"
@@ -25,6 +26,7 @@
 #include <set>
 #include <tuple>
 #include <type_traits>
+#include <utility>
 
 namespace Horo::Editor {
     /** @copydoc CanEditStateMachineTopology */
@@ -1003,6 +1005,40 @@ namespace Horo::Editor {
             std::vector<std::byte> bytes;
         };
 
+        struct DecisionOpenAdmission final {
+            std::optional<ProjectMutationLease> lease;
+            std::optional<Assets::AssetSourceIdentity> interruptedSave;
+        };
+
+        Result<DecisionOpenAdmission> AdmitDecisionOpen(const std::filesystem::path &root, const DecisionSaveJournalKey &key,
+                                                        const Assets::AssetRegistrySnapshot &registry,
+                                                        const ProjectMutationCoordinator *mutations, DurableFileSystem *files) {
+            using Admitted = Result<DecisionOpenAdmission>;
+            if (!mutations || !files) {
+                const auto pending = AdmitDecisionSaveJournal(root, key.asset);
+                return pending.HasError() ? Admitted::Failure(pending.ErrorValue()) : Admitted::Success({});
+            }
+            auto lease = mutations->TryAcquire({root, ProjectMutationOwner::Asset, "decision-source-open"});
+            if (lease.HasError())
+                return Admitted::Failure(lease.ErrorValue());
+            const auto journal = ReadDecisionSaveJournalIdentity(root, key.asset);
+            if (journal.HasError())
+                return Admitted::Failure(journal.ErrorValue());
+            if (!journal.Value())
+                return Admitted::Success({std::move(lease).Value(), {}});
+            const auto registered = CaptureGraphInput(root, registry, key.asset, AI::DecisionCodecLimits{}.maximumBytes);
+            if (registered.HasError())
+                return Admitted::Failure(registered.ErrorValue());
+            if (const auto verified = registered.Value().VerifyUnchanged(); verified.HasError())
+                return Admitted::Failure(verified.ErrorValue());
+            const auto recovered = RecoverDecisionSaveJournal(root, key, *files);
+            if (recovered.HasValue())
+                return Admitted::Success({std::move(lease).Value(), {}});
+            if (recovered.ErrorValue().code.Value() != Assets::AssetSourceErrors::Conflict.code.Value())
+                return Admitted::Failure(recovered.ErrorValue());
+            return Admitted::Success({std::move(lease).Value(), journal.Value()});
+        }
+
         /** @brief Acquires one resolved destination lock beneath the caller's Project mutation lease. */
         Result<DecisionSaveDestination> AcquireDecisionSaveDestination(const std::filesystem::path &root, std::filesystem::path path,
                                                                        const Assets::AssetSourceIdentity &accepted,
@@ -1067,13 +1103,10 @@ namespace Horo::Editor {
             return Prepared::Success({std::move(destination).Value(), std::move(encoded).Value()});
         }
 
-        /** @brief Converts tracked replacement to an accepted identity only when durability was confirmed. */
-        Result<Assets::AssetSourceIdentity> PublishDecisionDestination(const std::filesystem::path &root,
-                                                                       const DecisionSaveDestination &target,
-                                                                       std::span<const std::byte> bytes, DurableFileSystem &files,
-                                                                       bool &conflict) {
+        /** @brief Converts a tracked replacement to an identity only when durability is confirmed. */
+        Result<Assets::AssetSourceIdentity> RequireDurableDecisionWrite(Result<Assets::AssetSourcePublication> publication,
+                                                                        bool &conflict) {
             using Durable = Result<Assets::AssetSourceIdentity>;
-            auto publication = Assets::PublishAssetSource(root, target.path, target.accepted, bytes, target.lease, files);
             if (publication.HasError())
                 return Durable::Failure(std::move(publication).ErrorValue());
             auto receipt = std::move(publication).Value();
@@ -1082,6 +1115,84 @@ namespace Horo::Editor {
             conflict = true;
             return Durable::Failure(receipt.durabilityError ? std::move(*receipt.durabilityError)
                                                             : MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed));
+        }
+
+        /** @brief Restores only this attempt's exact graph bytes after a layout failure before replacement. */
+        Result<void> RestoreDecisionGraphWrite(const std::filesystem::path &root, const DecisionSaveSource &source,
+                                               const Assets::AssetSourceIdentity &written, DurableFileSystem &files, bool &conflict) {
+            const auto &target = source.destination;
+            auto restored =
+                RequireDurableDecisionWrite(Assets::PublishAssetSource(root, target.path, written,
+                                                                       std::as_bytes(std::span{source.inputs.Sources().front().bytes}),
+                                                                       target.lease, files),
+                                            conflict);
+            if (restored.HasError()) {
+                conflict = true;
+                return Result<void>::Failure(std::move(restored).ErrorValue());
+            }
+            return Result<void>::Success();
+        }
+
+        struct DecisionPairWrite final {
+            std::optional<Assets::AssetSourceIdentity> graph;
+            std::optional<Assets::AssetSourceIdentity> journal;
+        };
+
+        void RetireDecisionWriteJournal(const std::filesystem::path &root, const DecisionSaveSource &source, const DecisionPairWrite &write,
+                                        DurableFileSystem &files) {
+            if (!write.journal)
+                return;
+            const auto asset = source.inputs.Sources().front().record.id;
+            if (const auto cleared = ClearDecisionSaveJournal(root, asset, *write.journal, files); cleared.HasError())
+                LOG_ERROR("editor.decision_save", "Could not retire Decision save journal: %s", cleared.ErrorValue().message.c_str());
+        }
+
+        Result<DecisionPairWrite> PublishDecisionGraph(const std::filesystem::path &root, const DecisionSaveJournalKey &key,
+                                                       const DecisionSaveSource &source, const PreparedDecisionLayoutSave *layout,
+                                                       std::span<const std::byte> graphBytes, DurableFileSystem &files, bool &conflict) {
+            using Written = Result<DecisionPairWrite>;
+            DecisionPairWrite write;
+            if (layout) {
+                auto prepared = PrepareDecisionSaveJournal(root, key, std::as_bytes(std::span{source.inputs.Sources().front().bytes}),
+                                                           graphBytes, layout->destination.accepted, layout->bytes, files);
+                if (prepared.HasError())
+                    return Written::Failure(prepared.ErrorValue());
+                write.journal = prepared.Value();
+            }
+            if (const auto verified = source.inputs.VerifyUnchanged(); verified.HasError()) {
+                RetireDecisionWriteJournal(root, source, write, files);
+                return Written::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+            }
+            const auto &target = source.destination;
+            auto published = Assets::PublishAssetSource(root, target.path, target.accepted, graphBytes, target.lease, files);
+            if (published.HasError())
+                RetireDecisionWriteJournal(root, source, write, files);
+            auto durable = RequireDurableDecisionWrite(std::move(published), conflict);
+            if (durable.HasError())
+                return Written::Failure(durable.ErrorValue());
+            write.graph = durable.Value();
+            return Written::Success(std::move(write));
+        }
+
+        /** @brief Publishes layout and compensates an already accepted graph write only if layout replacement did not occur. */
+        Result<Assets::AssetSourceIdentity> PublishDecisionLayout(const std::filesystem::path &root,
+                                                                  const PreparedDecisionLayoutSave &layout,
+                                                                  const DecisionSaveSource &source, DecisionPairWrite &write,
+                                                                  DurableFileSystem &files, bool &conflict) {
+            const auto &target = layout.destination;
+            auto publication = Assets::PublishAssetSource(root, target.path, target.accepted, layout.bytes, target.lease, files);
+            if (write.graph && publication.HasError()) {
+                const auto owned = std::exchange(write.graph, std::nullopt);
+                auto restored = RestoreDecisionGraphWrite(root, source, *owned, files, conflict);
+                if (restored.HasError())
+                    return Result<Assets::AssetSourceIdentity>::Failure(
+                        WithCause(std::move(publication).ErrorValue(), std::move(restored).ErrorValue()));
+                RetireDecisionWriteJournal(root, source, write, files);
+            }
+            auto durable = RequireDurableDecisionWrite(std::move(publication), conflict);
+            if (durable.HasValue())
+                RetireDecisionWriteJournal(root, source, write, files);
+            return durable;
         }
 
     }  // namespace
@@ -1242,6 +1353,18 @@ namespace Horo::Editor {
             fail("workspace.decision_graph.limit");
             return;
         }
+
+        const auto admitted =
+            AdmitDecisionOpen(ProjectRoot(), {record->id, opened.identity.key.source.Value(), result.location.absolutePath},
+                              m_assetRegistry, m_mutations, m_durableFiles);
+        if (admitted.HasError()) {
+            if (existing != documents.end()) {
+                existing->conflict = true;
+                existing->diagnostic = admitted.ErrorValue();
+            }
+            fail("workspace.decision_graph.reconciliation_required");
+            return;
+        }
         const auto captured = CaptureGraphInput(ProjectRoot(), m_assetRegistry, record->id, AI::DecisionCodecLimits{}.maximumBytes);
         if (captured.HasError()) {
             fail("workspace.decision_graph.invalid");
@@ -1249,9 +1372,33 @@ namespace Horo::Editor {
         }
         const auto &source = captured.Value().Sources().front();
         auto &host = m_viewModel.workspacePanelHost;
+        const auto &interrupted = admitted.Value().interruptedSave;
+        if (existing != documents.end() && existing->identity == opened.identity) {
+            if (existing->interruptedSave != interrupted)
+                existing->externalReview.reset();
+            existing->interruptedSave = interrupted;
+            if (interrupted) {
+                existing->conflict = true;
+                existing->diagnostic = MakeError(Assets::AssetSourceErrors::Conflict);
+                existing->validation.reset();
+                static_cast<void>(host.FocusDocument(existing->identity.instance));
+                return;
+            }
+        }
+        const auto layoutIsCurrent = [&]() -> Result<bool> {
+            const auto observed = CaptureDecisionLayout(ProjectRoot(), result.location.absolutePath, record->id, existing->graph->asset);
+            if (observed.HasError())
+                return Result<bool>::Failure(observed.ErrorValue());
+            const auto draft = m_decisionGraphDrafts.find(existing->identity.instance);
+            return Result<bool>::Success(draft == m_decisionGraphDrafts.end() ? observed.Value().layout == *existing->layout
+                                                                              : observed.Value().accepted == draft->second.acceptedLayout);
+        };
         if (!reloadExternal && existing != documents.end() &&
             (existing->dirty || HasPendingBlackboardReferenceEdit(existing->identity.instance))) {
-            if (existing->identity != opened.identity || existing->source != source.sourceDigest) {
+            const auto layout = existing->identity == opened.identity && existing->source == source.sourceDigest
+                                    ? layoutIsCurrent()
+                                    : Result<bool>::Success(false);
+            if (layout.HasError() || !layout.Value()) {
                 existing->conflict = true;
                 existing->diagnostic = MakeError(Assets::AssetSourceErrors::Conflict);
                 existing->validation.reset();
@@ -1266,12 +1413,24 @@ namespace Horo::Editor {
         if (!reloadExternal && existing != documents.end() && existing->identity == opened.identity && existing->asset == record->id &&
             existing->source == source.sourceDigest &&
             (existing->editable || !m_gameplayRegistry || !NeedsDecisionTaskProviders(*existing->graph))) {
-            static_cast<void>(host.FocusDocument(opened.identity.instance));
-            return;
+            const auto layout = layoutIsCurrent();
+            if (layout.HasError()) {
+                existing->conflict = true;
+                existing->diagnostic = layout.ErrorValue();
+                existing->validation.reset();
+            } else if (layout.Value() && existing->conflict) {
+                existing->conflict = false;
+                existing->diagnostic.reset();
+            }
+            if (layout.HasError() || layout.Value()) {
+                InspectDecisionRecovery(*existing);
+                static_cast<void>(host.FocusDocument(opened.identity.instance));
+                return;
+            }
         }
         auto graph = Application::DecodeRegisteredDecisionGraphSource(source);
         if (graph.HasError() || captured.Value().VerifyUnchanged().HasError()) {
-            fail("workspace.decision_graph.invalid");
+            fail(interrupted ? "workspace.decision_graph.reconciliation_required" : "workspace.decision_graph.invalid");
             return;
         }
         if (existing != documents.end() && existing->revision == std::numeric_limits<std::uint64_t>::max()) {
@@ -1310,9 +1469,12 @@ namespace Horo::Editor {
                                                         .acceptedBytes = source.bytes.size(),
                                                         .acceptedLayout =
                                                             metadata.HasValue() ? metadata.Value().accepted : Assets::AssetSourceIdentity{},
+                                                        .savedGraph = candidate.graph,
                                                         .savedLayout = candidate.layout});
             }
         }
+        candidate.interruptedSave = interrupted;
+        candidate.conflict = interrupted.has_value();
         candidate.editable = !prepared.empty();
         candidate.layoutWritable = candidate.editable && candidate.layoutWritable && !IsProviderPropertyMachine(*candidate.graph);
         candidate.revision = existing == documents.end() ? 1 : existing->revision + 1;
@@ -1322,7 +1484,7 @@ namespace Horo::Editor {
         }
         if (existing != documents.end()) {
             if (const auto prior = m_decisionGraphDrafts.find(existing->identity.instance); prior != m_decisionGraphDrafts.end()) {
-                if (auto cleared = ClearDecisionGraphRecovery(*existing, prior->second); cleared.HasError()) {
+                if (auto cleared = DiscardOwnedDecisionRecovery(*existing, prior->second); cleared.HasError()) {
                     fail("workspace.source_open.unavailable");
                     return;
                 }
@@ -1341,11 +1503,11 @@ namespace Horo::Editor {
             *existing = std::move(candidate);
         }
         static_cast<void>(host.SetDocumentDirty(existing->identity.instance, false));
-        InspectDecisionGraphRecovery(*existing);
         if (reloadExternal)
             m_viewModel.contentBrowserOperationError.clear();
         if (existing->diagnostic)
             PublishDecisionGraphDiagnostics(*existing->diagnostic);
+        InspectDecisionRecovery(*existing);
     }
 
     /** @copydoc EditorWorkspaceController::CloseDecisionGraphSource */
@@ -1360,12 +1522,10 @@ namespace Horo::Editor {
             opened->diagnostic = MakeError(BlackboardDocumentErrors::ReferenceResolutionRequired);
             return true;
         }
-        if (!opened->dirty) {
-            if (const auto draft = m_decisionGraphDrafts.find(instance); draft != m_decisionGraphDrafts.end()) {
-                if (auto cleared = ClearDecisionGraphRecovery(*opened, draft->second); cleared.HasError()) {
-                    opened->diagnostic = cleared.ErrorValue();
-                    return true;
-                }
+        if (const auto draft = m_decisionGraphDrafts.find(instance); draft != m_decisionGraphDrafts.end() && !opened->dirty) {
+            if (const auto discarded = DiscardOwnedDecisionRecovery(*opened, draft->second); discarded.HasError()) {
+                opened->diagnostic = discarded.ErrorValue();
+                return true;
             }
         }
         if (const auto closed = m_viewModel.workspacePanelHost.CloseDocument(instance); closed.HasValue()) {
@@ -1404,8 +1564,8 @@ namespace Horo::Editor {
                 return Closed::Failure(saved.ErrorValue());
             }
         }
-        if (auto cleared = ClearDecisionGraphRecovery(*document, draft->second); cleared.HasError())
-            return Closed::Failure(cleared.ErrorValue());
+        if (const auto discarded = DiscardOwnedDecisionRecovery(*document, draft->second); discarded.HasError())
+            return Closed::Failure(discarded.ErrorValue());
         const auto closed = m_viewModel.workspacePanelHost.CloseDocument(fence.instance, WorkspaceDocumentClosePolicy::DiscardChanges);
         if (closed.HasError())
             return Closed::Failure(closed.ErrorValue());
@@ -1461,6 +1621,7 @@ namespace Horo::Editor {
         document.layout = candidate.layout;
         draft.currentDigest = candidate.digest;
         document.validation.reset();
+        document.externalReview.reset();
         ++document.revision;
         return true;
     }
@@ -1471,6 +1632,17 @@ namespace Horo::Editor {
         document.canUndo = draft.history.HasReplay(false);
         document.canRedo = draft.history.HasReplay(true);
         static_cast<void>(m_viewModel.workspacePanelHost.SetDocumentDirty(document.identity.instance, document.dirty));
+    }
+
+    Result<void> EditorWorkspaceController::ValidateDecisionDraftRoot(const AI::DecisionGraphSource &graph,
+                                                                      DecisionGraphWorkspaceDocument &document) const {
+        if (DecisionFamily(graph) != document.family)
+            return Result<void>::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+        const auto providers = AcquireDecisionDraftProviders(graph);
+        if (providers.HasError())
+            return Result<void>::Failure(providers.ErrorValue());
+        const auto registry = m_mutableAssetRegistry ? m_mutableAssetRegistry->Snapshot() : m_assetRegistry;
+        return ValidateDecisionDraft(ProjectRoot(), registry, graph, providers.Value(), document);
     }
 
     /** @copydoc EditorWorkspaceController::AcquireDecisionDraftProviders */
@@ -1721,20 +1893,16 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::SaveDecisionGraphDraft */
     Result<void> EditorWorkspaceController::SaveDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
                                                                    bool saveReferenceParticipant) {
-        JoinDecisionGraphRecovery();
-        auto result = PublishDecisionGraphDraft(document, draft, saveReferenceParticipant);
-        if (result.HasValue()) {
-            if (auto cleared = ClearDecisionGraphRecovery(document, draft); cleared.HasError())
-                PublishDecisionGraphDiagnostics(cleared.ErrorValue());
-        }
-        return result;
-    }
-
-    /** @copydoc EditorWorkspaceController::PublishDecisionGraphDraft */
-    Result<void> EditorWorkspaceController::PublishDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
-                                                                      bool saveReferenceParticipant) {
         if (!saveReferenceParticipant && HasPendingBlackboardReferenceEdit(document.identity.instance))
             return Result<void>::Failure(MakeError(BlackboardDocumentErrors::ReferenceResolutionRequired));
+        JoinDecisionGraphRecovery();
+        auto saved = PublishDecisionGraphDraft(document, draft);
+        if (saved.HasValue())
+            DiscardDecisionRecoveryAfterSave(document, draft);
+        return saved;
+    }
+
+    Result<void> EditorWorkspaceController::PublishDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft) {
         document.validation.reset();
         try {
             using Saved = Result<void>;
@@ -1749,6 +1917,8 @@ namespace Horo::Editor {
             if (project.HasError())
                 return fail(project.ErrorValue());
             const auto registry = m_mutableAssetRegistry ? m_mutableAssetRegistry->Snapshot() : m_assetRegistry;
+            if (const auto admitted = AdmitDecisionSaveJournal(root, document.asset); admitted.HasError())
+                return fail(admitted.ErrorValue());
             const auto source = CaptureDecisionSaveSource(root, registry, document, draft.acceptedBytes, *m_durableFiles);
             if (source.HasError())
                 return fail(source.ErrorValue());
@@ -1761,10 +1931,18 @@ namespace Horo::Editor {
                 if (prepared.HasError())
                     return fail(prepared.ErrorValue());
                 layout.emplace(std::move(prepared).Value());
+            } else {
+                const auto path = DecisionLayoutPath(source.Value().destination.path);
+                const auto observed = Assets::CaptureAssetSource(root, path, MaximumDecisionLayoutBytes);
+                if (observed.HasError())
+                    return fail(observed.ErrorValue());
+                if (observed.Value().identity != draft.acceptedLayout)
+                    return fail(MakeError(Assets::AssetSourceErrors::Conflict));
             }
             const auto verifySource = [&] {
                 return source.Value().inputs.VerifyUnchanged().HasValue();
             };
+            DecisionPairWrite write;
             if (graphChanged) {
                 const auto providers = AcquireDecisionDraftProviders(*document.graph);
                 if (providers.HasError())
@@ -1775,25 +1953,30 @@ namespace Horo::Editor {
                 const auto encoded = AI::DecisionPlanCodec::EncodeSource(std::span{document.graph.get(), 1}, document.graph->asset);
                 if (encoded.HasError())
                     return fail(encoded.ErrorValue());
-                if (!verifySource())
-                    return fail(MakeError(Assets::AssetSourceErrors::Conflict));
-                const auto written = PublishDecisionDestination(root, source.Value().destination, std::as_bytes(std::span{encoded.Value()}),
-                                                                *m_durableFiles, document.conflict);
+                const DecisionSaveJournalKey key{document.asset, document.identity.key.source.Value(), source.Value().destination.path};
+                auto written = PublishDecisionGraph(root, key, source.Value(), layout ? &*layout : nullptr,
+                                                    std::as_bytes(std::span{encoded.Value()}), *m_durableFiles, document.conflict);
                 if (written.HasError())
                     return fail(written.ErrorValue());
-                document.source = written.Value().digest;
-                draft.acceptedBytes = written.Value().bytes;
-                draft.savedDigest = draft.currentDigest;
-                ProjectDecisionGraphDraft(document, draft);
+                write = std::move(written).Value();
             } else if (!verifySource()) {
                 return fail(MakeError(Assets::AssetSourceErrors::Conflict));
             }
-            if (layout) {
-                const auto written =
-                    PublishDecisionDestination(root, layout->destination, layout->bytes, *m_durableFiles, document.conflict);
-                if (written.HasError())
-                    return fail(written.ErrorValue());
-                draft.acceptedLayout = written.Value();
+            std::optional<Result<Assets::AssetSourceIdentity>> layoutWrite;
+            if (layout)
+                layoutWrite.emplace(PublishDecisionLayout(root, *layout, source.Value(), write, *m_durableFiles, document.conflict));
+            if (write.graph) {
+                document.source = write.graph->digest;
+                draft.acceptedBytes = write.graph->bytes;
+                draft.savedDigest = draft.currentDigest;
+                draft.savedGraph = document.graph;
+            }
+            if (layoutWrite) {
+                if (layoutWrite->HasError()) {
+                    ProjectDecisionGraphDraft(document, draft);
+                    return fail(layoutWrite->ErrorValue());
+                }
+                draft.acceptedLayout = layoutWrite->Value();
                 draft.savedLayout = document.layout;
             }
             document.conflict = false;
@@ -1829,178 +2012,6 @@ namespace Horo::Editor {
         OpenEmbeddedDecisionGraphSource(opened.Value(), true);
     }
 
-    /** @copydoc EditorWorkspaceController::ResolveExternalDecisionGraphDraft */
-    Result<void> EditorWorkspaceController::ResolveExternalDecisionGraphDraft(DecisionGraphWorkspaceDocument &document,
-                                                                              DecisionGraphDraft &draft, const bool keepLocal) {
-        using Merged = Result<void>;
-        const auto root = ProjectRoot();
-        const auto registry = m_mutableAssetRegistry ? m_mutableAssetRegistry->Snapshot() : m_assetRegistry;
-        auto captured = CaptureGraphInput(root, registry, document.asset, AI::DecisionCodecLimits{}.maximumBytes);
-        if (captured.HasError())
-            return Merged::Failure(captured.ErrorValue());
-        const auto &source = captured.Value().Sources().front();
-        if (source.record.sourcePath.String() != document.identity.key.source.Value())
-            return Merged::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
-        auto external = Application::DecodeRegisteredDecisionGraphSource(source);
-        if (external.HasError())
-            return Merged::Failure(external.ErrorValue());
-        if (external.Value().asset != document.graph->asset || DecisionFamily(external.Value()) != document.family)
-            return Merged::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
-        const auto bytes = AI::DecisionPlanCodec::EncodeSource(std::span{&external.Value(), 1}, external.Value().asset);
-        if (bytes.HasError())
-            return Merged::Failure(bytes.ErrorValue());
-        const auto diskDigest = ComputeSha256(std::as_bytes(std::span{bytes.Value()}));
-        const bool localGraphChanged = draft.currentDigest != draft.savedDigest;
-        if (!keepLocal && localGraphChanged && diskDigest != draft.savedDigest && diskDigest != draft.currentDigest)
-            return Merged::Failure(MakeError(Assets::AssetSourceErrors::Conflict, "Both versions changed the Decision graph."));
-
-        const auto path = Foundation::Paths::Resolve(root, source.record.sourcePath);
-        auto disk = CaptureDecisionLayout(root, path, document.asset, document.graph->asset);
-        if (disk.HasError())
-            return Merged::Failure(disk.ErrorValue());
-        if (keepLocal && !document.layoutWritable && *document.layout != disk.Value().layout)
-            return Merged::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
-        auto mergedLayout = keepLocal ? Result<DecisionGraphLayout>::Success(*document.layout)
-                                      : MergeDecisionLayouts(*draft.savedLayout, *document.layout, disk.Value().layout);
-        if (mergedLayout.HasError())
-            return Merged::Failure(mergedLayout.ErrorValue());
-        const bool useLocalGraph = keepLocal || localGraphChanged;
-        const auto graph = useLocalGraph ? document.graph : std::make_shared<const AI::DecisionGraphSource>(std::move(external).Value());
-        if (!mergedLayout.Value().empty()) {
-            const auto view = ProjectDecisionCanvas(*graph, {document.identity.instance, document.revision}, document.editable);
-            if (PruneDecisionLayout(mergedLayout.Value(), view) != mergedLayout.Value())
-                return Merged::Failure(
-                    MakeError(Assets::AssetSourceErrors::Conflict, "A merged placement targets a removed Decision node."));
-        }
-        const auto providers = AcquireDecisionDraftProviders(*graph);
-        if (providers.HasError())
-            return Merged::Failure(providers.ErrorValue());
-        if (auto validated = ValidateDecisionDraft(root, registry, *graph, providers.Value(), document); validated.HasError())
-            return validated;
-
-        auto acceptedLayout = std::make_shared<const DecisionGraphLayout>(disk.Value().layout);
-        auto layout = std::make_shared<const DecisionGraphLayout>(std::move(mergedLayout).Value());
-        if (auto unchanged = captured.Value().VerifyUnchanged(); unchanged.HasError())
-            return unchanged;
-        const auto latest = Assets::CaptureAssetSource(root, DecisionLayoutPath(path), MaximumDecisionLayoutBytes);
-        if (latest.HasError())
-            return Merged::Failure(latest.ErrorValue());
-        if (latest.Value().identity != disk.Value().accepted)
-            return Merged::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
-
-        document.graph = graph;
-        document.layout = std::move(layout);
-        document.source = source.sourceDigest;
-        document.conflict = false;
-        document.subtreeReview.reset();
-        document.queryReview.reset();
-        document.validation.reset();
-        ++document.revision;
-        draft.savedDigest = diskDigest;
-        draft.currentDigest = useLocalGraph ? draft.currentDigest : diskDigest;
-        draft.acceptedBytes = source.bytes.size();
-        draft.acceptedLayout = disk.Value().accepted;
-        draft.savedLayout = std::move(acceptedLayout);
-        draft.history = DecisionGraphDocumentHistory{};
-        if (InBlackboardReferenceEdit(document.identity.instance))
-            RetireBlackboardReferenceEdit();
-        ProjectDecisionGraphDraft(document, draft);
-        return Merged::Success();
-    }
-
-    /** @copydoc EditorWorkspaceController::ResolveExternalDecisionGraph */
-    void EditorWorkspaceController::ResolveExternalDecisionGraph(const DecisionGraphDocumentFence fence, const bool keepLocal) {
-        if (m_viewModel.workspacePanelHost.ActiveDocument() != fence.instance || HasPendingBlackboardReferenceEdit(fence.instance) ||
-            fence.revision == std::numeric_limits<std::uint64_t>::max())
-            return;
-        auto &documents = m_viewModel.decisionGraphDocuments;
-        const auto document = std::ranges::find_if(documents, [fence](const auto &entry) {
-            return entry.identity.instance == fence.instance && entry.revision == fence.revision;
-        });
-        const auto draft = m_decisionGraphDrafts.find(fence.instance);
-        if (document == documents.end() || !document->conflict || !document->dirty || draft == m_decisionGraphDrafts.end())
-            return;
-        try {
-            const auto result = ResolveExternalDecisionGraphDraft(*document, draft->second, keepLocal);
-            document->diagnostic = result.HasError() ? std::optional{result.ErrorValue()} : std::nullopt;
-            if (document->diagnostic)
-                PublishDecisionGraphDiagnostics(*document->diagnostic);
-        } catch (const std::bad_alloc &) {
-            document->diagnostic = MakeError(Assets::AssetSourceErrors::Limit);
-        }
-    }
-
-    /** @copydoc EditorWorkspaceController::RestoreDecisionGraphDraft */
-    Result<void> EditorWorkspaceController::RestoreDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft) {
-        if (document.dirty || document.conflict || HasPendingBlackboardReferenceEdit(document.identity.instance))
-            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
-        const auto root = ProjectRoot();
-        const auto current = CaptureGraphInput(root, m_assetRegistry, document.asset, AI::DecisionCodecLimits{}.maximumBytes);
-        if (current.HasError())
-            return Result<void>::Failure(current.ErrorValue());
-        if (current.Value().Sources().front().sourceDigest != document.source)
-            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
-        auto recovered = ReadDecisionGraphRecovery(document, draft);
-        if (recovered.HasError())
-            return Result<void>::Failure(recovered.ErrorValue());
-        const auto providers = AcquireDecisionDraftProviders(*recovered.Value().graph);
-        if (providers.HasError())
-            return Result<void>::Failure(providers.ErrorValue());
-        if (auto validated = ValidateDecisionDraft(root, m_assetRegistry, *recovered.Value().graph, providers.Value(), document);
-            validated.HasError())
-            return validated;
-        if (auto verified = current.Value().VerifyUnchanged(); verified.HasError())
-            return Result<void>::Failure(verified.ErrorValue());
-        if (draft.currentDigest == recovered.Value().digest && *document.layout == *recovered.Value().layout) {
-            DocumentRecoveryService recovery(root, *m_mutations, *m_durableFiles);
-            return recovery.Discard(*document.recovery);
-        }
-        auto prepared = draft.history.PrepareChange(CaptureDecisionHistoryFence(document, draft), std::move(recovered).Value(),
-                                                    document.recovery->payload.size() + draft.acceptedBytes);
-        if (prepared.HasError())
-            return Result<void>::Failure(prepared.ErrorValue());
-        auto change = std::move(prepared).Value();
-        if (!PublishDecisionGraphChange(document, draft, change))
-            return Result<void>::Failure(MakeError(Application::DecisionCookErrors::Stale));
-        draft.acceptedRecovery = document.recovery;
-        ProjectDecisionGraphDraft(document, draft);
-        return Result<void>::Success();
-    }
-
-    /** @copydoc EditorWorkspaceController::ProcessDecisionRecoveryAction */
-    void EditorWorkspaceController::ProcessDecisionRecoveryAction(const EditorWorkspaceViewCommandData &command) {
-        if (!command.decisionGraphFence || !command.decisionGraphRecovery || !m_mutations || !m_durableFiles)
-            return;
-        const auto fence = *command.decisionGraphFence;
-        if (m_viewModel.workspacePanelHost.ActiveDocument() != fence.instance)
-            return;
-        auto &documents = m_viewModel.decisionGraphDocuments;
-        const auto document = std::ranges::find_if(documents, [fence](const auto &entry) {
-            return entry.identity.instance == fence.instance && entry.revision == fence.revision;
-        });
-        const auto draft = m_decisionGraphDrafts.find(fence.instance);
-        if (document == documents.end() || document->recovery != command.decisionGraphRecovery || draft == m_decisionGraphDrafts.end())
-            return;
-        try {
-            JoinDecisionGraphRecovery(fence.instance);
-            const auto result = [&] {
-                if (command.command == EditorWorkspaceViewCommand::RestoreDecisionGraphRecovery)
-                    return RestoreDecisionGraphDraft(*document, draft->second);
-                DocumentRecoveryService recovery(ProjectRoot(), *m_mutations, *m_durableFiles);
-                return recovery.Discard(*document->recovery);
-            }();
-            if (result.HasValue()) {
-                document->recovery.reset();
-                document->diagnostic.reset();
-            } else {
-                document->diagnostic = result.ErrorValue();
-                PublishDecisionGraphDiagnostics(*document->diagnostic);
-            }
-        } catch (const std::bad_alloc &) {
-            document->diagnostic = MakeError(Assets::AssetSourceErrors::Limit);
-        }
-    }
-
     /** @copydoc EditorWorkspaceController::ProcessDecisionGraphEdit */
     bool EditorWorkspaceController::ProcessDecisionGraphEdit(const EditorWorkspaceViewCommandData &cmd) {
         if (cmd.command == EditorWorkspaceViewCommand::ReloadExternalDecisionGraph) {
@@ -2011,12 +2022,19 @@ namespace Horo::Editor {
         if (cmd.command == EditorWorkspaceViewCommand::MergeExternalDecisionGraph ||
             cmd.command == EditorWorkspaceViewCommand::KeepLocalDecisionGraph) {
             if (cmd.decisionGraphFence)
-                ResolveExternalDecisionGraph(*cmd.decisionGraphFence, cmd.command == EditorWorkspaceViewCommand::KeepLocalDecisionGraph);
+                ResolveExternalDecisionGraph(*cmd.decisionGraphFence, cmd.command == EditorWorkspaceViewCommand::KeepLocalDecisionGraph
+                                                                          ? DecisionExternalAction::KeepDraft
+                                                                          : DecisionExternalAction::Merge);
             return true;
         }
         if (cmd.command == EditorWorkspaceViewCommand::RestoreDecisionGraphRecovery ||
             cmd.command == EditorWorkspaceViewCommand::DiscardDecisionGraphRecovery) {
-            ProcessDecisionRecoveryAction(cmd);
+            ProcessDecisionRecovery(cmd);
+            return true;
+        }
+        if (cmd.command == EditorWorkspaceViewCommand::ResolveDecisionExternalChange) {
+            if (cmd.decisionExternal)
+                ProcessDecisionExternalChange(*cmd.decisionExternal);
             return true;
         }
         if (cmd.command == EditorWorkspaceViewCommand::OpenDecisionDiagnosticKey) {
@@ -2046,6 +2064,10 @@ namespace Horo::Editor {
                 return;
             if (m_viewModel.contentBrowserOperationError.starts_with("workspace.decision_graph.diagnostic_key_"))
                 m_viewModel.contentBrowserOperationError.clear();
+            if (document->interruptedSave) {
+                document->diagnostic = MakeError(Assets::AssetSourceErrors::Conflict);
+                return;
+            }
             document->validation.reset();
             try {
                 const auto originalRevision = document->revision;

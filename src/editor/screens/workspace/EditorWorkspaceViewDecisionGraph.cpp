@@ -1077,24 +1077,67 @@ namespace Horo::Editor {
     }
 
     namespace {
-        /** @brief Presents explicit recovery actions for the currently projected checkpoint. */
-        bool DrawDecisionRecovery(const DecisionGraphWorkspaceDocument &document, const EditorGuiContext &context,
-                                  EditorWorkspaceViewCommandData &outCommand) {
+        void DrawDecisionExternalActions(const DecisionGraphWorkspaceDocument &document, const EditorGuiContext &context,
+                                         EditorWorkspaceViewCommandData &command) {
+            if (!document.conflict || !document.editable)
+                return;
+            const auto text = [&](const char *key) -> const std::string & {
+                return context.localization.Get("editor", key);
+            };
+            const auto button = [&](const char *key, DecisionExternalAction action) {
+                if (Ui::Button({.label = text(key).c_str(), .font = context.theme.fonts.sans}))
+                    command = {.command = EditorWorkspaceViewCommand::ResolveDecisionExternalChange,
+                               .decisionExternal = DecisionExternalRequest{{document.identity.instance, document.revision},
+                                                                           action,
+                                                                           document.externalReview}};
+            };
+            if (document.interruptedSave)
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.decision_graph.interrupted_save_review"), Theme::Warn(),
+                                context.theme.fonts);
+            if (!document.externalReview) {
+                button("workspace.decision_graph.external_review", DecisionExternalAction::Review);
+                return;
+            }
+            const auto label = [&](const char *key) {
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, text(key), Theme::Warn(), context.theme.fonts);
+            };
+            if (document.externalReview->graphChanged)
+                label("workspace.decision_graph.external_graph_changed");
+            if (document.externalReview->layoutChanged)
+                label("workspace.decision_graph.external_layout_changed");
+            if (document.interruptedSave) {
+                const auto &review = *document.externalReview;
+                const auto pair = std::format("{} {} | {} {}", text("workspace.decision_graph.reviewed_graph"),
+                                              FormatSha256(review.source.digest), text("workspace.decision_graph.reviewed_layout"),
+                                              review.layout.exists ? FormatSha256(review.layout.digest)
+                                                                   : text("workspace.decision_graph.no_disk_layout"));
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, pair, Theme::Muted(), context.theme.fonts);
+                button("workspace.decision_graph.external_accept_pair", DecisionExternalAction::AcceptDiskPair);
+                return;
+            }
+            button("workspace.decision_graph.external_reload", DecisionExternalAction::Reload);
+            button("workspace.decision_graph.external_merge", DecisionExternalAction::Merge);
+            button("workspace.decision_graph.external_keep", DecisionExternalAction::KeepDraft);
+        }
+
+        void DrawDecisionRecoveryActions(const DecisionGraphWorkspaceDocument &document, const EditorGuiContext &context,
+                                         EditorWorkspaceViewCommandData &command) {
             if (!document.recovery)
-                return false;
-            constexpr GuiLocalizationScope text{"workspace.decision_graph"};
-            const auto &fonts = context.theme.fonts;
-            const bool restore = Ui::Button({.label = text.Text(context.localization, "restore_recovery").c_str(),
-                                             .enabled = !document.dirty && !document.conflict,
-                                             .font = fonts.sans});
-            const bool discard = Ui::Button({.label = text.Text(context.localization, "discard_recovery").c_str(), .font = fonts.sans});
-            if (!restore && !discard)
-                return false;
-            outCommand = {.command = restore ? EditorWorkspaceViewCommand::RestoreDecisionGraphRecovery
-                                             : EditorWorkspaceViewCommand::DiscardDecisionGraphRecovery,
-                          .decisionGraphFence = DecisionGraphDocumentFence{document.identity.instance, document.revision},
-                          .decisionGraphRecovery = document.recovery};
-            return true;
+                return;
+            const auto text = [&](const char *key) -> const std::string & {
+                return context.localization.Get("editor", key);
+            };
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.decision_graph.recovery_available"), Theme::Warn(),
+                            context.theme.fonts);
+            const auto button = [&](const char *key, bool enabled, EditorWorkspaceViewCommand action) {
+                if (Ui::Button({.label = text(key).c_str(), .enabled = enabled, .font = context.theme.fonts.sans}))
+                    command = {.command = action,
+                               .decisionGraphFence = DecisionGraphDocumentFence{document.identity.instance, document.revision},
+                               .decisionGraphRecovery = document.recovery};
+            };
+            button("workspace.decision_graph.restore_recovery", document.editable && !document.dirty && !document.conflict,
+                   EditorWorkspaceViewCommand::RestoreDecisionGraphRecovery);
+            button("workspace.decision_graph.discard_recovery", true, EditorWorkspaceViewCommand::DiscardDecisionGraphRecovery);
         }
     }  // namespace
 
@@ -1122,7 +1165,9 @@ namespace Horo::Editor {
         if (opened->diagnostic) {
             const auto code = opened->diagnostic->code.Value();
             std::string_view key = opened->conflict ? "workspace.decision_graph.edit_conflict" : "workspace.decision_graph.edit_refused";
-            if (!opened->conflict && opened->recovery && code == Assets::AssetSourceErrors::Conflict.code.Value())
+            if (code == DecisionExternalErrors::Overlap.code.Value())
+                key = "workspace.decision_graph.external_overlap";
+            else if (opened->recovery && code == Assets::AssetSourceErrors::Conflict.code.Value())
                 key = "workspace.decision_graph.recovery_conflict";
             else if (code == AI::AIErrors::DecisionAssetDependencyCycle.code.Value())
                 key = "workspace.decision_graph.subtree_cycle";
@@ -1147,13 +1192,13 @@ namespace Horo::Editor {
             feedback == "workspace.decision_graph.diagnostic_key_unavailable" ||
             (opened->conflict && feedback == "workspace.decision_graph.invalid"))
             label(text(feedback), Theme::Warn());
-        if (opened->conflict && opened->dirty &&
+        if (opened->conflict && opened->dirty && !opened->interruptedSave && !opened->externalReview &&
             Ui::Button({.label = text("workspace.decision_graph.merge_external").c_str(), .font = m_context.theme.fonts.sans})) {
             outCommand = {.command = EditorWorkspaceViewCommand::MergeExternalDecisionGraph,
                           .decisionGraphFence = DecisionGraphDocumentFence{opened->identity.instance, opened->revision}};
             return true;
         }
-        if (opened->conflict && opened->dirty &&
+        if (opened->conflict && opened->dirty && !opened->interruptedSave && !opened->externalReview &&
             Ui::Button({.label = text("workspace.decision_graph.keep_local").c_str(), .font = m_context.theme.fonts.sans})) {
             outCommand = {.command = EditorWorkspaceViewCommand::KeepLocalDecisionGraph,
                           .decisionGraphFence = DecisionGraphDocumentFence{opened->identity.instance, opened->revision}};
@@ -1165,15 +1210,16 @@ namespace Horo::Editor {
                           .decisionGraphFence = DecisionGraphDocumentFence{opened->identity.instance, opened->revision}};
             return true;
         }
-        if (DrawDecisionRecovery(*opened, m_context, outCommand))
-            return true;
+        DrawDecisionExternalActions(*opened, m_context, outCommand);
+        DrawDecisionRecoveryActions(*opened, m_context, outCommand);
 
         const auto *propertyMachine = std::get_if<AI::StateMachineAssetDescriptor>(&opened->graph->body);
-        const bool propertyOnly = opened->editable && propertyMachine && !CanEditStateMachineTopology(*propertyMachine);
+        const bool editable = opened->editable && !opened->interruptedSave;
+        const bool propertyOnly = editable && propertyMachine && !CanEditStateMachineTopology(*propertyMachine);
         const auto drawTransitionOrder = [&](const AI::StateMachineAssetDescriptor &machine, const AI::StateMachineTransition &transition) {
             const auto order = ProjectStateMachineTransitionOrder(machine, transition);
             label(std::format("{} → {}", transition.source.Value(), transition.target.Value()), Theme::Text());
-            if (!opened->editable || propertyOnly)
+            if (!editable || propertyOnly)
                 label(std::format("{} {}", text("workspace.decision_graph.transition_priority"), order.priority), Theme::Text());
             label(std::format("{} {}", text("workspace.decision_graph.transition_order"), order.rank), Theme::Text());
             label(text("workspace.decision_graph.transition_precedence"), Theme::Muted());
@@ -1189,7 +1235,7 @@ namespace Horo::Editor {
                 return m_utilityGraphSelection.option;
             return {};
         };
-        if (!opened->editable || propertyOnly) {
+        if (!editable || propertyOnly) {
             label(text(propertyOnly ? "workspace.decision_graph.provider_machine_properties_only" : "workspace.decision_graph.read_only"),
                   Theme::Muted());
             if (propertyOnly) {

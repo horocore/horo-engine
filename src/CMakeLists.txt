@@ -4451,9 +4451,11 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceEnvironmentQueryDocument.cpp
             editor/screens/workspace/EditorWorkspaceDecisionGraph.cpp
             editor/screens/workspace/EditorWorkspaceDecisionGraphRecovery.cpp
+            editor/screens/workspace/EditorWorkspaceDecisionGraphConflict.cpp
             editor/screens/workspace/EditorWorkspaceViewDecisionGraph.cpp
             editor/screens/workspace/DecisionGraphCanvasModel.cpp
             editor/screens/workspace/DecisionGraphLayout.cpp
+            editor/screens/workspace/DecisionSaveJournal.cpp
             editor/screens/workspace/DecisionTreeSubtreeCatalog.cpp
             editor/screens/workspace/DecisionGraphCanvas.cpp
             editor/screens/workspace/EditorWorkspaceUtilityGraph.cpp

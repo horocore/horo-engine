@@ -70,6 +70,8 @@ namespace Horo::Application {
 }  // namespace Horo::Application
 
 namespace Horo::Editor {
+    struct CapturedDecisionExternal;
+
     struct TerrainDocumentView;
     class IEditorPlayXrHost;
     class ILocalizationService;
@@ -603,47 +605,51 @@ namespace Horo::Editor {
             Sha256Digest currentDigest;
             std::size_t acceptedBytes{};
             Assets::AssetSourceIdentity acceptedLayout;
+            std::shared_ptr<const AI::DecisionGraphSource> savedGraph;
             std::shared_ptr<const DecisionGraphLayout> savedLayout;
             DecisionGraphDocumentHistory history;
-            std::uint64_t recoveredRevision{};
+            std::uint64_t recoveryRevision{};
+            bool recoveryAttempted{};
             std::shared_ptr<const DocumentRecoveryRecord> acceptedRecovery;
         };
 
         std::map<DocumentInstanceId, DecisionGraphDraft> m_decisionGraphDrafts;
+        float m_decisionRecoverySeconds{};
+        void UpdateDecisionRecovery(float elapsedSeconds, int intervalMinutes);
+        void FlushDecisionRecovery();
+        void InspectDecisionRecovery(DecisionGraphWorkspaceDocument &document);
+        void ProcessDecisionRecovery(const EditorWorkspaceViewCommandData &command);
+        void ProcessDecisionExternalChange(const DecisionExternalRequest &request);
+        [[nodiscard]] Result<void> ResolveDecisionExternalChange(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
+                                                                 const DecisionExternalRequest &request);
+        [[nodiscard]] Result<void> AcceptInterruptedDecisionSave(DecisionGraphWorkspaceDocument &document,
+                                                                 const CapturedDecisionExternal &captured);
+        [[nodiscard]] Result<void> ApplyDecisionExternalChange(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
+                                                               DecisionExternalAction action, const CapturedDecisionExternal &captured);
+        [[nodiscard]] Result<void> RestoreDecisionRecovery(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft);
+        [[nodiscard]] Result<void> ValidateDecisionDraftRoot(const AI::DecisionGraphSource &graph,
+                                                             DecisionGraphWorkspaceDocument &document) const;
+        void DiscardDecisionRecoveryAfterSave(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft);
+        [[nodiscard]] Result<void> DiscardOwnedDecisionRecovery(const DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft);
+        [[nodiscard]] Result<void> WriteDecisionRecovery(const DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft);
+        [[nodiscard]] Result<void> PublishDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft);
         /** @brief Validates the latest schema and publishes the canonical registered source under its native lease. */
         Result<void> SaveDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
                                             bool saveReferenceParticipant = false);
-        /** @brief Publishes under the project write lease before any recovery cleanup. */
-        Result<void> PublishDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
-                                               bool saveReferenceParticipant);
-        /** @brief Schedules immutable Decision draft captures through the shared recovery store. */
-        void UpdateDecisionGraphAutosave(float seconds, int minutes);
-        /** @brief Checkpoints pending drafts at an explicit workspace lifecycle boundary. */
-        void FlushDecisionGraphAutosave();
         /** @brief Joins an accepted recovery writer before its borrowed project services retire. */
         void JoinDecisionGraphRecovery(std::optional<DocumentInstanceId> instance = {});
-        /** @brief Removes only the exact checkpoint owned by this draft after save or explicit discard. */
-        [[nodiscard]] Result<void> ClearDecisionGraphRecovery(const DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft);
         /** @brief Observes terminal recovery and acknowledges the exact published revision. */
         void ObserveDecisionGraphRecovery();
-        /** @brief Projects the durable recovery candidate when staging a registered Decision document. */
-        void InspectDecisionGraphRecovery(DecisionGraphWorkspaceDocument &document) const;
-        /** @brief Revalidates the exact checkpoint and its base before decoding the draft root. */
-        [[nodiscard]] Result<DecisionGraphDocumentRoot> ReadDecisionGraphRecovery(const DecisionGraphWorkspaceDocument &document,
-                                                                                  const DecisionGraphDraft &draft) const;
-        /** @brief Applies only an explicitly requested recovery action to the exact focused revision. */
-        void ProcessDecisionRecoveryAction(const EditorWorkspaceViewCommandData &command);
-        /** @brief Installs an explicitly accepted compatible checkpoint as an unsaved revision. */
-        [[nodiscard]] Result<void> RestoreDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft);
+        void StartQueuedDecisionRecovery();
 
         struct DecisionRecoveryWork final {
             DecisionGraphDocumentFence fence;
             JobHandle job;
+            std::shared_ptr<const DocumentRecoveryRecord> acceptedCheckpoint;
         };
 
         std::optional<DecisionRecoveryWork> m_decisionGraphRecovery;
         std::vector<DocumentInstanceId> m_decisionRecoveryQueue;
-        float m_decisionAutosaveSeconds{};
         bool m_decisionAutosaveDiscarded{};
         /** @brief Projects structured Decision findings into the workspace's Build Output. */
         void PublishDecisionGraphDiagnostics(const Error &error) const;
@@ -1519,11 +1525,8 @@ namespace Horo::Editor {
         bool ProcessDecisionGraphEdit(const EditorWorkspaceViewCommandData &cmd);
         /** @brief Reopens the exact conflicted Decision document after an explicit discard request. */
         void ReloadExternalDecisionGraph(DecisionGraphDocumentFence fence);
-        /** @brief Resolves a focused dirty Decision draft against the current registered disk version. */
-        void ResolveExternalDecisionGraph(DecisionGraphDocumentFence fence, bool keepLocal);
-        /** @brief Stages the merged or exact local draft and adopts the disk revision as the new save base. */
-        [[nodiscard]] Result<void> ResolveExternalDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
-                                                                     bool keepLocal);
+        /** @brief Resolves a focused dirty Decision draft against the reviewed registered disk version. */
+        void ResolveExternalDecisionGraph(DecisionGraphDocumentFence fence, DecisionExternalAction action);
         /** @brief Resolves a current finding to a registered Blackboard document and selects its exact key. */
         void OpenDecisionDiagnosticKey(const DecisionDiagnosticKeyRequest &request);
         /** @brief Saves all dirty intrinsic decision documents through the registered source owner. */
