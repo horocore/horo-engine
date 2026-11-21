@@ -35,12 +35,6 @@ namespace Horo::AI {
         bool enabled{true};             /**< The host enables service cadences only while their owning subtree is active. */
     };
 
-    /** @brief Compiler-admitted node's declared dependency on a typed perception listener. */
-    struct DecisionWakePerceptionDependency final {
-        DecisionNodeId node;
-        PerceptionListenerTypeId listener;
-    };
-
     /** @brief Lowerable deterministic work admission; wall-clock timing is never used. */
     struct DecisionWakeBudget final {
         static constexpr std::size_t HardEvaluationsPerTick = 8;

@@ -119,6 +119,7 @@ namespace Horo::AI {
         std::vector<SenseTypeId> sources;
         PerceptionParticipantFilter participant;
         PerceptionListenerFilter listenerFilter;
+        std::vector<DecisionWakePerceptionDependency> decisionWatches; /**< Nonempty selects event-only cooked execution. */
     };
 
     /**

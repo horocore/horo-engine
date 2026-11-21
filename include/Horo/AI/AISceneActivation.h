@@ -371,7 +371,8 @@ namespace Horo::AI {
     /** @brief Timing contract for external outcomes consumed by cooked decisions. */
     enum class AiCookedDecisionTiming : std::uint8_t {
         Deterministic,
-        BestEffortExternalFeedback
+        BestEffortExternalFeedback,
+        BestEffortReactive
     };
 
     /** @brief Opt-in fixed-tick execution for flat cooked Behavior Trees owned by this Scene. */
@@ -387,8 +388,9 @@ namespace Horo::AI {
         [[nodiscard]] bool HasMatchingTiming() const noexcept {
             if (timing == AiCookedDecisionTiming::Deterministic)
                 return scheduler.mode == AiSchedulingMode::Deterministic;
-            return timing == AiCookedDecisionTiming::BestEffortExternalFeedback && scheduler.mode == AiSchedulingMode::BestEffort &&
-                   intents;
+            return scheduler.mode == AiSchedulingMode::BestEffort &&
+                   (timing == AiCookedDecisionTiming::BestEffortReactive ||
+                    (timing == AiCookedDecisionTiming::BestEffortExternalFeedback && intents));
         }
     };
 

@@ -564,6 +564,11 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         Result<void> InstallAiSceneOwner(const AI::AiSceneRuntimeSettings settings,
                                          const std::span<const AI::AiControllerDescriptor> catalog) const {
             const auto &input = *owners_->configured;
+            if (IsAuthoritativeWorld() && input.perceptionProject && input.perceptionProject->policy &&
+                SelectsReactiveDecisions(*input.perceptionProject->policy) &&
+                (!OwnsCookedDecisionExecution() || input.decisionReplay))
+                return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid,
+                                                       "Reactive project decisions require a live scheduler without deterministic replay."));
             auto ai = OwnsCookedDecisionExecution() && !record_->preparedGameplay
                           ? AI::AiSceneRuntime::Create(settings, ConfiguredDecisionExecution())
                           : AI::AiSceneRuntime::Create(settings);
@@ -591,7 +596,12 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
 
         /** @brief Adds this world's explicit query owner to the selected immutable scheduler policy. */
         AI::AiSceneCookedDecisionExecution ConfiguredDecisionExecution() const {
-            auto execution = *owners_->configured->cookedDecisions->execution;
+            const auto &input = *owners_->configured;
+            auto execution = *input.cookedDecisions->execution;
+            if (input.perceptionProject && input.perceptionProject->policy && SelectsReactiveDecisions(*input.perceptionProject->policy)) {
+                execution.scheduler.mode = AI::AiSchedulingMode::BestEffort;
+                execution.timing = AI::AiCookedDecisionTiming::BestEffortReactive;
+            }
             if (record_->decisionQueries)
                 execution.queryTasks = record_->decisionQueries;
             if (record_->decisionMotion) {

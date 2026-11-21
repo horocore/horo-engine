@@ -396,6 +396,30 @@ namespace Horo::AI {
         }
     }
 
+    /** @copydoc Detail::ResolveCookedPerceptionWatches */
+    Result<std::vector<PerceptionListenerTypeId>> Detail::ResolveCookedPerceptionWatches(
+        const CookedDecisionPlan &plan, const AiControllerPerceptionEndpoints &endpoints,
+        const std::span<const DecisionWakePerceptionDependency> dependencies) {
+        using Watches = Result<std::vector<PerceptionListenerTypeId>>;
+        if (dependencies.size() > DecisionAssetValidationHardLimits::NodesPerAsset)
+            return Watches::Failure(MakeError(AIErrors::DecisionAssetLimitExceeded));
+        const auto nodes = plan.Graphs()[plan.Occurrences().front().plan].bindings->Nodes();
+        try {
+            std::vector<PerceptionListenerTypeId> listeners;
+            listeners.reserve(std::min(dependencies.size(), endpoints.listeners.size()));
+            for (const auto &dependency : dependencies) {
+                if (!std::ranges::binary_search(nodes, dependency.node, {}, &DecisionPlanNode::id) ||
+                    std::ranges::find(endpoints.listeners, dependency.listener) == endpoints.listeners.end())
+                    return Watches::Failure(MakeError(AIErrors::DecisionAssetSchemaInvalid));
+                if (std::ranges::find(listeners, dependency.listener) == listeners.end())
+                    listeners.push_back(dependency.listener);
+            }
+            return Watches::Success(std::move(listeners));
+        } catch (const std::bad_alloc &) {
+            return Watches::Failure(MakeError(AIErrors::DecisionAssetStorageUnavailable));
+        }
+    }
+
     /** @copydoc AiSceneRuntime::SetCookedPerceptionWatchesAtSafePoint */
     Result<void> AiSceneRuntime::SetCookedPerceptionWatchesAtSafePoint(
         const AgentHandle handle, const std::span<const DecisionWakePerceptionDependency> dependencies) const {
@@ -404,22 +428,10 @@ namespace Horo::AI {
         const auto *agent = Detail::FindAgent(*active_, handle);
         if (!agent || !agent->cookedPlan || !agent->perceptionEndpoints || !active_->scheduler)
             return Result<void>::Failure(MakeError(AIErrors::TaskContextInvalid));
-        const auto &plan = agent->cookedPlan;
-        if (dependencies.size() > DecisionAssetValidationHardLimits::NodesPerAsset)
-            return Result<void>::Failure(MakeError(AIErrors::DecisionAssetLimitExceeded));
-        const auto nodes = plan->Graphs()[plan->Occurrences().front().plan].bindings->Nodes();
-        const auto &admitted = agent->perceptionEndpoints->listeners;
-        std::array<PerceptionListenerTypeId, AiControllerPerceptionEndpoints::MaximumSenses> unique{};
-        std::size_t count{};
-        for (const auto &dependency : dependencies) {
-            if (!std::ranges::binary_search(nodes, dependency.node, {}, &DecisionPlanNode::id) ||
-                std::ranges::find(admitted, dependency.listener) == admitted.end())
-                return Result<void>::Failure(MakeError(AIErrors::DecisionAssetSchemaInvalid));
-            const auto current = std::span{unique}.first(count);
-            if (std::ranges::find(current, dependency.listener) == current.end())
-                unique[count++] = dependency.listener;
-        }
-        return active_->scheduler->SetPerceptionWatches(handle, plan, std::span{unique}.first(count));
+        auto watches = Detail::ResolveCookedPerceptionWatches(*agent->cookedPlan, *agent->perceptionEndpoints, dependencies);
+        if (watches.HasError())
+            return Result<void>::Failure(watches.ErrorValue());
+        return active_->scheduler->SetPerceptionWatches(handle, agent->cookedPlan, std::move(watches).Value());
     }
 
     /** @copydoc AiSceneRuntime::PollPerceptionAtSensePoll */

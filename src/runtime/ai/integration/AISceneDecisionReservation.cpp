@@ -29,8 +29,10 @@ namespace Horo::AI {
         public:
             ScheduledCookedDecision(const std::shared_ptr<Detail::AiSceneRuntimeState> &state,
                                     std::unique_ptr<DecisionGraphInstance> decision, AgentHandle agent,
-                                    std::shared_ptr<IAiCookedDecisionIntentSink> intents) noexcept
-                : state_(state), decision_(std::move(decision)), agent_(agent), intents_(std::move(intents)) {}
+                                    std::shared_ptr<IAiCookedDecisionIntentSink> intents,
+                                    std::vector<PerceptionListenerTypeId> watches) noexcept
+                : state_(state), decision_(std::move(decision)), agent_(agent), intents_(std::move(intents)),
+                  watches_(std::move(watches)) {}
 
             Result<AiSliceOutcome> Evaluate(const AiDecisionSliceContext &context, AiWorkBudget &budget) noexcept override {
                 providerFailure_.reset();
@@ -90,6 +92,10 @@ namespace Horo::AI {
                 return decision_->HasPendingTaskWake();
             }
 
+            std::span<const PerceptionListenerTypeId> DeclaredPerceptionWatches() const noexcept override {
+                return watches_;
+            }
+
             DecisionGraphInstance &Decision() noexcept {
                 return *decision_;
             }
@@ -103,6 +109,7 @@ namespace Horo::AI {
             std::unique_ptr<DecisionGraphInstance> decision_;
             AgentHandle agent_;
             std::shared_ptr<IAiCookedDecisionIntentSink> intents_;
+            std::vector<PerceptionListenerTypeId> watches_;
             std::optional<DecisionProviderFailure> providerFailure_;
             std::uint64_t evaluationTick_{};
         };
@@ -292,6 +299,17 @@ namespace Horo::AI {
             return Output::Failure(
                 MakeError(AIErrors::TaskContextInvalid, "Scheduled cooked decisions require an authored execution task."));
 
+        std::vector<PerceptionListenerTypeId> watches;
+        if (agent.perceptionEndpoints && !agent.perceptionEndpoints->decisionWatches.empty()) {
+            if (decisionExecution_->scheduler.mode != AiSchedulingMode::BestEffort)
+                return Output::Failure(MakeError(AIErrors::SchedulerPolicyInvalid, "Declared Perception wakes require best-effort timing."));
+            auto admitted = Detail::ResolveCookedPerceptionWatches(*plan, *agent.perceptionEndpoints, agent.perceptionEndpoints->decisionWatches);
+            if (admitted.HasError())
+                return Output::Failure(admitted.ErrorValue());
+            watches = std::move(admitted).Value();
+            bounded.intervalTicks = 0;
+        }
+
         constexpr auto End = Horo::Handle<TaskHandleTag>::InvalidIndex;
         const auto taskSlots = plan->Storage().taskSlots;
         if (taskSlots >= End - nextTaskSlot)
@@ -311,7 +329,8 @@ namespace Horo::AI {
                 return Output::Failure(decision.ErrorValue());
             bounded.workUnitsPerTick = *limit;
             auto executor =
-                std::make_shared<ScheduledCookedDecision>(state, std::move(decision).Value(), handle, decisionExecution_->intents);
+                std::make_shared<ScheduledCookedDecision>(state, std::move(decision).Value(), handle, decisionExecution_->intents,
+                                                           std::move(watches));
             nextTaskSlot += count + 1;
             return Output::Success({handle, identity, bounded, plan, std::move(executor), cancellation});
         } catch (const std::bad_alloc &) {

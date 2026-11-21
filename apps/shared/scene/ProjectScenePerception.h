@@ -17,6 +17,7 @@ namespace Horo::Application::Internal {
         std::vector<AI::PerceptionListenerTypeId> listeners;
         std::vector<AI::SenseTypeId> sources;
         AI::PerceptionParticipantFilter participant;
+        std::vector<AI::DecisionWakePerceptionDependency> decisionWatches;
     };
 
     /** @brief Stable listener authored for exactly one registered custom sense. */
@@ -43,6 +44,9 @@ namespace Horo::Application::Internal {
         std::vector<ProjectPerceptionControllerSelection> controllers;
         std::optional<ProjectNativePerceptionPolicy> native;
     };
+
+    /** @brief Reports whether the selected project explicitly opted into reactive cooked execution. */
+    [[nodiscard]] bool SelectsReactiveDecisions(const ProjectScenePerceptionPolicy &policy) noexcept;
 
     /** @brief Reads and freezes explicit project policy for the exact verified cooked Scene selection.
      * @param files Project-owned read boundary. @param context Exact load deadline and project identity.

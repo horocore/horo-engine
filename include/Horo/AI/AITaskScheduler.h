@@ -173,6 +173,11 @@ namespace Horo::AI {
         [[nodiscard]] virtual bool HasPendingTaskWake() const noexcept {
             return false;
         }
+
+        /** @brief Borrows the immutable listener declarations admitted with this exact executable. */
+        [[nodiscard]] virtual std::span<const PerceptionListenerTypeId> DeclaredPerceptionWatches() const noexcept {
+            return {};
+        }
     };
 
     /** @brief Lowerable per-agent frequency, work, command and worker-admission policy. */
@@ -372,7 +377,7 @@ namespace Horo::AI {
                                  std::span<const BlackboardKeyId> changedKeys) noexcept;
         /** @brief Replaces the exact reactive registration's validated listener dependencies. */
         [[nodiscard]] Result<void> SetPerceptionWatches(AgentHandle agent, const std::shared_ptr<const CookedDecisionPlan> &plan,
-                                                        std::span<const PerceptionListenerTypeId> listeners);
+                                                        std::vector<PerceptionListenerTypeId> listeners);
         /** @brief Borrows current listeners only on the Scene owner lane, outside native sensing calls. */
         [[nodiscard]] std::span<const PerceptionListenerTypeId> PerceptionWatches(
             AgentHandle agent, const std::shared_ptr<const CookedDecisionPlan> &plan) noexcept;

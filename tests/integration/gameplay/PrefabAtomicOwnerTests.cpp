@@ -754,6 +754,42 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(captured.ErrorValue().code.Value() == expected->code.Value());
         }
 
+        TEST_CASE("Native project Perception policies admit only declared reactive Decision edges",
+                  "[prefab][integration][ai][perception][host]") {
+            const auto asset = Assets::AssetId::Parse("5c881920-450f-4ca7-b938-d151696ea419").Value();
+            Runtime::SceneDefinitionBuilder builder{{7}, {42}};
+            auto definition = std::move(builder).Build();
+            REQUIRE(definition.HasValue());
+            auto source = nlohmann::json::parse(R"({
+                "schema": 2,
+                "sceneAsset": "5c881920-450f-4ca7-b938-d151696ea419",
+                "sceneRevision": 42,
+                "worldOriginMillimeters": [0,0,0],
+                "controllers": [{"controller":11,"listeners":[91],"sources":[20],"layers":1,"mask":1,
+                                 "decisionWatches":[{"node":2,"listener":91}]}],
+                "native": {"listeners":[{"id":91,"sense":20}],"radiusMillimeters":4000,"visibleLayers":1,"workUnitsPerTick":64}
+            })");
+            auto &watches = source["controllers"][0]["decisionWatches"];
+            SECTION("stable node and admitted listener select event-only execution") {
+                const auto captured = CaptureProjectPerception(definition.Value(), asset, source.dump());
+                REQUIRE(captured.HasValue());
+                CHECK(Internal::SelectsReactiveDecisions(*captured.Value()));
+                const auto &dependencies = captured.Value()->controllers.front().decisionWatches;
+                REQUIRE(dependencies.size() == 1);
+                CHECK(dependencies.front().node.Value() == 2);
+                CHECK(dependencies.front().listener.Value() == 91);
+            }
+            SECTION("listener outside the controller declaration is refused") {
+                watches[0]["listener"] = 92;
+                CHECK(CaptureProjectPerception(definition.Value(), asset, source.dump()).HasError());
+            }
+            SECTION("duplicate edges are refused") {
+                const auto duplicate = watches.front();
+                watches.push_back(duplicate);
+                CHECK(CaptureProjectPerception(definition.Value(), asset, source.dump()).HasError());
+            }
+        }
+
         /** @brief Returns a well-formed authored controller for which the captured catalog has no descriptor. */
         AI::AiControllerComponent UnavailableController(AI::AiControllerComponent component) {
             component.controller = AI::TestSupport::MakeIdentity<AI::ControllerTypeId>(999);

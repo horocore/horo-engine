@@ -331,7 +331,8 @@ namespace Horo::AI {
             REQUIRE(generation.HasValue());
             authored.descriptor.perceptionEndpoints = std::make_shared<const AiControllerPerceptionEndpoints>(
                 AiControllerPerceptionEndpoints{.registry = std::make_shared<const PerceptionDescriptorRegistry>(native.Registry(registration.contract)),
-                                                .listeners = {listener}, .sources = {sense}});
+                                                .listeners = {listener}, .sources = {sense},
+                                                .decisionWatches = {{Node(2), listener}}});
 
             Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
             for (std::uint64_t id = 1; id <= 2; ++id) {
@@ -363,16 +364,16 @@ namespace Horo::AI {
             auto publication = participant.Prepare(definition.Value(), view);
             REQUIRE(publication.HasValue());
             publication.Value()->Publish();
+            TestSupport::ExpectError(runtime.ActivateCookedDecisionsAtSafePoint({jobs, {}, {}}), AIErrors::SchedulerPolicyInvalid);
+            REQUIRE(fixture.probe.factories == 0);
             REQUIRE(runtime.ActivateCookedDecisionsAtSafePoint({.jobs = jobs, .scheduler = {.mode = AiSchedulingMode::BestEffort},
-                                                               .agent = {.intervalTicks = 0}, .intents = std::make_shared<CommitEmpty>(),
-                                                               .timing = AiCookedDecisionTiming::BestEffortExternalFeedback})
+                                                               .timing = AiCookedDecisionTiming::BestEffortReactive})
                         .HasValue());
             auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();
-            const auto agent = runtime.CapabilityAtSafePoint().ResolveAgent(MakeIdentity<AgentId>(1)).Value();
-            const std::array dependencies{DecisionWakePerceptionDependency{Node(2), listener}};
-            const auto subscribed = runtime.SetCookedPerceptionWatchesAtSafePoint(agent, dependencies);
-            INFO((subscribed.HasError() ? subscribed.ErrorValue().code.Value() : "Perception dependency admitted"));
-            REQUIRE(subscribed.HasValue());
+            const auto capability = runtime.CapabilityAtSafePoint();
+            const auto agent = capability.ResolveAgent(MakeIdentity<AgentId>(1)).Value();
+            const auto ignored = capability.ResolveAgent(MakeIdentity<AgentId>(2)).Value();
+            REQUIRE(runtime.SetCookedPerceptionWatchesAtSafePoint(ignored, {}).HasValue());
             const std::array invalid{DecisionWakePerceptionDependency{Node(8), listener}};
             CHECK(runtime.SetCookedPerceptionWatchesAtSafePoint(agent, invalid).HasError());
             const auto evaluate = [&](const std::uint64_t tick) {

@@ -94,7 +94,7 @@ namespace Horo::AI {
         std::size_t commands{};
         bool intents{};
         bool blackboardWakeQueued{};
-        std::vector<PerceptionListenerTypeId> perceptionWatches;
+        std::optional<std::vector<PerceptionListenerTypeId>> perceptionWatches;
     };
 
     struct AiTaskScheduler::PopulationChange::Storage final {
@@ -464,19 +464,14 @@ namespace Horo::AI {
     /** @copydoc AiTaskScheduler::SetPerceptionWatches */
     Result<void> AiTaskScheduler::SetPerceptionWatches(const AgentHandle agent,
                                                        const std::shared_ptr<const CookedDecisionPlan> &plan,
-                                                       const std::span<const PerceptionListenerTypeId> listeners) {
+                                                       std::vector<PerceptionListenerTypeId> listeners) {
         if (closed_ || inPhase_ || (report_.tick != 0 && !committed_))
             return Result<void>::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
         auto *entry = FindBoundDecision(agent, plan);
         if (!entry || entry->policy.intervalTicks != 0)
             return Result<void>::Failure(MakeError(AIErrors::TaskContextInvalid));
-        try {
-            std::vector<PerceptionListenerTypeId> replacement(listeners.begin(), listeners.end());
-            entry->perceptionWatches = std::move(replacement);
-            return Result<void>::Success();
-        } catch (const std::bad_alloc &) {
-            return Result<void>::Failure(MakeError(AIErrors::DecisionAssetStorageUnavailable));
-        }
+        entry->perceptionWatches.emplace(std::move(listeners));
+        return Result<void>::Success();
     }
 
     /** @copydoc AiTaskScheduler::PerceptionWatches */
@@ -485,7 +480,10 @@ namespace Horo::AI {
         if (closed_ || inPhase_)
             return {};
         const auto *entry = FindBoundDecision(agent, plan);
-        return entry ? std::span{entry->perceptionWatches} : std::span<const PerceptionListenerTypeId>{};
+        if (!entry || entry->policy.intervalTicks != 0)
+            return {};
+        return entry->perceptionWatches ? std::span<const PerceptionListenerTypeId>{*entry->perceptionWatches}
+                                         : entry->executor->DeclaredPerceptionWatches();
     }
 
     /** @copydoc AiTaskScheduler::Wake */

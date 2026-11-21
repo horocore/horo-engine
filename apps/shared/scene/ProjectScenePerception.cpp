@@ -23,7 +23,7 @@ namespace Horo::Application::Internal {
 
         /** @brief Reads a closed, bounded shape with duplicate object keys rejected before insertion. */
         Json ParsePolicy(const std::string &text) {
-            std::array<std::set<std::string, std::less<>>, 5> keys;
+            std::array<std::set<std::string, std::less<>>, 6> keys;
             const auto callback = [&](const int depth, const Json::parse_event_t event, const Json &value) {
                 if (depth < 0 || static_cast<std::size_t>(depth) >= keys.size())
                     throw std::invalid_argument("Perception policy nesting exceeded");
@@ -81,9 +81,35 @@ namespace Horo::Application::Internal {
             return values;
         }
 
+        /** @brief Parses unique cooked node/listener edges from the same authorized controller. */
+        std::vector<AI::DecisionWakePerceptionDependency> ReadDecisionWatches(
+            const Json &array, const std::span<const AI::PerceptionListenerTypeId> listeners) {
+            if (!array.is_array() || array.empty() || array.size() > AI::DecisionAssetValidationHardLimits::NodesPerAsset)
+                throw std::invalid_argument("Invalid reactive Decision dependency count");
+            std::vector<AI::DecisionWakePerceptionDependency> watches;
+            watches.reserve(array.size());
+            for (const auto &entry : array) {
+                RequireFields(entry, {"node", "listener"});
+                const auto node = AI::DecisionNodeId::Create(Unsigned(entry["node"]));
+                const auto listener = AI::PerceptionListenerTypeId::Create(Unsigned(entry["listener"]));
+                if (node.HasError() || listener.HasError() || !std::ranges::binary_search(listeners, listener.Value()))
+                    throw std::invalid_argument("Reactive Decision dependency requires an admitted controller listener");
+                watches.push_back({node.Value(), listener.Value()});
+            }
+            const auto identity = [](const auto &watch) { return std::pair{watch.node, watch.listener}; };
+            std::ranges::sort(watches, {}, identity);
+            if (std::ranges::adjacent_find(watches, {}, identity) != watches.end())
+                throw std::invalid_argument("Duplicate reactive Decision dependency");
+            return watches;
+        }
+
         /** @brief Projects inert durable controller fields without choosing any runtime implementation. */
-        ProjectPerceptionControllerSelection ReadController(const Json &object) {
-            RequireFields(object, {"controller", "listeners", "sources", "layers", "mask"});
+        ProjectPerceptionControllerSelection ReadController(const Json &object, const bool allowWatches) {
+            const bool hasWatches = allowWatches && object.contains("decisionWatches");
+            if (hasWatches)
+                RequireFields(object, {"controller", "listeners", "sources", "layers", "mask", "decisionWatches"});
+            else
+                RequireFields(object, {"controller", "listeners", "sources", "layers", "mask"});
             auto controller = AI::ControllerTypeId::Create(Unsigned(object["controller"]));
             if (controller.HasError())
                 throw std::invalid_argument("Invalid controller identity");
@@ -94,6 +120,8 @@ namespace Horo::Application::Internal {
                                                                         .mask = Unsigned(object["mask"])}};
             if (result.participant.layers == 0 || (result.listeners.empty() && result.sources.empty()))
                 throw std::invalid_argument("Controller requires declared endpoint layers and a listener or source");
+            if (hasWatches)
+                result.decisionWatches = ReadDecisionWatches(object["decisionWatches"], result.listeners);
             return result;
         }
 
@@ -236,7 +264,7 @@ namespace Horo::Application::Internal {
                                                 {}};
             policy.controllers.reserve(controllers.size());
             for (const auto &controller : controllers)
-                policy.controllers.push_back(ReadController(controller));
+                policy.controllers.push_back(ReadController(controller, schema == 2));
             constexpr auto key = &ProjectPerceptionControllerSelection::controller;
             std::ranges::sort(policy.controllers, {}, key);
             if (std::ranges::adjacent_find(policy.controllers, {}, key) != policy.controllers.end())
@@ -255,6 +283,11 @@ namespace Horo::Application::Internal {
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(AI::AIErrors::AgentCapacityExceeded));
         }
+    }
+
+    /** @copydoc SelectsReactiveDecisions */
+    bool SelectsReactiveDecisions(const ProjectScenePerceptionPolicy &policy) noexcept {
+        return std::ranges::any_of(policy.controllers, [](const auto &controller) { return !controller.decisionWatches.empty(); });
     }
 
     /** @copydoc FreezeProjectNativePerceptionRegistry */
@@ -319,7 +352,8 @@ namespace Horo::Application::Internal {
                     AI::AiControllerPerceptionEndpoints{.registry = registry,
                                                         .listeners = selection.listeners,
                                                         .sources = selection.sources,
-                                                        .participant = selection.participant});
+                                                        .participant = selection.participant,
+                                                        .decisionWatches = selection.decisionWatches});
                 if (const auto valid = AI::ValidateAiControllerDescriptor(*chosen); valid.HasError())
                     return Output::Failure(valid.ErrorValue());
             }

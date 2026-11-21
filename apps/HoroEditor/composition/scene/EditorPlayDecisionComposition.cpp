@@ -10,7 +10,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
     namespace {
         /** @brief Authoritative scheduler settings and the effective development grant for one Play startup. */
         struct EditorDecisionPolicy final {
-            AI::AiTaskSchedulerSettings scheduler;
+            std::optional<AI::AiTaskSchedulerSettings> scheduler;
             bool debugGranted{};
             std::size_t perceptionWorkUnitsLimit{AI::AiTaskSchedulerSettings::HardWorkUnits};
         };
@@ -27,7 +27,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             if (!resolved.Value())
                 return Policy::Success({{}, selection.decisionDebugGranted});
             const auto &settings = *resolved.Value();
-            if (settings.Scheduler().mode != AI::AiSchedulingMode::Deterministic)
+            if (selection.perceptionPolicy.empty() && settings.Scheduler().mode != AI::AiSchedulingMode::Deterministic)
                 return Policy::Failure(
                     MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Editor Decision Play requires a deterministic project AI scheduler."));
             return Policy::Success({settings.Scheduler(),
@@ -302,9 +302,19 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             return perception;
         if (cancellation.IsCancellationRequested())
             return JobCancelled();
-        auto admitted =
-            RegisterPresentationParticipants(policy,
-                                             AI::AiSceneCookedDecisionExecution{*decisionJobs_, settings.Value().scheduler, {}, {}});
+        const bool reactive = std::ranges::any_of(policy.aiControllers, [](const auto &controller) {
+            return controller.perceptionEndpoints && !controller.perceptionEndpoints->decisionWatches.empty();
+        });
+        const auto mode = reactive ? AI::AiSchedulingMode::BestEffort : AI::AiSchedulingMode::Deterministic;
+        const auto &configured = settings.Value().scheduler;
+        if (configured && configured->mode != mode)
+            return Result<void>::Failure(MakeError(
+                AI::AIErrors::SchedulerPolicyInvalid, "Editor Decision Play scheduler mode must match the authored Perception watches."));
+        AI::AiSceneCookedDecisionExecution execution{*decisionJobs_, configured.value_or(AI::AiTaskSchedulerSettings{}), {}, {}};
+        execution.scheduler.mode = mode;
+        if (reactive)
+            execution.timing = AI::AiCookedDecisionTiming::BestEffortReactive;
+        auto admitted = RegisterPresentationParticipants(policy, std::move(execution));
         if (admitted.HasValue()) {
             inspectionKeys_ = std::move(policy.decisions->inspectionKeys);
             decisionDebugGranted_ = settings.Value().debugGranted;

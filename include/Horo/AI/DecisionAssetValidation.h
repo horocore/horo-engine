@@ -188,6 +188,12 @@ namespace Horo::AI {
         std::optional<BlackboardValue> defaultValue; /**< Owned schema default resolved by stable key identity. */
     };
 
+    /** @brief Compiler-admitted node's declared dependency on a typed perception listener. */
+    struct DecisionWakePerceptionDependency final {
+        DecisionNodeId node;
+        PerceptionListenerTypeId listener;
+    };
+
     /** @brief Flat node record with a contiguous range into the plan's blackboard bindings. */
     struct DecisionPlanNode final {
         DecisionNodeId id;                    /**< Stable authored node identity. */

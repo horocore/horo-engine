@@ -1332,6 +1332,16 @@ startup on the already paired Scene. A listener cannot name an unregistered
 sense, and an insufficient aggregate allowance fails startup before exposing the
 world. Connected hosts receive no native Perception grant.
 
+A schema 2 controller may add a nonempty `decisionWatches` array. Each entry
+names a cooked Decision `node` and a `listener` already declared by the same
+controller. For example, `"decisionWatches": [{"node": 2, "listener": 91}]`
+selects event-only evaluation for that controller in Editor Play and
+authoritative headless sessions. Scene admission checks both identities before
+creating the Decision executor. The graph wakes on watched Perception changes,
+committed Blackboard dependencies, or accepted task continuation events.
+Other controllers retain their fixed-tick cadence. Deterministic headless
+replay requires its regular fixed-tick scheduling policy.
+
 The native public capture path rejects Script origins. The private VM admission
 path is available only to `Gameplay::LuaPerceptionSenseProgram`, which uses the
 existing Lua sandbox and allocator with a bounded instruction hook. Its callback

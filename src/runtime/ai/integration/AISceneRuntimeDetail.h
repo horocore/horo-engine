@@ -123,6 +123,11 @@ namespace Horo::AI::Detail {
         bool closed{};
     };
 
+    /** @brief Resolves node declarations to unique admitted listener identities. */
+    [[nodiscard]] Result<std::vector<PerceptionListenerTypeId>> ResolveCookedPerceptionWatches(
+        const CookedDecisionPlan &plan, const AiControllerPerceptionEndpoints &endpoints,
+        std::span<const DecisionWakePerceptionDependency> dependencies);
+
     /** @brief Resolves an exact live agent generation. @param state Owning publication. @param handle Requested handle. @return Slot or
      * null. */
     [[nodiscard]] AgentRuntimeState *FindAgent(AiSceneRuntimeState &state, AgentHandle handle) noexcept;
