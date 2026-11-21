@@ -41,7 +41,14 @@ namespace Horo::AI {
                 const auto snapshot = CaptureDecisionSnapshot(*state, context.agent);
                 if (snapshot.HasError())
                     return Result<AiSliceOutcome>::Failure(snapshot.ErrorValue());
-                const DecisionGraphStepInput input{context.tick, snapshot.Value().Binding(), snapshot.Value(), {}};
+                const auto &reasons = context.reasons;
+                const auto resume = reasons.blackboard || reasons.perception || reasons.task ? AiTaskResumeReason::Event
+                                                                                              : AiTaskResumeReason::FixedTick;
+                const DecisionGraphStepInput input{.tick = context.tick,
+                                                   .current = snapshot.Value().Binding(),
+                                                   .blackboard = snapshot.Value(),
+                                                   .events = {},
+                                                   .treeResumeReason = resume};
                 auto *capture = state->decisionReplay ? &*state->decisionReplay : nullptr;
                 const bool recording = capture && capture->agent == context.agent && capture->tick == context.tick &&
                                        capture->executor == this && !capture->observed;

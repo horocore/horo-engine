@@ -29,6 +29,7 @@ namespace Horo::AI {
         std::span<const StateMachineEventId> events;
         AiWorkBudget *utilityAgentBudget{};  /**< Required for closures containing Utility. Borrowed for this Step only. */
         AiWorkBudget *utilityGlobalBudget{}; /**< Host-issued global allowance, shared across all evaluated occurrences. */
+        AiTaskResumeReason treeResumeReason{AiTaskResumeReason::FixedTick}; /**< Frozen scheduler wake for Behavior Tree tasks. */
     };
 
     /** @brief One complete executable allocation; actual decision kernels own their existing traversal/task semantics.

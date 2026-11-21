@@ -190,6 +190,58 @@ namespace Horo::AI {
             CHECK(fixture.probe.cleanups == 1);
         }
 
+        TEST_CASE("Scene cooked tasks receive the admitted scheduler event after idle ticks",
+                  "[unit][ai][scene][decision_reservation][scheduler]") {
+            class CommitEmpty final : public IAiCookedDecisionIntentSink {
+            public:
+                Result<bool> Commit(const AiDecisionSliceContext &, AiWorkBudget &) noexcept override {
+                    return Result<bool>::Success(true);
+                }
+
+                void Discard(AgentHandle) noexcept override {}
+            };
+
+            Fixture fixture;
+            fixture.probe.succeedTick = 100;
+            auto source = TaskTree(11);
+            source.executionTask = MakeIdentity<TaskId>(9000);
+            const auto plan = fixture.Compile(std::span{&source, 1}, 11);
+            auto scene = SceneFixture(fixture, *plan);
+            scene.descriptor.cookedPlan = plan;
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            auto runtime = std::move(AiSceneRuntime::Create()).Value();
+            auto publication = TestSupport::Publish(runtime, scene);
+            const auto agent = runtime.Snapshot().Value().Agents().front().handle;
+            REQUIRE(runtime.ActivateCookedDecisionsAtSafePoint({.jobs = jobs,
+                                                               .scheduler = {.mode = AiSchedulingMode::BestEffort},
+                                                               .agent = {.intervalTicks = 0},
+                                                               .intents = std::make_shared<CommitEmpty>(),
+                                                               .timing = AiCookedDecisionTiming::BestEffortExternalFeedback})
+                        .HasValue());
+            auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();
+            const auto tick = [&](const std::uint64_t number) {
+                const auto evaluated = scheduler->EvaluateAtDecision(number);
+                REQUIRE(evaluated.HasValue());
+                CHECK(evaluated.Value().failed == 0);
+                REQUIRE(scheduler->CommitAtIntentDispatch(number).HasValue());
+                return evaluated.Value().evaluated;
+            };
+
+            CHECK(tick(1) == 1);
+            REQUIRE(fixture.probe.tasks.size() == 1);
+            const auto task = fixture.probe.tasks.front();
+            CHECK(tick(2) == 0);
+            CHECK(fixture.probe.resumes == 0);
+            REQUIRE(scheduler->Wake(agent, {.blackboard = true}).HasValue());
+            REQUIRE(scheduler->Wake(agent, {.perception = true, .task = true}).HasValue());
+            CHECK(tick(3) == 1);
+            CHECK(fixture.probe.resumes == 1);
+            CHECK(fixture.probe.lastResumeTask == task);
+            CHECK(fixture.probe.lastResumeReason == AiTaskResumeReason::Event);
+            CHECK(tick(4) == 0);
+            runtime.BeginShutdown();
+        }
+
         TEST_CASE("Scene decision replacement fences the old image and preserves the Blackboard across a clean restart",
                   "[unit][ai][scene][decision_reservation][scheduler]") {
             Fixture old;
@@ -245,6 +297,7 @@ namespace Horo::AI {
             CHECK(old.probe.aborts == 0);
             REQUIRE(scheduler->EvaluateAtDecision(2).HasValue());
             CHECK(old.probe.resumes == 1);
+            CHECK(old.probe.lastResumeReason == AiTaskResumeReason::FixedTick);
             REQUIRE(scheduler->CommitAtIntentDispatch(2).HasValue());
 
             bool evaluationDuringAbortRejected{};

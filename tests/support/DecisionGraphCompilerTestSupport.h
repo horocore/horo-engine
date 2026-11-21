@@ -39,6 +39,7 @@ namespace Horo::AI::DecisionGraphTestSupport {
         std::vector<AiTaskCancellationReason> abortReasons;
         AiTaskContinuation continuation;
         TaskHandle lastResumeTask;
+        std::optional<AiTaskResumeReason> lastResumeReason;
         std::uint64_t succeedTick{2};
         std::size_t factories{};
         std::size_t starts{};
@@ -74,6 +75,7 @@ namespace Horo::AI::DecisionGraphTestSupport {
                                    const AiTaskOperationContext &operation) noexcept override {
             ++probe_.resumes;
             probe_.lastResumeTask = operation.task;
+            probe_.lastResumeReason = context.reason;
             if (!immediate_ && probe_.resumeOutcome)
                 return *probe_.resumeOutcome;
             return Result<AiTaskState>::Success((immediate_ || context.tick >= probe_.succeedTick) ? AiTaskState::Succeeded

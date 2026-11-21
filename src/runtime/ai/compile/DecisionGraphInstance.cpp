@@ -281,7 +281,7 @@ namespace Horo::AI {
             return AdvanceUtility(index);
         if (!state.tree)
             return AdvanceMachine(index);
-        auto stepped = state.tree->Evaluate(input.tick, input.blackboard, input.current.agent);
+        auto stepped = state.tree->Evaluate(input.tick, input.blackboard, input.current.agent, input.treeResumeReason);
         if (trace_)
             state.tree->AppendTrace(TraceOccurrence(index), *trace_);
         if (stepped.HasError())
@@ -312,7 +312,8 @@ namespace Horo::AI {
     }
 
     Result<void> DecisionGraphInstance::ValidateStep(const DecisionGraphStepInput &input) const {
-        if (std::this_thread::get_id() != owner_ || evaluating_ || shutdown_ || input.tick == 0 || input.tick <= lastTick_)
+        if (std::this_thread::get_id() != owner_ || evaluating_ || shutdown_ || input.tick == 0 || input.tick <= lastTick_ ||
+            input.treeResumeReason >= AiTaskResumeReason::Count)
             return Invalid<void>(AIErrors::TaskTransitionInvalid);
         const auto schema = plan_->Graphs()[plan_->Occurrences()[0].plan].bindings->BlackboardSchema();
         if (!MatchesBlackboard(input, binding_.blackboard, schema))
