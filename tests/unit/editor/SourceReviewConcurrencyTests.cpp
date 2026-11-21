@@ -89,10 +89,10 @@ namespace {
         REQUIRE(audit);
         workspace.reviews.RecordAppliedAudit(&workspace.jobs, workspace.project.directory, &mutations, &workspace.files);
         REQUIRE(workspace.reviews.Status().writingAudit);
-        const auto waitForHistory = [&workspace](SourceReviewTransactions &owner, const auto &pending) {
+        const auto waitForHistory = [&workspace, &mutations](SourceReviewTransactions &owner, const auto &pending) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
             while (pending(owner.Status()) && std::chrono::steady_clock::now() < deadline) {
-                owner.UpdateAuditHistory(&workspace.jobs, workspace.project.directory);
+                owner.UpdateAuditHistory(&workspace.jobs, workspace.project.directory, &mutations, &workspace.files);
                 std::this_thread::sleep_for(std::chrono::milliseconds{1});
             }
             REQUIRE_FALSE(pending(owner.Status()));
@@ -100,6 +100,23 @@ namespace {
         waitForHistory(workspace.reviews, [](const auto &state) {
             return state.writingAudit;
         });
+        CHECK_FALSE(workspace.reviews.Status().auditHistoryError);
+
+        auto expected = SourceReviewDisposition::Stale;
+        SECTION("A history entry can survive an interrupted unsaved application") {
+            CHECK(workspace.reviews.Status().disposition == SourceReviewDisposition::Applied);
+        }
+        SECTION("Durable source saves advance the same historical transaction") {
+            REQUIRE(workspace.documents.SaveAll(workspace.files).HasValue());
+            expected = SourceReviewDisposition::Saved;
+        }
+        SECTION("Explicit group undo advances the same historical transaction") {
+            EditorWorkspaceViewCommandData revert;
+            REQUIRE(workspace.reviews.QueueUndo(workspace.lifetime.Token(), revert));
+            REQUIRE(workspace.Process(revert));
+            expected = SourceReviewDisposition::Reverted;
+        }
+        REQUIRE(workspace.reviews.DrainAuditHistory(&workspace.jobs, workspace.project.directory, &mutations, &workspace.files));
         CHECK_FALSE(workspace.reviews.Status().auditHistoryError);
 
         SourceReviewTransactions reopened;
@@ -111,6 +128,8 @@ namespace {
         CHECK(historical.audit->proposal.digest == audit->proposal.digest);
         CHECK(historical.audit->decisionDigest == audit->decisionDigest);
         CHECK(historical.feedback == SourceTransactionFeedback::None);
+        CHECK(historical.disposition == expected);
+        CHECK(historical.audit->historySequence == 1);
         CHECK_FALSE(historical.canUndo);
         EditorWorkspaceViewCommandData undo;
         CHECK_FALSE(reopened.QueueUndo(workspace.lifetime.Token(), undo));
@@ -121,7 +140,8 @@ namespace {
         for (const auto *sensitive : {"private-provider-label", "agent replacement", "a.cpp", "b.cpp", "provider"})
             CHECK(bytes.find(sensitive) == std::string::npos);
         std::ifstream disk(workspace.project.directory / "a.cpp", std::ios::binary);
-        CHECK((std::string{std::istreambuf_iterator<char>{disk}, {}} == "base"));
+        const std::string source{std::istreambuf_iterator<char>{disk}, {}};
+        CHECK(source == (expected == SourceReviewDisposition::Saved ? "agent replacement" : "base"));
     }
 
     TEST_CASE("Source review history retains bounded records and preserves corrupt evidence", "[editor][source][review][history]") {
@@ -133,7 +153,10 @@ namespace {
         auto audit = *workspace.reviews.Status().audit;
         for (std::size_t index = 0; index <= SourceReviewHistoryCapacity; ++index) {
             audit.proposal.revision = index + 1;
-            REQUIRE(AppendSourceReviewHistory(workspace.project.directory, audit, mutations, workspace.files).HasValue());
+            const auto written = WriteSourceReviewHistory(workspace.project.directory, audit, 0, SourceReviewDisposition::Applied,
+                                                          mutations, workspace.files);
+            REQUIRE(written.HasValue());
+            CHECK(written.Value() == index + 1);
         }
         const auto latest = ReadSourceReviewHistory(workspace.project.directory);
         REQUIRE(latest.HasValue());
@@ -147,7 +170,8 @@ namespace {
         }
         workspace.project.Put("interrupted", historyName);
         CHECK(ReadSourceReviewHistory(workspace.project.directory).HasError());
-        CHECK(AppendSourceReviewHistory(workspace.project.directory, audit, mutations, workspace.files).HasError());
+        CHECK(WriteSourceReviewHistory(workspace.project.directory, audit, 0, SourceReviewDisposition::Applied, mutations, workspace.files)
+                  .HasError());
         std::ifstream stored(path, std::ios::binary);
         CHECK((std::string{std::istreambuf_iterator<char>{stored}, {}} == "interrupted"));
     }
@@ -162,6 +186,7 @@ namespace {
             REQUIRE(workspace.Process(alphaFirst ? alpha : beta));
             workspace.Drain();
             REQUIRE(workspace.reviews.Status().feedback == SourceTransactionFeedback::Applied);
+            CHECK(workspace.reviews.Status().disposition == SourceReviewDisposition::Applied);
             const auto applied = workspace.Snapshots();
             CHECK(applied[0].Text() == (alphaFirst ? "alpha" : "beta"));
             CHECK(applied[0].Text() == applied[1].Text());
@@ -176,12 +201,37 @@ namespace {
             REQUIRE(workspace.reviews.QueueUndo(workspace.lifetime.Token(), undo));
             REQUIRE(workspace.Process(undo));
             CHECK(workspace.reviews.Status().feedback == SourceTransactionFeedback::Undone);
+            CHECK(workspace.reviews.Status().disposition == SourceReviewDisposition::Reverted);
             const auto restored = workspace.Snapshots();
             CHECK(restored[0].Text() == "base");
             CHECK(restored[1].Text() == "base");
             CHECK(restored[0].Revision() == 3 + 2 * index);
             CHECK(restored[0].Revision() == restored[1].Revision());
         }
+    }
+
+    TEST_CASE("Source review disposition requires exact in-place saves for the entire applied group", "[editor][source][review][history]") {
+        ReviewWorkspace workspace;
+        REQUIRE(workspace.Process(workspace.Queue("proposal", "agent")));
+        workspace.Drain();
+        const auto applied = workspace.Snapshots();
+        REQUIRE(workspace.reviews.Status().disposition == SourceReviewDisposition::Applied);
+        REQUIRE(workspace.documents.Save({workspace.a.instance, applied[0].Revision(), {}}, workspace.files).HasValue());
+        CHECK(workspace.reviews.Status().disposition == SourceReviewDisposition::Applied);
+        SECTION("Every changed source was saved at the applied revision") {
+            REQUIRE(workspace.documents.Save({workspace.b.instance, applied[1].Revision(), {}}, workspace.files).HasValue());
+            CHECK(workspace.reviews.Status().disposition == SourceReviewDisposition::Saved);
+            REQUIRE(workspace.documents.Close(workspace.a.instance).HasValue());
+            REQUIRE(workspace.documents.Close(workspace.b.instance).HasValue());
+            CHECK(workspace.reviews.Status().disposition == SourceReviewDisposition::Saved);
+        }
+        SECTION("An intervening user edit invalidates the unsaved review") {
+            const auto edited = workspace.documents.Edit(workspace.b.instance, {applied[1].Revision(), 0, 5, "user"});
+            REQUIRE(edited.HasValue());
+            REQUIRE(workspace.documents.Save({workspace.b.instance, edited.Value().Revision(), {}}, workspace.files).HasValue());
+            CHECK(workspace.reviews.Status().disposition == SourceReviewDisposition::Stale);
+        }
+        CHECK_FALSE(workspace.reviews.Status().canUndo);
     }
 
     TEST_CASE("Source edits and retired workspace requests preserve all live documents", "[editor][source][review][concurrency]") {

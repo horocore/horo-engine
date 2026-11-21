@@ -989,7 +989,7 @@ namespace Horo::Editor {
                 if (const auto *key = keys[static_cast<std::size_t>(state.feedback)])
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, key), Theme::Text(), fonts);
                 if (state.audit)
-                    DrawSourceAudit(*state.audit, locale, fonts);
+                    DrawSourceAudit(*state.audit, state.disposition, locale, fonts);
                 if (state.auditHistoryError)
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "source_patch_audit_history_error"),
                                     Theme::Text(), fonts);
@@ -998,9 +998,13 @@ namespace Horo::Editor {
             }
 
             /** @brief Presents the content-free proposal identifier for the latest successful application. */
-            void DrawSourceAudit(const Proposals::SourceReviewAudit &audit, const ILocalizationService &locale, const Theme::Fonts &fonts) {
+            void DrawSourceAudit(const Proposals::SourceReviewAudit &audit, const Proposals::SourceReviewDisposition disposition,
+                                 const ILocalizationService &locale, const Theme::Fonts &fonts) {
+                constexpr std::array keys{"source_patch_audit_historical", "source_patch_audit_applied", "source_patch_audit_saved",
+                                          "source_patch_audit_reverted", "source_patch_audit_stale"};
                 const auto label =
-                    std::format("{} {}", LocalizedText(locale, "source_patch_audit_proposal"), FormatSha256(audit.proposal.digest));
+                    std::format("{} {} · {}", LocalizedText(locale, "source_patch_audit_proposal"), FormatSha256(audit.proposal.digest),
+                                LocalizedText(locale, keys[static_cast<std::size_t>(disposition)]));
                 Ui::WrappedText(ImGui::GetContentRegionAvail().x, label, Theme::Muted(), fonts);
             }
 

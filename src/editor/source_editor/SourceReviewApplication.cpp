@@ -43,7 +43,32 @@ namespace Horo::Editor {
         const bool canUndo = !preparing_ && batch_.CanUndo() && std::ranges::all_of(batch_.Items(), [](const auto &item) {
             return !item.changed || item.snapshot.IsCurrent();
         });
-        return {feedback_, canUndo, audit_, auditWrite_.has_value(), auditHistoryError_};
+        return {feedback_, canUndo, audit_, auditWrite_.has_value(), auditHistoryError_, Disposition()};
+    }
+
+    /** @copydoc SourceReviewTransactions::Disposition */
+    Proposals::SourceReviewDisposition SourceReviewTransactions::Disposition() const noexcept {
+        using enum Proposals::SourceReviewDisposition;
+        if (reverted_)
+            return Reverted;
+        if (batch_.Items().empty()) {
+            const auto previous = audit_ ? audit_->disposition : Historical;
+            return previous == Applied ? Stale : previous;
+        }
+        bool sawSave{};
+        bool needsSave{};
+        for (const auto &item : batch_.Items()) {
+            if (!item.changed)
+                continue;
+            if (item.snapshot.WasSavedInPlace()) {
+                sawSave = true;
+                continue;
+            }
+            if (!item.snapshot.IsCurrent())
+                return Stale;
+            needsSave = true;
+        }
+        return sawSave && !needsSave ? Saved : Applied;
     }
 
     /** @copydoc SourceReviewTransactions::QueueUndo */
@@ -129,12 +154,15 @@ namespace Horo::Editor {
         auto outcome = std::move(applied).Value();
         batch_ = std::move(outcome.batch);
         audit_ = std::move(outcome.audit);
+        reverted_ = false;
+        auditSequence_ = 0;
         feedback_ = Feedback::Applied;
         return true;
     }
 
     /** @copydoc SourceReviewTransactions::UpdateAuditHistory */
-    void SourceReviewTransactions::UpdateAuditHistory(const JobSystem *jobs, const std::filesystem::path &root) {
+    void SourceReviewTransactions::UpdateAuditHistory(const JobSystem *jobs, const std::filesystem::path &root,
+                                                      const ProjectMutationCoordinator *mutations, DurableFileSystem *files) {
         if (auditRead_) {
             if (const auto snapshot = auditRead_->job.Snapshot(); snapshot && snapshot->terminalResult) {
                 if (!audit_) {
@@ -144,12 +172,27 @@ namespace Horo::Editor {
                 auditRead_.reset();
             }
         }
-        if (auditWrite_) {
-            if (const auto snapshot = auditWrite_->Snapshot(); snapshot && snapshot->terminalResult) {
-                auditHistoryError_ = snapshot->state != JobState::Succeeded;
-                auditWrite_.reset();
-            }
-        }
+        PollHistoryWrite();
+        if (auditSequence_ && !auditWrite_ && Disposition() != scheduledDisposition_)
+            RecordAppliedAudit(jobs, root, mutations, files);
+        BeginHistoryRead(jobs, root);
+    }
+
+    /** @copydoc SourceReviewTransactions::PollHistoryWrite */
+    void SourceReviewTransactions::PollHistoryWrite() {
+        if (!auditWrite_)
+            return;
+        const auto snapshot = auditWrite_->job.Snapshot();
+        if (!snapshot || !snapshot->terminalResult)
+            return;
+        auditHistoryError_ = snapshot->state != JobState::Succeeded;
+        if (!auditHistoryError_)
+            auditSequence_ = *auditWrite_->sequence;
+        auditWrite_.reset();
+    }
+
+    /** @copydoc SourceReviewTransactions::BeginHistoryRead */
+    void SourceReviewTransactions::BeginHistoryRead(const JobSystem *jobs, const std::filesystem::path &root) {
         if (auditReadRequested_ || !jobs || root.empty())
             return;
         auditReadRequested_ = true;
@@ -173,18 +216,44 @@ namespace Horo::Editor {
         auditHistoryError_ = true;
     }
 
+    /** @copydoc SourceReviewTransactions::DrainAuditHistory */
+    bool SourceReviewTransactions::DrainAuditHistory(const JobSystem *jobs, const std::filesystem::path &root,
+                                                     const ProjectMutationCoordinator *mutations, DurableFileSystem *files) {
+        constexpr JoinOptions join{WaitPolicy::OwnerThreadBlockAllowed, Duration::FromMilliseconds(1000)};
+        if (auditWrite_) {
+            static_cast<void>(auditWrite_->job.Wait(join));
+            PollHistoryWrite();
+        }
+        if (auditWrite_)
+            return false;
+        if (auditSequence_ && Disposition() != scheduledDisposition_)
+            RecordAppliedAudit(jobs, root, mutations, files);
+        if (auditWrite_) {
+            static_cast<void>(auditWrite_->job.Wait(join));
+            PollHistoryWrite();
+        }
+        return !auditWrite_ && !auditHistoryError_;
+    }
+
     /** @copydoc SourceReviewTransactions::RecordAppliedAudit */
     void SourceReviewTransactions::RecordAppliedAudit(const JobSystem *jobs, const std::filesystem::path &root,
                                                       const ProjectMutationCoordinator *mutations, DurableFileSystem *files) {
-        if (!audit_ || !jobs || !mutations || !files)
+        if (!audit_ || auditWrite_ || !jobs || !mutations || !files)
             return;
+        scheduledDisposition_ = Disposition();
         try {
+            auto sequence = std::make_shared<std::uint64_t>(auditSequence_);
             auto job = jobs->SubmitResult({.priority = JobPriority::Interactive, .resource = JobResource::Io},
-                                          [root, record = audit_, mutations, files](const CancellationToken &stop) {
-                return AppendSourceReviewHistory(root, *record, *mutations, *files, stop);
+                                          [root, record = audit_, mutations, files, sequence,
+                                           disposition = scheduledDisposition_](const CancellationToken &stop) {
+                const auto stored = WriteSourceReviewHistory(root, *record, *sequence, disposition, *mutations, *files, stop);
+                if (stored.HasError())
+                    return Result<void>::Failure(stored.ErrorValue());
+                *sequence = stored.Value();
+                return Result<void>::Success();
             });
             if (job.HasValue()) {
-                auditWrite_ = std::move(job).Value();
+                auditWrite_.emplace(HistoryWrite{std::move(job).Value(), std::move(sequence)});
                 return;
             }
         } catch (const std::bad_alloc &) {
@@ -209,6 +278,7 @@ namespace Horo::Editor {
             return;
         }
         batch_ = {};
+        reverted_ = true;
         feedback_ = Feedback::Undone;
     }
 }  // namespace Horo::Editor

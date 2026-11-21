@@ -15,12 +15,16 @@ namespace Horo::Editor {
     [[nodiscard]] Result<std::shared_ptr<const Proposals::SourceReviewAudit>> ReadSourceReviewHistory(const std::filesystem::path &root,
                                                                                                       const CancellationToken &stop = {});
 
-    /** @brief Appends one applied audit and atomically retains the newest bounded records.
+    /** @brief Appends a new application or updates the exact current history entry under the same lease.
      * @param root Authorized project root. @param audit Content-free application receipt.
+     * @param sequence Zero for a new entry, otherwise the identity returned by the durable append.
+     * @param outcome Exact latest observation of the application.
      * @param mutations Shared project authority. @param files Tracked filesystem. @param stop Cooperative cancellation.
-     * @return Success only after confirmed durable publication. Corrupt history remains available for inspection.
+     * @return Durable sequence, or a typed error that preserves corrupt or concurrently changed history.
      */
-    [[nodiscard]] Result<void> AppendSourceReviewHistory(const std::filesystem::path &root, const Proposals::SourceReviewAudit &audit,
-                                                         const ProjectMutationCoordinator &mutations, DurableFileSystem &files,
-                                                         const CancellationToken &stop = {});
+    [[nodiscard]] Result<std::uint64_t> WriteSourceReviewHistory(const std::filesystem::path &root,
+                                                                 const Proposals::SourceReviewAudit &audit, std::uint64_t sequence,
+                                                                 Proposals::SourceReviewDisposition outcome,
+                                                                 const ProjectMutationCoordinator &mutations, DurableFileSystem &files,
+                                                                 const CancellationToken &stop = {});
 }  // namespace Horo::Editor

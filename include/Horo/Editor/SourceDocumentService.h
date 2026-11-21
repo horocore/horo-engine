@@ -96,6 +96,11 @@ namespace Horo::Editor {
          * A stale snapshot remains an immutable byte lease.
          */
         [[nodiscard]] bool IsCurrent() const noexcept;
+        /** @brief Observes whether this exact revision was durably saved to its original source identity.
+         * @return True after an in-place durable save started from this revision.
+         * @details The owner marks the receipt once. Detached snapshots retain it after later edits or close.
+         */
+        [[nodiscard]] bool WasSavedInPlace() const noexcept;
         /** @brief Returns the monotonic committed observation/edit revision. @return Zero when inert. */
         [[nodiscard]] std::uint64_t Revision() const noexcept;
         /** @brief Returns the revision of the last explicitly loaded or durably saved disk base. @return Zero when inert. */

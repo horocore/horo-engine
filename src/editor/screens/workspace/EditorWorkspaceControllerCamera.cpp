@@ -62,6 +62,8 @@ namespace Horo::Editor {
         static_cast<void>(DrainUiCanvasRecovery());
         JoinAiDocumentRecovery();
         static_cast<void>(DrainPrefabRecovery());
+        if (!m_sourceReviews.DrainAuditHistory(m_sourceRecoveryJobs, ProjectRoot(), m_mutations, m_durableFiles))
+            LOG_ERROR("editor.source.review", "%s", "Source review history did not finish writing.");
         StopPrefabExternalWatch();
         static_cast<void>(ShutdownTerrainDocuments(true));
         ShutdownTerrainCook();

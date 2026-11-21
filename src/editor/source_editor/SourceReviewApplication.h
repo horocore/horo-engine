@@ -36,9 +36,11 @@ namespace Horo::Editor {
         bool Poll(SourceDocumentService &documents, const DurableFileSystem *files);
         /** @brief Polls history jobs and requests the initial read once for this workspace.
          * @param jobs Host job system. @param root Authorized project root.
+         * @param mutations Shared project mutation owner. @param files Tracked filesystem.
          * @details Adopted attribution carries no source owner receipt or undo authority.
          */
-        void UpdateAuditHistory(const JobSystem *jobs, const std::filesystem::path &root);
+        void UpdateAuditHistory(const JobSystem *jobs, const std::filesystem::path &root,
+                                const ProjectMutationCoordinator *mutations = nullptr, DurableFileSystem *files = nullptr);
         /** @brief Records the just-published receipt after Poll returned true.
          * @param jobs Host job system. @param root Authorized project root.
          * @param mutations Shared project mutation owner. @param files Tracked filesystem.
@@ -46,12 +48,26 @@ namespace Horo::Editor {
          */
         void RecordAppliedAudit(const JobSystem *jobs, const std::filesystem::path &root, const ProjectMutationCoordinator *mutations,
                                 DurableFileSystem *files);
+        /** @brief Drains an application write and its final observed outcome during orderly workspace retirement.
+         * @param jobs Host job system. @param root Authorized project root.
+         * @param mutations Shared project mutation owner. @param files Tracked filesystem.
+         * @return True only if the queued history writes completed durably within the shutdown wait.
+         */
+        [[nodiscard]] bool DrainAuditHistory(const JobSystem *jobs, const std::filesystem::path &root,
+                                             const ProjectMutationCoordinator *mutations, DurableFileSystem *files);
         /** @brief Reads the latest feedback and whether every changed document still permits group undo. */
         [[nodiscard]] Proposals::SourceTransactionStatus Status() const noexcept;
         /** @brief Stages one grouped undo when its receipt remains current. */
         [[nodiscard]] bool QueueUndo(const CancellationToken &lifetime, EditorWorkspaceViewCommandData &command) const;
 
     private:
+        /** @brief Classifies the latest successful group's owner or save evidence. */
+        [[nodiscard]] Proposals::SourceReviewDisposition Disposition() const noexcept;
+        /** @brief Schedules the initial read only when no earlier read was submitted or attempted. */
+        void BeginHistoryRead(const JobSystem *jobs, const std::filesystem::path &root);
+        /** @brief Consumes one completed write without waiting on an I/O worker. */
+        void PollHistoryWrite();
+
         /** @brief Submits immutable review preparation on the host job system. */
         void Start(std::shared_ptr<const SourceReviewApplication> request, const JobSystem *jobs, const std::filesystem::path &root,
                    const DurableFileSystem *files, const CancellationToken &lifetime);
@@ -60,6 +76,7 @@ namespace Horo::Editor {
         SourceEditBatch batch_;
         std::shared_ptr<const Proposals::SourceReviewAudit> audit_;
         Proposals::SourceTransactionFeedback feedback_{};
+        bool reverted_{};
 
         struct Preparation final {
             JobHandle job;
@@ -74,8 +91,15 @@ namespace Horo::Editor {
             std::shared_ptr<std::shared_ptr<const Proposals::SourceReviewAudit>> latest;
         };
 
+        struct HistoryWrite final {
+            JobHandle job;
+            std::shared_ptr<std::uint64_t> sequence;
+        };
+
         std::optional<HistoryRead> auditRead_;
-        std::optional<JobHandle> auditWrite_;
+        std::optional<HistoryWrite> auditWrite_;
+        std::uint64_t auditSequence_{};
+        Proposals::SourceReviewDisposition scheduledDisposition_{};
         bool auditReadRequested_{};
         bool auditHistoryError_{};
     };

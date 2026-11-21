@@ -9,7 +9,7 @@
 namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::UpdateSourceAutosave */
     void EditorWorkspaceController::UpdateSourceAutosave(const float elapsedSeconds, const int delaySeconds) {
-        m_sourceReviews.UpdateAuditHistory(m_sourceRecoveryJobs, ProjectRoot());
+        m_sourceReviews.UpdateAuditHistory(m_sourceRecoveryJobs, ProjectRoot(), m_mutations, m_durableFiles);
         if (m_sourceReviews.Poll(m_sourceOpenService.Documents(), m_durableFiles)) {
             m_sourceReviews.RecordAppliedAudit(m_sourceRecoveryJobs, ProjectRoot(), m_mutations, m_durableFiles);
             RefreshSourceDocumentProjection();

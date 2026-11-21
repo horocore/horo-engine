@@ -190,12 +190,15 @@ TEST_CASE("Source save advances durable base while retained snapshots keep origi
     SourceFileOpenService open(project.root);
     Files files;
     const auto edited = OpenEdit(open);
+    CHECK_FALSE(edited.WasSavedInPlace());
     const auto result = open.Documents().Save(Request(edited), files);
     REQUIRE(result.HasValue());
     CHECK(result.Value().disposition == SourceSaveDisposition::Durable);
     CHECK_FALSE(result.Value().snapshot.Dirty());
     CHECK(result.Value().snapshot.Revision() == edited.Revision() + 1);
     CHECK(result.Value().snapshot.BaseRevision() == result.Value().snapshot.Revision());
+    CHECK(edited.WasSavedInPlace());
+    CHECK_FALSE(result.Value().snapshot.WasSavedInPlace());
     CHECK(project.Read("code.cpp") == edited.Text());
     CHECK(edited.Dirty());
     CHECK(edited.DiskBase() == "base\n");
@@ -261,6 +264,7 @@ TEST_CASE("Source visible unconfirmed replacement never reports rollback or clea
     auto result = open.Documents().Save(Request(edited), files);
     REQUIRE(result.HasValue());
     CHECK(result.Value().disposition == SourceSaveDisposition::VisibleDurabilityUnconfirmed);
+    CHECK_FALSE(edited.WasSavedInPlace());
     REQUIRE(result.Value().diagnostic);
     CHECK(result.Value().snapshot.Dirty());
     CHECK_FALSE(result.Value().snapshot.SharesStateWith(edited));
@@ -281,6 +285,7 @@ TEST_CASE("Source Save As publishes the same instance and leaves original file a
     auto saved = open.SaveAs(Request(edited), destination, files);
     REQUIRE(saved.HasValue());
     const auto identity = saved.Value().snapshot.Identity();
+    CHECK_FALSE(edited.WasSavedInPlace());
     CHECK(identity.instance == edited.Identity().instance);
     const auto encoded = destination.generic_u8string();
     CHECK((identity.key.source.Value() == std::string{encoded.begin(), encoded.end()}));

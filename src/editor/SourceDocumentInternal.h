@@ -14,6 +14,14 @@ namespace Horo::Editor::Detail {
     };
 
     struct SourceDocumentRoot final {
+        SourceDocumentRoot() = default;
+
+        /** @brief Clones source data into a new publication without transferring a prior save receipt. */
+        explicit SourceDocumentRoot(const SourceDocumentRoot &previous)
+            : identity(previous.identity), currentRevision(previous.currentRevision), revision(previous.revision),
+              baseRevision(previous.baseRevision), text(previous.text), base(previous.base), external(previous.external),
+              saveUnconfirmed(previous.saveUnconfirmed) {}
+
         DocumentIdentity identity;
         /** @brief Shared per-incarnation witness. The owner writes the exact revision before publication and zero before retirement.
          * Worker snapshots only read it. It outlives the owner until the last immutable root is released.
@@ -25,6 +33,8 @@ namespace Horo::Editor::Detail {
         std::shared_ptr<const SourceText> base;
         SourceExternalState external{SourceExternalState::InSync};
         bool saveUnconfirmed{};
+        /** @brief Owner-lane write-once receipt for this exact revision, observed by immutable readers. */
+        mutable std::atomic_bool savedInPlace{};
     };
 
     /** @brief Validates bounded scalar text and captures exact non-normalized encoding metadata. */

@@ -830,6 +830,14 @@ its receipt. Atomic publication retains the most recent 16 applications in
 leases. Reopening a workspace reads historical attribution without restoring a
 live transaction or touching source files. Corrupt history stays on disk and
 the panel reports a read or publication error.
+Each record has a project-local sequence, assigned under the writer lease.
+The editor advances only the outcome of that exact record. An application is
+saved when every changed revision has a durable in-place source save receipt.
+Source Save As, later edits, and unconfirmed writes cannot supply that proof.
+An explicit group undo records a reverted application. An invalidated unsaved
+revision or an applied-only record reopened without live ownership is stale.
+The reader retains older records without outcome evidence as historical
+attribution. It never authorizes replay or replaces source bytes.
 
 ## Backend Providers
 

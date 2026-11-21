@@ -2,12 +2,14 @@
 
 #include "Horo/Assets/AssetSourcePublication.h"
 
+#include <limits>
 #include <new>
 
 namespace Horo::Editor {
     namespace {
         using Audit = Proposals::SourceReviewAudit;
         using Latest = Result<std::shared_ptr<const Audit>>;
+        using Sequence = Result<std::uint64_t>;
         constexpr std::string_view HistoryHeader = "horo.source-review-history.v1\n";
         constexpr auto MaximumHistoryBytes =
             HistoryHeader.size() + SourceReviewHistoryCapacity * (Proposals::MaximumSourceReviewAuditBytes + 1);
@@ -17,6 +19,7 @@ namespace Horo::Editor {
         struct History final {
             std::optional<Audit> latest;
             std::size_t retainedFrom{HistoryHeader.size()};
+            std::size_t latestFrom{HistoryHeader.size()};
         };
 
         /** @brief Uses the project's physical root for bounded no-follow publication. */
@@ -49,6 +52,7 @@ namespace Horo::Editor {
             const auto firstEnd = bytes.find('\n');
             History history;
             std::size_t count{};
+            std::size_t offset = HistoryHeader.size();
             while (!bytes.empty() && count < SourceReviewHistoryCapacity) {
                 const auto end = bytes.find('\n');
                 if (end == std::string_view::npos)
@@ -56,6 +60,10 @@ namespace Horo::Editor {
                 auto decoded = Proposals::DecodeSourceReviewAudit(bytes.substr(0, end));
                 if (decoded.HasError())
                     return Output::Failure(decoded.ErrorValue());
+                if (history.latest && history.latest->historySequence && decoded.Value().historySequence <= history.latest->historySequence)
+                    return Output::Failure(MakeError(Proposals::Errors::Malformed));
+                history.latestFrom = offset;
+                offset += end + 1;
                 history.latest = std::move(decoded).Value();
                 bytes.remove_prefix(end + 1);
                 ++count;
@@ -65,6 +73,23 @@ namespace Horo::Editor {
             if (count == SourceReviewHistoryCapacity)
                 history.retainedFrom += firstEnd + 1;
             return Output::Success(std::move(history));
+        }
+
+        /** @brief Allocates or reuses only an exact, still-current application sequence. */
+        Sequence ClaimSequence(const History &history, const Audit &audit, const std::uint64_t expected) {
+            const auto latest = history.latest ? history.latest->historySequence : 0;
+            if (!expected && latest < std::numeric_limits<std::uint64_t>::max())
+                return Sequence::Success(latest + 1);
+            if (history.latest && expected && latest == expected && history.latest->proposal.digest == audit.proposal.digest &&
+                history.latest->decisionDigest == audit.decisionDigest)
+                return Sequence::Success(expected);
+            return Sequence::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        }
+
+        /** @brief Once a completed outcome is stored, only an idempotent write may retain it. */
+        bool CanRecordOutcome(const History &history, const std::uint64_t sequence, const Proposals::SourceReviewDisposition next) {
+            return !sequence || history.latest->disposition == Proposals::SourceReviewDisposition::Applied ||
+                   history.latest->disposition == next;
         }
 
         /** @brief Retires only the reserved, single-link staging file under the held publication lease. */
@@ -125,37 +150,51 @@ namespace Horo::Editor {
         }
     }
 
-    /** @copydoc AppendSourceReviewHistory */
-    Result<void> AppendSourceReviewHistory(const std::filesystem::path &root, const Audit &audit,
-                                           const ProjectMutationCoordinator &mutations, DurableFileSystem &files,
-                                           const CancellationToken &stop) {
+    /** @copydoc WriteSourceReviewHistory */
+    Sequence WriteSourceReviewHistory(const std::filesystem::path &root, const Audit &audit, const std::uint64_t sequence,
+                                      const Proposals::SourceReviewDisposition outcome, const ProjectMutationCoordinator &mutations,
+                                      DurableFileSystem &files, const CancellationToken &stop) {
         try {
             const auto canonical = CanonicalRoot(root);
             if (canonical.HasError())
-                return Result<void>::Failure(canonical.ErrorValue());
-            const auto record = Proposals::EncodeSourceReviewAudit(audit);
-            if (record.HasError())
-                return Result<void>::Failure(record.ErrorValue());
+                return Sequence::Failure(canonical.ErrorValue());
             const auto &project = canonical.Value();
             const auto path = project / HistoryPath;
             const auto authority = mutations.TryAcquire({project, ProjectMutationOwner::Autosave, "source-review-history"});
             if (authority.HasError())
-                return Result<void>::Failure(authority.ErrorValue());
+                return Sequence::Failure(authority.ErrorValue());
             const auto current = Assets::CaptureAssetSource(project, path, MaximumHistoryBytes, stop);
             if (current.HasError())
-                return Result<void>::Failure(current.ErrorValue());
+                return Sequence::Failure(current.ErrorValue());
             const auto &capture = current.Value();
             const auto existing = Text(capture);
             const auto history = DecodeHistory(existing, capture.identity.exists);
             if (history.HasError())
-                return Result<void>::Failure(history.ErrorValue());
+                return Sequence::Failure(history.ErrorValue());
+            const auto id = ClaimSequence(history.Value(), audit, sequence);
+            if (id.HasError())
+                return id;
+            if (!CanRecordOutcome(history.Value(), sequence, outcome))
+                return Sequence::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+            auto entry = audit;
+            entry.historySequence = id.Value();
+            entry.disposition = outcome;
+            const auto record = Proposals::EncodeSourceReviewAudit(entry);
+            if (record.HasError())
+                return Sequence::Failure(record.ErrorValue());
             auto bytes = std::string{HistoryHeader};
-            if (capture.identity.exists)
-                bytes.append(existing.substr(history.Value().retainedFrom));
+            if (capture.identity.exists) {
+                const auto body = sequence ? existing.substr(HistoryHeader.size(), history.Value().latestFrom - HistoryHeader.size())
+                                           : existing.substr(history.Value().retainedFrom);
+                bytes.append(body);
+            }
             bytes.append(record.Value()).push_back('\n');
-            return PublishHistory(project, path, bytes, capture.identity, files, stop);
+            const auto published = PublishHistory(project, path, bytes, capture.identity, files, stop);
+            if (published.HasError())
+                return Sequence::Failure(published.ErrorValue());
+            return id;
         } catch (const std::bad_alloc &) {
-            return Result<void>::Failure(MakeError(Proposals::Errors::Bounds));
+            return Sequence::Failure(MakeError(Proposals::Errors::Bounds));
         }
     }
 }  // namespace Horo::Editor

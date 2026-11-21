@@ -391,6 +391,7 @@ namespace Horo::Editor::Proposals {
         }
 
         constexpr std::string_view SourceReviewAuditFormat = "horo.source-review.audit";
+        constexpr std::uint64_t SourceReviewAuditVersion = 2;
         constexpr auto SourceReviewAuditEvents = Limits{}.maximumFiles * (Limits{}.maximumHunksPerFile + 12) + 64;
 
         /** @brief Checks that a file has only bounded individual review decisions. */
@@ -424,6 +425,12 @@ namespace Horo::Editor::Proposals {
                    SourceReviewRevisionsValid(audit);
         }
 
+        /** @brief Validates whether this is an unstored record or one exact persisted application. */
+        bool SourceReviewOutcomeValid(const SourceReviewAudit &audit) {
+            using enum SourceReviewDisposition;
+            return audit.historySequence ? audit.disposition > Historical && audit.disposition <= Stale : audit.disposition == Historical;
+        }
+
         /** @brief Constructs the fixed redacted application payload around the existing proposal audit format. */
         Json SourceReviewPayload(const SourceReviewAudit &audit) {
             Json revisions = Json::array();
@@ -432,7 +439,9 @@ namespace Horo::Editor::Proposals {
             return {{"proposal", AuditPayload(audit.proposal)},
                     {"decisions", FormatSha256(audit.decisionDigest)},
                     {"choices", audit.choices},
-                    {"revisions", std::move(revisions)}};
+                    {"revisions", std::move(revisions)},
+                    {"sequence", audit.historySequence},
+                    {"disposition", static_cast<std::uint64_t>(audit.disposition)}};
         }
 
         /** @brief Parses one bounded list of canonical decisions without accepting aggregate review states. */
@@ -461,20 +470,30 @@ namespace Horo::Editor::Proposals {
         }
 
         /** @brief Validates the entire content-free record before exposing inert evidence. */
-        SourceReviewAudit ReadSourceReviewPayload(const Json &payload) {
-            Shape(payload, {"proposal", "decisions", "choices", "revisions"});
+        SourceReviewAudit ReadSourceReviewPayload(const Json &payload, const std::uint64_t version) {
+            if (version == WireVersion)
+                Shape(payload, {"proposal", "decisions", "choices", "revisions"});
+            else
+                Shape(payload, {"proposal", "decisions", "choices", "revisions", "sequence", "disposition"});
             const auto &proposal = payload.at("proposal");
             const auto &choices = payload.at("choices");
             const auto &revisions = payload.at("revisions");
-            if (!proposal.is_object() || !proposal.contains("version") || Number(proposal.at("version")) != WireVersion ||
-                !choices.is_array() || choices.size() > Limits{}.maximumFiles || !revisions.is_array() || revisions.size() > choices.size())
+            if (Number(proposal.at("version")) != WireVersion || !choices.is_array() || choices.size() > Limits{}.maximumFiles ||
+                !revisions.is_array() || revisions.size() > choices.size())
                 throw InvalidWire{};
             SourceReviewAudit audit{AuditPayload(proposal), Digest(payload.at("decisions"))};
             for (const auto &file : choices)
                 audit.choices.push_back(ReadSourceReviewChoices(file));
             for (const auto &revision : revisions)
                 audit.revisions.push_back(ReadSourceReviewRevision(revision));
-            if (!SourceReviewAuditValid(audit))
+            if (version == SourceReviewAuditVersion) {
+                audit.historySequence = Number(payload.at("sequence"));
+                const auto disposition = Number(payload.at("disposition"));
+                if (disposition > static_cast<std::uint64_t>(SourceReviewDisposition::Stale))
+                    throw InvalidWire{};
+                audit.disposition = static_cast<SourceReviewDisposition>(disposition);
+            }
+            if (!SourceReviewAuditValid(audit) || !SourceReviewOutcomeValid(audit))
                 throw InvalidWire{};
             return audit;
         }
@@ -606,13 +625,13 @@ namespace Horo::Editor::Proposals {
 
     /** @copydoc EncodeSourceReviewAudit */
     Result<std::string> EncodeSourceReviewAudit(const SourceReviewAudit &audit) {
-        if (!SourceReviewAuditValid(audit))
+        if (!SourceReviewAuditValid(audit) || !SourceReviewOutcomeValid(audit))
             return Fail<std::string>(Errors::Invalid);
         try {
             auto payload = SourceReviewPayload(audit);
             const auto canonical = payload.dump();
             auto encoded = Json{{"format", SourceReviewAuditFormat},
-                                {"version", WireVersion},
+                                {"version", SourceReviewAuditVersion},
                                 {"payload", std::move(payload)},
                                 {"commitment", FormatSha256(ComputeSha256(std::as_bytes(std::span{canonical})))}}
                                .dump();
@@ -631,7 +650,8 @@ namespace Horo::Editor::Proposals {
         try {
             const auto root = Parse(text, SourceReviewAuditEvents);
             Shape(root, {"format", "version", "payload", "commitment"});
-            if (Number(root.at("version")) != WireVersion)
+            const auto version = Number(root.at("version"));
+            if (version != WireVersion && version != SourceReviewAuditVersion)
                 return Fail<SourceReviewAudit>(Errors::UnsupportedVersion);
             if (String(root.at("format"), 64) != SourceReviewAuditFormat)
                 throw InvalidWire{};
@@ -639,7 +659,7 @@ namespace Horo::Editor::Proposals {
             const auto canonical = payload.dump();
             if (Digest(root.at("commitment")) != ComputeSha256(std::as_bytes(std::span{canonical})))
                 throw InvalidWire{};
-            return Result<SourceReviewAudit>::Success(ReadSourceReviewPayload(payload));
+            return Result<SourceReviewAudit>::Success(ReadSourceReviewPayload(payload, version));
         } catch (const WireBudgetExceeded &) {
             return Fail<SourceReviewAudit>(Errors::Bounds);
         } catch (const std::bad_alloc &) {

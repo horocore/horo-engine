@@ -297,6 +297,9 @@ namespace Horo::Editor {
                 if (const auto replaced = ReplacePrepared(files, path, cleanup, *prepared, result, std::move(fallback));
                     replaced.HasError())
                     return Result<SourceSaveResult>::Failure(replaced.ErrorValue());
+                if (result.disposition == SourceSaveDisposition::Durable && path == record.path &&
+                    prepared->identity == record.root->identity)
+                    record.root->savedInPlace.store(true);
                 record.path.swap(path);
                 record.Publish(std::move(prepared));
                 return Result<SourceSaveResult>::Success(std::move(result));

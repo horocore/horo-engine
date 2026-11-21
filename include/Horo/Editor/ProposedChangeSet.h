@@ -315,6 +315,15 @@ namespace Horo::Editor::Proposals {
 
     struct SourceReviewAudit;
 
+    /** @brief Outcome of the latest actual application, independent of later command feedback. */
+    enum class SourceReviewDisposition : std::uint8_t {
+        Historical, /**< Restored attribution without outcome evidence. */
+        Applied,
+        Saved,
+        Reverted,
+        Stale
+    };
+
     /** @brief Owner-published status for the latest explicit application or group undo. */
     struct SourceTransactionStatus final {
         SourceTransactionFeedback feedback{};
@@ -322,6 +331,7 @@ namespace Horo::Editor::Proposals {
         std::shared_ptr<const SourceReviewAudit> audit;
         bool writingAudit{};
         bool auditHistoryError{};
+        SourceReviewDisposition disposition{SourceReviewDisposition::Historical};
     };
 
     /** @brief Exact owner receipt and its redacted attribution, returned together after publication. */
@@ -485,6 +495,8 @@ namespace Horo::Editor::Proposals {
         Sha256Digest decisionDigest;                   /**< Commitment to the complete canonical review. */
         std::vector<std::vector<ReviewState>> choices; /**< Canonical per-file unit decisions, without ranges or text. */
         std::vector<SourceReviewRevision> revisions;
+        std::uint64_t historySequence{}; /**< Project history identity, assigned under the history writer lease. */
+        SourceReviewDisposition disposition{SourceReviewDisposition::Historical}; /**< Last durably recorded outcome. */
     };
 
     /** @brief Builds bounded content-free audit data. @param proposal Admitted values. @param review Optional exact review.

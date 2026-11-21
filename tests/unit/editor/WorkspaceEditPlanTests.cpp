@@ -6,6 +6,7 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <iterator>
+#include <nlohmann/json.hpp>
 
 namespace {
     using namespace Horo;
@@ -187,6 +188,17 @@ TEST_CASE("Applied source review audit round-trips without recovery source or au
     CHECK(restored.Value().revisions[0].after == applied.Value().batch.Items()[0].snapshot.Revision());
     CHECK(EncodeSourceReviewAudit(restored.Value()).Value() == encoded.Value());
     CHECK(DecodeAudit(encoded.Value()).HasError());
+
+    auto legacy = nlohmann::json::parse(encoded.Value());
+    auto &legacyPayload = legacy.at("payload");
+    legacyPayload.erase("sequence");
+    legacyPayload.erase("disposition");
+    const auto canonicalLegacy = legacyPayload.dump();
+    legacy["version"] = 1;
+    legacy["commitment"] = FormatSha256(ComputeSha256(std::as_bytes(std::span{canonicalLegacy})));
+    const auto decodedLegacy = DecodeSourceReviewAudit(legacy.dump());
+    REQUIRE(decodedLegacy.HasValue());
+    CHECK(decodedLegacy.Value().disposition == SourceReviewDisposition::Historical);
 
     auto corrupt = encoded.Value();
     const auto digest = FormatSha256(restored.Value().decisionDigest);
