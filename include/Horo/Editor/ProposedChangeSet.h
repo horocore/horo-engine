@@ -524,4 +524,12 @@ namespace Horo::Editor::Proposals {
     /** @brief Parses only the redacted versioned audit shape. @param text Untrusted bounded bytes.
      * @return Inert audit evidence, never review or dispatch authority. */
     Result<AuditRecord> DecodeAudit(std::string_view text);
+    /** @brief Maximum size of one serialized application audit. */
+    inline constexpr std::size_t MaximumSourceReviewAuditBytes = 64U * 1024U;
+    /** @brief Serializes one content-free applied review. @param audit Exact applied review evidence.
+     * @return A checksummed versioned record or a typed validation error. */
+    Result<std::string> EncodeSourceReviewAudit(const SourceReviewAudit &audit);
+    /** @brief Decodes only inert applied-review evidence. @param text Untrusted bounded bytes.
+     * @return Validated attribution with no source-edit, save, or undo authority. */
+    Result<SourceReviewAudit> DecodeSourceReviewAudit(std::string_view text);
 }  // namespace Horo::Editor::Proposals

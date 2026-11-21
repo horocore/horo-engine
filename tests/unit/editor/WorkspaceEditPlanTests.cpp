@@ -1,5 +1,6 @@
 #include "../../support/SourceDocumentTestProject.h"
 #include "Horo/Editor/ProposedChangeSet.h"
+#include "Horo/Foundation/Platform.h"
 
 #include <algorithm>
 #include <array>
@@ -151,6 +152,54 @@ TEST_CASE("Applying accepted proposal hunks stages one unsaved buffer transactio
     REQUIRE(undone.HasValue());
     CHECK(undone.Value()[0].Text() == a.Text());
     CHECK(undone.Value()[1].Text() == b.Text());
+}
+
+TEST_CASE("Applied source review audit round-trips without recovery source or authority", "[editor][proposal][audit]") {
+    Workspace workspace;
+    const auto source = workspace.Open("src/private.cpp", "one two");
+    const auto proposal = workspace.Build({EditFile{FileBase::Capture(source).Value(), {{0, "one", "first"}, {4, "two", "second"}}}});
+    const std::array observations{SourcePathObservation{source.Identity().key.source, source}};
+    const auto plan = PlanWorkspaceEdits(proposal, workspace.policy, observations).Value();
+    ReviewDecisions decisions{proposal};
+    REQUIRE(decisions.Decide(plan, {0, 0}, ReviewChoice::Accept).HasValue());
+    REQUIRE(decisions.Decide(plan, {0, 1}, ReviewChoice::Reject).HasValue());
+    auto prepared = decisions.PrepareAccepted(workspace.policy, plan);
+    REQUIRE(prepared.HasValue());
+    auto candidate = std::move(prepared).Value();
+    NativeDurableFileSystem files;
+    REQUIRE(candidate.ObserveDisk(workspace.project.directory, files).HasValue());
+    const auto applied = candidate.CommitObserved(workspace.documents, files);
+    REQUIRE(applied.HasValue());
+
+    const auto encoded = EncodeSourceReviewAudit(*applied.Value().audit);
+    REQUIRE(encoded.HasValue());
+    for (const auto *privateValue : {"src/private.cpp", "one two", "first", "second", "provider"})
+        CHECK(encoded.Value().find(privateValue) == std::string::npos);
+    auto restored = DecodeSourceReviewAudit(encoded.Value());
+    REQUIRE(restored.HasValue());
+    CHECK(restored.Value().proposal.digest == proposal.Digest());
+    CHECK(restored.Value().proposal.policy == proposal.PolicyDigest());
+    CHECK(restored.Value().decisionDigest == applied.Value().audit->decisionDigest);
+    CHECK(restored.Value().choices == applied.Value().audit->choices);
+    REQUIRE(restored.Value().revisions.size() == 1);
+    CHECK(restored.Value().revisions[0].file == 0);
+    CHECK(restored.Value().revisions[0].before == source.Revision());
+    CHECK(restored.Value().revisions[0].after == applied.Value().batch.Items()[0].snapshot.Revision());
+    CHECK(EncodeSourceReviewAudit(restored.Value()).Value() == encoded.Value());
+    CHECK(DecodeAudit(encoded.Value()).HasError());
+
+    auto corrupt = encoded.Value();
+    const auto digest = FormatSha256(restored.Value().decisionDigest);
+    const auto committedValue = corrupt.find(digest);
+    REQUIRE(committedValue != std::string::npos);
+    auto &lastDigit = corrupt[committedValue + digest.size() - 1];
+    lastDigit = lastDigit == '0' ? '1' : '0';
+    CHECK(DecodeSourceReviewAudit(corrupt).HasError());
+    CHECK(DecodeSourceReviewAudit(std::string(MaximumSourceReviewAuditBytes + 1, ' ')).HasError());
+    auto mismatched = std::move(restored).Value();
+    mismatched.revisions[0].file = 1;
+    CHECK(EncodeSourceReviewAudit(mismatched).HasError());
+    CHECK(workspace.documents.Snapshot(source.Identity().instance).Value().Text() == "first two");
 }
 
 TEST_CASE("Workspace plans preserve exact text and use canonical operation order", "[editor][proposal][plan]") {

@@ -820,6 +820,11 @@ decision states, and the previous and published revisions of accepted files by
 proposal index. Source paths, ranges, text, and provider responses stay outside
 the attribution. The panel identifies the last successful proposal by its digest.
 
+The application audit has a separate versioned, bounded encoding with a
+checksum over its canonical payload. Each accepted file has exactly one
+ordered before-and-after revision pair. Decoding provides attribution only
+and cannot open a document, dispatch an edit, or restore undo authority.
+
 ## Backend Providers
 
 The system supports pluggable LLM backends:
