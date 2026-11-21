@@ -109,7 +109,7 @@ namespace Horo::AI {
          */
         [[nodiscard]] Result<bool> NotifyPerception(AgentHandle agent, PerceptionListenerTypeId listener);
         /**
-         * @brief Binds or revokes one node's exact current task generation; does not start a task.
+         * @brief Binds or revokes a node's task generation and drops any unfrozen wake from the previous task.
          * @param node Admitted identity. @param task Exact live handle, or empty to revoke.
          * @return Success or typed invalid/foreign/duplicate task binding failure.
          */
