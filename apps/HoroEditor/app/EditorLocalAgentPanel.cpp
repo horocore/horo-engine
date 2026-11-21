@@ -850,6 +850,19 @@ namespace Horo::Editor {
                 return source.Revision() && !source.IsCurrent() ? "source_patch_stale" : nullptr;
             }
 
+            /** @brief Draws one file's review state and stages its operation when available. */
+            void DrawPatchCard(const EditorLocalAgentPatchReview &review, const std::size_t index, const bool rejected,
+                               const ILocalizationService &locale, const Theme::Fonts &fonts, EditorWorkspaceViewCommandData &command) {
+                const auto &file = review.files[index];
+                const auto *conflict = DrawPatchFile(file, review.plan.entries[index], locale, fonts);
+                const auto *status = rejected ? "patch_file_rejected" : conflict ? conflict : "patch_file_pending";
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, status),
+                                conflict && !rejected ? Theme::ConsoleWarning() : Theme::Muted(), fonts);
+                const bool canOpen = !rejected && !conflict && file.kind != EditorPatchFileKind::Create;
+                if (Button(locale, "source_patch_review", canOpen))
+                    status_ = requestSourceReview_(review.proposal, review.plan, index, command) ? nullptr : "source_patch_unavailable";
+            }
+
             /** @brief Renders file summaries in proposal order and stages only the selected current operation. */
             void DrawPatchReview(const ILocalizationService &locale, const Theme::Fonts &fonts, EditorWorkspaceViewCommandData &command) {
                 if (!patchReview_)
@@ -859,14 +872,7 @@ namespace Horo::Editor {
                 for (std::size_t index = 0; index < review.files.size(); ++index) {
                     if (review.files.size() > 1)
                         ImGui::PushID(static_cast<int>(index));
-                    const auto *conflict = DrawPatchFile(review.files[index], review.plan.entries[index], locale, fonts);
-                    const auto *status = rejected ? "patch_file_rejected" : conflict ? conflict : "patch_file_pending";
-                    Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, status),
-                                    conflict && !rejected ? Theme::ConsoleWarning() : Theme::Muted(), fonts);
-                    const bool canOpen = !rejected && !conflict && review.files[index].kind != EditorPatchFileKind::Create;
-                    if (Button(locale, "source_patch_review", canOpen)) {
-                        status_ = requestSourceReview_(review.proposal, review.plan, index, command) ? nullptr : "source_patch_unavailable";
-                    }
+                    DrawPatchCard(review, index, rejected, locale, fonts, command);
                     if (review.files.size() > 1)
                         ImGui::PopID();
                 }
