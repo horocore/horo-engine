@@ -245,7 +245,7 @@ namespace Horo::Editor {
                 DrawSceneQueryActivity(locale, fonts);
                 if (!response_.empty())
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, response_, Theme::Text(), fonts);
-                DrawPatchReview(locale, command);
+                DrawPatchReview(locale, fonts, command);
                 if (liveDraft_ && history_.HasRecovery() && background_->CanCancel() && Button(locale, "history_draft_offer", true))
                     history_.ReviewLiveDraft(*liveDraft_);
                 textFieldActive_ |= history_.Draw(context);
@@ -301,7 +301,7 @@ namespace Horo::Editor {
                 openSources_ = {};
                 requestSourceReview_ = {};
                 patchSource_ = {};
-                responseSettled_ = false;
+                patchReview_.reset();
                 captureSceneSelection_ = {};
                 captureEditorDiagnostics_ = {};
                 sourcePicker_ = SourcePickerMode::None;
@@ -356,6 +356,7 @@ namespace Horo::Editor {
                     models_.clear();
                     selection_ = -1;
                     response_.clear();
+                    patchReview_.reset();
                     status_ = nullptr;
                 }
                 if (Button(locale, "discover", !Busy() && !endpoint_.empty()))
@@ -764,20 +765,33 @@ namespace Horo::Editor {
                     contextPreview_.reset();
             }
 
-            /** @brief Makes a complete model patch viewable only on an explicit owner-lane review click. */
-            void DrawPatchReview(const ILocalizationService &locale, EditorWorkspaceViewCommandData &command) {
-                if (!responseSettled_ || !patchSource_.turn || !requestSourceReview_ || !IsEditorLocalPatchReply(response_))
+            /** @brief Prepares only complete model edits backed by the exact offered source. */
+            void CapturePatchReview() {
+                if (!patchSource_.turn || !requestSourceReview_ || !IsEditorLocalPatchReply(response_))
                     return;
-                if (!Button(locale, "source_patch_review", true))
-                    return;
-                const auto review = PrepareEditorLocalPatchReview(response_, patchSource_, contextProject_, contextGeneration_);
+                auto review = PrepareEditorLocalPatchReview(response_, patchSource_, contextProject_, contextGeneration_);
                 if (review.HasError()) {
                     status_ = review.ErrorValue().code.Value() == Proposals::Errors::StaleBase.code.Value() ? "source_patch_stale"
                                                                                                             : "source_patch_invalid";
                     return;
                 }
-                status_ =
-                    requestSourceReview_(review.Value().proposal, review.Value().plan, 0, command) ? nullptr : "source_patch_unavailable";
+                patchReview_.emplace(std::move(review).Value());
+            }
+
+            /** @brief Renders the admitted file reference and stages review only after an explicit click. */
+            void DrawPatchReview(const ILocalizationService &locale, const Theme::Fonts &fonts, EditorWorkspaceViewCommandData &command) {
+                if (!patchReview_)
+                    return;
+                const auto &review = *patchReview_;
+                const auto &path = std::get<Proposals::EditFile>(review.proposal.Files().front()).base.path.Value();
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, path, Theme::Muted(), fonts);
+                if (!Button(locale, "source_patch_review", true))
+                    return;
+                if (!patchSource_.source.IsCurrent()) {
+                    status_ = "source_patch_stale";
+                    return;
+                }
+                status_ = requestSourceReview_(review.proposal, review.plan, 0, command) ? nullptr : "source_patch_unavailable";
             }
 
             void Send(std::string_view prompt, std::optional<std::size_t> sceneCount = {}, bool recoverable = false,
@@ -823,7 +837,7 @@ namespace Horo::Editor {
                         patchSource_ = {std::move(offeredSource), std::move(offeredModel), turn_};
                         if (!patchSource_.source.Revision())
                             patchSource_.turn = 0;
-                        responseSettled_ = false;
+                        patchReview_.reset();
                         return true;
                     }
                 } catch (const std::bad_alloc &) {
@@ -906,8 +920,8 @@ namespace Horo::Editor {
                 }
                 if (result.status == AgentTurnStatus::Completed && !result.messages.empty()) {
                     response_ = std::move(result.messages.back().text);
-                    responseSettled_ = true;
                     status_ = response_.empty() ? "empty_response" : nullptr;
+                    CapturePatchReview();
                     ReviewCompleted(result);
                     return;
                 }
@@ -957,7 +971,7 @@ namespace Horo::Editor {
             std::function<std::span<const SourceDocumentSnapshot>()> openSources_;
             decltype(PanelContext::requestSourceReview) requestSourceReview_;
             EditorLocalAgentPatchSource patchSource_;
-            bool responseSettled_{};
+            std::optional<EditorLocalAgentPatchReview> patchReview_;
             std::shared_ptr<const Platform::IProjectReadFiles> projectFiles_;
             std::string projectReadIdentity_;
             std::string savedFilePath_;

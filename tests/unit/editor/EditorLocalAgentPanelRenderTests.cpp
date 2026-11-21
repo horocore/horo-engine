@@ -275,6 +275,14 @@ namespace {
         REQUIRE(Await([&] {
             return fixture.DrawnText().find("Review changes in source editor") != std::string::npos;
         }));
+        fixture.Draw(350);
+        const auto narrow = fixture.Draw(350, true, true);
+        const auto *chat = fixture.ChatWindow();
+        REQUIRE(chat);
+        CHECK(chat->ContentSizeIdeal.x <= chat->InnerRect.GetWidth());
+        const auto reference = narrow.rfind("code.cpp");
+        REQUIRE(reference != std::string::npos);
+        CHECK(reference > narrow.find("int value = 2;"));
         CHECK_FALSE(queued);
         SECTION("an explicit click queues the correct tab and exact hunk") {
             fixture.Activate("###source_patch_review");
@@ -284,6 +292,9 @@ namespace {
             REQUIRE(view);
             view->Publish(source);
             CHECK(view->widget.ReviewStatus() == SourceReviewStatus::Ready);
+            fixture.Activate("###source_patch_review");
+            REQUIRE(session.StageReview(queued));
+            CHECK(session.Acquire(source.Identity().instance) == view);
             CHECK(owner.Snapshot(source.Identity().instance).Value().SharesStateWith(source));
         }
         SECTION("a revised buffer prevents the review from opening") {
