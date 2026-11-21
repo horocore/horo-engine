@@ -190,6 +190,13 @@ namespace Horo::AI {
         return Finish({.state = AiTaskState::Cancelled, .cancellationReason = AiTaskCancellationReason::Requested});
     }
 
+    /** @copydoc AiNavigationMovementTask::FailMotion */
+    Error AiNavigationMovementTask::FailMotion(Error cause) {
+        if (!movement_ || owner_ != std::this_thread::get_id())
+            return MakeError(AIErrors::RuntimeUnavailable);
+        return RecordFailure(AiTaskFailureKind::Execution, std::move(cause));
+    }
+
     /** @copydoc AiNavigationMovementTask::Finish */
     Result<AiTaskTransitionDisposition> AiNavigationMovementTask::Finish(AiTaskTerminalResult terminal) {
         if (!decision_) {

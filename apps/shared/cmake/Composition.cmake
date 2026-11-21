@@ -114,6 +114,14 @@ target_link_libraries(HoroProjectSceneNavigationHostInternal
     PUBLIC HoroEngine::NavigationAssetSceneIntegration HoroEngine::PlatformProjectReadFiles
     PRIVATE HoroEngine::NavigationRecastDetour HoroEngine::ProjectSettings)
 
+set(HORO_SCENE_AI_NAVIGATION_MOTION_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/scene_ai_navigation_motion_headers")
+file(GENERATE OUTPUT "${HORO_SCENE_AI_NAVIGATION_MOTION_HEADERS}/SceneAiNavigationMotion.h"
+    CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/shared/navigation/SceneAiNavigationMotion.h\"\n")
+add_library(HoroSceneAiNavigationMotionInternal STATIC shared/navigation/SceneAiNavigationMotion.cpp)
+target_compile_features(HoroSceneAiNavigationMotionInternal PUBLIC cxx_std_20)
+target_include_directories(HoroSceneAiNavigationMotionInternal PUBLIC "${HORO_SCENE_AI_NAVIGATION_MOTION_HEADERS}")
+target_link_libraries(HoroSceneAiNavigationMotionInternal PUBLIC HoroEngine::AINavigationIntegration HoroEngine::NavigationCharacterIntegration)
+
 # Non-installed identity authority shared by application Scene factories, never by copied counters.
 set(HORO_ANIMATION_HOST_IDENTITY_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/animation_host_identity_headers")
 file(MAKE_DIRECTORY "${HORO_ANIMATION_HOST_IDENTITY_HEADERS}")

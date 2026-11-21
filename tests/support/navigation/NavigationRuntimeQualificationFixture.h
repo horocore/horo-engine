@@ -310,14 +310,6 @@ namespace Horo::Navigation::Qualification {
 
         /** @brief Runs real owner phases and proves neither query nor safe-velocity admission mutates the Character root. */
         Result<NavigationVelocityPublication> Advance(const std::uint64_t tick) {
-            return AdvanceWith(tick, [this](const auto &current, const auto &capture, const auto &request) {
-                return velocity->Prepare(current, capture, request);
-            });
-        }
-
-        /** @brief Runs the same owner phases with a caller-provided mechanism for advancing the movement owner. */
-        template <typename PrepareWork>
-        Result<NavigationVelocityPublication> AdvanceWith(const std::uint64_t tick, PrepareWork prepareWork) {
             const auto before = character->ControllerTransform(controller).Value();
             CommitQueries(tick);
             RequireSameRoot(before);
@@ -329,8 +321,7 @@ namespace Horo::Navigation::Qualification {
             }();
             const auto current = Now(tick);
             const auto work =
-                prepareWork(current, capture,
-                            NavigationAvoidanceRequest{.maximumAccelerationMetersPerSecondSquared = 20, .stepSeconds = StepSeconds});
+                velocity->Prepare(current, capture, {.maximumAccelerationMetersPerSecondSquared = 20, .stepSeconds = StepSeconds});
             RequireSameRoot(before);
             if (work.HasError())
                 return Result<NavigationVelocityPublication>::Failure(work.ErrorValue());
@@ -350,6 +341,18 @@ namespace Horo::Navigation::Qualification {
             const auto admitted = bridge.Submit(motion.Value(), current);
             REQUIRE(admitted.HasValue());
             RequireSameRoot(before);
+            StepCharacter(tick);
+            const auto afterCharacter = character->ControllerTransform(controller).Value();
+            REQUIRE(bridge.ObserveFeedback().HasValue());
+            RequireSameRoot(afterCharacter);
+            DispatchTick(tick);
+            RequireSameRoot(afterCharacter);
+            return publication;
+        }
+
+        /** @brief Advances the native world pair through completed Character movement. */
+        void StepCharacter(const std::uint64_t tick) {
+            const auto before = character->ControllerTransform(controller).Value();
             AdvancePhysics();
             RequireSameRoot(before);
             REQUIRE(character->RefreshPhysicsSnapshot(physics->Identity(), physics->PublishedTick().publicationRevision).HasValue());
@@ -360,13 +363,12 @@ namespace Horo::Navigation::Qualification {
                                             .fixedDelta = Duration::FromNanoseconds(16'666'667),
                                             .query = queries.Context(Expectations(tick))})
                         .HasValue());
-            const auto afterCharacter = character->ControllerTransform(controller).Value();
-            REQUIRE(bridge.ObserveFeedback().HasValue());
-            RequireSameRoot(afterCharacter);
+        }
+
+        /** @brief Dispatches queued path work only after the Character step. */
+        void DispatchTick(const std::uint64_t tick) {
             dispatched = coordinator->Dispatch(tick);
-            RequireSameRoot(afterCharacter);
             lastTick = tick;
-            return publication;
         }
 
         void RequireSameRoot(const Character::CharacterTransformPublication &before) const {

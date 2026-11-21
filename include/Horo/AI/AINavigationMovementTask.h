@@ -73,6 +73,11 @@ namespace Horo::AI {
          */
         [[nodiscard]] Result<AiTaskTransitionDisposition> Cancel();
 
+        /** @brief Retires movement and keeps an external motion-stage error on the exact task.
+         * @param cause Original avoidance or Character error. @return Original cause or a typed lifecycle failure.
+         */
+        [[nodiscard]] Error FailMotion(Error cause);
+
     private:
         AiNavigationMovementTask(AiRuntimeCapability ai, AgentHandle agent, TaskHandle task,
                                  Navigation::NavigationMovementController &movement,

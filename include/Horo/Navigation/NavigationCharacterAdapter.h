@@ -97,6 +97,8 @@ namespace Horo::Navigation {
          * by the host-declared common quantum; neither desired velocity nor a speculative Transform delta is feedback.
          */
         [[nodiscard]] Result<Character::CharacterLocomotionSnapshot> ObserveFeedback();
+        /** @brief Verifies exact borrowed safe-velocity authority. @param pipeline Candidate owner. @return Exact match. */
+        [[nodiscard]] bool UsesPipeline(const NavigationVelocityPipeline &pipeline) const noexcept;
         /** @brief Drop pending feedback after host cancellation/replacement; never recalls a Character command. */
         void DiscardFeedback() noexcept;
         /** @brief Revoke this dedicated grant and release local storage; idempotent, leaving Navigation host-owned. */
