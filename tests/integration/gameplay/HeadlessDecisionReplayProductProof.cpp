@@ -74,7 +74,23 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(coverage.at("scene-input") == "deterministic");
             CHECK(coverage.at("decision") == "deterministic");
             CHECK(coverage.at("canonical-ai") == "deterministic");
-            CHECK(coverage.at("physics") == "omitted");
+            REQUIRE(data.physics);
+            CHECK(coverage.at("physics") == "deterministic");
+            const auto &physics = artifact.at("physics");
+            CHECK(physics.at("physicsTick") == "1");
+            CHECK(physics.at("scope") == "authored-rigid-body-motion");
+            CHECK(physics.at("settingsDigest") == FormatSha256(data.physics->settings.digest));
+            const auto &bodies = physics.at("bodies");
+            const auto canonicalBodies = bodies.dump();
+            CHECK(physics.at("digest") == FormatSha256(ComputeSha256(std::as_bytes(std::span{canonicalBodies}))));
+            REQUIRE(bodies.size() == (data.characterMotion ? 2 : 0));
+            if (!bodies.empty()) {
+                CHECK(bodies.at(0).at("objectId") == "4");
+                CHECK(bodies.at(1).at("objectId") == "5");
+                CHECK(bodies.at(1).at("bodySlot") == "300");
+                CHECK(bodies.at(1).at("positionMeters").at(1).get<float>() < 10);
+                CHECK(bodies.at(1).at("linearVelocityMetersPerSecond").at(1).get<float>() < 0);
+            }
             CHECK(coverage.at("navigation") == "omitted");
             CHECK(coverage.at("achieved-character-motion") == (data.characterMotion ? "deterministic" : "omitted"));
             if (data.characterMotion) {

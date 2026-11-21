@@ -19,19 +19,21 @@ namespace Horo::Application::Internal {
         constexpr std::size_t MaximumEvidenceBytes = 128U * 1024U;
 
         /** @brief Describes supported and omitted boundaries even when trace records were captured for diagnostics. */
-        Json EncodeCoverage(const bool hasCharacterMotion) {
+        Json EncodeCoverage(const HeadlessDecisionReplayData &data, Json &recorded) {
             constexpr auto names =
                 std::to_array<std::string_view>({"scene-input", "perception-input", "query-publication", "blackboard-sync", "decision",
                                                  "navigation", "gameplay", "physics", "achieved-character-motion", "canonical-ai"});
             static_assert(names.size() == AI::AiReplayBoundaryCount);
+            const std::array
+                deterministic{true, false, false, false, true, false, false, data.physics.has_value(), data.characterMotion.has_value(),
+                              true};
+            static_assert(deterministic.size() == names.size());
             auto boundaries = Json::object();
-            for (const auto name : names)
-                boundaries[std::string{name}] = "omitted";
-            boundaries["scene-input"] = "deterministic";
-            boundaries["decision"] = "deterministic";
-            boundaries["canonical-ai"] = "deterministic";
-            if (hasCharacterMotion)
-                boundaries["achieved-character-motion"] = "deterministic";
+            for (std::size_t index = 0; index < names.size(); ++index) {
+                boundaries[std::string{names[index]}] = deterministic[index] ? "deterministic" : "omitted";
+                if (deterministic[index])
+                    recorded.push_back(names[index]);
+            }
             return {{"version", AI::AiReplayManifest::CurrentVersion}, {"boundaries", std::move(boundaries)}};
         }
 
@@ -52,6 +54,33 @@ namespace Horo::Application::Internal {
                                    {"termination", static_cast<std::uint8_t>(record.termination)}});
             }
             return records;
+        }
+
+        /** @brief Encodes only portable observations copied from the exact native body publication. */
+        Json EncodePhysics(const HeadlessReplayPhysics &physics) {
+            auto bodies = Json::array();
+            for (const auto &body : physics.bodies) {
+                const auto &position = body.pose.translation;
+                const auto &rotation = body.pose.rotation;
+                const auto &linear = body.linearVelocity;
+                const auto &angular = body.angularVelocity;
+                bodies.push_back({{"objectId", std::to_string(body.object.value)},
+                                  {"bodySlot", std::to_string(body.slot.value)},
+                                  {"positionMeters", {position.x, position.y, position.z}},
+                                  {"rotation", {rotation.x, rotation.y, rotation.z, rotation.w}},
+                                  {"linearVelocityMetersPerSecond", {linear.x, linear.y, linear.z}},
+                                  {"angularVelocityRadiansPerSecond", {angular.x, angular.y, angular.z}},
+                                  {"activity", static_cast<std::uint8_t>(body.activity)}});
+            }
+            const auto canonical = bodies.dump();
+            return {{"schemaVersion", 1},
+                    {"scope", "authored-rigid-body-motion"},
+                    {"omissions", {"solver-internal-state", "solver-build-identity", "external-physics-inputs"}},
+                    {"physicsTick", std::to_string(physics.publication.completedTick)},
+                    {"publicationRevision", std::to_string(physics.publication.publicationRevision)},
+                    {"settingsDigest", FormatSha256(physics.settings.digest)},
+                    {"digest", FormatSha256(ComputeSha256(std::as_bytes(std::span{canonical})))},
+                    {"bodies", std::move(bodies)}};
         }
 
         /** @brief Projects the stable portion of one original v4 trace record. */
@@ -85,14 +114,15 @@ namespace Horo::Application::Internal {
                 auto records = Json::array();
                 for (const auto &record : capture.trace->Records())
                     records.push_back(EncodeRecord(record));
-                const bool hasCharacterMotion = data.characterMotion.has_value();
+                auto recorded = Json::array();
+                auto coverage = EncodeCoverage(data, recorded);
                 Json payload{{"format", "horo-ai-replay-evidence"},
                              {"version", 1},
                              {"sceneDefinitionId", std::to_string(data.definition.value)},
                              {"agentId", std::to_string(capture.subject.Value())},
                              {"tick", std::to_string(capture.tick)},
-                             {"recordedBoundaries", {"scene-input", "decision", "canonical-ai"}},
-                             {"manifest", EncodeCoverage(hasCharacterMotion)},
+                             {"recordedBoundaries", std::move(recorded)},
+                             {"manifest", std::move(coverage)},
                              {"sceneInput",
                               {{"revision", std::to_string(data.definitionRevision.value)}, {"digest", FormatSha256(data.sceneInput)}}},
                              {"canonicalAi",
@@ -109,8 +139,9 @@ namespace Horo::Application::Internal {
                                  {"instanceGeneration", capture.blackboard.instanceGeneration},
                                  {"revision", std::to_string(capture.blackboardRevision)}}},
                                {"records", std::move(records)}}}};
-                if (hasCharacterMotion) {
-                    payload["recordedBoundaries"].insert(payload["recordedBoundaries"].end() - 1, "achieved-character-motion");
+                if (data.physics)
+                    payload["physics"] = EncodePhysics(*data.physics);
+                if (data.characterMotion) {
                     auto motion = EncodeCharacterMotion(*data.characterMotion);
                     const auto canonical = motion.dump();
                     const auto digest = ComputeSha256(std::as_bytes(std::span{canonical.data(), canonical.size()}));

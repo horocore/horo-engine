@@ -87,6 +87,23 @@ namespace Horo::Application::Internal {
         bool grounded{};
     };
 
+    /** @brief Native rigid-body observation without world handles or solver cache state. */
+    struct HeadlessReplayRigidBody final {
+        Runtime::SceneObjectId object;
+        Runtime::PhysicsBodySlotId slot;
+        Physics::PhysicsPose pose;
+        Math::Vec3 linearVelocity;
+        Math::Vec3 angularVelocity;
+        Physics::PhysicsBodyActivity activity;
+    };
+
+    /** @brief Exact native publication of the authored rigid-body projection in one fixed attempt. */
+    struct HeadlessReplayPhysics final {
+        Physics::PhysicsPublishedTick publication;
+        Physics::PhysicsWorldSettingsIdentity settings;
+        std::vector<HeadlessReplayRigidBody> bodies;
+    };
+
     /** @brief Original decision evidence and its reference-aware canonical encoding owned after fixed commit. */
     struct HeadlessDecisionReplayData final {
         AI::AiSceneDecisionReplayCapture evidence;
@@ -95,7 +112,8 @@ namespace Horo::Application::Internal {
         Runtime::SceneDefinitionRevision definitionRevision;
         Sha256Digest sceneInput;
         std::optional<std::vector<HeadlessReplayCharacterMotion>>
-            characterMotion; /**< Empty records still cover an idle controller tick. */
+            characterMotion;                          /**< Empty records still cover an idle controller tick. */
+        std::optional<HeadlessReplayPhysics> physics; /**< Absent for explicit Null Physics. */
     };
 
     /** @brief Product-owned mailbox for one exact committed tick; no concurrent access or file storage. */
@@ -134,6 +152,7 @@ namespace Horo::Application::Internal {
         const HeadlessNetworkDetail::WorldRecord *attemptWorld_{};
         AI::AgentHandle armedAgent_;
         std::uint64_t attempt_{};
+        std::optional<std::uint64_t> previousPhysicsTick_;
         std::optional<Capture> pending_;
         std::optional<Capture> committed_;
         bool published_{};

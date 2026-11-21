@@ -1431,6 +1431,15 @@ namespace Horo::Application::PrefabAtomicTest {
                                            .colliders = {Physics::Collider(21, 201, 4, 200, material,
                                                                            Runtime::PhysicsAnalyticCollider{
                                                                                Runtime::PhysicsStaticPlaneCollider{{0, 1, 0}, 0}})}}});
+                Runtime::RigidBodyComponent falling{.id = {30}, .body = {300}};
+                falling.motion = Runtime::AuthoredPhysicsMotionType::Dynamic;
+                falling.mass = Runtime::AuthoredPhysicsDensity{500.0F};
+                source.Add({.object = {5},
+                            .localTransform = {.translation = {8, 10, 0}},
+                            .components = {.rigidBody = falling,
+                                           .colliders = {Physics::Collider(31, 301, 5, 300, material,
+                                                                           Runtime::PhysicsAnalyticCollider{
+                                                                               Runtime::PhysicsSphereCollider{0.6F}})}}});
                 REQUIRE(source.RequireAsset({material, type}).HasValue());
             }
             if (selectNativePerception) {

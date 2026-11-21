@@ -25,6 +25,11 @@ namespace Horo::Application::Internal {
     namespace {
         using ReplayEntity = Result<AI::AiSavedEntityReference>;
 
+        /** @brief Checks that a slot still contains the original authored entity for this replay. */
+        bool IsOriginalReplayEntity(const HeadlessNetworkDetail::ReplayAuthoredScene &authored, const Runtime::EntityId entity) noexcept {
+            return entity.index < authored.slots.size() && entity == authored.slots[entity.index];
+        }
+
         /** @brief Resolves the exact current root authored entity; raw runtime references never enter the encoded record. */
         ReplayEntity ProjectReplayEntity(const HeadlessNetworkDetail::ReplayAuthoredScene &authored, const Runtime::RuntimeSceneView &scene,
                                          const AI::BlackboardStoredEntityReference &stored) {
@@ -32,8 +37,8 @@ namespace Horo::Application::Internal {
             auto entity = scene.Get(reference);
             if (entity.HasError())
                 return ReplayEntity::Failure(std::move(entity).ErrorValue());
-            if (!scene.SameIncarnation(authored.initialScene) || stored.slot >= authored.slots.size() ||
-                authored.slots[stored.slot] != reference.entity || !entity.Value().authoredObject)
+            if (!scene.SameIncarnation(authored.initialScene) || !IsOriginalReplayEntity(authored, reference.entity) ||
+                !entity.Value().authoredObject)
                 return ReplayEntity::Failure(
                     MakeError(AI::AIErrors::CanonicalStateInvalid, "AI replay requires an original root authored entity reference."));
 
@@ -73,6 +78,8 @@ namespace Horo::Application::Internal {
             const auto bindings = scope.Value().characterBindings;
             if (bindings.empty())
                 return Capture::Success(std::nullopt);
+            if (!scene.SameIncarnation(authored.initialScene))
+                return Capture::Failure(MakeError(AI::AIErrors::CanonicalRestoreStale));
             constexpr std::size_t MaximumControllers = 256;
             if (bindings.size() > MaximumControllers)
                 return Capture::Failure(
@@ -81,9 +88,7 @@ namespace Horo::Application::Internal {
                 std::vector<HeadlessReplayCharacterMotion> result;
                 result.reserve(bindings.size());
                 for (const auto &binding : bindings) {
-                    const auto owner = binding.owner.entity;
-                    if (!scene.SameIncarnation(authored.initialScene) || owner.index >= authored.slots.size() ||
-                        owner != authored.slots[owner.index])
+                    if (!IsOriginalReplayEntity(authored, binding.owner.entity))
                         return Capture::Failure(
                             MakeError(AI::AIErrors::CanonicalStateInvalid, "Character replay requires an authored controller identity."));
                     const auto movement = native.ReadCharacterFixedMovement(binding.handle, context);
@@ -100,6 +105,68 @@ namespace Horo::Application::Internal {
             } catch (const std::bad_alloc &) {
                 return Capture::Failure(MakeError(AI::AIErrors::DecisionAssetStorageUnavailable));
             }
+        }
+
+        /** @brief Copies the real Physics publication and original authored body state without advancing the solver. */
+        Result<HeadlessReplayPhysics> CapturePhysicsReplay(ScenePhysicsHost &native,
+                                                           const HeadlessNetworkDetail::ReplayAuthoredScene &authored,
+                                                           const Runtime::RuntimeSceneView &scene, const std::uint64_t previousTick) {
+            using Capture = Result<HeadlessReplayPhysics>;
+            const auto scope = native.Borrow();
+            if (scope.HasError())
+                return Capture::Failure(scope.ErrorValue());
+            const auto &physics = scope.Value().physics;
+            const auto publication = physics.PublishedTick();
+            if (publication.completedTick <= previousTick || publication.completedTick - previousTick != 1 ||
+                publication.completedTick != publication.transformTick || !scene.SameIncarnation(authored.initialScene))
+                return Capture::Failure(MakeError(Physics::PhysicsErrors::QuerySnapshotStale));
+
+            const auto bindings = scope.Value().bodyBindings;
+            constexpr std::size_t MaximumBodies = 128;
+            if (bindings.size() > MaximumBodies)
+                return Capture::Failure(MakeError(AI::AIErrors::CanonicalStateInvalid, "Physics replay exceeds its body budget."));
+            try {
+                HeadlessReplayPhysics result{publication, physics.Settings().Identity(), {}};
+                result.bodies.reserve(bindings.size());
+                for (const auto &binding : bindings) {
+                    const auto owner = scene.Find(binding.object);
+                    if (!owner || !IsOriginalReplayEntity(authored, owner->entity))
+                        return Capture::Failure(
+                            MakeError(AI::AIErrors::CanonicalStateInvalid, "Physics replay requires an original authored body identity."));
+                    const auto body = physics.ReadSceneBodyReconciliation(binding.handle);
+                    if (body.HasError())
+                        return Capture::Failure(body.ErrorValue());
+                    const auto &state = body.Value().state;
+                    result.bodies.push_back(
+                        {binding.object, binding.body, state.pose, state.linearVelocity, state.angularVelocity, state.activity});
+                }
+                std::ranges::sort(result.bodies, {}, [](const HeadlessReplayRigidBody &body) {
+                    return std::tuple{body.object, body.slot};
+                });
+                return Capture::Success(std::move(result));
+            } catch (const std::bad_alloc &) {
+                return Capture::Failure(MakeError(AI::AIErrors::DecisionAssetStorageUnavailable));
+            }
+        }
+
+        /** @brief Adds selected native evidence to an otherwise complete detached replay capture. */
+        HeadlessDecisionReplay::Capture CaptureNativeReplay(HeadlessDecisionReplayData data, ScenePhysicsHost &native,
+                                                            const HeadlessNetworkDetail::ReplayAuthoredScene &authored,
+                                                            const Runtime::RuntimeSceneView &scene,
+                                                            const Runtime::FixedStepContext &context,
+                                                            const std::optional<std::uint64_t> previousPhysicsTick) {
+            using Capture = HeadlessDecisionReplay::Capture;
+            auto motion = CaptureCharacterReplay(native, authored, scene, context);
+            if (motion.HasError())
+                return Capture::Failure(std::move(motion).ErrorValue());
+            data.characterMotion = std::move(motion).Value();
+            if (previousPhysicsTick) {
+                auto physics = CapturePhysicsReplay(native, authored, scene, *previousPhysicsTick);
+                if (physics.HasError())
+                    return Capture::Failure(std::move(physics).ErrorValue());
+                data.physics = std::move(physics).Value();
+            }
+            return Capture::Success(std::move(data));
         }
     }  // namespace
 
@@ -141,6 +208,15 @@ namespace Horo::Application::Internal {
             return;
         attemptWorld_ = &world;
         attempt_ = context.attemptNumber;
+        const auto native = world.native.Borrow();
+        if (native.HasError()) {
+            pending_ = Capture::Failure(native.ErrorValue());
+            return;
+        }
+        if (const auto &physics = native.Value().physics; physics.State() == Physics::PhysicsWorldState::ActiveSolver)
+            previousPhysicsTick_ = physics.PublishedTick().completedTick;
+        else
+            previousPhysicsTick_.reset();
         const auto agent = world.ai->CapabilityAtSafePoint().ResolveAgent(selection_.agent);
         if (agent.HasError()) {
             pending_ = Capture::Failure(agent.ErrorValue());
@@ -168,18 +244,9 @@ namespace Horo::Application::Internal {
         }
         armedAgent_ = {};
         auto captured = EncodeReplayCapture(std::move(evidence).Value(), *world.replayAuthoredScene, *scene);
-        if (captured.HasError()) {
-            pending_ = std::move(captured);
-            return;
-        }
-        auto motion = CaptureCharacterReplay(world.native, *world.replayAuthoredScene, *scene, context);
-        if (motion.HasError()) {
-            pending_ = Capture::Failure(std::move(motion).ErrorValue());
-            return;
-        }
-        auto value = std::move(captured).Value();
-        value.characterMotion = std::move(motion).Value();
-        pending_ = Capture::Success(std::move(value));
+        pending_ = captured.HasError() ? std::move(captured)
+                                       : CaptureNativeReplay(std::move(captured).Value(), world.native, *world.replayAuthoredScene, *scene,
+                                                             context, previousPhysicsTick_);
     }
 
     void HeadlessDecisionReplay::Commit(const Runtime::FixedStepContext &context) noexcept {
