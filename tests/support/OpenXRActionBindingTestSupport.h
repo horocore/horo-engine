@@ -62,6 +62,7 @@ namespace Horo::Tests::OpenXRAction {
             XrResult boundsResult{XR_SUCCESS};
             unsigned boundsReads{};
             bool enabled{};
+            unsigned suggestedPoseBindings{1};
             std::optional<XrBool32> poseActive;
             XrTime locatedTime{};
             XrSpace locatedBase{XR_NULL_HANDLE};
@@ -195,7 +196,8 @@ namespace Horo::Tests::OpenXRAction {
                 active->haptic.source = vibration->binding;
                 active->haptic.suggestedProfile = info->interactionProfile;
             }
-            REQUIRE(info->countSuggestedBindings == (active->tracking.enabled ? 2U : 1U) + (vibration != suggestions.end() ? 1U : 0U));
+            const auto expectedPoses = active->tracking.enabled ? active->tracking.suggestedPoseBindings : 0U;
+            REQUIRE(info->countSuggestedBindings == 1U + expectedPoses + (vibration != suggestions.end() ? 1U : 0U));
             REQUIRE(info->suggestedBindings[0].action != XR_NULL_HANDLE);
             ++active->suggestions;
             return Script::Record("suggest");
