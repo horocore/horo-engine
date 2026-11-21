@@ -1,0 +1,169 @@
+#include "AiSceneTestSupport.h"
+#include "Horo/AI/AINavigationMovementTask.h"
+#include "navigation/NavigationCoordinatorTestFixtures.h"
+
+#include <catch2/generators/catch_generators.hpp>
+
+namespace Horo::AI {
+    namespace {
+        using namespace Navigation;
+        using namespace Navigation::CoordinatorTestSupport;
+
+        /** @brief Provider returning a complete route or a valid unreachable result. */
+        class TaskProvider final : public INavigationQueryBackend {
+        public:
+            explicit TaskProvider(bool unreachable) : unreachable_(unreachable) {}
+
+            NavigationProviderCapabilities Capabilities() const noexcept override {
+                return MakeAvailablePathQueryCapabilities(1, Request().requirement.limits, 1);
+            }
+
+            Result<NavigationPath> FindPath(const NavigationPathRequest &request, const CancellationToken &) const override {
+                NavigationPath result;
+                result.sourceGeneration = request.topology;
+                result.status = unreachable_ ? NavigationPathStatus::Unreachable : NavigationPathStatus::Reachable;
+                if (!unreachable_) {
+                    const auto polygon = NavigationQueryProvenance{.world = request.world, .topology = request.topology};
+                    result.waypoints = {{request.start, {.kind = NavigationPathWaypointKind::Start, .polygon = polygon}},
+                                        {request.destination, {.kind = NavigationPathWaypointKind::Destination, .polygon = polygon}}};
+                }
+                return Result<NavigationPath>::Success(std::move(result));
+            }
+
+        private:
+            bool unreachable_;
+        };
+
+        /** @brief Owns the actual AI execution, query coordinator and separately registered Navigation movement owner. */
+        struct Fixture final {
+            JobSystem jobs{{.workerCount = 0}};
+            NavigationWorldLifecycle world{NavigationWorldLifecycle::Create(4).Value()};
+            NavigationCoordinator coordinator{NavigationCoordinator::Create(jobs, Limits()).Value()};
+            NavigationAgentRegistry registry{NavigationAgentRegistry::Create({.maximumAgents = 2}).Value()};
+            NavigationAgentSceneBinding binding{World(), Activation().scene, Activation().sceneGeneration};
+            AiSceneRuntime ai{AiSceneRuntime::Create().Value()};
+            std::unique_ptr<AiSceneActivationCandidate> scene;
+            std::unique_ptr<NavigationAgentSceneCandidate> agents;
+            std::unique_ptr<NavigationMovementController> movement;
+            AiRuntimeCapability capability;
+            AgentHandle agent;
+            TaskHandle task;
+
+            explicit Fixture(bool unreachable = false, std::uint32_t navEntity = 1) {
+                Activate(world, std::make_unique<TaskProvider>(unreachable));
+                const auto source = TestSupport::MakeFixture(1, 10, binding.scene.Value(), 1);
+                scene = TestSupport::Publish(ai, source);
+                capability = ai.CapabilityAtSafePoint();
+                agent = capability.ResolveAgent(source.agent.agent.agent).Value();
+                task = capability.StartTask(agent, {TestSupport::MakeIdentity<TaskId>(55)}).Value();
+                const NavigationAgentDescriptor desc{.owner = {binding.scene, navEntity, 1},
+                                                     .profile = NavigationAgentProfileId::Create(1).Value(),
+                                                     .filter = Request().filter};
+                agents = std::move(registry.PrepareScene(binding, std::array{desc})).Value();
+                agents->Publish();
+                const auto handle = registry.Snapshot().Value().Agents().front().handle;
+                movement = std::move(NavigationMovementController::Create(registry, world, coordinator, handle, Caller())).Value();
+            }
+
+            NavigationMovementObservation At(std::uint64_t tick) const {
+                return {.binding = binding,
+                        .position = {},
+                        .stepSeconds = 0.1F,
+                        .path = {.provenance = Source(), .linkRevision = 1, .goalRevision = 1, .tick = tick}};
+            }
+
+            NavigationMovementRequest Move() const {
+                return {.destination = {10, 0, 0}, .query = Request().requirement, .capabilityRevision = 1};
+            }
+
+            void PublishPath() {
+                REQUIRE(coordinator.Dispatch(0) == 1);
+                jobs.Shutdown(ShutdownPolicy::Drain);
+                const std::array callers{Caller()};
+                REQUIRE(coordinator.Commit(Current(callers, 1)) == 1);
+            }
+        };
+    }  // namespace
+
+    TEST_CASE("AI MoveTo completes only after exact achieved movement feedback", "[ai][navigation][movement]") {
+        Fixture fixture;
+        auto bound = AiNavigationMovementTask::Start(fixture.capability, fixture.agent, fixture.task, *fixture.movement, fixture.Move(),
+                                                     fixture.At(0));
+        REQUIRE(bound.HasValue());
+        auto task = std::move(bound).Value();
+        REQUIRE(task.Advance(fixture.At(0)).Value()->state == NavigationMovementState::Querying);
+        fixture.PublishPath();
+        const auto following = task.Advance(fixture.At(1));
+        REQUIRE(following.HasValue());
+        REQUIRE(following.Value()->state == NavigationMovementState::Following);
+        auto atGoal = fixture.At(2);
+        atGoal.position = fixture.Move().destination;
+        const auto latest = task.Advance(atGoal);
+        REQUIRE(latest.HasValue());
+        CHECK(fixture.capability.InspectTask(fixture.agent, fixture.task).Value().state == AiTaskState::Running);
+        ++atGoal.path.tick;
+        atGoal.feedback = NavigationMovementFeedback{latest.Value()->operation, latest.Value()->path, latest.Value()->tick, 0.0F};
+        REQUIRE(task.Advance(atGoal).Value()->state == NavigationMovementState::Arrived);
+        CHECK(fixture.capability.InspectTask(fixture.agent, fixture.task).Value().state == AiTaskState::Succeeded);
+    }
+
+    TEST_CASE("AI movement retains a typed unreachable result on the exact execution", "[ai][navigation][movement]") {
+        Fixture fixture(true);
+        auto bound = AiNavigationMovementTask::Start(fixture.capability, fixture.agent, fixture.task, *fixture.movement, fixture.Move(),
+                                                     fixture.At(0));
+        REQUIRE(bound.HasValue());
+        auto movementTask = std::move(bound).Value();
+        REQUIRE(movementTask.Advance(fixture.At(0)).HasValue());
+        fixture.PublishPath();
+        const auto result = movementTask.Advance(fixture.At(1));
+        REQUIRE(result.HasError());
+        CHECK(result.ErrorValue().code.Value() == AIErrors::NavigationTaskUnreachable.code.Value());
+        const auto task = fixture.capability.InspectTask(fixture.agent, fixture.task).Value();
+        REQUIRE(task.terminal.has_value());
+        REQUIRE(task.terminal->failure.has_value());
+        CHECK(task.state == AiTaskState::Failed);
+        CHECK(task.terminal->failure->cause.code.Value() == result.ErrorValue().code.Value());
+    }
+
+    TEST_CASE("AI Follow cannot borrow another entity or retarget a superseding operation", "[ai][navigation][movement]") {
+        const bool foreign = GENERATE(false, true);
+        Fixture fixture(false, foreign ? 2U : 1U);
+        auto follow = fixture.Move();
+        follow.mode = NavigationMovementMode::Follow;
+        follow.entity = NavigationAgentOwner{fixture.binding.scene, 7, 1};
+        auto now = fixture.At(0);
+        now.target = NavigationMovementTarget{*follow.entity, follow.destination, 1};
+        auto bound = AiNavigationMovementTask::Start(fixture.capability, fixture.agent, fixture.task, *fixture.movement, follow, now);
+        if (foreign) {
+            REQUIRE(bound.HasError());
+            CHECK(bound.ErrorValue().code.Value() == AIErrors::TaskContextInvalid.code.Value());
+            CHECK(fixture.movement->Status().state == NavigationMovementState::Idle);
+            return;
+        }
+        REQUIRE(bound.HasValue());
+        const auto replacement = fixture.movement->Start(fixture.Move(), now);
+        REQUIRE(replacement.HasValue());
+        auto movementTask = std::move(bound).Value();
+        CHECK_FALSE(movementTask.Advance(now).Value().has_value());
+        const auto task = fixture.capability.InspectTask(fixture.agent, fixture.task).Value();
+        REQUIRE(task.terminal.has_value());
+        CHECK(task.terminal->cancellationReason == AiTaskCancellationReason::Superseded);
+        CHECK(fixture.movement->Status().id == replacement.Value().accepted);
+        CHECK(fixture.movement->Status().state == NavigationMovementState::Querying);
+    }
+
+    TEST_CASE("Retiring an active movement binding cancels its Navigation operation and AI execution", "[ai][navigation][movement]") {
+        Fixture fixture;
+        {
+            const auto bound = AiNavigationMovementTask::Start(fixture.capability, fixture.agent, fixture.task, *fixture.movement,
+                                                               fixture.Move(), fixture.At(0));
+            REQUIRE(bound.HasValue());
+            REQUIRE(fixture.movement->Status().state == NavigationMovementState::Querying);
+        }
+        CHECK(fixture.movement->Status().state == NavigationMovementState::Cancelled);
+        const auto snapshot = fixture.capability.InspectTask(fixture.agent, fixture.task).Value();
+        REQUIRE(snapshot.terminal.has_value());
+        CHECK(snapshot.state == AiTaskState::Cancelled);
+        CHECK(snapshot.terminal->cancellationReason == AiTaskCancellationReason::OwnerShutdown);
+    }
+}  // namespace Horo::AI

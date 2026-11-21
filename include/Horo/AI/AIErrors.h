@@ -38,6 +38,8 @@ namespace Horo::AI::AIErrors {
     extern const ErrorCodeDescriptor TaskTransitionInvalid;
     /** @brief A failed AI task omitted a valid typed failure family or cause. */
     extern const ErrorCodeDescriptor TaskFailureInvalid;
+    /** @brief A valid Navigation query found no complete path for an admitted movement task. */
+    extern const ErrorCodeDescriptor NavigationTaskUnreachable;
     /** @brief The selected composition deliberately provides no gameplay-AI runtime. */
     extern const ErrorCodeDescriptor RuntimeUnavailable;
     /** @brief A gameplay-AI runtime or deterministic harness exhausted its declared capacity. */

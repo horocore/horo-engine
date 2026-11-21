@@ -143,6 +143,7 @@ namespace Horo::AI {
                 &AIErrors::TaskContextInvalid,
                 &AIErrors::TaskTransitionInvalid,
                 &AIErrors::TaskFailureInvalid,
+                &AIErrors::NavigationTaskUnreachable,
                 &AIErrors::RuntimeUnavailable,
                 &AIErrors::TaskCapacityExceeded,
                 &AIErrors::DecisionScriptCallbackFailed,

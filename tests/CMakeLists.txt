@@ -1358,7 +1358,9 @@ target_include_directories(HoroAISightTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/
 target_compile_definitions(HoroAISightTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
 horo_register_catch_test(HoroAISightTests LABELS "unit;ai;sight;headless")
 
-add_executable(HoroAINavigationTests unit/runtime/ai/EnvironmentQueryNavigationTests.cpp)
+add_executable(HoroAINavigationTests
+    unit/runtime/ai/EnvironmentQueryNavigationTests.cpp
+    unit/runtime/ai/AINavigationMovementTaskTests.cpp)
 target_compile_features(HoroAINavigationTests PRIVATE cxx_std_20)
 target_include_directories(HoroAINavigationTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
 target_link_libraries(HoroAINavigationTests PRIVATE HoroEngine::AINavigationIntegration HoroEngine::AISightIntegration HoroEngine::GameplayAiIntegration)

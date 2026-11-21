@@ -113,6 +113,9 @@ namespace Horo::AI::AIErrors {
         .retryable = false,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor NavigationTaskUnreachable{AiDomain, ErrorCode{"ai.navigation.unreachable"}, ErrorSeverity::Warning,
+                                                        "The movement task has no complete route to the admitted goal.",
+                                                        "Select a reachable goal or wait for navigation coverage to change."};
     const ErrorCodeDescriptor TaskFailureInvalid{
         .domain = AiDomain,
         .code = ErrorCode{"ai.task.failure_invalid"},

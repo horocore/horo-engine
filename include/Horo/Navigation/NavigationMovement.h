@@ -209,6 +209,11 @@ namespace Horo::Navigation {
             return agent_.handle;
         }
 
+        /** @brief Return the exact Scene entity bound to the movement registration. @return Copied owner identity. */
+        [[nodiscard]] NavigationAgentOwner Owner() const noexcept {
+            return agent_.owner;
+        }
+
         /** @brief Return the exact bound Scene/world incarnation. @return Prepared owner binding. */
         [[nodiscard]] NavigationAgentSceneBinding Binding() const noexcept {
             return binding_;

@@ -2286,6 +2286,12 @@ then publishes committed state for variable-rate RenderExtraction.
 4. **`SystemPhase::AiIntentDispatch` (Action/Navigation Intent Dispatch)**:
    - Translates decision outputs into typed intents. Navigation and steering commit in `NavIntentCommit`.
    - Combat actions and animation triggers enqueue as typed intents consumed later; they are not absorbed into `NavIntentCommit`.
+   - A host can hand an exact running AI task to `AiNavigationMovementTask` for MoveTo or Follow.
+     The binding checks that Navigation and AI own the same Scene entity, then uses the existing movement controller.
+     At `NavIntentCommit`, the host publishes query results, advances the task and sends its intent through the
+     selected safe-motion path. Character supplies achieved displacement for the next observation.
+     The binding publishes Navigation admission errors, provider failures, arrival and cancellation to the original
+     AI task. A superseded movement can never complete the replacement task or authorize its motion.
 5. **`SystemPhase::Gameplay` (Behavior Script Step & Locomotion)**:
    - Generic object-attached gameplay behaviors (`IBehaviorInstance::OnFixedUpdate`) and character controllers step **after** AI decision evaluation.
    - This group is not the AI decision phase.
