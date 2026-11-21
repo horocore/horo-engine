@@ -262,6 +262,10 @@ override, it searches absolute entries in the inherited `PATH`. Each
 project workspace owns its own provider. A successful gameplay build
 retries initial admission if its compile database was missing. Diagnostics
 are displayed only on the exact source publication that received them.
+The C++ source toolbar requests definitions and completions for the active
+selection. Definitions open embedded project sources and select the resolved
+UTF-16 range. Completion acceptance applies the main and additional edits
+as one revision-fenced undo step. Changes of source publication retire results.
 
 ### Source Save Publication (EDT-003.5)
 

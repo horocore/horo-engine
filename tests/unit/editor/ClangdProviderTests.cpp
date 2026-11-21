@@ -115,7 +115,7 @@ namespace {
         CHECK(PrepareClangdProvider(sources, settings).HasValue());
     }
 
-    TEST_CASE("Installed Clangd publishes versioned diagnostics and resolves a cross-file definition", "[integration][clangd]") {
+    TEST_CASE("Installed Clangd publishes diagnostics, resolves definitions and completes project C++", "[integration][clangd]") {
         const auto *installed = std::getenv("HORO_TEST_CLANGD");
         if (!installed)
             SKIP("Set HORO_TEST_CLANGD to the installed host executable.");
@@ -123,7 +123,8 @@ namespace {
         std::filesystem::create_directory(project.directory / "include");
         project.Put("inline int horo_fixture_symbol() { return 37; }\n", "include/gameplay_api.hpp");
         constexpr std::string_view code =
-            "#include \"gameplay_api.hpp\"\nint gameplay() { return horo_fixture_symbol(); }\nint broken = missing_fixture_symbol;\n";
+            "#include \"gameplay_api.hpp\"\nint gameplay() { return horo_fixture_symbol(); }\nint broken = missing_fixture_symbol;\n"
+            "int later() { return horo_fixture_symb; }\n";
         project.Put(code, "gameplay.cpp");
         const auto sourcePath = Utf8(project.directory / "gameplay.cpp");
         const auto commands = nlohmann::json::array({{{"directory", Utf8(project.directory)},
@@ -143,6 +144,8 @@ namespace {
         auto &owner = *workspace.Value();
         bool diagnosed = false;
         bool navigated = false;
+        std::optional<SourceEditingPlan> completionPlan;
+        const auto completionOffset = code.rfind("horo_fixture_symb") + std::string_view{"horo_fixture_symb"}.size();
         const auto observe = [&](const auto now) {
             for (const auto &event : owner.Poll(documents, now)) {
                 if (const auto *diagnostics = std::get_if<LanguageDiagnostics>(&event.payload)) {
@@ -156,6 +159,17 @@ namespace {
                         return target.source.Value() == "include/gameplay_api.hpp";
                     });
                 }
+                if (const auto *completion = std::get_if<LanguageCompletions>(&event.payload)) {
+                    const auto item = std::ranges::find_if(completion->items, [](const auto &candidate) {
+                        return candidate.label.find("horo_fixture_symbol") != std::string::npos;
+                    });
+                    if (item != completion->items.end()) {
+                        auto edit =
+                            PlanLanguageCompletion(documents.front(), {.anchor = completionOffset, .caret = completionOffset}, *item);
+                        if (edit.HasValue())
+                            completionPlan = std::move(edit).Value();
+                    }
+                }
             }
         };
         REQUIRE(Await([&](const auto now) {
@@ -167,6 +181,15 @@ namespace {
             observe(now);
             return diagnosed && navigated;
         }));
+        REQUIRE(owner.Request(documents.front(), SourceLanguageRequestKind::Completion, {.offset = completionOffset}).HasValue());
+        REQUIRE(Await([&](const auto now) {
+            observe(now);
+            return completionPlan.has_value();
+        }));
+        const auto completed = SubmitSourceEditingCommand(sources.Documents(), SourceEditSubmission{documents.front().Identity().instance,
+                                                                                                    std::move(*completionPlan)});
+        REQUIRE(completed.HasValue());
+        CHECK(completed.Value().snapshot.Text().find("return horo_fixture_symbol", code.find("int later()")) != std::string_view::npos);
         owner.Shutdown(ProjectLanguageWorkspace::Clock::now());
         REQUIRE(Await([&](const auto now) {
             static_cast<void>(owner.Poll({}, now));

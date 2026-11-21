@@ -133,6 +133,10 @@ TEST_CASE("Rejected route leave retains source views and failed destination entr
                                      {{.span = {0, 1}, .severity = Language::LanguageSeverity::Error, .message = "Example error"}}}});
     original->PublishDiagnostics(fixture.state.source, oldDiagnostics);
     CHECK(original->diagnostics == oldDiagnostics);
+    const auto oldFocus =
+        std::make_shared<const Language::LanguageSourceFocus>(Language::LanguageSourceFocus{fixture.state.source, {1, 3}});
+    CHECK(original->ApplyLanguageFocus(fixture.state.source, oldFocus));
+    CHECK_FALSE(original->ApplyLanguageFocus(fixture.state.source, oldFocus));
     REQUIRE(original->widget.Select({1, 3}));
     fixture.state.views.Presented(instance);
     fixture.state.deny = true;
@@ -153,6 +157,7 @@ TEST_CASE("Rejected route leave retains source views and failed destination entr
     CHECK(rolledBack->widget.HasHighlight(fixture.state.source.Revision()));
     rolledBack->PublishDiagnostics(fixture.state.source, oldDiagnostics);
     CHECK_FALSE(rolledBack->diagnostics);
+    CHECK_FALSE(rolledBack->ApplyLanguageFocus(fixture.state.source, oldFocus));
     CHECK(rolledBack->widget.Selection() == SourceWidgetSelection{0, 0});
     CHECK(fixture.state.views.NeedsFocus(instance));
 }

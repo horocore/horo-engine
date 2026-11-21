@@ -3531,6 +3531,14 @@
     "workspace.source_open.unsafe": {"text": "The source path is outside the project's safe boundary."},
     "workspace.source_open.unavailable": {"text": "No source editor route is available in this editor composition."},
     "workspace.source_language.unavailable": {"text": "C++ language features are unavailable. Install Clangd and generate compile_commands.json, or see the editor log for details."},
+    "workspace.source_language.definition": {"text": "Go to Definition"},
+    "workspace.source_language.actions": {"text": "C++ Language Actions"},
+    "workspace.source_language.complete": {"text": "Request Completions"},
+    "workspace.source_language.choose_completion": {"text": "Choose Completion"},
+    "workspace.source_language.waiting": {"text": "Waiting for the C++ language service…"},
+    "workspace.source_language.retry": {"text": "The C++ language service did not answer. Try again once it is ready."},
+    "workspace.source_language.no_definition": {"text": "No definition could be opened in this project."},
+    "workspace.source_language.no_completion": {"text": "No completions available at this position."},
     "workspace.global_dock.operations.search": {
       "text": "Search operations..."
     },

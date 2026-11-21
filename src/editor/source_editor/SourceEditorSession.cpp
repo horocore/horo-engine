@@ -53,6 +53,17 @@ namespace Horo::Editor {
             diagnostics = std::move(result);
     }
 
+    /** @copydoc SourceEditorView::ApplyLanguageFocus */
+    bool SourceEditorView::ApplyLanguageFocus(const SourceDocumentSnapshot &source,
+                                              const std::shared_ptr<const Language::LanguageSourceFocus> &focus) {
+        if (!focus || !source.IsCurrent() || !source.SharesStateWith(focus->source) || lastLanguageFocus.lock() == focus)
+            return false;
+        if (!widget.Select({focus->selection.start, focus->selection.end}))
+            return false;
+        lastLanguageFocus = focus;
+        return true;
+    }
+
     /** @copydoc SourceEditorSession::Acquire */
     SourceEditorView *SourceEditorSession::Acquire(const DocumentInstanceId instance) {
         if (!instance.Value())

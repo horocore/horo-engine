@@ -13,6 +13,75 @@
 #include <span>
 
 namespace Horo::Editor {
+    namespace {
+        /** @brief Resolves the localized notice for the active source revision. */
+        const char *LanguageNotice(const SourceLanguageStatusKind kind) {
+            switch (kind) {
+                case SourceLanguageStatusKind::Waiting:
+                    return "workspace.source_language.waiting";
+                case SourceLanguageStatusKind::Refused:
+                    return "workspace.source_language.retry";
+                case SourceLanguageStatusKind::NoDefinition:
+                    return "workspace.source_language.no_definition";
+                case SourceLanguageStatusKind::NoCompletion:
+                    return "workspace.source_language.no_completion";
+            }
+            return "workspace.source_language.retry";
+        }
+
+        /** @brief Displays a typed result set in the shared dropdown at the originating view selection. */
+        void DrawSourceCompletions(const EditorGuiContext &context, const SourceDocumentSnapshot &source, const SourceEditingView &view,
+                                   const std::shared_ptr<const SourceLanguageCompletions> &result,
+                                   EditorWorkspaceViewCommandData &command) {
+            if (!result || !result->source.SharesStateWith(source) || result->view.viewId != view.viewId ||
+                result->view.anchor != view.anchor || result->view.caret != view.caret)
+                return;
+            const auto &items = result->completions.items;
+            const auto &placeholder = context.localization.Get("editor", "workspace.source_language.choose_completion");
+            int choice = 0;
+            const Ui::ComboItemSource labels{.label = [&](const int index) {
+                return index == 0 ? placeholder.c_str() : items[static_cast<std::size_t>(index - 1)].label.c_str();
+            }};
+            if (Ui::ComboControl("##SourceCompletions", &choice, static_cast<int>(items.size()) + 1, labels, context.theme.fonts) &&
+                choice > 0 && command.command == EditorWorkspaceViewCommand::None) {
+                command.command = EditorWorkspaceViewCommand::ApplySourceCompletion;
+                command.sourceCompletionIntent = SourceCompletionIntent{result, static_cast<std::size_t>(choice - 1)};
+            }
+        }
+
+        /** @brief Offers language actions only for configured C++ source views. */
+        void DrawSourceLanguageActions(const EditorGuiContext &context, const SourceDocumentSnapshot &source,
+                                       const SourceEditorWidget &widget, const EditorWorkspaceViewModel &model,
+                                       EditorWorkspaceViewCommandData &command) {
+            if (ClassifySourceLanguage(source.Identity().key.source.Value()) != SourceLanguage::Cpp)
+                return;
+            const auto notice = [&](const char *key) {
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, context.localization.Get("editor", key), Theme::Muted(),
+                                context.theme.fonts);
+            };
+            if (model.sourceLanguageUnavailable) {
+                notice("workspace.source_language.unavailable");
+                return;
+            }
+            if (!model.sourceLanguageConfigured)
+                return;
+            if (model.sourceLanguageStatus && model.sourceLanguageStatus->source.SharesStateWith(source))
+                notice(LanguageNotice(model.sourceLanguageStatus->kind));
+            const auto view = widget.View();
+            const std::array labels{context.localization.Get("editor", "workspace.source_language.actions").c_str(),
+                                    context.localization.Get("editor", "workspace.source_language.definition").c_str(),
+                                    context.localization.Get("editor", "workspace.source_language.complete").c_str()};
+            constexpr std::array kinds{SourceLanguageRequestKind::Definition, SourceLanguageRequestKind::Completion};
+            int action = 0;
+            if (Ui::ComboControl("##SourceLanguageActions", &action, labels.data(), static_cast<int>(labels.size()), context.theme.fonts) &&
+                action > 0 && command.command == EditorWorkspaceViewCommand::None) {
+                command.command = EditorWorkspaceViewCommand::RequestSourceLanguage;
+                command.sourceLanguageIntent = SourceLanguageIntent{source, kinds[static_cast<std::size_t>(action - 1)], view};
+            }
+            DrawSourceCompletions(context, source, view, model.sourceCompletions, command);
+        }
+    }  // namespace
+
     /** @copydoc EditorWorkspaceView::DocumentTabHeight */
     float EditorWorkspaceView::DocumentTabHeight(const WorkspaceDockArea area) const {
         if (area != WorkspaceDockArea::Document)
@@ -240,14 +309,12 @@ namespace Horo::Editor {
         presentation->Publish(source);
         const auto diagnostics = viewModel.sourceLanguageDiagnostics.find(instance);
         presentation->PublishDiagnostics(source, diagnostics == viewModel.sourceLanguageDiagnostics.end() ? nullptr : diagnostics->second);
-        if (viewModel.sourceLanguageUnavailable && ClassifySourceLanguage(source.Identity().key.source.Value()) == SourceLanguage::Cpp) {
-            Ui::WrappedText(ImGui::GetContentRegionAvail().x, m_context.localization.Get("editor", "workspace.source_language.unavailable"),
-                            Theme::ConsoleWarning(), m_context.theme.fonts);
-        }
         if (viewModel.sourceEditingResult && viewModel.sourceEditingResult->HasValue())
             static_cast<void>(widget.Restore(viewModel.sourceEditingResult->Value()));
+        const bool languageFocus = presentation->ApplyLanguageFocus(source, viewModel.sourceLanguageFocus);
+        DrawSourceLanguageActions(m_context, source, widget, viewModel, outCommand);
         auto toolIntent = presentation->tools.Draw(widget, source, history, viewModel.sourceEditingResult, m_context);
-        const bool focus = m_sourceSession.NeedsFocus(instance) || (!toolIntent && presentation->tools.TakeFocusRequest());
+        const bool focus = languageFocus || m_sourceSession.NeedsFocus(instance) || (!toolIntent && presentation->tools.TakeFocusRequest());
         const auto available = ImGui::GetContentRegionAvail();
         auto intent = widget.Draw({available.x, available.y, Theme::GetActiveTokens().sizes.uiScale, focus, !toolIntent,
                                    m_context.inputRouter ? &m_context.inputRouter->Profile() : &m_context.settings.settings.keymap.profile,

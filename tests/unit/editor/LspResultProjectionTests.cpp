@@ -66,7 +66,7 @@ namespace {
         const auto &completion = std::get<LanguageCompletions>(result.Value().payload);
         REQUIRE(completion.items.size() == 1);
         CHECK(completion.incomplete);
-        CHECK(completion.items.front().hasExplicitTextEdit);
+        CHECK(completion.items.front().primaryEdit.has_value());
         const auto &edit = completion.items.front().edits.front();
         CHECK(edit.span == LanguageByteSpan{9, 15});
         CHECK(edit.replacement == "value");
@@ -96,6 +96,43 @@ namespace {
         CHECK(targets.front().source.Value() == "sub/a b.cpp");
         CHECK(targets.front().start == LanguagePosition{2, 1});
         CHECK(targets.front().end == LanguagePosition{2, 3});
+    }
+
+    TEST_CASE("Source navigation rejects foreign and stale snapshots and resolves UTF-16 by scalar") {
+        SourceFixture fixture;
+        LanguageLocation target{fixture.source.Identity().key.source, {1, 2}, {1, 8}};
+        const auto range = ResolveLanguageLocation(fixture.source, target);
+        REQUIRE(range.has_value());
+        CHECK(*range == LanguageByteSpan{9, 15});
+        target.start.utf16Column = 1;
+        CHECK_FALSE(ResolveLanguageLocation(fixture.source, target));
+        target.start.utf16Column = 2;
+        target.source = SourceDocumentId::Parse("other.cpp").Value();
+        CHECK_FALSE(ResolveLanguageLocation(fixture.source, target));
+        target.source = fixture.source.Identity().key.source;
+        REQUIRE(fixture.open.Documents().Edit(fixture.source.Identity().instance, {fixture.source.Revision(), 0, 3, "two"}).HasValue());
+        CHECK_FALSE(ResolveLanguageLocation(fixture.source, target));
+    }
+
+    TEST_CASE("Completion applies its additional edits as one undoable history operation") {
+        SourceFixture fixture;
+        const SourceEditingView view{.anchor = 15, .caret = 15, .viewId = SourceEditingViewId{1}};
+        const LanguageCompletionItem item{.edits = {{{9, 15}, "value"}, {{0, 3}, "two plus"}}, .primaryEdit = LanguageByteSpan{9, 15}};
+        const auto plan = PlanLanguageCompletion(fixture.source, view, item);
+        REQUIRE(plan.HasValue());
+        CHECK(plan.Value().before == view);
+        CHECK(plan.Value().after.caret == 19);
+
+        auto &documents = fixture.open.Documents();
+        const auto instance = fixture.source.Identity().instance;
+        const auto applied = SubmitSourceEditingCommand(documents, SourceEditSubmission{instance, plan.Value()});
+        REQUIRE(applied.HasValue());
+        CHECK(applied.Value().snapshot.Text() == "two plus\r\n\xF0\x9F\x98\x80"
+                                                 "value");
+        CHECK(PlanLanguageCompletion(fixture.source, view, item).HasError());
+        const auto undone = SubmitSourceEditingCommand(documents, SourceHistoryRequest{instance, applied.Value().snapshot.Revision()});
+        REQUIRE(undone.HasValue());
+        CHECK(undone.Value().snapshot.Text() == fixture.source.Text());
     }
 
     TEST_CASE("LSP projects code actions as inert text edits for the exact current document") {

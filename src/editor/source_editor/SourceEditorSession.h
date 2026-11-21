@@ -12,7 +12,8 @@
 namespace Horo::Editor {
     namespace Language {
         struct LanguageResult;
-    }
+        struct LanguageSourceFocus;
+    }  // namespace Language
 
     /** @brief One independent source presentation; no document or language authority. */
     struct SourceEditorView final {
@@ -24,12 +25,16 @@ namespace Horo::Editor {
         void Publish(const SourceDocumentSnapshot &source);
         /** @brief Presents diagnostics for the exact source publication, or clears retired decorations. */
         void PublishDiagnostics(const SourceDocumentSnapshot &source, std::shared_ptr<const Language::LanguageResult> result);
+        /** @brief Selects an exact language destination once in this presentation. */
+        [[nodiscard]] bool ApplyLanguageFocus(const SourceDocumentSnapshot &source,
+                                              const std::shared_ptr<const Language::LanguageSourceFocus> &focus);
 
         SourceEditorWidget widget;
         SourceEditorTools tools;
         SourceSyntaxCache syntax;
         std::shared_ptr<const SourceReviewOverlay> pendingReview;
         std::shared_ptr<const Language::LanguageResult> diagnostics;
+        std::weak_ptr<const Language::LanguageSourceFocus> lastLanguageFocus;
     };
 
     /** @brief Project-owner-scoped presentations with a monotonic host-lifetime identity allocator. */

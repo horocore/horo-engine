@@ -170,6 +170,8 @@ namespace Horo::Editor {
         EditPCGGraph,
         ReturnToWelcome,
         SourceDocumentInteraction,
+        RequestSourceLanguage,
+        ApplySourceCompletion,
         ReviewSourceProposal,
         SaveSourceDocument,
         SaveSourceDocumentAs,
@@ -359,6 +361,39 @@ namespace Horo::Editor {
     };
 
     /** @brief Native absolute path, optionally line-addressed diagnostic source requested by an output panel. */
+    /** @brief UI request carrying the exact source presented when the user chose an action. */
+    struct SourceLanguageIntent final {
+        SourceDocumentSnapshot source;
+        SourceLanguageRequestKind kind{};
+        SourceEditingView view;
+    };
+
+    /** @brief One result set and the exact presentation that requested it. */
+    struct SourceLanguageCompletions final {
+        SourceDocumentSnapshot source;
+        SourceEditingView view;
+        Language::LanguageCompletions completions;
+    };
+
+    /** @brief Explicit acceptance of one item from the current presentation. */
+    struct SourceCompletionIntent final {
+        std::shared_ptr<const SourceLanguageCompletions> result;
+        std::size_t index{};
+    };
+
+    enum class SourceLanguageStatusKind : std::uint8_t {
+        Waiting,
+        Refused,
+        NoDefinition,
+        NoCompletion
+    };
+
+    /** @brief A language request notice only visible on its originating source publication. */
+    struct SourceLanguageStatus final {
+        SourceDocumentSnapshot source;
+        SourceLanguageStatusKind kind{};
+    };
+
     struct DiagnosticSourceRequest {
         std::filesystem::path absolutePath;
         std::uint32_t line{};
@@ -798,6 +833,8 @@ namespace Horo::Editor {
         std::optional<std::filesystem::path> prefabSaveDestination;
         PrefabDocumentAction prefabAction{PrefabDocumentAction::Save};
         std::optional<SourceEditingCommand> sourceInteraction;
+        std::optional<SourceLanguageIntent> sourceLanguageIntent;
+        std::optional<SourceCompletionIntent> sourceCompletionIntent;
         std::shared_ptr<const SourceReviewOverlay> sourceReview;
         bool sourceTextInputOwned{}; /**< Current-frame ownership, independent of whether text changed. */
         std::optional<SourceSaveRequest> sourceSave;
@@ -1106,6 +1143,10 @@ namespace Horo::Editor {
         PCG::PCGNodeCatalogSnapshot pcgSchemas;
         std::vector<SourceDocumentSnapshot> sourceDocuments;
         std::map<DocumentInstanceId, std::shared_ptr<const Language::LanguageResult>> sourceLanguageDiagnostics;
+        std::shared_ptr<const Language::LanguageSourceFocus> sourceLanguageFocus;
+        std::shared_ptr<const SourceLanguageCompletions> sourceCompletions;
+        std::optional<SourceLanguageStatus> sourceLanguageStatus;
+        bool sourceLanguageConfigured{};
         bool sourceLanguageUnavailable{}; /**< Native source editing remains available. */
         std::vector<UiCanvasWorkspaceDocument> uiCanvasDocuments;
         std::vector<std::shared_ptr<const TerrainDocumentHost>> terrainDocuments;

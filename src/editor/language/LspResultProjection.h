@@ -2,6 +2,7 @@
 
 /** @file LspResultProjection.h @brief Typed, revision-bound results produced by the language adapter. */
 
+#include "Horo/Editor/SourceEditingCommands.h"
 #include "Horo/Editor/SourceLanguageSession.h"
 
 #include <variant>
@@ -39,6 +40,16 @@ namespace Horo::Editor::Language {
         LanguagePosition start;
         LanguagePosition end;
     };
+
+    /** @brief One explicit navigation to a validated, current source selection. */
+    struct LanguageSourceFocus final {
+        SourceDocumentSnapshot source;
+        LanguageByteSpan selection;
+    };
+
+    /** @brief Resolves a provider destination only against the matching current source publication. */
+    [[nodiscard]] std::optional<LanguageByteSpan> ResolveLanguageLocation(const SourceDocumentSnapshot &source,
+                                                                          const LanguageLocation &location);
 
     /** @brief Owned proposed text edit, interpreted only against the enclosing source lease. */
     struct LanguageTextEdit final {
@@ -79,8 +90,12 @@ namespace Horo::Editor::Language {
         std::string detail;
         std::string insertText;
         std::vector<LanguageTextEdit> edits;
-        bool hasExplicitTextEdit{}; /**< When set, the edits already contain the main replacement. */
+        std::optional<LanguageByteSpan> primaryEdit; /**< Identifies the main range among the sorted edits. */
     };
+
+    /** @brief Plans one atomic and undoable completion, including its additional document edits. */
+    [[nodiscard]] Result<SourceEditingPlan> PlanLanguageCompletion(const SourceDocumentSnapshot &source, const SourceEditingView &view,
+                                                                   const LanguageCompletionItem &item);
 
     /** @brief Bounded completion candidates and the peer's completeness indicator. */
     struct LanguageCompletions final {

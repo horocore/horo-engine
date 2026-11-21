@@ -3531,6 +3531,14 @@
     "workspace.source_open.unsafe": {"text": "Kaynak yolu projenin güvenli sınırı dışında."},
     "workspace.source_open.unavailable": {"text": "Bu düzenleyici bileşiminde kullanılabilir kaynak düzenleyici rotası yok."},
     "workspace.source_language.unavailable": {"text": "C++ dil özellikleri kullanılamıyor. Clangd kurup compile_commands.json dosyasını oluşturun veya ayrıntılar için editör günlüğüne bakın."},
+    "workspace.source_language.definition": {"text": "Tanıma Git"},
+    "workspace.source_language.actions": {"text": "C++ Dil İşlemleri"},
+    "workspace.source_language.complete": {"text": "Tamamlama Önerilerini Getir"},
+    "workspace.source_language.choose_completion": {"text": "Tamamlama Önerisi Seç"},
+    "workspace.source_language.waiting": {"text": "C++ dil servisi bekleniyor…"},
+    "workspace.source_language.retry": {"text": "C++ dil servisi yanıt vermedi. Servis hazır olduğunda tekrar deneyin."},
+    "workspace.source_language.no_definition": {"text": "Bu projede açılabilecek bir tanım bulunamadı."},
+    "workspace.source_language.no_completion": {"text": "Bu konumda tamamlama önerisi bulunamadı."},
     "workspace.global_dock.operations.search": {
       "text": "İşlemlerde ara..."
     },

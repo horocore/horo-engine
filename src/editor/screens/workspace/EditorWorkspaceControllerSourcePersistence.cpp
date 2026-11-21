@@ -291,6 +291,14 @@ namespace Horo::Editor {
         }
         NativeDurableFileSystem files;
         switch (command.command) {
+            case EditorWorkspaceViewCommand::RequestSourceLanguage:
+                if (command.sourceLanguageIntent)
+                    RequestSourceLanguage(*command.sourceLanguageIntent);
+                return true;
+            case EditorWorkspaceViewCommand::ApplySourceCompletion:
+                if (command.sourceCompletionIntent)
+                    ApplySourceCompletion(*command.sourceCompletionIntent);
+                return true;
             case EditorWorkspaceViewCommand::SourceDocumentInteraction:
                 m_viewModel.sourceEditingResult =
                     command.sourceInteraction ? SubmitSourceEditingCommand(m_sourceOpenService.Documents(), *command.sourceInteraction)

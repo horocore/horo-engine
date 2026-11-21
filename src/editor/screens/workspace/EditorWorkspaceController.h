@@ -773,6 +773,14 @@ namespace Horo::Editor {
         IExternalProcessRunner *m_sourceLanguageRunner{};
         Language::ClangdSettings m_clangdSettings;
         std::unique_ptr<Language::ProjectLanguageWorkspace> m_sourceLanguage;
+
+        struct PendingSourceLanguage final {
+            SourceLanguageIntent intent;
+            Language::ProjectLanguageRequest request;
+            Language::ProjectLanguageWorkspace::Clock::time_point deadline;
+        };
+
+        std::optional<PendingSourceLanguage> m_pendingSourceLanguage;
         PCGGraphDocumentService m_pcgDocuments;
         std::vector<std::unique_ptr<PrefabDocumentSession>> m_prefabDocuments;
         std::optional<DocumentInstanceId> m_activePrefabDocument;
@@ -1257,6 +1265,20 @@ namespace Horo::Editor {
         void RefreshSourceDocumentProjection();
         /** @brief Admits a language provider once its compiler metadata is available. */
         void PrepareSourceLanguage();
+        /** @brief Asks the synchronized provider for the active source feature. */
+        void RequestSourceLanguage(const SourceLanguageIntent &intent);
+        /** @brief Retires a request if its document is no longer active or its deadline passed. */
+        void ExpireSourceLanguageRequest(Language::ProjectLanguageWorkspace::Clock::time_point now);
+        /** @brief Releases language projections from replaced or closed source publications. */
+        void RetireStaleSourceLanguageProjections();
+        /** @brief Consumes one matching language reply from the current request. */
+        void AcceptSourceLanguage(Language::LanguageResult result);
+        /** @brief Displays completion choices for their originating view and source lease. */
+        void AcceptSourceCompletions(Language::LanguageResult &result, const SourceEditingView &view);
+        /** @brief Applies a selected completion using the source document's history authority. */
+        void ApplySourceCompletion(const SourceCompletionIntent &intent);
+        /** @brief Opens an in-project definition and publishes its exact selection. */
+        [[nodiscard]] bool FocusSourceDefinition(const Language::LanguageLocation &target);
         /** @brief Refreshes changed canvas projections outside GUI draw work. */
         void RefreshUiCanvasProjection();
         /** @brief Routes revision-fenced hierarchy and persistence operations to the canonical canvas owner. */
