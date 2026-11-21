@@ -32,6 +32,33 @@ namespace Horo::Editor {
         using Reply = std::variant<ProviderDiscovery, AgentTurnResult, ContextReview>;
         using BackgroundTurn = AgentBackgroundTurn<Reply>;
 
+        /** @brief Resolves the localized operation label from the admitted file kind. */
+        const char *PatchFileLabel(const EditorPatchFileKind kind) {
+            constexpr std::array keys{"patch_file_create", "patch_file_edit", "patch_file_delete", "patch_file_rename"};
+            return keys[static_cast<std::size_t>(kind)];
+        }
+
+        /** @brief Gives each planner conflict its owning user-facing status. */
+        const char *PatchConflictLabel(const Proposals::PlanConflictReason reason) {
+            using enum Proposals::PlanConflictReason;
+            switch (reason) {
+                case SourceStale:
+                    return "source_patch_stale";
+                case SourceMissing:
+                case SourceMoved:
+                case SourceUnavailable:
+                case Unobserved:
+                    return "patch_file_source_unavailable";
+                case SourceChangedOnDisk:
+                    return "patch_file_disk_changed";
+                case DestinationOccupied:
+                    return "patch_file_destination_occupied";
+                case OverlappingPaths:
+                    return "patch_file_overlap";
+            }
+            return "patch_file_source_unavailable";
+        }
+
         enum class SceneQueryPhase {
             Idle,
             Running,
@@ -778,20 +805,42 @@ namespace Horo::Editor {
                 patchReview_.emplace(std::move(review).Value());
             }
 
-            /** @brief Renders the admitted file reference and stages review only after an explicit click. */
+            /** @brief Renders one immutable file summary and checks that its source review remains available. */
+            const char *DrawPatchFile(const EditorPatchFileCard &file,
+                                      const std::variant<Proposals::FilePreview, Proposals::PlanConflict> &plan,
+                                      const ILocalizationService &locale, const Theme::Fonts &fonts) const {
+                const auto width = ImGui::GetContentRegionAvail().x;
+                Ui::WrappedText(width, LocalizedText(locale, PatchFileLabel(file.kind)), Theme::Text(), fonts);
+                Ui::WrappedText(width, file.path.Value(), Theme::Muted(), fonts);
+                if (file.destination)
+                    Ui::WrappedText(width, file.destination->Value(), Theme::Muted(), fonts);
+                const auto counts =
+                    std::format("+{} / -{} {} · {} {}", file.addedBytes, file.removedBytes, LocalizedText(locale, "patch_file_bytes"),
+                                file.hunks, LocalizedText(locale, "patch_file_ranges"));
+                Ui::WrappedText(width, counts, Theme::Muted(), fonts);
+                if (const auto *conflict = std::get_if<Proposals::PlanConflict>(&plan))
+                    return PatchConflictLabel(conflict->reason);
+                const auto &source = std::get<Proposals::FilePreview>(plan).before;
+                return source.Revision() && !source.IsCurrent() ? "source_patch_stale" : nullptr;
+            }
+
+            /** @brief Renders file summaries in proposal order and stages only the selected current operation. */
             void DrawPatchReview(const ILocalizationService &locale, const Theme::Fonts &fonts, EditorWorkspaceViewCommandData &command) {
                 if (!patchReview_)
                     return;
                 const auto &review = *patchReview_;
-                const auto &path = std::get<Proposals::EditFile>(review.proposal.Files().front()).base.path.Value();
-                Ui::WrappedText(ImGui::GetContentRegionAvail().x, path, Theme::Muted(), fonts);
-                if (!Button(locale, "source_patch_review", true))
-                    return;
-                if (!patchSource_.source.IsCurrent()) {
-                    status_ = "source_patch_stale";
-                    return;
+                for (std::size_t index = 0; index < review.files.size(); ++index) {
+                    if (review.files.size() > 1)
+                        ImGui::PushID(static_cast<int>(index));
+                    const auto *conflict = DrawPatchFile(review.files[index], review.plan.entries[index], locale, fonts);
+                    const auto &label = LocalizedText(locale, conflict ? conflict : "patch_file_pending");
+                    Ui::WrappedText(ImGui::GetContentRegionAvail().x, label, conflict ? Theme::ConsoleWarning() : Theme::Muted(), fonts);
+                    if (Button(locale, "source_patch_review", !conflict && review.files[index].kind != EditorPatchFileKind::Create)) {
+                        status_ = requestSourceReview_(review.proposal, review.plan, index, command) ? nullptr : "source_patch_unavailable";
+                    }
+                    if (review.files.size() > 1)
+                        ImGui::PopID();
                 }
-                status_ = requestSourceReview_(review.proposal, review.plan, 0, command) ? nullptr : "source_patch_unavailable";
             }
 
             void Send(std::string_view prompt, std::optional<std::size_t> sceneCount = {}, bool recoverable = false,

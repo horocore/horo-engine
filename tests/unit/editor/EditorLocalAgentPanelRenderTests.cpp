@@ -325,6 +325,9 @@ namespace {
         const auto reference = narrow.rfind("code.cpp");
         REQUIRE(reference != std::string::npos);
         CHECK(reference > narrow.find("int value = 2;"));
+        CHECK(narrow.find("Edit file") != std::string::npos);
+        CHECK(narrow.find("bytes") != std::string::npos);
+        CHECK(narrow.find("Awaiting review") != std::string::npos);
         CHECK_FALSE(queued);
         SECTION("an explicit click queues the correct tab and exact hunk") {
             fixture.Activate("###source_patch_review");
@@ -363,5 +366,35 @@ namespace {
         const auto remove = R"({"version":1,"files":[{"kind":"delete","path":"code.cpp"}]})";
         CHECK(PrepareEditorLocalPatchReview(remove, offered, "workspace", 1).HasError());
         CHECK(owner.Snapshot(source.Identity().instance).Value().SharesStateWith(source));
+    }
+
+    TEST_CASE("Chat summarizes every admitted operation without retaining patch text", "[editor][agent][source]") {
+        using namespace Proposals;
+        const auto path = [](std::string_view name) {
+            return SourceDocumentId::Parse(name).Value();
+        };
+        const auto policy = ProjectPolicy::Capture("workspace", 1, {{path("src"), true}}).Value();
+        const auto hash = ComputeSha256(std::as_bytes(std::span{"abc", 3}));
+        const FileBase edit{path("src/edit.cpp"), 1, 1, 3, false, hash, hash};
+        const FileBase remove{path("src/remove.cpp"), 1, 1, 3, false, hash, hash};
+        const FileBase rename{path("src/rename.cpp"), 1, 1, 3, false, hash, hash};
+        const auto proposal = ChangeSet::Capture(policy, {"review",
+                                                          1,
+                                                          {"provider", "model", "request"},
+                                                          {RenameFile{rename, path("src/target.cpp"), {}}, EditFile{edit, {{1, "b", "BB"}}},
+                                                           CreateFile{path("src/create.cpp"), "new\n"}, DeleteFile{remove}}});
+        REQUIRE(proposal.HasValue());
+        const auto cards = DescribeEditorPatchFiles(proposal.Value());
+        REQUIRE(cards.size() == 4);
+        CHECK(cards[0].kind == EditorPatchFileKind::Create);
+        CHECK(cards[0].addedBytes == 4);
+        CHECK(cards[1].kind == EditorPatchFileKind::Edit);
+        CHECK(cards[1].hunks == 1);
+        CHECK(cards[1].removedBytes == 1);
+        CHECK(cards[1].addedBytes == 2);
+        CHECK(cards[2].kind == EditorPatchFileKind::Delete);
+        CHECK(cards[2].removedBytes == 3);
+        CHECK(cards[3].kind == EditorPatchFileKind::Rename);
+        CHECK(cards[3].destination == path("src/target.cpp"));
     }
 }  // namespace

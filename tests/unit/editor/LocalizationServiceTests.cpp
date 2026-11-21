@@ -207,6 +207,17 @@ namespace {
             "workspace.local_agent.source_patch_stale",
             "workspace.local_agent.source_patch_invalid",
             "workspace.local_agent.source_patch_unavailable",
+            "workspace.local_agent.patch_file_create",
+            "workspace.local_agent.patch_file_edit",
+            "workspace.local_agent.patch_file_delete",
+            "workspace.local_agent.patch_file_rename",
+            "workspace.local_agent.patch_file_bytes",
+            "workspace.local_agent.patch_file_ranges",
+            "workspace.local_agent.patch_file_pending",
+            "workspace.local_agent.patch_file_source_unavailable",
+            "workspace.local_agent.patch_file_disk_changed",
+            "workspace.local_agent.patch_file_destination_occupied",
+            "workspace.local_agent.patch_file_overlap",
         };
         RequireCatalogKeys(service, sourceEditingKeys);
         constexpr std::array documentKeys{"workspace.documents.close",         "workspace.documents.move_left",

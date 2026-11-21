@@ -41,7 +41,40 @@ namespace Horo::Editor {
                 return {answer, true};
             return answer.starts_with("```") ? ReadFence(answer.substr(3)) : PatchReply{};
         }
+
+        /** @brief Collects the exact model ranges, without rendering or retaining their text. */
+        EditorPatchFileCard DescribeFile(const Proposals::FileOperation &operation) {
+            using namespace Proposals;
+            return std::visit([](const auto &file) -> EditorPatchFileCard {
+                using File = std::decay_t<decltype(file)>;
+                if constexpr (std::is_same_v<File, CreateFile>) {
+                    return {file.path, {}, EditorPatchFileKind::Create, 0, 0, file.text.size()};
+                } else if constexpr (std::is_same_v<File, DeleteFile>) {
+                    return {file.base.path, {}, EditorPatchFileKind::Delete, 0, file.base.bytes, 0};
+                } else {
+                    EditorPatchFileCard card{file.base.path, {}, EditorPatchFileKind::Edit, file.hunks.size()};
+                    if constexpr (std::is_same_v<File, RenameFile>) {
+                        card.kind = EditorPatchFileKind::Rename;
+                        card.destination = file.destination;
+                    }
+                    for (const auto &hunk : file.hunks) {
+                        card.removedBytes += hunk.before.size();
+                        card.addedBytes += hunk.after.size();
+                    }
+                    return card;
+                }
+            }, operation);
+        }
     }  // namespace
+
+    /** @copydoc DescribeEditorPatchFiles */
+    std::vector<EditorPatchFileCard> DescribeEditorPatchFiles(const Proposals::ChangeSet &proposal) {
+        std::vector<EditorPatchFileCard> cards;
+        cards.reserve(proposal.Files().size());
+        for (const auto &operation : proposal.Files())
+            cards.push_back(DescribeFile(operation));
+        return cards;
+    }
 
     /** @copydoc IsEditorLocalPatchReply */
     bool IsEditorLocalPatchReply(const std::string_view answer) {
@@ -76,8 +109,7 @@ namespace Horo::Editor {
         auto plan = PlanWorkspaceEdits(proposal.Value(), policy.Value(), observations);
         if (plan.HasError())
             return ReviewResult::Failure(plan.ErrorValue());
-        if (!std::holds_alternative<FilePreview>(plan.Value().entries.front()))
-            return ReviewResult::Failure(MakeError(Errors::StaleBase));
-        return ReviewResult::Success({std::move(proposal).Value(), std::move(plan).Value()});
+        auto cards = DescribeEditorPatchFiles(proposal.Value());
+        return ReviewResult::Success({std::move(proposal).Value(), std::move(plan).Value(), std::move(cards)});
     }
 }  // namespace Horo::Editor
