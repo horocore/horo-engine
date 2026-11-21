@@ -23,6 +23,8 @@ generated descriptor bundle. The check compiles `Assets/HoldWaypoint.horo_bt`
 with the native descriptor and the authored `Assets/Guard.horo_bb` schema.
 It encodes and reloads the cooked plan, then runs the graph once per fixed
 tick against a frozen Blackboard snapshot.
+An engine build with tests enabled can run the same checks from a fresh copy
+using `ctest --test-dir <engine-build> -R '^HoroGameplayAiGuardSdkQualification$' --output-on-failure`.
 Copy each asset with its paired `.horo` identity file when reusing it.
 The schema's **Target visible** key starts at `false`. To inspect that key in a
 project running this schema, launch cooked Editor Play with

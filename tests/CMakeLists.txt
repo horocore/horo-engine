@@ -3057,6 +3057,22 @@ target_compile_definitions(HoroGameplayAiTests PRIVATE
     HORO_TEST_AI_MODULE_REVISION_PATH="${HORO_TEST_AI_MODULE_REVISION_FILE}")
 add_dependencies(HoroGameplayAiTests HoroTestAiGameModule)
 horo_register_catch_test(HoroGameplayAiTests LABELS "unit;gameplay;ai;headless")
+if(NOT CMAKE_CROSSCOMPILING)
+    add_test(NAME HoroGameplayAiGuardSdkQualification COMMAND "${CMAKE_COMMAND}"
+        "-DSDK_DIR=${HORO_GAMEPLAY_SDK_PACKAGE_DIR}"
+        "-DEXAMPLE_DIR=${PROJECT_SOURCE_DIR}/examples/gameplay-ai"
+        "-DTEST_ROOT=${CMAKE_CURRENT_BINARY_DIR}/gameplay-ai-guard-sdk"
+        "-DCTEST_COMMAND=${CMAKE_CTEST_COMMAND}"
+        "-DGENERATOR=${CMAKE_GENERATOR}" "-DGENERATOR_PLATFORM=${CMAKE_GENERATOR_PLATFORM}"
+        "-DGENERATOR_TOOLSET=${CMAKE_GENERATOR_TOOLSET}" "-DBUILD_CONFIG=$<CONFIG>"
+        "-DCMAKE_C_COMPILER=${CMAKE_C_COMPILER}" "-DCMAKE_CXX_COMPILER=${CMAKE_CXX_COMPILER}"
+        "-DCMAKE_MAKE_PROGRAM=${CMAKE_MAKE_PROGRAM}" "-DCMAKE_LINKER=${CMAKE_LINKER}"
+        "-DCMAKE_OSX_SYSROOT=${CMAKE_OSX_SYSROOT}" "-DCMAKE_OSX_ARCHITECTURES=${CMAKE_OSX_ARCHITECTURES}"
+        "-DCMAKE_OSX_DEPLOYMENT_TARGET=${CMAKE_OSX_DEPLOYMENT_TARGET}"
+        -P "${CMAKE_CURRENT_SOURCE_DIR}/cmake/GameplayAiGuardSdkQualification.cmake")
+    set_tests_properties(HoroGameplayAiGuardSdkQualification PROPERTIES LABELS "integration;gameplay;ai;sdk;headless;ci-windows"
+        RUN_SERIAL TRUE TIMEOUT 180)
+endif()
 add_executable(HoroGameplayAiContractConsumer support/GameplayAiContractConsumer.cpp)
 target_compile_features(HoroGameplayAiContractConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroGameplayAiContractConsumer PRIVATE HoroEngine::GameplayAiScriptBridge HoroEngine::GameplayModuleHost)
