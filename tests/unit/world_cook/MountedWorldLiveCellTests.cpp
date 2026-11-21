@@ -1,4 +1,5 @@
 #include "../../integration/network/NetworkModeHostTestSupport.h"
+#include "../runtime/ai/AiSceneTestSupport.h"
 #include "../runtime/physics/PhysicsSceneActivationTestSupport.h"
 #include "HeadlessSceneLoadBoundary.h"
 #include "Horo/Assets/AssetProvider.h"
@@ -276,6 +277,9 @@ namespace Horo::WorldCook {
     TEST_CASE("Mounted World streams a verified cell through the real structural cutoff and detaches only its occurrence",
               "[world_cook][native][mounted_world][live_cell]") {
         Fixture fixture{false, false};
+        const auto controller = AI::TestSupport::MakeFixture(813, 812, 101, 0);
+        fixture.entities.front().components.aiAgent = controller.agent.agent;
+        fixture.entities.front().components.aiController = controller.agent.controller;
         const auto published = fixture.Publish();
         REQUIRE(published.HasValue());
         REQUIRE(published.Value().publication);
@@ -295,7 +299,13 @@ namespace Horo::WorldCook {
         A::MemoryAssetProvider provider;
         A::AssetLoadService loads{jobs, provider};
         A::AssetRegistry registry;
+        const std::array catalog{controller.descriptor};
+        auto createdAi = AI::AiSceneRuntime::Create();
+        REQUIRE(createdAi.HasValue());
+        auto ai = std::move(createdAi).Value();
         S::RuntimeSceneService scene{registry, loads, S::RuntimeSceneAssetLimits{}, S::SceneRuntimeId{101}};
+        REQUIRE(scene.AddActivationParticipant(std::make_unique<AI::AiSceneActivationParticipant>(ai, catalog)).HasValue());
+        REQUIRE(scene.AddStructuralParticipant(ai.MakeStructuralParticipant(catalog)).HasValue());
         S::SceneDefinitionBuilder startup{{99}, {1}};
         startup.Add({.object = {42}});
         auto definition = std::move(startup).Build();
@@ -389,6 +399,19 @@ namespace Horo::WorldCook {
         REQUIRE(attached());
         frame();
         stage(Stage::Active);
+        const auto capability = ai.CapabilityAtSafePoint();
+        const auto authoredAgent = controller.agent.agent.agent;
+        const auto original = capability.ResolveAgent(authoredAgent);
+        REQUIRE(original.HasValue());
+        const auto originalOwner = capability.ResolveAgentOwner(original.Value());
+        REQUIRE(originalOwner.HasValue());
+        const auto originalLifetime = capability.CaptureAgentLifetime(original.Value());
+        REQUIRE(originalLifetime.HasValue());
+        const auto taskId = AI::TestSupport::MakeIdentity<AI::TaskId>(814);
+        const auto originalTask = ai.StartTaskAtSafePoint(original.Value(), taskId);
+        REQUIRE(originalTask.HasValue());
+        REQUIRE(ai.Find(original.Value()).Value().hasRunningTask);
+        CHECK_FALSE(originalLifetime.Value().IsCancellationRequested());
 
         const S::SceneInstanceAddress siblingAddress{root, sibling.occurrence, sibling.definition, S::SceneInstanceMode::Streamed};
         const auto siblingAttached = [&] {
@@ -409,6 +432,11 @@ namespace Horo::WorldCook {
         stage(Stage::Retiring);
         REQUIRE_FALSE(attached());
         REQUIRE(siblingAttached());
+        CHECK(originalLifetime.Value().IsCancellationRequested());
+        CHECK(capability.ResolveAgent(authoredAgent).HasError());
+        CHECK(capability.CompleteTask(original.Value(), originalTask.Value()).HasError());
+        REQUIRE(scene.ActiveScene());
+        CHECK(scene.ActiveScene()->Get(originalOwner.Value()).HasError());
         frame();
         stage(Stage::Active);
         REQUIRE(mount->WithdrawLiveCell(request.occurrence).HasError());
@@ -420,6 +448,23 @@ namespace Horo::WorldCook {
         stage(Stage::Idle);
         REQUIRE_FALSE(attached());
         REQUIRE_FALSE(siblingAttached());
+
+        REQUIRE(mount->RequestLiveCell(request).HasValue());
+        until([](const Result<Stage> &last) {
+            return last.HasError() || last.Value() == Stage::Active;
+        });
+        stage(Stage::Active);
+        REQUIRE(attached());
+        const auto replacement = capability.ResolveAgent(authoredAgent);
+        REQUIRE(replacement.HasValue());
+        CHECK(replacement.Value() != original.Value());
+        const auto replacementOwner = capability.ResolveAgentOwner(replacement.Value());
+        REQUIRE(replacementOwner.HasValue());
+        CHECK(replacementOwner.Value() != originalOwner.Value());
+        CHECK_FALSE(ai.Find(replacement.Value()).Value().hasRunningTask);
+        CHECK(capability.CompleteTask(replacement.Value(), originalTask.Value()).HasError());
+        CHECK(capability.CompleteTask(original.Value(), originalTask.Value()).HasError());
+        CHECK(originalLifetime.Value().IsCancellationRequested());
     }
 
     TEST_CASE("Standalone mounted CoreEcs demand starts in the product frame and withdraws through the same Scene owner",
