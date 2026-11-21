@@ -103,6 +103,37 @@ namespace Horo::Editor::Proposals {
             return {};
         }
 
+        /** @brief Collects portable collision keys for both sides of every file operation. */
+        std::vector<std::string> AffectedPaths(const std::span<const FileOperation> files) {
+            std::vector<std::string> paths;
+            paths.reserve(2 * files.size());
+            for (const auto &file : files) {
+                const auto operation = Describe(file);
+                if (operation.base)
+                    paths.push_back(PatchDetail::Fold(operation.base->path.Value()));
+                if (operation.destination)
+                    paths.push_back(PatchDetail::Fold(operation.destination->Value()));
+            }
+            return paths;
+        }
+
+        /** @brief Reports source freshness and observed external changes before inspecting text. */
+        std::optional<PlanConflictReason> SourceProblem(const SourceDocumentSnapshot &snapshot) {
+            if (!snapshot.IsCurrent())
+                return PlanConflictReason::SourceStale;
+            switch (snapshot.ExternalState()) {
+                case SourceExternalState::InSync:
+                    return {};
+                case SourceExternalState::Removed:
+                    return PlanConflictReason::SourceMissing;
+                case SourceExternalState::Unreadable:
+                    return PlanConflictReason::SourceUnavailable;
+                case SourceExternalState::Changed:
+                    return PlanConflictReason::SourceChangedOnDisk;
+            }
+            return PlanConflictReason::SourceUnavailable;
+        }
+
         struct Budget final {
             const Limits &limits;
             std::size_t input{};
@@ -139,12 +170,8 @@ namespace Horo::Editor::Proposals {
             if (const auto *conflict = std::get_if<PlanConflict>(&source))
                 return Entry::Success(*conflict);
             auto snapshot = std::get<SourceDocumentSnapshot>(std::move(source));
-            if (!snapshot.IsCurrent())
-                return Entry::Success(PlanConflict{path, PlanConflictReason::SourceStale});
-            if (snapshot.ExternalState() == SourceExternalState::Removed)
-                return Entry::Success(PlanConflict{path, PlanConflictReason::SourceMissing});
-            if (snapshot.ExternalState() != SourceExternalState::InSync)
-                return Entry::Success(PlanConflict{path, PlanConflictReason::SourceChangedOnDisk});
+            if (const auto problem = SourceProblem(snapshot))
+                return Entry::Success(PlanConflict{path, *problem});
             if (!budget.Charge(snapshot.Text().size(), budget.input) || !budget.Charge(snapshot.DiskBase().size(), budget.input))
                 return Entry::Failure(MakeError(Errors::Bounds));
             const auto validation = ValidateAgainstSnapshot(*operation.base, operation.hunks, snapshot);
@@ -165,22 +192,29 @@ namespace Horo::Editor::Proposals {
             return Entry::Success(FilePreview{std::move(snapshot), std::move(result)});
         }
 
+        /** @brief Rejects conflicting operands before any text is copied. */
+        std::optional<PlanConflict> CheckPaths(const Operation &operation, const ObservationIndex &index,
+                                               const std::vector<std::string> &paths) {
+            if (operation.base) {
+                if (auto overlap = Overlap(operation.base->path, paths))
+                    return overlap;
+            }
+            if (operation.destination && (!operation.base || *operation.destination != operation.base->path)) {
+                if (auto overlap = Overlap(*operation.destination, paths))
+                    return overlap;
+                return Destination(index, *operation.destination);
+            }
+            return {};
+        }
+
         /** @brief Projects one operation, leaving conflicting entries available for review. */
         Result<PlanEntry> Prepare(const Operation &operation, const ObservationIndex &index, const std::vector<std::string> &paths,
                                   Budget &budget) {
             using Entry = Result<PlanEntry>;
             if (operation.hunks.size() > budget.limits.maximumHunksPerFile)
                 return Entry::Failure(MakeError(Errors::Bounds));
-            if (operation.base) {
-                if (auto overlap = Overlap(operation.base->path, paths))
-                    return Entry::Success(std::move(*overlap));
-            }
-            if (operation.destination && (!operation.base || *operation.destination != operation.base->path)) {
-                if (auto overlap = Overlap(*operation.destination, paths))
-                    return Entry::Success(std::move(*overlap));
-                if (auto conflict = Destination(index, *operation.destination))
-                    return Entry::Success(std::move(*conflict));
-            }
+            if (auto conflict = CheckPaths(operation, index, paths))
+                return Entry::Success(std::move(*conflict));
             if (operation.base)
                 return PrepareSource(operation, index, budget);
             if (!budget.Charge(operation.createdText->size(), budget.output))
@@ -207,14 +241,7 @@ namespace Horo::Editor::Proposals {
             ObservationIndex index;
             if (!IndexObservations(observations, index))
                 return PlanResult::Failure(MakeError(Errors::Invalid));
-            std::vector<std::string> paths;
-            for (const auto &file : proposal.Files()) {
-                const auto operation = Describe(file);
-                if (operation.base)
-                    paths.push_back(PatchDetail::Fold(operation.base->path.Value()));
-                if (operation.destination)
-                    paths.push_back(PatchDetail::Fold(operation.destination->Value()));
-            }
+            const auto paths = AffectedPaths(proposal.Files());
             Budget budget{limits};
             WorkspaceEditPlan plan{proposal.Digest(), {}};
             plan.entries.reserve(proposal.Files().size());

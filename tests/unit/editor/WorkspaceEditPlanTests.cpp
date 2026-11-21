@@ -103,6 +103,12 @@ TEST_CASE("Workspace plans distinguish stale, missing, relocated and external so
         observations[0].evidence = workspace.documents.Snapshot(instance).Value();
         expected = PlanConflictReason::SourceMissing;
     }
+    SECTION("unreadable files do not appear as clean previews") {
+        workspace.project.Put(std::string_view{"new\0", 4}, "src/edit.cpp");
+        REQUIRE(workspace.documents.InspectDisk(instance).HasError());
+        observations[0].evidence = workspace.documents.Snapshot(instance).Value();
+        expected = PlanConflictReason::SourceUnavailable;
+    }
     SECTION("an exact host relocation observation prevents rebasing onto another path") {
         observations[0].evidence = SourcePathState::Moved;
         expected = PlanConflictReason::SourceMoved;
