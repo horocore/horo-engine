@@ -121,6 +121,8 @@ namespace Horo::Application::Internal {
         }
         input_.play = state;
         if (state == Paused) {
+            tracking_.Revoke();
+            input_.neutralPending = true;
             composition_.session.RequestHapticCancellation();
             RevokeEyeGaze();
             RevokePlaneCapture();
@@ -208,6 +210,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::ApplyEventObservation */
     Result<bool> OpenXRPlayHost::ApplyEventObservation(const NativeSessionEventObservation &observed) {
+        const bool inputSuspended = observed.actionsInterrupted || (!eventsPending_ && observed.morePending);
         eventsPending_ = observed.morePending;
         if (observed.loss == NativeSessionEventLoss::Instance) {
             instanceLost_ = true;
@@ -219,14 +222,16 @@ namespace Horo::Application::Internal {
             return Result<bool>::Success(false);
         }
         const auto state = sessions_.Snapshot();
-        if (observed.actionsInterrupted) {
+        if (inputSuspended) {
             tracking_.Revoke();
+            input_.neutralPending = true;
+        }
+        if (observed.actionsInterrupted) {
             RevokeEyeGaze();
             RevokePlaneCapture();
             RevokePassthrough();
-            input_.neutralPending = true;
         }
-        const bool invalidateOutput = observed.actionsInterrupted || observed.bindingsChanged;
+        const bool invalidateOutput = inputSuspended || observed.bindingsChanged;
         if (invalidateOutput)
             composition_.session.RequestHapticCancellation();
         if (invalidateOutput || state.admitsActions) {

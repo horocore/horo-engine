@@ -628,7 +628,7 @@ namespace Horo::Application::Internal {
             XR::XRWorldOriginRevision origin;
             Editor::EditorPlayState play{Editor::EditorPlayState::Idle};
             bool admitted{};
-            bool neutralPending{}; /**< An observed focus edge requires an empty committed cutoff before resampling. */
+            bool neutralPending{}; /**< A suspension requires an empty committed cutoff before resampling. */
         };
 
         struct Parents final {

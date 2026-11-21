@@ -1583,6 +1583,25 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(runCutoff().pressed);
         CHECK(fixture.play->ReadInspection().sessionGeneration == generation);
 
+        // Both polls can run before Input sees the suspension.
+        for (std::uint32_t index = 0; index < Native::OpenXRSessionEvents::MaximumEventsPerPoll; ++index)
+            fixture.script.events.Push(XR_SESSION_STATE_FOCUSED);
+        RequireValue(fixture.play->PollEvents());
+        CHECK(fixture.play->ReadInspection().status == EditorXrInspectionStatus::EventsPending);
+        RequireValue(fixture.play->PollEvents());
+        CHECK(fixture.play->ReadInspection().status == EditorXrInspectionStatus::WaitingForSample);
+        const auto afterBacklog = runCutoff("neutral cutoff after the native backlog drains between frames");
+        CHECK_FALSE(afterBacklog.down);
+        CHECK(afterBacklog.released);
+        CHECK(runCutoff().pressed);
+
+        RequireValue(fixture.play->SetPlayState(Editor::EditorPlayState::Paused));
+        RequireValue(fixture.play->SetPlayState(Editor::EditorPlayState::Playing));
+        const auto afterPause = runCutoff("neutral cutoff after a Play pause and resume between frames");
+        CHECK_FALSE(afterPause.down);
+        CHECK(afterPause.released);
+        CHECK(runCutoff().pressed);
+
         fixture.script.actions.currentProfiles[0] = XR_NULL_PATH;
         if (type != Digital) {
             fixture.script.events.interactionProfileChanged = true;
@@ -1751,6 +1770,18 @@ namespace Horo::Tests::OpenXRApplication {
             CHECK(preview.ReadHapticPreview(request) == Cancelled);
             CHECK(native.applies == 0);
             requireDenial(valid, XR::XRErrors::OperationUnavailable);
+        }
+        SECTION("an unread native event backlog stops output before the next input cutoff") {
+            fixture.play->PumpHapticPreview();
+            REQUIRE(preview.ReadHapticPreview(request) == Submitted);
+            for (std::uint32_t index = 0; index < Native::OpenXRSessionEvents::MaximumEventsPerPoll; ++index)
+                fixture.script.events.Push(XR_SESSION_STATE_FOCUSED);
+            RequireValue(fixture.play->PollEvents());
+            CHECK(native.stops == 1);
+            RequireValue(fixture.play->PollEvents());
+            fixture.play->PumpHapticPreview();
+            CHECK(preview.ReadHapticPreview(request) == Cancelled);
+            CHECK(native.stops == 1);
         }
         SECTION("shutdown stops submitted output before releasing the native session") {
             fixture.play->PumpHapticPreview();
