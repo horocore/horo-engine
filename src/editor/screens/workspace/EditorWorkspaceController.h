@@ -40,6 +40,7 @@
 #include "editor/screens/workspace/prefab/PrefabApplyTransaction.h"
 #include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
 #include "editor/screens/workspace/prefab/PrefabHierarchySources.h"
+#include "editor/source_editor/SourceReviewApplication.h"
 #include "terrain/TerrainAssetCreation.h"
 
 #include <cstddef>
@@ -315,6 +316,11 @@ namespace Horo::Editor {
         /** @brief Last bounded Save All batch, including every independently failed document. */
         [[nodiscard]] const std::optional<Result<std::vector<SourceSaveAllItem>>> &SourceSaveAllOutcome() const noexcept {
             return m_sourceSaveAllOutcome;
+        }
+
+        /** @brief Reads source review feedback and stages an exact undo command through the workspace lane. */
+        [[nodiscard]] const SourceReviewTransactions &SourceReviews() const noexcept {
+            return m_sourceReviews;
         }
 
         /** @brief Applies an explicit revision-fenced canvas close decision, preserving dirty state on failure. */
@@ -699,6 +705,7 @@ namespace Horo::Editor {
         DocumentIdentityRegistry m_documentRegistry;
         std::optional<Result<SourceSaveResult>> m_sourceSaveOutcome;
         std::optional<Result<std::vector<SourceSaveAllItem>>> m_sourceSaveAllOutcome;
+        SourceReviewTransactions m_sourceReviews;
         std::optional<Result<bool>> m_sourceCloseOutcome;
         /** @brief Intercept only explicitly registered terrain assets; generic source routing remains unchanged. */
         bool TryOpenTerrainDocument(const SourceOpenRequest &request);

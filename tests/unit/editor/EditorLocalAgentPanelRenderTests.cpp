@@ -9,6 +9,7 @@
 #include "Horo/Editor/WorkspacePanelRegistry.h"
 #include "Horo/Foundation/Platform.h"
 #include "editor/source_editor/SourceEditorSession.h"
+#include "editor/source_editor/SourceReviewApplication.h"
 #include "editor/source_editor/SourceReviewOverlay.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
@@ -19,6 +20,7 @@
 #include <functional>
 #include <imgui_internal.h>
 #include <thread>
+#include <utility>
 
 namespace {
     using namespace Horo;
@@ -507,6 +509,7 @@ namespace {
         const auto two = owner.Open(project.Identity(longPath, 2), project.directory / longPath).Value();
         const std::array open{one, two};
         std::vector<DocumentInstanceId> selections;
+        SourceReviewTransactions transactions;
         const auto configure = [&](PanelContext &context) {
             context.projectFileRoot = &project.directory;
             context.openSourceSnapshots = [&]() -> std::span<const SourceDocumentSnapshot> {
@@ -518,6 +521,15 @@ namespace {
                 REQUIRE(overlay.HasValue());
                 selections.push_back(overlay.Value().Source().Identity().instance);
                 return true;
+            };
+            context.requestSourceReviewApply = [](const auto &decisions, const auto &policy, const auto &plan, auto &command) {
+                return QueueSourceReviewApplication("layout-test", decisions, policy, plan, command);
+            };
+            context.requestSourceReviewUndo = [&](auto &command) {
+                return transactions.QueueUndo(command);
+            };
+            context.sourceReviewTransaction = [&] {
+                return transactions.Status();
             };
         };
         LocalAgentFixture fixture{"en-US", configure};
@@ -584,5 +596,30 @@ namespace {
         CHECK(fixture.DrawnText().find("Accepted") != std::string::npos);
         CHECK(one.IsCurrent());
         CHECK(two.IsCurrent());
+        select(fixture.ChatWindow()->GetID(0), "###source_patch_hunks");
+        select(fixture.ChatWindow()->GetID(0), "###source_patch_reject_hunk");
+        select(fixture.ChatWindow()->GetID(1), "###source_patch_accept_file");
+        fixture.Activate("###source_patch_apply");
+        REQUIRE(fixture.command.command == EditorWorkspaceViewCommand::ApplySourceReview);
+        CHECK(one.IsCurrent());
+        CHECK(two.IsCurrent());
+        REQUIRE(transactions.Process(std::exchange(fixture.command, {}), owner));
+        CHECK(fixture.DrawnText().find("Accepted changes applied to the open files.") != std::string::npos);
+        const auto appliedOne = owner.Snapshot(one.Identity().instance).Value();
+        const auto appliedTwo = owner.Snapshot(two.Identity().instance).Value();
+        CHECK(appliedOne.Text() == "onE\n");
+        CHECK(appliedTwo.Text() == "new two\n");
+        CHECK(appliedOne.Dirty());
+        CHECK(appliedTwo.Dirty());
+        SourceDocumentService disk(project.directory);
+        CHECK(disk.Open(project.Identity("one.cpp", 1), project.directory / "one.cpp").Value().Text() == one.Text());
+        CHECK(disk.Open(project.Identity(longPath, 2), project.directory / longPath).Value().Text() == two.Text());
+        fixture.Activate("###source_patch_revert");
+        REQUIRE(fixture.command.command == EditorWorkspaceViewCommand::UndoSourceReview);
+        REQUIRE(transactions.Process(std::exchange(fixture.command, {}), owner));
+        CHECK(fixture.DrawnText().find("Applied changes were undone together.") != std::string::npos);
+        CHECK_FALSE(transactions.Status().canUndo);
+        CHECK(owner.Snapshot(one.Identity().instance).Value().Text() == one.Text());
+        CHECK(owner.Snapshot(two.Identity().instance).Value().Text() == two.Text());
     }
 }  // namespace

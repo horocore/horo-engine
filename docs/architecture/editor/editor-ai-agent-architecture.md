@@ -790,6 +790,14 @@ revision counters may differ after reopening a byte-identical source. The
 checkpoint preserves the decisions at save time. Undo tracks decisions made
 in the current review session.
 
+The Local Model panel queues an explicit Apply command with the accepted review
+and its exact offered-file policy. The workspace dispatches it after drawing.
+The source owner rechecks the policy, the live publications and the saved disk
+bases before publishing one batch of buffer changes. Only accepted text ranges
+enter that batch. The workspace retains its latest receipt for a single grouped
+Undo action while every affected publication is still current. Source files are
+written through the ordinary save flow.
+
 ## Backend Providers
 
 The system supports pluggable LLM backends:

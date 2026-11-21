@@ -18,6 +18,7 @@
 #include "PCGPreviewWorkspace.h"
 #include "ScriptModuleHostServices.h"
 #include "editor/input/EditorInputActions.h"
+#include "editor/source_editor/SourceReviewApplication.h"
 #include "editor/source_editor/SourceReviewOverlay.h"
 
 #include <algorithm>
@@ -217,6 +218,20 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             command.sourceReview = std::make_shared<const SourceReviewOverlay>(std::move(overlay).Value());
             command.command = EditorWorkspaceViewCommand::ReviewSourceProposal;
             return true;
+        },
+            .requestSourceReviewApply =
+                [project = std::string{projectIdentity}](const Proposals::ReviewDecisions &decisions,
+                                                         const Proposals::ProjectPolicy &policy, const Proposals::WorkspaceEditPlan &plan,
+                                                         EditorWorkspaceViewCommandData &command) {
+            return QueueSourceReviewApplication(project, decisions, policy, plan, command);
+        },
+            .requestSourceReviewUndo =
+                [this](EditorWorkspaceViewCommandData &command) {
+            return controller_->SourceReviews().QueueUndo(command);
+        },
+            .sourceReviewTransaction =
+                [this] {
+            return controller_->SourceReviews().Status();
         },
         };
         contributions_.panels.AttachAll(panelContext);

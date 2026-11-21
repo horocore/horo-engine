@@ -302,6 +302,20 @@ namespace Horo::Editor::Proposals {
         std::optional<std::size_t> hunk;
     };
 
+    enum class SourceTransactionFeedback : std::uint8_t {
+        None,
+        Applied,
+        Undone,
+        ApplyFailed,
+        UndoFailed
+    };
+
+    /** @brief Owner-published status for the latest explicit application or group undo. */
+    struct SourceTransactionStatus final {
+        SourceTransactionFeedback feedback{};
+        bool canUndo{};
+    };
+
     /** @brief Inert decisions on one exact proposal. Edits have per-hunk decisions and structural operations are indivisible. */
     class ReviewDecisions final {
     public:
@@ -309,6 +323,8 @@ namespace Horo::Editor::Proposals {
         explicit ReviewDecisions(ChangeSet proposal);
         /** @brief Reads the exact selected unit or its aggregate. @return Invalid for unknown units. */
         [[nodiscard]] Result<ReviewState> State(ReviewTarget target = {}) const;
+        /** @brief Reports whether at least one proposal unit was accepted. */
+        [[nodiscard]] bool HasAcceptedChanges() const noexcept;
         /** @brief Records one atomic decision. Acceptance requires a current, conflict-free plan for every selected operation.
          * @param plan The latest defensive workspace plan. @param target Whole proposal, file or edit hunk.
          * @param choice Explicit review-only choice. @return Success or typed failure, with no partial decisions or source writes.

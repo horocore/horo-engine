@@ -110,6 +110,11 @@ namespace Horo::Editor::Proposals {
         return true;
     }
 
+    /** @copydoc ReviewDecisions::HasAcceptedChanges */
+    bool ReviewDecisions::HasAcceptedChanges() const noexcept {
+        return std::ranges::any_of(units_, HasAcceptance);
+    }
+
     /** @brief Publishes a complete decision change with bounded undo history. */
     void ReviewDecisions::Publish(Units units) {
         if (units == units_)

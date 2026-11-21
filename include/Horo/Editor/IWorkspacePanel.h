@@ -66,6 +66,9 @@ namespace Horo::Editor {
 
     namespace Proposals {
         class ChangeSet;
+        class ProjectPolicy;
+        class ReviewDecisions;
+        struct SourceTransactionStatus;
         struct WorkspaceEditPlan;
     }  // namespace Proposals
 
@@ -115,6 +118,14 @@ namespace Horo::Editor {
         std::function<bool(const Proposals::ChangeSet &, const Proposals::WorkspaceEditPlan &, std::size_t,
                            EditorWorkspaceViewCommandData &)>
             requestSourceReview{};
+        /** @brief Stages the user's explicit request to apply the accepted text after drawing. */
+        std::function<bool(const Proposals::ReviewDecisions &, const Proposals::ProjectPolicy &, const Proposals::WorkspaceEditPlan &,
+                           EditorWorkspaceViewCommandData &)>
+            requestSourceReviewApply{};
+        /** @brief Stages group undo for the last applied source review. */
+        std::function<bool(EditorWorkspaceViewCommandData &)> requestSourceReviewUndo{};
+        /** @brief Reads the current workspace's source transaction outcome and undo availability. */
+        std::function<Proposals::SourceTransactionStatus()> sourceReviewTransaction{};
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */

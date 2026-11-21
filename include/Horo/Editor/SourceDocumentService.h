@@ -194,6 +194,13 @@ namespace Horo::Editor {
             return data_ && data_->undoable;
         }
 
+        /** @brief Checks exact nonempty receipt identity. @param other Receipt to compare.
+         * @return True if both receipts refer to the same owner publication.
+         */
+        [[nodiscard]] bool SharesStateWith(const SourceEditBatch &other) const noexcept {
+            return data_ && data_ == other.data_;
+        }
+
     private:
         friend class SourceDocumentService;
 

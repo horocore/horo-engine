@@ -277,6 +277,8 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::ProcessSourceDocumentCommand */
     bool EditorWorkspaceController::ProcessSourceDocumentCommand(const EditorWorkspaceViewCommandData &command) {
+        if (m_sourceReviews.Process(command, m_sourceOpenService.Documents()))
+            return true;
         NativeDurableFileSystem files;
         switch (command.command) {
             case EditorWorkspaceViewCommand::SourceDocumentInteraction:

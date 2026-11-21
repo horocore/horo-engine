@@ -208,6 +208,9 @@ namespace Horo::Editor {
                 activeSourceRange_ = context.activeSourceRange;
                 openSources_ = context.openSourceSnapshots;
                 requestSourceReview_ = context.requestSourceReview;
+                requestSourceReviewApply_ = context.requestSourceReviewApply;
+                requestSourceReviewUndo_ = context.requestSourceReviewUndo;
+                sourceReviewTransaction_ = context.sourceReviewTransaction;
                 projectFiles_ = context.agentProjectFiles;
                 projectReadIdentity_ = context.agentProjectReadIdentity;
                 captureSceneSelection_ = context.captureSceneSelection;
@@ -282,6 +285,7 @@ namespace Horo::Editor {
                 DrawSceneQueryActivity(locale, fonts);
                 if (!response_.empty())
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, response_, Theme::Text(), fonts);
+                DrawSourceTransaction(locale, fonts, command);
                 DrawPatchReview(locale, fonts, command);
                 if (liveDraft_ && history_.HasRecovery() && background_->CanCancel() && Button(locale, "history_draft_offer", true))
                     history_.ReviewLiveDraft(*liveDraft_);
@@ -338,6 +342,10 @@ namespace Horo::Editor {
                 activeSourceRange_ = {};
                 openSources_ = {};
                 requestSourceReview_ = {};
+                requestSourceReviewApply_ = {};
+                requestSourceReviewUndo_ = {};
+                sourceReviewTransaction_ = {};
+                sourceApplyQueued_ = false;
                 patchSource_ = {};
                 patchReview_.reset();
                 patchCheckpoint_.Abandon();
@@ -943,6 +951,40 @@ namespace Horo::Editor {
                     status_ = review.decisions.Undo(review.plan).HasError() ? "source_patch_stale" : nullptr;
             }
 
+            /** @brief Rebuilds the exact offered-file policy before staging the explicit application. */
+            void QueueSourceApply(const EditorLocalAgentPatchReview &review, EditorWorkspaceViewCommandData &command) {
+                try {
+                    std::vector<Proposals::PathRule> rules;
+                    rules.reserve(review.offeredPaths.size());
+                    for (const auto &path : review.offeredPaths)
+                        rules.push_back({path, false});
+                    const auto policy =
+                        Proposals::ProjectPolicy::Capture(contextProject_, review.proposal.PolicyRevision(), std::move(rules));
+                    sourceApplyQueued_ =
+                        policy.HasValue() && requestSourceReviewApply_(review.decisions, policy.Value(), review.plan, command);
+                } catch (const std::bad_alloc &) {
+                    sourceApplyQueued_ = false;
+                }
+                status_ = sourceApplyQueued_ ? nullptr : "source_patch_apply_failed";
+            }
+
+            /** @brief Presents the workspace-owned result and a single action to reverse the applied group. */
+            void DrawSourceTransaction(const ILocalizationService &locale, const Theme::Fonts &fonts,
+                                       EditorWorkspaceViewCommandData &command) {
+                if (!sourceReviewTransaction_)
+                    return;
+                const auto state = sourceReviewTransaction_();
+                using enum Proposals::SourceTransactionFeedback;
+                if (std::exchange(sourceApplyQueued_, false) && state.feedback == Applied)
+                    patchReview_.reset();
+                constexpr std::array<const char *, 5> keys{nullptr, "source_patch_applied", "source_patch_reverted",
+                                                           "source_patch_apply_failed", "source_patch_revert_failed"};
+                if (const auto *key = keys[static_cast<std::size_t>(state.feedback)])
+                    Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, key), Theme::Text(), fonts);
+                if (requestSourceReviewUndo_ && state.canUndo && Button(locale, "source_patch_revert", true))
+                    status_ = requestSourceReviewUndo_(command) ? nullptr : "source_patch_revert_failed";
+            }
+
             /** @brief Explicitly checkpoints the exact inert proposal and current unit decisions on the storage worker. */
             void SavePatchReview(const EditorLocalAgentPatchReview &review) {
                 EditorPatchCheckpoint checkpoint{review.proposal, review.decisions, review.offeredPaths};
@@ -1040,6 +1082,8 @@ namespace Horo::Editor {
                         ImGui::PopID();
                 }
                 DrawPatchDecisions(review, locale);
+                if (requestSourceReviewApply_ && Button(locale, "source_patch_apply", review.decisions.HasAcceptedChanges()))
+                    QueueSourceApply(review, command);
                 if (!buildRoot_.empty() && Button(locale, "source_patch_checkpoint_save", CanCheckpointPatchReview()))
                     SavePatchReview(review);
                 ImGui::EndDisabled();
@@ -1221,6 +1265,10 @@ namespace Horo::Editor {
             std::function<bool(SourceDocumentSnapshot &, SourceContextRange &)> activeSourceRange_;
             std::function<std::span<const SourceDocumentSnapshot>()> openSources_;
             decltype(PanelContext::requestSourceReview) requestSourceReview_;
+            decltype(PanelContext::requestSourceReviewApply) requestSourceReviewApply_;
+            decltype(PanelContext::requestSourceReviewUndo) requestSourceReviewUndo_;
+            decltype(PanelContext::sourceReviewTransaction) sourceReviewTransaction_;
+            bool sourceApplyQueued_{};
             EditorLocalAgentPatchSource patchSource_;
             std::optional<EditorLocalAgentPatchReview> patchReview_;
             std::shared_ptr<const Platform::IProjectReadFiles> projectFiles_;

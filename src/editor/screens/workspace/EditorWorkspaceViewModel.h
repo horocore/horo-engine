@@ -68,6 +68,7 @@ namespace Horo::Application {
 
 namespace Horo::Editor {
     class SourceReviewOverlay;
+    struct SourceReviewApplication;
     class TerrainDocumentHost;
     struct PrefabApplyRecoveryCandidate;
 
@@ -297,6 +298,8 @@ namespace Horo::Editor {
         CreateTerrainFoliageType,
         OpenGyroscopeBinding,
         BlackboardDocument,
+        ApplySourceReview,
+        UndoSourceReview,
     };
 
     enum class BottomDockMode {
@@ -847,6 +850,8 @@ namespace Horo::Editor {
         std::optional<DiagnosticSourceRequest> diagnosticSource = std::nullopt;
         std::optional<CreateGameplayBehaviorRequest> gameplayBehaviorRequest = std::nullopt;
         std::optional<AssetSceneDropRequest> assetSceneDrop = std::nullopt;
+        std::shared_ptr<const SourceReviewApplication> sourceReviewApplication;
+        SourceEditBatch sourceReviewUndo;
     };
 
     /** @brief Pending project-local Content Browser clipboard operation. */
