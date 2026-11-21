@@ -264,6 +264,16 @@ namespace Horo {
         [[nodiscard]] virtual Result<void> RemoveDurable(const std::filesystem::path &path) = 0;
         /** @brief Synchronizes directory metadata. @param path Directory to synchronize. @return Success or typed I/O failure. */
         [[nodiscard]] virtual Result<void> SyncDirectory(const std::filesystem::path &path) = 0;
+        /** @brief Publishes a prepared regular, single-link file without replacing any existing destination.
+         * @param prepared Existing, durably staged file. @param destination Absent sibling filename.
+         * @param receipt Fresh caller-owned commit witness, recorded before any later sync/error.
+         * @return Durable success or a typed publication failure. An existing destination is preserved.
+         * @pre Absolute normalized siblings within the caller's protected publication directory.
+         * @details The default rejects unsupported publication. Native implementations use an exclusive rename and never copy.
+         */
+        [[nodiscard]] virtual Result<void> PublishFileNoReplaceTracked(const std::filesystem::path &prepared,
+                                                                       const std::filesystem::path &destination,
+                                                                       AtomicFileReplacementReceipt &receipt);
     };
 
     /** @brief Native Windows/macOS/Linux durable filesystem implementation. */
@@ -328,6 +338,10 @@ namespace Horo {
         [[nodiscard]] Result<void> PublishDirectoryNoReplaceTracked(const std::filesystem::path &prepared,
                                                                     const std::filesystem::path &destination,
                                                                     AtomicFileReplacementReceipt &receipt) override;
+        /** @copydoc DurableFileSystem::PublishFileNoReplaceTracked */
+        [[nodiscard]] Result<void> PublishFileNoReplaceTracked(const std::filesystem::path &prepared,
+                                                               const std::filesystem::path &destination,
+                                                               AtomicFileReplacementReceipt &receipt) override;
         /** @copydoc DurableFileSystem::SyncDirectory */
         [[nodiscard]] Result<void> SyncDirectory(const std::filesystem::path &path) override;
 
@@ -359,6 +373,16 @@ namespace Horo {
                                               .remediationHint = "Compose an authority with native no-replace directory publication.",
                                               .retryable = false,
                                               .userActionable = false};
+        return Result<void>::Failure(MakeError(unsupported));
+    }
+
+    /** @copydoc DurableFileSystem::PublishFileNoReplaceTracked */
+    inline Result<void> DurableFileSystem::PublishFileNoReplaceTracked(const std::filesystem::path &, const std::filesystem::path &,
+                                                                       AtomicFileReplacementReceipt &) {
+        const ErrorCodeDescriptor unsupported{.domain = ErrorDomainId{"horo.platform.filesystem"},
+                                              .code = ErrorCode{"filesystem.file_publication_unsupported"},
+                                              .defaultSeverity = ErrorSeverity::Error,
+                                              .summary = "The filesystem does not support tracked exclusive file publication."};
         return Result<void>::Failure(MakeError(unsupported));
     }
 

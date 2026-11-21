@@ -180,6 +180,13 @@ synchronization according to host policy, capacity inspection, and immediate
 OS-held exclusive locking. Lock-file text is diagnostic only; ownership lives
 in the native handle and is released by RAII or process termination.
 
+Tracked exclusive publication accepts a prepared sibling directory or a
+single-link regular file. The native rename decides whether the destination
+still exists and commits only when that name is absent. Both entry points
+record native visibility before parent-directory synchronization. Alternate
+filesystem providers can leave exclusive file publication unsupported and
+must fail before any destination mutation in that case.
+
 The `ExclusiveFileLock` value wrapper and its public observation symbols belong
 to Foundation. Its incomplete state is implemented by Platform through the
 single staged, non-installed `HoroPublicationLockInternal` header. This keeps

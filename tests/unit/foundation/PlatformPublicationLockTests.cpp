@@ -73,6 +73,44 @@ namespace {
         }
     }
 
+    TEST_CASE("Native file publication commits complete bytes and preserves an occupied sibling", "[unit][foundation][publication]") {
+        LockDirectory directory;
+        Horo::NativeDurableFileSystem files;
+        const auto prepared = directory.path / "prepared";
+        const auto destination = directory.path / std::filesystem::path{u8"published ü.cpp"};
+        const std::string content = "new file";
+        bool created{};
+        REQUIRE(files.WritePrivateDurable(prepared, std::as_bytes(std::span{content}), created).HasValue());
+        REQUIRE(created);
+        SECTION("An existing file remains untouched") {
+            std::ofstream(destination, std::ios::binary) << "user file";
+            Horo::AtomicFileReplacementReceipt receipt;
+            CHECK(files.PublishFileNoReplaceTracked(prepared, destination, receipt).HasError());
+            CHECK_FALSE(receipt.WasCommitted());
+            CHECK(std::filesystem::is_regular_file(prepared));
+            std::ifstream retained(destination, std::ios::binary);
+            CHECK((std::string{std::istreambuf_iterator<char>{retained}, {}} == "user file"));
+        }
+        SECTION("An absent destination receives the exact prepared bytes") {
+            Horo::AtomicFileReplacementReceipt receipt;
+            REQUIRE(files.PublishFileNoReplaceTracked(prepared, destination, receipt).HasValue());
+            CHECK(receipt.WasCommitted());
+            CHECK_FALSE(std::filesystem::exists(prepared));
+            std::ifstream published(destination, std::ios::binary);
+            CHECK((std::string{std::istreambuf_iterator<char>{published}, {}} == content));
+        }
+        SECTION("A hard-linked stage cannot be published") {
+            std::error_code error;
+            std::filesystem::create_hard_link(prepared, directory.path / "alias", error);
+            if (error)
+                SKIP("Hard links are unavailable for this test volume");
+            Horo::AtomicFileReplacementReceipt receipt;
+            CHECK(files.PublishFileNoReplaceTracked(prepared, destination, receipt).HasError());
+            CHECK_FALSE(receipt.WasCommitted());
+            CHECK_FALSE(std::filesystem::exists(destination));
+        }
+    }
+
     TEST_CASE("Directory publication rejects malformed and nonsibling paths before mutation", "[unit][foundation][publication]") {
         LockDirectory directory;
         Horo::NativeDurableFileSystem files;

@@ -358,37 +358,60 @@ namespace Horo {
         return SyncDirectory(destination.parent_path());
     }
 
+    namespace {
+        /** @brief Accepts only a single normalized absolute publication filename. */
+        bool PublicationPath(const std::filesystem::path &path) {
+            return path.is_absolute() && !path.filename().empty() && path == path.lexically_normal() &&
+                   path.native().find(std::filesystem::path::value_type{}) == std::filesystem::path::string_type::npos;
+        }
+
+        /** @brief Commits an exclusive sibling rename with no copy or replace fallback. */
+        bool RenameNoReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) {
+#if defined(_WIN32)
+            return MoveFileExW(NativeApiPath(prepared).c_str(), NativeApiPath(destination).c_str(), MOVEFILE_WRITE_THROUGH) != 0;
+#elif defined(__APPLE__)
+            return renameatx_np(AT_FDCWD, prepared.c_str(), AT_FDCWD, destination.c_str(), RENAME_EXCL) == 0;
+#elif defined(__linux__) && defined(SYS_renameat2)
+            return syscall(SYS_renameat2, AT_FDCWD, prepared.c_str(), AT_FDCWD, destination.c_str(), RENAME_NOREPLACE) == 0;
+#else
+            static_cast<void>(prepared);
+            static_cast<void>(destination);
+            return false;
+#endif
+        }
+
+        /** @brief Checks staging shape and publishes without giving an existence check overwrite authority. */
+        Result<void> PublishSibling(NativeDurableFileSystem &files, const std::filesystem::path &prepared,
+                                    const std::filesystem::path &destination, const FileEntryKind kind,
+                                    AtomicFileReplacementReceipt &receipt) {
+            if (receipt.WasCommitted() || !PublicationPath(prepared) || !PublicationPath(destination) || prepared == destination ||
+                prepared.parent_path() != destination.parent_path())
+                return Result<void>::Failure(FsError(IoFailed, destination));
+            const auto source = files.InspectEntry(prepared);
+            if (source.HasError())
+                return Result<void>::Failure(source.ErrorValue());
+            const auto &entry = source.Value();
+            if (!entry || entry->kind != kind || (kind == FileEntryKind::RegularFile && entry->hardLinks != 1))
+                return Result<void>::Failure(FsError(IoFailed, prepared));
+            if (!RenameNoReplace(prepared, destination))
+                return Result<void>::Failure(FsError(IoFailed, destination));
+            receipt.RecordCommitted();
+            return files.SyncDirectory(destination.parent_path());
+        }
+    }  // namespace
+
     /** @copydoc NativeDurableFileSystem::PublishDirectoryNoReplaceTracked */
     Result<void> NativeDurableFileSystem::PublishDirectoryNoReplaceTracked(const std::filesystem::path &prepared,
                                                                            const std::filesystem::path &destination,
                                                                            AtomicFileReplacementReceipt &receipt) {
-        if (receipt.WasCommitted() || prepared.filename().empty() || destination.filename().empty() ||
-            prepared.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos ||
-            destination.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos ||
-            !prepared.is_absolute() || !destination.is_absolute() || prepared != prepared.lexically_normal() ||
-            destination != destination.lexically_normal() || prepared == destination || prepared.parent_path() != destination.parent_path())
-            return Result<void>::Failure(FsError(IoFailed, destination));
-        std::error_code error;
-        const auto source = std::filesystem::symlink_status(NativeApiPath(prepared), error);
-        if (error || source.type() != std::filesystem::file_type::directory)
-            return Result<void>::Failure(FsError(IoFailed, prepared));
-        const auto target = std::filesystem::symlink_status(NativeApiPath(destination), error);
-        if ((error && error != std::errc::no_such_file_or_directory) || target.type() != std::filesystem::file_type::not_found)
-            return Result<void>::Failure(FsError(IoFailed, destination));
-#if defined(_WIN32)
-        if (!MoveFileExW(NativeApiPath(prepared).c_str(), NativeApiPath(destination).c_str(), MOVEFILE_WRITE_THROUGH))
-            return Result<void>::Failure(FsError(IoFailed, destination));
-#elif defined(__APPLE__)
-        if (renameatx_np(AT_FDCWD, prepared.c_str(), AT_FDCWD, destination.c_str(), RENAME_EXCL) != 0)
-            return Result<void>::Failure(FsError(IoFailed, destination));
-#elif defined(__linux__) && defined(SYS_renameat2)
-        if (syscall(SYS_renameat2, AT_FDCWD, prepared.c_str(), AT_FDCWD, destination.c_str(), RENAME_NOREPLACE) != 0)
-            return Result<void>::Failure(FsError(IoFailed, destination));
-#else
-        return Result<void>::Failure(FsError(IoFailed, destination));
-#endif
-        receipt.RecordCommitted();
-        return SyncDirectory(destination.parent_path());
+        return PublishSibling(*this, prepared, destination, FileEntryKind::Directory, receipt);
+    }
+
+    /** @copydoc NativeDurableFileSystem::PublishFileNoReplaceTracked */
+    Result<void> NativeDurableFileSystem::PublishFileNoReplaceTracked(const std::filesystem::path &prepared,
+                                                                      const std::filesystem::path &destination,
+                                                                      AtomicFileReplacementReceipt &receipt) {
+        return PublishSibling(*this, prepared, destination, FileEntryKind::RegularFile, receipt);
     }
 
     /** @copydoc DurableFileSystem::RemoveDurable */

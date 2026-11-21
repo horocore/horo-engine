@@ -181,11 +181,18 @@ namespace Horo::Editor {
 
         /** @brief Uses the native commit receipt to preserve visible state even when durability or callbacks fail. */
         Result<void> ReplacePrepared(DurableFileSystem &files, const std::filesystem::path &path, TemporaryGuard &cleanup,
-                                     Detail::SourceDocumentRoot &prepared, SourceSaveResult &result, Error fallback) {
+                                     Detail::SourceDocumentRoot &prepared, SourceSaveResult &result, Error fallback,
+                                     const bool requireAbsent) {
             AtomicFileReplacementReceipt receipt;
             try {
-                auto replaced = files.AtomicReplaceTracked(cleanup.path, path, receipt);
+                auto replaced = requireAbsent ? files.PublishFileNoReplaceTracked(cleanup.path, path, receipt)
+                                              : files.AtomicReplaceTracked(cleanup.path, path, receipt);
                 if (!receipt.WasCommitted()) {
+                    if (requireAbsent) {
+                        const auto current = files.InspectEntry(path);
+                        if (current.HasValue() && current.Value())
+                            return Result<void>::Failure(MakeError(SourceDocumentErrors::SaveConflict));
+                    }
                     if (replaced.HasError())
                         return replaced;
                     return Result<void>::Failure(MakeError(SourceDocumentErrors::Invalid));
@@ -294,7 +301,7 @@ namespace Horo::Editor {
                                                       storage_->limits.maximumDocumentBytes, cancellation);
                     written.HasError())
                     return Result<SourceSaveResult>::Failure(written.ErrorValue());
-                if (const auto replaced = ReplacePrepared(files, path, cleanup, *prepared, result, std::move(fallback));
+                if (const auto replaced = ReplacePrepared(files, path, cleanup, *prepared, result, std::move(fallback), absentAllowed);
                     replaced.HasError())
                     return Result<SourceSaveResult>::Failure(replaced.ErrorValue());
                 if (result.disposition == SourceSaveDisposition::Durable && path == record.path &&

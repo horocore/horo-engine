@@ -95,11 +95,22 @@ namespace {
 
         Result<void> AtomicReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
                                           AtomicFileReplacementReceipt &receipt) override {
+            return Publish(prepared, destination, receipt, false);
+        }
+
+        Result<void> PublishFileNoReplaceTracked(const std::filesystem::path &prepared, const std::filesystem::path &destination,
+                                                 AtomicFileReplacementReceipt &receipt) override {
+            return Publish(prepared, destination, receipt, true);
+        }
+
+        Result<void> Publish(const std::filesystem::path &prepared, const std::filesystem::path &destination,
+                             AtomicFileReplacementReceipt &receipt, const bool requireAbsent) {
             if (beforeReplace)
                 beforeReplace();
             if (failReplace)
                 return Result<void>::Failure(MakeError(SourceDocumentErrors::ReadFailed));
-            auto result = native.AtomicReplaceTracked(prepared, destination, receipt);
+            auto result = requireAbsent ? native.PublishFileNoReplaceTracked(prepared, destination, receipt)
+                                        : native.AtomicReplaceTracked(prepared, destination, receipt);
             if (receipt.WasCommitted() && afterCommit)
                 afterCommit();
             if (receipt.WasCommitted() && failAfterCommit)
@@ -671,7 +682,7 @@ TEST_CASE("Source autosave retains failed text and retries with bounded backoff"
     CHECK_FALSE(documents.UpdateAutosave(300, 1, files));
 }
 
-TEST_CASE("Source Save As rejects destinations created during private staging even with matching base bytes", "[source][save][conflict]") {
+TEST_CASE("Source Save As rejects a concurrent destination even with matching base bytes", "[source][save][conflict]") {
     const std::string base = GENERATE(std::string{}, std::string{"base"});
     Project project;
     project.Put("code.cpp", base);
@@ -679,9 +690,15 @@ TEST_CASE("Source Save As rejects destinations created during private staging ev
     Files files;
     const auto edited = OpenEdit(open);
     const std::filesystem::path destination{u8"concurrent ü.cpp"};
-    files.afterWrite = [&] {
+    const auto createDestination = [&] {
         project.Put(destination, base);
     };
+    SECTION("The destination appears during private staging") {
+        files.afterWrite = createDestination;
+    }
+    SECTION("The destination appears after the final disk check") {
+        files.beforeReplace = createDestination;
+    }
 
     const auto denied = open.SaveAs(Request(edited), destination, files);
     REQUIRE(denied.HasError());
@@ -697,6 +714,7 @@ TEST_CASE("Source Save As rejects destinations created during private staging ev
     CHECK_FALSE(std::filesystem::exists(temporary));
 
     files.afterWrite = {};
+    files.beforeReplace = {};
     auto approved = Request(edited);
     approved.approvedDiskBytes = base;
     const auto saved = open.SaveAs(approved, destination, files);
