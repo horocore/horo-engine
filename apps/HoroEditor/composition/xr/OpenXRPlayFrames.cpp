@@ -495,7 +495,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::UsesXrScene */
     bool OpenXRPlayHost::UsesXrScene() const noexcept {
-        return scene_ && scene_->published && !scene_->retiring;
+        return std::this_thread::get_id() == lane_ && scene_ && scene_->published && !scene_->retiring;
     }
 
     /** @copydoc OpenXRPlayHost::PresentationState */
@@ -533,7 +533,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::CanvasScene */
     Runtime::SceneRuntimeId OpenXRPlayHost::CanvasScene() const noexcept {
-        return std::this_thread::get_id() == lane_ && UsesXrScene() ? scene_->scene : Runtime::SceneRuntimeId{};
+        return std::this_thread::get_id() == lane_ && !busy_ && UsesXrScene() ? scene_->scene : Runtime::SceneRuntimeId{};
     }
 
     /** @copydoc OpenXRPlayHost::PrepareRenderFrame */

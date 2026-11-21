@@ -323,10 +323,11 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::ReadHandGestures */
     XRHandGestureCandidates OpenXRPlayHost::ReadHandGestures() const noexcept {
-        const auto *snapshot = tracking_.Current();
-        if (!snapshot || eventsPending_ || !input_.admitted || input_.play != Editor::EditorPlayState::Playing)
+        if (std::this_thread::get_id() != lane_ || busy_ || closing_ || eventsPending_ || !input_.admitted ||
+            input_.play != Editor::EditorPlayState::Playing || !sessions_.Snapshot().admitsActions)
             return {};
-        return composition_.session.ReadHandGestures(*snapshot);
+        const auto *snapshot = tracking_.Current();
+        return snapshot ? composition_.session.ReadHandGestures(*snapshot) : XRHandGestureCandidates{};
     }
 
     /** @copydoc OpenXRPlayHost::HasCurrentAssignedInput */
@@ -429,6 +430,8 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::ReadWorldUiPointer */
     std::optional<OpenXRWorldUiPointerFrame> OpenXRPlayHost::ReadWorldUiPointer(const Input::PlayerId player) const {
+        if (std::this_thread::get_id() != lane_ || busy_ || closing_)
+            return std::nullopt;
         const auto &selected = composition_.bindings->worldUiPointer;
         if (!selected || !input_.port)
             return std::nullopt;

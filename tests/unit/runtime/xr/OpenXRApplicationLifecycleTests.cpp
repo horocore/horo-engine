@@ -20,6 +20,7 @@
 #include <bit>
 #include <catch2/generators/catch_generators.hpp>
 #include <functional>
+#include <thread>
 #include <type_traits>
 #include <utility>
 
@@ -1867,6 +1868,17 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(worldUi->source.scene == sources.Scope().scene);
         CHECK(worldUi->source.assignmentRevision != 0);
         CHECK(worldUi->sample.selectDown);
+        CHECK(fixture.play->UsesXrScene());
+        bool foreignScene{};
+        bool foreignPointer{};
+        {
+            const std::jthread worker{[&] {
+                foreignScene = fixture.play->UsesXrScene();
+                foreignPointer = fixture.play->ReadWorldUiPointer(player).has_value();
+            }};
+        }
+        CHECK_FALSE(foreignScene);
+        CHECK_FALSE(foreignPointer);
         CHECK(worldUi->sample.ray.maximumDistance == 6.0F);
         CHECK_FALSE(fixture.play->ReadWorldUiPointer(2));
         const auto wrongDevice =
