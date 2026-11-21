@@ -58,6 +58,7 @@ namespace {
         const auto empty = sense.Evaluate({binding.agent, binding.listener, position, 2, 1, {}}, budget, budget);
         return empty.HasValue() && empty.Value().count == 0;
     }
+
     /** @brief Confirms rejected host slices leave the next fixed tick available. */
     bool CheckAdmission(PerceptionSenseInstance &sense, const PerceptionSenseBinding &binding) {
         constexpr std::size_t maximumCandidates = 32;
