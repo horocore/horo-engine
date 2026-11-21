@@ -1012,6 +1012,7 @@
     "workspace.decision_graph.edit_conflict": {"text": "The saved Decision source changed. Your draft is still open."},
     "workspace.decision_graph.reload_external": {"text": "Discard Draft and Reload from Disk"},
     "workspace.decision_graph.merge_external": {"text": "Merge Disk Changes into Draft"},
+    "workspace.decision_graph.keep_local": {"text": "Keep Local Draft for Next Save"},
     "workspace.decision_graph.restore_recovery": {"text": "Restore Recovery Copy as Draft"},
     "workspace.decision_graph.discard_recovery": {"text": "Discard Recovery Copy"},
     "workspace.decision_graph.recovery_conflict": {"text": "The saved source or layout changed. The recovery copy is still available."},

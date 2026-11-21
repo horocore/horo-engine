@@ -1422,7 +1422,9 @@ namespace Horo::Editor {
         bool CloseDecisionGraphSource(DocumentInstanceId instance);
 
         /** @brief Opens one exact registered query source in the normal workspace. */
-        void OpenEmbeddedEnvironmentQuerySource(const SourceOpenResult &result);
+        void OpenEmbeddedEnvironmentQuerySource(const SourceOpenResult &result, bool reloadExternal = false);
+        /** @brief Restages the exact registered Query before discarding a conflicted draft. */
+        void ReloadExternalEnvironmentQuery(EnvironmentQueryWorkspaceDocument &document, EnvironmentQueryDocumentFence fence);
         /** @brief Routes a Run or Cancel request for the currently active registered saved query. */
         bool ProcessEnvironmentQueryPreview(const EditorWorkspaceViewCommandData &command);
         /** @brief Routes one revision-fenced Query edit or history command to the active document. */
@@ -1517,10 +1519,11 @@ namespace Horo::Editor {
         bool ProcessDecisionGraphEdit(const EditorWorkspaceViewCommandData &cmd);
         /** @brief Reopens the exact conflicted Decision document after an explicit discard request. */
         void ReloadExternalDecisionGraph(DecisionGraphDocumentFence fence);
-        /** @brief Reconciles a focused dirty Decision draft with its current registered disk version. */
-        void MergeExternalDecisionGraph(DecisionGraphDocumentFence fence);
-        /** @brief Stages an exact three-way merge and adopts the disk revision as the new save base. */
-        [[nodiscard]] Result<void> MergeExternalDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft);
+        /** @brief Resolves a focused dirty Decision draft against the current registered disk version. */
+        void ResolveExternalDecisionGraph(DecisionGraphDocumentFence fence, bool keepLocal);
+        /** @brief Stages the merged or exact local draft and adopts the disk revision as the new save base. */
+        [[nodiscard]] Result<void> ResolveExternalDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
+                                                                     bool keepLocal);
         /** @brief Resolves a current finding to a registered Blackboard document and selects its exact key. */
         void OpenDecisionDiagnosticKey(const DecisionDiagnosticKeyRequest &request);
         /** @brief Saves all dirty intrinsic decision documents through the registered source owner. */

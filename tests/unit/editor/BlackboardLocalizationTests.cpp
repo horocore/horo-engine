@@ -192,6 +192,7 @@ TEST_CASE("Decision graph workspace and initial state machine labels resolve in 
                               "read_only",
                               "reload_external",
                               "merge_external",
+                              "keep_local",
                               "restore_recovery",
                               "discard_recovery",
                               "recovery_conflict",

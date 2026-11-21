@@ -1829,9 +1829,9 @@ namespace Horo::Editor {
         OpenEmbeddedDecisionGraphSource(opened.Value(), true);
     }
 
-    /** @copydoc EditorWorkspaceController::MergeExternalDecisionGraphDraft */
-    Result<void> EditorWorkspaceController::MergeExternalDecisionGraphDraft(DecisionGraphWorkspaceDocument &document,
-                                                                            DecisionGraphDraft &draft) {
+    /** @copydoc EditorWorkspaceController::ResolveExternalDecisionGraphDraft */
+    Result<void> EditorWorkspaceController::ResolveExternalDecisionGraphDraft(DecisionGraphWorkspaceDocument &document,
+                                                                              DecisionGraphDraft &draft, const bool keepLocal) {
         using Merged = Result<void>;
         const auto root = ProjectRoot();
         const auto registry = m_mutableAssetRegistry ? m_mutableAssetRegistry->Snapshot() : m_assetRegistry;
@@ -1851,18 +1851,21 @@ namespace Horo::Editor {
             return Merged::Failure(bytes.ErrorValue());
         const auto diskDigest = ComputeSha256(std::as_bytes(std::span{bytes.Value()}));
         const bool localGraphChanged = draft.currentDigest != draft.savedDigest;
-        if (localGraphChanged && diskDigest != draft.savedDigest && diskDigest != draft.currentDigest)
+        if (!keepLocal && localGraphChanged && diskDigest != draft.savedDigest && diskDigest != draft.currentDigest)
             return Merged::Failure(MakeError(Assets::AssetSourceErrors::Conflict, "Both versions changed the Decision graph."));
 
         const auto path = Foundation::Paths::Resolve(root, source.record.sourcePath);
         auto disk = CaptureDecisionLayout(root, path, document.asset, document.graph->asset);
         if (disk.HasError())
             return Merged::Failure(disk.ErrorValue());
-        auto mergedLayout = MergeDecisionLayouts(*draft.savedLayout, *document.layout, disk.Value().layout);
+        if (keepLocal && !document.layoutWritable && *document.layout != disk.Value().layout)
+            return Merged::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        auto mergedLayout = keepLocal ? Result<DecisionGraphLayout>::Success(*document.layout)
+                                      : MergeDecisionLayouts(*draft.savedLayout, *document.layout, disk.Value().layout);
         if (mergedLayout.HasError())
             return Merged::Failure(mergedLayout.ErrorValue());
-        const auto graph =
-            localGraphChanged ? document.graph : std::make_shared<const AI::DecisionGraphSource>(std::move(external).Value());
+        const bool useLocalGraph = keepLocal || localGraphChanged;
+        const auto graph = useLocalGraph ? document.graph : std::make_shared<const AI::DecisionGraphSource>(std::move(external).Value());
         if (!mergedLayout.Value().empty()) {
             const auto view = ProjectDecisionCanvas(*graph, {document.identity.instance, document.revision}, document.editable);
             if (PruneDecisionLayout(mergedLayout.Value(), view) != mergedLayout.Value())
@@ -1894,7 +1897,7 @@ namespace Horo::Editor {
         document.validation.reset();
         ++document.revision;
         draft.savedDigest = diskDigest;
-        draft.currentDigest = localGraphChanged ? draft.currentDigest : diskDigest;
+        draft.currentDigest = useLocalGraph ? draft.currentDigest : diskDigest;
         draft.acceptedBytes = source.bytes.size();
         draft.acceptedLayout = disk.Value().accepted;
         draft.savedLayout = std::move(acceptedLayout);
@@ -1905,8 +1908,8 @@ namespace Horo::Editor {
         return Merged::Success();
     }
 
-    /** @copydoc EditorWorkspaceController::MergeExternalDecisionGraph */
-    void EditorWorkspaceController::MergeExternalDecisionGraph(const DecisionGraphDocumentFence fence) {
+    /** @copydoc EditorWorkspaceController::ResolveExternalDecisionGraph */
+    void EditorWorkspaceController::ResolveExternalDecisionGraph(const DecisionGraphDocumentFence fence, const bool keepLocal) {
         if (m_viewModel.workspacePanelHost.ActiveDocument() != fence.instance || HasPendingBlackboardReferenceEdit(fence.instance) ||
             fence.revision == std::numeric_limits<std::uint64_t>::max())
             return;
@@ -1918,7 +1921,7 @@ namespace Horo::Editor {
         if (document == documents.end() || !document->conflict || !document->dirty || draft == m_decisionGraphDrafts.end())
             return;
         try {
-            const auto result = MergeExternalDecisionGraphDraft(*document, draft->second);
+            const auto result = ResolveExternalDecisionGraphDraft(*document, draft->second, keepLocal);
             document->diagnostic = result.HasError() ? std::optional{result.ErrorValue()} : std::nullopt;
             if (document->diagnostic)
                 PublishDecisionGraphDiagnostics(*document->diagnostic);
@@ -2005,9 +2008,10 @@ namespace Horo::Editor {
                 ReloadExternalDecisionGraph(*cmd.decisionGraphFence);
             return true;
         }
-        if (cmd.command == EditorWorkspaceViewCommand::MergeExternalDecisionGraph) {
+        if (cmd.command == EditorWorkspaceViewCommand::MergeExternalDecisionGraph ||
+            cmd.command == EditorWorkspaceViewCommand::KeepLocalDecisionGraph) {
             if (cmd.decisionGraphFence)
-                MergeExternalDecisionGraph(*cmd.decisionGraphFence);
+                ResolveExternalDecisionGraph(*cmd.decisionGraphFence, cmd.command == EditorWorkspaceViewCommand::KeepLocalDecisionGraph);
             return true;
         }
         if (cmd.command == EditorWorkspaceViewCommand::RestoreDecisionGraphRecovery ||

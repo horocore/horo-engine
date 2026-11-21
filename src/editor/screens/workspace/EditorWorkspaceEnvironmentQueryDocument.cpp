@@ -98,7 +98,7 @@ namespace Horo::Editor {
     }  // namespace
 
     /** @copydoc EditorWorkspaceController::OpenEmbeddedEnvironmentQuerySource */
-    void EditorWorkspaceController::OpenEmbeddedEnvironmentQuerySource(const SourceOpenResult &result) {
+    void EditorWorkspaceController::OpenEmbeddedEnvironmentQuerySource(const SourceOpenResult &result, const bool reloadExternal) {
         const auto &opened = *result.document;
         const auto fail = [&](std::string_view key) {
             if (opened.disposition == DocumentOpenDisposition::Opened)
@@ -127,7 +127,7 @@ namespace Horo::Editor {
             return;
         }
         const auto &source = captured.Value().Sources().front();
-        if (existing != documents.end() && existing->dirty) {
+        if (!reloadExternal && existing != documents.end() && existing->dirty) {
             if (existing->identity != opened.identity || existing->source != source.sourceDigest) {
                 existing->conflict = true;
                 existing->diagnostic = MakeError(Assets::AssetSourceErrors::Conflict);
@@ -139,7 +139,7 @@ namespace Horo::Editor {
             static_cast<void>(m_viewModel.workspacePanelHost.FocusDocument(existing->identity.instance));
             return;
         }
-        if (existing != documents.end() && existing->identity == opened.identity && existing->asset == record->id &&
+        if (!reloadExternal && existing != documents.end() && existing->identity == opened.identity && existing->asset == record->id &&
             existing->source == source.sourceDigest) {
             static_cast<void>(m_viewModel.workspacePanelHost.FocusDocument(opened.identity.instance));
             return;
@@ -168,6 +168,10 @@ namespace Horo::Editor {
                                                            source.bytes.size()});
             }
         }
+        if (reloadExternal && prepared.empty()) {
+            fail("workspace.environment_query.invalid");
+            return;
+        }
         if (existing != documents.end()) {
             if (existing->revision == std::numeric_limits<std::uint64_t>::max()) {
                 fail("workspace.source_open.unavailable");
@@ -193,6 +197,9 @@ namespace Horo::Editor {
         if (existing->identity.instance != opened.identity.instance)
             static_cast<void>(host.CloseDocument(existing->identity.instance));
         *existing = std::move(candidate);
+        static_cast<void>(host.SetDocumentDirty(existing->identity.instance, false));
+        if (reloadExternal)
+            m_viewModel.contentBrowserOperationError.clear();
     }
 
     /** @copydoc EditorWorkspaceController::CloseEnvironmentQuerySource */
@@ -389,6 +396,26 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc EditorWorkspaceController::ReloadExternalEnvironmentQuery */
+    void EditorWorkspaceController::ReloadExternalEnvironmentQuery(EnvironmentQueryWorkspaceDocument &document,
+                                                                   const EnvironmentQueryDocumentFence fence) {
+        if (document.revision != fence.revision || !document.conflict)
+            return;
+        const auto *record = m_assetRegistry.Find(document.asset);
+        if (!record)
+            return;
+        const auto opened = m_sourceOpenService.Open({.path = Foundation::Paths::Resolve(ProjectRoot(), record->sourcePath),
+                                                      .origin = SourceOpenOrigin::Command,
+                                                      .mode = SourceOpenMode::EmbeddedOnly});
+        if (opened.HasError() || !opened.Value().document || opened.Value().document->identity != document.identity) {
+            if (opened.HasValue() && opened.Value().document && opened.Value().document->disposition == DocumentOpenDisposition::Opened)
+                static_cast<void>(m_documentRegistry.Close(opened.Value().document->identity.instance));
+            document.diagnostic = MakeError(Assets::AssetSourceErrors::Conflict);
+            return;
+        }
+        OpenEmbeddedEnvironmentQuerySource(opened.Value(), true);
+    }
+
     /** @copydoc EditorWorkspaceController::ProcessEnvironmentQueryEdit */
     bool EditorWorkspaceController::ProcessEnvironmentQueryEdit(const EditorWorkspaceViewCommandData &command) {
         if (command.command != EditorWorkspaceViewCommand::EditEnvironmentQuery)
@@ -406,6 +433,10 @@ namespace Horo::Editor {
         if (draft == m_environmentQueryDrafts.end() || document == documents.end())
             return true;
         try {
+            if (request.action == EnvironmentQueryEditAction::ReloadExternal) {
+                ReloadExternalEnvironmentQuery(*document, request.fence);
+                return true;
+            }
             const auto edited = ApplyEnvironmentQueryEdit(*document, draft->second, request);
             document->diagnostic = edited.HasError() ? std::optional{edited.ErrorValue()} : std::nullopt;
         } catch (const std::bad_alloc &) {

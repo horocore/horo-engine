@@ -654,6 +654,14 @@ reconciles placements by node ID. Divergent graph edits or incompatible
 placements leave the draft and both disk files available. A successful merge
 adopts the disk revision as the new save base and starts a new undo history.
 
+**Keep Local Draft for Next Save** accepts the current disk identities as the
+save base and keeps the local graph and layout in memory. A later explicit save
+still checks each file it replaces against that base.
+
+Environment Query drafts use the same explicit reload action. The editor
+keeps the draft and its history until the registered external query and its
+metadata stage successfully as an editable replacement.
+
 Decision graph autosave sends immutable graph and layout snapshots to the
 shared background recovery writer. The checkpoint records both accepted
 disk identities and never writes the registered source or layout. A

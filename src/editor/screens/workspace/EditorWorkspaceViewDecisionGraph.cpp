@@ -1153,6 +1153,12 @@ namespace Horo::Editor {
                           .decisionGraphFence = DecisionGraphDocumentFence{opened->identity.instance, opened->revision}};
             return true;
         }
+        if (opened->conflict && opened->dirty &&
+            Ui::Button({.label = text("workspace.decision_graph.keep_local").c_str(), .font = m_context.theme.fonts.sans})) {
+            outCommand = {.command = EditorWorkspaceViewCommand::KeepLocalDecisionGraph,
+                          .decisionGraphFence = DecisionGraphDocumentFence{opened->identity.instance, opened->revision}};
+            return true;
+        }
         if (opened->conflict &&
             Ui::Button({.label = text("workspace.decision_graph.reload_external").c_str(), .font = m_context.theme.fonts.sans})) {
             outCommand = {.command = EditorWorkspaceViewCommand::ReloadExternalDecisionGraph,

@@ -749,6 +749,33 @@ TEST_CASE("Registered Query settings use shared history and tracked source publi
         REQUIRE(unchanged.HasValue());
         CHECK(unchanged.Value().identity == before.Value().identity);
     }
+    SECTION("explicit reload resets history only after staging a compatible external Query") {
+        project.WriteQuery("External read-only Query");
+        Project::Open(controller, Project::Path);
+        REQUIRE(document.conflict);
+        const auto revision = document.revision;
+        issue(ReloadExternal);
+        CHECK(document.revision == revision);
+        CHECK(document.query == draft);
+        CHECK(document.dirty);
+        CHECK(document.canUndo);
+
+        const auto replacement =
+            CreateBuiltinLatticeQuery(QueryId::Create(14).Value(), QueryStageId::Create(41).Value(), QueryResultSchemaId::Create(8).Value(),
+                                      "External lattice", {.stepMillimeters = 750, .outerSteps = 3}, 9);
+        REQUIRE(replacement.HasValue());
+        project.WriteAsset(replacement.Value());
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::EditEnvironmentQuery,
+                                   .environmentQueryEdit = EnvironmentQueryEditRequest{{instance, revision - 1}, ReloadExternal}});
+        CHECK(document.query == draft);
+        issue(ReloadExternal);
+        CHECK(document.revision == revision + 1);
+        CHECK(document.query->DisplayName() == "External lattice");
+        CHECK_FALSE(document.conflict);
+        CHECK_FALSE(document.canUndo);
+        CHECK_FALSE(document.canRedo);
+        CHECK_FALSE(controller.HasDirtySourceDocuments());
+    }
     SECTION("external bytes cannot displace the draft, and stale close cannot discard it") {
         project.WriteQuery("External");
         Project::Open(controller, Project::Path);

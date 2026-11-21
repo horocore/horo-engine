@@ -279,6 +279,7 @@ namespace Horo::Editor {
         OpenDecisionDiagnosticKey,
         ReloadExternalDecisionGraph,
         MergeExternalDecisionGraph,
+        KeepLocalDecisionGraph,
         RestoreDecisionGraphRecovery,
         DiscardDecisionGraphRecovery,
         OpenDiagnosticSource,
@@ -422,7 +423,8 @@ namespace Horo::Editor {
         Apply,
         Undo,
         Redo,
-        Save
+        Save,
+        ReloadExternal
     };
 
     /** @brief An optional structural edit: append a typed test or remove one exact stage. */

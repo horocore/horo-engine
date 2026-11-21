@@ -1359,7 +1359,37 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
               disk.Value().identity);
         CHECK(Assets::CaptureAssetSource(project.root, DecisionLayoutPath(source), MaximumDecisionLayoutBytes).Value().identity ==
               diskLayout.Value().identity);
-        if (!overlap) {
+        if (overlap) {
+            const auto keep = [&] {
+                controller.ProcessCommand({.command = EditorWorkspaceViewCommand::KeepLocalDecisionGraph,
+                                           .decisionGraphFence = DecisionGraphDocumentFence{instance, view.revision}});
+            };
+            keep();
+            REQUIRE_FALSE(view.conflict);
+            CHECK(view.revision == revision + 1);
+            CHECK_FALSE(view.canUndo);
+            CHECK(*view.layout == local);
+            CHECK(Assets::CaptureAssetSource(project.root, DecisionLayoutPath(source), MaximumDecisionLayoutBytes).Value().identity ==
+                  diskLayout.Value().identity);
+
+            const auto later = EncodeDecisionLayout({{node, 28, 32}}, view.asset, view.graph->asset);
+            REQUIRE(later.HasValue());
+            write(DecisionLayoutPath(source), later.Value());
+            controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Save));
+            REQUIRE(view.conflict);
+            CHECK(*view.layout == local);
+            const auto changedAgain = Assets::CaptureAssetSource(project.root, DecisionLayoutPath(source), MaximumDecisionLayoutBytes);
+            REQUIRE(changedAgain.HasValue());
+            CHECK(changedAgain.Value().bytes == later.Value());
+
+            keep();
+            REQUIRE_FALSE(view.conflict);
+            controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Save));
+            CHECK_FALSE(view.dirty);
+            const auto saved = CaptureDecisionLayout(project.root, source, view.asset, view.graph->asset);
+            REQUIRE(saved.HasValue());
+            CHECK(saved.Value().layout == local);
+        } else {
             CHECK(std::get<AI::StateMachineAssetDescriptor>(view.graph->body).states.front().terminal ==
                   AI::DecisionStateTerminal::Succeeded);
             controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Save));

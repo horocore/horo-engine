@@ -813,6 +813,11 @@ namespace Horo::Editor {
         if (opened->diagnostic)
             label(text(opened->conflict ? "workspace.environment_query.edit_conflict" : "workspace.environment_query.edit_refused"),
                   Theme::Warn());
+        if (opened->conflict &&
+            Ui::Button({.label = text("workspace.decision_graph.reload_external").c_str(), .font = m_context.theme.fonts.sans})) {
+            outCommand = MakeEnvironmentQueryEditCommand(*opened, EnvironmentQueryEditAction::ReloadExternal);
+            return true;
+        }
         label(text(DescriptorLabel(opened->descriptors)), Theme::Muted());
         for (const auto &stage : query.Stages()) {
             const auto stageType = text(StageLabel(stage.kind));
