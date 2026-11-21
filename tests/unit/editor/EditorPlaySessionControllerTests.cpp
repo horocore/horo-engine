@@ -1382,8 +1382,8 @@ namespace {
     using NavigationPlayFixture = Application::CharacterSceneProductTest::NavigationProductFixture;
 
     void CookEditorPlayDecisionAssets(NavigationPlayFixture &fixture, std::span<NavigationPlayFixture::AddedAsset> assets,
-                                     const std::shared_ptr<const AI::DecisionNodeGeneration> &providers,
-                                     std::shared_ptr<const AI::QuerySchemaRegistry> querySchema) {
+                                      const std::shared_ptr<const AI::DecisionNodeGeneration> &providers,
+                                      std::shared_ptr<const AI::QuerySchemaRegistry> querySchema) {
         using namespace Assets;
         AssetRegistry registry;
         std::vector<AssetRecord> records;
@@ -1398,11 +1398,10 @@ namespace {
         request.assets.cookedRoot = decisionCook.path;
         request.assets.registry = registry.Snapshot();
         request.assets.validateHostInputs = [&providers] {
-            return providers->CanUse() ? Result<void>::Success()
-                                       : Result<void>::Failure(MakeError(Application::DecisionCookErrors::Stale));
+            return providers->CanUse() ? Result<void>::Success() : Result<void>::Failure(MakeError(Application::DecisionCookErrors::Stale));
         };
-        auto captured = AssetCookInputSnapshot::Capture(request.assets.sourceRoot, request.assets.registry, request.assets.limits,
-                                                        1024U * 1024U);
+        auto captured =
+            AssetCookInputSnapshot::Capture(request.assets.sourceRoot, request.assets.registry, request.assets.limits, 1024U * 1024U);
         REQUIRE(captured.HasValue());
         request.assets.pinnedInputs = std::make_shared<const AssetCookInputSnapshot>(std::move(captured).Value());
         const auto cooked = Application::DecisionAssetCookHost::Cook(fixture.project.jobs, request);
@@ -1509,7 +1508,7 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
                        add(122, BlackboardSchemaAssetType, "assets/path.horo_bb", schemaBytes.Value()),
                        add(123, EnvironmentQuerySourceAssetType, "assets/path.horo_eqs", queryBytes.Value())};
     CookEditorPlayDecisionAssets(fixture, assets, providers.Value(),
-                                std::make_shared<const QuerySchemaRegistry>(std::move(queries).Value()));
+                                 std::make_shared<const QuerySchemaRegistry>(std::move(queries).Value()));
     const auto committedQuery = Assets::DecodeCookedArtifact(assets.back().cookedEnvelope);
     REQUIRE(committedQuery.HasValue());
     const auto cookedDigest = committedQuery.Value().payloadDigest;
@@ -1536,13 +1535,12 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
         const auto &contract = senses->Contracts().front();
         const auto sense = std::to_string(contract.sense.identity.Value());
         const auto work = (contract.workUnits + PerceptionSenseGeneration::ValidationWorkUnits + 1) * 3;
-        fixture.project.WriteText(
-            perceptionPath,
-            std::string{R"({"schema":2,"sceneAsset":")"} + fixture.project.sceneId.ToString() +
-                R"(","sceneRevision":1,"worldOriginMillimeters":[0,0,0],"controllers":[{"controller":)" +
-                std::to_string(controller.Value()) + R"(,"listeners":[91],"sources":[)" + sense +
-                R"(],"layers":1,"mask":1}],"native":{"listeners":[{"id":91,"sense":)" + sense +
-                R"(}],"radiusMillimeters":4000,"visibleLayers":1,"workUnitsPerTick":)" + std::to_string(work) + "}}");
+        fixture.project.WriteText(perceptionPath,
+                                  std::string{R"({"schema":2,"sceneAsset":")"} + fixture.project.sceneId.ToString() +
+                                      R"(","sceneRevision":1,"worldOriginMillimeters":[0,0,0],"controllers":[{"controller":)" +
+                                      std::to_string(controller.Value()) + R"(,"listeners":[91],"sources":[)" + sense +
+                                      R"(],"layers":1,"mask":1}],"native":{"listeners":[{"id":91,"sense":)" + sense +
+                                      R"(}],"radiusMillimeters":4000,"visibleLayers":1,"workUnitsPerTick":)" + std::to_string(work) + "}}");
     }
     fixture.Publish(Fixture::Input::Valid, Fixture::Client::None, assets, [&](auto &scene) {
         auto &actor = scene.objects.back();
