@@ -477,6 +477,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         /** @copydoc Editor::EditorPlaySceneHost::ReadDecisionProblem */
         std::optional<Editor::EditorPlayDecisionProblem> ReadDecisionProblem() const override;
 
+        std::uint64_t AgentInspectionTick() const noexcept override;
+        std::optional<Editor::EditorPlayAgentInspection> ReadAgentInspection(Runtime::EntityRef owner) const override;
+
         Result<std::shared_ptr<Gameplay::GameplayPrefabContext>> PrefabServices(const Gameplay::BehaviorRegistry &registry,
                                                                                 const Gameplay::ComponentRegistry &components) override {
             if (!prefab_.templates)

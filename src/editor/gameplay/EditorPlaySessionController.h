@@ -14,8 +14,10 @@
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "editor/document/RuntimeSceneConversion.h"
 
+#include <array>
 #include <memory>
 #include <optional>
+#include <span>
 
 namespace Horo::Editor {
     /** @brief Explicit editor play-mode lifecycle state. */
@@ -171,6 +173,14 @@ namespace Horo::Editor {
         [[nodiscard]] std::optional<Runtime::RuntimeSceneView> SceneView() const noexcept;
         /** @brief Reads the selected ready host's completed Decision problem. */
         [[nodiscard]] std::optional<EditorPlayDecisionProblem> ReadDecisionProblem() const;
+        static constexpr std::uint64_t AgentInspectionTickSpacing = 4;
+        static constexpr std::size_t AgentInspectionHistoryLimit = 8;
+
+        /** @brief Samples only the selected live Play entity at a bounded rate and drops stale selection data. */
+        void RefreshAgentInspection(std::optional<Runtime::EntityRef> selection);
+
+        /** @brief Borrows chronological detached snapshots until the next refresh or Play transition. */
+        [[nodiscard]] std::span<const EditorPlayAgentInspection> AgentInspectionHistory() const noexcept;
         /** @brief Indicates whether legacy viewport extraction is outside the selected Play composition. */
         [[nodiscard]] bool UsesMountedViewport() const noexcept;
         /** @brief Borrows the actual Play host receipt synchronously; absence never implies no Physics. */
@@ -184,6 +194,7 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> RejectFixedAttempt(const Runtime::FixedStepContext &context, Error error);
         [[nodiscard]] bool MatchesFixedAttempt(const Runtime::FixedStepContext &context) const noexcept;
         void FlushPendingStop() noexcept;
+        void ClearAgentInspection() noexcept;
 
         struct FixedAttempt final {
             EditorPlaySceneHost *scene{};
@@ -244,6 +255,10 @@ namespace Horo::Editor {
         EditorPlaySessionState state_{EditorPlaySessionState::Idle};
         Gameplay::ComponentRegistry prefabComponents_; /**< Owned inert schema snapshot, fixed for the complete Scene epoch. */
         std::unique_ptr<EditorPlaySceneHost> sceneHost_;
+        std::array<EditorPlayAgentInspection, AgentInspectionHistoryLimit> inspectionHistory_{};
+        std::optional<Runtime::EntityRef> inspectedOwner_;
+        std::size_t inspectionCount_{};
+        std::uint64_t lastInspectionTick_{};
         const Gameplay::BehaviorRegistry *pendingRegistry_{}; /**< Frozen module owner remains alive while Starting. */
         CancellationSource preparationCancellation_;
         std::uint64_t preparationFrame_{1};

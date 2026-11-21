@@ -3456,6 +3456,10 @@ Perception memory identity and age. Hosts pass an explicit set of Blackboard
 keys approved for display. Other rows keep their type and identity with no
 value. Opaque values, revoked reads, and diagnostic messages stay out of the
 snapshot. A fresh capture refuses a retired agent or a foreign Scene.
+Editor Play samples the selected live entity only on completed Decision ticks.
+It retains up to eight snapshots and samples at most once every four fixed ticks.
+Pausing does not add duplicate samples, and a changed or stale selection clears
+the previous history. The Play host uses the default redacted Blackboard view.
 
 ### Scene decision scheduling tiers
 

@@ -512,6 +512,9 @@ namespace Horo::Editor {
             return;
         }
         stopPending_ = false;
+        ClearAgentInspection();
+        inspectedOwner_.reset();
+        lastInspectionTick_ = 0;
         CancelModuleScripts();
         if (debugger_)
             debugger_->Producer().Detach();
@@ -747,6 +750,52 @@ namespace Horo::Editor {
         if (!sceneHost_ || (state_ != EditorPlaySessionState::Playing && state_ != EditorPlaySessionState::Paused))
             return std::nullopt;
         return sceneHost_->ReadDecisionProblem();
+    }
+
+    /** @copydoc EditorPlaySessionController::RefreshAgentInspection */
+    void EditorPlaySessionController::RefreshAgentInspection(const std::optional<Runtime::EntityRef> selection) {
+        const auto scene = SceneView();
+        if (fixedAttempt_ || !scene || (state_ != EditorPlaySessionState::Playing && state_ != EditorPlaySessionState::Paused) ||
+            !selection || !scene->Get(*selection).HasValue()) {
+            ClearAgentInspection();
+            inspectedOwner_.reset();
+            return;
+        }
+        if (inspectedOwner_ != selection) {
+            ClearAgentInspection();
+            inspectedOwner_ = selection;
+        }
+        const auto tick = sceneHost_->AgentInspectionTick();
+        if (tick == 0 ||
+            (lastInspectionTick_ != 0 && tick >= lastInspectionTick_ && tick - lastInspectionTick_ < AgentInspectionTickSpacing))
+            return;
+        if (tick < lastInspectionTick_)
+            ClearAgentInspection();
+        lastInspectionTick_ = tick;
+        auto captured = sceneHost_->ReadAgentInspection(*selection);
+        if (!captured || !captured->snapshot || captured->owner != *selection || !captured->agent.IsValid() || captured->tick != tick) {
+            ClearAgentInspection();
+            return;
+        }
+        if (inspectionCount_ != 0 && inspectionHistory_.front().agent != captured->agent)
+            ClearAgentInspection();
+        if (inspectionCount_ == inspectionHistory_.size()) {
+            std::move(inspectionHistory_.begin() + 1, inspectionHistory_.end(), inspectionHistory_.begin());
+            --inspectionCount_;
+        }
+        inspectionHistory_[inspectionCount_++] = std::move(*captured);
+    }
+
+    /** @copydoc EditorPlaySessionController::AgentInspectionHistory */
+    std::span<const EditorPlayAgentInspection> EditorPlaySessionController::AgentInspectionHistory() const noexcept {
+        return std::span{inspectionHistory_}.first(inspectionCount_);
+    }
+
+    /** @brief Releases only the bounded history; the session-wide sampling budget remains consumed. */
+    void EditorPlaySessionController::ClearAgentInspection() noexcept {
+        for (auto &captured : std::span{inspectionHistory_}.first(inspectionCount_))
+            captured = {};
+        inspectionCount_ = 0;
     }
 
     std::optional<EditorSceneCollisionReceipt> EditorPlaySessionController::CollisionReceipt() const noexcept {

@@ -224,6 +224,9 @@ namespace {
     struct PlayOwnerObservations final {
         std::vector<Runtime::SceneRuntimeId> admitted;
         std::optional<Editor::EditorPlayDecisionProblem> decisionProblem;
+        std::uint64_t inspectionTick{};
+        std::uint32_t inspectionGeneration{1};
+        std::size_t inspectionReads{};
         std::size_t ticks{};
         std::size_t closed{};
         bool failTick{};
@@ -263,6 +266,18 @@ namespace {
         /** @brief Supplies an owned report for the session projection test. */
         std::optional<Editor::EditorPlayDecisionProblem> ReadDecisionProblem() const override {
             return observations_->decisionProblem;
+        }
+
+        std::uint64_t AgentInspectionTick() const noexcept override {
+            return observations_->inspectionTick;
+        }
+
+        std::optional<Editor::EditorPlayAgentInspection> ReadAgentInspection(Runtime::EntityRef owner) const override {
+            ++observations_->inspectionReads;
+            const AI::AgentHandle handle{AI::AiRuntimeIncarnation::Create(owner.runtime.value).Value(),
+                                         {owner.entity.index, observations_->inspectionGeneration}};
+            return Editor::EditorPlayAgentInspection{owner, handle, observations_->inspectionTick,
+                                                     std::make_shared<const AI::AiAgentInspectionSnapshot>()};
         }
 
         Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context) override {
@@ -590,6 +605,48 @@ TEST_CASE("Play exposes the owned Decision problem while playing and paused", "[
     play.Stop();
     CHECK_FALSE(play.ReadDecisionProblem());
     CHECK(captured->error.code.Value() == error.code.Value());
+}
+
+TEST_CASE("Play keeps bounded immutable agent inspection history for one live generation", "[editor][play][ai]") {
+    using Controller = Editor::EditorPlaySessionController;
+    const auto observations = std::make_shared<PlayOwnerObservations>();
+    auto registry = Registry();
+    Controller play;
+    REQUIRE(play.Start(AuthoringScene(), registry, ObservePlayOwner(observations)).HasValue());
+    const auto owner = play.SceneView()->Find({2});
+    REQUIRE(owner);
+    play.RefreshAgentInspection(owner);
+    CHECK(play.AgentInspectionHistory().empty());
+
+    constexpr auto spacing = Controller::AgentInspectionTickSpacing;
+    constexpr auto limit = Controller::AgentInspectionHistoryLimit;
+    for (std::uint64_t sample = 0; sample <= limit; ++sample) {
+        observations->inspectionTick = 1 + sample * spacing;
+        play.RefreshAgentInspection(owner);
+        play.RefreshAgentInspection(owner);
+        ++observations->inspectionTick;
+        play.RefreshAgentInspection(owner);
+    }
+    REQUIRE(play.AgentInspectionHistory().size() == limit);
+    CHECK(play.AgentInspectionHistory().front().tick == 1 + spacing);
+    CHECK(observations->inspectionReads == limit + 1);
+
+    REQUIRE(play.Pause().HasValue());
+    observations->inspectionTick = 1 + (limit + 1) * spacing;
+    ++observations->inspectionGeneration;
+    play.RefreshAgentInspection(owner);
+    REQUIRE(play.AgentInspectionHistory().size() == 1);
+    CHECK(play.AgentInspectionHistory().front().agent.slot.generation == 2);
+
+    auto stale = *owner;
+    ++stale.entity.generation;
+    play.RefreshAgentInspection(stale);
+    CHECK(play.AgentInspectionHistory().empty());
+    play.RefreshAgentInspection(owner);
+    CHECK(play.AgentInspectionHistory().empty());
+    CHECK(observations->inspectionReads == limit + 2);
+    play.Stop();
+    CHECK(play.AgentInspectionHistory().empty());
 }
 
 TEST_CASE("Play injected-owner failure preserves cause and closes the single Scene service", "[editor][play][ownership]") {
@@ -939,6 +996,16 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     };
     REQUIRE(tick().HasValue());
     CHECK(providerState->startTick == 1);
+    play.RefreshAgentInspection(entity);
+    REQUIRE(play.AgentInspectionHistory().size() == 1);
+    const auto &inspection = play.AgentInspectionHistory().front();
+    CHECK(inspection.owner == entity);
+    CHECK(inspection.tick == 1);
+    REQUIRE(inspection.snapshot);
+    CHECK(inspection.snapshot->agent == inspection.agent);
+    CHECK(inspection.snapshot->decisionTick == 1);
+    for (const auto &key : inspection.snapshot->keys)
+        CHECK(key.status == AI::AiInspectionValueStatus::Redacted);
     if (providerState->failure == FailedCallback::Start) {
         verifyProblem(1);
         play.Stop();

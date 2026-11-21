@@ -2,6 +2,7 @@
 #include "Horo/AI/AIErrors.h"
 
 #include <algorithm>
+#include <new>
 
 namespace Horo::Application::Internal::EditorProjectSceneDetail {
     /** @copydoc Editor::EditorPlaySceneHost::ReadDecisionProblem */
@@ -26,6 +27,34 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                                                  .entity = report->entity,
                                                  .graph = origin.asset,
                                                  .node = origin.node};
+    }
+
+    /** @copydoc Editor::EditorPlaySceneHost::AgentInspectionTick */
+    std::uint64_t ProjectPlaySceneHost::AgentInspectionTick() const noexcept {
+        return ai_ && !sceneClosed_ && !decisionTickPending_ && std::this_thread::get_id() == ownerLane_ ? committedDecisionTick_ : 0;
+    }
+
+    /** @copydoc Editor::EditorPlaySceneHost::ReadAgentInspection */
+    std::optional<Editor::EditorPlayAgentInspection> ProjectPlaySceneHost::ReadAgentInspection(const Runtime::EntityRef owner) const {
+        const auto tick = AgentInspectionTick();
+        const auto scene = tick != 0 && scenes_ ? scenes_->ActiveScene() : std::nullopt;
+        if (!scene || owner.runtime != scene->RuntimeId())
+            return std::nullopt;
+        const auto entity = scene->Get(owner);
+        if (entity.HasError() || !entity.Value().components || !entity.Value().components->aiAgent)
+            return std::nullopt;
+        const auto handle = ai_->CapabilityAtSafePoint().ResolveAgent(entity.Value().components->aiAgent->agent);
+        if (handle.HasError())
+            return std::nullopt;
+        try {
+            auto snapshot = ai_->CaptureAgentInspectionAtSafePoint(*scene, handle.Value(), {});
+            if (snapshot.HasError() || snapshot.Value().owner != owner || snapshot.Value().decisionTick != tick)
+                return std::nullopt;
+            return Editor::EditorPlayAgentInspection{owner, handle.Value(), tick,
+                                                     std::make_shared<const AI::AiAgentInspectionSnapshot>(std::move(snapshot).Value())};
+        } catch (const std::bad_alloc &) {
+            return std::nullopt;
+        }
     }
 
     /** @copydoc ProjectPlaySceneHost::PrepareDecisionSelection */

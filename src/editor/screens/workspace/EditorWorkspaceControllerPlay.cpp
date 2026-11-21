@@ -254,6 +254,9 @@ namespace Horo::Editor {
         }
         m_viewModel.playError = m_playSession.LastError().has_value() ? m_playSession.LastError()->message : std::string{};
         RefreshPlayDecisionProblem();
+        const auto scene = m_playSession.SceneView();
+        const auto selected = m_selection.Current().primary;
+        m_playSession.RefreshAgentInspection(scene && selected ? scene->Find(Runtime::SceneObjectId{selected->value}) : std::nullopt);
     }
 
     /** @copydoc EditorWorkspaceController::ResolvePlayDecisionProblemObject */

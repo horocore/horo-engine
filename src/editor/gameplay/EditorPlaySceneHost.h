@@ -22,8 +22,9 @@ namespace Horo::Gameplay {
 }
 
 namespace Horo::AI {
+    struct AiAgentInspectionSnapshot;
     class DecisionNodeGeneration;
-}
+}  // namespace Horo::AI
 
 namespace Horo::Runtime {
     class SceneAnimationRuntime;
@@ -92,6 +93,14 @@ namespace Horo::Editor {
         AI::DecisionNodeId node;                  /**< Cooked source node within graph, when available. */
     };
 
+    /** @brief Play-committed identity and immutable copied inspection data. */
+    struct EditorPlayAgentInspection final {
+        Runtime::EntityRef owner;
+        AI::AgentHandle agent;
+        std::uint64_t tick{};
+        std::shared_ptr<const AI::AiAgentInspectionSnapshot> snapshot;
+    };
+
     /** @brief Synchronous acquisition from the current Project's existing provider owner. */
     using EditorPlayDecisionProviderSource = std::function<Result<std::shared_ptr<const AI::DecisionNodeGeneration>>()>;
 
@@ -126,6 +135,16 @@ namespace Horo::Editor {
          * @return Last completed failure or absence for unconfigured/healthy hosts. No runtime ownership escapes.
          */
         [[nodiscard]] virtual std::optional<EditorPlayDecisionProblem> ReadDecisionProblem() const {
+            return std::nullopt;
+        }
+
+        /** @brief Last fully committed Decision tick available for inspection, or zero before readiness. */
+        [[nodiscard]] virtual std::uint64_t AgentInspectionTick() const noexcept {
+            return 0;
+        }
+
+        /** @brief Copies the exact selected live agent at the host's current committed tick. */
+        [[nodiscard]] virtual std::optional<EditorPlayAgentInspection> ReadAgentInspection(Runtime::EntityRef) const {
             return std::nullopt;
         }
 
