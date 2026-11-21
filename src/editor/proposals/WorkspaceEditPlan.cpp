@@ -43,7 +43,7 @@ namespace Horo::Editor::Proposals {
                     const auto identity = snapshot->Identity();
                     if (identity.key.kind != DocumentKind::Source || identity.key.source != observation.path || !identity.IsValid())
                         return false;
-                } else if (std::get<SourcePathState>(observation.evidence) > SourcePathState::Moved) {
+                } else if (std::get<SourcePathState>(observation.evidence) > SourcePathState::Unavailable) {
                     return false;
                 }
                 if (!index.emplace(PatchDetail::Fold(observation.path.Value()), &observation).second)
@@ -73,6 +73,10 @@ namespace Horo::Editor::Proposals {
                 case SourcePathState::Moved:
                     return PlanConflict{path, PlanConflictReason::SourceMoved};
                 case SourcePathState::Occupied:
+                case SourcePathState::ParentMissing:
+                case SourcePathState::Redirect:
+                case SourcePathState::PortableAlias:
+                case SourcePathState::Unavailable:
                     return PlanConflict{path, PlanConflictReason::SourceUnavailable};
             }
             return PlanConflict{path, PlanConflictReason::SourceUnavailable};
@@ -83,12 +87,24 @@ namespace Horo::Editor::Proposals {
             const auto *observation = Find(index, path);
             if (!observation)
                 return PlanConflict{path, PlanConflictReason::Unobserved};
-            if (const auto *state = std::get_if<SourcePathState>(&observation->evidence); state && *state == SourcePathState::Absent) {
-                if (observation->path == path)
-                    return {};
-                return PlanConflict{path, PlanConflictReason::Unobserved};
+            const auto *state = std::get_if<SourcePathState>(&observation->evidence);
+            if (!state)
+                return PlanConflict{path, PlanConflictReason::DestinationOccupied};
+            using enum PlanConflictReason;
+            switch (*state) {
+                case SourcePathState::Absent:
+                    return observation->path == path ? std::nullopt : std::optional{PlanConflict{path, Unobserved}};
+                case SourcePathState::ParentMissing:
+                    return PlanConflict{path, DestinationParentMissing};
+                case SourcePathState::Redirect:
+                    return PlanConflict{path, DestinationRedirect};
+                case SourcePathState::PortableAlias:
+                    return PlanConflict{path, DestinationAlias};
+                case SourcePathState::Unavailable:
+                    return PlanConflict{path, DestinationUnavailable};
+                default:
+                    return PlanConflict{path, DestinationOccupied};
             }
-            return PlanConflict{path, PlanConflictReason::DestinationOccupied};
         }
 
         /** @brief Checks path ancestry at segment boundaries across the finite proposal. */

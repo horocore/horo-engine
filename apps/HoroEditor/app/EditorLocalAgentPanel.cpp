@@ -33,7 +33,13 @@ namespace Horo::Editor {
         using Reply = std::variant<ProviderDiscovery, AgentTurnResult, ContextReview>;
         using BackgroundTurn = AgentBackgroundTurn<Reply>;
         using PatchLoad = Result<std::optional<EditorLocalAgentPatchReview>>;
-        using PatchWorker = AgentBackgroundTurn<std::variant<Result<void>, PatchLoad>>;
+
+        struct PatchPreview final {
+            std::uint64_t turn;
+            Result<EditorLocalAgentPatchReview> review;
+        };
+
+        using PatchWorker = AgentBackgroundTurn<std::variant<Result<void>, PatchLoad, PatchPreview>>;
 
         /** @brief Resolves the localized operation label from the admitted file kind. */
         const char *PatchFileLabel(const EditorPatchFileKind kind) {
@@ -53,7 +59,11 @@ namespace Horo::Editor {
                                       "patch_file_destination_occupied",
                                       "patch_file_overlap",
                                       "patch_file_dirty_delete",
-                                      "patch_file_case_only_rename"};
+                                      "patch_file_case_only_rename",
+                                      "patch_file_parent_missing",
+                                      "patch_file_redirect",
+                                      "patch_file_destination_alias",
+                                      "patch_file_destination_unavailable"};
             const auto index = static_cast<std::size_t>(reason);
             return index < keys.size() ? keys[index] : unavailable;
         }
@@ -344,6 +354,7 @@ namespace Horo::Editor {
                 sourceApplyQueued_ = false;
                 patchSource_ = {};
                 patchReview_.reset();
+                patchDestination_.clear();
                 patchCheckpoint_.Abandon();
                 captureSceneSelection_ = {};
                 captureEditorDiagnostics_ = {};
@@ -847,6 +858,26 @@ namespace Horo::Editor {
                 patchReview_.emplace(std::move(review).Value());
             }
 
+            /** @brief Rechecks this exact reply with one explicitly named, read-only destination. */
+            void ReviewPatchDestination() {
+                auto path = SourceDocumentId::Parse(patchDestination_);
+                if (path.HasError()) {
+                    status_ = "source_patch_invalid";
+                    return;
+                }
+                const auto started = patchCheckpoint_.Start(PatchWorker::Operation{
+                    [root = buildRoot_, project = contextProject_, generation = contextGeneration_, path = std::move(path).Value(),
+                     files = &files_, offered = patchSource_, reply = response_](const std::stop_token stop) -> PatchWorker::Reply {
+                    const CancellationSource cancellation;
+                    const std::stop_callback cancel{stop, [&] {
+                        cancellation.RequestCancellation();
+                    }};
+                    const EditorPatchDestination destination{path, root, *files, cancellation.Token()};
+                    return PatchPreview{offered.turn, PrepareEditorLocalPatchReview(reply, offered, project, generation, &destination)};
+                }});
+                status_ = started ? "working" : "source_patch_invalid";
+            }
+
             /** @brief Renders one immutable file summary and checks that its source review remains available. */
             const char *DrawPatchFile(const EditorPatchFileCard &file,
                                       const std::variant<Proposals::FilePreview, Proposals::PlanConflict> &plan,
@@ -917,6 +948,27 @@ namespace Horo::Editor {
                 DrawUnitDecisions(review, {file, index}, state, conflict, locale);
             }
 
+            /** @brief Shows a bounded whole-scalar excerpt without opening or creating the destination. */
+            void DrawCreatePreview(EditorLocalAgentPatchReview &review, const std::size_t index, const ILocalizationService &locale,
+                                   const Theme::Fonts &fonts) {
+                const auto *preview = std::get_if<Proposals::FilePreview>(&review.plan->entries[index]);
+                if (!preview || !preview->after)
+                    return;
+                if (Button(locale, "source_patch_create_preview", true))
+                    review.expandedFile = review.expandedFile == index ? std::nullopt : std::optional{index};
+                if (review.expandedFile != index)
+                    return;
+                const auto &text = *preview->after;
+                constexpr std::size_t MaximumPreviewBytes = 4096;
+                auto boundary = std::min(text.size(), MaximumPreviewBytes);
+                while (boundary < text.size() && (static_cast<unsigned char>(text[boundary]) & 0xc0U) == 0x80U)
+                    --boundary;
+                const auto width = ImGui::GetContentRegionAvail().x;
+                Ui::WrappedText(width, std::string_view{text}.substr(0, boundary), Theme::Text(), fonts);
+                if (boundary < text.size())
+                    Ui::WrappedText(width, LocalizedText(locale, "source_patch_create_excerpt"), Theme::Muted(), fonts);
+            }
+
             /** @brief Draws one file's review state and stages its operation when available. */
             void DrawPatchCard(EditorLocalAgentPatchReview &review, const std::size_t index, const ILocalizationService &locale,
                                const Theme::Fonts &fonts, EditorWorkspaceViewCommandData &command) {
@@ -928,8 +980,10 @@ namespace Horo::Editor {
                 const auto *status = conflict && !rejected ? conflict : PatchDecisionLabel(state);
                 Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, status),
                                 conflict && !rejected ? Theme::ConsoleWarning() : Theme::Muted(), fonts);
-                const bool canOpen = !rejected && !conflict && file.kind != EditorPatchFileKind::Create;
-                if (Button(locale, "source_patch_review", canOpen))
+                const bool canOpen = !rejected && !conflict;
+                if (file.kind == EditorPatchFileKind::Create)
+                    DrawCreatePreview(review, index, locale, fonts);
+                else if (Button(locale, "source_patch_review", canOpen))
                     status_ = requestSourceReview_(review.proposal, *review.plan, index, command) ? nullptr : "source_patch_unavailable";
                 DrawUnitDecisions(review, {index}, state, conflict != nullptr, locale);
                 DrawHunkReview(review, index, conflict != nullptr, locale, fonts);
@@ -1024,13 +1078,13 @@ namespace Horo::Editor {
                 const auto snapshots = openSources_();
                 std::vector<SourceDocumentSnapshot> sources{snapshots.begin(), snapshots.end()};
                 const auto started = patchCheckpoint_.Start(
-                    PatchWorker::Operation{[root = buildRoot_, project = contextProject_,
+                    PatchWorker::Operation{[root = buildRoot_, project = contextProject_, files = &files_,
                                             sources = std::move(sources)](const std::stop_token stop) -> PatchWorker::Reply {
                     const CancellationSource cancellation;
                     const std::stop_callback cancel{stop, [&] {
                         cancellation.RequestCancellation();
                     }};
-                    return LoadEditorPatchCheckpoint(root, project, sources, cancellation.Token());
+                    return LoadEditorPatchCheckpoint(root, project, sources, cancellation.Token(), files);
                 }});
                 status_ = started ? "working" : "source_patch_checkpoint_error";
             }
@@ -1072,6 +1126,18 @@ namespace Horo::Editor {
                 status_ = "source_patch_checkpoint_loaded";
             }
 
+            /** @brief Publishes the destination observation as an inert review in the attached workspace. */
+            void AdoptPatchCheckpoint(PatchPreview &preview) {
+                if (preview.turn != patchSource_.turn)
+                    return;
+                if (preview.review.HasError()) {
+                    status_ = "source_patch_invalid";
+                    return;
+                }
+                patchReview_.emplace(std::move(preview.review).Value());
+                status_ = nullptr;
+            }
+
             /** @brief Requires an attached project and an idle review lane for explicit checkpoint actions. */
             bool CanCheckpointPatchReview() const {
                 return !Busy() && !patchCheckpoint_.Busy() && !awaitingCheckpoint_ && !contextPreview_ && !buildRoot_.empty() &&
@@ -1085,9 +1151,32 @@ namespace Horo::Editor {
                     LoadPatchReview();
             }
 
+            /** @brief Lets the user name the exact structural destination without reading any source from it. */
+            void DrawPatchDestination(const ILocalizationService &locale, const Theme::Fonts &fonts) {
+                if (!patchSource_.turn || !requestSourceReview_ || buildRoot_.empty() || !IsEditorLocalPatchReply(response_))
+                    return;
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "source_patch_destination"), Theme::Text(), fonts);
+                ImGui::BeginDisabled(!CanCheckpointPatchReview());
+                static_cast<void>(DrawTextField("##PatchDestination", patchDestination_, MaximumSourceDocumentIdBytes, fonts));
+                if (Button(locale, "source_patch_destination_review", !patchDestination_.empty()))
+                    ReviewPatchDestination();
+                ImGui::EndDisabled();
+            }
+
+            /** @brief Prevents dispatch through the text transaction when a structural decision is included. */
+            bool HasAcceptedFileOperation(const EditorLocalAgentPatchReview &review) const {
+                for (std::size_t index = 0; index < review.files.size(); ++index) {
+                    if (review.files[index].kind != EditorPatchFileKind::Edit &&
+                        review.decisions.State({index}).Value() == Proposals::ReviewState::Accepted)
+                        return true;
+                }
+                return false;
+            }
+
             /** @brief Renders file summaries in proposal order and stages only the selected current operation. */
             void DrawPatchReview(const ILocalizationService &locale, const Theme::Fonts &fonts, EditorWorkspaceViewCommandData &command) {
                 if (!patchReview_) {
+                    DrawPatchDestination(locale, fonts);
                     DrawPatchRestore(locale);
                     return;
                 }
@@ -1102,8 +1191,12 @@ namespace Horo::Editor {
                 }
                 DrawPatchDecisions(review, locale);
                 const bool writingAudit = sourceReviewTransaction_ && sourceReviewTransaction_().writingAudit;
+                const bool fileOperation = HasAcceptedFileOperation(review);
+                if (fileOperation)
+                    Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "source_patch_structural_preview"),
+                                    Theme::Muted(), fonts);
                 if (requestSourceReviewApply_ &&
-                    Button(locale, "source_patch_apply", !writingAudit && review.decisions.HasAcceptedChanges()))
+                    Button(locale, "source_patch_apply", !fileOperation && !writingAudit && review.decisions.HasAcceptedChanges()))
                     QueueSourceApply(review, command);
                 if (!buildRoot_.empty() && Button(locale, "source_patch_checkpoint_save", CanCheckpointPatchReview()))
                     SavePatchReview(review);
@@ -1154,6 +1247,7 @@ namespace Horo::Editor {
                         if (patchSource_.sources.empty())
                             patchSource_.turn = 0;
                         patchReview_.reset();
+                        patchDestination_.clear();
                         return true;
                     }
                 } catch (const std::bad_alloc &) {
@@ -1292,6 +1386,7 @@ namespace Horo::Editor {
             bool sourceApplyQueued_{};
             EditorLocalAgentPatchSource patchSource_;
             std::optional<EditorLocalAgentPatchReview> patchReview_;
+            std::string patchDestination_;
             std::shared_ptr<const Platform::IProjectReadFiles> projectFiles_;
             std::string projectReadIdentity_;
             std::string savedFilePath_;

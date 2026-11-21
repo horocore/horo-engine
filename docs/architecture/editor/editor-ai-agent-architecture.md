@@ -781,6 +781,12 @@ Deleting a source with unsaved edits is a planning conflict, even when the
 proposal captures the current revision. The review also identifies a case-only
 rename as a portable path conflict. Both checks reject acceptance independently
 of the preview so a supplied preview cannot bypass them.
+For create or rename review the user may name one exact project-relative
+destination for the current reply. An I/O worker walks the existing parent
+directories and distinguishes absent leaves, occupied names, missing parents,
+case aliases and redirects. The destination grants read-only review scope.
+New file text is shown as a bounded excerpt. Restoring a saved review checks
+its structural destinations again before restoring accepted decisions.
 
 The Local Model panel can explicitly replace the recovery checkpoint at
 `.horo/local/agent/source-review` with the admitted proposal and its current decisions. The

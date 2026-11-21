@@ -127,7 +127,8 @@ namespace Horo::Editor {
 
         /** @brief Checks exact proposal identity and current source evidence before publishing restored decisions. */
         LoadResult Restore(CheckpointEnvelope envelope, const std::string_view project,
-                           const std::span<const SourceDocumentSnapshot> sources) {
+                           const std::span<const SourceDocumentSnapshot> sources, const std::filesystem::path &root,
+                           const DurableFileSystem *files, const CancellationToken &stop) {
             std::vector<PathRule> rules;
             for (const auto &path : envelope.paths)
                 rules.push_back({path, false});
@@ -137,13 +138,16 @@ namespace Horo::Editor {
             auto proposal = DecodeRecovery(envelope.proposal, policy.Value());
             if (proposal.HasError())
                 return LoadResult::Failure(proposal.ErrorValue());
-            auto plan = PlanRecoveredWorkspaceEdits(proposal.Value(), policy.Value(), Observe(envelope.paths, sources));
+            auto cards = DescribeEditorPatchFiles(proposal.Value());
+            auto observations = Observe(envelope.paths, sources);
+            if (files)
+                ObserveEditorPatchDestinations(cards, root, *files, observations, stop);
+            auto plan = PlanRecoveredWorkspaceEdits(proposal.Value(), policy.Value(), observations);
             if (plan.HasError())
                 return LoadResult::Failure(plan.ErrorValue());
             auto decisions = ReviewDecisions::Decode(proposal.Value(), plan.Value(), envelope.decisions);
             if (decisions.HasError())
                 return LoadResult::Failure(decisions.ErrorValue());
-            auto cards = DescribeEditorPatchFiles(proposal.Value());
             return LoadResult::Success(EditorLocalAgentPatchReview{std::move(proposal).Value(),
                                                                    std::make_shared<const WorkspaceEditPlan>(std::move(plan).Value()),
                                                                    std::move(cards),
@@ -214,7 +218,8 @@ namespace Horo::Editor {
 
     /** @copydoc LoadEditorPatchCheckpoint */
     LoadResult LoadEditorPatchCheckpoint(const std::filesystem::path &root, const std::string_view project,
-                                         const std::span<const SourceDocumentSnapshot> sources, const CancellationToken &stop) {
+                                         const std::span<const SourceDocumentSnapshot> sources, const CancellationToken &stop,
+                                         const DurableFileSystem *files) {
         const auto canonical = CanonicalRoot(root);
         if (canonical.HasError())
             return LoadResult::Failure(canonical.ErrorValue());
@@ -229,6 +234,6 @@ namespace Horo::Editor {
         auto envelope = ReadEnvelope({reinterpret_cast<const char *>(bytes.data()), bytes.size()});
         if (!envelope)
             return LoadResult::Failure(MakeError(Errors::Malformed));
-        return Restore(std::move(*envelope), project, sources);
+        return Restore(std::move(*envelope), project, sources, canonical.Value(), files, stop);
     }
 }  // namespace Horo::Editor

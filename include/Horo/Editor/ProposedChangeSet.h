@@ -195,9 +195,13 @@ namespace Horo::Editor::Proposals {
 
     /** @brief Workspace-owned evidence for a path without a readable source snapshot. */
     enum class SourcePathState : std::uint8_t {
-        Absent,   /**< The workspace inspected this exact spelling and found no entry. */
-        Occupied, /**< The path is in use, including by a directory or an unreadable source. */
-        Moved     /**< The workspace observed that the original file moved away. */
+        Absent,        /**< The workspace inspected this exact spelling and found no entry. */
+        Occupied,      /**< The path is in use, including by a directory or an unreadable source. */
+        Moved,         /**< The workspace observed that the original file moved away. */
+        ParentMissing, /**< An expected parent directory is absent. */
+        Redirect,      /**< A component redirects outside the inspected directory chain. */
+        PortableAlias, /**< An existing component differs in portable letter case. */
+        Unavailable    /**< The host could not inspect the entire path. */
     };
 
     /** @brief One exact workspace observation. Omitted paths have unknown availability. */
@@ -217,7 +221,11 @@ namespace Horo::Editor::Proposals {
         DestinationOccupied,
         OverlappingPaths,
         DirtyDelete,
-        CaseOnlyRename
+        CaseOnlyRename,
+        DestinationParentMissing,
+        DestinationRedirect,
+        DestinationAlias,
+        DestinationUnavailable
     };
 
     /** @brief Conflict reason and affected path for one operation in the proposal. */

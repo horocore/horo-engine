@@ -1,10 +1,77 @@
 #include "EditorLocalAgentPatch.h"
 
+#include "Horo/Foundation/Platform.h"
+
+#include <algorithm>
 #include <format>
 
 namespace Horo::Editor {
     namespace {
         using ReviewResult = Result<EditorLocalAgentPatchReview>;
+        using Proposals::SourcePathState;
+
+        /** @brief Compares portable names without treating locale-specific folding as filesystem authority. */
+        bool PortableAlias(const std::u8string_view left, const std::u8string_view right) {
+            const auto fold = [](const char8_t value) {
+                return value >= u8'A' && value <= u8'Z' ? static_cast<char8_t>(value + (u8'a' - u8'A')) : value;
+            };
+            return std::ranges::equal(left, right, {}, fold, fold);
+        }
+
+        /** @brief Checks one exact child spelling and refuses redirects before stepping into a parent. */
+        SourcePathState InspectDestinationComponent(const std::filesystem::path &parent, const std::filesystem::path &name, const bool leaf,
+                                                    const DurableFileSystem &files, const CancellationToken &stop) {
+            constexpr std::size_t MaximumDirectoryEntries = 8192;
+            const auto entries = files.ListDirectory(parent, MaximumDirectoryEntries, stop);
+            if (entries.HasError())
+                return SourcePathState::Unavailable;
+            const auto spelling = name.generic_u8string();
+            const FileDirectoryEntry *exact{};
+            for (const auto &entry : entries.Value()) {
+                if (entry.name == name)
+                    exact = &entry;
+                else if (PortableAlias(entry.name.generic_u8string(), spelling))
+                    return SourcePathState::PortableAlias;
+            }
+            if (exact) {
+                if (exact->info.kind == FileEntryKind::Redirect)
+                    return SourcePathState::Redirect;
+                if (leaf)
+                    return SourcePathState::Occupied;
+                if (exact->info.kind != FileEntryKind::Directory)
+                    return SourcePathState::Unavailable;
+                const auto inspected = files.InspectEntry(parent / name);
+                return inspected.HasValue() && inspected.Value() && inspected.Value()->kind == FileEntryKind::Directory
+                           ? SourcePathState::Occupied
+                           : SourcePathState::Unavailable;
+            }
+            if (!leaf)
+                return SourcePathState::ParentMissing;
+            const auto inspected = files.InspectEntry(parent / name);
+            if (inspected.HasError())
+                return SourcePathState::Unavailable;
+            return inspected.Value() ? SourcePathState::Occupied : SourcePathState::Absent;
+        }
+
+        /** @brief Walks the explicitly admitted relative destination outward from the owned project root. */
+        SourcePathState InspectDestination(const SourceDocumentId &path, const std::filesystem::path &root, const DurableFileSystem &files,
+                                           const CancellationToken &stop) {
+            if (!root.is_absolute() || stop.IsCancellationRequested())
+                return SourcePathState::Unavailable;
+            const auto entry = files.InspectEntry(root);
+            if (entry.HasError() || !entry.Value() || entry.Value()->kind != FileEntryKind::Directory)
+                return SourcePathState::Unavailable;
+            auto parent = root;
+            const auto &text = path.Value();
+            const std::filesystem::path relative{std::u8string{text.begin(), text.end()}};
+            for (const auto &name : relative.parent_path()) {
+                const auto state = InspectDestinationComponent(parent, name, false, files, stop);
+                if (state != SourcePathState::Occupied)
+                    return state;
+                parent /= name;
+            }
+            return InspectDestinationComponent(parent, relative.filename(), true, files, stop);
+        }
 
         struct PatchReply final {
             std::string_view body;
@@ -64,6 +131,13 @@ namespace Horo::Editor {
                 }
             }, operation);
         }
+
+        /** @brief Finds the distinct destination operand of a structural operation. */
+        const SourceDocumentId *DestinationPath(const EditorPatchFileCard &card) {
+            if (card.kind == EditorPatchFileKind::Create)
+                return &card.path;
+            return card.destination ? &*card.destination : nullptr;
+        }
     }  // namespace
 
     /** @copydoc DescribeEditorPatchFiles */
@@ -75,6 +149,20 @@ namespace Horo::Editor {
         return cards;
     }
 
+    /** @copydoc ObserveEditorPatchDestinations */
+    void ObserveEditorPatchDestinations(const std::span<const EditorPatchFileCard> cards, const std::filesystem::path &root,
+                                        const DurableFileSystem &files, std::vector<Proposals::SourcePathObservation> &observations,
+                                        const CancellationToken &stop) {
+        for (const auto &card : cards) {
+            const auto *path = DestinationPath(card);
+            if (!path || std::ranges::any_of(observations, [path](const auto &entry) {
+                return entry.path == *path;
+            }))
+                continue;
+            observations.push_back({*path, InspectDestination(*path, root, files, stop)});
+        }
+    }
+
     /** @copydoc IsEditorLocalPatchReply */
     bool IsEditorLocalPatchReply(const std::string_view answer) {
         return !Extract(answer).body.empty();
@@ -83,7 +171,8 @@ namespace Horo::Editor {
     /** @copydoc PrepareEditorLocalPatchReview */
     Result<EditorLocalAgentPatchReview> PrepareEditorLocalPatchReview(const std::string_view answer,
                                                                       const EditorLocalAgentPatchSource &offered,
-                                                                      const std::string_view project, const std::uint64_t generation) {
+                                                                      const std::string_view project, const std::uint64_t generation,
+                                                                      const EditorPatchDestination *destination) {
         using namespace Proposals;
         if (offered.sources.empty())
             return ReviewResult::Failure(MakeError(Errors::StaleBase));
@@ -99,6 +188,10 @@ namespace Horo::Editor {
             observations.push_back({path, source});
             offeredPaths.push_back(path);
         }
+        if (destination && std::ranges::find(offeredPaths, destination->path) == offeredPaths.end()) {
+            rules.push_back({destination->path, false});
+            offeredPaths.push_back(destination->path);
+        }
         auto policy = ProjectPolicy::Capture(std::string{project}, generation, std::move(rules));
         if (policy.HasError())
             return ReviewResult::Failure(policy.ErrorValue());
@@ -109,10 +202,19 @@ namespace Horo::Editor {
                                       : DecodeStructuredPatch(reply.body, policy.Value(), std::move(identity), sources);
         if (proposal.HasError())
             return ReviewResult::Failure(proposal.ErrorValue());
+        auto cards = DescribeEditorPatchFiles(proposal.Value());
+        if (destination) {
+            const bool matches = std::ranges::any_of(cards, [&](const auto &card) {
+                const auto *path = DestinationPath(card);
+                return path && *path == destination->path;
+            });
+            if (!matches)
+                return ReviewResult::Failure(MakeError(Errors::PolicyDenied));
+            ObserveEditorPatchDestinations(cards, destination->root, destination->files, observations, destination->stop);
+        }
         auto plan = PlanWorkspaceEdits(proposal.Value(), policy.Value(), observations);
         if (plan.HasError())
             return ReviewResult::Failure(plan.ErrorValue());
-        auto cards = DescribeEditorPatchFiles(proposal.Value());
         ReviewDecisions decisions{proposal.Value()};
         return ReviewResult::Success({std::move(proposal).Value(),
                                       std::make_shared<const WorkspaceEditPlan>(std::move(plan).Value()),

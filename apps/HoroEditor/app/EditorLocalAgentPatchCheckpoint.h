@@ -24,5 +24,5 @@ namespace Horo::Editor {
      */
     [[nodiscard]] Result<std::optional<EditorLocalAgentPatchReview>> LoadEditorPatchCheckpoint(
         const std::filesystem::path &root, std::string_view project, std::span<const SourceDocumentSnapshot> sources,
-        const CancellationToken &stop);
+        const CancellationToken &stop, const DurableFileSystem *files = nullptr);
 }  // namespace Horo::Editor

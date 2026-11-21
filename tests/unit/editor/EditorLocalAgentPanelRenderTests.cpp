@@ -383,6 +383,73 @@ namespace {
         CHECK(edited.Value().IsCurrent());
     }
 
+    TEST_CASE("An explicitly selected structural destination is inspected without publishing files", "[editor][agent][source]") {
+        using namespace Proposals;
+        TestSupport::SourceProject project;
+        project.Put("base");
+        SourceDocumentService owner{project.directory};
+        const auto source = owner.Open(project.Identity(), project.directory / "code.cpp").Value();
+        const EditorLocalAgentPatchSource offered{{source}, "example/model:latest", 1};
+        NativeDurableFileSystem files;
+        const auto path = SourceDocumentId::Parse("src/new.cpp").Value();
+        const EditorPatchDestination destination{path, project.directory, files, {}};
+        constexpr auto create = R"({"version":1,"files":[{"kind":"create","path":"src/new.cpp","text":"new text"}]})";
+        constexpr auto rename = R"({"version":1,"files":[{"kind":"rename","path":"code.cpp","destination":"src/new.cpp","hunks":[]}]})";
+        CHECK(PrepareEditorLocalPatchReview(create, offered, "workspace", 1).HasError());
+        CHECK(PrepareEditorLocalPatchReview(rename, offered, "workspace", 1).HasError());
+        auto expected = std::optional<PlanConflictReason>{};
+        SECTION("Missing parent") {
+            expected = PlanConflictReason::DestinationParentMissing;
+        }
+        SECTION("Occupied destination") {
+            REQUIRE(std::filesystem::create_directory(project.directory / "src"));
+            project.Put("existing", "src/new.cpp");
+            expected = PlanConflictReason::DestinationOccupied;
+        }
+        SECTION("Portable alias collision") {
+            REQUIRE(std::filesystem::create_directory(project.directory / "src"));
+            project.Put("existing", "src/New.cpp");
+            expected = PlanConflictReason::DestinationAlias;
+        }
+        SECTION("A symbolic link does not contribute a valid parent") {
+            REQUIRE(std::filesystem::create_directory(project.directory / "other"));
+            std::error_code error;
+            std::filesystem::create_directory_symlink(project.directory / "other", project.directory / "src", error);
+            if (error)
+                SKIP("Directory symlink creation is unavailable to the test process");
+            expected = PlanConflictReason::DestinationRedirect;
+        }
+        SECTION("The exact absent destination has a review and recoverable decisions") {
+            REQUIRE(std::filesystem::create_directory(project.directory / "src"));
+            auto prepared = PrepareEditorLocalPatchReview(create, offered, "workspace", 1, &destination);
+            REQUIRE(prepared.HasValue());
+            auto review = std::move(prepared).Value();
+            REQUIRE(review.decisions.Decide(*review.plan, {0}, ReviewChoice::Accept).HasValue());
+            REQUIRE(SaveEditorPatchCheckpoint(files, project.directory, {review.proposal, review.decisions, review.offeredPaths}, {})
+                        .HasValue());
+            const std::array sources{source};
+            const auto restored = LoadEditorPatchCheckpoint(project.directory, "workspace", sources, {}, &files);
+            REQUIRE(restored.HasValue());
+            REQUIRE(restored.Value());
+            CHECK(restored.Value()->decisions.State().Value() == ReviewState::Accepted);
+            CHECK_FALSE(std::filesystem::exists(project.directory / "src/new.cpp"));
+            project.Put("appeared", "src/new.cpp");
+            CHECK(LoadEditorPatchCheckpoint(project.directory, "workspace", sources, {}, &files).HasError());
+            REQUIRE(std::filesystem::remove(project.directory / "src/new.cpp"));
+        }
+        for (const auto reply : {create, rename}) {
+            const auto review = PrepareEditorLocalPatchReview(reply, offered, "workspace", 1, &destination);
+            REQUIRE(review.HasValue());
+            const auto &entry = review.Value().plan->entries.front();
+            if (expected)
+                CHECK(std::get<PlanConflict>(entry).reason == *expected);
+            else
+                CHECK(std::get<FilePreview>(entry).after == (reply == create ? "new text" : "base"));
+        }
+        CHECK(source.IsCurrent());
+        CHECK(source.Text() == "base");
+    }
+
     TEST_CASE("Chat summarizes every admitted operation without retaining patch text", "[editor][agent][source]") {
         using namespace Proposals;
         const auto path = [](std::string_view name) {
