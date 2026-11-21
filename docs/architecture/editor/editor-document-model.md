@@ -180,6 +180,12 @@ protocol, and request payloads. Workspace callers keep callback ownership
 scoped to this session object and issue Stop when retiring a connection. A
 failed or disconnected adapter has no authority over source editing.
 
+The internal LSP adapter reads one bounded frame at a time from each transport
+incarnation. Frame lengths count UTF-8 bytes. Missing or duplicate lengths,
+oversized headers or bodies, and truncated streams fault the connection. JSON
+envelope decoding independently rejects malformed, ambiguous, or deeply nested
+messages before feature adapters inspect payloads.
+
 ### Source Save Publication (EDT-003.5)
 
 `SourceDocumentService::Save` captures one exact current revision on the owner thread.
