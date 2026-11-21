@@ -207,6 +207,66 @@ namespace Horo::XR::OpenXRInternal {
         return Outcome::Success({frame, prediction, period_, deadline, deadline - now.Nanoseconds(), status, 1});
     }
 
+    std::uint32_t NativeProjectionResolution::BeginFrame(const XRFrameId &frame, const bool adaptive, const std::uint64_t deviceIncarnation,
+                                                         const std::uint64_t rendererRevision) noexcept {
+        if (!adaptive || !frame.IsValid() || deviceIncarnation == 0 || rendererRevision == 0) {
+            *this = {};
+            return scale_;
+        }
+        if (frame.session != frame_.session || frame.configuration != frame_.configuration ||
+            frame.capabilityRevision != frame_.capabilityRevision || deviceIncarnation != deviceIncarnation_ ||
+            rendererRevision != rendererRevision_)
+            *this = {};
+        if (frame.sequence <= frame_.sequence)
+            return frameScale_;
+        if (!completed_ || frame.sequence - frame_.sequence != 1) {
+            late_ = 0;
+            headroom_ = 0;
+        }
+        frame_ = frame;
+        deviceIncarnation_ = deviceIncarnation;
+        rendererRevision_ = rendererRevision;
+        frameScale_ = scale_;
+        completed_ = false;
+        return frameScale_;
+    }
+
+    bool NativeProjectionResolution::AwaitsCompletion(const XRFrameId &frame) const noexcept {
+        return frame.IsValid() && frame == frame_ && !completed_;
+    }
+
+    void NativeProjectionResolution::ObserveCompletion(const NativeFramePacingObservation &observation) noexcept {
+        if (!AwaitsCompletion(observation.frame) || observation.predictedPeriodNanoseconds <= 0)
+            return;
+        completed_ = true;
+        if (observation.deadline != NativeFrameDeadline::WithinBudget) {
+            headroom_ = 0;
+            if (++late_ == LateFrames) {
+                scale_ = std::max(MinimumPercent, scale_ - StepPercent);
+                late_ = 0;
+            }
+            return;
+        }
+        late_ = 0;
+        if (observation.remainingNanoseconds < observation.predictedPeriodNanoseconds / 4) {
+            headroom_ = 0;
+            return;
+        }
+        if (++headroom_ == HeadroomFrames) {
+            scale_ = std::min(FullPercent, scale_ + StepPercent);
+            headroom_ = 0;
+        }
+    }
+
+    XRRenderRectangle NativeProjectionResolution::Rectangle(const Render::FramebufferExtent extent, const std::uint32_t percent) noexcept {
+        const auto admitted = std::clamp(percent, MinimumPercent, FullPercent);
+        const auto scale = [admitted](const std::uint32_t dimension) {
+            const auto pixels = static_cast<std::uint32_t>(static_cast<std::uint64_t>(dimension) * admitted / FullPercent);
+            return std::max(pixels, static_cast<std::uint32_t>(dimension != 0));
+        };
+        return {0, 0, scale(extent.width), scale(extent.height)};
+    }
+
     /** @copydoc OpenXRFrameCompositor::SubImage */
     Result<XrSwapchainSubImage> OpenXRFrameCompositor::SubImage(const XRExternalRenderTargetDescriptor &target,
                                                                 std::span<const NativeProjectionTarget> owners) const {

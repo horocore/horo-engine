@@ -74,6 +74,7 @@ namespace Horo::Application::Internal {
         XR::OpenXRInternal::OpenXRVulkanSwapchainImages images;
         XR::OpenXRInternal::OpenXRSwapchain color;
         XR::OpenXRInternal::OpenXRFrameCompositor compositor;
+        XR::OpenXRInternal::NativeProjectionResolution resolution;
 
         std::shared_ptr<WriterPair> writer;
         Render::RenderTextureDescriptor allocation;

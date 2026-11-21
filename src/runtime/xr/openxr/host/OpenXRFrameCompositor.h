@@ -55,6 +55,36 @@ namespace Horo::XR::OpenXRInternal {
         std::uint32_t framesInFlight{};
     };
 
+    /** @brief Selects a bounded projection rectangle scale at frame admission using completed pacing evidence. */
+    class NativeProjectionResolution final {
+    public:
+        static constexpr std::uint32_t FullPercent = 100;
+
+        /** @brief Selects the scale for this frame and resets evidence across owner or capability replacement. */
+        [[nodiscard]] std::uint32_t BeginFrame(const XRFrameId &frame, bool adaptive, std::uint64_t deviceIncarnation,
+                                               std::uint64_t rendererRevision) noexcept;
+        /** @brief True only for the current eligible frame with no retained completion sample. */
+        [[nodiscard]] bool AwaitsCompletion(const XRFrameId &frame) const noexcept;
+        /** @brief Observes completed work once. Changes apply to the next admitted frame. */
+        void ObserveCompletion(const NativeFramePacingObservation &observation) noexcept;
+        /** @brief Converts the admitted scale to an active rectangle without changing the allocation. */
+        [[nodiscard]] static XRRenderRectangle Rectangle(Render::FramebufferExtent extent, std::uint32_t percent) noexcept;
+
+    private:
+        static constexpr std::uint32_t MinimumPercent = 70;
+        static constexpr std::uint32_t StepPercent = 5;
+        static constexpr std::uint32_t LateFrames = 3;
+        static constexpr std::uint32_t HeadroomFrames = 10;
+        XRFrameId frame_;
+        std::uint64_t deviceIncarnation_{};
+        std::uint64_t rendererRevision_{};
+        std::uint32_t scale_{FullPercent};
+        std::uint32_t frameScale_{FullPercent};
+        std::uint32_t late_{};
+        std::uint32_t headroom_{};
+        bool completed_{};
+    };
+
     /** @brief Native owners matching each plan target; no renderer or native allocation ownership transfers. */
     struct NativeProjectionTarget final {
         OpenXRSwapchain *owner{};

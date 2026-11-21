@@ -506,6 +506,101 @@ namespace Horo::Tests::OpenXR {
             f.Empty(frame);
         }
 
+        TEST_CASE("Native XR adaptive resolution uses consecutive completed frames and resets for a new plan",
+                  "[unit][xr][compositor][resolution]") {
+            CompositorFixture f;
+            f.Bind();
+            const auto nativeFrame = f.Begin();
+            auto frame = nativeFrame;
+            NativeProjectionResolution resolution;
+            const auto begin = [&](const XRFrameId &id, bool adaptive = true, std::uint64_t rendererRevision = 1) {
+                return resolution.BeginFrame(id, adaptive, 1, rendererRevision);
+            };
+            const auto observe = [&](const NativeFrameDeadline deadline, const std::int64_t slack) {
+                const NativeFramePacingObservation sample{.frame = frame,
+                                                          .predictedPeriodNanoseconds = 10'000'000,
+                                                          .remainingNanoseconds = slack,
+                                                          .deadline = deadline};
+                resolution.ObserveCompletion(sample);
+                resolution.ObserveCompletion(sample);
+                CHECK_FALSE(resolution.AwaitsCompletion(frame));
+                ++frame.sequence;
+            };
+            using enum NativeFrameDeadline;
+            for (std::uint32_t index = 0; index < 2; ++index) {
+                CHECK(begin(frame) == 100);
+                observe(CpuSubmissionMissed, -10);
+            }
+            ++frame.sequence;
+            CHECK(begin(frame) == 100);
+            observe(CpuSubmissionMissed, -10);
+            CHECK(begin(frame) == 100);
+            CHECK(begin({}) == 100);
+            for (std::uint32_t index = 0; index < 3; ++index) {
+                CHECK(begin(frame) == 100);
+                observe(CpuSubmissionMissed, -10);
+            }
+            auto last = frame;
+            --last.sequence;
+            CHECK(begin(last) == 100);
+            CHECK(begin(frame) == 95);
+            observe(DisplayMissed, -2'000'000);
+            for (std::uint32_t index = 0; index < 12; ++index) {
+                CHECK(begin(frame) == 95);
+                observe(index % 2 == 0 ? WithinBudget : CpuSubmissionMissed, 100'000);
+            }
+            for (std::uint32_t index = 0; index < 24; ++index) {
+                static_cast<void>(begin(frame));
+                observe(DisplayMissed, -2'000'000);
+            }
+            CHECK(begin(frame) == 70);
+            for (std::uint32_t index = 0; index < 10; ++index) {
+                CHECK(begin(frame) == 70);
+                observe(WithinBudget, 4'000'000);
+            }
+            CHECK(begin(frame) == 75);
+            CHECK(begin(frame, true, 2) == 100);
+            auto replacement = frame;
+            replacement.capabilityRevision = IdentityValue<XRCapabilityRevision>(frame.capabilityRevision.Value() + 1);
+            ++replacement.sequence;
+            CHECK(begin(replacement, true, 2) == 100);
+            resolution.ObserveCompletion({.frame = frame, .predictedPeriodNanoseconds = 10'000'000, .deadline = DisplayMissed});
+            CHECK(resolution.AwaitsCompletion(replacement));
+            CHECK(begin(replacement, false, 2) == 100);
+            CHECK_FALSE(resolution.AwaitsCompletion(replacement));
+            CHECK(begin({}) == 100);
+            f.Empty(nativeFrame);
+        }
+
+        TEST_CASE("Native XR projection submits scaled image rectangles inside the same allocation", "[unit][xr][compositor][resolution]") {
+            CompositorFixture f;
+            f.Bind();
+            const auto frame = f.Begin();
+            const auto image = f.Acquire(frame);
+            const auto plan = f.Plan(frame, image, nullptr, false, 85);
+            const auto rectangle = NativeProjectionResolution::Rectangle({800, 600}, 85);
+            CHECK((rectangle == XRRenderRectangle{0, 0, 680, 510}));
+            for (const auto &target : plan.Targets()) {
+                CHECK((target.allocationExtent == Render::FramebufferExtent{800, 600}));
+                CHECK(target.renderRectangle == rectangle);
+                CHECK(target.image == image);
+            }
+            f.images.complete = true;
+            const std::array completed{image};
+            REQUIRE(f.frames.Submit(frame, completed) == XRFrameStatus::Ok);
+            REQUIRE(f.color.PollRelease().Value());
+            REQUIRE(f.frames.Release(frame, image) == XRFrameStatus::Ok);
+            const std::array owners{NativeProjectionTarget{&f.color, image}};
+            REQUIRE(f.compositor.EndProjection(frame, plan, owners).HasValue());
+            REQUIRE(f.script.views == 2);
+            for (std::size_t eye = 0; eye < 2; ++eye) {
+                const auto &subImage = f.script.encoded[eye].subImage;
+                CHECK(subImage.imageRect.extent.width == 680);
+                CHECK(subImage.imageRect.extent.height == 510);
+                CHECK(subImage.imageArrayIndex == eye);
+            }
+        }
+
         TEST_CASE("Missed XR deadlines preserve pending image debt before zero-layer end and the next frame",
                   "[unit][xr][compositor][pacing]") {
             CompositorFixture f;

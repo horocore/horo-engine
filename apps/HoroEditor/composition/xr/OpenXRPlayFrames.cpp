@@ -64,7 +64,8 @@ namespace Horo::Application::Internal {
 
         /** @brief Describes the exact acquired color subresource for one ordered eye without issuing another target. */
         XRExternalRenderTargetDescriptor DescribeEyeTarget(const XRViewDescriptor &view, const NativeSwapchainAcquisition &acquisition,
-                                                           const Render::RenderTextureDescriptor &allocation, std::uint32_t eye) {
+                                                           const Render::RenderTextureDescriptor &allocation, std::uint32_t eye,
+                                                           const std::uint32_t scale) {
             return {view.id,
                     XRExternalRenderTargetRole::ProjectionColor,
                     acquisition.image.target,
@@ -72,7 +73,7 @@ namespace Horo::Application::Internal {
                     allocation.format,
                     allocation.usage,
                     allocation.extent,
-                    {0, 0, view.recommendedExtent.width, view.recommendedExtent.height},
+                    NativeProjectionResolution::Rectangle(view.recommendedExtent, scale),
                     eye,
                     2,
                     1};
@@ -84,7 +85,7 @@ namespace Horo::Application::Internal {
                                                       const NativePresentationViews &observed,
                                                       const OpenXRApplicationProjection &projection,
                                                       const NativeSwapchainAcquisition &acquisition,
-                                                      const Render::RenderTextureDescriptor &allocation) {
+                                                      const Render::RenderTextureDescriptor &allocation, const std::uint32_t scale) {
             constexpr std::uint32_t viewCount = 2;
             const XRViewConfigurationDescriptor configuration{CurrentXRContractVersion,
                                                               id.session,
@@ -97,7 +98,7 @@ namespace Horo::Application::Internal {
             std::array<XRExternalRenderTargetDescriptor, viewCount> targets{};
             for (std::uint32_t eye = 0; eye < views.size(); ++eye) {
                 views[eye] = DescribeEye(observed, configuration.session, eye, projection);
-                targets[eye] = DescribeEyeTarget(views[eye], acquisition, allocation, eye);
+                targets[eye] = DescribeEyeTarget(views[eye], acquisition, allocation, eye, scale);
             }
             const std::array images{acquisition.image};
             return XRViewRenderPlan::Create({configuration, displayTime, views, targets, images}, configuration.session, configuration.id,
@@ -745,8 +746,10 @@ namespace Horo::Application::Internal {
         if (revision.HasError())
             return Result<void>::Failure(revision.ErrorValue());
         const XRViewConfigurationId configuration{render_->session, {.index = 0, .generation = 1}};
+        const auto scale = render_->resolution.BeginFrame(frame.frame, !support.synthetic && !WantsMotionHistory(scene_->projection->plan),
+                                                          support.deviceIncarnation, support.capabilityRevision);
         auto plan = PlanStereoProjection(configuration, revision.Value(), frame.predictedDisplayTime, input_.origin, *render_->views,
-                                         *scene_->projection, *render_->acquisition, render_->allocation);
+                                         *scene_->projection, *render_->acquisition, render_->allocation, scale);
         if (plan.HasError())
             return Result<void>::Failure(plan.ErrorValue());
         const Render::MultiviewPublication publication{scene_->scene.value,       frameNumber,
@@ -1035,11 +1038,14 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRPlayHost::FrameState::ObserveRenderCompletion */
     void OpenXRPlayHost::FrameState::ObserveRenderCompletion(const XRFrameId &frame) {
         const auto &metrics = host.composition_.metrics;
-        if (completionTimingObserved || !rendered || !encoded || !metrics.MeasuresRenderCompletion() ||
+        if (completionTimingObserved || !rendered || !encoded ||
+            (!metrics.MeasuresRenderCompletion() && !resolution.AwaitsCompletion(frame)) ||
             !Editor::EditorVulkanXrViewportAccess::SubmissionCompleted(host.composition_.viewport, *encoded))
             return;
         completionTimingObserved = true;
         const auto pacing = ObservePacing(frame);
+        if (pacing.HasValue())
+            resolution.ObserveCompletion(pacing.Value());
         metrics.RecordRenderCompletion(pacing.HasValue() ? std::optional{pacing.Value().deadline} : std::nullopt);
     }
 

@@ -313,7 +313,7 @@ namespace Horo::Tests::OpenXR {
             }
 
             XRViewRenderPlan Plan(const XRFrameId &frame, const XRSwapchainImageId &image, const XRSwapchainImageId *depthImage = nullptr,
-                                  bool requireSampling = false) {
+                                  bool requireSampling = false, std::uint32_t scale = NativeProjectionResolution::FullPercent) {
                 const auto prediction = frames.Snapshot().predictedDisplayTime;
                 std::array<XRViewDescriptor, 2> views{};
                 std::array<XRExternalRenderTargetDescriptor, 4> targets{};
@@ -327,7 +327,7 @@ namespace Horo::Tests::OpenXR {
                                                                            Render::RenderTextureUsage::Sampled
                                                                      : Render::RenderTextureUsage::RenderAttachment,
                                             .allocationExtent = {800, 600},
-                                            .renderRectangle = {0, 0, 800, 600},
+                                            .renderRectangle = NativeProjectionResolution::Rectangle({800, 600}, scale),
                                             .arrayLayer = index,
                                             .arrayLayerCount = 2};
                     if (depthImage) {
