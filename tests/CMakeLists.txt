@@ -3931,10 +3931,16 @@ add_executable(HoroProposedChangeSetTests
 target_link_libraries(HoroProposedChangeSetTests PRIVATE HoroEngine::EditorServices HoroEngine::Security nlohmann_json::nlohmann_json)
 horo_register_catch_test(HoroProposedChangeSetTests LABELS "unit;editor;proposal;headless")
 
+add_executable(HoroLanguageServerTestChild helpers/editor/LspFixture.cpp)
+target_link_libraries(HoroLanguageServerTestChild PRIVATE HoroEditorLanguageProtocolInternal)
+
 add_executable(HoroSourceLanguageSessionTests
         unit/editor/LspConnectionTests.cpp
+        unit/editor/LspProcessTests.cpp
         unit/editor/SourceLanguageSessionTests.cpp)
 target_link_libraries(HoroSourceLanguageSessionTests PRIVATE HoroEngine::EditorServices HoroEditorLanguageProtocolInternal)
+target_compile_definitions(HoroSourceLanguageSessionTests PRIVATE HORO_LANGUAGE_SERVER_CHILD="$<TARGET_FILE:HoroLanguageServerTestChild>")
+add_dependencies(HoroSourceLanguageSessionTests HoroLanguageServerTestChild)
 horo_register_catch_test(HoroSourceLanguageSessionTests LABELS "unit;editor;source;headless")
 
 add_executable(HoroEditorLanguageProtocolTests

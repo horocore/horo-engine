@@ -215,6 +215,13 @@ language processes. Protocol bytes and bounded stderr logs use separate paths.
 Process-tree ownership stays with Platform, including when a queue refuses
 additional output or a process stops reading its input.
 
+The process adapter runs on an owned worker and moves bytes across bounded
+queues. The editor polls a fixed amount of input without waiting for the process.
+The worker posts termination only after its last output, allowing the owner to
+consume a final message before retiring the session. Project switches cancel or
+shut down the old connection and poll it to completion before releasing its
+worker. Host teardown cancels and joins any remaining worker.
+
 ### Source Save Publication (EDT-003.5)
 
 `SourceDocumentService::Save` captures one exact current revision on the owner thread.
