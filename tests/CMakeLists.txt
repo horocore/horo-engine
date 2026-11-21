@@ -4046,7 +4046,8 @@ if (HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroEditorWorkspaceControllerTests PRIVATE HoroEngine::Gui nlohmann_json::nlohmann_json
         HoroAudioFrontendComposition HoroEngine::AudioImport HoroAudioNull HoroEngine::PlatformProjectReadFiles)
     target_link_libraries(HoroEditorWorkspaceControllerTests PRIVATE HoroEditorPlaySaveHostInternal HoroEngine::Platform)
-    target_link_libraries(HoroEditorWorkspaceControllerTests PRIVATE HoroEngine::DecisionCookHost HoroEngine::AISceneIntegration)
+    target_link_libraries(HoroEditorWorkspaceControllerTests PRIVATE HoroEngine::DecisionCookHost
+        HoroEngine::AISceneIntegration HoroEngine::AISightIntegration)
     set_property(SOURCE unit/editor/EditorWorkspaceControllerBlackboardTests.cpp APPEND PROPERTY COMPILE_DEFINITIONS
         HORO_TEST_AI_MODULE_PATH="$<TARGET_FILE:HoroTestAiGameModule>"
         HORO_TEST_AI_MODULE_REVISION_PATH="${HORO_TEST_AI_MODULE_REVISION_FILE}")

@@ -4534,7 +4534,8 @@ if (HORO_BUILD_EDITOR_GUI)
 
     add_library(HoroEngine::Gui ALIAS HoroGui)
     target_link_libraries(HoroGui PUBLIC HoroEngine::Runtime)
-    target_link_libraries(HoroGui PRIVATE HoroEngine::PlatformServices HoroEngine::DecisionCookHost HoroEngine::AISceneIntegration)
+    target_link_libraries(HoroGui PRIVATE HoroEngine::PlatformServices HoroEngine::DecisionCookHost
+        HoroEngine::AISceneIntegration HoroEngine::AISightIntegration)
     target_link_libraries(HoroGui PUBLIC HoroEngine::EditorXRSimulatorModel)
     target_link_libraries(HoroGui PRIVATE HoroUiInspectorInternal)
     target_link_libraries(HoroGui PRIVATE HoroFoundationJsonInternal)

@@ -257,7 +257,7 @@ target_link_libraries(HoroEditorSceneProductHost PRIVATE HoroProjectScenePercept
 target_compile_features(HoroEditorSceneProductHost PUBLIC cxx_std_20)
 target_include_directories(HoroEditorSceneProductHost PUBLIC "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")
 target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlayXrHostInterface HoroEditorPlaySceneHostInternal HoroScenePhysicsHost
-        HoroEngine::Application HoroEngine::ProjectCollisionSettings HoroEngine::AISceneIntegration
+        HoroEngine::Application HoroEngine::ProjectCollisionSettings HoroEngine::AISceneIntegration HoroEngine::AISightIntegration
         HoroEngine::PrefabRuntime HoroEngine::SceneRuntimeConversion HoroRuntimeUiPaintHost)
 
 # Non-installed executable adapter shared with qualification; portable producer remains Editor/Platform-free.
