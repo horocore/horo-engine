@@ -358,6 +358,9 @@ TEST_CASE("Gameplay build service consumes exported SDK and preserves last succe
     const std::optional<BuildOutputSessionId> successfulOutputSession = AssertSuccessfulBuildOutput(*buildOutput, success);
     REQUIRE(service.IsUpToDate(request));
     REQUIRE(std::filesystem::is_regular_file(project.root / ".horo/local/gameplay_module.json"));
+    const std::string_view generator{HORO_TEST_CMAKE_GENERATOR};
+    if (generator.starts_with("Ninja") || generator.find("Makefiles") != std::string_view::npos)
+        CHECK(std::filesystem::is_regular_file(GameplayLocalBuildDirectory(project.root) / "compile_commands.json"));
 
     const std::size_t callsAfterBuild = processes.calls.load(std::memory_order_relaxed);
     const auto cached = service.Start(request);

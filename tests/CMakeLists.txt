@@ -3935,6 +3935,7 @@ add_executable(HoroLanguageServerTestChild helpers/editor/LspFixture.cpp)
 target_link_libraries(HoroLanguageServerTestChild PRIVATE HoroEditorLanguageProtocolInternal)
 
 add_executable(HoroSourceLanguageSessionTests
+        unit/editor/ClangdProviderTests.cpp
         unit/editor/LspConnectionTests.cpp
         unit/editor/LspProcessTests.cpp
         unit/editor/LspResultProjectionTests.cpp

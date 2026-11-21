@@ -484,7 +484,7 @@ namespace Horo::Application {
             Update(session, GameplayBuildState::Validating, "validate");
             UpdateOperation(state, session, OperationState::Running, "validate", "Validating gameplay artifact.", 0.8F);
             PublishStage(state, session, "validate", "gameplay.build.validation_started", "Validating gameplay artifact.");
-            const std::filesystem::path buildRoot = session->request.projectRoot / ".horo/local/build/gameplay-debug";
+            const std::filesystem::path buildRoot = GameplayLocalBuildDirectory(session->request.projectRoot);
             const std::filesystem::path candidate = buildRoot / "candidate_gameplay_module.json";
             Result<nlohmann::json> manifest = ReadCandidateManifest(candidate);
             if (manifest.HasError())
@@ -646,7 +646,7 @@ namespace Horo::Application {
                                                  const std::shared_ptr<GameplayBuildService::State::Session> &session,
                                                  const std::string_view inputHash, OutputBudget &budget,
                                                  std::optional<std::string> &retryHash) {
-            const std::filesystem::path buildRoot = session->request.projectRoot / ".horo/local/build/gameplay-debug";
+            const std::filesystem::path buildRoot = GameplayLocalBuildDirectory(session->request.projectRoot);
             const std::filesystem::path candidateManifest = buildRoot / "candidate_gameplay_module.json";
             if (const auto libraries =
                     Detail::PrepareGameplayLibraries(session->request, buildRoot, *state.files, session->cancellation.Token());

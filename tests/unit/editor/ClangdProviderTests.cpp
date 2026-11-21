@@ -1,0 +1,160 @@
+#include "../../support/SourceDocumentTestProject.h"
+#include "ClangdProvider.h"
+#include "Horo/Application/GameplayBuildService.h"
+#include "Horo/Editor/SourceFileOpenService.h"
+
+#include <algorithm>
+#include <array>
+#include <catch2/catch_test_macros.hpp>
+#include <cstdlib>
+
+namespace {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    using namespace Horo::Editor::Language;
+    using namespace std::chrono_literals;
+
+    /** @brief Creates a discovery candidate for existence and permission checks without running it. */
+    std::filesystem::path StubClangd(const TestSupport::SourceProject &owner) {
+#ifdef _WIN32
+        constexpr auto name = "clangd.exe";
+#else
+        constexpr auto name = "clangd";
+#endif
+        owner.Put("fixture", name);
+        auto file = owner.directory / name;
+#ifndef _WIN32
+        std::filesystem::permissions(file, std::filesystem::perms::owner_exec, std::filesystem::perm_options::add);
+#endif
+        return file;
+    }
+
+    /** @brief Encodes fixture paths in the UTF-8 representation read by Clangd. */
+    std::string Utf8(const std::filesystem::path &path) {
+        const auto text = path.generic_u8string();
+        return {reinterpret_cast<const char *>(text.data()), text.size()};
+    }
+
+    /** @brief Pumps real language workers for a single bounded integration step. */
+    template <typename Step> bool Await(Step step) {
+        const auto deadline = ProjectLanguageWorkspace::Clock::now() + 10s;
+        while (ProjectLanguageWorkspace::Clock::now() < deadline) {
+            if (step(ProjectLanguageWorkspace::Clock::now()))
+                return true;
+            std::this_thread::sleep_for(5ms);
+        }
+        return false;
+    }
+
+    TEST_CASE("Clangd discovery skips relative and project-owned executables and consumes the gameplay database") {
+        TestSupport::SourceProject project;
+        TestSupport::SourceProject trustedTools;
+        static_cast<void>(StubClangd(project));
+        const auto installed = StubClangd(trustedTools);
+        SourceFileOpenService sources{project.directory};
+        auto compiled = Application::GameplayLocalBuildDirectory(sources.ProjectRoot());
+        std::filesystem::create_directories(compiled);
+        std::ofstream{compiled / "compile_commands.json"} << R"([{"directory":".","file":"test.cpp","arguments":["clang++","test.cpp"]}])";
+        ClangdSettings settings;
+        settings.searchDirectories = {".", project.directory, trustedTools.directory};
+        const auto provider = PrepareClangdProvider(sources, settings);
+        REQUIRE(provider.HasValue());
+        CHECK(std::filesystem::equivalent(provider.Value().executable, installed));
+        CHECK(provider.Value().extensions == sources.Policy().nativeSourceExtensions);
+        constexpr std::string_view prefix = "--compile-commands-dir=";
+        const std::string_view argument{provider.Value().arguments.front()};
+        REQUIRE(argument.starts_with(prefix));
+        CHECK(std::filesystem::equivalent(std::filesystem::u8path(argument.substr(prefix.size())), compiled));
+    }
+
+    TEST_CASE("Clangd explicit paths preserve the chosen database and report missing binary or metadata") {
+        TestSupport::SourceProject project;
+        TestSupport::SourceProject trustedTools;
+        SourceFileOpenService sources{project.directory};
+        ClangdSettings settings;
+        const auto absent = PrepareClangdProvider(sources, settings);
+        REQUIRE(absent.HasError());
+        CHECK(absent.ErrorValue().code.Value() == "clangd_executable_unavailable");
+
+        settings.executable = StubClangd(trustedTools);
+        const auto withoutCommands = PrepareClangdProvider(sources, settings);
+        REQUIRE(withoutCommands.HasError());
+        CHECK(withoutCommands.ErrorValue().code.Value() == "clangd_compile_commands_unavailable");
+        const auto build = project.directory / "custom build";
+        std::filesystem::create_directories(build);
+        project.Put(R"([{"directory":".","file":"test.cpp","arguments":["clang++","test.cpp"]}])", "custom build/compile_commands.json");
+        settings.compileCommands = std::filesystem::u8path("custom build/compile_commands.json");
+        settings.backgroundIndex = false;
+        const auto selected = PrepareClangdProvider(sources, settings);
+        REQUIRE(selected.HasValue());
+        CHECK(selected.Value().arguments.front().find("custom build") != std::string::npos);
+        CHECK(selected.Value().arguments.back() == "--background-index=false");
+        settings.executable = "clangd";
+        CHECK(PrepareClangdProvider(sources, settings).HasError());
+    }
+
+    TEST_CASE("Clangd discovery rejects a project database symlink outside the project") {
+        TestSupport::SourceProject project;
+        TestSupport::SourceProject trustedTools;
+        trustedTools.Put("[]", "compile_commands.json");
+        std::error_code error;
+        std::filesystem::create_symlink(trustedTools.directory / "compile_commands.json", project.directory / "compile_commands.json",
+                                        error);
+        if (error)
+            SKIP("This host cannot create a file symlink.");
+
+        SourceFileOpenService sources{project.directory};
+        ClangdSettings settings{.executable = StubClangd(trustedTools)};
+        const auto discovered = PrepareClangdProvider(sources, settings);
+        REQUIRE(discovered.HasError());
+        CHECK(discovered.ErrorValue().code.Value() == "clangd_compile_commands_unavailable");
+        settings.compileCommands = trustedTools.directory / "compile_commands.json";
+        CHECK(PrepareClangdProvider(sources, settings).HasValue());
+    }
+
+    TEST_CASE("Installed Clangd resolves a cross-file definition using the configured include directory", "[integration][clangd]") {
+        const auto *installed = std::getenv("HORO_TEST_CLANGD");
+        if (!installed)
+            SKIP("Set HORO_TEST_CLANGD to the installed host executable.");
+        TestSupport::SourceProject project;
+        std::filesystem::create_directory(project.directory / "include");
+        project.Put("inline int horo_fixture_symbol() { return 37; }\n", "include/gameplay_api.hpp");
+        constexpr std::string_view code = "#include \"gameplay_api.hpp\"\nint gameplay() { return horo_fixture_symbol(); }\n";
+        project.Put(code, "gameplay.cpp");
+        const auto sourcePath = Utf8(project.directory / "gameplay.cpp");
+        const auto commands = nlohmann::json::array({{{"directory", Utf8(project.directory)},
+                                                      {"file", sourcePath},
+                                                      {"arguments", {"clang++", "-std=c++20", "-Iinclude", sourcePath}}}});
+        project.Put(commands.dump(), "compile_commands.json");
+        SourceFileOpenService sources{project.directory};
+        const auto opened = sources.Open({.path = "gameplay.cpp"});
+        REQUIRE(opened.HasValue());
+        REQUIRE(opened.Value().sourceSnapshot.has_value());
+        const std::array documents{*opened.Value().sourceSnapshot};
+        const auto provider = PrepareClangdProvider(sources, {.executable = std::filesystem::u8path(installed), .backgroundIndex = false});
+        REQUIRE(provider.HasValue());
+        NativeExternalProcessRunner runner;
+        auto workspace = ProjectLanguageWorkspace::Create(runner, sources, std::span{&provider.Value(), 1});
+        REQUIRE(workspace.HasValue());
+        auto &owner = *workspace.Value();
+        REQUIRE(Await([&](const auto now) {
+            static_cast<void>(owner.Poll(documents, now));
+            return owner.Request(documents.front(), SourceLanguageRequestKind::Definition, {.offset = code.find("horo_fixture_symbol")})
+                .HasValue();
+        }));
+        REQUIRE(Await([&](const auto now) {
+            for (const auto &event : owner.Poll(documents, now)) {
+                if (const auto *navigation = std::get_if<LanguageNavigation>(&event.payload))
+                    return std::ranges::any_of(navigation->targets, [](const auto &target) {
+                        return target.source.Value() == "include/gameplay_api.hpp";
+                    });
+            }
+            return false;
+        }));
+        owner.Shutdown(ProjectLanguageWorkspace::Clock::now());
+        REQUIRE(Await([&](const auto now) {
+            static_cast<void>(owner.Poll({}, now));
+            return owner.Finished();
+        }));
+    }
+}  // namespace

@@ -244,6 +244,18 @@ Provider failure leaves other providers and source editing available. A restart
 uses a new transport incarnation and an explicit host request. Executable paths
 and arguments enter only through the host's configuration.
 
+### C++ Language Adapter (EDT-003.10)
+
+Clangd resolves an explicit host-installed executable or searches absolute
+host-provided executable directories in order, excluding the project tree
+from discovery. It consumes an explicitly selected compilation database,
+the project's `compile_commands.json`, or the gameplay build database.
+Gameplay CMake requests export compile commands on supporting generators.
+The process receives the database directory as one argument. The adapter
+keeps project-defined Clangd configuration disabled and does not enable
+query-driver execution. Missing tools or metadata produce a typed availability
+failure while the ordinary source editor remains usable.
+
 ### Source Save Publication (EDT-003.5)
 
 `SourceDocumentService::Save` captures one exact current revision on the owner thread.

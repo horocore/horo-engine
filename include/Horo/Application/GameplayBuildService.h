@@ -28,6 +28,12 @@ namespace Horo::Packages {
 namespace Horo::Application {
     using GameplayBuildSessionId = std::uint64_t;
 
+    /** @brief Returns the established project-local gameplay CMake build directory.
+     * @param projectRoot Root of the admitted project.
+     * @return Location shared by gameplay builds and tools that consume their compile metadata.
+     */
+    [[nodiscard]] std::filesystem::path GameplayLocalBuildDirectory(const std::filesystem::path &projectRoot);
+
     /** @brief Observable lifecycle of one project gameplay build request. */
     enum class GameplayBuildState : std::uint8_t {
         Queued,
