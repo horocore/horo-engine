@@ -7,6 +7,11 @@
 namespace Horo::Runtime {
     // Private shared ownership is acyclic: candidates pin State and Scope; neither retains its participants/candidates.
     struct SceneAnimationRuntime::State final {
+        struct PendingRootMotion final {
+            SceneRootMotionResult result;
+            bool claimed{};
+        };
+
         struct Actor final {
             AnimationSceneInternal::PreparedAssets assets;
             Animation::AnimationGraphInstance graph;
@@ -15,6 +20,8 @@ namespace Horo::Runtime {
             Animation::AnimationInstanceHandle instance;
             std::vector<Animation::GraphParameterInput> inputStorage;
             SceneAnimationInputSnapshot capturedInput;
+            std::optional<PendingRootMotion> pendingMotion;
+            std::optional<SceneRootMotionResult> publishedMotion;
             bool playing{};
             bool staged{};
             Actor(AnimationSceneInternal::PreparedAssets prepared, Animation::AnimationGraphInstance instanceOwner, EntityRef owner,
@@ -57,6 +64,10 @@ namespace Horo::Runtime {
                                                         const Animation::GraphEvaluationInput &batch, const CancellationToken &work);
         /** @brief Evaluates and joins all assigned slots before releasing the owner lane. */
         [[nodiscard]] Result<void> EvaluateActors(const FixedStepContext &context) const;
+        /** @brief Captures movement requests only after the complete owner-lane candidate is evaluated. */
+        [[nodiscard]] Result<void> StageRootMotion(const FixedStepContext &context) const;
+        /** @brief Validates exact host callback authority before accessing a pending motion receipt. */
+        [[nodiscard]] Result<void> AdmitMotionCallback(const FixedStepContext &context) const;
         [[nodiscard]] Result<void> PrepareAttempt(const FixedStepContext &context);
         [[nodiscard]] Result<void> ArmActors() const;
         void PublishActors() const noexcept;

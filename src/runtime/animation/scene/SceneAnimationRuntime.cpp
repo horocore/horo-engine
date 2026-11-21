@@ -30,6 +30,17 @@ namespace Horo::Runtime {
                    limits.maximumClipOccurrencesPerTick <= A::AnimationNotifyHardLimits::OccurrencesPerTick;
         }
 
+        /** @brief Movement requests require the actual authoritative Scene domain. */
+        bool ValidMotionPolicy(const SceneAnimationRuntimeConfig &config) noexcept {
+            return !config.enableRootMotionRequests || config.evaluationDomain == A::AnimationEvaluationDomain::AuthoritativeSimulation;
+        }
+
+        /** @brief Checks explicit host identity and domain before any Scene owner allocation. */
+        bool ValidComposition(const SceneAnimationRuntimeConfig &config) noexcept {
+            return config.runtimeOwner.IsValid() && config.target.IsValid() && CanBindSource(config.expectedDispatch) &&
+                   config.evaluationDomain < A::AnimationEvaluationDomain::Count && ValidMotionPolicy(config);
+        }
+
         A::GraphInstanceOutcome Rejected(A::GraphInstanceFailure failure) noexcept {
             A::GraphInstanceOutcome outcome;
             outcome.failure = failure;
@@ -45,8 +56,7 @@ namespace Horo::Runtime {
 
     Result<std::unique_ptr<SceneAnimationRuntime>> SceneAnimationRuntime::Create(SceneAnimationRuntimeConfig config) {
         using Return = Result<std::unique_ptr<SceneAnimationRuntime>>;
-        if (!config.runtimeOwner.IsValid() || !config.target.IsValid() || !CanBindSource(config.expectedDispatch) ||
-            config.evaluationDomain >= A::AnimationEvaluationDomain::Count)
+        if (!ValidComposition(config))
             return Return::Failure(MakeError(A::AnimationErrors::GraphAdmissionRejected));
         if (!ValidStoragePolicy(config.limits) || !ValidWorkPolicy(config.limits))
             return Return::Failure(MakeError(A::AnimationAssetErrors::Capacity));
@@ -93,6 +103,7 @@ namespace Horo::Runtime {
         observation.authoring = actor->authoring;
         observation.instance = actor->instance;
         observation.state = actor->playing ? A::AnimationPlaybackState::Playing : A::AnimationPlaybackState::Paused;
+        observation.rootMotion = actor->publishedMotion;
         if (const auto publication = actor->graph.Publication(); publication.currentPose.IsValid()) {
             const auto previous = publication.previousPose.IsValid() ? publication.previousPose : publication.currentPose;
             observation.component = A::RuntimeAnimationComponent{A::CurrentAnimationComponentContractVersion,

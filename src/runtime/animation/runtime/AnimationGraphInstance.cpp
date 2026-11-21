@@ -572,6 +572,20 @@ namespace Horo::Animation {
         return instance.PrepareCommit(tick);
     }
 
+    /** @copydoc Detail::GraphSceneCommitAccess::ReadRootMotion */
+    GraphInstanceOutcome Detail::GraphSceneCommitAccess::ReadRootMotion(const AnimationGraphInstance &instance, const AnimationTickId tick,
+                                                                        AnimationRootMotionDelta &output) {
+        const auto *state = instance.state_.get();
+        if (const auto owner = Owner(state); owner.HasError())
+            return owner;
+        if (state->rootMotion.poses.empty())
+            return {GraphInstanceFailure::AdmissionRejected};
+        if (!tick.IsValid() || state->candidate.tick != tick || state->candidate.commitArmed)
+            return {GraphInstanceFailure::TickStale};
+        output = state->rootMotion.poses[state->program->OutputSlot().index];
+        return {};
+    }
+
     /** @copydoc Detail::GraphSceneCommitAccess::Publish */
     GraphInstancePublication Detail::GraphSceneCommitAccess::Publish(AnimationGraphInstance &instance) noexcept {
         return instance.PublishPrepared();

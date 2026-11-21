@@ -2109,6 +2109,7 @@ add_library(HoroAnimationSceneIntegration STATIC
         runtime/animation/scene/SceneAnimationState.cpp
         runtime/animation/scene/SceneAnimationParticipants.cpp
         runtime/animation/scene/SceneAnimationFixed.cpp
+        runtime/animation/scene/SceneAnimationRootMotion.cpp
         runtime/animation/scene/SceneAnimationRuntime.cpp)
 add_library(HoroEngine::AnimationSceneIntegration ALIAS HoroAnimationSceneIntegration)
 target_compile_features(HoroAnimationSceneIntegration PUBLIC cxx_std_20)

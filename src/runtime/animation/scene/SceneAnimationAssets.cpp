@@ -168,7 +168,7 @@ namespace Horo::Runtime::AnimationSceneInternal {
         Result<void> SupportedAuthoring(const A::AnimationAuthoringComponent &authoring) {
             if (auto valid = A::ValidateAnimationAuthoringComponent(authoring); valid.HasError())
                 return valid;
-            if (authoring.retarget.IsValid() || authoring.rootMotion != A::RootMotionPolicy::Ignore)
+            if (authoring.retarget.IsValid())
                 return Result<void>::Failure(MakeError(A::AnimationAssetErrors::Unsupported));
             return Result<void>::Success();
         }

@@ -20,6 +20,9 @@ namespace Horo::Animation::Detail {
 
         /** @brief Checks candidate identity, owner thread and cancellation before arming publication. */
         [[nodiscard]] static GraphInstanceOutcome Prepare(AnimationGraphInstance &instance, AnimationTickId tick);
+        /** @brief Copies the fully evaluated candidate's actual root delta before the Scene commit fence. */
+        [[nodiscard]] static GraphInstanceOutcome ReadRootMotion(const AnimationGraphInstance &instance, AnimationTickId tick,
+                                                                 AnimationRootMotionDelta &output);
         /** @brief Publishes an already armed candidate without cancellation or other fallible work. */
         [[nodiscard]] static GraphInstancePublication Publish(AnimationGraphInstance &instance) noexcept;
     };

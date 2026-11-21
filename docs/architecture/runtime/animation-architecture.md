@@ -821,6 +821,16 @@ The fixed commit publishes the output delta beside its exact pose generation.
 aborted attempt leaves the last committed delta and cursor intact. The read
 provides data for the movement owner and carries no movement authority.
 
+An authoritative Scene host can opt into movement requests for components that
+declare `RequestCharacterMovement`. The Scene adapter reads each fully staged
+graph once and addresses the request to its exact entity, Animation instance,
+simulation tick, and scheduler attempt. The movement owner may claim it once
+before preparation and either report applied motion or reject it. An unclaimed
+request reports an unavailable consumer. A claimed request without a response
+fails preparation. The remainder runs from the applied pose to the requested
+endpoint. Feedback joins the pose at the same commit fence, and
+abort discards the request and every staged response.
+
 Rules:
 
 - root motion is optional per clip

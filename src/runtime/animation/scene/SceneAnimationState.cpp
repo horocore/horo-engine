@@ -66,6 +66,9 @@ namespace Horo::Runtime {
             return Return::Failure(MakeError(A::AnimationErrors::GenerationExhausted));
         const auto generation = nextGeneration++;
         const auto &component = *entity.components->animation;
+        const bool requestsMotion = component.rootMotion == A::RootMotionPolicy::RequestCharacterMovement;
+        if (requestsMotion && !config.enableRootMotionRequests)
+            return Return::Failure(MakeError(A::AnimationAssetErrors::Unsupported));
         A::AnimationCookedContext codec;
         codec.cancellation = config.ownerCancellation;
         auto assets = PrepareAssets(scene, entity.groupAssets, component, {config.target, config.limits, codec, assetGenerations});
@@ -87,6 +90,7 @@ namespace Horo::Runtime {
         context.clipEvents.maximumOccurrencesPerTick = config.limits.maximumClipOccurrencesPerTick;
         context.cancellation = config.ownerCancellation;
         context.evaluationDomain = config.evaluationDomain;
+        context.extractRootMotion = requestsMotion;
         auto graph = A::AnimationGraphInstance::Create(prepared.Borrow(), context);
         if (graph.HasError())
             return Return::Failure(graph.ErrorValue());

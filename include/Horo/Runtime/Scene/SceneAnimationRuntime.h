@@ -62,6 +62,29 @@ namespace Horo::Runtime {
         Animation::AnimationEvaluationDomain evaluationDomain{
             Animation::AnimationEvaluationDomain::AuthoritativeSimulation}; /**< Fixed domain for the admitted graph and pose receipts. */
         std::optional<SceneAnimationParallelEvaluation> parallelEvaluation;
+        bool enableRootMotionRequests{}; /**< Explicit host opt-in for authoritative same-attempt movement integration. */
+    };
+
+    /** @brief One root motion request addressed to an exact Scene entity and fixed attempt. */
+    struct SceneRootMotionRequest final {
+        EntityRef entity;
+        Animation::RootMotionRequestId id;
+        Animation::AnimationRootMotionDelta delta;
+    };
+
+    /** @brief Disposition committed by Animation after the same scheduler fence as the pose. */
+    enum class SceneRootMotionDisposition : std::uint8_t {
+        Unavailable,
+        Rejected,
+        Consumed
+    };
+
+    /** @brief Owned feedback for one historical root motion request. */
+    struct SceneRootMotionResult final {
+        SceneRootMotionRequest request;
+        SceneRootMotionDisposition disposition{SceneRootMotionDisposition::Unavailable};
+        Animation::AnimationRootMotionDelta applied{};   /**< Displacement in the request's starting root frame. */
+        Animation::AnimationRootMotionDelta remaining{}; /**< Displacement from the applied pose to the requested endpoint. */
     };
 
     /** @brief Non-owning immutable observation; no pose is claimed before an actual successful fixed commit. */
@@ -71,6 +94,7 @@ namespace Horo::Runtime {
         Animation::AnimationInstanceHandle instance;
         Animation::AnimationPlaybackState state{Animation::AnimationPlaybackState::Ready};
         std::optional<Animation::RuntimeAnimationComponent> component;
+        std::optional<SceneRootMotionResult> rootMotion; /**< Latest result from this exact committed instance. */
     };
 
     /**
@@ -138,6 +162,21 @@ namespace Horo::Runtime {
          * @param entity Exact generation-qualified owner. @return Copied observation or typed stale/owner failure.
          */
         [[nodiscard]] Result<SceneAnimationObservation> Query(EntityRef entity) const;
+        /** @brief Claims one pending request for the host's movement owner.
+         * @param entity Exact active entity. @param context Current fixed dispatch, after Animation evaluation.
+         * @return One owned request, no request for an actor without staged motion, or a typed admission failure.
+         * @details A second claim for the same attempt fails. Each claim requires a response before fixed preparation.
+         */
+        [[nodiscard]] Result<std::optional<SceneRootMotionRequest>> ClaimRootMotion(EntityRef entity, const FixedStepContext &context);
+        /** @brief Stages movement feedback for one previously claimed request.
+         * @param entity Exact active entity. @param request Identity returned by ClaimRootMotion for that entity.
+         * @param applied Motion actually applied in the request frame, or empty for rejection.
+         * @param context Current fixed dispatch. @return Success or a typed stale, duplicate, malformed or admission failure.
+         * @details The host must stage movement through the same commit fence. An aborted attempt retires all feedback.
+         */
+        [[nodiscard]] Result<void> ResolveRootMotion(EntityRef entity, const Animation::RootMotionRequestId &request,
+                                                     const std::optional<Animation::AnimationRootMotionDelta> &applied,
+                                                     const FixedStepContext &context);
         /** @brief Changes component play intent only at an unarmed owner control boundary.
          * @param entity Exact active entity. @param playing True plays, false holds all graph state until resumed.
          * @return Success or typed stale/lifecycle/owner rejection. Host pause/step remains scheduler-owned.

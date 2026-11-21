@@ -9,6 +9,95 @@
 #include <catch2/catch_approx.hpp>
 
 namespace Horo::Animation {
+    namespace {
+        /** @brief Cooks a genuine authoritative graph with a tracked root and ten units of travel per fixture tick. */
+        std::optional<AnimationAuthoringComponent> PrepareRootedGraph(Test::Cook::Fixture &cook) {
+            const auto graph = Test::Graph::Simple();
+            const Test::Instance::Prepared source(graph, 6, true);
+            cook.Replace(*source.skeleton, source.compileClips, graph);
+            AnimationAuthoringComponent component;
+            component.component = Test::Id<AnimationComponentId>(7);
+            component.skeleton = source.skeleton->Data().skeleton;
+            component.source = {AnimationSourceKind::Graph, {}, graph.id};
+            component.rootMotion = RootMotionPolicy::RequestCharacterMovement;
+            return component;
+        }
+
+        /** @brief Confirms malformed and duplicate movement feedback preserve the single valid response. */
+        void ResolveFixtureMovement(Runtime::SceneAnimationRuntime &owner, Runtime::EntityRef entity, const RootMotionRequestId &id,
+                                    const Runtime::FixedStepContext &context) {
+            const AnimationRootMotionDelta malformed{{4.0F, 0.0F, 0.0F}, {0.0F, 0.0F, 0.0F, 0.0F}};
+            CHECK(owner.ResolveRootMotion(entity, id, malformed, context).HasError());
+            const AnimationRootMotionDelta moved{{4.0F, 0.0F, 0.0F}, {}};
+            REQUIRE(owner.ResolveRootMotion(entity, id, moved, context).HasValue());
+            CHECK(owner.ResolveRootMotion(entity, id, moved, context).HasError());
+        }
+    }  // namespace
+
+    TEST_CASE("Scene movement claims retire on abort and bind feedback to the exact retry", "[animation][scene][root-motion]") {
+        Test::Scene::Fixture fixture(false, true, PrepareRootedGraph, {}, {}, true);
+        auto &owner = *fixture.forward->adapter;
+        RootMotionRequestId abandoned;
+        fixture.peer->movement = [&fixture, &owner, &abandoned](const Runtime::FixedStepContext &context) {
+            const auto request = owner.ClaimRootMotion(fixture.entity, context);
+            REQUIRE(request.HasValue());
+            REQUIRE(request.Value().has_value());
+            const auto id = request.Value()->id;
+            CHECK(request.Value()->delta.translation.x == 10.0F);
+            CHECK(owner.ClaimRootMotion(fixture.entity, context).HasError());
+            if (abandoned.IsValid()) {
+                CHECK(id.tick == abandoned.tick);
+                CHECK(id.generation != abandoned.generation);
+                CHECK(owner.ResolveRootMotion(fixture.entity, abandoned, std::nullopt, context).HasError());
+            } else {
+                abandoned = id;
+            }
+            CHECK_FALSE(fixture.Observation().rootMotion.has_value());
+            ResolveFixtureMovement(owner, fixture.entity, id, context);
+            return Result<void>::Success();
+        };
+        fixture.peer->failUpdate = true;
+        REQUIRE(fixture.Tick().HasError());
+        CHECK_FALSE(fixture.Observation().rootMotion.has_value());
+        REQUIRE(fixture.scheduler->RunFrame(fixture.lifecycle, fixture.token, false).HasValue());
+        const auto committed = fixture.Observation();
+        REQUIRE(committed.rootMotion.has_value());
+        CHECK(committed.rootMotion->request.id.instance == committed.instance);
+        CHECK(committed.rootMotion->disposition == Runtime::SceneRootMotionDisposition::Consumed);
+        CHECK(committed.rootMotion->applied.translation.x == 4.0F);
+        CHECK(committed.rootMotion->remaining.translation.x == 6.0F);
+    }
+
+    TEST_CASE("Scene root motion distinguishes absent consumers rejection and unresolved claims", "[animation][scene][root-motion]") {
+        Test::Scene::Fixture fixture(false, true, PrepareRootedGraph, {}, {}, true);
+        auto &owner = *fixture.forward->adapter;
+        REQUIRE(fixture.Tick().HasValue());
+        const auto initial = fixture.Observation().rootMotion;
+        REQUIRE(initial.has_value());
+        CHECK(initial->disposition == Runtime::SceneRootMotionDisposition::Unavailable);
+        CHECK(initial->remaining.translation.x == 10.0F);
+        fixture.peer->movement = [&fixture, &owner](const Runtime::FixedStepContext &context) {
+            const auto request = owner.ClaimRootMotion(fixture.entity, context);
+            REQUIRE(request.HasValue());
+            CHECK(request.Value().has_value());
+            return Result<void>::Success();
+        };
+        REQUIRE(fixture.Tick().HasError());
+        REQUIRE(fixture.Observation().rootMotion.has_value());
+        CHECK(fixture.Observation().rootMotion->request.id == initial->request.id);
+        fixture.peer->movement = [&fixture, &owner](const Runtime::FixedStepContext &context) {
+            const auto request = owner.ClaimRootMotion(fixture.entity, context);
+            REQUIRE(request.HasValue());
+            REQUIRE(request.Value().has_value());
+            return owner.ResolveRootMotion(fixture.entity, request.Value()->id, std::nullopt, context);
+        };
+        REQUIRE(fixture.scheduler->RunFrame(fixture.lifecycle, fixture.token, false).HasValue());
+        const auto rejected = fixture.Observation().rootMotion;
+        REQUIRE(rejected.has_value());
+        CHECK(rejected->disposition == Runtime::SceneRootMotionDisposition::Rejected);
+        CHECK(rejected->remaining.translation.x == 10.0F);
+    }
+
     TEST_CASE("Scene animation freezes per-actor input before evaluation without fixed-path allocation", "[animation][scene][input]") {
         struct Inputs final : Runtime::SceneAnimationInputSource {
             GraphParameterId parameter{Test::Id<GraphParameterId>(1)};

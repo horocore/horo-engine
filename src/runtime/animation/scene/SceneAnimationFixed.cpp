@@ -129,6 +129,10 @@ namespace Horo::Runtime {
         for (const auto &actor : active->current->actors) {
             if (!actor || !actor->staged)
                 continue;
+            if (actor->pendingMotion && actor->pendingMotion->claimed &&
+                actor->pendingMotion->result.disposition == SceneRootMotionDisposition::Unavailable)
+                return Result<void>::Failure(
+                    MakeError(A::AnimationErrors::GraphAdmissionRejected, "A claimed root motion request has no response."));
             const auto outcome = A::Detail::GraphSceneCommitAccess::Prepare(actor->graph, attemptTick);
             if (outcome.HasError())
                 return Result<void>::Failure(A::DescribeGraphInstanceFailure(outcome));
@@ -143,6 +147,10 @@ namespace Horo::Runtime {
             if (!actor || !actor->staged)
                 continue;
             (void)A::Detail::GraphSceneCommitAccess::Publish(actor->graph);
+            if (actor->pendingMotion) {
+                actor->publishedMotion = actor->pendingMotion->result;
+                actor->pendingMotion.reset();
+            }
             actor->staged = false;
         }
     }
@@ -155,6 +163,7 @@ namespace Horo::Runtime {
                 continue;
             if (actor->graph.Abort().HasError())
                 std::terminate();
+            actor->pendingMotion.reset();
             actor->staged = false;
         }
     }
@@ -202,7 +211,9 @@ namespace Horo::Runtime {
             return Result<void>::Success();
         if (const auto captured = state_->CaptureInputs(context); captured.HasError())
             return captured;
-        return state_->EvaluateActors(context);
+        if (const auto evaluated = state_->EvaluateActors(context); evaluated.HasError())
+            return evaluated;
+        return state_->StageRootMotion(context);
     }
 
     Result<void> SceneAnimationRuntime::PrepareFixedCommit(const FixedStepContext &context) {
