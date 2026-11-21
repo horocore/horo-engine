@@ -678,8 +678,7 @@ namespace Horo::Application::Internal {
     }
 
     bool OpenXRPlayHost::CanArmEyeGazeRendering() const noexcept {
-        return std::this_thread::get_id() == lane_ && !closing_ && !busy_ && SetupIdle() &&
-               composition_.session.MayArmEyeGazeRendering();
+        return std::this_thread::get_id() == lane_ && !closing_ && !busy_ && SetupIdle() && composition_.session.MayArmEyeGazeRendering();
     }
 
     Result<void> OpenXRPlayHost::ArmEyeGazeRendering() {

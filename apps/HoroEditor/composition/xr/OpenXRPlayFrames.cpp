@@ -146,15 +146,15 @@ namespace Horo::Application::Internal {
                 return std::clamp(2.0F * (axis / -ray.z - low) / (high - low) - 1.0F, -1.0F, 1.0F);
             };
             return Math::Vec2{center(ray.x, std::tan(fov.angleLeft), std::tan(fov.angleRight)),
-                             center(ray.y, std::tan(fov.angleDown), std::tan(fov.angleUp))};
+                              center(ray.y, std::tan(fov.angleDown), std::tan(fov.angleUp))};
         }
 
         std::optional<std::array<Math::Vec2, 2>> GazeFoveationCenters(const XRPoseSample &gaze, const NativePresentationViews &views) {
             constexpr XrViewStateFlags tracked = XR_VIEW_STATE_ORIENTATION_TRACKED_BIT | XR_VIEW_STATE_POSITION_TRACKED_BIT;
             const auto &orientation = gaze.Components().orientation;
             const auto gap = gaze.Time().runtimeSample.Nanoseconds() - views.referenceToWorld.time.runtimeSample.Nanoseconds();
-            if (std::abs(gap) > Duration::FromMilliseconds(50).ToNanoseconds() || gaze.Target() != views.reference || views.count != 2 || (views.flags & tracked) != tracked ||
-                orientation.validity != XRPoseComponentValidity::Tracked || !orientation.value)
+            if (std::abs(gap) > Duration::FromMilliseconds(50).ToNanoseconds() || gaze.Target() != views.reference || views.count != 2 ||
+                (views.flags & tracked) != tracked || orientation.validity != XRPoseComponentValidity::Tracked || !orientation.value)
                 return std::nullopt;
             const auto direction = orientation.value->Rotate({0, 0, -1});
             const auto left = EyeFoveationCenter(views.views[0], direction);

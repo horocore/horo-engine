@@ -197,8 +197,8 @@ namespace Horo::Application::Internal {
 
     bool OpenXRApplicationSession::MayArmEyeGazeRendering() const {
         if (!MayArmEyeGaze() || !std::ranges::any_of(settings_.Features(), [](const auto &feature) {
-                return feature.capability == XRCapability::FixedFoveation && feature.kind == XRFeatureRequirementKind::Optional;
-            }))
+            return feature.capability == XRCapability::FixedFoveation && feature.kind == XRFeatureRequirementKind::Optional;
+        }))
             return false;
         const auto route = native_->ReadExtensionAdmission(selection_.attempt, XR_HTC_FOVEATION_EXTENSION_NAME);
         return route.HasValue() && route.Value().state == NativeExtensionState::Enabled;

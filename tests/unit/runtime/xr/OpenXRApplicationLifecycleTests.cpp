@@ -172,9 +172,10 @@ namespace Horo::Tests::OpenXRApplication {
                     script.census.gazeSupport = XR_TRUE;
                 }
                 if (fixedFoveation) {
-                    request.invocation.emplace(
-                        SettingKey{"xr.features.fixed_foveation"},
-                        ConfigurationInputValue{static_cast<std::int64_t>(XR::XRProjectFeaturePolicy::OptionalProjection), std::nullopt});
+                    request.invocation.emplace(SettingKey{"xr.features.fixed_foveation"},
+                                               ConfigurationInputValue{static_cast<std::int64_t>(
+                                                                           XR::XRProjectFeaturePolicy::OptionalProjection),
+                                                                       std::nullopt});
                     static constexpr std::array extra{std::string_view{XR_HTC_FOVEATION_EXTENSION_NAME}};
                     script.native.extraExtensions = extra;
                     ++script.native.extensionCount;
@@ -1904,8 +1905,8 @@ namespace Horo::Tests::OpenXRApplication {
     TEST_CASE("OpenXR gaze rendering uses an explicit Play grant and restores the fixed profile",
               "[xr][application][play][gaze][foveation]") {
         using enum XR::XRProjectFeaturePolicy;
-        ApplicationFixture fixture{true, 6, Unrequested, Unrequested, Unrequested, false, std::nullopt, OptionalDisable,
-                                   false, {}, nullptr, false, false, true};
+        ApplicationFixture fixture{true,  6,  Unrequested, Unrequested, Unrequested, false, std::nullopt, OptionalDisable,
+                                   false, {}, nullptr,     false,       false,       true};
         fixture.CreatePlay();
         auto &preview = *fixture.play->EyeGazePreview();
         REQUIRE(preview.CanArmEyeGazeRendering());

@@ -428,8 +428,8 @@ namespace Horo::XR::OpenXRInternal {
         if (!centers && !gazeProfileApplied_)
             return Outcome::Success();
         if (centers && !std::ranges::all_of(*centers, [](const auto &point) {
-                return std::abs(point.x) <= 1.0F && std::abs(point.y) <= 1.0F;
-            }))
+            return std::abs(point.x) <= 1.0F && std::abs(point.y) <= 1.0F;
+        }))
             return Outcome::Failure(MakeError(XRErrors::OperationInvalid));
         const auto owner = session_->Borrow(request_.target.session);
         if (owner.HasError())
@@ -447,8 +447,7 @@ namespace Horo::XR::OpenXRInternal {
         const auto count = static_cast<std::uint32_t>(subImages.size());
         const XrFoveationCustomModeInfoHTC custom{XR_TYPE_FOVEATION_CUSTOM_MODE_INFO_HTC, nullptr, count, configurations.data()};
         const XrFoveationApplyInfoHTC info{XR_TYPE_FOVEATION_APPLY_INFO_HTC, centers ? &custom : nullptr,
-                                           centers ? XR_FOVEATION_MODE_CUSTOM_HTC : XR_FOVEATION_MODE_FIXED_HTC,
-                                           count, subImages.data()};
+                                           centers ? XR_FOVEATION_MODE_CUSTOM_HTC : XR_FOVEATION_MODE_FIXED_HTC, count, subImages.data()};
         // A failed native update may have changed runtime state. Keep rollback debt until fixed is positively restored.
         gazeProfileApplied_ = gazeProfileApplied_ || centers.has_value();
         const auto applied = applyFoveation_(owner.Value().session, &info);
