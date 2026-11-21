@@ -48,6 +48,10 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<std::unique_ptr<AI::QueryExecution>> Admit(const AI::DecisionQueryTaskDescriptor &descriptor,
                                                                         const AI::AiTaskOperationContext &operation,
                                                                         std::uint64_t submitted, std::uint64_t deadline) override;
+        /** @brief Resolves the compiled native plan into one scoped point or Perception execution. */
+        [[nodiscard]] Result<std::unique_ptr<AI::QueryExecution>> AdmitPlan(const CookedSceneQueryPlan &plan,
+                                                                            const AI::AiTaskOperationContext &operation,
+                                                                            std::uint64_t submitted, std::uint64_t deadline);
         /** @brief Publishes at most one result per active query through the Scene-owned BlackboardSync lane. */
         [[nodiscard]] Result<void> PublishOutputs(TickScope &scope);
         /** @brief Issues bounded allowances in round-robin occurrence order without allocating. */

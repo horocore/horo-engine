@@ -35,6 +35,7 @@ namespace Horo::AI {
     class PerceptionSpatialBroadphase;
     class PerceptionSpatialSnapshot;
     class PerceptionSenseGeneration;
+    struct PerceptionQueryInput;
 
     /** @brief Host-captured absolute position of an exact live Perception endpoint. */
     struct AiScenePerceptionPosition final {
@@ -512,6 +513,13 @@ namespace Horo::AI {
          */
         [[nodiscard]] Result<PerceptionMemorySnapshot> ReadPerceptionAtSafePoint(const Runtime::RuntimeSceneView &scene,
                                                                                  Runtime::EntityRef recipient);
+
+        /** @brief Captures bounded, currently authorized memory for one exact decision agent.
+         * @param scene Current Scene on the owner lane. @param agent Exact handle of the requesting controller.
+         * @return Detached observations and revocable provider/filter authority, or a typed admission failure.
+         */
+        [[nodiscard]] Result<PerceptionQueryInput> CaptureQueryPerceptionAtSafePoint(const Runtime::RuntimeSceneView &scene,
+                                                                                     AgentHandle agent) const;
 
         /** @brief Activates cooked decisions once on an exact already-staged Scene before host publication.
          * @param execution Deterministic owner policy with live process jobs and callable provider generation.

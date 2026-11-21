@@ -107,10 +107,15 @@ namespace Horo::AI {
         TEST_CASE("Native custom-sense metadata exceptions reject the complete bundle before module factories",
                   "[ai][sense-provider][native]") {
             std::array<std::uint32_t, 4> counters{};
-            auto image = Platform::LoadDynamicLibraryAtPath(HORO_TEST_AI_MODULE_PATH);
+            Horo::Tests::OwnedTestDirectory directory{"custom sense failed metadata"};
+            const std::filesystem::path artifact{HORO_TEST_AI_MODULE_PATH};
+            const auto isolated = directory.Path() / artifact.filename();
+            // Generated descriptor export caches its first capture in the loaded image.
+            REQUIRE(std::filesystem::copy_file(artifact, isolated));
+            auto image = Platform::LoadDynamicLibraryAtPath(isolated);
             REQUIRE(image.HasValue());
             Observe(*image.Value(), counters, true);
-            auto loaded = Gameplay::GameModuleHost{}.Load(HORO_TEST_AI_MODULE_PATH, Expectation());
+            auto loaded = Gameplay::GameModuleHost{}.Load(isolated, Expectation());
             REQUIRE(loaded.HasError());
             CHECK(loaded.ErrorValue().code.Value() == AIErrors::PerceptionDescriptorInvalid.code.Value());
             CHECK((counters == std::array<std::uint32_t, 4>{}));

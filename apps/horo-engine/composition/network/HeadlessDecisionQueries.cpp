@@ -2,6 +2,7 @@
 
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryCache.h"
+#include "Horo/AI/EnvironmentQueryPerception.h"
 #include "ProjectScenePerception.h"
 
 #include <algorithm>
@@ -122,28 +123,42 @@ namespace Horo::Application::Internal {
         const auto plan = plans_.find(descriptor.query);
         if (plan == plans_.end())
             return Execution::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
-        const auto owner = scope_->runtime.ResolveDecisionQueryOwnerAtSafePoint(operation.agent);
-        if (owner.HasError())
-            return Execution::Failure(owner.ErrorValue());
-        const auto position = CaptureProjectSceneWorldPosition(scope_->scene, owner.Value(), scope_->origin);
-        if (position.HasError())
-            return Execution::Failure(position.ErrorValue());
-        AI::QueryContextCapture capture;
-        const auto contexts =
-            capture.Capture(*plan->second.plan, *registry_, *contexts_, scope_->scene,
-                            {.querier = owner.Value(), .querierLocation = position.Value(), .executionRevision = submitted});
-        if (contexts.HasError())
-            return Execution::Failure(contexts.ErrorValue());
-        auto admitted = AI::AdmitBuiltinPointQuery(*plan->second.plan, *registry_, scope_->scene,
-                                                   {operation.agent, contexts.Value(), operation.ownerCancellation},
-                                                   {.submittedTick = submitted,
-                                                    .deadlineTick = deadline,
-                                                    .maximumCandidates = Candidates,
-                                                    .bestCount = 1},
-                                                   {cache_, plan->second.digest});
+        auto admitted = AdmitPlan(plan->second, operation, submitted, deadline);
         if (admitted.HasValue())
             ++scope_->active;
         return admitted;
+    }
+
+    /** @copydoc HeadlessDecisionQueries::AdmitPlan */
+    Execution HeadlessDecisionQueries::AdmitPlan(const CookedSceneQueryPlan &plan, const AiTaskOperationContext &operation,
+                                                 const std::uint64_t submitted, const std::uint64_t deadline) {
+        const auto owner = scope_->runtime.ResolveDecisionQueryOwnerAtSafePoint(operation.agent);
+        if (owner.HasError())
+            return Execution::Failure(owner.ErrorValue());
+        AI::QueryContextCapture capture;
+        AI::QueryContextCaptureSource source{.querier = owner.Value(), .executionRevision = submitted};
+        const bool perception = AI::UsesBuiltinPerceptionQuery(*plan.plan);
+        if (!perception) {
+            const auto position = CaptureProjectSceneWorldPosition(scope_->scene, owner.Value(), scope_->origin);
+            if (position.HasError())
+                return Execution::Failure(position.ErrorValue());
+            source.querierLocation = position.Value();
+        }
+        const auto contexts = capture.Capture(*plan.plan, *registry_, *contexts_, scope_->scene, source);
+        if (contexts.HasError())
+            return Execution::Failure(contexts.ErrorValue());
+        AI::QueryExecutionInputs inputs{operation.agent, contexts.Value(), operation.ownerCancellation};
+        const AI::QueryExecutionSettings settings{.submittedTick = submitted,
+                                                  .deadlineTick = deadline,
+                                                  .maximumCandidates = Candidates,
+                                                  .bestCount = 1};
+        if (!perception)
+            return AI::AdmitBuiltinPointQuery(*plan.plan, *registry_, scope_->scene, std::move(inputs), settings, {cache_, plan.digest});
+
+        auto observations = scope_->runtime.CaptureQueryPerceptionAtSafePoint(scope_->scene, operation.agent);
+        if (observations.HasError())
+            return Execution::Failure(std::move(observations).ErrorValue());
+        return AI::AdmitBuiltinPerceptionQuery(*plan.plan, *registry_, std::move(inputs), std::move(observations).Value(), settings);
     }
 
     /** @copydoc HeadlessDecisionQueries::PublishOutputs */

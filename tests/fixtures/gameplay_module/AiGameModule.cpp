@@ -133,15 +133,14 @@ namespace {
     };
 
     /** @brief Registered test task with one typed query result and an explicit writable key. */
-    class FixtureQueryDecisionNode final : public FixtureDecisionNode {
+    template <Horo::AI::BlackboardValueKind Kind> class FixtureQueryDecisionNode final : public FixtureDecisionNode {
     public:
         static Horo::AI::DecisionNodeContract DescribeDecisionNode() {
             using namespace Horo::AI;
             DecisionNodeContract contract;
             contract.descriptor.origin = {DecisionDescriptorSourceKind::Native, DecisionProviderId::Create(501).Value(), 1};
             const auto key = BlackboardKeyId::Create(4).Value();
-            contract.descriptor.requirements = {
-                {.key = key, .kind = BlackboardValueKind::WorldCoordinate, .access = BlackboardKeyAccess::ReadWrite}};
+            contract.descriptor.requirements = {{.key = key, .kind = Kind, .access = BlackboardKeyAccess::ReadWrite}};
             const BehaviorTreeQueryOutput output{QueryId::Create(1).Value(),
                                                  QueryResultSchemaId::Create(1).Value(),
                                                  1,
@@ -157,7 +156,10 @@ namespace {
     };
 }  // namespace
 HORO_AI_NODE(FixtureDecisionNode, "101")
-HORO_AI_NODE(FixtureQueryDecisionNode, "102")
+using FixturePointQueryDecisionNode = FixtureQueryDecisionNode<Horo::AI::BlackboardValueKind::WorldCoordinate>;
+using FixtureActorQueryDecisionNode = FixtureQueryDecisionNode<Horo::AI::BlackboardValueKind::EntityReference>;
+HORO_AI_NODE(FixturePointQueryDecisionNode, "102")
+HORO_AI_NODE(FixtureActorQueryDecisionNode, "103")
 
 namespace {
     std::uint32_t *perceptionLifecycleCounters{};

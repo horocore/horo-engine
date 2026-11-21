@@ -27,6 +27,7 @@ namespace Horo::AI {
         AgentHandle agent;
         std::shared_ptr<const QueryContextSnapshot> contexts;
         CancellationToken ownerCancellation; /**< Optional exact agent lifetime issued by its Scene owner. */
+        std::shared_ptr<const BlackboardValueAuthorization> outputAuthorization; /**< Optional permission for the derived value. */
     };
 
     /** @brief One query's host-composed generator and asynchronous test adapter.
@@ -270,6 +271,11 @@ namespace Horo::AI {
                                             std::uint64_t deadlineTick) const noexcept;
         /** @brief Checks whether retained input authority can still be honored. */
         [[nodiscard]] bool InputsAreCurrent() const noexcept;
+
+        /** @brief Returns the live read authority to attach to the derived Blackboard output. */
+        [[nodiscard]] std::shared_ptr<const BlackboardValueAuthorization> OutputAuthorization() const noexcept {
+            return inputs_.outputAuthorization;
+        }
 
     private:
         friend Result<std::unique_ptr<QueryExecution>> AdmitBuiltinPointQuery(const EnvironmentQueryPlan &, const QuerySchemaRegistry &,

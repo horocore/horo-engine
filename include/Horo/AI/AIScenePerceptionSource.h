@@ -25,6 +25,18 @@ namespace Horo::AI {
      */
     [[nodiscard]] PerceptionSourceLiveness PerceptionSceneLiveness(Runtime::RuntimeScene &scene) noexcept;
 
+    class PerceptionSenseGeneration;
+
+    /** @brief A detached query input authorized by the exact live Perception owners. */
+    struct PerceptionQueryInput final {
+        Runtime::RuntimeSceneView scene;
+        AgentHandle agent;
+        std::uint64_t spatialRevision{};
+        PerceptionMemorySnapshot memory;
+        std::shared_ptr<const BlackboardValueAuthorization> authorization;
+        std::weak_ptr<const PerceptionSenseGeneration> provider;
+    };
+
     /** @brief Paired writable collections; the smaller admitted key capacity bounds the atomic projection. */
     struct PerceptionBlackboardProjection final {
         BlackboardKeyId sources;   /**< EntityReference collection; exact admitted identities. */

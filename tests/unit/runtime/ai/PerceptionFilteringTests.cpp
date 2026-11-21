@@ -323,6 +323,29 @@ namespace Horo::AI {
             ExpectError(EvaluateQueryPerception(source, test, target), AIErrors::PerceptionSpatialStale);
         }
 
+        TEST_CASE("Perception policy authority survives movement and revokes when disclosure changes", "[unit][ai][eqs][perception]") {
+            PublicationFixture fixture;
+            const auto first = fixture.broadphase.CurrentFor(fixture.scene->View());
+            REQUIRE(first);
+            const auto distinct = std::make_unique<PublicationFixture>();
+            REQUIRE(distinct->scene->View().RuntimeId() == fixture.scene->View().RuntimeId());
+            CHECK_FALSE(fixture.broadphase.CurrentFor(distinct->scene->View()));
+            const auto positionAuthority = first->ReadAuthorization();
+            const auto policyAuthority = first->ReadPolicyAuthorization();
+            REQUIRE(policyAuthority->IsCurrent());
+
+            fixture.source.position = Math::WorldCoordinate64::FromMillimeters(42, 0, 0);
+            fixture.Publish(2);
+            CHECK_FALSE(positionAuthority->IsCurrent());
+            CHECK(policyAuthority->IsCurrent());
+            CHECK(fixture.broadphase.Current()->ReadPolicyAuthorization() == policyAuthority);
+
+            fixture.source.visibility = PerceptionGameplayVisibility::Hidden;
+            fixture.Publish(3);
+            CHECK_FALSE(policyAuthority->IsCurrent());
+            CHECK(fixture.broadphase.Current()->ReadPolicyAuthorization()->IsCurrent());
+        }
+
         TEST_CASE("EQS Perception refuses a distinct Scene that reuses the source identities", "[unit][ai][eqs][perception]") {
             PublicationFixture original;
             const auto published = original.Sync(2);

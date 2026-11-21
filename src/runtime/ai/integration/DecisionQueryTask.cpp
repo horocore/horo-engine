@@ -383,7 +383,8 @@ namespace Horo::AI {
         if (batch.HasError())
             return RejectOutput(std::move(batch).ErrorValue());
         auto write = std::move(batch).Value();
-        if (auto staged = write.Stage({descriptor_.output, BlackboardValue{std::move(value).Value()}}); staged.HasError())
+        if (auto staged = write.Stage({descriptor_.output, BlackboardValue{std::move(value).Value()}, query_->OutputAuthorization()});
+            staged.HasError())
             return RejectOutput(std::move(staged).ErrorValue());
         // Hide the pending output while notifying observers, which may synchronously call back.
         const auto task = operation_.task;

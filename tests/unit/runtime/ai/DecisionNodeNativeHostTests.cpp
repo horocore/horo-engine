@@ -19,6 +19,8 @@ namespace Horo::AI {
 
         std::unique_ptr<Gameplay::LoadedGameModule> Load() {
             auto result = Gameplay::GameModuleHost{}.Load(HORO_TEST_AI_MODULE_PATH, Expectation());
+            if (result.HasError())
+                UNSCOPED_INFO(result.ErrorValue().code.Value() << ": " << result.ErrorValue().message);
             REQUIRE(result.HasValue());
             REQUIRE_FALSE(result.Value().diagnostic);
             return std::move(result).Value().owner;
@@ -68,7 +70,10 @@ namespace Horo::AI {
             auto acquired = module->AcquireDecisionNodes();
             REQUIRE(acquired.HasValue());
             auto generation = std::move(acquired).Value();
-            REQUIRE(generation->Contracts().size() == 2);
+            REQUIRE(generation->Contracts().size() == 3);
+            CHECK(generation->Contracts()[2].descriptor.type.Value() == 103);
+            REQUIRE(generation->Contracts()[2].descriptor.requirements.size() == 1);
+            CHECK(generation->Contracts()[2].descriptor.requirements.front().kind == BlackboardValueKind::EntityReference);
             CHECK(generation->Contracts()[1].descriptor.type.Value() == 102);
             CHECK(generation->Contracts()[0].descriptor.type.Value() == 101);
             CHECK(generation->Contracts()[0].descriptor.source.source.ends_with("AiGameModule.cpp"));

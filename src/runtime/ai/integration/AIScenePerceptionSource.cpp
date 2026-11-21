@@ -159,17 +159,24 @@ namespace Horo::AI {
             return Result<std::size_t>::Success(found->maximumCollectionElements);
         }
 
+        /** @brief Rechecks both the subject and the observation's provenance against current policy. */
+        [[nodiscard]] bool AllowsRecord(const PerceptionSpatialSnapshot &filtering, Runtime::EntityRef listener,
+                                        const PerceivedStimulus &record) noexcept {
+            const auto allows = [&](PerceptionSourceRef source) {
+                return source.sceneIncarnation == listener.runtime.value &&
+                       filtering.Allows(listener, {listener.runtime, {source.slot, source.generation}}, record.key.sense);
+            };
+            return allows(record.key.source) && allows(record.provenance);
+        }
+
         /** @brief Filters remembered subject/provenance and bounds the complete paired projection before writes begin. */
-        [[nodiscard]] ProjectionCandidate BuildProjection(const Runtime::RuntimeSceneView &scene,
-                                                          const PerceptionSpatialSnapshot &filtering,
+        [[nodiscard]] ProjectionCandidate BuildProjection(const PerceptionSpatialSnapshot &filtering,
                                                           const PerceptionMemorySnapshot &memory,
                                                           const PerceptionPublicationSnapshot &identity, const std::size_t capacity) {
             ProjectionCandidate next{.snapshot = identity};
             for (std::size_t index = 0; index < memory.count; ++index) {
                 const auto &record = memory.entries[index];
-                if (const auto admits = [&](const PerceptionSourceRef source) {
-                    return filtering.Allows(identity.listener, {scene.RuntimeId(), {source.slot, source.generation}}, record.key.sense);
-                }; !admits(record.key.source) || !admits(record.provenance))
+                if (!AllowsRecord(filtering, identity.listener, record))
                     continue;
                 if (++next.admittedCount > capacity)
                     continue;
@@ -282,7 +289,7 @@ namespace Horo::AI {
 
     /** @copydoc Detail::PerceptionGroupPublication::Publish */
     void Detail::PerceptionGroupPublication::Publish() noexcept {
-        owner->PublishPrepared(std::move(next));
+        owner->PublishPrepared(std::move(next), preparedScene);
         previous.reset();
         preparedScene = {};
     }
@@ -509,6 +516,41 @@ namespace Horo::AI {
         return sensing->memory.Snapshot(active_->lastPerceptionTick, {&current, ViewSourceAlive});
     }
 
+    /** @copydoc AiSceneRuntime::CaptureQueryPerceptionAtSafePoint */
+    Result<PerceptionQueryInput> AiSceneRuntime::CaptureQueryPerceptionAtSafePoint(const Runtime::RuntimeSceneView &scene,
+                                                                                   const AgentHandle handle) const {
+        using Captured = Result<PerceptionQueryInput>;
+        if (const auto owner = CapabilityAtSafePoint().ValidateAtSafePoint(); owner.HasError())
+            return Captured::Failure(owner.ErrorValue());
+        if (!scene.IsCurrent() || scene.RuntimeId() != active_->binding.scene)
+            return Captured::Failure(MakeError(AIErrors::PerceptionSpatialStale));
+        const auto *agent = Detail::FindAgent(*active_, handle);
+        const auto &policy = active_->perceptionExecution;
+        if (!agent || !agent->sensing || !policy || !policy->generation->CanAdmit() || !active_->perceptionSpatial)
+            return Captured::Failure(MakeError(AIErrors::RuntimeUnavailable));
+        if (active_->perceptionPollFailure)
+            return Captured::Failure(*active_->perceptionPollFailure);
+        if (agent->sensing->suspension)
+            return Captured::Failure(*agent->sensing->suspension);
+        const auto filtering = active_->perceptionSpatial->CurrentFor(scene);
+        if (!filtering || !filtering->ReadAuthorization()->IsCurrent() || scene.Get(agent->record.owner).HasError())
+            return Captured::Failure(MakeError(AIErrors::PerceptionSpatialStale));
+
+        auto view = scene;
+        auto memory = agent->sensing->memory.Snapshot(active_->lastPerceptionTick, {&view, ViewSourceAlive});
+        if (memory.HasError())
+            return Captured::Failure(std::move(memory).ErrorValue());
+        PerceptionQueryInput input{.scene = scene,
+                                   .agent = handle,
+                                   .spatialRevision = filtering->Revision(),
+                                   .authorization = filtering->ReadPolicyAuthorization(),
+                                   .provider = policy->generation};
+        for (const auto &record : std::span{memory.Value().entries}.first(memory.Value().count))
+            if (AllowsRecord(*filtering, agent->record.owner, record))
+                input.memory.entries[input.memory.count++] = record;
+        return Captured::Success(std::move(input));
+    }
+
     /** @copydoc ProjectPerceptionSource */
     PerceptionSourceRef ProjectPerceptionSource(const Runtime::EntityRef entity) noexcept {
         return {.sceneIncarnation = entity.runtime.value, .slot = entity.entity.index, .generation = entity.entity.generation};
@@ -586,7 +628,7 @@ namespace Horo::AI {
                                                      .revision = current_ ? current_->revision + 1 : 1,
                                                      .spatialRevision = spatial->Revision(),
                                                      .simulationTick = simulationTick};
-        auto next = BuildProjection(view, *spatial, remembered.Value(), identity, capacity_);
+        auto next = BuildProjection(*spatial, remembered.Value(), identity, capacity_);
         if (next.admittedCount > capacity_) {
             rejectedByCapacity_ = next.admittedCount;
             return PublicationResult::Failure(MakeError(AIErrors::PerceptionDescriptorLimitExceeded));

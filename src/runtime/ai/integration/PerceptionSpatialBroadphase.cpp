@@ -90,6 +90,24 @@ namespace Horo::AI {
             return std::binary_search(record.senses.begin(), record.senses.begin() + record.senseCount, sense);
         }
 
+        template <class Endpoint> bool SameEndpoint(const Endpoint &left, const Endpoint &right) noexcept {
+            return left.entity == right.entity && left.ownerCancellation == right.ownerCancellation &&
+                   std::ranges::equal(std::span{left.senses}.first(left.senseCount), std::span{right.senses}.first(right.senseCount));
+        }
+
+        /** @brief Compares disclosure identity while ignoring movement of retained endpoints. */
+        bool SamePolicy(const PerceptionSpatialSnapshot::InputView &left, const PerceptionSpatialSnapshot::InputView &right) {
+            const auto sameListener = [](const auto &a, const auto &b) {
+                return SameEndpoint(a, b) && a.filtering == b.filtering && a.admission == b.admission;
+            };
+            const auto sameSource = [](const auto &a, const auto &b) {
+                return SameEndpoint(a, b) && a.team == b.team && a.layers == b.layers && a.listenerMask == b.listenerMask &&
+                       a.visibility == b.visibility;
+            };
+            return left.filtering == right.filtering && std::ranges::equal(left.listeners, right.listeners, sameListener) &&
+                   std::ranges::equal(left.sources, right.sources, sameSource);
+        }
+
         /** @brief Filters a source before the exact range check. */
         [[nodiscard]] bool Matches(const PerceptionSpatialSource &source, const PerceptionSpatialListener &listener,
                                    const PerceptionSpatialQuery &query, const PerceptionFilteringPolicy &filtering) noexcept {
@@ -153,10 +171,14 @@ namespace Horo::AI {
         return authorization_;
     }
 
+    /** @copydoc PerceptionSpatialSnapshot::ReadPolicyAuthorization */
+    std::shared_ptr<const BlackboardValueAuthorization> PerceptionSpatialSnapshot::ReadPolicyAuthorization() const noexcept {
+        return policyAuthorization_;
+    }
+
     /** @copydoc PerceptionSpatialBroadphase::~PerceptionSpatialBroadphase */
     PerceptionSpatialBroadphase::~PerceptionSpatialBroadphase() {
-        if (current_)
-            current_->authorization_->Revoke();
+        PublishPrepared({});
     }
 
     /** @copydoc PerceptionSpatialSnapshot::SourceCount */
@@ -173,10 +195,10 @@ namespace Horo::AI {
     std::size_t PerceptionSpatialSnapshot::BuildNode(const std::size_t begin, const std::size_t end) {
         const auto index = nodes_.size();
         nodes_.emplace_back();
-        auto minimum = sources_[begin].position.Millimeters();
+        auto minimum = sources_[sourceOrder_[begin]].position.Millimeters();
         auto maximum = minimum;
         for (std::size_t source = begin + 1; source < end; ++source) {
-            const auto point = sources_[source].position.Millimeters();
+            const auto point = sources_[sourceOrder_[source]].position.Millimeters();
             for (std::size_t axis = 0; axis < 3; ++axis) {
                 minimum[axis] = std::min(minimum[axis], point[axis]);
                 maximum[axis] = std::max(maximum[axis], point[axis]);
@@ -194,11 +216,11 @@ namespace Horo::AI {
             if (Separation(maximum[candidate], minimum[candidate]) > Separation(maximum[axis], minimum[axis]))
                 axis = candidate;
         const auto middle = std::midpoint(begin, end);
-        std::nth_element(sources_.begin() + begin, sources_.begin() + middle, sources_.begin() + end,
-                         [axis](const PerceptionSpatialSource &first, const PerceptionSpatialSource &second) {
-            const auto firstAxis = first.position.Millimeters()[axis];
-            const auto secondAxis = second.position.Millimeters()[axis];
-            return firstAxis == secondAxis ? first.entity < second.entity : firstAxis < secondAxis;
+        std::nth_element(sourceOrder_.begin() + begin, sourceOrder_.begin() + middle, sourceOrder_.begin() + end,
+                         [this, axis](std::size_t first, std::size_t second) {
+            const auto firstAxis = sources_[first].position.Millimeters()[axis];
+            const auto secondAxis = sources_[second].position.Millimeters()[axis];
+            return firstAxis == secondAxis ? first < second : firstAxis < secondAxis;
         });
         const auto left = BuildNode(begin, middle);
         const auto right = BuildNode(middle, end);
@@ -228,8 +250,9 @@ namespace Horo::AI {
         }
         for (std::size_t source = node.begin; source < node.end; ++source) {
             ++result.examinedSources;
-            if (Matches(sources_[source], listener, query, filtering_))
-                InsertCandidate(sources_[source], query.maximumCandidates, result);
+            const auto &record = sources_[sourceOrder_[source]];
+            if (Matches(record, listener, query, filtering_))
+                InsertCandidate(record, query.maximumCandidates, result);
         }
     }
 
@@ -278,8 +301,9 @@ namespace Horo::AI {
         if (endpoint == listeners_.end() || endpoint->entity != listener || endpoint->ownerCancellation.IsCancellationRequested() ||
             !Supports(*endpoint, sense))
             return false;
-        const auto candidate = std::ranges::find(sources_, source, &PerceptionSpatialSource::entity);
-        return candidate != sources_.end() && !candidate->ownerCancellation.IsCancellationRequested() && Supports(*candidate, sense) &&
+        const auto candidate = std::ranges::lower_bound(sources_, source, {}, &PerceptionSpatialSource::entity);
+        return candidate != sources_.end() && candidate->entity == source && !candidate->ownerCancellation.IsCancellationRequested() &&
+               Supports(*candidate, sense) &&
                AllowsPerception(filtering_, endpoint->filtering,
                                 PerceptionParticipantFilter{candidate->team, candidate->layers, candidate->listenerMask,
                                                             candidate->visibility},
@@ -292,7 +316,7 @@ namespace Horo::AI {
         const std::span<const PerceptionSpatialSource> sources, const PerceptionFilteringPolicy &filtering) {
         auto prepared = Prepare(scene, revision, listeners, sources, filtering, {});
         if (prepared.HasValue())
-            PublishPrepared(prepared.Value());
+            PublishPrepared(prepared.Value(), scene);
         return prepared;
     }
 
@@ -331,7 +355,11 @@ namespace Horo::AI {
             return first.entity == second.entity;
         }) != next->sources_.end())
             return SnapshotResult::Failure(MakeError(AIErrors::PerceptionSpatialConflict));
+        const bool samePolicy = current_ && publicationScene_.SameIncarnation(scene) && SamePolicy(current_->Inputs(), next->Inputs());
+        next->policyAuthorization_ = samePolicy ? current_->policyAuthorization_ : std::make_shared<BlackboardValueAuthorization>();
         if (!next->sources_.empty()) {
+            next->sourceOrder_.resize(next->sources_.size());
+            std::iota(next->sourceOrder_.begin(), next->sourceOrder_.end(), std::size_t{0});
             next->nodes_.reserve(next->sources_.size() * 2);
             (void)next->BuildNode(0, next->sources_.size());
         }
@@ -341,14 +369,25 @@ namespace Horo::AI {
     }
 
     /** @copydoc PerceptionSpatialBroadphase::PublishPrepared */
-    void PerceptionSpatialBroadphase::PublishPrepared(std::shared_ptr<const PerceptionSpatialSnapshot> prepared) noexcept {
-        if (current_)
+    void PerceptionSpatialBroadphase::PublishPrepared(std::shared_ptr<const PerceptionSpatialSnapshot> prepared,
+                                                      const Runtime::RuntimeSceneView &scene) noexcept {
+        if (current_) {
             current_->authorization_->Revoke();
+            if (!prepared || current_->policyAuthorization_ != prepared->policyAuthorization_)
+                current_->policyAuthorization_->Revoke();
+        }
         current_ = std::move(prepared);
+        publicationScene_ = scene;
     }
 
     /** @copydoc PerceptionSpatialBroadphase::Current */
     std::shared_ptr<const PerceptionSpatialSnapshot> PerceptionSpatialBroadphase::Current() const noexcept {
         return current_;
+    }
+
+    /** @copydoc PerceptionSpatialBroadphase::CurrentFor */
+    std::shared_ptr<const PerceptionSpatialSnapshot> PerceptionSpatialBroadphase::CurrentFor(
+        const Runtime::RuntimeSceneView &scene) const noexcept {
+        return scene.IsCurrent() && publicationScene_.SameIncarnation(scene) ? current_ : nullptr;
     }
 }  // namespace Horo::AI

@@ -4128,9 +4128,10 @@ TEST_CASE("Blackboard workspace reviews the loaded native Decision catalog and r
         CHECK(generation->CanUse());
         const auto providers = view.usageReview->providers.lock();
         REQUIRE(providers);
-        REQUIRE(providers->Descriptors().size() == 2);
-        CHECK(providers->Descriptors().front().type == AI::DecisionNodeTypeId::Create(101).Value());
-        CHECK(providers->Descriptors().back().type == AI::DecisionNodeTypeId::Create(102).Value());
+        REQUIRE(providers->Descriptors().size() == 3);
+        CHECK(providers->Descriptors()[0].type == AI::DecisionNodeTypeId::Create(101).Value());
+        CHECK(providers->Descriptors()[1].type == AI::DecisionNodeTypeId::Create(102).Value());
+        CHECK(providers->Descriptors()[2].type == AI::DecisionNodeTypeId::Create(103).Value());
         CHECK(std::ranges::none_of(view.usageReview->gaps, [](const Application::BlackboardUsageGap &gap) {
             return gap.kind == Application::BlackboardUsageGapKind::DecisionProvider;
         }));

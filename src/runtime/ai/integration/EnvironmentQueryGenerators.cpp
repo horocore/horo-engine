@@ -2,13 +2,13 @@
 
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryExecution.h"
+#include "Horo/AI/EnvironmentQueryPerception.h"
 
 #include <algorithm>
 #include <array>
 #include <bit>
 #include <limits>
 #include <new>
-#include <tuple>
 #include <utility>
 
 namespace Horo::AI {
@@ -298,10 +298,6 @@ namespace Horo::AI {
             });
         }
 
-        /** @brief Uses an explicit canonical order rather than discovery or sense order. */
-        [[nodiscard]] auto SourceOrder(const PerceptionSourceRef &source) noexcept {
-            return std::tuple{source.slot, source.generation};
-        }
     }  // namespace
 
     /** @copydoc QueryGeneratorOutput::IsValid */
@@ -346,32 +342,35 @@ namespace Horo::AI {
             return Result<QuerySchemaRegistry>::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
         const auto origin = BuiltinOrigin();
         const auto item = QueryItemTypeId::Create(PointItem).Value();
-        const std::array items{QueryItemTypeDescriptor{.id = item, .origin = origin, .kind = QueryItemKind::Point}};
+        auto perception = DescribeBuiltinPerceptionQuery();
+        const std::array items{QueryItemTypeDescriptor{.id = item, .origin = origin, .kind = QueryItemKind::Point}, perception.item};
         const auto builtin = BuiltinQueryContextDescriptors();
         std::vector<QueryContextDescriptor> contexts(builtin.begin(), builtin.end());
         contexts.insert(contexts.end(), locationContexts.begin(), locationContexts.end());
         const auto centers = PointCenterChoice(locationContexts);
-        const std::array generators{
-            QueryGeneratorDescriptor{.id = QueryGeneratorId::Create(LatticeGenerator).Value(),
-                                     .origin = origin,
-                                     .outputItemType = item,
-                                     .outputItemVersion = LatticeVersion,
-                                     .properties = {{QueryPropertyId::Create(StepMillimeters).Value(), Unsigned64, true},
-                                                    {QueryPropertyId::Create(OuterSteps).Value(), Unsigned64, true},
-                                                    {QueryPropertyId::Create(InnerSteps).Value(), Unsigned64, false},
-                                                    {QueryPropertyId::Create(PointCenter).Value(), Unsigned64, false}},
-                                     .contextChoice = centers}};
+        const std::array generators{QueryGeneratorDescriptor{.id = QueryGeneratorId::Create(LatticeGenerator).Value(),
+                                                             .origin = origin,
+                                                             .outputItemType = item,
+                                                             .outputItemVersion = LatticeVersion,
+                                                             .properties =
+                                                                 {{QueryPropertyId::Create(StepMillimeters).Value(), Unsigned64, true},
+                                                                  {QueryPropertyId::Create(OuterSteps).Value(), Unsigned64, true},
+                                                                  {QueryPropertyId::Create(InnerSteps).Value(), Unsigned64, false},
+                                                                  {QueryPropertyId::Create(PointCenter).Value(), Unsigned64, false}},
+                                                             .contextChoice = centers},
+                                    std::move(perception.generator)};
         const std::array tests{QueryTestDescriptor{
-            .id = QueryTestId::Create(PointDistanceTest).Value(),
-            .origin = origin,
-            .inputItemType = item,
-            .inputItemVersion = LatticeVersion,
-            .properties = {{QueryPropertyId::Create(DistanceRadius).Value(), Unsigned64, true},
-                           {QueryPropertyId::Create(DistancePreferNearer).Value(), Boolean, true},
-                           {QueryPropertyId::Create(DistanceScoreWeight).Value(), Unsigned64, false},
-                           {QueryPropertyId::Create(PointCenter).Value(), Unsigned64, false}},
-            .contextChoice = centers,
-        }};
+                                   .id = QueryTestId::Create(PointDistanceTest).Value(),
+                                   .origin = origin,
+                                   .inputItemType = item,
+                                   .inputItemVersion = LatticeVersion,
+                                   .properties = {{QueryPropertyId::Create(DistanceRadius).Value(), Unsigned64, true},
+                                                  {QueryPropertyId::Create(DistancePreferNearer).Value(), Boolean, true},
+                                                  {QueryPropertyId::Create(DistanceScoreWeight).Value(), Unsigned64, false},
+                                                  {QueryPropertyId::Create(PointCenter).Value(), Unsigned64, false}},
+                                   .contextChoice = centers,
+                               },
+                               std::move(perception.test)};
         return QuerySchemaRegistry::Capture({items, contexts, generators, tests});
     }
 
@@ -593,30 +592,4 @@ namespace Horo::AI {
         return admitted;
     }
 
-    /** @copydoc GenerateQueryPerceivedEntities */
-    Result<QueryGenerationResult> GenerateQueryPerceivedEntities(const QueryPerceivedEntitySource &source,
-                                                                 const QueryGeneratorOutput &output) {
-        if (!output.IsValid())
-            return Generation::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-        const auto current = source.publication.Current(source.scene, source.filtering, source.blackboard);
-        if (current.HasError())
-            return Generation::Failure(current.ErrorValue());
-        if (current.Value().revision != output.provenance.revision)
-            return Generation::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
-        const auto &memory = current.Value().memory;
-        std::array<PerceptionSourceRef, MaximumPerceptionMemoryEntries> records{};
-        auto candidates = std::span{records}.first(memory.count);
-        std::ranges::transform(std::span{memory.entries}.first(memory.count), candidates.begin(), [](const PerceivedStimulus &entry) {
-            return entry.key.source;
-        });
-        std::ranges::sort(candidates, {}, SourceOrder);
-        const auto duplicates = std::ranges::unique(candidates);
-        const auto count = static_cast<std::size_t>(duplicates.begin() - candidates.begin());
-        if (count > output.maximumItems)
-            return Generation::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
-        std::ranges::transform(candidates.first(count), output.items.begin(), [&source](const PerceptionSourceRef &record) {
-            return Runtime::EntityRef{source.scene.RuntimeId(), {record.slot, record.generation}};
-        });
-        return Generation::Success({.provenance = output.provenance, .itemCount = count});
-    }
 }  // namespace Horo::AI
