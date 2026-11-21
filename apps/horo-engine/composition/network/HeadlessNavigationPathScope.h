@@ -4,6 +4,7 @@
  * @brief Private authoritative Gameplay path grant over the installed immutable cooked provider.
  */
 #include "Horo/Animation/AnimationGraph.h"
+#include "Horo/Foundation/Sha256.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Navigation/NavigationCrowdSnapshot.h"
 #include "Horo/Runtime/Scene/SceneIdentity.h"
@@ -26,6 +27,26 @@ namespace Horo::Application::Internal {
     struct ProjectSceneNavigationWorld;
     class ScenePhysicsHost;
     class SceneAiNavigationActor;
+
+    /** @brief Portable terminal result evidence with no process-local handles. */
+    struct HeadlessReplayNavigationResult final {
+        std::uint64_t sequence{};
+        std::optional<Navigation::NavigationPathStatus> status;
+        std::optional<Navigation::NavigationPathStopReason> stopReason;
+        std::size_t points{};
+        Sha256Digest digest;
+    };
+
+    /** @brief One bounded best-effort Navigation publication captured for diagnostic use. */
+    struct HeadlessReplayNavigation final {
+        static constexpr std::size_t MaximumResults = 32;
+        Sha256Digest profile;
+        std::uint64_t tick{};
+        std::uint64_t topology{};
+        std::array<HeadlessReplayNavigationResult, MaximumResults> results{};
+        std::size_t count{};
+        bool truncated{};
+    };
 
     /** @brief Owns the exact static world pin and module scope through terminal query retirement. */
     class HeadlessNavigationPathScope final {
@@ -62,7 +83,7 @@ namespace Horo::Application::Internal {
         void ObserveMotion(std::uint64_t tick);
         void DiscardMotionFeedback() noexcept;
         /** @brief Commits terminal results and refreshes the native scope on the fixed owner lane. */
-        [[nodiscard]] Result<void> CommitAtFixedTick(std::uint64_t tick) const;
+        [[nodiscard]] Result<void> CommitAtFixedTick(std::uint64_t tick, HeadlessReplayNavigation *replay = nullptr) const;
         /** @brief Dispatches only after gameplay has submitted from the same fixed owner lane. */
         void DispatchAtFixedTick(std::uint64_t tick) const;
         /** @brief Closes native admission before the Scene provider retires. */
@@ -85,7 +106,7 @@ namespace Horo::Application::Internal {
                                     Navigation::NavigationWorldActivationDescriptor activation,
                                     Navigation::NavigationOutcomeProvenance source, Navigation::NavigationAgentRegistry &agents,
                                     std::vector<Navigation::NavigationPathCaller> callers,
-                                    std::shared_ptr<Gameplay::GameplayNavigationContext> context) noexcept;
+                                    std::shared_ptr<Gameplay::GameplayNavigationContext> context, Sha256Digest replayProfile) noexcept;
 
         std::shared_ptr<Navigation::NavigationWorldLifecycle> lifecycle_;
         Navigation::NavigationCoordinator &coordinator_;
@@ -98,5 +119,6 @@ namespace Horo::Application::Internal {
         std::uint64_t motionTick_{};
         float motionStep_{};
         std::shared_ptr<Gameplay::GameplayNavigationContext> context_;
+        Sha256Digest replayProfile_;
     };
 }  // namespace Horo::Application::Internal

@@ -68,10 +68,13 @@ namespace Horo::Application::Internal {
             auto recorded = Json::array();
             for (std::size_t index = 0; index < HeadlessReplayBoundaryNames.size(); ++index) {
                 const auto name = HeadlessReplayBoundaryNames[index];
-                const bool present = replay.boundaries[index].profile.coverage == AI::AiReplayCoverage::Deterministic;
-                if (coverage.at(name) != (present ? "deterministic" : "omitted"))
+                const auto mode = replay.boundaries[index].profile.coverage;
+                const auto expected = mode == AI::AiReplayCoverage::Nondeterministic ? "nondeterministic"
+                                      : mode == AI::AiReplayCoverage::Deterministic  ? "deterministic"
+                                                                                     : "omitted";
+                if (coverage.at(name) != expected)
                     throw InvalidEvidence{};
-                if (present)
+                if (mode != AI::AiReplayCoverage::Omitted)
                     recorded.push_back(name);
             }
             if (file.at("recordedBoundaries") != recorded)
@@ -168,6 +171,16 @@ namespace Horo::Application::Internal {
             if (file.at("format") != "horo-ai-replay-evidence" || file.at("version") != 1)
                 return Outcome::Failure(MakeError(AI::AIErrors::CanonicalSchemaUnsupported));
             auto result = ReadRequired(file);
+            if (file.contains("navigation")) {
+                const auto &navigation = file.at("navigation");
+                const auto &records = navigation.at("results");
+                if (navigation.at("schemaVersion") != 1 || navigation.at("scope") != "best-effort-path-publication" ||
+                    !records.is_array() || records.size() > 32 || ReadIdentity(navigation.at("tick")) != result.tick ||
+                    HashJson(records) != ReadDigest(navigation.at("digest")))
+                    throw InvalidEvidence{};
+                (void)ReadIdentity(navigation.at("topology"));
+                result.At(Navigation).profile = {AI::AiReplayCoverage::Nondeterministic, 1, ReadDigest(navigation.at("profile"))};
+            }
             if (file.contains("gameplay")) {
                 const auto &gameplay = file.at("gameplay");
                 const auto &records = gameplay.at("records");

@@ -72,6 +72,12 @@ namespace Horo::Navigation {
         std::uint64_t tick{};
     };
 
+    /** @brief Optional synchronous read receipt for each newly published terminal path. */
+    struct NavigationPathCommitObserver final {
+        void *context{};
+        void (*observe)(void *, const NavigationPathCompletion &) noexcept {};
+    };
+
     /**
      * @brief Owner-thread admission, bounded batching, cancellation and stable terminal publication.
      * @details The host injects its process JobSystem and calls Dispatch/Commit at fixed-tick boundaries. Submit never
@@ -130,11 +136,12 @@ namespace Horo::Navigation {
         [[nodiscard]] std::uint32_t Dispatch(std::uint64_t tick);
         /** @brief Publish a stable prefix of eligible terminal results at NavIntentCommit.
          * @param current Fresh exact Scene/root and active caller incarnations.
+         * @param observer Optional borrowed diagnostic callback in publication order. It must not reenter the coordinator.
          * @return Number newly published; invalid/rollback observations leave publication unchanged.
          * @details Cancellation wins before publication. Expired pending work returns CapacityExceeded; eligible ready
          * results may publish on deadlineTick. Revision mismatch returns StaleSnapshot, never fabricated region proof.
          */
-        [[nodiscard]] std::uint32_t Commit(const NavigationPathPublication &current);
+        [[nodiscard]] std::uint32_t Commit(const NavigationPathPublication &current, NavigationPathCommitObserver observer = {});
         /** @brief Transfer one published result once. @param handle Exact request identity.
          * @return Owned terminal result or empty for pending, stale or already consumed handles.
          * @details A consumed slot is reclaimed only after its partition is quiescent; late workers cannot alias reuse.

@@ -4,6 +4,7 @@
 #include "GameplayReplicationAdmissionTestSupport.h"
 #include "HeadlessCookedDecisionAdmission.h"
 #include "HeadlessProjectScene.h"
+#include "HeadlessReplayArtifact.h"
 #include "Horo/AI/AITaskContinuation.h"
 #include "Horo/Animation/AnimationErrors.h"
 #include "Horo/Foundation/Platform.h"
@@ -490,6 +491,75 @@ namespace Horo::Application::CharacterSceneProductTest {
             return asset;
         }
     }  // namespace
+
+    TEST_CASE("Cooked AI replay records terminal best-effort Navigation outcomes", "[ai][navigation][character][product]") {
+        NavigationProductFixture fixture;
+        DecisionFixture::Fixture decision;
+        auto source = DecisionFixture::TaskTree(11);
+        source.executionTask = DecisionFixture::MakeIdentity<AI::TaskId>(9000);
+        const std::array catalog{AI::AiControllerDescriptor{.controller = DecisionFixture::MakeIdentity<AI::ControllerTypeId>(49),
+                                                            .decisionAsset = source.asset,
+                                                            .decisionKind = AI::DecisionPlanKind::BehaviorTree,
+                                                            .blackboardSchema = decision.schema}};
+        const auto asset = PublishDecisionMotionProject(fixture, decision, source, catalog.front(), std::nullopt);
+        const auto gameplay = NavigationGameplay();
+        const auto agent = DecisionFixture::MakeIdentity<AI::AgentId>(50);
+        auto replay = std::make_shared<Internal::HeadlessDecisionReplay>(Internal::HeadlessDecisionReplaySelection{agent, 2});
+        NativeNavigationProductWorld product;
+        auto started = product.Start(fixture, gameplay, {}, Physics::PhysicsRuntimeMode::Canonical, [&](auto &input, auto &assets) {
+            input.aiControllers = catalog;
+            input.cookedDecisions = std::make_shared<Internal::HeadlessCookedDecisionInput>(
+                Internal::HeadlessCookedDecisionInput{.committed = *assets.committed,
+                                                      .environment = decision.Environment(),
+                                                      .bindings = {{catalog.front().controller, asset}},
+                                                      .execution = AI::AiSceneCookedDecisionExecution{assets.jobs, {}, {}}});
+            input.decisionReplay = replay;
+        });
+        INFO((started.HasError() ? started.ErrorValue().message : "started"));
+        REQUIRE(started.HasValue());
+        product.RunFrame();
+        const auto capability = Internal::InspectHeadlessNavigationContext(product.PhysicsService());
+        REQUIRE(capability);
+        auto request = capability->Submit({.start = {1, 0, 1}, .destination = {2, 0, 2}});
+        REQUIRE(request.HasValue());
+        const auto cancelled = request.Value().Cancel();
+        REQUIRE(cancelled.HasValue());
+        REQUIRE(cancelled.Value());
+        product.RunFrame();
+        auto result = replay->TakeCommitted();
+        REQUIRE(result);
+        INFO((result->HasError() ? result->ErrorValue().message : "captured"));
+        REQUIRE(result->HasValue());
+        const auto &data = result->Value();
+        REQUIRE(data.navigation);
+        CHECK(data.navigation->tick == 2);
+        REQUIRE(data.navigation->count == 1);
+        CHECK_FALSE(data.navigation->results.front().status);
+        CHECK(data.navigation->results.front().digest != Sha256Digest{});
+        auto changed = data;
+        ++changed.navigation->results.front().sequence;
+        const auto comparison = Internal::CompareHeadlessReplayCaptures(data, changed);
+        REQUIRE(comparison.HasValue());
+        CHECK_FALSE(comparison.Value());
+        const auto publish = [&](const std::filesystem::path &directory, const Internal::HeadlessDecisionReplayData &captured) {
+            const auto path = directory.u8string();
+            const auto output = Internal::HeadlessReplayOutput::Parse({reinterpret_cast<const char *>(path.data()), path.size()});
+            REQUIRE(output.HasValue());
+            const auto digest = ComputeSha256(std::as_bytes(std::span{captured.canonicalRecord}));
+            REQUIRE(Internal::PublishHeadlessReplayArtifact(output.Value(), captured, digest).HasValue());
+            return directory / "evidence.json";
+        };
+        const auto root = fixture.project.project.dir.path;
+        const auto recorded = publish(root / "nav-recorded", data);
+        const auto differing = publish(root / "nav-differing", changed);
+        const auto artifactComparison = Internal::CompareHeadlessReplayArtifacts(recorded, differing);
+        REQUIRE(artifactComparison.HasValue());
+        CHECK_FALSE(artifactComparison.Value());
+        changed.navigation->profile = changed.sceneInput;
+        CHECK(Internal::CompareHeadlessReplayCaptures(data, changed).HasError());
+        const auto incompatible = publish(root / "nav-incompatible", changed);
+        CHECK(Internal::CompareHeadlessReplayArtifacts(recorded, incompatible).HasError());
+    }
 
     TEST_CASE("Cooked AI decision moves or follows through real Character feedback", "[ai][navigation][character][product]") {
         using namespace Navigation;

@@ -901,7 +901,9 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Result<void>::Success();
             if (context.cancellation.IsCancellationRequested())
                 return JobCancelled();
-            auto committed = paths->CommitAtFixedTick(context.simulationTick);
+            const auto &replay = owners_->configured->decisionReplay;
+            auto *observed = replay ? replay->ObserveNavigation(*record_, context) : nullptr;
+            auto committed = paths->CommitAtFixedTick(context.simulationTick, observed);
             if (committed.HasError() || !record_->decisionMotion)
                 return committed;
             if (context.simulationTick == 0)
@@ -924,11 +926,11 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         Result<void> RunConfiguredTick(const Runtime::FixedStepContext &context) {
             if (!configuredActivated_ || !record_ || record_->closeRequested)
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
-            if (auto navigation = PrepareNavigationTick(context); navigation.HasError())
-                return navigation;
             if (OwnsCookedDecisionExecution() && owners_->configured->decisionReplay && owners_->fixed &&
                 request_.world == Network::NetworkModeWorldKind::Standalone)
                 owners_->fixed->ArmDecisionReplay(*record_, context);
+            if (auto navigation = PrepareNavigationTick(context); navigation.HasError())
+                return navigation;
             if (const auto perception = RunConfiguredPerception(context); perception.HasError())
                 return perception;
             if (const auto decisions = RunConfiguredDecisions(context); decisions.HasError())

@@ -3391,6 +3391,14 @@ and behavior identity. Native image bytes, module-private state, deferred Scene
 publication, and external Gameplay inputs remain explicit omissions. Input
 playback requires an additional input recording.
 
+An independently granted native path scope can run alongside cooked decisions.
+When present, replay reports the Navigation coordinator's terminal path outcomes
+with the selected cooked asset and query profile. The manifest labels this
+boundary `nondeterministic` because worker completion can move between ticks.
+The comparer checks profile compatibility and leaves these outcomes out of
+deterministic equality. Motion intents that consume best-effort feedback retain
+their independent scheduler timing contract.
+
 Use `horo-engine --compare-ai-replay <recorded evidence.json> <replayed evidence.json>`
 to compare two single-tick reports with matching coverage and content identities.
 The command reads bounded files without opening a project and prints the first

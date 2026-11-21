@@ -149,7 +149,7 @@ namespace Horo::Navigation {
     }
 
     /** @copydoc NavigationCoordinator::Commit */
-    std::uint32_t NavigationCoordinator::Commit(const NavigationPathPublication &current) {
+    std::uint32_t NavigationCoordinator::Commit(const NavigationPathPublication &current, const NavigationPathCommitObserver observer) {
         const auto &state = MutableState();
         if (!state || !state->ValidPublication(current))
             return 0;
@@ -173,6 +173,8 @@ namespace Horo::Navigation {
             if (!failure.has_value() && !entry.candidate)
                 break;  // Worker arrival cannot bypass an earlier eligible admitted request.
             State::Publish(entry, std::move(failure), current.tick);
+            if (observer.observe)
+                observer.observe(observer.context, *entry.terminal);
             ++published;
         }
         return published;

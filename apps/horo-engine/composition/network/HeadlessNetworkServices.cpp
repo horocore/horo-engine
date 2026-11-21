@@ -147,7 +147,11 @@ namespace Horo::Application::Internal {
         HeadlessDecisionReplay::Capture EncodeReplayCapture(AI::AiSceneDecisionReplayCapture evidence,
                                                             const HeadlessNetworkDetail::ReplayAuthoredScene &authored,
                                                             const Runtime::RuntimeSceneView &scene,
-                                                            const std::optional<HeadlessReplayPerception> perception) {
+                                                            const std::optional<HeadlessReplayPerception> perception,
+                                                            const std::optional<HeadlessReplayNavigation> &navigation) {
+            if (navigation && navigation->truncated)
+                return HeadlessDecisionReplay::Capture::Failure(
+                    MakeError(AI::AIErrors::CanonicalStateInvalid, "Navigation replay exceeded its outcome budget."));
             auto encoded = AI::EncodeAiCanonicalStateRecord(evidence.canonical, HeadlessDecisionReplay::CanonicalBudget,
                                                             [&](const AI::BlackboardStoredEntityReference &stored) {
                 return ProjectReplayEntity(authored, scene, stored);
@@ -159,7 +163,8 @@ namespace Horo::Application::Internal {
                                                              .definition = scene.DefinitionId(),
                                                              .definitionRevision = authored.definitionRevision,
                                                              .sceneInput = authored.sceneInput,
-                                                             .perception = perception});
+                                                             .perception = perception,
+                                                             .navigation = navigation});
         }
 
         /** @brief Copies exact solved Character results over stable authored keys without stepping a subsystem. */
@@ -353,6 +358,7 @@ namespace Horo::Application::Internal {
         attemptWorld_ = &world;
         attempt_ = context.attemptNumber;
         gameplay_.reset();
+        navigation_.reset();
         perception_.reset();
         if (const auto spatial = world.perception.Current()) {
             const auto scene = world.scenes->ActiveScene();
@@ -399,6 +405,14 @@ namespace Horo::Application::Internal {
         return &gameplay_.emplace();
     }
 
+    /** @copydoc HeadlessDecisionReplay::ObserveNavigation */
+    HeadlessReplayNavigation *HeadlessDecisionReplay::ObserveNavigation(const HeadlessNetworkDetail::WorldRecord &world,
+                                                                        const Runtime::FixedStepContext &context) noexcept {
+        if (owner_ != std::this_thread::get_id() || !armedAgent_.IsValid() || attemptWorld_ != &world || attempt_ != context.attemptNumber)
+            return nullptr;
+        return &navigation_.emplace();
+    }
+
     void HeadlessDecisionReplay::Prepare(HeadlessNetworkDetail::WorldRecord &world, const Runtime::FixedStepContext &context) {
         if (owner_ != std::this_thread::get_id() || pending_ || attemptWorld_ != &world || attempt_ != context.attemptNumber ||
             selection_.tick != context.simulationTick)
@@ -413,7 +427,7 @@ namespace Horo::Application::Internal {
             return;
         }
         armedAgent_ = {};
-        auto captured = EncodeReplayCapture(std::move(evidence).Value(), *world.replayAuthoredScene, *scene, perception_);
+        auto captured = EncodeReplayCapture(std::move(evidence).Value(), *world.replayAuthoredScene, *scene, perception_, navigation_);
         pending_ = captured.HasError() ? std::move(captured)
                                        : CaptureNativeReplay(std::move(captured).Value(), world, *world.replayAuthoredScene, *scene,
                                                              context, previousPhysicsTick_, gameplay_);
@@ -636,10 +650,9 @@ namespace Horo::Application::Internal {
             const bool dispatchesMotion =
                 input.navigationMotion && executesDecisions && decisions->execution->scheduler.mode == AI::AiSchedulingMode::BestEffort;
             if (input.navigationPath && (!input.navigationPath->IsValid() || !input.navigation || !gameplay || !gameplay->enabled ||
-                                         gameplay->nativeArtifact.empty() || (executesDecisions && !dispatchesMotion)))
+                                         gameplay->nativeArtifact.empty()))
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid,
-                                                       "Best-effort paths require cooked Navigation and native gameplay. Scheduled "
-                                                       "decisions also require explicit best-effort motion."));
+                                                       "Best-effort paths require cooked Navigation and native gameplay."));
             if (input.navigationMotion && (!input.navigationPath || !dispatchesMotion || input.decisionReplay))
                 return Result<void>::Failure(MakeError(Navigation::NavigationErrors::CapabilityDescriptorInvalid));
             if (gameplay && gameplay->prefabPermission == GameplayPrefabPermission::Granted && !input.prefabLoads)

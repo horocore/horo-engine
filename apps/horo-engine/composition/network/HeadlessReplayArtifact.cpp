@@ -20,6 +20,7 @@ namespace Horo::Application::Internal {
         constexpr std::uint32_t PerceptionInputSchemaVersion = 1;
         constexpr std::uint32_t QueryPublicationSchemaVersion = 1;
         constexpr std::uint32_t GameplaySchemaVersion = 1;
+        constexpr std::uint32_t NavigationReplaySchemaVersion = 1;
         constexpr std::uint32_t RigidBodyMotionSchemaVersion = 1;
         constexpr std::uint32_t CharacterMotionSchemaVersion = 1;
 
@@ -38,11 +39,35 @@ namespace Horo::Application::Internal {
             static_assert(deterministic.size() == names.size());
             auto boundaries = Json::object();
             for (std::size_t index = 0; index < names.size(); ++index) {
-                boundaries[std::string{names[index]}] = deterministic[index] ? "deterministic" : "omitted";
-                if (deterministic[index])
+                const bool navigation = index == static_cast<std::size_t>(AI::AiReplayBoundary::Navigation) && data.navigation.has_value();
+                boundaries[std::string{names[index]}] = navigation             ? "nondeterministic"
+                                                        : deterministic[index] ? "deterministic"
+                                                                               : "omitted";
+                if (deterministic[index] || navigation)
                     recorded.push_back(names[index]);
             }
             return {{"version", AI::AiReplayManifest::CurrentVersion}, {"boundaries", std::move(boundaries)}};
+        }
+
+        /** @brief Keeps the actual best-effort terminal outcomes visible for diagnosis. */
+        Json EncodeNavigation(const HeadlessReplayNavigation &navigation) {
+            auto results = Json::array();
+            for (const auto &result : std::span{navigation.results}.first(navigation.count)) {
+                Json status = result.status ? Json(static_cast<std::uint8_t>(*result.status)) : Json(nullptr);
+                Json stop = result.stopReason ? Json(static_cast<std::uint8_t>(*result.stopReason)) : Json(nullptr);
+                results.push_back({{"sequence", std::to_string(result.sequence)},
+                                   {"status", std::move(status)},
+                                   {"stopReason", std::move(stop)},
+                                   {"pointCount", result.points},
+                                   {"digest", FormatSha256(result.digest)}});
+            }
+            return {{"schemaVersion", NavigationReplaySchemaVersion},
+                    {"scope", "best-effort-path-publication"},
+                    {"profile", FormatSha256(navigation.profile)},
+                    {"tick", std::to_string(navigation.tick)},
+                    {"topology", std::to_string(navigation.topology)},
+                    {"digest", FormatSha256(HashRecords(results))},
+                    {"results", std::move(results)}};
         }
 
         /** @brief Encodes terminal query outcomes or the corresponding successful Blackboard writes in owner order. */
@@ -231,6 +256,8 @@ namespace Horo::Application::Internal {
                     payload["physics"] = EncodePhysics(*data.physics);
                 if (data.gameplay)
                     payload["gameplay"] = EncodeGameplay(*data.gameplay);
+                if (data.navigation)
+                    payload["navigation"] = EncodeNavigation(*data.navigation);
                 if (const auto &queries = data.queries) {
                     payload["queryPublication"] = EncodeQueryBoundary(*queries, false, capture.tick);
                     payload["blackboardSync"] = EncodeQueryBoundary(*queries, true, capture.blackboardRevision);
@@ -298,6 +325,9 @@ namespace Horo::Application::Internal {
             if (const auto &gameplay = data.gameplay)
                 result.Observe(Gameplay, GameplaySchemaVersion, gameplay->profile.digest, {gameplay->profile.revision, data.evidence.tick},
                                HashRecords(EncodeGameplayRecords(*gameplay)));
+            if (const auto &navigation = data.navigation)
+                result.manifest.boundaries[static_cast<std::size_t>(Navigation)] = {AI::AiReplayCoverage::Nondeterministic,
+                                                                                    NavigationReplaySchemaVersion, navigation->profile};
             if (const auto &queries = data.queries) {
                 result.Observe(QueryPublication, QueryPublicationSchemaVersion, queries->profile,
                                {data.evidence.subject.Value(), data.evidence.tick}, HashRecords(EncodeQueries(*queries, false)));

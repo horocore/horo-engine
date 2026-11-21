@@ -7,11 +7,80 @@
 #include "SceneAiNavigationMotion.h"
 
 #include <algorithm>
+#include <bit>
 #include <limits>
 #include <new>
 
 namespace Horo::Application::Internal {
     namespace Nav = Navigation;
+
+    namespace {
+        /** @brief Hashes canonical integer words without retaining native structs or process identities. */
+        void HashWord(Sha256Builder &hash, std::uint64_t value) noexcept {
+            std::array<std::byte, sizeof(value)> bytes;
+            for (std::size_t i = 0; i < bytes.size(); ++i)
+                bytes[i] = static_cast<std::byte>(value >> (8 * i));
+            (void)hash.Update(bytes);
+        }
+
+        /** @brief Hashes finite solver coordinates with one representation for signed zero. */
+        void HashFloat(Sha256Builder &hash, float value) noexcept {
+            HashWord(hash, std::bit_cast<std::uint32_t>(value == 0 ? 0.0F : value));
+        }
+
+        /** @brief Identifies the selected immutable Navigation assets and explicit query policy. */
+        Sha256Digest CaptureNavigationProfile(const ProjectSceneNavigationWorld &owner, const ProjectSceneNavigationSelection &selection,
+                                              const HeadlessNavigationPathPolicy &policy) noexcept {
+            Sha256Builder hash;
+            const auto assets = owner.assets->ActiveAssetProvenance();
+            HashWord(hash, assets.size());
+            for (const auto &asset : assets)
+                (void)hash.Update(std::as_bytes(std::span{asset.cookedContentDigest.bytes}));
+            const auto query = selection.policy.MaximumQuery();
+            HashWord(hash, selection.profile.Value());
+            HashWord(hash, selection.policy.Revision().Value());
+            HashWord(hash, policy.filter.Value());
+            HashWord(hash, policy.deadlineTicks);
+            HashWord(hash, static_cast<std::uint64_t>(query.quality));
+            HashWord(hash, query.limits.maximumNodeExpansions);
+            HashWord(hash, query.limits.maximumResultPoints);
+            HashFloat(hash, query.limits.maximumSearchDistanceMeters);
+            return hash.Finalize();
+        }
+
+        /** @brief Observes an already published completion before the consumer transfers its ownership. */
+        void ObserveNavigationCompletion(void *storage, const Nav::NavigationPathCompletion &completion) noexcept {
+            auto &replay = *static_cast<HeadlessReplayNavigation *>(storage);
+            if (replay.count == replay.results.size()) {
+                replay.truncated = true;
+                return;
+            }
+            auto &record = replay.results[replay.count++];
+            record.sequence = completion.acceptedSequence;
+            if (completion.result.HasError()) {
+                const std::string_view code = completion.result.ErrorValue().code.Value();
+                record.digest = ComputeSha256(std::as_bytes(std::span{code}));
+                return;
+            }
+            const auto &path = completion.result.Value();
+            record.status = path.status;
+            record.stopReason = path.stopReason;
+            record.points = path.points.size();
+            Sha256Builder hash;
+            HashWord(hash, static_cast<std::uint64_t>(path.status));
+            HashWord(hash, static_cast<std::uint64_t>(path.stopReason));
+            HashWord(hash, path.stopPolygonIndex);
+            HashWord(hash, path.points.size());
+            for (const auto &point : path.points) {
+                HashFloat(hash, point.x);
+                HashFloat(hash, point.y);
+                HashFloat(hash, point.z);
+            }
+            for (const auto value : {path.stopPosition.x, path.stopPosition.y, path.stopPosition.z, path.cost, path.lengthMeters})
+                HashFloat(hash, value);
+            record.digest = hash.Finalize();
+        }
+    }  // namespace
 
     /** @copydoc HeadlessNavigationPathScope::Create */
     Result<std::unique_ptr<HeadlessNavigationPathScope>> HeadlessNavigationPathScope::Create(
@@ -68,28 +137,27 @@ namespace Horo::Application::Internal {
                 return Scope::Failure(context.ErrorValue());
             if (auto refreshed = context.Value()->Refresh({.binding = binding, .path = {.provenance = source}}); refreshed.HasError())
                 return Scope::Failure(refreshed.ErrorValue());
-            return Scope::Success(
-                std::unique_ptr<HeadlessNavigationPathScope>{new HeadlessNavigationPathScope{std::move(world),
-                                                                                             owner.coordinator,
-                                                                                             active.Value(),
-                                                                                             source,
-                                                                                             owner.agents,
-                                                                                             {caller},
-                                                                                             std::move(context).Value()}});
+            return Scope::Success(std::unique_ptr<HeadlessNavigationPathScope>{
+                new HeadlessNavigationPathScope{std::move(world),
+                                                owner.coordinator,
+                                                active.Value(),
+                                                source,
+                                                owner.agents,
+                                                {caller},
+                                                std::move(context).Value(),
+                                                CaptureNavigationProfile(owner, selection, policy)}});
         } catch (const std::bad_alloc &) {
             return Scope::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
         }
     }
 
-    HeadlessNavigationPathScope::HeadlessNavigationPathScope(std::shared_ptr<Nav::NavigationWorldLifecycle> lifecycle,
-                                                             Nav::NavigationCoordinator &coordinator,
-                                                             const Nav::NavigationWorldActivationDescriptor activation,
-                                                             const Nav::NavigationOutcomeProvenance source,
-                                                             Nav::NavigationAgentRegistry &agents,
-                                                             std::vector<Nav::NavigationPathCaller> callers,
-                                                             std::shared_ptr<Gameplay::GameplayNavigationContext> context) noexcept
+    HeadlessNavigationPathScope::HeadlessNavigationPathScope(
+        std::shared_ptr<Nav::NavigationWorldLifecycle> lifecycle, Nav::NavigationCoordinator &coordinator,
+        const Nav::NavigationWorldActivationDescriptor activation, const Nav::NavigationOutcomeProvenance source,
+        Nav::NavigationAgentRegistry &agents, std::vector<Nav::NavigationPathCaller> callers,
+        std::shared_ptr<Gameplay::GameplayNavigationContext> context, const Sha256Digest replayProfile) noexcept
         : lifecycle_(std::move(lifecycle)), coordinator_(coordinator), activation_(activation), source_(source), agents_(agents),
-          callers_(std::move(callers)), context_(std::move(context)) {}
+          callers_(std::move(callers)), context_(std::move(context)), replayProfile_(replayProfile) {}
 
     HeadlessNavigationPathScope::~HeadlessNavigationPathScope() = default;
 
@@ -275,13 +343,18 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc HeadlessNavigationPathScope::CommitAtFixedTick */
-    Result<void> HeadlessNavigationPathScope::CommitAtFixedTick(const std::uint64_t tick) const {
+    Result<void> HeadlessNavigationPathScope::CommitAtFixedTick(const std::uint64_t tick, HeadlessReplayNavigation *replay) const {
         const auto current = lifecycle_->ActiveDescriptor();
         if (current.HasError())
             return Result<void>::Failure(current.ErrorValue());
         if (current.Value() != activation_)
             return Result<void>::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
-        static_cast<void>(coordinator_.Commit({activation_, source_, callers_, tick}));
+        Nav::NavigationPathCommitObserver observer;
+        if (replay) {
+            *replay = {.profile = replayProfile_, .tick = tick, .topology = activation_.topology.Value()};
+            observer = {replay, ObserveNavigationCompletion};
+        }
+        static_cast<void>(coordinator_.Commit({activation_, source_, callers_, tick}, observer));
         return context_->Refresh({.binding = context_->Binding().scene, .path = {.provenance = source_, .tick = tick}});
     }
 

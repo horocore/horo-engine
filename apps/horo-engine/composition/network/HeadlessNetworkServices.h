@@ -2,6 +2,7 @@
 
 #include "AnimationRuntimeIdentitySource.h"
 #include "GameplayWorldComposition.h"
+#include "HeadlessNavigationPathScope.h"
 #include "HeadlessSceneLoadBoundary.h"
 #include "Horo/AI/AISceneActivation.h"
 #include "Horo/AI/DecisionQueryTask.h"
@@ -141,6 +142,7 @@ namespace Horo::Application::Internal {
         std::optional<HeadlessReplayPerception> perception;
         std::optional<HeadlessReplayQueries> queries;
         std::optional<HeadlessReplayGameplay> gameplay;
+        std::optional<HeadlessReplayNavigation> navigation;
     };
 
     /** @brief Product-owned mailbox for one exact committed tick; no concurrent access or file storage. */
@@ -176,6 +178,8 @@ namespace Horo::Application::Internal {
         /** @brief Supplies optional storage only for the selected fixed attempt and exact World. */
         Gameplay::BehaviorFixedEvidence *ObserveGameplay(const HeadlessNetworkDetail::WorldRecord &,
                                                          const Runtime::FixedStepContext &) noexcept;
+        /** @brief Supplies Navigation observation storage after exact fixed-attempt admission. */
+        HeadlessReplayNavigation *ObserveNavigation(const HeadlessNetworkDetail::WorldRecord &, const Runtime::FixedStepContext &) noexcept;
 
         HeadlessDecisionReplaySelection selection_;
         const std::thread::id owner_{std::this_thread::get_id()};
@@ -185,6 +189,7 @@ namespace Horo::Application::Internal {
         std::optional<std::uint64_t> previousPhysicsTick_;
         std::optional<HeadlessReplayPerception> perception_;
         std::optional<Gameplay::BehaviorFixedEvidence> gameplay_;
+        std::optional<HeadlessReplayNavigation> navigation_;
         std::optional<Capture> pending_;
         std::optional<Capture> committed_;
         bool published_{};

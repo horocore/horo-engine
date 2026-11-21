@@ -290,7 +290,7 @@ namespace Horo::Application::Internal {
         Result<void> ValidateNavigationPathPolicy(const ProductLaunch &launch) {
             if (launch.navigationPath &&
                 (!HasHeadlessAiAuthority(launch.role) || !launch.gameplay || launch.gameplay->nativeArtifact.empty() ||
-                 launch.sceneInput.navigationMode != HeadlessNavigationMode::RecastDetour || !launch.cookedDecisionBindings.empty()))
+                 launch.sceneInput.navigationMode != HeadlessNavigationMode::RecastDetour))
                 return Result<void>::Failure(
                     MakeError(Net::NetworkErrors::NetworkModeInvalid,
                               "A best-effort Navigation path grant requires authoritative cooked Navigation and native gameplay."));
