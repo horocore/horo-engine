@@ -594,9 +594,9 @@ namespace Horo::AI {
             const QueryPhysicsPublication publication{physics.capability.Identity(), 7, tick.publicationRevision, tick.completedTick};
             QueryPhysicsProbe sight;
             // The Physics fixture is rebased to a threat ten meters in front of the cover.
-            REQUIRE(sight
-                        .Start(physics.capability, publication, exposureStage, Physics::PhysicsRayQuery{.maximumDistanceMeters = 10},
-                               {.channel = SightTest::VisibilityChannel()})
+            const std::array rays{Physics::PhysicsRayQuery{.origin = {-0.25F, 0, 0}, .maximumDistanceMeters = 10},
+                                  Physics::PhysicsRayQuery{.origin = {0.25F, 0, 0}, .maximumDistanceMeters = 10}};
+            REQUIRE(sight.StartExposure(physics.capability, publication, exposureStage, rays, {.channel = SightTest::VisibilityChannel()})
                         .Value());
             REQUIRE(physics.world->ProcessQueryBatch().HasValue());
             const auto visibility = sight.Poll(publication);

@@ -2,6 +2,7 @@
 #include "Horo/AI/EnvironmentQueryPhysics.h"
 #include "PerceptionSightTestSupport.h"
 
+#include <array>
 #include <limits>
 #include <numbers>
 
@@ -173,6 +174,54 @@ namespace Horo::AI {
             REQUIRE(clear.Value().has_value());
             CHECK(clear.Value()->filter == true);
             CHECK(clear.Value()->metric == 1.0);
+        }
+
+        TEST_CASE("EQS exposure batches publish complete evidence against one Physics tick", "[unit][ai][sight][eqs]") {
+            SightWorld physics;
+            (void)physics.Box(-5);
+            physics.Advance();
+            const auto publication = ProbePublication(physics);
+            const auto stage = QueryStageId::Create(2).Value();
+            const Physics::PhysicsQueryFilter filter{.channel = VisibilityChannel()};
+            const Physics::PhysicsRayQuery blocked{.maximumDistanceMeters = 10};
+            const Physics::PhysicsRayQuery clear{.origin = {2, 0, 0}, .maximumDistanceMeters = 10};
+            const std::array rays{blocked, clear};
+            QueryPhysicsProbe exposure;
+            const std::array<Physics::PhysicsRayQuery, QueryPhysicsProbe::MaximumExposureRays + 1> oversized{};
+            CHECK(exposure.StartExposure(physics.capability, publication, stage, oversized, filter).HasError());
+            CHECK(exposure.StartExposure(physics.capability, publication, stage, {}, filter).HasError());
+            auto invalid = rays;
+            invalid.back().maximumDistanceMeters = -1;
+            CHECK(exposure.StartExposure(physics.capability, publication, stage, invalid, filter).HasError());
+            CHECK_FALSE(exposure.Poll(publication).Value().has_value());
+
+            REQUIRE(exposure.StartExposure(physics.capability, publication, stage, rays, filter).Value());
+            QueryPhysicsProbe other;
+            REQUIRE_FALSE(other.Start(physics.capability, publication, stage, blocked, filter).Value());
+            CHECK_FALSE(exposure.Poll(publication).Value().has_value());
+            REQUIRE(physics.world->ProcessQueryBatch().HasValue());
+            SECTION("replaced publication invalidates even a completed exposure batch") {
+                physics.Advance();
+                const auto stale = exposure.Poll(publication);
+                REQUIRE(stale.HasError());
+                CHECK(stale.ErrorValue().code.Value() == Physics::PhysicsErrors::QuerySnapshotStale.code.Value());
+            }
+            SECTION("one blocker and one clear ray report partial exposure") {
+                const auto sample = exposure.Poll(publication);
+                REQUIRE(sample.HasValue());
+                REQUIRE(sample.Value().has_value());
+                CHECK(sample.Value()->stage == stage);
+                CHECK(sample.Value()->filter == true);
+                CHECK(sample.Value()->metric == 0.5);
+            }
+            CHECK_FALSE(exposure.Poll(publication).Value().has_value());
+            const auto next = ProbePublication(physics);
+            REQUIRE(other.Start(physics.capability, next, stage, blocked, filter).Value());
+            REQUIRE(physics.world->ProcessQueryBatch().HasValue());
+            const auto independent = other.Poll(next);
+            REQUIRE(independent.HasValue());
+            REQUIRE(independent.Value().has_value());
+            CHECK(independent.Value()->filter == false);
         }
 
         TEST_CASE("EQS Physics probe releases backpressure and retires stale or cancelled work", "[unit][ai][sight][eqs]") {
