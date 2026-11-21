@@ -236,10 +236,7 @@ namespace Horo::Editor {
                     PrepareSourceReview(true);
                     return;
                 }
-                if (Button(locale, "context_build_offer",
-                           ready && buildOutput_ && gameplayBuilds_ && !buildRoot_.empty() && contextLifetime_ &&
-                               !contextProject_.empty())) {
-                    PrepareBuildReview();
+                if (DrawBuildContextActions(locale, ready)) {
                     return;
                 }
                 const auto count = sceneCount_ ? sceneCount_() : std::nullopt;
@@ -269,35 +266,54 @@ namespace Horo::Editor {
                 status_ = nullptr;
             }
 
-            /** @brief Uses only the existing gameplay service's exact active-project operation. */
-            std::optional<OperationId> ActiveBuildOperation() const {
+            /** @brief Offers distinct explicit selections over the same committed project. */
+            bool DrawBuildContextActions(const ILocalizationService &locale, const bool ready) {
+                const bool enabled =
+                    ready && buildOutput_ && gameplayBuilds_ && !buildRoot_.empty() && contextLifetime_ && !contextProject_.empty();
+                if (Button(locale, "context_build_offer", enabled)) {
+                    PrepareBuildReview(false);
+                    return true;
+                }
+                if (Button(locale, "context_completed_build_offer", enabled)) {
+                    PrepareBuildReview(true);
+                    return true;
+                }
+                return false;
+            }
+
+            /** @brief Resolves the separately selected active or terminal operation within the committed project. */
+            std::optional<OperationId> BuildOperation(const bool completed) const {
+                if (completed)
+                    return gameplayBuilds_->QueryLatestCompletedOutput(buildRoot_);
                 const auto build = gameplayBuilds_->QueryActiveProject(buildRoot_);
                 return build ? build->operationId : std::nullopt;
             }
 
-            void PrepareBuildReview() {
+            void PrepareBuildReview(const bool completed) {
                 constexpr std::size_t Records = 8;
                 constexpr std::size_t Bytes = (3U << 10U) - Records;  // Leave room for framing each selected in-memory message.
-                const auto operation = ActiveBuildOperation();
+                const auto operation = BuildOperation(completed);
                 auto tail = operation ? buildOutput_->CaptureOperationTail(*operation, Records, Bytes) : std::nullopt;
+                const char *unavailable = completed ? "context_completed_build_unavailable" : "context_build_unavailable";
                 if (!tail) {
-                    status_ = "context_build_unavailable";
+                    status_ = unavailable;
                     return;
                 }
                 auto prepared = EditorLocalAgentContext::PrepareBuildOutput(std::move(*tail), contextProject_, contextGeneration_,
                                                                             contextLifetime_->Token(), turn_ + 1);
                 if (prepared.HasError()) {
-                    status_ = "context_build_unavailable";
+                    status_ = unavailable;
                     return;
                 }
                 contextPreview_.emplace(std::move(prepared).Value());
+                reviewingCompletedBuild_ = completed;
                 status_ = nullptr;
             }
 
             /** @brief Rechecks widget byte offsets only on approval, avoiding whole-document scans during preview drawing. */
             bool ReviewSelectionCurrent() const {
                 if (const auto operation = contextPreview_->BuildOperation())
-                    return ActiveBuildOperation() == operation;
+                    return BuildOperation(reviewingCompletedBuild_) == operation;
                 const auto expected = contextPreview_->Selection();
                 if (!expected)
                     return true;
@@ -491,6 +507,7 @@ namespace Horo::Editor {
             const char *status_{};
             std::uint64_t turn_{};
             bool awaitingCheckpoint_{};
+            bool reviewingCompletedBuild_{};
         };
     }  // namespace
 

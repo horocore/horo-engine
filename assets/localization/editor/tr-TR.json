@@ -153,6 +153,8 @@
     "workspace.local_agent.context_range_offer": {"text": "Seçili kaynak aralığını incele"},
     "workspace.local_agent.context_range_unavailable": {"text": "Önce etkin kaynak dosyasında metin seçin."},
     "workspace.local_agent.context_build_offer": {"text": "Etkin oyun kodu derlemesinin çıktısını incele"},
+    "workspace.local_agent.context_completed_build_offer": {"text": "Son tamamlanan oyun kodu derlemesinin çıktısını incele"},
+    "workspace.local_agent.context_completed_build_unavailable": {"text": "Bu projenin son tamamlanan oyun kodu derlemesine ait saklanan çıktı yok."},
     "workspace.local_agent.context_build_unavailable": {"text": "Geçerli projenin etkin oyun kodu derlemesinde eklenebilecek çıktı yok."},
     "workspace.local_agent.context_review": {"text": "Seçili yerel modele gönderilecek bağlamı inceleyin."},
     "workspace.local_agent.context_approve": {"text": "Bağlamı onayla ve isteği gönder"},

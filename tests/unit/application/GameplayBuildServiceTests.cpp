@@ -507,6 +507,7 @@ TEST_CASE("Active gameplay build projection survives readers and clears at cance
     REQUIRE(*active->progress > 0.0F);
     REQUIRE_FALSE(active->cancellationRequested);
     REQUIRE_FALSE(fixture.service.QueryActiveProject(fixture.project.root / "other-project").has_value());
+    CHECK_FALSE(fixture.service.QueryLatestCompletedOutput(fixture.project.root));
 
     std::atomic<bool> reading{true};
     std::atomic<bool> invalidSnapshot{false};
@@ -527,7 +528,15 @@ TEST_CASE("Active gameplay build projection survives readers and clears at cance
         REQUIRE(cancelling->cancellationRequested);
     REQUIRE_FALSE(duplicateRequest);
     REQUIRE_FALSE(invalidSnapshot.load(std::memory_order_relaxed));
-    REQUIRE(AwaitTerminal(fixture.service, active->id).state == GameplayBuildState::Cancelled);
+    const auto terminal = AwaitTerminal(fixture.service, active->id);
+    REQUIRE(terminal.state == GameplayBuildState::Cancelled);
+    REQUIRE(terminal.operationId);
+    CHECK(fixture.service.QueryLatestCompletedOutput(fixture.project.root) == terminal.operationId);
+    const auto tail = fixture.output.CaptureOperationTail(*terminal.operationId, 4, 4096);
+    REQUIRE(tail);
+    CHECK(tail->operation == terminal.operationId);
+    CHECK(tail->witness.IsCurrent());
+    CHECK_FALSE(fixture.service.QueryLatestCompletedOutput(fixture.project.root / "other-project"));
     REQUIRE_FALSE(fixture.service.QueryActiveProject(fixture.project.root).has_value());
 }
 
@@ -540,10 +549,17 @@ TEST_CASE("Gameplay build service maps process timeout to one correlated termina
     const GameplayBuildSnapshot terminal = AwaitTerminal(fixture.service, started.Value());
     REQUIRE(terminal.state == GameplayBuildState::TimedOut);
     REQUIRE(terminal.operationId.has_value());
+    CHECK(fixture.service.QueryLatestCompletedOutput(fixture.project.root) == terminal.operationId);
     const auto snapshot = fixture.output.SnapshotIfChanged(0);
     REQUIRE(snapshot.has_value());
     AssertTerminalOutput(*snapshot, terminal, BuildOutputResult::TimedOut, "gameplay.build.timed_out");
     AssertTerminalOperation(fixture.operations, terminal, OperationState::Failed);
+    const auto next = fixture.service.Start(fixture.Request(std::chrono::milliseconds{20}));
+    REQUIRE(next.HasValue());
+    const auto replacement = AwaitTerminal(fixture.service, next.Value());
+    REQUIRE(replacement.operationId);
+    CHECK(replacement.operationId != terminal.operationId);
+    CHECK(fixture.service.QueryLatestCompletedOutput(fixture.project.root) == replacement.operationId);
 }
 
 TEST_CASE("Gameplay build service exposes external lock waiting and bounded timeout", "[unit][gameplay][build][lock]") {

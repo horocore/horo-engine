@@ -113,6 +113,12 @@ namespace Horo::Application {
          * @return An owned snapshot; terminal sessions are excluded.
          */
         [[nodiscard]] std::optional<GameplayBuildSnapshot> QueryActiveProject(const std::filesystem::path &projectRoot) const;
+        /** @brief Finds the latest terminal build's output operation for exactly one project.
+         * @param projectRoot Project root used when starting the build.
+         * @return Exact operation identity if the terminal build published correlated output.
+         * @details The output store still owns retention and can reject an evicted operation.
+         */
+        [[nodiscard]] std::optional<OperationId> QueryLatestCompletedOutput(const std::filesystem::path &projectRoot) const;
         /** @brief Requests cooperative cancellation for an active session. */
         [[nodiscard]] bool RequestCancel(GameplayBuildSessionId id) const;
         /** @brief Reports whether the last validated build matches current project inputs. */

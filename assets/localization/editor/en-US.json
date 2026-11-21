@@ -153,6 +153,8 @@
     "workspace.local_agent.context_range_offer": {"text": "Review selected source range"},
     "workspace.local_agent.context_range_unavailable": {"text": "Select text in the active source first."},
     "workspace.local_agent.context_build_offer": {"text": "Review current gameplay build output"},
+    "workspace.local_agent.context_completed_build_offer": {"text": "Review last completed gameplay build output"},
+    "workspace.local_agent.context_completed_build_unavailable": {"text": "No retained output is available for this project's last completed gameplay build."},
     "workspace.local_agent.context_build_unavailable": {"text": "There is no eligible output from the current project's active gameplay build."},
     "workspace.local_agent.context_review": {"text": "Review the exact context that will be sent to the selected local model."},
     "workspace.local_agent.context_approve": {"text": "Approve context and ask"},

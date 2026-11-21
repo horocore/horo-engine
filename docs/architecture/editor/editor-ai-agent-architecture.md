@@ -873,9 +873,9 @@ An executed scene count tool can be recorded through the same review. These
 conversation records contain localized host labels and an opaque reference
 scoped to the turn.
 
-The panel can also preview the recent output of the active gameplay build
-for the current project. It reads only the retained output for that build
-operation, marks omitted output, and redacts the text before review.
+The panel offers separate previews for the active gameplay build and the last
+completed build of the current project. It reads only the retained output for
+the selected operation, marks omitted output, and redacts the text before review.
 Changes to the selected operation's output invalidate its approval. Other
 builds and process logs have no effect while the selected output is retained.
 

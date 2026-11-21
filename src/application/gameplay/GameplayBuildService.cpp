@@ -140,6 +140,7 @@ namespace Horo::Application {
         GameplayBuildSessionId nextId{1};
         std::unordered_map<GameplayBuildSessionId, std::shared_ptr<Session>> sessions;
         std::unordered_map<std::string, GameplayBuildSessionId, TransparentStringHash, std::equal_to<>> activeProjects;
+        std::unordered_map<std::string, OperationId, TransparentStringHash, std::equal_to<>> completedOutputs;
         bool shutdown{false};
         bool shutdownFinished{false};
         std::size_t activeAdmissions{};
@@ -858,12 +859,22 @@ namespace Horo::Application {
                             cacheHit ? "Gameplay module was already up to date." : "Gameplay module built successfully.", 1.0F);
         }
 
-        void RemoveActiveProject(const std::shared_ptr<GameplayBuildService::State> &state, const std::string_view projectKey,
-                                 const GameplayBuildSessionId sessionId) {
-            std::lock_guard lock(state->Mutex());
-            if (const auto active = state->activeProjects.find(projectKey);
-                active != state->activeProjects.end() && active->second == sessionId)
-                state->activeProjects.erase(active);
+        /** @brief Publishes the exact output identity before exposing a terminal session snapshot. */
+        void PublishTerminalSession(GameplayBuildService::State &state,
+                                    const std::shared_ptr<GameplayBuildService::State::Session> &session, const std::string_view projectKey,
+                                    const std::optional<OperationId> outputOperation, const GameplayBuildState terminal,
+                                    const Result<void> &result) {
+            std::lock_guard lock(state.Mutex());
+            if (const auto active = state.activeProjects.find(projectKey);
+                active != state.activeProjects.end() && active->second == session->snapshot.id) {
+                if (outputOperation)
+                    state.completedOutputs.insert_or_assign(active->first, *outputOperation);
+                else if (const auto prior = state.completedOutputs.find(projectKey); prior != state.completedOutputs.end())
+                    state.completedOutputs.erase(prior);
+                state.activeProjects.erase(active);
+            }
+            Update(session, terminal, result.HasValue() ? "complete" : "terminal",
+                   result.HasError() ? std::optional<Error>{result.ErrorValue()} : std::nullopt);
         }
 
         [[nodiscard]] Result<void> CompleteBuild(const std::shared_ptr<GameplayBuildService::State> &state,
@@ -873,9 +884,12 @@ namespace Horo::Application {
             std::lock_guard transitionLock(session->transitionMutex);
             const GameplayBuildState terminal = TerminalStateFor(result);
             bool cacheHit = false;
+            std::optional<OperationId> outputOperation;
             {
                 std::lock_guard lock(session->Mutex());
                 cacheHit = session->cacheHit;
+                if (state->output)
+                    outputOperation = session->snapshot.operationId;
             }
             BuildTerminalOutput output = MakeTerminalOutput(result, terminal, cacheHit);
             PublishRecord(*state, session,
@@ -886,9 +900,7 @@ namespace Horo::Application {
                                             .code = std::move(output.code),
                                             .message = std::move(output.message)});
             UpdateTerminalOperation(*state, session, result, terminal, cacheHit);
-            Update(session, terminal, result.HasValue() ? "complete" : "terminal",
-                   result.HasError() ? std::optional<Error>{result.ErrorValue()} : std::nullopt);
-            RemoveActiveProject(state, projectKey, session->snapshot.id);
+            PublishTerminalSession(*state, session, projectKey, outputOperation, terminal, result);
             return result;
         }
 
@@ -1026,6 +1038,18 @@ namespace Horo::Application {
             found == state_->sessions.end() || found->second != session || IsTerminal(session->snapshot.state))
             return std::nullopt;
         return session->snapshot;
+    }
+
+    /** @copydoc GameplayBuildService::QueryLatestCompletedOutput */
+    std::optional<OperationId> GameplayBuildService::QueryLatestCompletedOutput(const std::filesystem::path &projectRoot) const {
+        std::error_code error;
+        const auto absolute = std::filesystem::absolute(projectRoot, error);
+        if (error)
+            return std::nullopt;
+        const auto projectKey = absolute.lexically_normal().generic_string();
+        std::lock_guard lock(state_->Mutex());
+        const auto found = state_->completedOutputs.find(projectKey);
+        return found == state_->completedOutputs.end() ? std::nullopt : std::optional{found->second};
     }
 
     bool GameplayBuildService::RequestCancel(const GameplayBuildSessionId id) const {
