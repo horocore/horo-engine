@@ -54,15 +54,16 @@ namespace Horo::Editor {
             if (!request)
                 return provider->Discover(stop);
             AgentTurnRuntime runtime;
+            AgentTurnTextObserver observe;
+            if (draft)
+                observe = [&draft](std::string_view delta) {
+                    draft->Append(delta);
+                };
             if (source) {
                 const auto dispatch = source->Dispatch(stop);
-                return runtime.Run(*provider, nullptr, turn, std::move(*request), {}, stop, &dispatch);
+                return runtime.Run(*provider, nullptr, turn, std::move(*request), {}, stop, &dispatch, observe);
             }
-            if (draft)
-                return runtime.Run(*provider, nullptr, turn, std::move(*request), {}, stop, nullptr, [&draft](std::string_view delta) {
-                    draft->Append(delta);
-                });
-            return runtime.Run(*provider, nullptr, turn, std::move(*request), {}, stop);
+            return runtime.Run(*provider, nullptr, turn, std::move(*request), {}, stop, nullptr, observe);
         }
 
         /** @brief Presents sanitized, localized remediation without displaying transport response bodies. */
@@ -145,13 +146,14 @@ namespace Horo::Editor {
             void Poll() {
                 if (history_.Poll()) {
                     if (std::exchange(awaitingCheckpoint_, false))
-                        Send({}, true);
+                        Send(prompt_, {}, true);
                     else
                         history_.FinishRecovery(AgentHistoryMessageState::Incomplete);
                 } else if (awaitingCheckpoint_ && !history_.RecoveryStartPending()) {
                     awaitingCheckpoint_ = false;
                 }
                 PollReply();
+                PollLiveResponse();
             }
 
             void DrawIcon(ImDrawList *draw, const ImVec2 &position, const ImVec2 &size, ImU32 color) override {
@@ -177,8 +179,8 @@ namespace Horo::Editor {
                 if (status_)
                     ImGui::TextWrapped("%s", LocalizedText(locale, status_).c_str());
                 if (!response_.empty())
-                    ImGui::TextWrapped("%s", response_.c_str());
-                if (liveDraft_ && background_->CanCancel() && Button(locale, "history_draft_offer", true))
+                    Ui::WrappedText(ImGui::GetContentRegionAvail().x, response_, Theme::Text(), fonts);
+                if (liveDraft_ && history_.HasRecovery() && background_->CanCancel() && Button(locale, "history_draft_offer", true))
                     history_.ReviewLiveDraft(*liveDraft_);
                 history_.Draw(context);
                 ImGui::EndChild();
@@ -198,14 +200,24 @@ namespace Horo::Editor {
                 SavedFile
             };
 
+            struct PlainReplay final {
+                std::string endpoint;
+                std::string model;
+                std::string prompt;
+            };
+
             [[nodiscard]] bool Busy() const {
                 return background_->Busy();
             }
 
-            /** @brief Checks the common prerequisites for preparing or sending a user prompt. */
+            /** @brief Checks the common prerequisites for dispatch at the currently selected destination. */
+            [[nodiscard]] bool CanRunTurn() const {
+                return !Busy() && !awaitingCheckpoint_ && !history_.HasRecovery() && !endpoint_.empty() && !model_.empty();
+            }
+
+            /** @brief Enables composer actions only when a prompt has been entered. */
             [[nodiscard]] bool CanSendPrompt() const {
-                return !Busy() && !awaitingCheckpoint_ && !history_.HasRecovery() && !endpoint_.empty() && !model_.empty() &&
-                       !prompt_.empty();
+                return CanRunTurn() && !prompt_.empty();
             }
 
             void RevokeContext() noexcept {
@@ -213,6 +225,7 @@ namespace Horo::Editor {
                     contextLifetime_->RequestCancellation();
                 contextLifetime_.reset();
                 contextPreview_.reset();
+                plainReplay_.reset();
                 activeSource_ = {};
                 activeSourceRange_ = {};
                 openSources_ = {};
@@ -277,7 +290,10 @@ namespace Horo::Editor {
                 }
                 const bool ready = CanSendPrompt();
                 if (Button(locale, "ask", ready)) {
-                    Send({});
+                    Send(prompt_);
+                    return;
+                }
+                if (DrawRegenerate(locale)) {
                     return;
                 }
                 if (Button(locale, "history_recovery_offer", ready && history_.CanReviewRecovery())) {
@@ -297,8 +313,19 @@ namespace Horo::Editor {
                 if (count.has_value()) {
                     ImGui::Text("%s %zu", LocalizedText(locale, "scene_count").c_str(), *count);
                     if (Button(locale, "ask_with_scene_count", ready))
-                        Send(count);
+                        Send(prompt_, count);
                 }
+            }
+
+            /** @brief Offers the last plain prompt again only at its exact prior destination. */
+            bool DrawRegenerate(const ILocalizationService &locale) {
+                if (!plainReplay_)
+                    return false;
+                const bool sameDestination = plainReplay_->endpoint == endpoint_ && plainReplay_->model == model_;
+                if (!Button(locale, "regenerate", sameDestination && CanRunTurn()))
+                    return false;
+                Send(plainReplay_->prompt);
+                return true;
             }
 
             /** @brief Opens a query for the active graph only after an explicit editor action. */
@@ -625,7 +652,7 @@ namespace Horo::Editor {
                     const bool selected = ReviewSelectionCurrent();
                     auto approved = std::exchange(contextPreview_, std::nullopt);
                     if (selected && approved->Approve())
-                        Send({}, false, std::move(approved));
+                        Send(prompt_, {}, false, std::move(approved));
                     else
                         status_ = "context_stale";
                     return;
@@ -635,32 +662,38 @@ namespace Horo::Editor {
                     contextPreview_.reset();
             }
 
-            void Send(std::optional<std::size_t> sceneCount, bool recoverable = false, std::optional<EditorLocalAgentContext> source = {}) {
+            void Send(std::string_view prompt, std::optional<std::size_t> sceneCount = {}, bool recoverable = false,
+                      std::optional<EditorLocalAgentContext> source = {}) {
                 ModelRequest request;
                 request.model = model_;
-                request.messages.push_back({.role = ModelRole::User, .text = prompt_});
+                request.messages.push_back({.role = ModelRole::User, .text = std::string{prompt}});
                 history_.ClearReview();
-                submittedPrompt_ = recoverable || sceneCount.has_value() || source ? std::nullopt : std::optional{prompt_};
+                const bool plain = !recoverable && !sceneCount && !source;
+                auto replay = plain ? std::optional{PlainReplay{endpoint_, model_, request.messages.front().text}} : std::nullopt;
+                submittedPrompt_ = plain ? std::optional{request.messages.front().text} : std::nullopt;
                 submittedReference_.reset();
                 if (source)
                     submittedReference_ = source->HistoryReference();
                 else if (sceneCount)
                     submittedReference_ = AgentHistoryReference{AgentHistoryReferenceKind::ToolCall, turn_ + 1, contextGeneration_};
                 submittedProject_ = history_.Project();
-                if (!Start(std::move(request), sceneCount, std::move(source), recoverable) && recoverable)
+                if (Start(std::move(request), sceneCount, std::move(source)))
+                    plainReplay_ = std::move(replay);
+                else if (recoverable)
                     history_.FinishRecovery(AgentHistoryMessageState::Failed);
             }
 
             [[nodiscard]] bool Start(std::optional<ModelRequest> request, std::optional<std::size_t> sceneCount = {},
-                                     std::optional<EditorLocalAgentContext> source = {}, const bool recoverable = false) {
+                                     std::optional<EditorLocalAgentContext> source = {}) {
                 try {
-                    auto draft = recoverable ? std::make_shared<AgentHistoryLiveDraft>() : nullptr;
+                    auto draft = request && !sceneCount ? std::make_shared<AgentHistoryLiveDraft>() : nullptr;
                     BackgroundTurn::Operation task{[endpoint = endpoint_, request = std::move(request), sceneCount,
                                                     source = std::move(source), turn = ++turn_, draft](std::stop_token stop) mutable {
                         return RunLocalOperation(std::move(endpoint), std::move(request), sceneCount, std::move(source), turn, draft, stop);
                     }};
                     if (background_->Start(std::move(task))) {
                         liveDraft_ = std::move(draft);
+                        displayedDraftBytes_ = 0;
                         status_ = "working";
                         response_.clear();
                         return true;
@@ -672,6 +705,18 @@ namespace Horo::Editor {
                 submittedPrompt_.reset();
                 submittedReference_.reset();
                 return false;
+            }
+
+            /** @brief Keeps the latest safe prefix when a transient display allocation fails. */
+            void PollLiveResponse() {
+                if (!liveDraft_)
+                    return;
+                try {
+                    if (auto updated = liveDraft_->DisplayIfChanged(displayedDraftBytes_))
+                        response_ = std::move(*updated);
+                } catch (const std::bad_alloc &) {
+                    // Live display is optional while the worker still owns the terminal response.
+                }
             }
 
             void PollReply() {
@@ -794,6 +839,8 @@ namespace Horo::Editor {
             std::shared_ptr<BackgroundTurn> background_;
             EditorLocalAgentHistory history_;
             std::shared_ptr<AgentHistoryLiveDraft> liveDraft_;
+            std::size_t displayedDraftBytes_{};
+            std::optional<PlainReplay> plainReplay_;
             std::optional<std::string> submittedPrompt_;
             std::optional<AgentHistoryReference> submittedReference_;
             AgentHistoryProjectRevision submittedProject_;

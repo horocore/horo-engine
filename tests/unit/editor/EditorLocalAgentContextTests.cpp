@@ -206,16 +206,20 @@ namespace Horo::Editor {
             shouldSend = true;
         }
         RecordingModel provider;
-        auto worker = std::async(std::launch::async, [context = std::move(context), &provider]() mutable {
+        std::string observed;
+        auto worker = std::async(std::launch::async, [context = std::move(context), &provider, &observed]() mutable {
             const auto dispatch = context.Dispatch();
             AgentTurnRuntime runtime;
             const ModelRequest request{.model = "local", .messages = {{.role = ModelRole::User, .text = "Explain the active source"}}};
-            return runtime.Run(provider, nullptr, 77, request, {}, {}, &dispatch);
+            return runtime.Run(provider, nullptr, 77, request, {}, {}, &dispatch, [&observed](std::string_view delta) {
+                observed.append(delta);
+            });
         });
         const auto result = worker.get();
         if (!shouldSend) {
             CHECK(result.status == AgentTurnStatus::ContextDenied);
             CHECK(provider.sent.empty());
+            CHECK(observed.empty());
             return;
         }
         REQUIRE(result.status == AgentTurnStatus::Completed);
@@ -224,6 +228,7 @@ namespace Horo::Editor {
         REQUIRE(result.messages.size() == 2);
         CHECK(result.messages.front().text == "Explain the active source");
         CHECK(result.messages.back().text == "Local response");
+        CHECK(observed == result.messages.back().text);
     }
 
     TEST_CASE("An explicitly selected open source keeps its own revision and loses approval when closed",

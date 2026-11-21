@@ -201,7 +201,7 @@ namespace Horo::Agent {
                                           static_cast<std::uint32_t>(ModelFeature::Usage)};
             if (turnId == 0 || !ValidLimits(limits) || (!request.tools.empty() && !tools) || !AdmitModelRequest(request, known).Succeeded())
                 return {InvalidRequest, {}};
-            if (observeText && (context || tools))
+            if (observeText && tools)
                 return {InvalidRequest, {}};
             const auto contextOffset = request.messages.size() - 1;
             const auto contextCount = context ? context->preview.Items().size() : 0;

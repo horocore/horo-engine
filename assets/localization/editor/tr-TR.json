@@ -95,6 +95,7 @@
     "workspace.local_agent.model": {"text": "Model adı"},
     "workspace.local_agent.prompt": {"text": "Mesaj"},
     "workspace.local_agent.ask": {"text": "Yerel modele gönder"},
+    "workspace.local_agent.regenerate": {"text": "Son bağlamsız yanıtı yeniden üret"},
     "workspace.local_agent.scene_count": {"text": "Sahnedeki nesne sayısı"},
     "workspace.local_agent.ask_with_scene_count": {"text": "Gönder ve bir nesne sayısı sorgusuna izin ver"},
     "workspace.local_agent.tools_unsupported": {"text": "Araçları destekleyen kurulu bir model seçin veya yalnızca mesajı gönderin."},

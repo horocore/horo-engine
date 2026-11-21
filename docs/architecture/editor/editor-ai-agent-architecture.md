@@ -994,6 +994,15 @@ its authoritative owner.
 4. Opening the panel establishes (or resumes) a conversation
 5. Closing the panel hides it; the conversation persists in the background
 
+The local chat panel displays completed, redacted lines while an inference
+without tools is running, including turns with explicitly approved attachments.
+The display polls the bounded worker draft without waiting for the producer.
+Final delivery uses the terminal response. A live display does not approve
+conversation storage or create a history checkpoint.
+Regenerate resubmits the last plain prompt to the same selected model and
+endpoint. The separate composer keeps its current draft. Context-bearing and
+tool turns require a new explicit selection and approval.
+
 ### Activity Bar Button
 
 When the AI capability is composed, the AI Chat button is contributed to the

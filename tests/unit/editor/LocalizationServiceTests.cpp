@@ -849,6 +849,7 @@ TEST_CASE("Local model panel copy resolves in both shipped locales", "[unit][edi
                                "model",
                                "prompt",
                                "ask",
+                               "regenerate",
                                "stop",
                                "working",
                                "invalid",

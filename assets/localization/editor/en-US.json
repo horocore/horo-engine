@@ -95,6 +95,7 @@
     "workspace.local_agent.model": {"text": "Model name"},
     "workspace.local_agent.prompt": {"text": "Message"},
     "workspace.local_agent.ask": {"text": "Send to local model"},
+    "workspace.local_agent.regenerate": {"text": "Regenerate last plain response"},
     "workspace.local_agent.scene_count": {"text": "Current scene objects"},
     "workspace.local_agent.ask_with_scene_count": {"text": "Send and allow one scene count query"},
     "workspace.local_agent.tools_unsupported": {"text": "Choose an installed model that supports tools, or send the message by itself."},

@@ -241,6 +241,19 @@ namespace Horo::Agent {
         size_ += accepted.size();
     }
 
+    /** @copydoc AgentHistoryLiveDraft::DisplayIfChanged */
+    std::optional<std::string> AgentHistoryLiveDraft::DisplayIfChanged(std::size_t &displayedBytes) const {
+        std::string prefix;
+        {
+            const std::unique_lock lock{mutex_, std::try_to_lock};
+            if (!lock.owns_lock() || complete_ == displayedBytes)
+                return {};
+            prefix.assign(buffer_.data(), complete_);
+            displayedBytes = complete_;
+        }
+        return RedactHistoryDisplayText(AgentHistoryTextKind::AssistantMessage, prefix).admittedText;
+    }
+
     /** @copydoc AgentHistoryLiveDraft::Review */
     Result<AgentHistoryAnswerReview> AgentHistoryLiveDraft::Review(const AgentHistoryRecoveryTurn recovery) const {
         const auto prefix = [this] {

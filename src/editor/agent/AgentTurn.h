@@ -72,7 +72,7 @@ namespace Horo::Agent {
                                                   std::string &result) const = 0;
     };
 
-    /** @brief Synchronous worker observer for accepted deltas from a plain text-only turn. */
+    /** @brief Synchronous worker observer for accepted deltas from an inference with no tools. */
     using AgentTurnTextObserver = std::function<void(std::string_view)>;
 
     /** @brief Editor-owned admission for at most one active authoring turn.
@@ -89,7 +89,7 @@ namespace Horo::Agent {
          * @param limits Host-approved finite budgets. Transient failures terminate the turn without automatic retry.
          * @param cancellation Host-owned signal observed cooperatively by the provider and tools.
          * @param context Optional exact preview already confirmed by the user. Its policy must be owned by this calling lane.
-         * @param observeText Optional ephemeral text observer. Requires a turn with no tools or attached context.
+         * @param observeText Optional ephemeral text observer. Requires a turn with no tool controller.
          * @return One terminal outcome. The tool controller retains authority to reject and cancel operations.
          */
         [[nodiscard]] AgentTurnResult Run(IModelProvider &provider, const IAgentTurnTools *tools, std::uint64_t turnId,

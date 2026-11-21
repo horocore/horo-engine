@@ -712,13 +712,19 @@ namespace Horo::Agent {
         const AgentHistoryRecoveryTurn recovery{projectRevision, *opened.started};
 
         AgentHistoryLiveDraft draft;
+        std::size_t displayedBytes{};
+        CHECK_FALSE(draft.DisplayIfChanged(displayedBytes));
         draft.Append("Public line");
+        CHECK_FALSE(draft.DisplayIfChanged(displayedBytes));
         RequireError(draft.Review(recovery), AgentHistoryErrors::Invalid);
         draft.Append("\nAuthorization: Bear");
+        CHECK(draft.DisplayIfChanged(displayedBytes) == "Public line\n");
+        CHECK_FALSE(draft.DisplayIfChanged(displayedBytes));
         const auto early = draft.Review(recovery);
         REQUIRE(early.HasValue());
         CHECK(early.Value().Answer() == "Public line\n");
         draft.Append("er split-secret\nUnapproved suffix");
+        CHECK(draft.DisplayIfChanged(displayedBytes) == "Public line\n[redacted]\n");
         const auto preview = draft.Review(recovery);
         REQUIRE(preview.HasValue());
         CHECK(preview.Value().Answer() == "Public line\n[redacted]\n");

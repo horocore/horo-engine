@@ -102,6 +102,12 @@ namespace Horo::Agent {
         /** @brief Appends accepted plain-text model output up to the durable message limit. */
         void Append(std::string_view delta);
 
+        /** @brief Copies a newly completed, redacted prefix without waiting for the worker.
+         * @param displayedBytes Source byte count already inspected by this display consumer.
+         * @return Updated ephemeral text when a complete displayable prefix is ready.
+         */
+        [[nodiscard]] std::optional<std::string> DisplayIfChanged(std::size_t &displayedBytes) const;
+
         /** @brief Freezes the current redacted prefix for explicit approval of a streaming checkpoint. */
         [[nodiscard]] Result<AgentHistoryAnswerReview> Review(AgentHistoryRecoveryTurn recovery) const;
 
