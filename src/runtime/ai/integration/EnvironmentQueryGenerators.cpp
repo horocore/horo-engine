@@ -597,6 +597,16 @@ namespace Horo::AI {
         });
     }
 
+    /** @copydoc BuiltinPointNavigationPlan::Rule */
+    QueryScoreRule BuiltinPointNavigationPlan::Rule() const {
+        QueryScoreRule rule{.stage = test, .requiredFilterValue = true};
+        if (maximumScoredCost)
+            rule.score = QueryScoreRange{.maximum = *maximumScoredCost,
+                                         .weight = static_cast<double>(scoreWeight),
+                                         .direction = QueryScoreDirection::Lower};
+        return rule;
+    }
+
     /** @copydoc CaptureBuiltinPointNavigation */
     Result<BuiltinPointNavigationPlan> CaptureBuiltinPointNavigation(const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry,
                                                                      const QueryContextSnapshot &contexts) {

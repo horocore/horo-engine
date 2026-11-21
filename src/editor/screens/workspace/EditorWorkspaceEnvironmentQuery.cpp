@@ -1,4 +1,5 @@
 #include "AuthoredAiSourceInventory.h"
+#include "EnvironmentQueryPreviewNavigation.h"
 #include "EnvironmentQueryPreviewPhysics.h"
 #include "EnvironmentQueryWorkspaceSource.h"
 #include "Horo/AI/AIErrors.h"
@@ -157,13 +158,18 @@ namespace Horo::Editor {
             Math::WorldCoordinate64 center;
         };
 
-        using LatticePreviewTest = std::variant<LatticePreviewDistance, AI::QueryStageId>;
+        struct LatticePreviewNavigation final {
+            AI::QueryStageId stage;
+        };
+
+        using LatticePreviewTest = std::variant<LatticePreviewDistance, AI::QueryStageId, LatticePreviewNavigation>;
 
         /** @brief Detached native test programs and their canonical query ranking rules. */
         struct LatticePreviewScoring final {
             AI::QueryScoringPlan plan;
             std::vector<LatticePreviewTest> tests;
             std::optional<AI::BuiltinPointVisibilityPlan> visibility;
+            std::optional<AI::BuiltinPointNavigationPlan> navigation;
         };
 
         /** @brief Admits every authored preview test before a worker can observe the Scene capture. */
@@ -179,6 +185,13 @@ namespace Horo::Editor {
                     return Output::Failure(captured.ErrorValue());
                 visibility = captured.Value();
             }
+            std::optional<AI::BuiltinPointNavigationPlan> navigation;
+            if (AI::UsesBuiltinPointNavigation(plan)) {
+                const auto captured = AI::CaptureBuiltinPointNavigation(plan, schema, contexts);
+                if (captured.HasError())
+                    return Output::Failure(captured.ErrorValue());
+                navigation = captured.Value();
+            }
             std::vector<LatticePreviewTest> tests;
             std::vector<AI::QueryScoreRule> rules;
             tests.reserve(authored.size());
@@ -187,6 +200,11 @@ namespace Horo::Editor {
                 if (visibility && stage.id == visibility->test) {
                     rules.push_back({.stage = stage.id, .requiredFilterValue = true});
                     tests.emplace_back(stage.id);
+                    continue;
+                }
+                if (navigation && stage.id == navigation->test) {
+                    rules.push_back(navigation->Rule());
+                    tests.emplace_back(LatticePreviewNavigation{stage.id});
                     continue;
                 }
                 auto test = AI::BuiltinPointDistanceQuery::Capture(stage, schema);
@@ -202,15 +220,21 @@ namespace Horo::Editor {
             auto scoring = AI::QueryScoringPlan::Capture(plan, schema, rules, AI::QueryScoreTieBreak::StableIndex);
             if (scoring.HasError())
                 return Output::Failure(scoring.ErrorValue());
-            return Output::Success({std::move(scoring).Value(), std::move(tests), visibility});
+            return Output::Success({std::move(scoring).Value(), std::move(tests), visibility, navigation});
         }
 
         /** @brief Evaluates one bounded set of native stages without consulting mutable Scene state. */
         Result<void> EvaluateLatticeTests(std::span<const LatticePreviewTest> tests, const Math::WorldCoordinate64 &point, bool visible,
-                                          std::span<AI::QueryTestSample> facts) {
+                                          const AI::QueryTestSample *path, std::span<AI::QueryTestSample> facts) {
             for (std::size_t index = 0; index < tests.size(); ++index) {
                 if (const auto *stage = std::get_if<AI::QueryStageId>(&tests[index])) {
                     facts[index] = {.stage = *stage, .filter = visible, .metric = visible ? 1.0 : 0.0};
+                    continue;
+                }
+                if (const auto *navigation = std::get_if<LatticePreviewNavigation>(&tests[index])) {
+                    if (!path || path->stage != navigation->stage)
+                        return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryContextInvalid));
+                    facts[index] = *path;
                     continue;
                 }
                 const auto &distance = std::get<LatticePreviewDistance>(tests[index]);
@@ -232,6 +256,11 @@ namespace Horo::Editor {
             return sample * (total - 1) / std::max<std::size_t>(1, count - 1);
         }
 
+        void CapturePreviewPoints(std::span<const AI::QueryGeneratedItem> items, std::span<Math::WorldCoordinate64> points) {
+            for (std::size_t index = 0; index < points.size(); ++index)
+                points[index] = std::get<Math::WorldCoordinate64>(items[PreviewCandidateIndex(index, items.size(), points.size())]);
+        }
+
         Result<LatticePreviewCandidates> GenerateLatticePreview(const AI::EnvironmentQueryPlan &plan,
                                                                 const AI::QueryContextSnapshot &contexts,
                                                                 AI::QueryGeneratorProvenance origin) {
@@ -250,7 +279,7 @@ namespace Horo::Editor {
                                                                   const AI::QueryContextSnapshot &contexts,
                                                                   const AI::BuiltinPointVisibilityPlan &visibility,
                                                                   const Runtime::RuntimeSceneView &scene, SceneObjectId anchor,
-                                                                  const EnvironmentQueryPreviewPhysics *physics) {
+                                                                  bool navigation, const EnvironmentQueryPreviewPhysics *physics) {
             using Candidates = Result<LatticePreviewCandidates>;
             if (!physics || !physics->capture)
                 return Candidates::Failure(MakeError(AI::AIErrors::EnvironmentQueryContextCapabilityUnavailable));
@@ -267,10 +296,11 @@ namespace Horo::Editor {
 
             std::array<Math::WorldCoordinate64, AI::MaximumQueryPhysicsVisibilityRays> points;
             const auto &items = candidates.Value().items;
-            const auto count = std::min(points.size(), items.size());
-            for (std::size_t index = 0; index < count; ++index)
-                points[index] = std::get<Math::WorldCoordinate64>(items[PreviewCandidateIndex(index, items.size(), count)]);
-            auto clear = physics->capture(scene, {*querier, visibility.test, *eye, std::span{points}.first(count),
+            const auto count =
+                std::min({points.size(), items.size(), navigation ? EnvironmentQueryPreviewNavigation::MaximumPaths : points.size()});
+            const auto sample = std::span{points}.first(count);
+            CapturePreviewPoints(items, sample);
+            auto clear = physics->capture(scene, {*querier, visibility.test, *eye, sample,
                                                   Physics::PhysicsQueryChannelId::FromBytes(visibility.channel)});
             if (clear.HasError())
                 return Candidates::Failure(clear.ErrorValue());
@@ -396,6 +426,7 @@ namespace Horo::Editor {
                                                               const LatticePreviewScoring &scoring,
                                                               const AI::QueryGeneratorProvenance &provenance,
                                                               std::optional<LatticePreviewCandidates> captured,
+                                                              const EnvironmentQueryPreviewNavigation::Evaluate &navigation,
                                                               const CancellationToken &cancel) {
             using Preview = Result<AI::QueryDebugSnapshot>;
             const auto cancelled = [] {
@@ -409,7 +440,20 @@ namespace Horo::Editor {
                 return Preview::Failure(generated.ErrorValue());
             const auto &candidates = generated.Value();
             const auto total = candidates.items.size();
-            const auto evaluated = scoring.visibility ? std::min(total, candidates.clear.size()) : total;
+            auto evaluated = scoring.visibility ? std::min(total, candidates.clear.size()) : total;
+            std::vector<AI::QueryTestSample> paths;
+            if (scoring.navigation) {
+                evaluated = std::min(evaluated, EnvironmentQueryPreviewNavigation::MaximumPaths);
+                std::array<Math::WorldCoordinate64, EnvironmentQueryPreviewNavigation::MaximumPaths> storage;
+                const auto points = std::span{storage}.first(evaluated);
+                CapturePreviewPoints(candidates.items, points);
+                auto tested = navigation(points, cancel);
+                if (tested.HasError())
+                    return Preview::Failure(tested.ErrorValue());
+                paths = std::move(tested).Value();
+                if (paths.size() != evaluated)
+                    return Preview::Failure(MakeError(AI::AIErrors::EnvironmentQueryContextInvalid));
+            }
             AI::QueryDebugSnapshot snapshot{.query = plan.Id(),
                                             .generator = provenance.stage,
                                             .terminalStatus = AI::QueryExecutionStatus::Completed,
@@ -429,7 +473,8 @@ namespace Horo::Editor {
                 const auto candidate = PreviewCandidateIndex(index, total, evaluated);
                 const auto point = std::get<Math::WorldCoordinate64>(candidates.items[candidate]);
                 const bool visible = scoring.visibility && candidates.clear[index];
-                if (const auto tested = EvaluateLatticeTests(scoring.tests, point, visible, facts); tested.HasError())
+                const auto *path = paths.empty() ? nullptr : &paths[index];
+                if (const auto tested = EvaluateLatticeTests(scoring.tests, point, visible, path, facts); tested.HasError())
                     return Preview::Failure(tested.ErrorValue());
                 scores.push_back(scoring.plan.Evaluate(static_cast<std::uint32_t>(candidate), 0, facts));
                 const auto sampled = snapshot.candidates.size();
@@ -550,6 +595,31 @@ namespace Horo::Editor {
                selection.primary == pin.anchor && (!pin.target || PreviewSelectionTarget(selection.objects, pin.anchor) == pin.target);
     }
 
+    Result<EnvironmentQueryPreviewNavigation::Evaluate> EditorWorkspaceController::CaptureEnvironmentQueryNavigation(
+        const Runtime::RuntimeSceneView &scene, SceneObjectId anchor, AI::QueryStageId stage) {
+        using Captured = Result<EnvironmentQueryPreviewNavigation::Evaluate>;
+        const auto unavailable = [] {
+            return Captured::Failure(MakeError(AI::AIErrors::EnvironmentQueryContextCapabilityUnavailable));
+        };
+        if (!m_queryPreviewNavigation || !m_queryPreviewNavigation->capture || !m_defaultScenePath)
+            return unavailable();
+        const auto projectRoot = ProjectRoot();
+        const auto *asset = m_assetRegistry.FindByPath(WorkspacePortablePathText(m_defaultScenePath->lexically_relative(projectRoot)));
+        if (!asset || asset->type.Value() != "core.scene")
+            return unavailable();
+        const auto actor = CapturePreviewActor(scene, anchor);
+        if (actor.HasError())
+            return Captured::Failure(actor.ErrorValue());
+        const auto definition = BuildRuntimeSceneProjection(m_document.Snapshot());
+        if (definition.HasError())
+            return Captured::Failure(definition.ErrorValue());
+        auto access = m_queryPreviewNavigation->capture(
+            {projectRoot, asset->id, definition.Value(), scene, actor.Value().entity, actor.Value().point, stage});
+        if (access.HasValue() && !access.Value())
+            return unavailable();
+        return access;
+    }
+
     /** @copydoc EditorWorkspaceController::StartEnvironmentQueryPreview */
     Result<void> EditorWorkspaceController::StartEnvironmentQueryPreview(EnvironmentQueryWorkspaceDocument &document,
                                                                          const EnvironmentQueryPreviewRequest &request) {
@@ -578,8 +648,6 @@ namespace Horo::Editor {
         const auto stages = plan.Value().Stages();
         if (!document.settings)
             return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
-        if (document.settings->navigation)
-            return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryStageUnsupported));
         const auto *generator = m_querySchema->Find(stages.front().generator);
         if (!generator)
             return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
@@ -594,17 +662,25 @@ namespace Horo::Editor {
         std::optional<LatticePreviewCandidates> candidates;
         if (scoring.Value().visibility) {
             auto visibility = CaptureVisibilityPreview(plan.Value(), *contexts.Value(), *scoring.Value().visibility, *current, pin.anchor,
-                                                       m_queryPreviewPhysics);
+                                                       scoring.Value().navigation.has_value(), m_queryPreviewPhysics);
             if (visibility.HasError())
                 return Result<void>::Failure(visibility.ErrorValue());
             candidates.emplace(std::move(visibility).Value());
         }
+        EnvironmentQueryPreviewNavigation::Evaluate navigation;
+        if (const auto &stage = scoring.Value().navigation) {
+            auto access = CaptureEnvironmentQueryNavigation(*current, pin.anchor, stage->test);
+            if (access.HasError())
+                return Result<void>::Failure(access.ErrorValue());
+            navigation = std::move(access).Value();
+        }
         auto output = std::make_shared<std::shared_ptr<const AI::QueryDebugSnapshot>>();
-        auto job = m_sourceRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Cpu},
-                                                      [plan = std::move(plan).Value(), contexts = std::move(contexts).Value(),
-                                                       scoring = std::move(scoring).Value(), origin, output,
-                                                       candidates = std::move(candidates)](const CancellationToken &cancel) mutable {
-            auto evaluated = EvaluateLatticePreview(plan, *contexts, scoring, origin, std::move(candidates), cancel);
+        auto job =
+            m_sourceRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Cpu},
+                                               [plan = std::move(plan).Value(), contexts = std::move(contexts).Value(),
+                                                scoring = std::move(scoring).Value(), origin, output, candidates = std::move(candidates),
+                                                navigation = std::move(navigation)](const CancellationToken &cancel) mutable {
+            auto evaluated = EvaluateLatticePreview(plan, *contexts, scoring, origin, std::move(candidates), navigation, cancel);
             if (evaluated.HasError())
                 return Result<void>::Failure(std::move(evaluated).ErrorValue());
             *output = std::make_shared<const AI::QueryDebugSnapshot>(std::move(evaluated).Value());
@@ -1174,11 +1250,6 @@ namespace Horo::Editor {
             label(text("workspace.environment_query.perception_preview"), Theme::Muted());
             return true;
         }
-        if (opened->settings && opened->settings->navigation) {
-            label(text("workspace.environment_query.provider_preview"), Theme::Muted());
-            return true;
-        }
-
         using enum EnvironmentQueryPreviewStatus;
         const auto &preview = opened->preview;
         const bool running = preview.status == Running;
@@ -1214,12 +1285,16 @@ namespace Horo::Editor {
                                         "workspace.environment_query.preview_failed"};
         if (preview.status != Idle || (!sceneAvailable && !missingTarget))
             label(text(StatusKeys[static_cast<std::size_t>(preview.status)]), preview.diagnostic ? Theme::Warn() : Theme::Muted());
+        if (preview.status == Failed && preview.diagnostic && !preview.diagnostic->message.empty())
+            label(preview.diagnostic->message, Theme::Warn());
         if (!preview.snapshot)
             return true;
         const auto &snapshot = *preview.snapshot;
         auto previewDescription = text(query.Stages().size() == 1 ? "workspace.environment_query.preview_generator_only"
                                                                   : "workspace.environment_query.preview_distance");
-        if (opened->settings && opened->settings->visibility)
+        if (opened->settings && opened->settings->navigation)
+            previewDescription = text("workspace.environment_query.preview_navigation");
+        else if (opened->settings && opened->settings->visibility)
             previewDescription = text("workspace.environment_query.preview_visibility");
         label(previewDescription, Theme::Muted());
         const auto evaluated = snapshot.generated != snapshot.evaluated

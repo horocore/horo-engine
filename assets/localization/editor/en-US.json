@@ -1065,7 +1065,7 @@
     "workspace.environment_query.perceived_actors": {"text": "Perceived actors"},
     "workspace.environment_query.currently_sensed": {"text": "Currently sensed only"},
     "workspace.environment_query.perception_preview": {"text": "Perception queries use the agent’s live observations."},
-    "workspace.environment_query.provider_preview": {"text": "Navigation tests require an active simulation."},
+    "workspace.environment_query.preview_navigation": {"text": "Path tests use the saved Scene and cooked NavMesh."},
     "workspace.environment_query.preview_visibility": {"text": "Scene visibility uses up to 32 lattice points. Coordinates are shown in millimeters."},
     "workspace.environment_query.live_select": {"text": "Select a Play agent and open the saved query used by its decision."},
     "workspace.environment_query.live_waiting": {"text": "Waiting for the selected agent to run this query."},

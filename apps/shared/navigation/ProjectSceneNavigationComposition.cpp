@@ -102,6 +102,17 @@ namespace Horo::Application::Internal {
             return Prepared::Success({std::move(backend).Value(), reservation});
         }
 
+        Result<std::unique_ptr<Assets::AssetPayloadCache>> CreateNavigationTileCache(const Nav::NavigationProjectProfile &policy) {
+            using Cache = Result<std::unique_ptr<Assets::AssetPayloadCache>>;
+            const auto &capacity = policy.Capacities();
+            if (capacity.maximumConcurrentQueries > Nav::RecastDetourProviderHardLimits::ConcurrentQueries ||
+                capacity.maximumResidentMemoryBytes > std::numeric_limits<std::size_t>::max() ||
+                capacity.maximumBytesPerResidentTile >= capacity.maximumResidentMemoryBytes)
+                return Cache::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
+            return Assets::AssetPayloadCache::Create(capacity.maximumResidentTiles,
+                                                     static_cast<std::size_t>(capacity.maximumBytesPerResidentTile));
+        }
+
         /** @brief Bounds queued work from the same project capacities as provider admission. */
         [[nodiscard]] Nav::NavigationPathBatchLimits CoordinatorLimits(const Nav::NavigationProjectProfile &profile) noexcept {
             const auto &capacity = profile.Capacities();
@@ -147,6 +158,7 @@ namespace Horo::Application::Internal {
             return Selection::Failure(scope.ErrorValue());
         return Selection::Success(std::make_shared<const ProjectSceneNavigationSelection>(
             ProjectSceneNavigationSelection{{surface.Value()->id, scope.Value()},
+                                            surface.Value()->definition,
                                             surface.Value()->profiles.front(),
                                             workspace.target,
                                             settings.Value().RuntimeProfile(),
@@ -154,17 +166,44 @@ namespace Horo::Application::Internal {
                                             workspace.jobs}));
     }
 
+    /** @copydoc PrepareProjectNavigationPreviewBackend */
+    Result<std::unique_ptr<Nav::INavigationQueryBackend>> PrepareProjectNavigationPreviewBackend(
+        const ProjectSceneNavigationSelection &selection, const Nav::NavMeshAssetSource &assets,
+        const Nav::NavigationWorldActivationDescriptor &identity, const CancellationToken &cancellation) {
+        using Backend = Result<std::unique_ptr<Nav::INavigationQueryBackend>>;
+        const auto &capacity = selection.policy.Capacities();
+        const auto tileLimit = static_cast<std::size_t>(capacity.maximumBytesPerResidentTile);
+        auto cache = CreateNavigationTileCache(selection.policy);
+        if (cache.HasError())
+            return Backend::Failure(cache.ErrorValue());
+        const auto loaded = Nav::LoadNavMeshAsset(assets, selection.definition, selection.target, *cache.Value(), cancellation,
+                                                  {.scope = selection.surface.scope});
+        if (loaded.HasError())
+            return Backend::Failure(loaded.ErrorValue());
+        const auto &provenance = loaded.Value().contentProvenance;
+        if (!provenance || !provenance->projectProfile || !provenance->projectProfile->MatchesAuthority(selection.policy))
+            return Backend::Failure(MakeError(Nav::NavigationErrors::ProjectProfileStale));
+        const auto &partitions = loaded.Value().partitions;
+        const auto partition = std::ranges::find_if(partitions, [&](const auto &candidate) {
+            return candidate.surface == selection.surface.surface && candidate.profile == selection.profile;
+        });
+        if (partition == partitions.end())
+            return Backend::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
+        const std::array surfaces{Nav::NavigationLoadedSurface{selection.definition, 0, std::to_address(partition)}};
+        auto prepared =
+            PrepareBackend(selection, identity, surfaces, static_cast<std::size_t>(capacity.maximumResidentMemoryBytes) - tileLimit);
+        if (prepared.HasError())
+            return Backend::Failure(prepared.ErrorValue());
+        auto result = std::move(prepared).Value();
+        return Backend::Success(std::move(result.backend));
+    }
+
     /** @copydoc CreateProjectSceneNavigationWorld */
     Result<std::unique_ptr<ProjectSceneNavigationWorld>> CreateProjectSceneNavigationWorld(
         const ProjectSceneNavigationSelection &selection) {
         using World = Result<std::unique_ptr<ProjectSceneNavigationWorld>>;
         const auto &capacity = selection.policy.Capacities();
-        if (capacity.maximumConcurrentQueries > Nav::RecastDetourProviderHardLimits::ConcurrentQueries ||
-            capacity.maximumResidentMemoryBytes > std::numeric_limits<std::size_t>::max() ||
-            capacity.maximumBytesPerResidentTile >= capacity.maximumResidentMemoryBytes)
-            return World::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
-        auto cache = Assets::AssetPayloadCache::Create(capacity.maximumResidentTiles,
-                                                       static_cast<std::size_t>(capacity.maximumBytesPerResidentTile));
+        auto cache = CreateNavigationTileCache(selection.policy);
         if (cache.HasError())
             return World::Failure(cache.ErrorValue());
         auto agents = Nav::NavigationAgentRegistry::Create({capacity.maximumAgents});

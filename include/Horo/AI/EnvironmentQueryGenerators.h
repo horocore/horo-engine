@@ -145,6 +145,9 @@ namespace Horo::AI {
         QueryStageId test;
         std::optional<double> maximumScoredCost;
         std::uint32_t scoreWeight{1};
+
+        /** @brief Applies the authored cost normalization and reachability filter. */
+        [[nodiscard]] QueryScoreRule Rule() const;
     };
 
     /** @brief Detects an authored Navigation reachability or traversal-cost stage. */

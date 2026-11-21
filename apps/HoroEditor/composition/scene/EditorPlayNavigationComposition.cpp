@@ -1,4 +1,5 @@
 #include "EditorProjectSceneHostOwner.h"
+#include "Horo/AI/EnvironmentQueryNavigation.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Platform/NativeProjectReadFiles.h"
 #include "Horo/Scene/CookedSceneDefinition.h"
@@ -109,6 +110,106 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         if (encoded.Value() != expected.Value())
             return Result<void>::Failure(MakeError(stale, "The active Play Scene differs from the selected committed Scene."));
         return Result<void>::Success();
+    }
+
+    namespace {
+        using PreviewNavigation = Editor::EnvironmentQueryPreviewNavigation;
+        using PathSamples = Result<std::vector<AI::QueryTestSample>>;
+
+        struct NavigationPreviewBatch final {
+            std::filesystem::path root;
+            Assets::AssetRegistrySnapshot registry;
+            std::shared_ptr<const CommittedSceneAssets> assets;
+            Runtime::RuntimeSceneDefinition definition;
+            Assets::AssetId scene;
+            Assets::AssetCookTargetId target;
+            Navigation::NavigationWorldActivationDescriptor identity;
+            Runtime::NavigationAgentComponent agent;
+            Math::WorldCoordinate64 start;
+            AI::QueryStageId stage;
+            JobSystem &jobs;
+
+            Result<std::shared_ptr<const ProjectSceneNavigationSelection>> Select(const CancellationToken &cancellation) const {
+                using Selection = Result<std::shared_ptr<const ProjectSceneNavigationSelection>>;
+                const auto metadata = LoadProjectMetadata(root);
+                if (metadata.HasError())
+                    return Selection::Failure(metadata.ErrorValue());
+                const auto files = Platform::CreateNativeProjectReadFiles(root, metadata.Value().projectId, 1);
+                if (files.HasError())
+                    return Selection::Failure(files.ErrorValue());
+                const Platform::ProjectReadContext context{.projectIdentity = metadata.Value().projectId,
+                                                           .projectGeneration = 1,
+                                                           .cancellation = cancellation,
+                                                           .deadline = std::chrono::steady_clock::now() + std::chrono::seconds{30}};
+                return CaptureProjectSceneNavigation({*files.Value(), context, registry, definition, scene, target, jobs});
+            }
+
+            PathSamples operator()(std::span<const Math::WorldCoordinate64> points, const CancellationToken &cancel) const {
+                if (points.size() > PreviewNavigation::MaximumPaths)
+                    return PathSamples::Failure(MakeError(Navigation::NavigationErrors::CapacityExceeded));
+                if (points.empty())
+                    return PathSamples::Success({});
+                const auto selected = Select(cancel);
+                if (selected.HasError())
+                    return PathSamples::Failure(selected.ErrorValue());
+                const auto &selection = *selected.Value();
+                if (agent.profile != selection.profile)
+                    return PathSamples::Failure(MakeError(Navigation::NavigationErrors::AgentDescriptorInvalid));
+                const auto backend =
+                    PrepareProjectNavigationPreviewBackend(selection, {registry, assets->SceneProvider()}, identity, cancel);
+                if (backend.HasError())
+                    return PathSamples::Failure(backend.ErrorValue());
+                const Navigation::NavigationPathRequest path{.world = identity.world,
+                                                             .topology = identity.topology,
+                                                             .filter = agent.filter,
+                                                             .requirement = selection.policy.MaximumQuery()};
+                std::vector<AI::QueryTestSample> samples;
+                samples.reserve(points.size());
+                for (const auto &point : points) {
+                    const auto sample = AI::EvaluateBuiltinPointNavigationPath(*backend.Value(), path, stage, start, point, cancel);
+                    if (sample.HasError())
+                        return PathSamples::Failure(sample.ErrorValue());
+                    samples.push_back(sample.Value());
+                }
+                return PathSamples::Success(std::move(samples));
+            }
+        };
+    }  // namespace
+
+    Result<Editor::EnvironmentQueryPreviewNavigation::Evaluate> ProjectPlaySceneHost::CapturePreviewNavigation(
+        const std::filesystem::path &previewRoot, const std::optional<SceneCookSelection> &cook, JobSystem &jobs,
+        const Editor::EnvironmentQueryPreviewNavigationRequest &request) const {
+        using Captured = Result<Editor::EnvironmentQueryPreviewNavigation::Evaluate>;
+        if (!cook || !resources_.assets_)
+            return Captured::Failure(MakeError(Navigation::NavigationErrors::NoNavigationData));
+        std::error_code error;
+        if (!std::filesystem::equivalent(previewRoot, request.root, error) || error)
+            return Captured::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
+        if (!request.scene.IsCurrent() || request.scene.DefinitionId() != request.definition.Id() ||
+            request.scene.DefinitionRevision() != request.definition.Revision())
+            return Captured::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
+        const auto owner = request.scene.Get(request.querier);
+        if (owner.HasError())
+            return Captured::Failure(owner.ErrorValue());
+        const auto &agent = owner.Value().components->navigationAgent;
+        if (!agent || !agent->enabled || agent->movementCapability != Navigation::NavigationAgentMovementCapability::Grounded)
+            return Captured::Failure(MakeError(Navigation::NavigationErrors::AgentDescriptorInvalid));
+        auto committed = resources_.assets_->DecodeScene(request.sceneAsset);
+        if (committed.HasError())
+            return Captured::Failure(committed.ErrorValue());
+        const auto matched =
+            MatchCommittedPlayProjection(request.definition, committed.Value(), Navigation::NavigationErrors::StaleSnapshot);
+        if (matched.HasError())
+            return Captured::Failure(matched.ErrorValue());
+
+        const auto id = request.scene.RuntimeId().value;
+        const Navigation::NavigationWorldActivationDescriptor identity{Navigation::NavigationSceneRuntimeId::Create(id).Value(),
+                                                                       Navigation::NavigationSceneGeneration::Create(id).Value(),
+                                                                       Navigation::NavigationWorldId::Create(id).Value(),
+                                                                       Navigation::NavigationGeneration::Create(id).Value()};
+        return Captured::Success(NavigationPreviewBatch{previewRoot, resources_.registry_.Snapshot(), resources_.assets_,
+                                                        std::move(committed).Value(), request.sceneAsset, cook->target, identity, *agent,
+                                                        request.start, request.stage, jobs});
     }
 
     /** @copydoc ProjectPlaySceneHost::PrepareNavigation */

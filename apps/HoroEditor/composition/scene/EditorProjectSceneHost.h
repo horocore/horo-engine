@@ -9,6 +9,7 @@
 #include "EditorPlaySaveHost.h"
 #include "EditorPlaySceneHost.h"
 #include "EditorPlayXrHost.h"
+#include "EnvironmentQueryPreviewNavigation.h"
 #include "EnvironmentQueryPreviewPhysics.h"
 #include "Horo/AI/AISceneActivation.h"
 #include "Horo/Prefab/PrefabMetrics.h"
@@ -93,6 +94,7 @@ namespace Horo::Application::Internal {
         std::unique_ptr<Runtime::RuntimeSceneService> scenes;
         Physics::PhysicsRuntimeMode physicsMode; /**< Actual successfully created peer, never inferred from a schema file. */
         Editor::EnvironmentQueryPreviewPhysics queryPreviewPhysics;
+        Editor::EnvironmentQueryPreviewNavigation queryPreviewNavigation;
     };
 
     /** @brief Prepares explicit project preview resources without starting/publishing a Scene candidate.

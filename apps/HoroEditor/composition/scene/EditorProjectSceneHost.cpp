@@ -119,7 +119,12 @@ namespace Horo::Application::Internal {
             [native = owner.get()](const Runtime::RuntimeSceneView &scene, const AI::QueryPhysicsVisibilityRequest &request) {
             return native->CapturePreviewVisibility(scene, request);
         }};
-        return Result<EditorProjectPreviewScene>::Success({std::move(owner), std::move(scenes), mode, std::move(queryPreview)});
+        Editor::EnvironmentQueryPreviewNavigation navigationPreview{
+            [native = owner.get(), root, cook = policy.cooked, &jobs](const Editor::EnvironmentQueryPreviewNavigationRequest &request) {
+            return native->CapturePreviewNavigation(root, cook, jobs, request);
+        }};
+        return Result<EditorProjectPreviewScene>::Success(
+            {std::move(owner), std::move(scenes), mode, std::move(queryPreview), std::move(navigationPreview)});
     }
 
     /** @copydoc ValidateEditorPreviewProjectScope */

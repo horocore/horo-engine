@@ -4451,6 +4451,7 @@ namespace Horo::Editor {
             screenHost.Services().Register<CollisionActivationEvidence>(collisionActivation);
             screenHost.Services().RegisterConst<EditorPreviewCollisionReceiptSource>(previewCollisionReceipt);
             screenHost.Services().RegisterConst(preview.queryPreviewPhysics);
+            screenHost.Services().RegisterConst(preview.queryPreviewNavigation);
             screenHost.Services().RegisterConst<WorkspaceReadSourceFactory>(workspaceReadSources);
             if (p.options.xrInputPlayer)
                 screenHost.Services().RegisterConst<EditorXrInputPlayerSelection>(*p.options.xrInputPlayer);

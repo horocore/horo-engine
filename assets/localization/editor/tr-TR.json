@@ -1065,7 +1065,7 @@
     "workspace.environment_query.perceived_actors": {"text": "Algılanan aktörler"},
     "workspace.environment_query.currently_sensed": {"text": "Yalnızca şu anda algılananlar"},
     "workspace.environment_query.perception_preview": {"text": "Algı sorguları ajanın çalışma anındaki gözlemlerini kullanır."},
-    "workspace.environment_query.provider_preview": {"text": "Navigasyon testleri etkin bir simülasyon gerektirir."},
+    "workspace.environment_query.preview_navigation": {"text": "Yol testleri kaydedilmiş Sahneyi ve derlenmiş NavMesh’i kullanır."},
     "workspace.environment_query.preview_visibility": {"text": "Sahne görüş testi en fazla 32 ızgara noktası kullanır. Koordinatlar milimetre cinsinden gösterilir."},
     "workspace.environment_query.live_select": {"text": "Bir Play ajanı seçin ve kararında kullanılan kayıtlı sorguyu açın."},
     "workspace.environment_query.live_waiting": {"text": "Seçili ajanın bu sorguyu çalıştırması bekleniyor."},

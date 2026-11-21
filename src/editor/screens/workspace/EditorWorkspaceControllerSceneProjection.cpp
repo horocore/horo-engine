@@ -130,14 +130,7 @@ namespace Horo::Editor {
             (m_deferredRuntimeSnapshot && m_deferredRuntimeSnapshot->state == snapshot.state))
             return;
 
-        Result<Runtime::RuntimeSceneDefinition> definition = ConvertSceneDocumentToRuntime(snapshot, m_previewSceneId, m_triggerBinding);
-        if (!snapshot.prefabInstances.empty() && m_prefabSources && m_viewModel.prefabHierarchy &&
-            !m_viewModel.prefabHierarchyUnavailable && m_viewModel.prefabHierarchy->documentRevision == snapshot.revision.value) {
-            auto limits = PrefabLimits();
-            if (limits.HasValue())
-                definition = ConvertScenePrefabProjectionToRuntime(snapshot, m_previewSceneId, *m_viewModel.prefabHierarchy->sources,
-                                                                   m_prefabSources->resolver, limits.Value(), nullptr, m_triggerBinding);
-        }
+        auto definition = BuildRuntimeSceneProjection(snapshot);
         if (definition.HasError()) {
             LOG_ERROR("editor.runtime_scene", "Scene conversion failed: %s", definition.ErrorValue().message.c_str());
             return;
@@ -148,6 +141,18 @@ namespace Horo::Editor {
         }
         m_queuedRuntimeRevision = snapshot.revision;
         m_queuedDefinitionRevision = Runtime::SceneDefinitionRevision{snapshot.state.value};
+    }
+
+    Result<Runtime::RuntimeSceneDefinition> EditorWorkspaceController::BuildRuntimeSceneProjection(const SceneDocumentSnapshot &snapshot) {
+        Result<Runtime::RuntimeSceneDefinition> definition = ConvertSceneDocumentToRuntime(snapshot, m_previewSceneId, m_triggerBinding);
+        if (!snapshot.prefabInstances.empty() && m_prefabSources && m_viewModel.prefabHierarchy &&
+            !m_viewModel.prefabHierarchyUnavailable && m_viewModel.prefabHierarchy->documentRevision == snapshot.revision.value) {
+            auto limits = PrefabLimits();
+            if (limits.HasValue())
+                definition = ConvertScenePrefabProjectionToRuntime(snapshot, m_previewSceneId, *m_viewModel.prefabHierarchy->sources,
+                                                                   m_prefabSources->resolver, limits.Value(), nullptr, m_triggerBinding);
+        }
+        return definition;
     }
 
     /** @copydoc EditorWorkspaceController::SynchronizeRuntimeScenePreview() */

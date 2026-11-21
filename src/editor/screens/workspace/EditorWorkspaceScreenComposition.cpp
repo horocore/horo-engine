@@ -1,4 +1,5 @@
 #include "EditorWorkspaceScreen.h"
+#include "EnvironmentQueryPreviewNavigation.h"
 #include "EnvironmentQueryPreviewPhysics.h"
 #include "Horo/AI/EnvironmentQuerySchema.h"
 #include "Horo/Application/ProjectSourceDocument.h"
@@ -391,7 +392,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                            .latticeQueryFactory = latticeFactory ? *latticeFactory : nullptr,
                                            .querySchema = services_.TryGetConst<AI::QuerySchemaRegistry>(),
                                            .queryContextAccess = contextAccess ? *contextAccess : AI::QueryContextProviderAccess{},
-                                           .queryPreviewPhysics = services_.TryGetConst<EnvironmentQueryPreviewPhysics>()};
+                                           .queryPreviewPhysics = services_.TryGetConst<EnvironmentQueryPreviewPhysics>(),
+                                           .queryPreviewNavigation = services_.TryGetConst<EnvironmentQueryPreviewNavigation>()};
     }
 
     /** @copydoc EditorWorkspaceScreen::RestoreExtensionWorkspace */

@@ -39,9 +39,9 @@ namespace Horo::AI {
         }
 
         /** @brief Translates complete path evidence without promoting a partial search to no-path. */
-        Result<std::optional<QueryTestSample>> TranslatePath(const Navigation::NavigationPath &path, const QueryStageId stage,
-                                                             const Navigation::NavigationGeneration topology) {
-            using Sample = Result<std::optional<QueryTestSample>>;
+        Result<QueryTestSample> TranslatePath(const Navigation::NavigationPath &path, const QueryStageId stage,
+                                              const Navigation::NavigationGeneration topology) {
+            using Sample = Result<QueryTestSample>;
             if (path.sourceGeneration != topology)
                 return Sample::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
             QueryTestSample sample{.stage = stage};
@@ -257,7 +257,8 @@ namespace Horo::AI {
             return Sample::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
         if (completed->result.HasError())
             return Sample::Failure(std::move(completed->result).ErrorValue());
-        return TranslatePath(completed->result.Value(), stage_, source_.topology);
+        const auto translated = TranslatePath(completed->result.Value(), stage_, source_.topology);
+        return translated.HasValue() ? Sample::Success(translated.Value()) : Sample::Failure(translated.ErrorValue());
     }
 
     /** @copydoc QueryNavigationProbe::IsCurrent */
@@ -306,15 +307,21 @@ namespace Horo::AI {
         if (access->deadlineTicks == 0 || !access->filter.IsValid() || !access->publication.activation.IsValid())
             return Admission::Failure(MakeError(Navigation::NavigationErrors::CapabilityDescriptorInvalid));
 
-        QueryScoreRule rule{.stage = captured.Value().test, .requiredFilterValue = true};
-        if (const auto cost = captured.Value().maximumScoredCost)
-            rule.score = QueryScoreRange{.maximum = *cost,
-                                         .weight = static_cast<double>(captured.Value().scoreWeight),
-                                         .direction = QueryScoreDirection::Lower};
         const std::size_t width = 2U * captured.Value().lattice.outerSteps + 1U;
         auto source =
             std::make_unique<PointNavigationSource>(captured.Value(), scene, querier, *start, settings.deadlineTick, owner, *access);
-        return Admission::Success(
-            {captured.Value().generator, rule, 2U * width * width, settings.maximumCandidates, settings.testWorkUnits, std::move(source)});
+        return Admission::Success({captured.Value().generator, captured.Value().Rule(), 2U * width * width, settings.maximumCandidates,
+                                   settings.testWorkUnits, std::move(source)});
+    }
+
+    /** @copydoc EvaluateBuiltinPointNavigationPath */
+    Result<QueryTestSample> EvaluateBuiltinPointNavigationPath(const Navigation::INavigationQueryBackend &backend,
+                                                               Navigation::NavigationPathRequest request, QueryStageId stage,
+                                                               Math::WorldCoordinate64 start, Math::WorldCoordinate64 destination,
+                                                               const CancellationToken &cancellation) {
+        request.start = StaticNavigationPoint(start);
+        request.destination = StaticNavigationPoint(destination);
+        const auto path = backend.FindPath(request, cancellation);
+        return path.HasValue() ? TranslatePath(path.Value(), stage, request.topology) : Result<QueryTestSample>::Failure(path.ErrorValue());
     }
 }  // namespace Horo::AI

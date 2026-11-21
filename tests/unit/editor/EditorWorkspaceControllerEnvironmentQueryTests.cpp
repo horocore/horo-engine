@@ -5,6 +5,7 @@
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Editor/DocumentRecoveryService.h"
+#include "Horo/Scene/SceneSource.h"
 #include "OwnedTestDirectory.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/EnvironmentQueryPreviewPhysics.h"
@@ -624,6 +625,130 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
     controller.UpdateEnvironmentQueryPreview();
     CHECK(document.preview.status == Stale);
     CHECK_FALSE(document.preview.snapshot);
+}
+
+TEST_CASE("Authoring preview ranks mixed path, distance and visibility evidence for the same saved Scene",
+          "[unit][editor][eqs][workspace]") {
+    Project project;
+    const auto sceneAsset = Assets::AssetId::FromBytes({8});
+    const std::array objects{SceneSource::SceneObjectSnapshot{.id = {1}, .name = "Query anchor"}};
+    REQUIRE(std::filesystem::create_directories(project.root / ".horo"));
+    std::ofstream(project.root / ".horo/project.json") << R"({"settings":{"defaultScene":"assets/main.horo"}})";
+    std::ofstream(project.root / "assets/main.horo") << SceneSource::EncodeSceneSource({objects, {}});
+    std::ofstream(project.root / "assets/main.horo.horo")
+        << std::format(R"({{"schemaVersion":1,"assetId":"{}","assetType":"core.scene"}})", sceneAsset.ToString());
+    const auto rebuilt = Assets::RebuildAssetRegistry(project.registry, project.root, Assets::AssetRegistryOpenMode::ReadOnly);
+    REQUIRE(rebuilt.HasValue());
+    REQUIRE(rebuilt.Value().status == Assets::AssetRegistryBuildStatus::Complete);
+
+    const auto queryId = QueryId::Create(21).Value();
+    const auto distance = QueryStageId::Create(23).Value();
+    const auto visibility = QueryStageId::Create(24).Value();
+    const auto path = QueryStageId::Create(25).Value();
+    const auto lattice = CreateBuiltinLatticeQuery(queryId, QueryStageId::Create(22).Value(), QueryResultSchemaId::Create(26).Value(),
+                                                   "Mixed preview", {.stepMillimeters = 500, .outerSteps = 1}, 9);
+    REQUIRE(lattice.HasValue());
+    const auto ranged = AddBuiltinPointDistanceTest(lattice.Value(), distance, {2000, true, 2});
+    REQUIRE(ranged.HasValue());
+    const auto occlusion = AddBuiltinPointVisibilityTest(ranged.Value(), visibility, {1});
+    REQUIRE(occlusion.HasValue());
+    const auto query = AddBuiltinPointNavigationTest(occlusion.Value(), path, 10.0, 8);
+    REQUIRE(query.HasValue());
+    project.WriteAsset(query.Value());
+    const auto registry = CaptureBuiltinQuerySchema();
+    REQUIRE(registry.HasValue());
+
+    const auto owner = std::this_thread::get_id();
+    std::thread::id pathWorker;
+    std::vector<Math::WorldCoordinate64> rayPoints;
+    std::vector<Math::WorldCoordinate64> pathPoints;
+    const EnvironmentQueryPreviewPhysics physics{[&](const Runtime::RuntimeSceneView &scene, const QueryPhysicsVisibilityRequest &request) {
+        CHECK(scene.IsCurrent());
+        CHECK(request.stage == visibility);
+        REQUIRE_FALSE(request.points.empty());
+        rayPoints.assign(request.points.begin(), request.points.end());
+        EnvironmentQueryPreviewPhysics::Visibility clear;
+        clear.fill(true);
+        clear[request.points.size() - 1] = false;
+        return Result<EnvironmentQueryPreviewPhysics::Visibility>::Success(clear);
+    }};
+    const EnvironmentQueryPreviewNavigation navigation{[&](const EnvironmentQueryPreviewNavigationRequest &request) {
+        CHECK(std::this_thread::get_id() == owner);
+        CHECK(request.sceneAsset == sceneAsset);
+        CHECK(request.scene.Get(request.querier).HasValue());
+        CHECK(request.definition.Revision() == request.scene.DefinitionRevision());
+        CHECK(request.stage == path);
+        return Result<EnvironmentQueryPreviewNavigation::Evaluate>::Success(
+            [&](std::span<const Math::WorldCoordinate64> points, const CancellationToken &) {
+            pathWorker = std::this_thread::get_id();
+            pathPoints.assign(points.begin(), points.end());
+            std::vector<QueryTestSample> samples;
+            samples.reserve(points.size());
+            for (std::size_t index = 0; index < points.size(); ++index)
+                samples.push_back({.stage = path, .filter = index != 0, .metric = index == 1 ? 1.0 : 9.0});
+            return Result<std::vector<QueryTestSample>>::Success(std::move(samples));
+        });
+    }};
+    const CancellationToken token;
+    REQUIRE(project.runtime.Startup(token).HasValue());
+    JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 8}};
+    EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(),
+                                         {.assets = {.mutableAssetRegistry = &project.registry},
+                                          .mutations = &project.mutations,
+                                          .durableFiles = &project.files,
+                                          .jobs = &jobs,
+                                          .querySchema = &registry.Value(),
+                                          .queryPreviewPhysics = &physics,
+                                          .queryPreviewNavigation = &navigation});
+    REQUIRE_FALSE(controller.InitializationError());
+    const auto &model = controller.ViewModel();
+    REQUIRE(model.objects.size() == 1);
+    const auto anchor = model.objects.front().id;
+    controller.ProcessCommand({.command = EditorWorkspaceViewCommand::SelectObject, .objectPayload = anchor});
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+    for (std::uint64_t frame = 1; std::chrono::steady_clock::now() < deadline; ++frame) {
+        REQUIRE(project.runtime.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, {frame, {}, 0.0, 0, {}, false, token}).HasValue());
+        controller.SynchronizeRuntimeScenePreview();
+        if (project.runtime.ActiveScene() && controller.ViewportScene().documentRevision == model.documentRevision)
+            break;
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    REQUIRE(project.runtime.ActiveScene());
+    REQUIRE(controller.ViewportScene().documentRevision == model.documentRevision);
+    Project::Open(controller, Project::Path);
+    REQUIRE(model.environmentQueryDocuments.size() == 1);
+    const auto &document = model.environmentQueryDocuments.front();
+    auto request = EnvironmentQueryPreviewRequest{document.identity.instance, document.source, model.documentRevision, anchor};
+    controller.ProcessCommand({.command = EditorWorkspaceViewCommand::PreviewEnvironmentQuery, .environmentQueryPreview = request});
+    using enum EnvironmentQueryPreviewStatus;
+    REQUIRE(document.preview.status == Running);
+    jobs.Shutdown(ShutdownPolicy::Drain);
+    controller.UpdateEnvironmentQueryPreview();
+    REQUIRE(document.preview.status == Ready);
+    CHECK(pathWorker != owner);
+    CHECK(pathPoints == rayPoints);
+    REQUIRE(document.preview.snapshot);
+    const auto &snapshot = *document.preview.snapshot;
+    CHECK(snapshot.generated == 9);
+    REQUIRE(snapshot.candidates.size() == 9);
+    REQUIRE(snapshot.candidates.front().score);
+    REQUIRE(snapshot.candidates.back().score);
+    CHECK(snapshot.candidates.front().score->failedStage == path);
+    CHECK(snapshot.candidates.back().score->failedStage == visibility);
+    REQUIRE_FALSE(snapshot.winners.empty());
+    CHECK(snapshot.winners.front().itemIndex == 1);
+
+    request.action = EnvironmentQueryPreviewAction::FocusCandidate;
+    request.previewEvidence = document.preview.snapshot;
+    request.candidate = 1;
+    const auto camera = model.viewportCamera.target;
+    auto transform = model.objects.front().localTransform;
+    transform.translation.x += 1;
+    controller.ProcessCommand(
+        {.command = EditorWorkspaceViewCommand::CommitObjectTransform, .objectPayload = anchor, .transformPayload = transform});
+    controller.ProcessCommand({.command = EditorWorkspaceViewCommand::PreviewEnvironmentQuery, .environmentQueryPreview = request});
+    CHECK(model.viewportCamera.target == camera);
+    CHECK(document.preview.status == Stale);
 }
 
 TEST_CASE("Environment Query checkpoints recover only over the same registered source and metadata", "[unit][editor][eqs][workspace]") {

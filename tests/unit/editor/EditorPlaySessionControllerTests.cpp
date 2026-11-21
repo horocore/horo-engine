@@ -1281,6 +1281,66 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
 }
 
 #if HORO_TEST_NAVIGATION_NATIVE
+TEST_CASE("Editor authoring EQS evaluates a committed NavMesh without starting Play", "[editor][navigation][product][eqs]") {
+    using namespace Horo::Application::Internal;
+    using Fixture = Horo::Application::CharacterSceneProductTest::NavigationProductFixture;
+    Fixture fixture;
+    fixture.Publish(Fixture::Input::Valid, Fixture::Client::None, {}, [](auto &source) {
+        source.objects.back().localTransform.translation = {1, 0, 1};
+    });
+    const auto root = fixture.project.project.dir.path;
+    auto prepared =
+        PrepareEditorProjectPreview(root, fixture.project.jobs,
+                                    {.cooked = SceneCookSelection{fixture.project.cooked.path, fixture.project.request.assets.target}});
+    REQUIRE(prepared.HasValue());
+    auto preview = std::move(prepared).Value();
+    const auto definition = SceneSource::ConvertSceneSourceToRuntime({fixture.source.objects, fixture.source.prefabInstances}, {1}, {1});
+    REQUIRE(definition.HasValue());
+    const CancellationToken cancellation;
+    REQUIRE(preview.scenes->Startup(cancellation).HasValue());
+    REQUIRE(preview.scenes->QueuePreparation(definition.Value()).HasValue());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+    for (std::uint64_t frame = 1; !preview.scenes->ActiveScene() && std::chrono::steady_clock::now() < deadline; ++frame) {
+        REQUIRE(preview.scenes->OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, {frame, {}, 0.0, 0, {}, false, cancellation})
+                    .HasValue());
+        if (const auto error = preview.scenes->TakeOperationError())
+            FAIL(error->message);
+        std::this_thread::sleep_for(std::chrono::milliseconds{1});
+    }
+    const auto scene = preview.scenes->ActiveScene();
+    REQUIRE(scene);
+    const auto querier = scene->Find(Runtime::SceneObjectId{fixture.source.objects.back().id.value});
+    REQUIRE(querier);
+    const auto start = Math::WorldCoordinate64::FromMillimeters(1000, 0, 1000);
+    const auto stage = AI::QueryStageId::Create(1).Value();
+    const auto captured =
+        preview.queryPreviewNavigation.capture({root, fixture.project.sceneId, definition.Value(), *scene, *querier, start, stage});
+    if (captured.HasError())
+        UNSCOPED_INFO(captured.ErrorValue().message);
+    REQUIRE(captured.HasValue());
+    const std::array points{Math::WorldCoordinate64::FromMillimeters(1500, 0, 1000),
+                            Math::WorldCoordinate64::FromMillimeters(15000, 0, 1000)};
+    const auto results = captured.Value()(points, cancellation);
+    if (results.HasError())
+        UNSCOPED_INFO(results.ErrorValue().message);
+    REQUIRE(results.HasValue());
+    REQUIRE(results.Value().size() == points.size());
+    CHECK(results.Value()[0].stage == stage);
+    CHECK(results.Value()[0].filter == true);
+    REQUIRE(results.Value()[0].metric);
+    CHECK(*results.Value()[0].metric > 0.0);
+    CHECK(results.Value()[1].filter == false);
+    CHECK(scene->IsCurrent());
+
+    auto edit = fixture.source.objects;
+    edit.back().localTransform.translation.x += 1.0F;
+    const auto stale = SceneSource::ConvertSceneSourceToRuntime({edit, fixture.source.prefabInstances}, {1}, {1});
+    REQUIRE(stale.HasValue());
+    CHECK(
+        preview.queryPreviewNavigation.capture({root, fixture.project.sceneId, stale.Value(), *scene, *querier, start, stage}).HasError());
+    preview.scenes->Shutdown();
+}
+
 TEST_CASE("Editor Play publishes cooked tactical path output through its admitted Navigation agent", "[editor][play][ai][product][eqs]") {
     using namespace Horo::AI;
     using namespace Horo::Application::Internal;

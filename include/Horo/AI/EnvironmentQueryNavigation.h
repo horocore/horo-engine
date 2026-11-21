@@ -27,6 +27,13 @@ namespace Horo::AI {
                                                                                const Navigation::NavigationPathPublication &current,
                                                                                const QueryGeneratorOutput &output);
 
+    /** @brief Evaluates one point against a detached static provider using the runtime reachability and cost semantics. */
+    [[nodiscard]] Result<QueryTestSample> EvaluateBuiltinPointNavigationPath(const Navigation::INavigationQueryBackend &backend,
+                                                                             Navigation::NavigationPathRequest request, QueryStageId stage,
+                                                                             Math::WorldCoordinate64 start,
+                                                                             Math::WorldCoordinate64 destination,
+                                                                             const CancellationToken &cancellation);
+
     /** @brief One exclusive best-effort path request consumed by an EQS host adapter.
      * @details The host supplies exact Navigation coordinates, caller authority and pinned revisions.
      * All methods use the coordinator owner lane. The world is borrowed for submission only.

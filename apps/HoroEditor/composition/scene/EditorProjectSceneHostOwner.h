@@ -54,7 +54,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
     /** @brief Pins registry, cooked payloads and dependent loaders in their original destruction order. */
     struct ProjectSceneAssetOwners final {
         Assets::AssetRegistry registry_;
-        std::unique_ptr<CommittedSceneAssets> assets_;
+        std::shared_ptr<const CommittedSceneAssets> assets_;
         Assets::MemoryAssetProvider emptyProvider_;
         std::unique_ptr<Assets::AssetLoadService> loads_;
         std::unique_ptr<Assets::AssetLoadService> prefabLoads_;
@@ -506,6 +506,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
 
         [[nodiscard]] Result<Editor::EnvironmentQueryPreviewPhysics::Visibility> CapturePreviewVisibility(
             const Runtime::RuntimeSceneView &scene, const AI::QueryPhysicsVisibilityRequest &request);
+        [[nodiscard]] Result<Editor::EnvironmentQueryPreviewNavigation::Evaluate> CapturePreviewNavigation(
+            const std::filesystem::path &previewRoot, const std::optional<SceneCookSelection> &cook, JobSystem &jobs,
+            const Editor::EnvironmentQueryPreviewNavigationRequest &request) const;
 
         Result<std::shared_ptr<Gameplay::GameplayPrefabContext>> PrefabServices(const Gameplay::BehaviorRegistry &registry,
                                                                                 const Gameplay::ComponentRegistry &components) override {

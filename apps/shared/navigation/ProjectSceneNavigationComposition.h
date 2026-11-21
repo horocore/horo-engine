@@ -24,6 +24,7 @@ namespace Horo::Application::Internal {
     /** @brief Canonical owner-thread policy captured once for the chosen durable Scene. */
     struct ProjectSceneNavigationSelection final {
         Navigation::NavigationBakeSurfaceKey surface;
+        Assets::AssetId definition;
         Navigation::NavigationAgentProfileId profile;
         AssetCookTargetId target;
         Navigation::NavigationProjectProfile policy;
@@ -43,6 +44,11 @@ namespace Horo::Application::Internal {
     /** @brief Captures the registered definition, selected scoped surface and exact project runtime policy. */
     [[nodiscard]] Result<std::shared_ptr<const ProjectSceneNavigationSelection>> CaptureProjectSceneNavigation(
         const ProjectSceneNavigationSource &workspace);
+
+    /** @brief Builds a query-only provider from the exact scoped cook without creating a world or caller reservations. */
+    [[nodiscard]] Result<std::unique_ptr<Navigation::INavigationQueryBackend>> PrepareProjectNavigationPreviewBackend(
+        const ProjectSceneNavigationSelection &selection, const Navigation::NavMeshAssetSource &assets,
+        const Navigation::NavigationWorldActivationDescriptor &identity, const CancellationToken &cancellation);
 
     /** @brief Reserves one distinct world-lifetime population and coordinator from the captured project limits. */
     [[nodiscard]] Result<std::unique_ptr<ProjectSceneNavigationWorld>> CreateProjectSceneNavigationWorld(

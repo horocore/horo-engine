@@ -1,6 +1,7 @@
 #pragma once
 
 #include "EditorWorkspaceHostServices.h"
+#include "EnvironmentQueryPreviewNavigation.h"
 #include "Horo/AI/EnvironmentQueryContexts.h"
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Application/TerrainAuthoringAssets.h"
@@ -154,6 +155,7 @@ namespace Horo::Editor {
         const AI::QuerySchemaRegistry *querySchema{}; /**< Application-owned immutable descriptor registry. */
         AI::QueryContextProviderAccess queryContextAccess;
         const EnvironmentQueryPreviewPhysics *queryPreviewPhysics{};
+        const EnvironmentQueryPreviewNavigation *queryPreviewNavigation{};
     };
 
     class EditorWorkspaceController {  // NOSONAR(cpp:S1820, cpp:S1448) Authoritative workspace controller
@@ -833,6 +835,7 @@ namespace Horo::Editor {
         const AI::QuerySchemaRegistry *m_querySchema{};
         AI::QueryContextProviderAccess m_queryContextAccess;
         const EnvironmentQueryPreviewPhysics *m_queryPreviewPhysics{};
+        const EnvironmentQueryPreviewNavigation *m_queryPreviewNavigation{};
         UiInspectorResources *m_uiInspectorResources{};
         JobSystem *m_sourceRecoveryJobs{};
 
@@ -1329,6 +1332,7 @@ namespace Horo::Editor {
         /** @brief Attempts one recovery write when the active document has unsaved content. */
         void WriteAutosaveRecovery();
         void QueueRuntimeScene(SceneDocumentSnapshot snapshot);
+        [[nodiscard]] Result<Runtime::RuntimeSceneDefinition> BuildRuntimeSceneProjection(const SceneDocumentSnapshot &snapshot);
         void StartPlaySession();
         void BeginPlaySession();
         /** @brief Captures the complete current native save inventory cold; errors disable save without silently dropping owners. */
@@ -1510,6 +1514,8 @@ namespace Horo::Editor {
         /** @brief Captures exact authoring inputs and submits pure bounded lattice evaluation. */
         Result<void> StartEnvironmentQueryPreview(EnvironmentQueryWorkspaceDocument &document,
                                                   const EnvironmentQueryPreviewRequest &request);
+        [[nodiscard]] Result<EnvironmentQueryPreviewNavigation::Evaluate> CaptureEnvironmentQueryNavigation(
+            const Runtime::RuntimeSceneView &scene, SceneObjectId anchor, AI::QueryStageId stage);
         /** @brief Frames a retained point from the same saved query and active authoring Scene revision. */
         void FocusEnvironmentQueryCandidate(EnvironmentQueryWorkspaceDocument &document, const EnvironmentQueryPreviewRequest &request);
         /** @brief Cancels the worker and detaches its result before retiring the controller. */
