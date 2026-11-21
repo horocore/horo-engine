@@ -3,6 +3,7 @@
 #include "GameModuleHostDetail.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/PathUtils.h"
+#include "Horo/Foundation/Platform.h"
 #include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
@@ -169,7 +170,8 @@ namespace Horo::Gameplay {
     Result<std::unique_ptr<LoadedGameModule>> GameModuleHost::PrepareArtifactImage(const std::filesystem::path &libraryPath,
                                                                                    const GameModuleLoadExpectation &expectation,
                                                                                    const bool ownedShadow,
-                                                                                   const CancellationToken &cancellation) {
+                                                                                   const CancellationToken &cancellation,
+                                                                                   const std::optional<Sha256Digest> recorded) {
         using Output = Result<std::unique_ptr<LoadedGameModule>>;
         if (cancellation.IsCancellationRequested())
             return Output::Failure(JobCancelled().ErrorValue());
@@ -182,6 +184,21 @@ namespace Horo::Gameplay {
         auto impl = std::make_shared<LoadedGameModule::Impl>();
         impl->codeImage = std::move(image).Value();
         impl->loadedArtifactPath = libraryPath;
+        if (recorded) {
+            const auto &library = *impl->codeImage->library;
+            if (!library.OwnsSymbolAtPath(library.GetSymbol(GetGameModuleDescriptorSymbol), libraryPath) ||
+                !library.OwnsSymbolAtPath(library.GetSymbol(GetGameplayDescriptorBundleSymbol), libraryPath))
+                return Output::Failure(MakeError(GameplayErrors::InvalidGameModuleDescriptor,
+                                                 "The loaded native exports do not belong to the recorded gameplay artifact."));
+            const auto bytes =
+                NativeDurableFileSystem{}.ReadFileBounded(libraryPath, Detail::MaximumRecordedNativeArtifactBytes, cancellation);
+            if (bytes.HasError())
+                return Output::Failure(bytes.ErrorValue());
+            if (ComputeSha256(std::as_bytes(std::span{bytes.Value()})) != *recorded)
+                return Output::Failure(MakeError(GameplayErrors::InvalidGameModuleDescriptor,
+                                                 "The loaded gameplay artifact no longer matches its recorded bytes."));
+            impl->codeImage->recordedArtifact = recorded;
+        }
         const auto exports = ReadValidatedExports(*impl->codeImage->library, expectation);
         if (exports.HasError())
             return Output::Failure(exports.ErrorValue());

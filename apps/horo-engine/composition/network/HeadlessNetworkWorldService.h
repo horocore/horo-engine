@@ -628,10 +628,11 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return AdmitHeadlessCookedControllers(catalog, *owners_->definition, selection, limits.Value(), record_->sceneCancellation,
                                                       &queries);
             const auto &gameplay = *owners_->gameplay;
-            auto image = Gameplay::GameModuleHost::PrepareImage(gameplay.nativeArtifact,
-                                                                {gameplay.moduleId, Gameplay::CurrentGameplayBuildFingerprint(),
-                                                                 gameplay.descriptorRevision},
-                                                                record_->sceneCancellation);
+            const Gameplay::GameModuleLoadExpectation expected{gameplay.moduleId, Gameplay::CurrentGameplayBuildFingerprint(),
+                                                               gameplay.descriptorRevision};
+            auto image = gameplay.recordReplayImage
+                             ? Gameplay::GameModuleHost::PrepareRecordedImage(gameplay.nativeArtifact, expected, record_->sceneCancellation)
+                             : Gameplay::GameModuleHost::PrepareImage(gameplay.nativeArtifact, expected, record_->sceneCancellation);
             if (image.HasError())
                 return Result<std::vector<AI::AiControllerDescriptor>>::Failure(image.ErrorValue());
             record_->preparedGameplay = std::move(image).Value();

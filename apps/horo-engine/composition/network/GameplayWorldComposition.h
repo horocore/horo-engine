@@ -32,6 +32,7 @@ namespace Horo::Application::Internal {
     /** @brief Compatibility metadata from the active native or Lua behavior image. */
     struct GameplayReplayProfile final {
         Sha256Digest digest;
+        Sha256Digest source;
         std::uint64_t revision{};
         bool native{};
     };
@@ -75,6 +76,7 @@ namespace Horo::Application::Internal {
             vfxScene; /**< Explicit Scene owner; configured factories clone its original cold policy per WorldRecord. */
         std::shared_ptr<const Prefab::IPrefabGroupPublicationOwner> prefabGroupPublication; /**< Optional host-owned Scene binding. */
         std::weak_ptr<Runtime::SceneAnimationRuntime> animation; /**< Explicit authority Scene animation owner, when composed. */
+        bool recordReplayImage{};                                /**< Opt-in file-identity capture during native module admission. */
     };
 
     /** @brief Explicit asset authorities and bounds for a composition-owned cooked prefab provider.

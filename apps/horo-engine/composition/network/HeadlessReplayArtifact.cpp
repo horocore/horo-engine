@@ -19,7 +19,7 @@ namespace Horo::Application::Internal {
         constexpr std::uint32_t SceneInputSchemaVersion = 1;
         constexpr std::uint32_t PerceptionInputSchemaVersion = 1;
         constexpr std::uint32_t QueryPublicationSchemaVersion = 1;
-        constexpr std::uint32_t GameplaySchemaVersion = 1;
+        constexpr std::uint32_t GameplaySchemaVersion = 2;
         constexpr std::uint32_t NavigationReplaySchemaVersion = 1;
         constexpr std::uint32_t RigidBodyMotionSchemaVersion = 2;
         constexpr std::uint32_t CharacterMotionSchemaVersion = 1;
@@ -131,11 +131,10 @@ namespace Horo::Application::Internal {
         Json EncodeGameplay(const HeadlessReplayGameplay &gameplay) {
             auto records = EncodeGameplayRecords(gameplay);
             auto omissions = Json::array({"private-module-state", "external-gameplay-inputs", "deferred-scene-publication"});
-            if (gameplay.profile.native)
-                omissions.push_back("native-image-content");
             return {{"schemaVersion", GameplaySchemaVersion},
                     {"scope", "fixed-transform-submissions"},
                     {"source", gameplay.profile.native ? "native" : "lua"},
+                    {"sourceDigest", FormatSha256(gameplay.profile.source)},
                     {"revision", std::to_string(gameplay.profile.revision)},
                     {"profile", FormatSha256(gameplay.profile.digest)},
                     {"digest", FormatSha256(HashRecords(records))},

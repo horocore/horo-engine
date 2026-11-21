@@ -214,14 +214,19 @@ namespace Horo::Application::Internal {
                 const auto &gameplay = file.at("gameplay");
                 const auto &records = gameplay.at("records");
                 const auto &transforms = records.at("transforms");
-                if (gameplay.at("schemaVersion") != 1 || gameplay.at("scope") != "fixed-transform-submissions" || !transforms.is_array() ||
-                    transforms.size() > 64 || !records.at("callbacks").is_number_unsigned() ||
-                    !records.at("sceneCommandsQueued").is_boolean())
+                const auto &source = gameplay.at("source");
+                if (gameplay.at("schemaVersion") != 2 || gameplay.at("scope") != "fixed-transform-submissions" ||
+                    (source != "native" && source != "lua") || !transforms.is_array() || transforms.size() > 64 ||
+                    !records.at("callbacks").is_number_unsigned() || !records.at("sceneCommandsQueued").is_boolean())
                     throw InvalidEvidence{};
                 const auto digest = HashJson(records);
                 if (digest != ReadDigest(gameplay.at("digest")))
                     throw InvalidEvidence{};
-                result.At(Gameplay) = {{AI::AiReplayCoverage::Deterministic, 1, ReadDigest(gameplay.at("profile"))},
+                const auto image = ReadDigest(gameplay.at("sourceDigest"));
+                const auto profile = ReadDigest(gameplay.at("profile"));
+                const std::array<std::span<const std::byte>, 2> parts{std::as_bytes(std::span{image.bytes}),
+                                                                      std::as_bytes(std::span{profile.bytes})};
+                result.At(Gameplay) = {{AI::AiReplayCoverage::Deterministic, 2, ComputeSha256Fragments(parts)},
                                        {{ReadIdentity(gameplay.at("revision")), result.tick}, digest}};
             }
             if (file.contains("queryPublication") || file.contains("blackboardSync")) {

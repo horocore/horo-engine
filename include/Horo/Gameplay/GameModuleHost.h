@@ -5,6 +5,7 @@
  * @brief Validated ownership and unload ordering for one project gameplay dynamic library.
  */
 
+#include "Horo/Foundation/Sha256.h"
 #include "Horo/Gameplay/BehaviorRestore.h"
 #include "Horo/Gameplay/GameModule.h"
 #include "Horo/Gameplay/PersistenceInstallation.h"
@@ -101,6 +102,8 @@ namespace Horo::Gameplay {
         [[nodiscard]] Result<std::shared_ptr<const AI::PerceptionSenseGeneration>> AcquirePerceptionSenses() const;
         /** @brief Returns the artifact path actually loaded by the platform library loader. */
         [[nodiscard]] const std::filesystem::path &LoadedArtifactPath() const noexcept;
+        /** @brief Returns the verified bytes of the recorded native artifact, when explicitly captured. */
+        [[nodiscard]] std::optional<Sha256Digest> RecordedArtifactDigest() const noexcept;
         /** @brief Returns the frozen descriptor registry while the module is loaded. */
         [[nodiscard]] const BehaviorRegistry &Registry() const noexcept;
         /**
@@ -267,6 +270,14 @@ namespace Horo::Gameplay {
         [[nodiscard]] static Result<std::unique_ptr<PreparedGameModuleImage>> PrepareImage(const std::filesystem::path &libraryPath,
                                                                                            const GameModuleLoadExpectation &expectation,
                                                                                            const CancellationToken &cancellation = {});
+        /** @brief Prepares one verified private copy beside the selected module for content-addressed diagnostics.
+         * @param libraryPath Absolute artifact in a host-controlled build directory.
+         * @param expectation Approved SDK/module identity. @param cancellation Optional owner cancellation.
+         * @return Inert loaded image pinned to the recorded contents, or an original typed failure.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<PreparedGameModuleImage>> PrepareRecordedImage(
+            const std::filesystem::path &libraryPath, const GameModuleLoadExpectation &expectation,
+            const CancellationToken &cancellation = {});
         /** @brief Binds this host's real service scopes and activates the exact prepared image once.
          * @param prepared Owner to consume on the preparing thread. Off-thread refusal leaves it intact.
          * @param cancellation Host cancellation ancestry. @return Activated owner, owned diagnostic, or pre-factory failure.
@@ -306,10 +317,9 @@ namespace Horo::Gameplay {
         [[nodiscard]] Result<GameModuleLoadCandidate> LoadArtifact(const std::filesystem::path &libraryPath,
                                                                    const GameModuleLoadExpectation &expectation, bool ownedShadow) const;
         /** @brief Shares native and shadow image preparation before any service-scoped work. */
-        [[nodiscard]] static Result<std::unique_ptr<LoadedGameModule>> PrepareArtifactImage(const std::filesystem::path &libraryPath,
-                                                                                            const GameModuleLoadExpectation &expectation,
-                                                                                            bool ownedShadow,
-                                                                                            const CancellationToken &cancellation);
+        [[nodiscard]] static Result<std::unique_ptr<LoadedGameModule>> PrepareArtifactImage(
+            const std::filesystem::path &libraryPath, const GameModuleLoadExpectation &expectation, bool ownedShadow,
+            const CancellationToken &cancellation, std::optional<Sha256Digest> recorded = std::nullopt);
         /** @brief Shared startup path; legacy portable Load can intentionally omit Scene scopes. */
         [[nodiscard]] Result<GameModuleLoadCandidate> ActivatePreparedImage(std::unique_ptr<LoadedGameModule> &prepared,
                                                                             const CancellationToken &cancellation) const;

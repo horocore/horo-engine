@@ -728,7 +728,10 @@ namespace Horo::Application::Internal {
             return Result<NetworkProductComposition>::Failure(std::move(valid).ErrorValue());
         if (auto valid = ValidateLiveWorldSelection(input, gameplay); valid.HasError())
             return Result<NetworkProductComposition>::Failure(std::move(valid).ErrorValue());
-        auto owners = std::make_shared<WorldOwners>(std::move(definition), gameplay, replicationAdmission);
+        auto selectedGameplay = gameplay;
+        if (selectedGameplay && input.decisionReplay)
+            selectedGameplay->recordReplayImage = true;
+        auto owners = std::make_shared<WorldOwners>(std::move(definition), selectedGameplay, replicationAdmission);
         if (auto prepared = owners->PreparePhysicsRuntime(input.mode); prepared.HasError())
             return Result<NetworkProductComposition>::Failure(prepared.ErrorValue());
         owners->configured.emplace(std::move(input));

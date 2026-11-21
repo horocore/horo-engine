@@ -20,6 +20,8 @@
 
 namespace Horo::Gameplay {
     namespace Detail {
+        inline constexpr std::size_t MaximumRecordedNativeArtifactBytes = 512U * 1024U * 1024U;
+
         /** @brief Pin native SDK deleter code independently of module instances and defer owned shadow cleanup. */
         struct GameModuleCodeImage final {
             explicit GameModuleCodeImage(std::unique_ptr<Platform::DynamicLibrary> loaded) : library(std::move(loaded)) {}
@@ -28,6 +30,7 @@ namespace Horo::Gameplay {
             ~GameModuleCodeImage() noexcept;
             std::unique_ptr<Platform::DynamicLibrary> library;
             std::filesystem::path shadowArtifact;
+            std::optional<Sha256Digest> recordedArtifact;
         };
 
         /** @brief Generation-owned native contributions; shutdown retires each registry before the code image. */

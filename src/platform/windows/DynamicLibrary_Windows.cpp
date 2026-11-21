@@ -4,6 +4,7 @@
 #include "Horo/Platform/PlatformErrors.h"
 
 #include <algorithm>
+#include <array>
 #include <filesystem>
 #include <new>
 #include <stdexcept>
@@ -42,6 +43,18 @@ namespace Horo::Platform {
                 } catch (const std::length_error &) {
                     return nullptr;
                 }
+            }
+
+            [[nodiscard]] bool OwnsSymbolAtPath(const void *symbol, const std::filesystem::path &path) const override {
+                MEMORY_BASIC_INFORMATION region{};
+                if (!symbol || VirtualQuery(symbol, &region, sizeof(region)) == 0 || region.AllocationBase != m_handle)
+                    return false;
+                std::array<wchar_t, 32768> image{};
+                const auto length = GetModuleFileNameW(m_handle, image.data(), static_cast<DWORD>(image.size()));
+                std::error_code error;
+                return length != 0 && length < image.size() &&
+                       std::filesystem::equivalent(Foundation::Paths::NativeApiPath(path), std::filesystem::path{image.data()}, error) &&
+                       !error;
             }
 
         private:

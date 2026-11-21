@@ -106,6 +106,11 @@ namespace Horo::Gameplay {
         return impl_->loadedArtifactPath;
     }
 
+    /** @copydoc LoadedGameModule::RecordedArtifactDigest */
+    std::optional<Sha256Digest> LoadedGameModule::RecordedArtifactDigest() const noexcept {
+        return impl_->codeImage ? impl_->codeImage->recordedArtifact : std::nullopt;
+    }
+
     /** @copydoc LoadedGameModule::Registry */
     const BehaviorRegistry &LoadedGameModule::Registry() const noexcept {
         return *impl_->registries.registry;

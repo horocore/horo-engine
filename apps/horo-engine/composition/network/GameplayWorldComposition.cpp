@@ -218,9 +218,18 @@ namespace Horo::Application::Internal {
         }
         options.replicationAdmission = selection.replicationAdmission;
         GameModuleHost loader{std::move(options)};
-        auto loaded = prepared ? loader.ActivatePrepared(prepared->image, prepared->cancellation)
-                               : loader.Load(selection.nativeArtifact,
-                                             {selection.moduleId, CurrentGameplayBuildFingerprint(), selection.descriptorRevision});
+        const GameModuleLoadExpectation expectation{selection.moduleId, CurrentGameplayBuildFingerprint(), selection.descriptorRevision};
+        const auto activate = [&]() -> Result<GameModuleLoadCandidate> {
+            if (prepared)
+                return loader.ActivatePrepared(prepared->image, prepared->cancellation);
+            if (!selection.recordReplayImage)
+                return loader.Load(selection.nativeArtifact, expectation);
+            auto recorded = GameModuleHost::PrepareRecordedImage(selection.nativeArtifact, expectation);
+            if (recorded.HasError())
+                return Result<GameModuleLoadCandidate>::Failure(recorded.ErrorValue());
+            return loader.ActivatePrepared(*recorded.Value());
+        };
+        auto loaded = activate();
         if (loaded.HasError())
             return Result<void>::Failure(loaded.ErrorValue());
         auto candidate = std::move(loaded).Value();
@@ -484,19 +493,26 @@ namespace Horo::Application::Internal {
         const auto hashText = [](const std::string_view text) {
             return ComputeSha256(std::as_bytes(std::span{text}));
         };
-        const auto profile = [](const Sha256Digest &left, const Sha256Digest &right, const std::uint64_t revision, const bool native) {
+        const auto profile = [&](const Sha256Digest &left, const Sha256Digest &right, const Sha256Digest &source,
+                                 const std::uint64_t revision, const bool native) {
             std::array<std::byte, 9> identity{};
             identity[0] = static_cast<std::byte>(native);
             for (std::size_t byte = 0; byte < sizeof(revision); ++byte)
                 identity[byte + 1] = static_cast<std::byte>(revision >> (byte * 8));
-            const std::array<std::span<const std::byte>, 3> parts{std::as_bytes(std::span{left.bytes}),
-                                                                  std::as_bytes(std::span{right.bytes}), identity};
-            return GameplayReplayProfile{ComputeSha256Fragments(parts), revision, native};
+            const auto replication = replicationLease_ ? replicationLease_->Descriptors()->Fingerprint() : Sha256Digest{};
+            const std::array<std::span<const std::byte>, 5> parts{std::as_bytes(std::span{left.bytes}),
+                                                                  std::as_bytes(std::span{right.bytes}),
+                                                                  std::as_bytes(std::span{source.bytes}),
+                                                                  std::as_bytes(std::span{replication.bytes}), identity};
+            return GameplayReplayProfile{ComputeSha256Fragments(parts), source, revision, native};
         };
-        if (native_)
-            return profile(hashText(native_->ModuleId()), hashText(native_->BuildFingerprint()), native_->DescriptorRevision(), true);
-        if (script_)
-            return profile(hashText(script_->Descriptor().typeId.Value()), script_->SourceDigest(), script_->Revision(), false);
+        if (native_) {
+            if (const auto source = native_->RecordedArtifactDigest())
+                return profile(hashText(native_->ModuleId()), hashText(native_->BuildFingerprint()), *source, native_->DescriptorRevision(),
+                               true);
+        } else if (script_) {
+            return profile(hashText(script_->Descriptor().typeId.Value()), {}, script_->SourceDigest(), script_->Revision(), false);
+        }
         return {};
     }
 

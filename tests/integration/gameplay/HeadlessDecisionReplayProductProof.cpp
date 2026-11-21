@@ -2,6 +2,7 @@
 #include "HeadlessReplayArtifact.h"
 #include "Horo/AI/AICanonicalState.h"
 #include "Horo/AI/AIErrors.h"
+#include "Horo/Foundation/Platform.h"
 #include "Horo/Network/NetworkErrors.h"
 #include "Horo/Scene/CookedSceneDefinition.h"
 #include "NetworkProductHost.h"
@@ -97,6 +98,16 @@ namespace Horo::Application::PrefabAtomicTest {
             const auto incompatible = Internal::CompareHeadlessReplayArtifacts(file, candidate);
             REQUIRE(incompatible.HasError());
             CHECK(incompatible.ErrorValue().code.Value() == AI::AIErrors::CanonicalSchemaUnsupported.code.Value());
+            physics.at("buildDigest") = FormatSha256(configuration.build);
+            physics.at("profile") = FormatSha256(configuration.Fingerprint());
+            auto &gameplay = artifact.at("gameplay");
+            const auto originalImage = gameplay.at("sourceDigest");
+            gameplay.at("sourceDigest") = FormatSha256(configuration.build);
+            writeCandidate();
+            const auto differentImage = Internal::CompareHeadlessReplayArtifacts(file, candidate);
+            REQUIRE(differentImage.HasError());
+            CHECK(differentImage.ErrorValue().code.Value() == AI::AIErrors::CanonicalSchemaUnsupported.code.Value());
+            gameplay.at("sourceDigest") = originalImage;
 
             physics.at("bodies").at(0).at("activity") = 99;
             writeCandidate();
@@ -163,6 +174,8 @@ namespace Horo::Application::PrefabAtomicTest {
             if (const auto &gameplay = data.gameplay) {
                 const auto &section = artifact.at("gameplay");
                 CHECK(section.at("source") == "native");
+                CHECK(section.at("schemaVersion") == 2);
+                CHECK(section.at("sourceDigest") == FormatSha256(gameplay->profile.source));
                 CHECK(section.at("profile") == FormatSha256(gameplay->profile.digest));
                 const auto &records = section.at("records");
                 CHECK(records.at("callbacks") == (data.characterMotion ? 1 : 0));
@@ -393,6 +406,12 @@ namespace Horo::Application::PrefabAtomicTest {
         REQUIRE(captured->HasValue());
         const auto &data = captured->Value();
         CHECK(data.gameplay.has_value() == gameplay.has_value());
+        if (gameplay) {
+            REQUIRE(data.gameplay);
+            const auto bytes = NativeDurableFileSystem{}.ReadFileBounded(gameplay->nativeArtifact, 512U * 1024U * 1024U);
+            REQUIRE(bytes.HasValue());
+            CHECK(data.gameplay->profile.source == ComputeSha256(std::as_bytes(std::span{bytes.Value()})));
+        }
         CHECK(data.definitionRevision == definitionRevision);
         CHECK(data.sceneInput == sceneInputDigest);
         CHECK(data.perception.has_value() == hasPerception);

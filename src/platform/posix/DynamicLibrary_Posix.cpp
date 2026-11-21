@@ -45,6 +45,13 @@ namespace Horo::Platform {
                 }
             }
 
+            [[nodiscard]] bool OwnsSymbolAtPath(const void *symbol, const std::filesystem::path &path) const override {
+                Dl_info image{};
+                std::error_code error;
+                return symbol && dladdr(symbol, &image) != 0 && image.dli_fname &&
+                       std::filesystem::equivalent(path, std::filesystem::path{image.dli_fname}, error) && !error;
+            }
+
         private:
             void *m_handle = nullptr;  // NOSONAR(cpp:S5008)
         };
