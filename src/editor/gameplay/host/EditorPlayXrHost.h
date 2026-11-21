@@ -7,7 +7,6 @@
 #include "Horo/Math/SceneMath.h"
 #include "Horo/Runtime/InputCollection.h"
 #include "Horo/Runtime/Scene/SceneIdentity.h"
-#include "Horo/XR/XRErrors.h"
 
 #include <array>
 #include <cstdint>
@@ -242,12 +241,14 @@ namespace Horo::Editor {
         /** @return A one-use in-memory grant, or a typed policy, hardware or lifecycle failure. */
         [[nodiscard]] virtual Result<void> ArmEyeGaze() = 0;
 
+        /** @return Whether Setup can offer separate consent for gaze-based rendering. */
         [[nodiscard]] virtual bool CanArmEyeGazeRendering() const noexcept {
             return false;
         }
 
-        [[nodiscard]] virtual Result<void> ArmEyeGazeRendering() {
-            return Result<void>::Failure(MakeError(XR::XRErrors::OperationUnsupported));
+        /** @return Whether the one-use rendering grant was armed. */
+        [[nodiscard]] virtual bool ArmEyeGazeRendering() {
+            return false;
         }
 
         /** @brief Synchronously removes any armed/active grant and discards its latest sample. */

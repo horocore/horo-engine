@@ -287,7 +287,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Editor::EditorXrEyeGazeState ReadEyeGazeState() const noexcept override;
         [[nodiscard]] Result<void> ArmEyeGaze() override;
         [[nodiscard]] bool CanArmEyeGazeRendering() const noexcept override;
-        [[nodiscard]] Result<void> ArmEyeGazeRendering() override;
+        [[nodiscard]] bool ArmEyeGazeRendering() override;
         void RevokeEyeGaze() noexcept override;
         /** @return Only the exact current Play pointing sample, gated by the focused cutoff and consent. */
         [[nodiscard]] std::optional<XR::XRPoseSample> ReadEyeGaze() const noexcept;

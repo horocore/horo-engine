@@ -1911,7 +1911,10 @@ namespace Horo::Tests::OpenXRApplication {
         auto &preview = *fixture.play->EyeGazePreview();
         REQUIRE(preview.CanArmEyeGazeRendering());
         const auto renderingGrant = GENERATE(false, true);
-        RequireValue(renderingGrant ? preview.ArmEyeGazeRendering() : preview.ArmEyeGaze());
+        if (renderingGrant)
+            REQUIRE(preview.ArmEyeGazeRendering());
+        else
+            RequireValue(preview.ArmEyeGaze());
         auto scene = ActivatePlay(fixture, std::nullopt);
         auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
         RequireValue(fixture.scheduler->AddParticipant(std::move(cutoff)));

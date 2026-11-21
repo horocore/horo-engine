@@ -681,12 +681,12 @@ namespace Horo::Application::Internal {
         return std::this_thread::get_id() == lane_ && !closing_ && !busy_ && SetupIdle() && composition_.session.MayArmEyeGazeRendering();
     }
 
-    Result<void> OpenXRPlayHost::ArmEyeGazeRendering() {
+    bool OpenXRPlayHost::ArmEyeGazeRendering() {
         if (!CanArmEyeGazeRendering())
-            return Result<void>::Failure(MakeError(XR::XRErrors::OperationUnsupported));
+            return false;
         gazeRenderingArmed_ = true;
         gazeArmed_ = true;
-        return Result<void>::Success();
+        return true;
     }
 
     /** @copydoc Editor::IEditorXrEyeGazePreview::RevokeEyeGaze */
