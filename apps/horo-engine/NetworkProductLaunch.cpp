@@ -320,8 +320,8 @@ namespace Horo::Application::Internal {
             const bool reactive = resources.perceptionPolicy && SelectsReactiveDecisions(*resources.perceptionPolicy);
             const auto mode = reactive ? AI::AiSchedulingMode::BestEffort : AI::AiSchedulingMode::Deterministic;
             if (resources.decisionSchedulerModeAuthored && resources.decisionScheduler.mode != mode)
-                return Execution::Failure(MakeError(
-                    AI::AIErrors::SchedulerPolicyInvalid, "Headless AI scheduler mode must match the authored Perception watches."));
+                return Execution::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid,
+                                                    "Headless AI scheduler mode must match the authored Perception watches."));
             AI::AiSceneCookedDecisionExecution execution{resources.jobs, resources.decisionScheduler, {}};
             execution.scheduler.mode = mode;
             if (reactive)

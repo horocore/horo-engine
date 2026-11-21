@@ -1977,7 +1977,7 @@ namespace Horo::Editor {
                 if (target.HasError()) {
                     const auto cancelled = Cancel(port);
                     return Result<void>::Failure(cancelled.HasError() ? WithCause(target.ErrorValue(), cancelled.ErrorValue())
-                                                                       : target.ErrorValue());
+                                                                      : target.ErrorValue());
                 }
                 if (!target.Value())
                     return Cancel(port);

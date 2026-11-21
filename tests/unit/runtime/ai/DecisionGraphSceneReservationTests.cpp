@@ -1,11 +1,11 @@
 #include "AiSceneTestSupport.h"
 #include "AllocationProbe.h"
 #include "DecisionGraphCompilerTestSupport.h"
-#include "PerceptionSenseTestSupport.h"
 #include "Horo/AI/AIReplayEvidence.h"
 #include "Horo/AI/DecisionQueryTask.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
+#include "PerceptionSenseTestSupport.h"
 
 #include <algorithm>
 #include <array>
@@ -224,11 +224,12 @@ namespace Horo::AI {
             auto runtime = std::move(AiSceneRuntime::Create()).Value();
             auto publication = TestSupport::Publish(runtime, scene);
             const auto agent = runtime.Snapshot().Value().Agents().front().handle;
-            REQUIRE(runtime.ActivateCookedDecisionsAtSafePoint({.jobs = jobs,
-                                                               .scheduler = {.mode = AiSchedulingMode::BestEffort},
-                                                               .agent = {.intervalTicks = 0},
-                                                               .intents = std::make_shared<CommitEmpty>(),
-                                                               .timing = AiCookedDecisionTiming::BestEffortExternalFeedback})
+            REQUIRE(runtime
+                        .ActivateCookedDecisionsAtSafePoint({.jobs = jobs,
+                                                             .scheduler = {.mode = AiSchedulingMode::BestEffort},
+                                                             .agent = {.intervalTicks = 0},
+                                                             .intents = std::make_shared<CommitEmpty>(),
+                                                             .timing = AiCookedDecisionTiming::BestEffortExternalFeedback})
                         .HasValue());
             auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();
             const auto tick = [&](const std::uint64_t number) {
@@ -268,7 +269,9 @@ namespace Horo::AI {
             REQUIRE(continuation.IsCurrent());
             auto publicationResult = AiTaskPublicationDisposition::Stale;
             {
-                const std::jthread notifier{[&] { publicationResult = continuation.NotifyEvent(); }};
+                const std::jthread notifier{[&] {
+                    publicationResult = continuation.NotifyEvent();
+                }};
             }
             CHECK(publicationResult == AiTaskPublicationDisposition::Accepted);
             REQUIRE(continuation.NotifyEvent() == AiTaskPublicationDisposition::Accepted);
@@ -315,10 +318,11 @@ namespace Horo::AI {
             JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
             auto runtime = std::move(AiSceneRuntime::Create()).Value();
             auto publication = TestSupport::Publish(runtime, scene);
-            REQUIRE(runtime.ActivateCookedDecisionsAtSafePoint({.jobs = jobs,
-                                                               .scheduler = {.mode = AiSchedulingMode::BestEffort},
-                                                               .agent = {.intervalTicks = 0},
-                                                               .timing = AiCookedDecisionTiming::BestEffortReactive})
+            REQUIRE(runtime
+                        .ActivateCookedDecisionsAtSafePoint({.jobs = jobs,
+                                                             .scheduler = {.mode = AiSchedulingMode::BestEffort},
+                                                             .agent = {.intervalTicks = 0},
+                                                             .timing = AiCookedDecisionTiming::BestEffortReactive})
                         .HasValue());
             auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();
             AiTaskPublicationDisposition feedback = AiTaskPublicationDisposition::Stale;
@@ -373,9 +377,11 @@ namespace Horo::AI {
             JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
             auto runtime = std::move(AiSceneRuntime::Create()).Value();
             auto publication = TestSupport::Publish(runtime, scene);
-            REQUIRE(runtime.ActivateCookedDecisionsAtSafePoint({.jobs = jobs, .scheduler = {.mode = AiSchedulingMode::BestEffort},
-                                                               .agent = {.intervalTicks = 0},
-                                                               .timing = AiCookedDecisionTiming::BestEffortReactive})
+            REQUIRE(runtime
+                        .ActivateCookedDecisionsAtSafePoint({.jobs = jobs,
+                                                             .scheduler = {.mode = AiSchedulingMode::BestEffort},
+                                                             .agent = {.intervalTicks = 0},
+                                                             .timing = AiCookedDecisionTiming::BestEffortReactive})
                         .HasValue());
             auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();
             const auto evaluate = [&](const std::uint64_t tick) {
@@ -436,23 +442,29 @@ namespace Horo::AI {
             const PerceptionDescriptorOrigin origin{PerceptionDescriptorSourceKind::Native, MakeIdentity<PerceptionProviderId>(22), 1};
             const PerceptionSenseRegistration registration{{{sense, origin, "reactive sight", native.capabilities},
                                                             {MakeIdentity<StimulusTypeId>(21), origin, "visible actor", 1, {}},
-                                                            sizeof(WakeSense), 2, 2},
+                                                            sizeof(WakeSense),
+                                                            2,
+                                                            2},
                                                            {&sees, [](void *value) -> IPerceptionSenseProvider * {
-                                                                return new WakeSense{*static_cast<const bool *>(value)};
-                                                            }, [](void *, IPerceptionSenseProvider *provider) noexcept { delete provider; }}};
+                return new WakeSense{*static_cast<const bool *>(value)};
+            }, [](void *, IPerceptionSenseProvider *provider) noexcept {
+                delete provider;
+            }}};
             auto generation = PerceptionSenseGeneration::Capture(std::span{&registration, 1}, std::make_shared<std::atomic_bool>(true));
             REQUIRE(generation.HasValue());
             authored.descriptor.perceptionEndpoints = std::make_shared<const AiControllerPerceptionEndpoints>(
-                AiControllerPerceptionEndpoints{.registry = std::make_shared<const PerceptionDescriptorRegistry>(native.Registry(registration.contract)),
-                                                .listeners = {listener}, .sources = {sense},
+                AiControllerPerceptionEndpoints{.registry = std::make_shared<const PerceptionDescriptorRegistry>(
+                                                    native.Registry(registration.contract)),
+                                                .listeners = {listener},
+                                                .sources = {sense},
                                                 .decisionWatches = {{Node(2), listener}}});
 
             Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
             for (std::uint64_t id = 1; id <= 2; ++id) {
                 auto agent = authored.agent.agent;
                 agent.agent = MakeIdentity<AgentId>(id);
-                builder.Add({.object = Runtime::SceneObjectId{id},
-                             .components = {.aiAgent = agent, .aiController = authored.agent.controller}});
+                builder.Add(
+                    {.object = Runtime::SceneObjectId{id}, .components = {.aiAgent = agent, .aiController = authored.agent.controller}});
             }
             auto definition = std::move(builder).Build();
             REQUIRE(definition.HasValue());
@@ -460,16 +472,20 @@ namespace Horo::AI {
             REQUIRE(scene.HasValue());
             const auto view = scene.Value()->View();
             PerceptionSpatialBroadphase spatial;
-            const AiScenePerceptionActivationInput sensing{spatial, {},
-                [](const Runtime::RuntimeSceneView &candidate) {
-                    std::vector<AiScenePerceptionPosition> positions;
-                    for (std::uint64_t id = 1; id <= 2; ++id)
-                        positions.push_back({*candidate.Find(Runtime::SceneObjectId{id}),
-                                             Math::WorldCoordinate64::FromMillimeters(static_cast<std::int64_t>(id) * 1000, 0, 0)});
-                    return Result<std::vector<AiScenePerceptionPosition>>::Success(std::move(positions));
-                },
-                AiScenePerceptionExecution{.generation = generation.Value(), .capabilities = native.capabilities,
-                                           .radiusMillimeters = 5000, .visibleLayers = 1, .workUnitsPerTick = 100}};
+            const AiScenePerceptionActivationInput sensing{spatial,
+                                                           {},
+                                                           [](const Runtime::RuntimeSceneView &candidate) {
+                std::vector<AiScenePerceptionPosition> positions;
+                for (std::uint64_t id = 1; id <= 2; ++id)
+                    positions.push_back({*candidate.Find(Runtime::SceneObjectId{id}),
+                                         Math::WorldCoordinate64::FromMillimeters(static_cast<std::int64_t>(id) * 1000, 0, 0)});
+                return Result<std::vector<AiScenePerceptionPosition>>::Success(std::move(positions));
+            },
+                                                           AiScenePerceptionExecution{.generation = generation.Value(),
+                                                                                      .capabilities = native.capabilities,
+                                                                                      .radiusMillimeters = 5000,
+                                                                                      .visibleLayers = 1,
+                                                                                      .workUnitsPerTick = 100}};
 
             JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
             auto runtime = std::move(AiSceneRuntime::Create()).Value();
@@ -479,8 +495,10 @@ namespace Horo::AI {
             publication.Value()->Publish();
             TestSupport::ExpectError(runtime.ActivateCookedDecisionsAtSafePoint({jobs, {}, {}}), AIErrors::SchedulerPolicyInvalid);
             REQUIRE(fixture.probe.factories == 0);
-            REQUIRE(runtime.ActivateCookedDecisionsAtSafePoint({.jobs = jobs, .scheduler = {.mode = AiSchedulingMode::BestEffort},
-                                                               .timing = AiCookedDecisionTiming::BestEffortReactive})
+            REQUIRE(runtime
+                        .ActivateCookedDecisionsAtSafePoint({.jobs = jobs,
+                                                             .scheduler = {.mode = AiSchedulingMode::BestEffort},
+                                                             .timing = AiCookedDecisionTiming::BestEffortReactive})
                         .HasValue());
             auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();
             const auto capability = runtime.CapabilityAtSafePoint();
@@ -490,7 +508,9 @@ namespace Horo::AI {
             const std::array invalid{DecisionWakePerceptionDependency{Node(8), listener}};
             CHECK(runtime.SetCookedPerceptionWatchesAtSafePoint(agent, invalid).HasError());
             const auto evaluate = [&](const std::uint64_t tick) {
-                REQUIRE(runtime.PollPerceptionAtSensePoll(view, spatial, tick, Duration::FromNanoseconds(sensing.execution->memory.fixedStep.count()))
+                REQUIRE(runtime
+                            .PollPerceptionAtSensePoll(view, spatial, tick,
+                                                       Duration::FromNanoseconds(sensing.execution->memory.fixedStep.count()))
                             .HasValue());
                 const auto decision = scheduler->EvaluateAtDecision(tick);
                 REQUIRE(decision.HasValue());

@@ -1650,13 +1650,13 @@ namespace Horo::Application::PrefabAtomicTest {
                     if (reactiveNativePerception) {
                         ai.erase("scheduler");
                         WriteDecisionProductMetadata(project.path, ai);
-                        ExpectDecisionProductExit(0, project.path, directory.path, target, sceneId, *gameplay, controller.descriptor.controller,
-                                                  artifactId, options);
+                        ExpectDecisionProductExit(0, project.path, directory.path, target, sceneId, *gameplay,
+                                                  controller.descriptor.controller, artifactId, options);
                         ai["scheduler"]["mode"] = "deterministic";
                         WriteDecisionProductMetadata(project.path, ai);
                         options.refusal = "must match the authored Perception watches";
-                        ExpectDecisionProductExit(3, project.path, directory.path, target, sceneId, *gameplay, controller.descriptor.controller,
-                                                  artifactId, options);
+                        ExpectDecisionProductExit(3, project.path, directory.path, target, sceneId, *gameplay,
+                                                  controller.descriptor.controller, artifactId, options);
                         return;
                     }
                     const auto admittedBudget = perception["native"]["workUnitsPerTick"];

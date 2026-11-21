@@ -11,6 +11,7 @@
 
 namespace Horo::AI {
     class CookedDecisionPlan;
+
     namespace Detail {
         struct AiSceneRuntimeState;
     }

@@ -1,4 +1,5 @@
 #include "Horo/AI/AITaskScheduler.h"
+
 #include "Horo/AI/DecisionGraphCompiler.h"
 
 #include <algorithm>
@@ -462,8 +463,7 @@ namespace Horo::AI {
     }
 
     /** @copydoc AiTaskScheduler::SetPerceptionWatches */
-    Result<void> AiTaskScheduler::SetPerceptionWatches(const AgentHandle agent,
-                                                       const std::shared_ptr<const CookedDecisionPlan> &plan,
+    Result<void> AiTaskScheduler::SetPerceptionWatches(const AgentHandle agent, const std::shared_ptr<const CookedDecisionPlan> &plan,
                                                        std::vector<PerceptionListenerTypeId> listeners) {
         if (closed_ || inPhase_ || (report_.tick != 0 && !committed_))
             return Result<void>::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
@@ -483,7 +483,7 @@ namespace Horo::AI {
         if (!entry || entry->policy.intervalTicks != 0)
             return {};
         return entry->perceptionWatches ? std::span<const PerceptionListenerTypeId>{*entry->perceptionWatches}
-                                         : entry->executor->DeclaredPerceptionWatches();
+                                        : entry->executor->DeclaredPerceptionWatches();
     }
 
     /** @copydoc AiTaskScheduler::Wake */

@@ -96,7 +96,9 @@ namespace Horo::Application::Internal {
                     throw std::invalid_argument("Reactive Decision dependency requires an admitted controller listener");
                 watches.push_back({node.Value(), listener.Value()});
             }
-            const auto identity = [](const auto &watch) { return std::pair{watch.node, watch.listener}; };
+            const auto identity = [](const auto &watch) {
+                return std::pair{watch.node, watch.listener};
+            };
             std::ranges::sort(watches, {}, identity);
             if (std::ranges::adjacent_find(watches, {}, identity) != watches.end())
                 throw std::invalid_argument("Duplicate reactive Decision dependency");
@@ -287,7 +289,9 @@ namespace Horo::Application::Internal {
 
     /** @copydoc SelectsReactiveDecisions */
     bool SelectsReactiveDecisions(const ProjectScenePerceptionPolicy &policy) noexcept {
-        return std::ranges::any_of(policy.controllers, [](const auto &controller) { return !controller.decisionWatches.empty(); });
+        return std::ranges::any_of(policy.controllers, [](const auto &controller) {
+            return !controller.decisionWatches.empty();
+        });
     }
 
     /** @copydoc FreezeProjectNativePerceptionRegistry */

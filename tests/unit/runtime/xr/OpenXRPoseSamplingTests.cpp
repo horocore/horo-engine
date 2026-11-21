@@ -81,7 +81,9 @@ namespace Horo::Tests::OpenXRAction {
             fixture.Activate(4);
             fixture.Sync();
             bool queried = false;
-            fixture.actions.script.gaze.onActivity = [&queried] { queried = true; };
+            fixture.actions.script.gaze.onActivity = [&queried] {
+                queried = true;
+            };
             consent = false;
             const auto denied = sample();
             REQUIRE(denied.HasError());

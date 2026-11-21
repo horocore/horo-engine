@@ -16,15 +16,17 @@ namespace Horo::AI::Detail {
                 continue;
             auto &memory = agent.sensing->memory;
             const auto handle = agent.record.handle;
-            const auto watches = scheduler ? scheduler->PerceptionWatches(handle, agent.cookedPlan)
-                                           : std::span<const PerceptionListenerTypeId>{};
+            const auto watches =
+                scheduler ? scheduler->PerceptionWatches(handle, agent.cookedPlan) : std::span<const PerceptionListenerTypeId>{};
             if (watches.empty()) {
                 memory.ForgetRetiredSources(sources);
                 continue;
             }
             const auto previous = memory;
             memory.ForgetRetiredSources(sources);
-            if (std::ranges::any_of(watches, [&](const auto listener) { return memory.DecisionFactsChanged(previous, listener); }))
+            if (std::ranges::any_of(watches, [&](const auto listener) {
+                return memory.DecisionFactsChanged(previous, listener);
+            }))
                 static_cast<void>(scheduler->Wake(handle, {.perception = true}));
         }
     }

@@ -254,8 +254,13 @@ namespace Horo::Application::Internal {
         const auto found = std::ranges::find(devices, role, &XR::XRTrackedDeviceRecord::role);
         if (found == devices.end() || found->state != XR::XRTrackedDeviceState::Tracked)
             return std::nullopt;
-        return HapticTarget{session.session, found->id, snapshot->BindingRevision(), scene_->scene, *player,
-                            input_.port->ReadPlayerAssignmentRevision(), role};
+        return HapticTarget{session.session,
+                            found->id,
+                            snapshot->BindingRevision(),
+                            scene_->scene,
+                            *player,
+                            input_.port->ReadPlayerAssignmentRevision(),
+                            role};
     }
 
     /** @copydoc OpenXRPlayHost::HasHapticRoute */
@@ -268,8 +273,7 @@ namespace Horo::Application::Internal {
     bool OpenXRPlayHost::CanPreviewHaptic(Editor::EditorXrHapticHand hand) const noexcept {
         using enum Editor::EditorXrHapticPreviewState;
         const auto target = CaptureHapticTarget(hand);
-        return target && target->assignment &&
-               (!hapticPreview_ || (hapticPreview_->state != Queued && !hapticPreview_->mayNeedStop));
+        return target && target->assignment && (!hapticPreview_ || (hapticPreview_->state != Queued && !hapticPreview_->mayNeedStop));
     }
 
     /** @copydoc Editor::IEditorXrHapticPreview::QueueHapticPreview */
@@ -340,8 +344,8 @@ namespace Horo::Application::Internal {
 
         const auto submitted = [&] {
             const Operation operation{*this};
-            return composition_.session.SubmitHapticPreview(preview.target.session, preview.target.role,
-                                                            preview.intent.amplitude, preview.intent.duration);
+            return composition_.session.SubmitHapticPreview(preview.target.session, preview.target.role, preview.intent.amplitude,
+                                                            preview.intent.duration);
         }();
         if (revoked()) {
             if (sessions_.Snapshot().session == preview.target.session)

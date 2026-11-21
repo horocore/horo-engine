@@ -109,6 +109,7 @@ namespace Horo::AI {
         AiTaskPublicationDisposition AiTaskMailbox::Publish(const std::size_t slot, const TaskHandle task,
                                                             AiTaskTerminalResult *result) noexcept {
             auto &record = slots_[slot];
+
             using enum AiTaskPublicationDisposition;
             {
                 const std::unique_lock lock(record.mutex, std::try_to_lock);
@@ -118,14 +119,14 @@ namespace Horo::AI {
                     return Stale;
                 if (record.published)
                     return AlreadyPublished;
-                if (result) {
+                if (result)
                     record.pending.terminal.emplace(std::move(*result));
-                    record.published = true;
-                } else {
+                else
                     record.pending.event = true;
-                }
+                record.published = result != nullptr;
                 record.pendingGeneration.store(task.slot.generation);
             }
+
             pendingHint_.store(true);
             return Accepted;
         }

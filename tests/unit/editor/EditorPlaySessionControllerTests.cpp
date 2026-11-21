@@ -963,8 +963,8 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
         const auto writtenMode = inferWatchedScheduler ? std::string{} : std::string{R"("mode":")"} + mode + "\",";
         const auto evaluations = watchedScheduler ? 2 : 1;
         metadata.insert(insertion + backend.size(), std::string{R"(,"ai":{"schemaVersion":1,"scheduler":{)"} + writtenMode +
-                            R"("evaluationsPerTick":)" + std::to_string(evaluations) +
-                            R"(},"development":{"liveMutation":false}})");
+                                                        R"("evaluationsPerTick":)" + std::to_string(evaluations) +
+                                                        R"(},"development":{"liveMutation":false}})");
         project.WriteText(".horo/project.json", metadata);
     }
     SECTION("An explicit schema-scoped inspector key reveals only its admitted value") {

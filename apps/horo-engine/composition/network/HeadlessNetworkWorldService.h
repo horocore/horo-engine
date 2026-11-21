@@ -565,10 +565,10 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                                          const std::span<const AI::AiControllerDescriptor> catalog) const {
             const auto &input = *owners_->configured;
             if (IsAuthoritativeWorld() && input.perceptionProject && input.perceptionProject->policy &&
-                SelectsReactiveDecisions(*input.perceptionProject->policy) &&
-                (!OwnsCookedDecisionExecution() || input.decisionReplay))
-                return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid,
-                                                       "Reactive project decisions require a live scheduler without deterministic replay."));
+                SelectsReactiveDecisions(*input.perceptionProject->policy) && (!OwnsCookedDecisionExecution() || input.decisionReplay))
+                return Result<void>::Failure(
+                    MakeError(AI::AIErrors::SchedulerPolicyInvalid,
+                              "Reactive project decisions require a live scheduler without deterministic replay."));
             auto ai = OwnsCookedDecisionExecution() && !record_->preparedGameplay
                           ? AI::AiSceneRuntime::Create(settings, ConfiguredDecisionExecution())
                           : AI::AiSceneRuntime::Create(settings);

@@ -1425,7 +1425,9 @@ namespace Horo::Tests::OpenXRApplication {
                 CHECK(source.locationReads == reads);
             }
             SECTION("consent withdrawn during the native activity query prevents the location read") {
-                source.onActivity = [&preview] { preview.RevokeEyeGaze(); };
+                source.onActivity = [&preview] {
+                    preview.RevokeEyeGaze();
+                };
                 CHECK_FALSE(sample());
                 CHECK(preview.ReadEyeGazeState() == Unavailable);
                 CHECK(source.locationReads == reads);
@@ -1434,7 +1436,9 @@ namespace Horo::Tests::OpenXRApplication {
                 CHECK(source.locationReads == reads);
             }
             SECTION("consent withdrawn during location discards the returned pose") {
-                source.onLocation = [&preview] { preview.RevokeEyeGaze(); };
+                source.onLocation = [&preview] {
+                    preview.RevokeEyeGaze();
+                };
                 CHECK_FALSE(sample());
                 CHECK(preview.ReadEyeGazeState() == Unavailable);
                 CHECK(source.locationReads == reads + 1);
@@ -1767,8 +1771,8 @@ namespace Horo::Tests::OpenXRApplication {
         SECTION("a modal opened by the native callback retires the submitted vibration") {
             std::optional<Input::InputContextToken> modal;
             native.onApply = [&] {
-                modal.emplace(fixture.router.PushContext(Input::InputContextId{"haptic-callback-modal"},
-                                                         Input::InputContextKind::ModalRoot));
+                modal.emplace(
+                    fixture.router.PushContext(Input::InputContextId{"haptic-callback-modal"}, Input::InputContextKind::ModalRoot));
             };
             fixture.play->PumpHapticPreview();
             native.onApply = {};
@@ -1965,6 +1969,7 @@ namespace Horo::Tests::OpenXRApplication {
 
     TEST_CASE("Play retirement during hand classification rejects the revoked Input cutoff", "[xr][application][play][hands]") {
         using enum XR::XRProjectFeaturePolicy;
+
         struct RetiringPolicy final : XR::IXRHandGesturePolicy {
             Host::OpenXRPlayHost *play{};
             XR::XRContactPinchGesturePolicy pinch;
@@ -1976,7 +1981,9 @@ namespace Horo::Tests::OpenXRApplication {
                 return pinch.Classify(joints);
             }
         } policy;
-        ApplicationFixture fixture{true, 5, Unrequested, OptionalDisable, Unrequested, false, std::nullopt, Unrequested, false, {}, &policy};
+
+        ApplicationFixture fixture{true,        5,     Unrequested, OptionalDisable, Unrequested, false, std::nullopt,
+                                   Unrequested, false, {},          &policy};
         auto scene = PublishPlay(fixture);
         auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
         auto *observed = cutoff.get();

@@ -309,8 +309,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         const auto mode = reactive ? AI::AiSchedulingMode::BestEffort : AI::AiSchedulingMode::Deterministic;
         const auto &configured = settings.Value();
         if (configured.schedulerModeAuthored && configured.scheduler.mode != mode)
-            return Result<void>::Failure(MakeError(
-                AI::AIErrors::SchedulerPolicyInvalid, "Editor Decision Play scheduler mode must match the authored Perception watches."));
+            return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid,
+                                                   "Editor Decision Play scheduler mode must match the authored Perception watches."));
         AI::AiSceneCookedDecisionExecution execution{*decisionJobs_, configured.scheduler, {}, {}};
         execution.scheduler.mode = mode;
         if (reactive)

@@ -455,8 +455,9 @@ namespace Horo::Application::Internal {
                                                           XRTrackingConfidence::High});
         if (sample.HasError())
             return std::nullopt;
-        return OpenXRWorldUiPointerFrame{
-            {device->id, scope.cutoff.origin, scope.cutoff.bindingRevision, scope.scene, scope.player, *assignment}, sample.Value()};
+        return OpenXRWorldUiPointerFrame{{device->id, scope.cutoff.origin, scope.cutoff.bindingRevision, scope.scene, scope.player,
+                                          *assignment},
+                                         sample.Value()};
     }
 
     /** @copydoc OpenXRPlayHost::BuildInputSnapshot */

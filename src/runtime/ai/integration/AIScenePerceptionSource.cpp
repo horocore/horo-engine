@@ -474,8 +474,8 @@ namespace Horo::AI {
             }
             if (previous && !agent.sensing->suspension &&
                 std::ranges::any_of(scheduler->PerceptionWatches(handle, plan), [&](const auto listener) {
-                    return agent.sensing->memory.DecisionFactsChanged(*previous, listener);
-                }))
+                return agent.sensing->memory.DecisionFactsChanged(*previous, listener);
+            }))
                 static_cast<void>(scheduler->Wake(handle, {.perception = true}));
         }
         return Result<void>::Success();

@@ -4,8 +4,8 @@
 #include "Horo/AI/PerceptionDescriptorRegistry.h"
 
 #include <algorithm>
-#include <ranges>
 #include <cmath>
+#include <ranges>
 #include <tuple>
 #include <utility>
 
@@ -257,13 +257,15 @@ namespace Horo::AI {
     /** @copydoc AIPerceptionMemory::DecisionFactsChanged */
     bool AIPerceptionMemory::DecisionFactsChanged(const AIPerceptionMemory &previous,
                                                   const PerceptionListenerTypeId listener) const noexcept {
-        const auto selected = [listener](const PerceivedStimulus &stimulus) { return stimulus.key.listener == listener; };
+        const auto selected = [listener](const PerceivedStimulus &stimulus) {
+            return stimulus.key.listener == listener;
+        };
         auto current = std::span{entries_}.first(count_) | std::views::filter(selected);
         auto before = std::span{previous.entries_}.first(previous.count_) | std::views::filter(selected);
         return !std::ranges::equal(current, before, [](const PerceivedStimulus &left, const PerceivedStimulus &right) {
-            return left.key == right.key && left.provenance == right.provenance &&
-                   left.lastKnownPosition == right.lastKnownPosition && left.lastKnownVelocity == right.lastKnownVelocity &&
-                   left.firstSensedTick == right.firstSensedTick && left.isCurrentlySensed == right.isCurrentlySensed;
+            return left.key == right.key && left.provenance == right.provenance && left.lastKnownPosition == right.lastKnownPosition &&
+                   left.lastKnownVelocity == right.lastKnownVelocity && left.firstSensedTick == right.firstSensedTick &&
+                   left.isCurrentlySensed == right.isCurrentlySensed;
         });
     }
 
