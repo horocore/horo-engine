@@ -298,6 +298,8 @@ namespace Horo::XR::OpenXRInternal {
         if (!anchors_.scope.grant.IsValid())
             return Result<void>::Success();
         anchors_.Withdraw(reason);
+        if (const auto store = RetireSpatialAnchorStore(); store.HasError())
+            return store;
         for (auto &slot : std::span{anchors_.slots}.first(anchors_.maximumAnchors))
             if (const auto released = anchors_.Release(slot); released.HasError())
                 return released;

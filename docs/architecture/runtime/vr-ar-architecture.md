@@ -1048,6 +1048,13 @@ as Unlocalized until the selected provider produces new live evidence through
 `XRSpatialAnchors`. Provider failure rolls back staging. A host without a
 selected protected store cannot bind this participant.
 
+The native OpenXR host can separately admit `XR_MSFT_spatial_anchor_persistence`
+on the cold save/restore lane. The connection belongs to the live anchor scope
+and a revocable persistence grant. Enumeration and writes have a fixed
+capacity. A revoked write is removed before delivery, with cleanup debt retained
+for retry. Native restore creates a fresh Locating identity and publishes a pose
+only after a later successful tracking sample.
+
 Plane/mesh snapshots
 are bounded observed evidence and never mutate authored Scene, Physics or Navigation
 without an explicit destination-owned adapter and transaction. The portable plane publication

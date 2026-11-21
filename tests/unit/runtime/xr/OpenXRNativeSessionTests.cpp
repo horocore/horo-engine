@@ -65,6 +65,81 @@ namespace Horo::Tests::OpenXR {
                 return XR_SUCCESS;
             }
         };
+
+        struct AnchorStoreScript final {
+            static inline thread_local AnchorStoreScript *active{};
+            std::optional<XrSpatialAnchorPersistenceNameMSFT> entry;
+            CancellationSource *revokeOnPersist{};
+
+            AnchorStoreScript() {
+                active = this;
+            }
+
+            ~AnchorStoreScript() {
+                active = nullptr;
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Open(XrSession, XrSpatialAnchorStoreConnectionMSFT *out) {
+                *out = NativeHandle<XrSpatialAnchorStoreConnectionMSFT>(31);
+                return Script::Record("anchor-store-open");
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Close(XrSpatialAnchorStoreConnectionMSFT) {
+                return Script::Record("anchor-store-close");
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Persist(XrSpatialAnchorStoreConnectionMSFT,
+                                                          const XrSpatialAnchorPersistenceInfoMSFT *info) {
+                active->entry = info->spatialAnchorPersistenceName;
+                if (active->revokeOnPersist)
+                    active->revokeOnPersist->RequestCancellation();
+                return Script::Record("anchor-store-persist");
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Read(XrSpatialAnchorStoreConnectionMSFT, std::uint32_t capacity, std::uint32_t *count,
+                                                       XrSpatialAnchorPersistenceNameMSFT *names) {
+                *count = active->entry ? 1U : 0U;
+                if (capacity < *count)
+                    return XR_ERROR_SIZE_INSUFFICIENT;
+                if (*count)
+                    names[0] = *active->entry;
+                return XR_SUCCESS;
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Restore(XrSession, const XrSpatialAnchorFromPersistedAnchorCreateInfoMSFT *info,
+                                                          XrSpatialAnchorMSFT *out) {
+                if (!active->entry || std::string_view{active->entry->name} != info->spatialAnchorPersistenceName.name)
+                    return XR_ERROR_SPATIAL_ANCHOR_NAME_NOT_FOUND_MSFT;
+                *out = NativeHandle<XrSpatialAnchorMSFT>(21);
+                return Script::Record("anchor-store-restore");
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Remove(XrSpatialAnchorStoreConnectionMSFT, const XrSpatialAnchorPersistenceNameMSFT *) {
+                const auto status = Script::Record("anchor-store-remove");
+                if (status == XR_SUCCESS)
+                    active->entry.reset();
+                return status;
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Resolve(XrInstance instance, const char *name, PFN_xrVoidFunction *out) {
+                const std::array entries{std::pair{"xrCreateSpatialAnchorStoreConnectionMSFT", reinterpret_cast<PFN_xrVoidFunction>(&Open)},
+                                         std::pair{"xrDestroySpatialAnchorStoreConnectionMSFT",
+                                                   reinterpret_cast<PFN_xrVoidFunction>(&Close)},
+                                         std::pair{"xrPersistSpatialAnchorMSFT", reinterpret_cast<PFN_xrVoidFunction>(&Persist)},
+                                         std::pair{"xrEnumeratePersistedSpatialAnchorNamesMSFT",
+                                                   reinterpret_cast<PFN_xrVoidFunction>(&Read)},
+                                         std::pair{"xrCreateSpatialAnchorFromPersistedNameMSFT",
+                                                   reinterpret_cast<PFN_xrVoidFunction>(&Restore)},
+                                         std::pair{"xrUnpersistSpatialAnchorMSFT", reinterpret_cast<PFN_xrVoidFunction>(&Remove)}};
+                const auto found = std::ranges::find_if(entries, [name](const auto &entry) {
+                    return std::string_view{entry.first} == name;
+                });
+                if (found == entries.end())
+                    return AnchorScript::Resolve(instance, name, out);
+                *out = found->second;
+                return XR_SUCCESS;
+            }
+        };
     }  // namespace
 
     TEST_CASE("OpenXR native anchors are grant scoped and retire before the session", "[unit][xr][native][anchors]") {
@@ -142,6 +217,112 @@ namespace Horo::Tests::OpenXR {
         CHECK(*(end - 5) == "destroy-anchor-space");
         CHECK(*(end - 4) == "destroy-anchor");
         CHECK(*(end - 3) == "destroy-session");
+    }
+
+    TEST_CASE("OpenXR anchor store restores a fresh identity and revokes incomplete durable writes", "[unit][xr][native][anchors][save]") {
+        Fixture fixture;
+        AnchorStoreScript storage;
+        AnchorResources resources;
+        const auto lifecycle = std::make_shared<XRSessionLifecycle>(resources);
+        const auto active =
+            lifecycle->Activate(fixture.capabilities, fixture.capabilities.System(), fixture.capabilities.Revision(), fixture.plan);
+        REQUIRE(active.HasValue());
+        for (const auto event : {XRSessionEvent::Started, XRSessionEvent::BecameVisible, XRSessionEvent::BecameFocused})
+            REQUIRE(lifecycle->ApplyEvent(active.Value(), event).HasValue());
+        constexpr std::array<std::string_view, 2> advertised{XR_MSFT_SPATIAL_ANCHOR_EXTENSION_NAME,
+                                                             XR_MSFT_SPATIAL_ANCHOR_PERSISTENCE_EXTENSION_NAME};
+        fixture.script.extraExtensions = advertised;
+        fixture.script.extensionCount = 3;
+        fixture.script.resolveExtra = &AnchorStoreScript::Resolve;
+        const std::array dependencies{advertised.front()};
+        const std::array extensions{NativeExtensionRequest{advertised.front()},
+                                    NativeExtensionRequest{.name = advertised.back(), .dependencies = dependencies}};
+        auto request = fixture.Request();
+        request.candidate = active.Value();
+        request.extensions = extensions;
+        REQUIRE(fixture.owner.Create(request).HasValue());
+        const XRAnchorScope scope{.space = {.id = {request.candidate, {0, 1}},
+                                            .kind = XRSpaceKind::World,
+                                            .worldOriginRevision = IdentityValue<XRWorldOriginRevision>(1)},
+                                  .provider = IdentityValue<XRAnchorProviderGeneration>(1),
+                                  .grant = IdentityValue<XRAnchorGrant>(1)};
+        const auto world = NativeHandle<XrSpace>(11);
+        const auto publication = std::make_shared<XRSpatialAnchors>(lifecycle);
+        REQUIRE(fixture.owner.StartSpatialAnchors(scope, world, {1, Duration::FromNanoseconds(30)}, publication).HasValue());
+        const auto createdAt = XRRuntimeTime::Create(10).Value();
+        const auto observedAt = XRRuntimeTime::Create(20).Value();
+        const auto anchor = fixture.owner.CreateSpatialAnchor(scope, world, {}, createdAt);
+        REQUIRE(anchor.HasValue());
+        RequireFailureIdentity(fixture.owner.PersistSpatialAnchor(scope, world, anchor.Value(), observedAt, "key-one"),
+                               XRErrors::OperationUnavailable);
+        CancellationSource consent;
+        REQUIRE(fixture.owner.OpenSpatialAnchorStore(scope, world, consent.Token()).HasValue());
+        RequireFailureIdentity(fixture.owner.PersistSpatialAnchor(scope, world, anchor.Value(), observedAt, "key-one"),
+                               XRErrors::OperationUnavailable);
+        REQUIRE(fixture.owner.SampleSpatialAnchor(scope, world, anchor.Value(), observedAt).HasValue());
+
+        SECTION("existing records retain their stable name and restore without any old pose") {
+            REQUIRE(fixture.owner.PersistSpatialAnchor(scope, world, anchor.Value(), observedAt, "key-one").HasValue());
+            RequireFailureIdentity(fixture.owner.PersistSpatialAnchor(scope, world, anchor.Value(), observedAt, "key-one"),
+                                   XRErrors::OperationInvalid);
+            std::array<XrSpatialAnchorPersistenceNameMSFT, 1> names{};
+            REQUIRE(fixture.owner.ReadSpatialAnchorStore(scope, world, names).Value() == 1);
+            CHECK(std::string_view{names.front().name} == "key-one");
+            REQUIRE(fixture.owner.RetireSession().HasValue());
+            REQUIRE(fixture.owner.PrepareSession({fixture.preflight, fixture.preflight.Attempt()}).HasValue());
+            const auto replacement =
+                lifecycle->Activate(fixture.capabilities, fixture.capabilities.System(), fixture.capabilities.Revision(), fixture.plan);
+            REQUIRE(replacement.HasValue());
+            for (const auto event : {XRSessionEvent::Started, XRSessionEvent::BecameVisible, XRSessionEvent::BecameFocused})
+                REQUIRE(lifecycle->ApplyEvent(replacement.Value(), event).HasValue());
+            request.candidate = replacement.Value();
+            REQUIRE(fixture.owner.Activate(request).HasValue());
+            auto replacementScope = scope;
+            replacementScope.space.id.session = request.candidate;
+            replacementScope.grant = IdentityValue<XRAnchorGrant>(2);
+            REQUIRE(fixture.owner.StartSpatialAnchors(replacementScope, world, {1, Duration::FromNanoseconds(30)}, publication).HasValue());
+            REQUIRE(fixture.owner.OpenSpatialAnchorStore(replacementScope, world, consent.Token()).HasValue());
+            const auto missing = fixture.owner.RestoreSpatialAnchor(replacementScope, world, observedAt, "absent");
+            REQUIRE(missing.HasValue());
+            CHECK_FALSE(missing.Value());
+            const auto restored = fixture.owner.RestoreSpatialAnchor(replacementScope, world, observedAt, "key-one");
+            REQUIRE(restored.HasValue());
+            REQUIRE(restored.Value());
+            CHECK(*restored.Value() != anchor.Value());
+            const auto unlocalized = publication->Read(replacementScope, *restored.Value(), observedAt);
+            REQUIRE(unlocalized.HasValue());
+            CHECK(unlocalized.Value().Observation().state == XRAnchorLocalization::Locating);
+            CHECK_FALSE(unlocalized.Value().Observation().pose);
+            REQUIRE(fixture.owner.Close().HasValue());
+            const auto close = std::ranges::find(fixture.script.calls, "anchor-store-close");
+            const auto session = std::ranges::find(fixture.script.calls, "destroy-session");
+            REQUIRE(session != fixture.script.calls.end());
+            CHECK(close < session);
+        }
+        SECTION("revocation during write compensates the native record before returning") {
+            storage.revokeOnPersist = &consent;
+            RequireFailureIdentity(fixture.owner.PersistSpatialAnchor(scope, world, anchor.Value(), observedAt, "key-one"),
+                                   XRErrors::PermissionDenied);
+            CHECK_FALSE(storage.entry);
+            CHECK(fixture.script.calls.back() == "anchor-store-remove");
+            REQUIRE(fixture.owner.CloseSpatialAnchorStore(scope).HasValue());
+            REQUIRE(publication->Read(scope, anchor.Value(), observedAt).HasValue());
+            REQUIRE(fixture.owner.Close().HasValue());
+        }
+        SECTION("failed compensation fences the store until explicit retirement retries") {
+            storage.revokeOnPersist = &consent;
+            fixture.script.fail = "anchor-store-remove";
+            RequireFailureIdentity(fixture.owner.PersistSpatialAnchor(scope, world, anchor.Value(), observedAt, "key-one"),
+                                   XRErrors::OperationUnavailable);
+            CHECK(storage.entry);
+            std::array<XrSpatialAnchorPersistenceNameMSFT, 1> names{};
+            RequireFailureIdentity(fixture.owner.ReadSpatialAnchorStore(scope, world, names), XRErrors::OperationUnavailable);
+            RequireFailureIdentity(fixture.owner.CloseSpatialAnchorStore(scope), XRErrors::OperationUnavailable);
+            fixture.script.fail = {};
+            REQUIRE(fixture.owner.CloseSpatialAnchorStore(scope).HasValue());
+            CHECK_FALSE(storage.entry);
+            REQUIRE(fixture.owner.Close().HasValue());
+        }
     }
 
     TEST_CASE("OpenXR native transaction publishes only complete ownership and retires in reverse order", "[unit][xr][native]") {

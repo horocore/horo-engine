@@ -134,6 +134,9 @@ namespace Horo::XR {
          * @return Success invalidates old anchors. Failure leaves the old admission intact. */
         [[nodiscard]] Result<void> Activate(const XRAnchorScope &scope, const XRAnchorLimits &limits, XRCapabilityState support);
 
+        /** @brief Validates exact live scope authority without reading an anchor or calling native code. */
+        [[nodiscard]] Result<void> CheckScope(const XRAnchorScope &scope) const;
+
         /** @brief Allocates one live identity for a privately prepared provider anchor.
          * @param scope Exact active producer and authorization.
          * @param createdAt Runtime clock at creation. Older observations cannot localize the resulting identity.
@@ -174,7 +177,6 @@ namespace Horo::XR {
 
         [[nodiscard]] Result<std::shared_ptr<const XRSessionLifecycle>> ResolveLifecycle() const;
 
-        [[nodiscard]] Result<void> CheckScope(const XRAnchorScope &scope) const;
         [[nodiscard]] Result<std::size_t> Find(const XRAnchorScope &scope, const XRSpatialAnchorId &id) const;
 
         std::weak_ptr<const XRSessionLifecycle> lifecycle_;

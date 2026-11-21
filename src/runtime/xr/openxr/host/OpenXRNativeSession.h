@@ -404,6 +404,20 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Revokes portable access and destroys native children, retaining cleanup debt on failure. */
         [[nodiscard]] Result<void> StopSpatialAnchors(const XRAnchorScope &scope, XRAnchorWithdrawal reason);
 
+        /** @brief Opens cold access after the host grants separate protected-local persistence consent. */
+        [[nodiscard]] Result<void> OpenSpatialAnchorStore(const XRAnchorScope &scope, XrSpace world, CancellationToken consent);
+        /** @brief Saves one freshly localized anchor under a host-created opaque name. */
+        [[nodiscard]] Result<void> PersistSpatialAnchor(const XRAnchorScope &scope, XrSpace world, const XRSpatialAnchorId &id,
+                                                        XRRuntimeTime now, std::string_view name);
+        /** @brief Lists bounded provider-private names for the protected store adapter. Cold operation. */
+        [[nodiscard]] Result<std::size_t> ReadSpatialAnchorStore(const XRAnchorScope &scope, XrSpace world,
+                                                                 std::span<XrSpatialAnchorPersistenceNameMSFT> names);
+        /** @brief Resolves a stored name into a fresh Locating identity in the current session. */
+        [[nodiscard]] Result<std::optional<XRSpatialAnchorId>> RestoreSpatialAnchor(const XRAnchorScope &scope, XrSpace world,
+                                                                                    XRRuntimeTime now, std::string_view name);
+        /** @brief Revokes and retires the connection independently of the live anchors. */
+        [[nodiscard]] Result<void> CloseSpatialAnchorStore(const XRAnchorScope &scope);
+
         /** @brief Creates an estimator on the exact enabled session after separate app and OS approval.
          * @param scope Already consented purpose and calibrated World scope. @param limits Explicit cadence and expiry.
          * @return Success, or typed capability, permission, identity, resource or validation failure.
@@ -515,6 +529,8 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Revokes evidence and retires the light child, retaining failed native retirement for retry. */
         [[nodiscard]] Result<void> RetireLightEstimation();
         [[nodiscard]] Result<void> RetireSpatialAnchors(XRAnchorWithdrawal reason);
+        [[nodiscard]] Result<void> RetireSpatialAnchorStore();
+        [[nodiscard]] Result<std::shared_ptr<XRSpatialAnchors>> BorrowAnchorStore(const XRAnchorScope &scope, XrSpace world) const;
         [[nodiscard]] Result<std::shared_ptr<XRSpatialAnchors>> BorrowAnchorPublication(const XRAnchorScope &scope, XrSpace world) const;
 
         /** @brief Passes an otherwise unhandled OpenXR event to the linked passthrough provider.
@@ -658,6 +674,21 @@ namespace Horo::XR::OpenXRInternal {
             [[nodiscard]] Result<void> Release(Slot &slot);
             void Withdraw(XRAnchorWithdrawal reason);
         } anchors_;
+
+        struct SpatialAnchorStore final {
+            XrSpatialAnchorStoreConnectionMSFT connection{XR_NULL_HANDLE};
+            PFN_xrDestroySpatialAnchorStoreConnectionMSFT destroy{};
+            PFN_xrPersistSpatialAnchorMSFT persist{};
+            PFN_xrEnumeratePersistedSpatialAnchorNamesMSFT enumerate{};
+            PFN_xrCreateSpatialAnchorFromPersistedNameMSFT restore{};
+            PFN_xrUnpersistSpatialAnchorMSFT remove{};
+            std::optional<XrSpatialAnchorPersistenceNameMSFT> pendingRemoval;
+            CancellationToken consent;
+            bool admitted{};
+
+            [[nodiscard]] Result<std::size_t> Read(std::span<XrSpatialAnchorPersistenceNameMSFT> names) const;
+            [[nodiscard]] Result<void> UndoPendingWrite();
+        } anchorStore_;
 
         XRAnchorGrant lastAnchorGrant_;
         bool anchorCall_{};
