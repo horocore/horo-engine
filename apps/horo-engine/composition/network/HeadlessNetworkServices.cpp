@@ -225,8 +225,11 @@ namespace Horo::Application::Internal {
             constexpr std::size_t MaximumBodies = 128;
             if (bindings.size() > MaximumBodies)
                 return Capture::Failure(MakeError(AI::AIErrors::CanonicalStateInvalid, "Physics replay exceeds its body budget."));
+            const auto configuration = physics.ReadReplayConfiguration();
+            if (configuration.HasError())
+                return Capture::Failure(configuration.ErrorValue());
             try {
-                HeadlessReplayPhysics result{publication, physics.Settings().Identity(), scope.Value().character.Settings().Identity(), {}};
+                HeadlessReplayPhysics result{publication, configuration.Value(), scope.Value().character.Settings().Identity(), {}};
                 result.bodies.reserve(bindings.size());
                 for (const auto &binding : bindings) {
                     const auto owner = scene.Find(binding.object);

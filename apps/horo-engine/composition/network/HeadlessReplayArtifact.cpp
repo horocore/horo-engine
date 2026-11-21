@@ -21,7 +21,7 @@ namespace Horo::Application::Internal {
         constexpr std::uint32_t QueryPublicationSchemaVersion = 1;
         constexpr std::uint32_t GameplaySchemaVersion = 1;
         constexpr std::uint32_t NavigationReplaySchemaVersion = 1;
-        constexpr std::uint32_t RigidBodyMotionSchemaVersion = 1;
+        constexpr std::uint32_t RigidBodyMotionSchemaVersion = 2;
         constexpr std::uint32_t CharacterMotionSchemaVersion = 1;
 
         /** @brief Hashes the same canonical array for comparison and detached artifact publication. */
@@ -184,12 +184,22 @@ namespace Horo::Application::Internal {
         /** @brief Adds provenance and explicit omissions to the portable body observations. */
         Json EncodePhysics(const HeadlessReplayPhysics &physics) {
             auto bodies = EncodeRigidBodies(physics.bodies);
+            const auto &configuration = physics.configuration;
             return {{"schemaVersion", RigidBodyMotionSchemaVersion},
                     {"scope", "authored-rigid-body-motion"},
-                    {"omissions", {"solver-internal-state", "solver-build-identity", "external-physics-inputs"}},
+                    {"omissions", {"solver-internal-state", "external-physics-inputs"}},
                     {"physicsTick", std::to_string(physics.publication.completedTick)},
                     {"publicationRevision", std::to_string(physics.publication.publicationRevision)},
-                    {"settingsDigest", FormatSha256(physics.settings.digest)},
+                    {"settingsDigest", FormatSha256(configuration.settings.digest)},
+                    {"profile", FormatSha256(configuration.Fingerprint())},
+                    {"buildDigest", FormatSha256(configuration.build)},
+                    {"solverDigest", FormatSha256(configuration.solver)},
+                    {"platformDigest", FormatSha256(configuration.platform)},
+                    {"filtersDigest", FormatSha256(configuration.filters)},
+                    {"surfacesDigest", FormatSha256(configuration.surfaces)},
+                    {"floatingPoint",
+                     {{"architecture", static_cast<std::uint8_t>(configuration.floatingPoint.architecture)},
+                      {"value", std::to_string(configuration.floatingPoint.value)}}},
                     {"digest", FormatSha256(HashRecords(bodies))},
                     {"bodies", std::move(bodies)}};
         }
@@ -337,7 +347,7 @@ namespace Horo::Application::Internal {
             }
             if (const auto &physics = data.physics) {
                 const AI::AiReplayStamp stamp{physics->publication.completedTick, physics->publication.publicationRevision};
-                result.Observe(Physics, RigidBodyMotionSchemaVersion, physics->settings.digest, stamp,
+                result.Observe(Physics, RigidBodyMotionSchemaVersion, physics->configuration.Fingerprint(), stamp,
                                HashRecords(EncodeRigidBodies(physics->bodies)));
                 if (data.characterMotion)
                     result.Observe(AchievedCharacterMotion, CharacterMotionSchemaVersion, physics->characterSettings.digest, stamp,

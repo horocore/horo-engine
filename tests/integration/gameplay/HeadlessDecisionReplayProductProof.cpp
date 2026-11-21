@@ -55,7 +55,8 @@ namespace Horo::Application::PrefabAtomicTest {
         };
 
         /** @brief Compares the producer's real artifact and verifies ordered divergence and corrupted evidence handling. */
-        void ExpectPortableComparison(const std::filesystem::path &file, nlohmann::json artifact) {
+        void ExpectPortableComparison(const std::filesystem::path &file, nlohmann::json artifact,
+                                      const Physics::PhysicsReplayConfiguration &configuration) {
             const auto same = Internal::CompareHeadlessReplayArtifacts(file, file);
             INFO((same.HasError() ? same.ErrorValue().message : "evidence accepted"));
             REQUIRE(same.HasValue());
@@ -87,6 +88,15 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(Internal::RunHeadlessReplayComparison(arguments, out, err) == 1);
             CHECK(out.str().find("Divergence at tick 1 in physics") != std::string::npos);
             CHECK(err.str().empty());
+
+            auto incompatibleBuild = configuration;
+            incompatibleBuild.build = configuration.solver;
+            physics.at("buildDigest") = FormatSha256(incompatibleBuild.build);
+            physics.at("profile") = FormatSha256(incompatibleBuild.Fingerprint());
+            writeCandidate();
+            const auto incompatible = Internal::CompareHeadlessReplayArtifacts(file, candidate);
+            REQUIRE(incompatible.HasError());
+            CHECK(incompatible.ErrorValue().code.Value() == AI::AIErrors::CanonicalSchemaUnsupported.code.Value());
 
             physics.at("bodies").at(0).at("activity") = 99;
             writeCandidate();
@@ -129,7 +139,14 @@ namespace Horo::Application::PrefabAtomicTest {
             const auto &physics = artifact.at("physics");
             CHECK(physics.at("physicsTick") == std::to_string(data.evidence.tick));
             CHECK(physics.at("scope") == "authored-rigid-body-motion");
-            CHECK(physics.at("settingsDigest") == FormatSha256(data.physics->settings.digest));
+            const auto &configuration = data.physics->configuration;
+            CHECK(physics.at("schemaVersion") == 2);
+            CHECK(physics.at("settingsDigest") == FormatSha256(configuration.settings.digest));
+            CHECK(physics.at("buildDigest") == FormatSha256(configuration.build));
+            CHECK(physics.at("solverDigest") == FormatSha256(configuration.solver));
+            CHECK(physics.at("profile") == FormatSha256(configuration.Fingerprint()));
+            CHECK(configuration.filters != Sha256Digest{});
+            CHECK(configuration.surfaces != Sha256Digest{});
             const auto &bodies = physics.at("bodies");
             const auto canonicalBodies = bodies.dump();
             CHECK(physics.at("digest") == FormatSha256(ComputeSha256(std::as_bytes(std::span{canonicalBodies}))));
@@ -196,7 +213,7 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(nlohmann::json::parse(retained) == artifact);
             stream.close();
             retained.close();
-            ExpectPortableComparison(file, artifact);
+            ExpectPortableComparison(file, artifact, configuration);
         }
 
         /** @brief Verifies shared first-difference ordering using evidence from an actual committed fixed tick. */
@@ -242,10 +259,15 @@ namespace Horo::Application::PrefabAtomicTest {
             REQUIRE(physics.Value()->replayed);
             CHECK(physics.Value()->recorded->revision + 1 == physics.Value()->replayed->revision);
 
-            changed.physics->settings.digest = changed.sceneInput;
+            changed.physics->configuration.settings.digest = changed.sceneInput;
             const auto incompatible = Internal::CompareHeadlessReplayCaptures(data, changed);
             REQUIRE(incompatible.HasError());
             CHECK(incompatible.ErrorValue().code.Value() == AI::AIErrors::CanonicalSchemaUnsupported.code.Value());
+            changed.physics->configuration = data.physics->configuration;
+            changed.physics->configuration.build = changed.sceneInput;
+            const auto changedBuild = Internal::CompareHeadlessReplayCaptures(data, changed);
+            REQUIRE(changedBuild.HasError());
+            CHECK(changedBuild.ErrorValue().code.Value() == AI::AIErrors::CanonicalSchemaUnsupported.code.Value());
         }
     }  // namespace
 

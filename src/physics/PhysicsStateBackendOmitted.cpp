@@ -10,6 +10,11 @@
 namespace Horo::Physics::Detail {
     struct CanonicalPhysicsStateWorkspace::Impl final {};
 
+    /** @copydoc ReadCanonicalReplaySimulation */
+    Result<CanonicalReplaySimulation> ReadCanonicalReplaySimulation(CanonicalWorldHandle) {
+        return Result<CanonicalReplaySimulation>::Failure(MakeError(PhysicsErrors::OperationUnsupported));
+    }
+
     /** @copydoc PrepareCanonicalPhysicsStateBuild */
     Result<CanonicalPhysicsStateBuildIdentity> PrepareCanonicalPhysicsStateBuild(const PhysicsStateBuildBinding &) {
         return Result<CanonicalPhysicsStateBuildIdentity>::Failure(MakeError(PhysicsErrors::OperationUnsupported));

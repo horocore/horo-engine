@@ -2,6 +2,7 @@
 #include "Horo/AI/AIErrors.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Foundation/Utf8.h"
+#include "Horo/Physics/PhysicsWorld.h"
 
 #include <algorithm>
 #include <charconv>
@@ -34,14 +35,21 @@ namespace Horo::Application::Internal {
             }
         };
 
-        /** @brief Reads exact positive identifiers without JSON numeric rounding or alternate spellings. */
-        std::uint64_t ReadIdentity(const Json &field) {
+        /** @brief Reads a canonical unsigned decimal string without JSON numeric rounding. */
+        std::uint64_t ReadWord(const Json &field) {
             const auto &text = field.get_ref<const std::string &>();
             std::uint64_t value{};
             const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
-            if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() || value == 0 || text.front() == '0')
+            if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() || (text.size() > 1 && text.front() == '0'))
                 throw InvalidEvidence{};
             return value;
+        }
+
+        /** @brief Reads a required nonzero owner identity or publication revision. */
+        std::uint64_t ReadIdentity(const Json &field) {
+            if (const auto value = ReadWord(field); value != 0)
+                return value;
+            throw InvalidEvidence{};
         }
 
         /** @brief Rejects missing or empty content identities. */
@@ -135,14 +143,35 @@ namespace Horo::Application::Internal {
 
         /** @brief Bounds and verifies a native body or Character projection before it can participate in comparison. */
         PortableBoundary ReadMotion(const Json &section, const std::string_view recordsKey, AI::AiReplayStamp stamp,
-                                    const std::size_t maximum) {
+                                    const std::size_t maximum, const std::uint32_t schema = 1) {
             const auto &records = section.at(recordsKey);
-            if (section.at("schemaVersion") != 1 || !records.is_array() || records.size() > maximum)
+            if (section.at("schemaVersion") != schema || !records.is_array() || records.size() > maximum)
                 throw InvalidEvidence{};
             const auto hash = HashJson(records);
             if (hash != ReadDigest(section.at("digest")))
                 throw InvalidEvidence{};
-            return {{AI::AiReplayCoverage::Deterministic, 1, ReadDigest(section.at("settingsDigest"))}, {stamp, hash}};
+            return {{AI::AiReplayCoverage::Deterministic, schema, ReadDigest(section.at("settingsDigest"))}, {stamp, hash}};
+        }
+
+        /** @brief Reconstructs and checks the solver-owned compatibility digest carried by a portable artifact. */
+        Sha256Digest ReadPhysicsConfiguration(const Json &section) {
+            const auto &fp = section.at("floatingPoint");
+            const auto &architecture = fp.at("architecture");
+            if (!architecture.is_number_unsigned() || architecture == 0 ||
+                architecture > static_cast<unsigned>(Physics::PhysicsStateFpArchitecture::ArmFpcr))
+                throw InvalidEvidence{};
+            const Physics::PhysicsReplayConfiguration configuration{ReadDigest(section.at("buildDigest")),
+                                                                    ReadDigest(section.at("solverDigest")),
+                                                                    ReadDigest(section.at("platformDigest")),
+                                                                    ReadDigest(section.at("filtersDigest")),
+                                                                    ReadDigest(section.at("surfacesDigest")),
+                                                                    {ReadDigest(section.at("settingsDigest"))},
+                                                                    {architecture.get<Physics::PhysicsStateFpArchitecture>(),
+                                                                     ReadWord(fp.at("value"))}};
+            const auto profile = configuration.Fingerprint();
+            if (profile != ReadDigest(section.at("profile")))
+                throw InvalidEvidence{};
+            return profile;
         }
 
         /** @brief Reads the redacted query publication or its confirmed Blackboard write records. */
@@ -215,7 +244,9 @@ namespace Horo::Application::Internal {
                 if (physics.at("scope") != "authored-rigid-body-motion")
                     throw InvalidEvidence{};
                 const AI::AiReplayStamp stamp{ReadIdentity(physics.at("physicsTick")), ReadIdentity(physics.at("publicationRevision"))};
-                result.At(Physics) = ReadMotion(physics, "bodies", stamp, 128);
+                auto bodyMotion = ReadMotion(physics, "bodies", stamp, 128, 2);
+                bodyMotion.profile.content = ReadPhysicsConfiguration(physics);
+                result.At(Physics) = bodyMotion;
                 if (file.contains("characterMotion"))
                     result.At(AchievedCharacterMotion) = ReadMotion(file.at("characterMotion"), "records", stamp, 256);
             } else if (file.contains("characterMotion")) {

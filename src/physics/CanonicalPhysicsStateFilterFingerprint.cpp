@@ -1,7 +1,17 @@
 #include "CanonicalPhysicsStateBackendInternal.h"
+#include "Horo/Physics/PhysicsErrors.h"
 #include "PhysicsStateHashInternal.h"
 
 namespace Horo::Physics::Detail {
+    /** @copydoc ReadCanonicalReplaySimulation */
+    Result<CanonicalReplaySimulation> ReadCanonicalReplaySimulation(const CanonicalWorldHandle handle) {
+        if (!handle.value)
+            return Result<CanonicalReplaySimulation>::Failure(MakeError(PhysicsErrors::InvalidState));
+        const auto &world = *static_cast<const CanonicalWorld *>(handle.value);
+        return Result<CanonicalReplaySimulation>::Success(
+            {CanonicalPhysicsStateFilterFingerprint(world), CanonicalPhysicsStateSurfaceFingerprint(world.simulation.binding.surfaces)});
+    }
+
     namespace {
         void Layer(StateDetail::StateHash &hash, const CollisionLayerDefinition &value) noexcept {
             hash.Id(value.id);

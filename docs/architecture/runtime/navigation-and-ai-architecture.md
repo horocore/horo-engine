@@ -3399,6 +3399,12 @@ The comparer checks profile compatibility and leaves these outcomes out of
 deterministic equality. Motion intents that consume best-effort feedback retain
 their independent scheduler timing contract.
 
+Canonical Physics replay records the bound executable and solver build, platform
+ABI, current floating-point controls, world settings, compiled collision filters
+and surface identity. Comparison rejects a different configuration before
+examining body motion. A host without verified solver identity reports a typed
+replay capture error. Older Physics records must be regenerated for comparison.
+
 Use `horo-engine --compare-ai-replay <recorded evidence.json> <replayed evidence.json>`
 to compare two single-tick reports with matching coverage and content identities.
 The command reads bounded files without opening a project and prints the first

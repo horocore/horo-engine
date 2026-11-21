@@ -102,7 +102,7 @@ namespace Horo::Application::Internal {
     /** @brief Exact native publication of the authored rigid-body projection in one fixed attempt. */
     struct HeadlessReplayPhysics final {
         Physics::PhysicsPublishedTick publication;
-        Physics::PhysicsWorldSettingsIdentity settings;
+        Physics::PhysicsReplayConfiguration configuration;
         Character::CharacterWorldSettingsIdentity characterSettings;
         std::vector<HeadlessReplayRigidBody> bodies;
     };
