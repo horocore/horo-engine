@@ -118,6 +118,9 @@ namespace Horo::Editor {
             return source_.Revision() != 0;
         }
 
+        /** @brief Returns the exact whole, unredacted file offered to the model, or an inert lease. */
+        [[nodiscard]] SourceDocumentSnapshot PatchSource() const noexcept;
+
         /** @brief Checks the captured authority without accessing any editor or output owner. */
         [[nodiscard]] bool IsCurrent() const;
 

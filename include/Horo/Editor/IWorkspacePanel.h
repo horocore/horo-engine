@@ -64,6 +64,11 @@ namespace Horo::Editor {
     struct EditorWorkspaceViewCommandData;
     struct EditorWorkspaceViewModel;
 
+    namespace Proposals {
+        class ChangeSet;
+        struct WorkspaceEditPlan;
+    }  // namespace Proposals
+
     /** @brief Context injected when a panel is attached to the workspace. */
     struct PanelContext {
         EditorDataBus &dataBus;
@@ -106,6 +111,10 @@ namespace Horo::Editor {
         std::string_view agentProjectReadIdentity{}; /**< Exact workspace reader identity, borrowed during attachment. */
         /** @brief Captures findings from the active editor document on the workspace owner lane. */
         std::function<std::optional<AgentEditorDiagnosticsSnapshot>()> captureEditorDiagnostics{};
+        /** @brief Stages an exact planned operation for presentation after the workspace draw. */
+        std::function<bool(const Proposals::ChangeSet &, const Proposals::WorkspaceEditPlan &, std::size_t,
+                           EditorWorkspaceViewCommandData &)>
+            requestSourceReview{};
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */

@@ -1,15 +1,20 @@
 #include "../../../apps/HoroEditor/app/EditorLocalAgentPanel.h"
+#include "../../../apps/HoroEditor/app/EditorLocalAgentPatch.h"
 #include "../../support/OwnedTestDirectory.h"
+#include "../../support/SourceDocumentTestProject.h"
 #include "EditorWorkspaceViewModel.h"
 #include "Horo/Editor/IWorkspacePanel.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
 #include "Horo/Foundation/Platform.h"
+#include "editor/source_editor/SourceEditorSession.h"
+#include "editor/source_editor/SourceReviewOverlay.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <cstdlib>
 #include <fstream>
+#include <functional>
 #include <imgui_internal.h>
 #include <thread>
 
@@ -29,7 +34,7 @@ namespace {
         EditorWorkspaceViewCommandData command;
         EditorLocalAgentPanelHost agent{MakeEditorLocalAgentPanel(jobs.Get(), files)};
 
-        explicit LocalAgentFixture(const std::string locale) {
+        explicit LocalAgentFixture(const std::string locale, const std::function<void(PanelContext &)> &configure = {}) {
             ImGui::GetIO().IniFilename = nullptr;
             ImGui::GetIO().ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
             const auto catalog = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" / (locale + ".json");
@@ -41,6 +46,8 @@ namespace {
                              .inputRouter = &gui.input,
                              .workspaceInputContext = &workspace,
                              .projectIdentity = "layout-test"};
+            if (configure)
+                configure(ctx);
             panels.AttachAll(ctx);
             InputFrame(1);
         }
@@ -234,5 +241,74 @@ namespace {
         REQUIRE(Await([&] {
             return fixture.DrawnText().find("Final answer after hiding the dock") != std::string::npos;
         }));
+    }
+
+    TEST_CASE("A completed source reply opens only its exact publication for review", "[.][chat-http]") {
+        const auto *endpoint = std::getenv("HORO_MODEL_TEST_ENDPOINT");
+        REQUIRE(endpoint);
+        TestSupport::SourceProject project;
+        project.Put("int value = 1;\n");
+        SourceDocumentService owner{project.directory};
+        const auto source = owner.Open(project.Identity(), project.directory / "code.cpp").Value();
+        SourceEditorSession session;
+        std::shared_ptr<const SourceReviewOverlay> queued;
+        LocalAgentFixture fixture{"en-US", [&](PanelContext &context) {
+            context.activeSourceSnapshot = [&](SourceDocumentSnapshot &output) {
+                output = source;
+                return true;
+            };
+            context.requestSourceReview = [&](const Proposals::ChangeSet &proposal, const Proposals::WorkspaceEditPlan &plan,
+                                              const std::size_t index, EditorWorkspaceViewCommandData &) {
+                auto overlay = SourceReviewOverlay::Capture(proposal, plan, index);
+                REQUIRE(overlay.HasValue());
+                queued = std::make_shared<const SourceReviewOverlay>(std::move(overlay).Value());
+                return true;
+            };
+        }};
+        fixture.Draw(420);
+        fixture.Enter("##Endpoint", endpoint);
+        fixture.Enter("##Model", "editor-inline-patch");
+        fixture.Enter("##Prompt", "Propose one source edit");
+        fixture.Activate("###context_offer");
+        REQUIRE(fixture.DrawnText().find("int value = 1;") != std::string::npos);
+        fixture.Activate("###context_approve");
+        REQUIRE(Await([&] {
+            return fixture.DrawnText().find("Review changes in source editor") != std::string::npos;
+        }));
+        CHECK_FALSE(queued);
+        SECTION("an explicit click queues the correct tab and exact hunk") {
+            fixture.Activate("###source_patch_review");
+            REQUIRE(queued);
+            REQUIRE(session.StageReview(queued));
+            auto *view = session.Acquire(source.Identity().instance);
+            REQUIRE(view);
+            view->Publish(source);
+            CHECK(view->widget.ReviewStatus() == SourceReviewStatus::Ready);
+            CHECK(owner.Snapshot(source.Identity().instance).Value().SharesStateWith(source));
+        }
+        SECTION("a revised buffer prevents the review from opening") {
+            REQUIRE(owner.Edit(source.Identity().instance, {source.Revision(), 12, 1, "9"}).HasValue());
+            fixture.Activate("###source_patch_review");
+            CHECK_FALSE(queued);
+            CHECK(fixture.DrawnText().find("The source changed after this request.") != std::string::npos);
+        }
+    }
+
+    TEST_CASE("Local source review rejects prose and edits outside the offered file", "[editor][agent][source]") {
+        TestSupport::SourceProject project;
+        project.Put("one\n");
+        SourceDocumentService owner{project.directory};
+        const auto source = owner.Open(project.Identity(), project.directory / "code.cpp").Value();
+        const EditorLocalAgentPatchSource offered{source, "example/model:latest", 1};
+        const auto patch =
+            R"({"version":1,"files":[{"kind":"edit","path":"code.cpp","hunks":[{"offset":0,"before":"one","after":"two"}]}]})";
+        REQUIRE(PrepareEditorLocalPatchReview(patch, offered, "workspace", 1).HasValue());
+        CHECK_FALSE(IsEditorLocalPatchReply("An example:\n```json\n{}\n```"));
+        const auto foreign =
+            R"({"version":1,"files":[{"kind":"edit","path":"other.cpp","hunks":[{"offset":0,"before":"one","after":"two"}]}]})";
+        CHECK(PrepareEditorLocalPatchReview(foreign, offered, "workspace", 1).HasError());
+        const auto remove = R"({"version":1,"files":[{"kind":"delete","path":"code.cpp"}]})";
+        CHECK(PrepareEditorLocalPatchReview(remove, offered, "workspace", 1).HasError());
+        CHECK(owner.Snapshot(source.Identity().instance).Value().SharesStateWith(source));
     }
 }  // namespace

@@ -11,6 +11,7 @@
 #include "WorkspacePathText.h"
 #include "editor/screens/NavigationErrors.h"
 #include "editor/screens/workspace/panels/input_mapping/InputGyroscopeEditor.h"
+#include "editor/source_editor/SourceReviewOverlay.h"
 
 #include <algorithm>
 #include <imgui.h>
@@ -340,6 +341,18 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         using enum EditorWorkspaceViewCommand;
         if (command.command == None)
             return;
+        if (command.command == ReviewSourceProposal) {
+            const auto &documents = controller_->ViewModel().sourceDocuments;
+            if (command.sourceReview &&
+                std::ranges::any_of(documents,
+                                    [&](const auto &source) {
+                return source.SharesStateWith(command.sourceReview->Source());
+            }) &&
+                view_.StageSourceReview(command.sourceReview))
+                controller_->ProcessCommand(
+                    {.command = FocusWorkspaceDocument, .documentInstance = command.sourceReview->Source().Identity().instance});
+            return;
+        }
         if (!TryOpenDocumentModal(command) && !TryOpenCreationModal(command))
             controller_->ProcessCommand(command);
         ReconcileEditorDiagnostics();

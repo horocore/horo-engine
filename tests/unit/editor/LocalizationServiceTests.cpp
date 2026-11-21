@@ -199,6 +199,14 @@ namespace {
             "workspace.source_edit.history_evicted",
             "workspace.source_edit.history_oversized",
             "workspace.source_edit.close_search",
+            "workspace.source_review.previous",
+            "workspace.source_review.next",
+            "workspace.source_review.conflict",
+            "workspace.source_review.dismiss",
+            "workspace.local_agent.source_patch_review",
+            "workspace.local_agent.source_patch_stale",
+            "workspace.local_agent.source_patch_invalid",
+            "workspace.local_agent.source_patch_unavailable",
         };
         RequireCatalogKeys(service, sourceEditingKeys);
         constexpr std::array documentKeys{"workspace.documents.close",         "workspace.documents.move_left",

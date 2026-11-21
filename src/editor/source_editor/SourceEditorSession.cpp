@@ -1,8 +1,22 @@
 #include "SourceEditorSession.h"
 
+#include "SourceReviewOverlay.h"
+
 #include <algorithm>
 
 namespace Horo::Editor {
+    /** @copydoc SourceEditorView::Publish */
+    void SourceEditorView::Publish(const SourceDocumentSnapshot &source) {
+        widget.Publish(source);
+        if (pendingReview) {
+            if (!widget.PresentReview(*pendingReview))
+                widget.ShowReviewConflict();
+            pendingReview.reset();
+        }
+        if (syntax.Publish(source) || !widget.HasHighlight(source.Revision()))
+            static_cast<void>(widget.Highlight(source.Revision(), syntax.Syntax()));
+    }
+
     /** @copydoc SourceEditorSession::Acquire */
     SourceEditorView *SourceEditorSession::Acquire(const DocumentInstanceId instance) {
         if (!instance.Value())
@@ -12,6 +26,17 @@ namespace Horo::Editor {
         if (!nextViewId_)
             return nullptr;
         return &views_.try_emplace(instance.Value(), SourceEditingViewId{nextViewId_++}).first->second;
+    }
+
+    /** @copydoc SourceEditorSession::StageReview */
+    bool SourceEditorSession::StageReview(std::shared_ptr<const SourceReviewOverlay> overlay) {
+        if (!overlay || !overlay->Source().IsCurrent())
+            return false;
+        auto *view = Acquire(overlay->Source().Identity().instance);
+        if (!view)
+            return false;
+        view->pendingReview = std::move(overlay);
+        return true;
     }
 
     /** @copydoc SourceEditorSession::ReadSelection */

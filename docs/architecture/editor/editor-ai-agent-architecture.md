@@ -759,6 +759,10 @@ existing gutter and text decorations. It maps original byte coordinates to
 display coordinates and retains the exact source publication. Navigation
 only moves the caret. A newer source publication or a tentative widget edit
 retires the markers and reports a conflict until a new plan is selected.
+The local model panel offers review for a complete JSON change or unified
+diff returned to a turn that explicitly included the exact whole source.
+An explicit click prepares the plan and queues the selected existing source
+tab through the workspace command lane. Reviews remain scoped to each tab.
 
 ## Backend Providers
 

@@ -301,6 +301,14 @@ namespace Horo::Editor {
                std::chrono::steady_clock::now() < project_.deadline;
     }
 
+    /** @copydoc EditorLocalAgentContext::PatchSource */
+    SourceDocumentSnapshot EditorLocalAgentContext::PatchSource() const noexcept {
+        const auto items = Items();
+        if (selection_ || !source_.IsCurrent() || items.size() != 1 || items.front().provenance.kind != Agent::AgentContextKind::File)
+            return {};
+        return items.front().candidate.text.ends_with(source_.Text()) ? source_ : SourceDocumentSnapshot{};
+    }
+
     /** @copydoc EditorLocalAgentContext::MatchesOpenSource */
     bool EditorLocalAgentContext::MatchesOpenSource(const std::span<const SourceDocumentSnapshot> open) const noexcept {
         return std::ranges::any_of(open, [this](const auto &snapshot) {

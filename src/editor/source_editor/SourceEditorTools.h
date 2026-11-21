@@ -57,5 +57,7 @@ namespace Horo::Editor {
         void StatusText(const SourceHistoryState &history, const std::optional<Result<SourceEditingPublication>> &outcome,
                         const EditorGuiContext &context) const;
         void Navigate(SourceEditorWidget &widget, const SourceDocumentSnapshot &source, const EditorGuiContext &context);
+        /** @brief Presents review-only navigation and status for the exact selected proposal. */
+        void Review(SourceEditorWidget &widget, const EditorGuiContext &context);
     };
 }  // namespace Horo::Editor

@@ -4182,6 +4182,7 @@ if (HORO_BUILD_EDITOR_GUI)
     add_executable(HoroEditorLocalAgentPanelRenderTests
         unit/editor/EditorLocalAgentPanelRenderTests.cpp
         ../apps/HoroEditor/app/EditorLocalAgentPanel.cpp
+        ../apps/HoroEditor/app/EditorLocalAgentPatch.cpp
         ../apps/HoroEditor/app/EditorLocalAgentContext.cpp
         ../apps/HoroEditor/app/EditorLocalAgentHistory.cpp)
     target_include_directories(HoroEditorLocalAgentPanelRenderTests PRIVATE

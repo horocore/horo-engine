@@ -87,6 +87,11 @@ namespace Horo::Editor {
         /** @brief Tears down source presentations when their project document owner leaves or is replaced. */
         void ResetSourceSession() noexcept;
 
+        /** @brief Queues a review for its exact source tab on the next draw. */
+        [[nodiscard]] bool StageSourceReview(std::shared_ptr<const SourceReviewOverlay> overlay) {
+            return m_sourceSession.StageReview(std::move(overlay));
+        }
+
         /** @brief Reads the exact selected range from the active source's existing presentation. */
         [[nodiscard]] std::optional<SourceContextRange> ReadSourceSelection(const SourceDocumentSnapshot &snapshot) const {
             return m_sourceSession.ReadSelection(snapshot);

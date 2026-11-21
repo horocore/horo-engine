@@ -67,6 +67,7 @@ namespace Horo::Application {
 }  // namespace Horo::Application
 
 namespace Horo::Editor {
+    class SourceReviewOverlay;
     class TerrainDocumentHost;
     struct PrefabApplyRecoveryCandidate;
 
@@ -166,6 +167,7 @@ namespace Horo::Editor {
         EditPCGGraph,
         ReturnToWelcome,
         SourceDocumentInteraction,
+        ReviewSourceProposal,
         SaveSourceDocument,
         SaveSourceDocumentAs,
         SaveAllSourceDocuments,
@@ -761,6 +763,7 @@ namespace Horo::Editor {
         std::optional<std::filesystem::path> prefabSaveDestination;
         PrefabDocumentAction prefabAction{PrefabDocumentAction::Save};
         std::optional<SourceEditingCommand> sourceInteraction;
+        std::shared_ptr<const SourceReviewOverlay> sourceReview;
         bool sourceTextInputOwned{}; /**< Current-frame ownership, independent of whether text changed. */
         std::optional<SourceSaveRequest> sourceSave;
         SourceCloseDecision sourceCloseDecision{SourceCloseDecision::Cancel};

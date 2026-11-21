@@ -65,6 +65,9 @@ class Handler(BaseHTTPRequestHandler):
         if not cloud and payload["model"] == "editor-dock-lifecycle":
             self.send_dock_lifecycle(payload)
             return
+        if not cloud and payload["model"] == "editor-inline-patch":
+            self.send_inline_patch(payload)
+            return
         if not cloud and payload["model"] in {"editor-local-loading", "editor-local-idle"}:
             self.hold_local_response(payload["model"] == "editor-local-idle")
             return
@@ -93,6 +96,18 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_records(["{}"], status=400)
                 return
         self.send_model_stream(payload["model"], cloud)
+
+    def send_inline_patch(self, payload):
+        messages = payload.get("messages", [])
+        if (self.headers.get("Authorization") is not None or len(messages) != 2 or payload.get("tools")
+                or messages[-1] != {"role": "user", "content": "Propose one source edit"}
+                or messages[0].get("role") != "user"
+                or not messages[0].get("content", "").endswith("\n\nint value = 1;\n")):
+            self.send_records(["{}"], status=400)
+            return
+        patch = "```diff\n--- a/code.cpp\n+++ b/code.cpp\n@@ -1 +1 @@\n-int value = 1;\n+int value = 2;\n```"
+        frames = [{"message": {"content": patch}}, {"done": True}]
+        self.send_records([json.dumps(frame) + "\n" for frame in frames])
 
     def send_dock_lifecycle(self, payload):
         gate = self.server.chat_gate

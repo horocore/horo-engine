@@ -151,6 +151,25 @@ namespace Horo::Editor {
             Ui::ErrorText(Text(context, "workspace.source_edit.invalid").c_str(), context.theme.fonts);
     }
 
+    /** @copydoc SourceEditorTools::Review */
+    void SourceEditorTools::Review(SourceEditorWidget &widget, const EditorGuiContext &context) {
+        const auto status = widget.ReviewStatus();
+        if (status == SourceReviewStatus::None)
+            return;
+        if (status == SourceReviewStatus::Ready) {
+            if (Button(context, "workspace.source_review.previous") && widget.NavigateReview(false))
+                focusSource_ = true;
+            if (Button(context, "workspace.source_review.next") && widget.NavigateReview(true))
+                focusSource_ = true;
+        } else {
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text(context, "workspace.source_review.conflict"), Theme::ConsoleWarning(),
+                            context.theme.fonts);
+        }
+        if (Button(context, "workspace.source_review.dismiss"))
+            widget.ClearReview();
+        ImGui::NewLine();
+    }
+
     /** @copydoc SourceEditorTools::Draw */
     std::optional<SourceEditingCommand> SourceEditorTools::Draw(SourceEditorWidget &widget, const SourceDocumentSnapshot &source,
                                                                 const SourceHistoryState &history,
@@ -205,6 +224,7 @@ namespace Horo::Editor {
             focusLine_ = lineOpen_;
         }
         ImGui::NewLine();
+        Review(widget, context);
         if (auto search = Search(widget, source, context))
             intent = std::move(search);
         Navigate(widget, source, context);

@@ -726,6 +726,12 @@ namespace Horo::Editor {
         storage_->reviewStatus = SourceReviewStatus::None;
     }
 
+    /** @copydoc SourceEditorWidget::ShowReviewConflict */
+    void SourceEditorWidget::ShowReviewConflict() {
+        ClearReview();
+        storage_->reviewStatus = SourceReviewStatus::Conflicted;
+    }
+
     /** @copydoc SourceEditorWidget::ReviewStatus */
     SourceReviewStatus SourceEditorWidget::ReviewStatus() const noexcept {
         const auto &state = *storage_;

@@ -140,6 +140,8 @@ namespace Horo::Editor {
         [[nodiscard]] bool PresentReview(const SourceReviewOverlay &overlay);
         /** @brief Removes only the review projection, preserving ordinary diagnostics. */
         void ClearReview();
+        /** @brief Shows a conflict for a selected review that no longer matches the source publication. */
+        void ShowReviewConflict();
         /** @brief Reads the active review state against the current document publication. */
         [[nodiscard]] SourceReviewStatus ReviewStatus() const noexcept;
         /** @brief Selects and reveals the previous or next review location, wrapping around the file. */

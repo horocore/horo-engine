@@ -18,6 +18,7 @@
 #include "PCGPreviewWorkspace.h"
 #include "ScriptModuleHostServices.h"
 #include "editor/input/EditorInputActions.h"
+#include "editor/source_editor/SourceReviewOverlay.h"
 
 #include <algorithm>
 #include <array>
@@ -204,6 +205,18 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             .captureEditorDiagnostics =
                 [this] {
             return CaptureEditorDiagnostics();
+        },
+            .requestSourceReview =
+                [](const Proposals::ChangeSet &proposal, const Proposals::WorkspaceEditPlan &plan, const std::size_t operation,
+                   EditorWorkspaceViewCommandData &command) {
+            if (command.command != EditorWorkspaceViewCommand::None)
+                return false;
+            auto overlay = SourceReviewOverlay::Capture(proposal, plan, operation);
+            if (overlay.HasError())
+                return false;
+            command.sourceReview = std::make_shared<const SourceReviewOverlay>(std::move(overlay).Value());
+            command.command = EditorWorkspaceViewCommand::ReviewSourceProposal;
+            return true;
         },
         };
         contributions_.panels.AttachAll(panelContext);

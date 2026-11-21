@@ -17,15 +17,12 @@ namespace Horo::Editor {
         /** @brief Reconciles one publication into independent interaction and lexical projections.
          * @param source Current authoritative source publication.
          */
-        void Publish(const SourceDocumentSnapshot &source) {
-            widget.Publish(source);
-            if (syntax.Publish(source) || !widget.HasHighlight(source.Revision()))
-                static_cast<void>(widget.Highlight(source.Revision(), syntax.Syntax()));
-        }
+        void Publish(const SourceDocumentSnapshot &source);
 
         SourceEditorWidget widget;
         SourceEditorTools tools;
         SourceSyntaxCache syntax;
+        std::shared_ptr<const SourceReviewOverlay> pendingReview;
     };
 
     /** @brief Project-owner-scoped presentations with a monotonic host-lifetime identity allocator. */
@@ -38,6 +35,8 @@ namespace Horo::Editor {
          * @return Presentation, or null when its typed identity is inert or view IDs are exhausted.
          */
         [[nodiscard]] SourceEditorView *Acquire(DocumentInstanceId instance);
+        /** @brief Queues a prepared overlay for the source tab's next presentation. */
+        [[nodiscard]] bool StageReview(std::shared_ptr<const SourceReviewOverlay> overlay);
         /** @brief Observes a range in an existing widget only. No presentation is created on a miss. */
         [[nodiscard]] std::optional<SourceContextRange> ReadSelection(const SourceDocumentSnapshot &snapshot) const;
         /** @brief Removes only explicitly closed document presentations. @param tabs Current host-owned tab inventory. */
