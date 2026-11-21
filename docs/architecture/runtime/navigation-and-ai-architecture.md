@@ -2302,6 +2302,9 @@ then publishes committed state for variable-rate RenderExtraction.
      Scene incarnation and the entity generation captured when that controller was created.
      Standalone project startup can select its authored movement actors explicitly. It prepares the registered
      Navigation agent and Character controller together and includes each actor's caller in path publication.
+     The configured standalone host accepts task requests during cooked evaluation, dispatches them through
+     the scheduler, and submits safe motion before the native Character step. The next tick consumes feedback
+     from the prior committed native step. An aborted animated attempt discards its outstanding feedback.
      The binding publishes Navigation admission errors, provider failures, arrival and cancellation to the original
      AI task. A superseded movement can never complete the replacement task or authorize its motion.
      For a behavior-tree node, the host binds the continuation captured during evaluation at intent dispatch.

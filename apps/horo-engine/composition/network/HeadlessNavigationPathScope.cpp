@@ -104,7 +104,7 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(Nav::NavigationErrors::AdmissionRejected));
         try {
             auto callers = callers_;
-            std::vector<std::unique_ptr<SceneAiNavigationActor>> actors;
+            std::vector<Actor> actors;
             callers.reserve(1 + selected.size());
             actors.reserve(selected.size());
             for (const auto &policy : selected) {
@@ -123,10 +123,10 @@ namespace Horo::Application::Internal {
                 if (actor.HasError())
                     return Result<void>::Failure(std::move(actor).ErrorValue());
                 if (std::ranges::any_of(actors, [&](const auto &existing) {
-                    return existing->Agent() == actor.Value()->Agent();
+                    return existing.owner->Agent() == actor.Value()->Agent();
                 }))
                     return Result<void>::Failure(MakeError(Nav::NavigationErrors::AgentDescriptorInvalid));
-                actors.push_back(std::move(actor).Value());
+                actors.push_back({std::move(actor).Value(), {}});
                 callers.push_back(caller);
             }
             actors_ = std::move(actors);
@@ -135,6 +135,115 @@ namespace Horo::Application::Internal {
         } catch (const std::bad_alloc &) {
             return Result<void>::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
         }
+    }
+
+    /** @copydoc HeadlessNavigationPathScope::BeginMotionTick */
+    void HeadlessNavigationPathScope::BeginMotionTick(const std::uint64_t tick, const float stepSeconds) noexcept {
+        motionTick_ = tick;
+        motionStep_ = stepSeconds;
+    }
+
+    Result<Nav::NavigationMovementObservation> HeadlessNavigationPathScope::ObserveActor(
+        const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy, const SceneAiNavigationActor &actor,
+        const std::optional<Nav::NavigationAgentOwner> target) const {
+        using Observation = Result<Nav::NavigationMovementObservation>;
+        Nav::NavigationMovementObservation current{.binding = context_->Binding().scene,
+                                                   .stepSeconds = motionStep_,
+                                                   .path = {.provenance = source_,
+                                                            .linkRevision = activation_.topology.Value(),
+                                                            .goalRevision = 1,
+                                                            .tick = motionTick_}};
+        if (target) {
+            if (!policy.follow)
+                return Observation::Failure(MakeError(Nav::NavigationErrors::CapabilityUnavailable));
+            auto followed = policy.follow(scene, *target, motionTick_);
+            if (followed.HasError())
+                return Observation::Failure(std::move(followed).ErrorValue());
+            current.target = std::move(followed).Value();
+        }
+        return actor.Capture(current);
+    }
+
+    /** @copydoc HeadlessNavigationPathScope::AdmitMotion */
+    Result<void> HeadlessNavigationPathScope::AdmitMotion(const Runtime::RuntimeSceneView &scene,
+                                                          const HeadlessNavigationMotionPolicy &policy, AI::AiRuntimeCapability ai,
+                                                          AI::AiTaskContinuation task, Nav::NavigationMovementRequest request,
+                                                          const std::uint64_t tick) {
+        if (tick == 0 || tick != motionTick_ || scene.RuntimeId().value != activation_.scene.Value())
+            return Result<void>::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
+        const auto entity = ai.ResolveAgentOwner(task.Operation().agent);
+        if (entity.HasError())
+            return Result<void>::Failure(entity.ErrorValue());
+        const auto actor = agents_.FindOwner({activation_.scene, entity.Value().entity.index, entity.Value().entity.generation});
+        if (!actor)
+            return Result<void>::Failure(MakeError(Nav::NavigationErrors::AgentRegistryStale));
+        const auto selected = std::ranges::find_if(actors_, [&](const Actor &entry) {
+            return entry.owner->Agent() == *actor;
+        });
+        if (selected == actors_.end())
+            return Result<void>::Failure(MakeError(Nav::NavigationErrors::AdmissionRejected));
+        const auto target = request.entity;
+        auto current = ObserveActor(scene, policy, *selected->owner, target);
+        if (current.HasError())
+            return Result<void>::Failure(std::move(current).ErrorValue());
+        auto admitted = selected->owner->Admit(std::move(ai), std::move(task), std::move(request), current.Value());
+        if (admitted.HasValue())
+            selected->target = target;
+        return admitted;
+    }
+
+    /** @copydoc HeadlessNavigationPathScope::SubmitMotion */
+    Result<void> HeadlessNavigationPathScope::SubmitMotion(const Runtime::RuntimeSceneView &scene,
+                                                           const HeadlessNavigationMotionPolicy &policy) {
+        if (std::ranges::none_of(actors_, [](const Actor &entry) {
+            return entry.owner->Motion() != nullptr;
+        }))
+            return Result<void>::Success();
+        auto population = agents_.Snapshot();
+        if (population.HasError())
+            return Result<void>::Failure(std::move(population).ErrorValue());
+        auto capture = policy.capture(scene, population.Value(), motionTick_);
+        if (capture.HasError())
+            return Result<void>::Failure(std::move(capture).ErrorValue());
+        const auto sampled = capture.Value().Agents();
+        for (auto &actor : actors_) {
+            auto *motion = actor.owner->Motion();
+            if (!motion)
+                continue;
+            auto current = ObserveActor(scene, policy, *actor.owner, actor.target);
+            if (current.HasError()) {
+                motion->Reject(std::move(current).ErrorValue());
+                continue;
+            }
+            const auto sample = std::ranges::find(sampled, actor.owner->Agent(), &Nav::NavigationCrowdAgentFact::handle);
+            if (sample == sampled.end()) {
+                motion->Reject(MakeError(Nav::NavigationErrors::StaleSnapshot));
+                continue;
+            }
+            auto limits = policy.limits;
+            limits.agentIndex = static_cast<std::size_t>(sample - sampled.begin());
+            limits.stepSeconds = motionStep_;
+            // Motion-stage failures are delivered by the binding to this actor's task.
+            (void)motion->Submit(current.Value(), capture.Value(), limits, *policy.solver);
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc HeadlessNavigationPathScope::ObserveMotion */
+    void HeadlessNavigationPathScope::ObserveMotion(const std::uint64_t tick) {
+        for (auto &actor : actors_) {
+            if (auto *motion = actor.owner->Motion()) {
+                if (auto result = motion->Observe(tick); result.HasError())
+                    motion->Reject(std::move(result).ErrorValue());
+            }
+        }
+    }
+
+    /** @copydoc HeadlessNavigationPathScope::DiscardMotionFeedback */
+    void HeadlessNavigationPathScope::DiscardMotionFeedback() noexcept {
+        for (auto &actor : actors_)
+            if (auto *motion = actor.owner->Motion())
+                motion->DiscardFeedback();
     }
 
     /** @copydoc HeadlessNavigationPathScope::Context */

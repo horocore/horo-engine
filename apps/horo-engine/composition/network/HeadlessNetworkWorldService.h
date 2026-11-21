@@ -8,6 +8,7 @@
 #include "HeadlessNetworkWorldOwners.h"
 #include "HeadlessPerceptionPolicy.h"
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/AINavigationIntentDispatch.h"
 #include "Horo/WorldStreaming/WorldArtifactErrors.h"
 
 namespace Horo::Application::Internal::HeadlessNetworkDetail {
@@ -33,6 +34,16 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 !record_->navigationPath)
                 return {};
             return record_->navigationPath->Context();
+        }
+
+        Result<void> StageNavigationMotion(AI::AiTaskContinuation task, Navigation::NavigationMovementRequest request,
+                                           const std::uint64_t tick) const {
+            if (std::this_thread::get_id() != owners_->owner || !record_ || record_->closeRequested || !record_->decisionMotion ||
+                !record_->ai || tick == 0 || tick != record_->motionEvaluationTick)
+                return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPhaseInvalid));
+            if (const auto resolved = record_->ai->CapabilityAtSafePoint().ResolveAgentOwner(task.Operation().agent); resolved.HasError())
+                return Result<void>::Failure(resolved.ErrorValue());
+            return record_->decisionMotion->Stage(std::move(task), tick, std::move(request));
         }
 
         const Vfx::VfxExtractionOutcome *VfxFrame() const noexcept {
@@ -485,6 +496,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return InstallAiSceneOwner(settings, {});
             }
             settings.requirePerceptionEndpoints = true;
+            if (auto motion = PrepareDecisionMotion(settings); motion.HasError())
+                return motion;
             if (!OwnsPerception())
                 settings.availableCapabilities.bits &= ~AI::AiCapabilitySet::Of(AI::AiCapability::Perception).bits;
 
@@ -512,6 +525,34 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 catalog = record_->admittedControllers;
             }
             return InstallAiSceneOwner(settings, catalog);
+        }
+
+        /** @brief Binds the selected policy to this generation's exact decision dispatch. */
+        Result<void> PrepareDecisionMotion(const AI::AiSceneRuntimeSettings &settings) const {
+            const auto &input = *owners_->configured;
+            const auto &policy = input.navigationMotion;
+            if (!policy)
+                return Result<void>::Success();
+            if (!OwnsCookedDecisionExecution() || !policy->solver || !policy->capture || input.navigationActors.empty() ||
+                input.cookedDecisions->execution->intents)
+                return Result<void>::Failure(MakeError(Navigation::NavigationErrors::CapabilityDescriptorInvalid));
+            auto motion =
+                AI::AiNavigationIntentDispatch::Create(settings.maximumAgents,
+                                                       [weak = std::weak_ptr<WorldRecord>{record_},
+                                                        policy](const AI::AiTaskContinuation &task,
+                                                                Navigation::NavigationMovementRequest request, const std::uint64_t tick) {
+                const auto world = weak.lock();
+                if (!world || world->closeRequested || !world->navigationPath || !world->ai || !world->scenes)
+                    return Result<void>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+                const auto scene = world->scenes->ActiveScene();
+                return scene ? world->navigationPath->AdmitMotion(*scene, *policy, world->ai->CapabilityAtSafePoint(), task,
+                                                                  std::move(request), tick)
+                             : Result<void>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+            });
+            if (motion.HasError())
+                return Result<void>::Failure(std::move(motion).ErrorValue());
+            record_->decisionMotion = std::move(motion).Value();
+            return Result<void>::Success();
         }
 
         /** @brief Shares Scene lifecycle ownership without constructing any client controller or Blackboard. */
@@ -548,6 +589,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             auto execution = *owners_->configured->cookedDecisions->execution;
             if (record_->decisionQueries)
                 execution.queryTasks = record_->decisionQueries;
+            if (record_->decisionMotion)
+                execution.intents = record_->decisionMotion;
             return execution;
         }
 
@@ -787,6 +830,16 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Result<void>::Success();
             if (owners_->configured->decisionReplay && owners_->fixed && request_.world == Network::NetworkModeWorldKind::Standalone)
                 owners_->fixed->ArmDecisionReplay(*record_, context);
+
+            struct ResetMotionPhase {
+                std::uint64_t &tick;
+
+                ~ResetMotionPhase() {
+                    tick = 0;
+                }
+            } reset{record_->motionEvaluationTick};
+
+            record_->motionEvaluationTick = context.simulationTick;
             auto result = record_->decisionQueries ? RunConfiguredDecisionQueries(context.simulationTick)
                                                    : EvaluateConfiguredDecisions(context.simulationTick);
             if (result.HasValue())
@@ -835,16 +888,38 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return record_->ai->PollPerceptionAtSensePoll(*scene, record_->perception, context.simulationTick, context.fixedDelta);
         }
 
+        /** @brief Publishes path results and consumes the preceding Character result before decision evaluation. */
+        Result<void> PrepareNavigationTick(const Runtime::FixedStepContext &context) {
+            auto *paths = record_->navigationPath.get();
+            if (!paths)
+                return Result<void>::Success();
+            if (context.cancellation.IsCancellationRequested())
+                return JobCancelled();
+            auto committed = paths->CommitAtFixedTick(context.simulationTick);
+            if (committed.HasError() || !record_->decisionMotion)
+                return committed;
+            if (context.simulationTick == 0)
+                return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPhaseInvalid));
+            paths->ObserveMotion(context.simulationTick - 1);
+            paths->BeginMotionTick(context.simulationTick, static_cast<float>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0F);
+            return Result<void>::Success();
+        }
+
+        /** @brief Submits the selected actors' safe motion after behavior and Animation evaluation. */
+        Result<void> SubmitConfiguredMotion() {
+            if (!record_->decisionMotion)
+                return Result<void>::Success();
+            const auto scene = record_->scenes->ActiveScene();
+            return scene ? record_->navigationPath->SubmitMotion(*scene, *owners_->configured->navigationMotion)
+                         : Result<void>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+        }
+
         /** @brief Uses ordinary fixed stages only after readiness; load progress never dispatches a tick. */
         Result<void> RunConfiguredTick(const Runtime::FixedStepContext &context) {
             if (!configuredActivated_ || !record_ || record_->closeRequested)
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
-            if (record_->navigationPath) {
-                if (context.cancellation.IsCancellationRequested())
-                    return JobCancelled();
-                if (const auto committed = record_->navigationPath->CommitAtFixedTick(context.simulationTick); committed.HasError())
-                    return committed;
-            }
+            if (auto navigation = PrepareNavigationTick(context); navigation.HasError())
+                return navigation;
             if (const auto perception = RunConfiguredPerception(context); perception.HasError())
                 return perception;
             if (const auto decisions = RunConfiguredDecisions(context); decisions.HasError())
@@ -856,8 +931,12 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 if (animation.HasError())
                     return animation;
             }
+            if (auto motion = SubmitConfiguredMotion(); motion.HasError())
+                return motion;
             auto advanced = AdvanceConfiguredNative(context);
             if (advanced.HasError()) {
+                if (record_->decisionMotion)
+                    record_->navigationPath->DiscardMotionFeedback();
                 if (gameplay_)
                     gameplay_->Shutdown();
                 return advanced;

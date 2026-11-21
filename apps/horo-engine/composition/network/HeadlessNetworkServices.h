@@ -5,6 +5,8 @@
 #include "HeadlessSceneLoadBoundary.h"
 #include "Horo/AI/AISceneActivation.h"
 #include "Horo/Navigation/NavigationAreas.h"
+#include "Horo/Navigation/NavigationCrowdAvoidance.h"
+#include "Horo/Navigation/NavigationMovement.h"
 #include "Horo/Network/NetworkModeComposition.h"
 #include "Horo/Network/SceneReplicationCommitSource.h"
 #include "Horo/Prefab/PrefabLimits.h"
@@ -30,6 +32,10 @@ namespace Horo::Runtime {
 
 namespace Horo::Vfx {
     struct VfxExtractionOutcome;
+}
+
+namespace Horo::AI {
+    class AiTaskContinuation;
 }
 
 namespace Horo::Application::Internal {
@@ -134,6 +140,18 @@ namespace Horo::Application::Internal {
         std::uint64_t principal{};
     };
 
+    /** @brief Explicit project-selected crowd authority, fixed envelope and live Follow observations. */
+    struct HeadlessNavigationMotionPolicy final {
+        std::shared_ptr<Navigation::INavigationCrowdBackend> solver;
+        Navigation::NavigationAvoidanceRequest limits;
+        std::function<Result<Navigation::NavigationCrowdSnapshot>(const Runtime::RuntimeSceneView &,
+                                                                  const Navigation::NavigationAgentSnapshot &, std::uint64_t)>
+            capture;
+        std::function<Result<std::optional<Navigation::NavigationMovementTarget>>(const Runtime::RuntimeSceneView &,
+                                                                                  Navigation::NavigationAgentOwner, std::uint64_t)>
+            follow;
+    };
+
     /** @brief Maps one explicitly public authored action to a stable positive presentation tag. */
     struct HeadlessAnimationActionTag final {
         Animation::GraphActionId action;
@@ -231,7 +249,8 @@ namespace Horo::Application::Internal {
         std::shared_ptr<HeadlessInitialStateHost> initialSceneState;
         std::shared_ptr<HeadlessDecisionReplay> decisionReplay; /**< Optional explicit one-shot standalone replay capture. */
         std::optional<Runtime::SceneAnimationParallelEvaluation> animationParallel;
-        std::vector<HeadlessNavigationActorPolicy> navigationActors; /**< Explicit standalone AI movement population. */
+        std::vector<HeadlessNavigationActorPolicy> navigationActors;            /**< Explicit standalone AI movement population. */
+        std::shared_ptr<const HeadlessNavigationMotionPolicy> navigationMotion; /**< Bounded owner-lane movement policy, when selected. */
     };
 
     /** @brief Composes actual project Scene services and their sole aggregate-owned Physics/Character pair.
@@ -331,6 +350,14 @@ namespace Horo::Application::Internal {
     /** @brief Reads the already-bound native path scope on its owner lane, when explicitly selected. */
     [[nodiscard]] std::shared_ptr<const Gameplay::GameplayNavigationContext> InspectHeadlessNavigationContext(
         const Network::INetworkModeService &service) noexcept;
+
+    /** @brief Stages an exact running decision node's MoveTo or Follow within the configured decision evaluation.
+     * @param service Borrowed service for this exact authoritative World.
+     * @param task Task continuation from the current behavior-tree callback. @param request Typed movement selection.
+     * @param tick Current evaluation tick. @return Admission or typed phase, capability or capacity failure.
+     */
+    [[nodiscard]] Result<void> StageHeadlessNavigationMotion(const Network::INetworkModeService &service, AI::AiTaskContinuation task,
+                                                             Navigation::NavigationMovementRequest request, std::uint64_t tick);
 
     /** @brief Inspect the already-bound execution context of an explicitly selected headless world service.
      * @param service Borrowed application-owned service, not a process-global discovery source.

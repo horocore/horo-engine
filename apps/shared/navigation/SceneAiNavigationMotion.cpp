@@ -82,6 +82,12 @@ namespace Horo::Application::Internal {
         }
     }
 
+    /** @copydoc SceneAiNavigationMotion::Reject */
+    void SceneAiNavigationMotion::Reject(Error error) {
+        DiscardFeedback();
+        (void)task_.FailMotion(std::move(error));
+    }
+
     SceneAiNavigationActor::SceneAiNavigationActor(std::unique_ptr<Nav::NavigationMovementController> movement,
                                                    std::unique_ptr<Nav::NavigationVelocityPipeline> velocity,
                                                    Nav::NavigationCharacterAdapter bridge, Character::CharacterCapability character,
@@ -163,6 +169,8 @@ namespace Horo::Application::Internal {
 
     /** @copydoc SceneAiNavigationActor::Motion */
     SceneAiNavigationMotion *SceneAiNavigationActor::Motion() noexcept {
+        if (motion_ && !task_.IsCurrent())
+            motion_.reset();
         return motion_ ? &*motion_ : nullptr;
     }
 

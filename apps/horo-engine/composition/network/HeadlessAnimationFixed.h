@@ -186,6 +186,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (auto *replay = DecisionReplay())
                 replay->Abort(context);
             for (std::size_t index = count_; index > 0; --index) {
+                if (auto &paths = evaluated_[index - 1]->navigationPath)
+                    paths->DiscardMotionFeedback();
                 evaluated_[index - 1]->native.AbortAnimationFixedTick(context);
                 evaluated_[index - 1]->animation->AbortFixedUpdate(context);
             }

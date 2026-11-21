@@ -10,9 +10,15 @@ namespace Horo::Runtime {
     class RuntimeSceneView;
 }
 
+namespace Horo::AI {
+    class AiRuntimeCapability;
+    class AiTaskContinuation;
+}  // namespace Horo::AI
+
 namespace Horo::Application::Internal {
     struct HeadlessNavigationPathPolicy;
     struct HeadlessNavigationActorPolicy;
+    struct HeadlessNavigationMotionPolicy;
     struct ProjectSceneNavigationSelection;
     struct ProjectSceneNavigationWorld;
     class ScenePhysicsHost;
@@ -40,6 +46,17 @@ namespace Horo::Application::Internal {
         /** @brief Prepares the selected actors and registers distinct callers before the first fixed tick. */
         [[nodiscard]] Result<void> PrepareActors(ScenePhysicsHost &physics, const Runtime::RuntimeSceneView &scene,
                                                  std::span<const HeadlessNavigationActorPolicy> selected);
+        /** @brief Opens the exact fixed-tick observation used by staged and active motion. */
+        void BeginMotionTick(std::uint64_t tick, float stepSeconds) noexcept;
+        /** @brief Resolves the exact AI task and its prepared Scene actor at decision intent dispatch. */
+        [[nodiscard]] Result<void> AdmitMotion(const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy,
+                                               AI::AiRuntimeCapability ai, AI::AiTaskContinuation task,
+                                               Navigation::NavigationMovementRequest request, std::uint64_t tick);
+        /** @brief Submits safe Navigation motion before the native Character step. */
+        [[nodiscard]] Result<void> SubmitMotion(const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy);
+        /** @brief Retains achieved motion after native publication, or discards an aborted attempt. */
+        void ObserveMotion(std::uint64_t tick);
+        void DiscardMotionFeedback() noexcept;
         /** @brief Commits terminal results and refreshes the native scope on the fixed owner lane. */
         [[nodiscard]] Result<void> CommitAtFixedTick(std::uint64_t tick) const;
         /** @brief Dispatches only after gameplay has submitted from the same fixed owner lane. */
@@ -50,6 +67,14 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<bool> PollRetirement() const;
 
     private:
+        struct Actor final {
+            std::unique_ptr<SceneAiNavigationActor> owner;
+            std::optional<Navigation::NavigationAgentOwner> target;
+        };
+
+        [[nodiscard]] Result<Navigation::NavigationMovementObservation> ObserveActor(
+            const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy, const SceneAiNavigationActor &actor,
+            std::optional<Navigation::NavigationAgentOwner> target) const;
         HeadlessNavigationPathScope(std::shared_ptr<Navigation::NavigationWorldLifecycle> lifecycle,
                                     Navigation::NavigationCoordinator &coordinator,
                                     Navigation::NavigationWorldActivationDescriptor activation,
@@ -63,7 +88,9 @@ namespace Horo::Application::Internal {
         Navigation::NavigationOutcomeProvenance source_;
         Navigation::NavigationAgentRegistry &agents_;
         std::vector<Navigation::NavigationPathCaller> callers_;
-        std::vector<std::unique_ptr<SceneAiNavigationActor>> actors_;
+        std::vector<Actor> actors_;
+        std::uint64_t motionTick_{};
+        float motionStep_{};
         std::shared_ptr<Gameplay::GameplayNavigationContext> context_;
     };
 }  // namespace Horo::Application::Internal

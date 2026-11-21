@@ -35,6 +35,8 @@ namespace Horo::Application::Internal {
          * @param tick Committed fixed tick. @return Success or the original stale or Character failure.
          */
         [[nodiscard]] Result<void> Observe(std::uint64_t tick);
+        /** @brief Retains a failed motion observation or publication on the exact AI task. */
+        void Reject(Error error);
         /** @brief Discards feedback for a failed or abandoned Character attempt before retirement. */
         void DiscardFeedback() noexcept;
 

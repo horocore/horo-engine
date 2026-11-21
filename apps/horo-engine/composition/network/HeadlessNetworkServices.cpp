@@ -518,6 +518,14 @@ namespace Horo::Application::Internal {
         return world ? world->NavigationContext() : nullptr;
     }
 
+    /** @copydoc StageHeadlessNavigationMotion */
+    Result<void> StageHeadlessNavigationMotion(const Network::INetworkModeService &service, AI::AiTaskContinuation task,
+                                               Navigation::NavigationMovementRequest request, const std::uint64_t tick) {
+        const auto *world = dynamic_cast<const WorldService *>(&service);
+        return world ? world->StageNavigationMotion(std::move(task), std::move(request), tick)
+                     : Result<void>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+    }
+
     /** @copydoc InspectHeadlessGameplayContext */
     std::shared_ptr<const Gameplay::GameplayPhysicsContext> InspectHeadlessGameplayContext(
         const Network::INetworkModeService &service) noexcept {

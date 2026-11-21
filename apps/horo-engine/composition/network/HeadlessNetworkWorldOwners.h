@@ -27,6 +27,10 @@ namespace Horo::Application::Internal {
     class HeadlessDecisionQueries;
 }
 
+namespace Horo::AI {
+    class AiNavigationIntentDispatch;
+}
+
 namespace Horo::Application::Internal::HeadlessNetworkDetail {
     class HeadlessFixedParticipant;
     class ReplicaAnimationInputs;
@@ -53,7 +57,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
 
         Network::NetworkModeServiceRequest request;
         std::uint64_t generation{};
-        std::uint64_t decisionTick{}; /**< Last completed AI dispatch; a downstream same-tick retry does not replay it. */
+        std::uint64_t decisionTick{};         /**< Last completed AI dispatch; a downstream same-tick retry does not replay it. */
+        std::uint64_t motionEvaluationTick{}; /**< Nonzero while the exact cooked decision phase accepts staged motion. */
         std::shared_ptr<Runtime::RuntimeScene> scene;
         std::weak_ptr<const Gameplay::GameplayPhysicsContext> gameplay;
         GameplayWorldComposition *activeGameplay{};
@@ -70,6 +75,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         std::optional<InitialTransformCapture> initialTransformCapture;
         std::optional<ReplayAuthoredScene> replayAuthoredScene;
         std::shared_ptr<HeadlessDecisionQueries> decisionQueries; /**< Keeps task binding and phase inventory scoped to this world. */
+        std::shared_ptr<AI::AiNavigationIntentDispatch> decisionMotion;
         AI::PerceptionSpatialBroadphase perception;
         std::unique_ptr<ProjectSceneNavigationWorld> navigation;
         std::unique_ptr<HeadlessNavigationPathScope>

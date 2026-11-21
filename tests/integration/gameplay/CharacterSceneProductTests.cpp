@@ -2,6 +2,7 @@
 #include "CharacterSceneProductFixture.h"
 #include "GameplayReplicationAdmissionTestSupport.h"
 #include "HeadlessProjectScene.h"
+#include "Horo/AI/AITaskContinuation.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Platform/DynamicLibrary.h"
@@ -276,6 +277,9 @@ namespace Horo::Application::CharacterSceneProductTest {
         const auto gameplay = NavigationGameplay();
         NativeNavigationProductWorld product;
         REQUIRE(product.Start(fixture, gameplay).HasValue());
+        const auto outOfPhase = Internal::StageHeadlessNavigationMotion(*product.physics, {}, {}, 1);
+        REQUIRE(outOfPhase.HasError());
+        CHECK(outOfPhase.ErrorValue().code.Value() == AI::AIErrors::SchedulerPhaseInvalid.code.Value());
 
         const auto scope = Internal::InspectHeadlessNavigationContext(*product.physics);
         REQUIRE(scope);
