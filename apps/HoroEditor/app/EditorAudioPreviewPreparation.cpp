@@ -11,9 +11,10 @@ namespace Horo::Editor::AudioPreviewHostDetail {
         constexpr std::uint32_t Frames = 256;
 
         /** @brief Builds the real prepared resident voice; factory copies every sample before this borrow ends. */
-        Result<std::unique_ptr<Audio::AudioVoiceRenderRuntime>> Voice(const AudioComponentPreviewRequest &request,
-                                                                      const DecodedSource &decoded, const Audio::AudioCommandScope &scope) {
+        Result<std::unique_ptr<Audio::AudioVoiceRenderRuntime>> Voice(const CapturedSource &capture,
+                                                                      const Audio::AudioCommandScope &scope) {
             using namespace Audio;
+            const auto &decoded = capture.decoded;
             auto plan = AudioResamplerPlan::Prepare({.quality = AudioResamplerQuality::Linear,
                                                      .inputRate = decoded.format.sampleRate,
                                                      .outputRate = 48'000,
@@ -31,7 +32,7 @@ namespace Horo::Editor::AudioPreviewHostDetail {
             return AudioVoiceRenderRuntime::CreateResident(std::make_shared<AudioVoiceStateMachine>(std::move(registry).Value()),
                                                            {std::span{planes}.first(decoded.planes.size()), decoded.frames, true},
                                                            {plan.Value(),
-                                                            {request.source.playback.loop, 0, decoded.frames},
+                                                            {capture.source.playback.loop, 0, decoded.frames},
                                                             64,
                                                             40U << 20U,
                                                             64U << 10U,
@@ -62,8 +63,7 @@ namespace Horo::Editor::AudioPreviewHostDetail {
     }
 
     /** @copydoc Prepare */
-    Result<Audio::Internal::AudioFrontendResources> Prepare(const AudioComponentPreviewRequest &request, const DecodedSource &decoded,
-                                                            const Audio::AudioRuntimeId owner) {
+    Result<Audio::Internal::AudioFrontendResources> Prepare(const CapturedSource &capture, const Audio::AudioRuntimeId owner) {
         using namespace Audio;
         const AudioCommandScope scope{owner, 1, {owner, 1, 1}};
         const MixerCompileProfile profile{.sampleRate = 48'000,
@@ -73,7 +73,7 @@ namespace Horo::Editor::AudioPreviewHostDetail {
         auto plan = CompileMixerGraph(MakeDefaultMixerAsset(), {owner, 1, 1, 1, 1, 1}, profile);
         if (plan.HasError())
             return Result<Internal::AudioFrontendResources>::Failure(plan.ErrorValue());
-        const auto bus = request.source.playback.bus.value_or(Identity<AudioBusId>(3));
+        const auto bus = capture.source.playback.bus.value_or(Identity<AudioBusId>(3));
         if (!plan.Value()->ResolveBus(bus).has_value())
             return Result<Internal::AudioFrontendResources>::Failure(MakeError(AudioComponentPreviewErrors::MissingBus));
         auto stagingResult = AudioCommandStaging::Create(
@@ -86,10 +86,10 @@ namespace Horo::Editor::AudioPreviewHostDetail {
         auto mixer = MixerGraphRuntime::Create({scope, Identity<AudioMemoryPoolId>(33), profile});
         if (mixer.HasError())
             return Result<Internal::AudioFrontendResources>::Failure(mixer.ErrorValue());
-        auto voice = Voice(request, decoded, scope);
+        auto voice = Voice(capture, scope);
         if (voice.HasError())
             return Result<Internal::AudioFrontendResources>::Failure(voice.ErrorValue());
-        AudioVoiceRenderRequest initial{bus, request.source, request.listener, {}};
+        AudioVoiceRenderRequest initial{bus, capture.source, capture.listener, {}};
         initial.source.identity.context = scope.scene;
         if (initial.listener)
             initial.listener->identity.context = scope.scene;

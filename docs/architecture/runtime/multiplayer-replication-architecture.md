@@ -51,6 +51,234 @@ objects, find a service locator or mutate state during construction.
 
 ## Execution Roles and Authority
 
+On authenticated mode startup and travel, the composition asks the selected
+authority Scene service for its declared authored object and schema bindings
+after Scene, Physics, and Gameplay activation. The configured headless adapter
+resolves those stable Scene object identities against the exact committed Scene
+and checks each schema against the installed module's immutable descriptor
+snapshot and the role-specific admitted schema subset. The project host uses
+the network policy captured with the selected Scene's project root. It discovers
+an authored object through an enabled behavior or serialized component whose
+typed owner registered an admitted schema. Disabled behaviors, unregistered
+components, service schemas, and dynamic Prefab members do not declare an
+authored network object. An entity with multiple matching owner occurrences
+is rejected because a mapping currently carries one schema. An embedding
+host can supply an explicit binding list through the same transaction.
+
+The authority world assigns the initial slots in stable authored object order
+and stages the complete mapping privately. The normal lifecycle safe point
+publishes the mapping with its world role. Duplicate or stale bindings and
+activation cancellation discard the candidate without replacing the old world.
+An authored object identity is retained as provenance. Clients do not derive
+network identities from local object order and require the authenticated
+initial state synchronization path for receiving mappings.
+
+The initial field snapshot uses a reliable Control manifest followed by
+contiguous record segments. The manifest declares the authoritative tick,
+record count, and total wire bytes. The inbox checks the authenticated
+connection, world session, and authority epoch on every frame. It retains
+bounded bytes in canonical object order and hands the full snapshot to the
+field decoder once. At the structural safe point, `ApplyCompleted` verifies
+that the receiving apply owner has the same peer, world, and recipient.
+The decoded records must match their segment identities and the manifest
+tick. Validation, cancellation, or a rejected owner transaction discards
+the batch before any Scene value is published.
+
+The version 2 initial stream also carries one authority-issued ownership
+revision and an optional autonomous owner per object. Every segment of that
+record must repeat the same ownership facts. `PrepareReceiver` receives
+those facts after complete receipt and structural reconstruction. It
+derives each object role against the exact local peer through
+`ProjectInitialReplicationRole` and keeps the binding detached until the
+same owner transaction commits the fields and ownership. An autonomous
+client world may receive both owned and simulated objects. A simulated
+client world cannot accept an autonomous object grant. The host can read
+the committed initial fact through `InitialClientOwnership` while the exact
+Scene, session, and object remain live. Future ownership transitions use
+the live role owner. Rebuild configured host adapters for the updated
+receiver callback and use the same stream revision on both peers.
+
+Hosts enable this path with `NetworkWorldBindingPolicy::initialState`, a
+distinct required handshake feature and Control message, and a live
+`INetworkInitialStateHost` adapter. The configured lane shares the world,
+authored inventory, and Prefab outbox. It starts a field snapshot only after
+the matching structural inventory is sent and defers subsequent Prefab
+changes while that snapshot is in flight. The receiving owner waits for
+the complete committed object count, including Prefab reconstruction that
+can outlive receipt of its lifecycle message. At the structural safe point
+the apply transaction still verifies every exact object identity. Only a successful apply issues a
+receipt for that world session, authority epoch, and tick. Normal traffic
+is admitted after the matching receipt. A valid early packet consumes its
+lane sequence without invoking gameplay or extending the peer lifetime.
+Build native consumers again for the extended policy and phase interfaces.
+
+For a configured headless authority with a secured transport, the host may
+select public Scene transforms for an exact committed Scene asset. Its
+explicit role authority resolves the accepted connection and principal to
+one gameplay peer, negotiated descriptor generation, and the complete
+object ownership inventory. The same initial-state adapter is retained by
+world binding and the secure transport. A new structural revision stays
+pending until the next committed fixed observation. Existing client
+recipient and apply grants continue through the configured client owner.
+
+An explicitly configured replica Scene can also select the registered
+transform projection and a host grant for the descriptor generation
+negotiated with its authenticated server. It reuses the installed
+serializer lease and the complete reconstructed Scene mapping. The Scene
+service publishes decoded transforms synchronously at its live structural
+safe point. The initial ownership and receipt become eligible only after
+this transaction succeeds. Rebuild native consumers against the additive
+Scene apply owner factory. The direct Scene apply factory remains supported.
+
+`CaptureReplicationAuthoredScene` extracts an ordered inventory of exact
+authority identities and stable Scene provenance. It omits process-local
+entity handles and dynamic Prefab occurrences. Once a caller has admitted the
+complete inventory for an authenticated world, `StageReplicaAuthoredScene`
+matches every row against the committed local Scene and stages the entire
+mapping. Session, authority epoch, schema version, authored identity, and
+mapping capacity are checked before publication. The client keeps its existing
+mapping until the structural safe point commits the replacement.
+
+Hosts using the authored baseline can encode the inventory as ordered
+`NetworkAuthoredScenePage` records. Each big-endian page carries the bound
+session, authority epoch, complete row count, and first row index. Rows
+contain stable Scene object and schema identities with their exact schema
+version. The wire index determines the initial authority slot and generation,
+independent of the client's entity order. A page contains up to 32 rows and
+uses at most 666 payload bytes. Send one empty page for an empty inventory.
+`NetworkAuthoredSceneAssembly` transfers the inventory only after every
+contiguous page has arrived. Existing world binding and Prefab messages retain
+their wire formats. Consumers of the new page API link `NetworkRuntime`.
+
+Configure `NetworkWorldBindingPolicy::authoredScene` with a distinct Control
+message and a required handshake feature to enable this path. Rebuild native
+hosts against the extended policy layout. The existing reliable Control owner
+sends the world binding, then the authored pages, then dynamic Prefab records.
+Native backpressure retains the exact frame and sequence. The client matches
+the complete inventory against its committed local Scene projection before
+publishing the network world at the structural safe point. During travel,
+provisional pages follow PREPARE and remain private until COMMIT. Cancellation
+or expiry drops the detached candidate and retains the published world.
+
+An embedding host can create `ReplicationInboundApply` in
+`InitialSnapshot` mode after reconstructing the exact authored and dynamic
+inventory. On the authority, `EncodeReplicationInitialState` uses one
+committed mapping and capture tick to encode a complete recipient-specific
+inventory of full records within a total byte budget. The receiving route
+pins its mapping revision and admits reliable full
+records with the initial field projection. Every object must contribute a
+record from the same authority tick. The receiver applies the entire inventory
+through one owner transaction at the structural safe point. An incomplete
+inventory reports pending. A failed transaction discards staged values. The
+successful report includes `initialPublished`, including for an explicitly
+empty inventory. The host can use that receipt to gate gameplay publication.
+Existing callers keep the incremental default. Rebuild native consumers
+against the extended apply report and world lease layouts.
+
+Existing mode services have an empty authored projection by default. A service
+wrapper around an opted-in authority Scene forwards the projection method to
+retain the same declarations. Existing world staging without authored objects
+continues through `Stage`.
+
+NetworkRuntime can prepare an authority-only mapping batch through
+`ReplicationWorldLifecycle::PrepareObjectBatch`. A Scene structural
+participant supplies the exact new and retired entity associations while
+their group is still private. The batch retains tombstones and validates all
+retirements before additions, including legal reuse of a slot by its next
+generation. It revokes the previous capture revision in one swap at the
+structural safe point. Cancellation, another mapping publication, pause,
+world replacement, or a rejected Scene participant prevents the detached
+batch from becoming visible. Metrics run after the Scene and its owners
+publish. Existing single-object entry points retain their bounded,
+allocation-free update path.
+
+Gameplay host composition can supply a Prefab group publication owner before
+activating a module. Prefab passes the verified cooked recipe, projected
+components in recipe order, and admitted creator to that owner. The resulting
+binding prepares its candidate using Scene-assigned entity references in the
+same order, and stays with the occurrence for retirement. Spawn and despawn
+publish with the other Scene owners. A rejected mapping leaves the entire
+group unchanged.
+
+For runtime-created entities the authority can call
+`PrepareDynamicObjectBatch` with the Scene reservations and their admitted
+schema versions. The mapping assigns slots within its existing budget, reusing
+retired slots only at their next generation. Despawn resolves the exact Scene
+entity generation and rejects authored mappings. Rollback discards the assigned
+identities and preserves the live mapping and its capture revision.
+
+The configured headless host binds the authority Gameplay service to the
+canonical network world through a weak grant for its exact Scene. It projects
+cooked Prefab members through the same admitted behavior and component schemas
+used for authored discovery. Members without an admitted owner stay local.
+Scene travel and shutdown revoke the old grant, and the client factory receives
+no authority grant.
+
+Each published Prefab mapping carries the cooked asset ID and verified
+envelope digest, the complete prepared entity count, and the member's
+position in that order. Local-only members still occupy their prepared slots.
+The first mapped member's generation-qualified network object ID identifies
+the whole occurrence. Every member in a batch must describe the same recipe
+and occupy a distinct slot in increasing order. Invalid evidence discards the
+entire detached mapping and preserves the previous capture revision.
+Source consumers of the mapping may continue using the existing authored
+provenance initializer. Rebuild native consumers against the updated mapping
+value layout. The existing NetworkRuntime target supplies the Assets identity
+header through its public usage requirements.
+
+The versioned Prefab lifecycle payload carries the world session, authority
+epoch and occurrence. Spawn also carries the cooked envelope identity, bounded
+entity count, and exact network object and schema versions in prepared member
+order. Despawn names only the exact occurrence. The codec rejects invalid
+lengths, repeated object slots and ambiguous member order before data reaches
+Scene admission. Dispatch must still check the authenticated server direction,
+the current world and the selected cooked catalog.
+
+The headless authority stores the admitted spawn inputs on the occurrence's
+anchor alongside its Scene transaction. The extended spawn format appends a
+length-prefixed intent of at most 4,096 bytes. It carries placement, typed
+initialization values, external bindings, and canonical value overrides.
+References name authored Scene objects or exact network object generations.
+The receiver resolves those identities in its active Scene and supplies its
+locally selected cook target. Legacy spawn records without intent and despawn
+records keep their original encoding. Deploy peers with extended spawn support
+together when enabling it on the protected lifecycle lane.
+
+A host can register a dedicated Prefab lifecycle control message and require
+its negotiated feature. The existing dispatcher admits the protected reliable
+lane, and the world owner verifies the exact authenticated server, published
+session, and authority epoch. Each client world has a bounded inbox that only
+its Scene factory receives. The owner transfers records at the structural
+safe point. Travel, disconnect and shutdown fence out the previous inbox.
+
+At NetworkFlush the authority rereads grouped Prefab mappings only when
+their committed mapping revision changes. Each peer compares that inventory
+with the occurrences accepted by its native reliable send. Despawn precedes
+any replacement spawn, and backpressure retains the exact encoded frame and
+sequence. Initial and Commit world messages precede that world's Prefab data.
+The matching client candidate can stage ordered data received in the same
+poll, and exposes it only after Scene publication. A packet that cannot fit
+the negotiated codec or transport budget fails that peer's publication.
+
+A client can bind a received spawn as the owner of a cooked Prefab group
+transaction. Scene assigns local entity generations and NetworkRuntime
+publishes the authenticated authority IDs with the same commit. The same
+binding verifies every member on retirement. A newer replica generation
+may skip occurrences the sender never published, while duplicate generations
+and stale retirements leave the Scene and mapping unchanged. Host replica
+submission uses the structural safe point before the first fixed tick and
+shares verified loading, member projection and rollback with ordinary Prefab
+work.
+
+The configured headless client owns one bounded reconstruction queue per
+Scene generation. It resolves placement and relationships against the local
+Scene, checks member schemas against the admitted client module, and queues one
+structural transaction at a time. A later spawn can satisfy an unresolved
+relationship in the same publication window. Unknown templates, duplicate
+occurrences, stale retirements and exhausted recovery budgets return typed
+errors to the host, which retires the failed world. Client Gameplay receives
+no Prefab spawn capability when the protected lane owns replica reconstruction.
+
 ```cpp
 enum class ReplicationExecutionRole : std::uint8_t {
     Standalone,
@@ -274,6 +502,16 @@ or bypass of descriptor validation is admitted. Capture limits are borrowed as a
 const reference only during preparation, and Scene post-commit capture borrows
 the lifecycle read API as const.
 
+Configured headless initial capture shares one coordinator across recipients
+for the exact activation and mapping. Its explicit `ExactCommit` mode
+publishes every sampled row, including equal values, with the positive
+committed tick as the publication revision. The same authority source
+admits only strictly increasing ticks within the activation, including when
+the mapping changes and the inventory is rebuilt. Travel installs a separate
+Scene and world scope. Equal-value refresh and revision selection are fixed
+at preparation. Ordinary capture continues to publish changed values with
+per-object revisions. Rebuild native consumers of the additive capture limits.
+
 Read and capture guards are noncopyable and nonmovable, so each successful owner
 read closes exactly once. A misbehaving native owner or codec may throw a foreign
 exception outside the ordinary nonthrowing adapter contract. The candidate fault
@@ -295,7 +533,11 @@ truth. Replace the complete coordinator when schemas, codecs, owner modules or
 the target set change, closing the old generation before admitting the new one.
 
 `SceneReplicationCommitSource` is the concrete typed Scene adapter for declared
-translation fields. The host passes the actual complete Scene command transaction
+translation and rotation fields. A rotation declaration binds all four quaternion
+components. Capture normalizes the committed rotation, and replica application
+validates and normalizes the complete value before staging the Scene command.
+A partial or non-normalizable rotation cannot publish, and a translation-only
+update keeps the current rotation. The host passes the actual complete Scene command transaction
 to `CommitSimulationTick`, then calls `CaptureAfterCommit` at `NetworkFlush`.
 The latter derives its tick from the successful transaction, rather than taking
 an independently supplied tick. Its ordinary RuntimeScene view revision fences
@@ -304,6 +546,16 @@ candidate, including mutations from a codec callback after extraction. The
 adapter copies values while the view is current; snapshots retain no ECS view.
 The existing NetworkRuntime-to-RuntimeScene dependency owns this composition;
 NetworkApi remains Scene-implementation neutral.
+
+The configured headless authority keeps its existing Scene transaction path.
+Its optional public transform policy names an exact installed schema and version
+and a complete set of floating-point field-to-transform bindings. The host
+admits that policy against the selected gameplay generation and creates the
+read-only Scene source with `CreateObserved`. At successful fixed commit the
+same host observes its current Scene with the scheduler's live committed
+dispatch evidence. The source borrows the Scene and pins the owner for each
+active read. A failed fixed attempt, stale Scene, or mismatched schema cannot
+offer a sample. Existing direct-Scene callers retain `CommitSimulationTick`.
 
 Pool ownership persists across latest-pin replacement, `Shutdown`, and external
 pin release. Shutdown closes admission and revokes snapshots without reclaiming
@@ -433,6 +685,12 @@ each), and field count (`u32`). Each ascending distinct field carries
 retain their declared codec's byte order. Full records have zero baseline identity
 and contain the complete selected projection. Delta roots require the exact decoded
 object/schema/session/projection generation, host-resolved entity mapping, tick and publication revision.
+
+The codec and receiver interpret publication order within the existing
+world/session/object/projection identity. The headless exact-commit capture
+feeds only the initial Spawn projection. It sends the same committed
+revision to eligible recipients of that capture. Incremental baseline
+history remains scoped to its separately admitted Update projection.
 
 Decode performs a complete allocation-free framing pass before invoking a codec.
 It bounds counts, tags, ordering, lengths and the complete wire record, copies the

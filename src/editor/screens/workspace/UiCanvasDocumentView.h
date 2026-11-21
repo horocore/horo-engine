@@ -43,7 +43,8 @@ namespace Horo::Editor {
         mutable std::optional<Gesture> m_gesture;
 
         /** @brief Present preview controls and copied geometry through the existing document scroll container. */
-        void DrawPreview(const UiCanvasWorkspaceDocument &document, EditorWorkspaceViewCommandData &output) const;
+        /** @brief Emits preview gestures and returns an inline override only for an explicit diagnostic click. */
+        Runtime::Ui::UiStylePropertyId DrawPreview(const UiCanvasWorkspaceDocument &document, EditorWorkspaceViewCommandData &output) const;
         /** @brief Begin an exact source/selection-fenced gesture or emit a bounded guide/selection intent. */
         void HandlePress(const UiCanvasWorkspaceDocument &document, ImVec2 viewportExtent, ImVec2 origin, float scale, bool changed,
                          EditorWorkspaceViewCommandData &output) const;

@@ -14,6 +14,17 @@
 #include <vector>
 
 namespace Horo::Runtime::Ui {
+    /** @brief Formats permanent identity bytes in the exact Runtime UI source representation.
+     * @param identity Durable identity. @return 32 lowercase hexadecimal characters.
+     */
+    [[nodiscard]] std::string FormatUiStableId(const SerializedUiId &identity);
+
+    /** @brief Parses the exact Runtime UI source representation into durable identity bytes.
+     * @param text Identity text. @return Parsed bytes or a typed malformed-source failure.
+     * @details The receiving typed identifier separately validates whether zero is allowed.
+     */
+    [[nodiscard]] Result<SerializedUiId> ParseUiStableId(std::string_view text);
+
     /** @brief Hard parser ceilings for one Runtime UI source document. */
     struct UiDocumentSerializationLimits final {
         static constexpr std::size_t MaximumSourceBytes = 4U * 1024U * 1024U;

@@ -6,6 +6,8 @@
 
 namespace {
     constexpr std::array InspectorKeys{
+        "workspace.ui_canvas.recover",
+        "workspace.ui_canvas.discard_recovery",
         "workspace.ui_canvas.preview.clear_guides",
         "workspace.ui_canvas.preview.desktop",
         "workspace.ui_canvas.preview.phone",

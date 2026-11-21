@@ -1,5 +1,57 @@
 # Gameplay Runtime Integration
 
+## Animation command and observation grant
+
+Native gameplay builds can request the `Animation` SDK component through
+`find_package(HoroEngineGameplay CONFIG REQUIRED COMPONENTS Animation)` and
+link `HoroEngine::GameplayAnimationApi`. The interface exposes portable Graph
+command and observation values through `GameplayAnimationContext`. Existing
+runtime includes continue to provide the same Graph types. The SDK component
+exports no Scene integration or Graph runtime target.
+
+The host factory accepts an explicit module principal and Scene incarnation
+after host policy allows animation. The grant uses the caller's module
+cancellation token and weakly references the Scene owner. Actor generations
+fence commands and queries across reloads. Parameter, trigger and action
+requests go through the existing Graph owner. Parameter, state, event, socket
+and root motion observations copy committed values while Character retains
+the authority to consume movement.
+
+The headless authority composition supplies the configured Scene animation
+owner when it starts a selected native gameplay module. The module loader
+issues a grant using the actual project-service generation token before calling
+`Start`. Reload and retirement cancel that token before module teardown.
+Behavior callbacks in the registered module namespace receive the same grant
+through `BehaviorContext::AnimationContext` during simulation-capable phases.
+The native SDK boundary advances to 32 because the module context and behavior
+backend layout changed.
+
+Editor Play issues animation grants from the frozen project behavior registry
+after the active Scene publishes. Each grant is keyed by the exact registered
+behavior type. The behavior runtime revokes those grants before unloading a
+generation and Editor Play creates fresh grants when it restores a replacement
+registry. Headless Lua receives its grant from the selected script module's
+authority Scene composition.
+
+An admitted Lua behavior receives `ctx.animation` for its own entity during
+simulation callbacks. A stored table or function from an earlier callback
+returns `nil, "animation.callback.expired"`. An action handle can be stored
+and used through a fresh callback's animation table. Lua can pass a positive
+integer or decimal string for stable IDs, and receives stable IDs as decimal
+strings. Lua booleans, integers and floating-point numbers map to the matching
+Graph parameter types.
+
+Use `set_parameter(id, value)`, `trigger(id)`, `queue_action(id, section)`,
+`action(handle)`, `cancel_action(handle, cut)` and `release_action(handle)` for
+commands and action observations. `snapshot()` reports playback state,
+pose availability and optional committed root motion. `socket(id)` reads a
+16-value model-space matrix in column-major order. `parameters(count)` copies
+the complete parameter block and requires the declared count. The
+`state_events(capacity)` and `clip_events(capacity)` calls copy complete
+occurrence blocks with a caller-supplied capacity. These reads use the latest
+committed pose. A failed operation returns `nil` and a stable error code.
+Copy buffers and Lua output count against the VM memory budget.
+
 ## Cooked prefab creation and retirement
 
 The explicitly selected production `GameplayWorldComposition` may grant

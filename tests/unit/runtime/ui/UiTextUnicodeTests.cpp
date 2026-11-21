@@ -188,6 +188,27 @@ namespace Horo::Runtime::Ui {
         REQUIRE(owner.OrderLine(old, 0, 3, tooSmall).HasError());
     }
 
+    TEST_CASE("Generated malformed UTF-8 cannot replace a live paragraph cache", "[runtime_ui][unicode][fuzz]") {
+        auto owner = Analyzer();
+        const std::string text = "A אב á";
+        const auto original = Analyze(owner, text);
+        constexpr std::array<std::string_view, 5> malformed{"\xC0\xAF", "\xED\xA0\x80", "\xF4\x90\x80\x80", "\xE2\x82", "\x80"};
+        for (const auto bytes : malformed) {
+            for (std::size_t index = 0; index <= text.size(); ++index) {
+                CAPTURE(index);
+                auto candidate = text;
+                candidate.insert(index, bytes);
+                const auto parsed = owner.Analyze(candidate, Content(2), Locale(), UiTextParagraphDirection::Auto);
+                REQUIRE(parsed.HasError());
+                CHECK_FALSE(parsed.ErrorValue().code.Value().empty());
+                CHECK(Analyze(owner, text).Scalars().data() == original.Scalars().data());
+            }
+        }
+        const auto next = Analyze(owner, "new אב", "en-US", 2);
+        CHECK(next.Text() == "new אב");
+        CHECK(original.Text() == text);
+    }
+
     TEST_CASE("Prepared Unicode cache hits perform no C++ allocation", "[runtime_ui][unicode][cache]") {
         auto owner = Analyzer();
         const auto old = Analyze(owner, "cached אב");

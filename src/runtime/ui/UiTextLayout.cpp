@@ -36,7 +36,7 @@ namespace Horo::Runtime::Ui {
         bool IsOlder(const UiLayoutSourceRevisions &candidate, const UiLayoutSourceRevisions &current) noexcept {
             return candidate.document < current.document || candidate.tree < current.tree || candidate.content < current.content ||
                    candidate.style < current.style || candidate.intrinsic < current.intrinsic || candidate.canvas < current.canvas ||
-                   candidate.policy < current.policy;
+                   candidate.policy < current.policy || candidate.presentation < current.presentation;
         }
     }  // namespace UiTextLayoutInternal
 

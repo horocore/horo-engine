@@ -5,6 +5,7 @@
  * Only checked travel reaches the caller; failures still roll back the candidate tick.
  */
 #include "CharacterWorldCarryInternal.h"
+#include "CharacterWorldRootMotionInternal.h"
 #include "CharacterWorldStepInternal.h"
 
 #include <cmath>
@@ -34,6 +35,7 @@ namespace Horo::Character::Detail {
         const auto selection = SelectNearestSweepBlock(evidence, direction, distance, descriptor);
         if (!selection.blocked) {
             motion.position += motion.remaining;
+            ConsumeRootTravel(motion, 1.0F);
             motion.remaining = {};
             return Result<bool>::Success(false);
         }
@@ -45,8 +47,10 @@ namespace Horo::Character::Detail {
                 return Result<bool>::Failure(continuous.ErrorValue());
             if (continuous.Value()) {
                 // Re-sweep the full slope-projected path before committing any travel.
-                motion.remaining = ClipSlopeMotion(motion.remaining, *continuous.Value(), descriptor,
-                                                   std::cos(descriptor.maximumSlopeDegrees * Math::Pi / 180.0F));
+                ProjectSweepTravel(motion, [&continuous, &descriptor](Math::Vec3 value) {
+                    return ClipSlopeMotion(value, *continuous.Value(), descriptor,
+                                           std::cos(descriptor.maximumSlopeDegrees * Math::Pi / 180.0F));
+                });
                 return Result<bool>::Success(true);
             }
         }
@@ -259,17 +263,22 @@ namespace Horo::Character::Detail {
     [[nodiscard]] Result<SweepMotionState> AdmitSweepMotion(const CharacterMovementRequest &command,
                                                             const CharacterTransformPublication &previous,
                                                             const CharacterFixedTickInput &input, const Math::Vec3 previousGravityVelocity,
-                                                            const float maximumDisplacement) {
+                                                            const float maximumDisplacement, const CharacterRootMotionPlan &root) {
         const double seconds = static_cast<double>(input.fixedDelta.ToNanoseconds()) / 1'000'000'000.0;
         if (!std::isfinite(seconds) || seconds <= 0.0 || seconds > static_cast<double>(std::numeric_limits<float>::max()))
             return Result<SweepMotionState>::Failure(
                 MakeError(CharacterErrors::PlacementInvalid, "Character fixed-tick delta cannot produce a finite movement result."));
         const auto elapsedSeconds = static_cast<float>(seconds);
-        SweepMotionState motion{previous.position, command.desiredVelocityMetersPerSecond.value_or(Math::Vec3{}) * elapsedSeconds,
-                                elapsedSeconds, previousGravityVelocity};
+        if (command.rootMotion.has_value() && Math::Length(command.rootMotion->delta.translation) > maximumDisplacement)
+            return Result<SweepMotionState>::Failure(
+                MakeError(CharacterErrors::PlacementInvalid, "Root motion exceeds the fixed-tick envelope."));
+        const auto gameplay = root.overrideTranslation ? Math::Vec3{} : command.desiredVelocityMetersPerSecond.value_or(Math::Vec3{});
+        SweepMotionState motion{previous.position, gameplay * elapsedSeconds + root.worldTravel, elapsedSeconds, previousGravityVelocity};
         if (!Math::IsFinite(motion.remaining) || Math::Length(motion.remaining) > maximumDisplacement)
             return Result<SweepMotionState>::Failure(
                 MakeError(CharacterErrors::PlacementInvalid, "Character desired displacement exceeds the finite fixed-tick envelope."));
+        if (root.translate)
+            motion.rootTravel.emplace(root.worldTravel);
         return Result<SweepMotionState>::Success(std::move(motion));
     }
 
@@ -343,19 +352,34 @@ namespace Horo::Character::Detail {
 
         auto carried = previous;
         carried.heading = command.detachPlatformRequested ? previous.heading : carry.heading;
+        const auto root = PlanRootMotion(command, carried);
         auto result = InitialSweepMovement(command, carried, descriptor, previousGravityVelocity, input.tick);
+        if (root.rotate)
+            result.finalHeading = (root.basis * root.twist).Normalized();
 
         auto admitted = AdmitSweepMotion(command, previous, input, previousGravityVelocity,
-                                         impl.settings.Values().work.maximumDisplacementMetersPerTick);
+                                         impl.settings.Values().work.maximumDisplacementMetersPerTick, root);
         if (admitted.HasError())
             return Result<CharacterMovementResult>::Failure(admitted.ErrorValue());
         auto motion = std::move(admitted).Value();
+        const auto tracking = std::exchange(motion.rootTravel, std::nullopt);
+        std::optional<CharacterMovementRequest> effective;
+        if (root.translate) {
+            effective = command;
+            effective->desiredVelocityMetersPerSecond = motion.remaining / motion.elapsedSeconds;
+        }
+        const auto &travelCommand = effective.has_value() ? *effective : command;
 
         if (const auto swept = ResolvePlatformDisplacement(impl, result, command, input, descriptor, carry, motion); swept.HasError())
             return Result<CharacterMovementResult>::Failure(swept.ErrorValue());
+        motion.rootTravel = tracking;
         AdmitPlatformDeparture(result, command, carry);
-        if (const auto moved = ResolveDesiredDisplacement(impl, result, command, input, descriptor, motion); moved.HasError())
+        if (const auto moved = ResolveDesiredDisplacement(impl, result, travelCommand, input, descriptor, motion); moved.HasError())
             return Result<CharacterMovementResult>::Failure(moved.ErrorValue());
+        if (const auto feedback = FinishRootMotion(result, command, root, motion.rootTravel.value_or(SweepRootTravel{}).applied);
+            feedback.HasError())
+            return Result<CharacterMovementResult>::Failure(feedback.ErrorValue());
+        motion.rootTravel.reset();
         std::optional<CharacterSweepHit> steepSupport;
         auto supportDescriptor = descriptor;
         if ((!previous.grounded && previous.sourceTick != 0) || result.jumpApplied)
@@ -365,12 +389,13 @@ namespace Horo::Character::Detail {
         if (const bool stepped =
                 (static_cast<std::uint16_t>(result.collisions) & static_cast<std::uint16_t>(CharacterCollisionFlags::Step)) != 0;
             !stepped) {
-            if (const auto grounded = ResolveGrounding(impl, result, command, input, supportDescriptor, motion.position, steepSupport);
+            if (const auto grounded =
+                    ResolveGrounding(impl, result, travelCommand, input, supportDescriptor, motion.position, steepSupport);
                 grounded.HasError())
                 return Result<CharacterMovementResult>::Failure(grounded.ErrorValue());
         }
-        if (const auto completed =
-                ResolvePostSweepMotion(impl, result, StepQueryContext{command, input, descriptor}, supportDescriptor, motion, steepSupport);
+        if (const auto completed = ResolvePostSweepMotion(impl, result, StepQueryContext{travelCommand, input, descriptor},
+                                                          supportDescriptor, motion, steepSupport);
             completed.HasError())
             return Result<CharacterMovementResult>::Failure(completed.ErrorValue());
         AdmitPlatformWalkOff(result, command, descriptor, carry, motion.position);

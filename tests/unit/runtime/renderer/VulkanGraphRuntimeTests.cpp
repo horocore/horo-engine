@@ -2,6 +2,8 @@
 #include "VulkanGraphTestSupport.h"
 #include "runtime/renderer/modules/vulkan/VulkanGraphRuntimeInternal.h"
 
+#include <catch2/generators/catch_generators.hpp>
+
 namespace {
     using namespace Horo::Render;
     using namespace Horo::Render::VulkanResourceTest;
@@ -9,6 +11,92 @@ namespace {
 
 #include "VulkanMaterialCommandTests.inl"
 #include "VulkanMultiviewCommandTests.inl"
+
+    TEST_CASE("Vulkan pre-frame uniform preparation waits for exact native readers by polling only",
+              "[renderer][vulkan][graph][reconstruction][retirement]") {
+        NativeGraphFixture fixture;
+        MultiviewPacket packet(fixture, false);
+        const auto uniform = packet.parameters;
+        constexpr std::size_t UniformBytes = 224;
+        std::array<std::byte, UniformBytes> initial;
+        initial.fill(std::byte{0x35});
+        std::array<std::byte, UniformBytes> next;
+        next.fill(std::byte{0x61});
+        auto written = std::span{fixture.resourceState.state.mapped}.first(UniformBytes);
+        REQUIRE(SubmissionTest::Take(fixture.graph.ObservePreparationBuffer(uniform)));
+        CHECK(fixture.graph.ObservePreparationBuffer(0).HasError());
+        CHECK(fixture.graph.WritePreparationUniform(packet.native.vertex, initial).HasError());
+        CHECK(fixture.graph.WritePreparationUniform(uniform, std::span{initial}.first(1)).HasError());
+        REQUIRE(fixture.graph.WritePreparationUniform(uniform, initial).HasValue());
+        CHECK(std::ranges::equal(written, initial));
+
+        REQUIRE(fixture.graph.BeginFrame({1}).HasValue());
+        CHECK(fixture.graph.ObservePreparationBuffer(uniform).HasError());
+        CHECK(fixture.graph.WritePreparationUniform(uniform, next).HasError());
+        CHECK(std::ranges::equal(written, initial));
+        RenderGraphLeaseTransfer transfer;
+        REQUIRE(fixture.graph.ExecuteGraph(packet.Request(fixture, transfer)).HasValue());
+        REQUIRE(fixture.graph.SubmitFrame({1}).HasValue());
+        CHECK_FALSE(SubmissionTest::Take(fixture.graph.ObservePreparationBuffer(uniform)));
+        const auto busy = fixture.graph.WritePreparationUniform(uniform, next);
+        REQUIRE(busy.HasError());
+        CHECK(busy.ErrorValue().code.Value() == VulkanBackendErrors::SubmissionBusy.code.Value());
+        CHECK(std::ranges::equal(written, initial));
+        CHECK(fixture.commandState.state.waitCalls == 0);
+
+        fixture.commandState.state.Complete();
+        REQUIRE(SubmissionTest::Take(fixture.graph.ObservePreparationBuffer(uniform)));
+        REQUIRE(fixture.graph.WritePreparationUniform(uniform, next).HasValue());
+        CHECK(std::ranges::equal(written, next));
+        REQUIRE(fixture.graph.BeginShutdown().HasValue());
+        CHECK(fixture.graph.ObservePreparationBuffer(uniform).HasError());
+        CHECK(fixture.graph.WritePreparationUniform(uniform, initial).HasError());
+        CHECK(std::ranges::equal(written, next));
+        CHECK(fixture.commandState.state.waitCalls == 0);
+    }
+
+    TEST_CASE("Vulkan explicit graph admits the bounded scene and color material pass inventory",
+              "[renderer][vulkan][graph][color-output]") {
+        const bool beyondLimit = GENERATE(false, true);
+        NativeGraphFixture fixture;
+        const MaterialPacket packet(fixture);
+        const auto count = RenderGraphMaterialRaster::MaximumRetainedPasses + (beyondLimit ? 1 : 0);
+        auto builder = SubmissionTest::Take(RenderGraphBuilder::Create({count, 1, count, count}));
+        const auto color = SubmissionTest::Take(builder.ImportTexture({{1}, 3, 1}, RenderGraphResourceClass::Persistent));
+        std::vector<RenderGraphPassWorkload> workloads;
+        RenderGraphPassRef previous;
+        for (std::size_t index = 0; index < count; ++index) {
+            const auto pass = SubmissionTest::Take(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
+            REQUIRE(builder.AddUsage({pass, color, RenderGraphAccess::Write, RenderGraphUsageKind::ColorAttachment}).HasValue());
+            if (previous.IsValid())
+                REQUIRE(builder.AddDependency({previous, pass, RenderGraphDependencyKind::ExecutionOrder}).HasValue());
+            previous = pass;
+            workloads.push_back(
+                {pass, RenderGraphMaterialRaster{.color = color, .colorView = {{1}, 4, 1}, .extent = {8, 8}, .depthClear = std::nullopt}});
+        }
+        const auto graph = SubmissionTest::Take(builder.Finalize());
+        const auto schedule = SubmissionTest::Take(CompileRenderGraph(graph));
+        const std::array queues{RenderQueueAssignment{RenderQueueRole::Graphics, {1}}};
+        const std::array initial{RenderGraphImportedState{color, {}, RenderGraphInitialContents::Discarded}};
+        const auto sync = SubmissionTest::Take(SynthesizeRenderGraphSynchronization(graph, schedule, queues, initial));
+        const auto compiled = SubmissionTest::Take(CompileRenderGraphExecution(graph, schedule, sync, queues));
+        const std::array instances{RenderGraphResourceInstance{color, packet.texture}};
+        const std::array views{RenderGraphTextureViewInstance{{{1}, 4, 1}, packet.view}};
+        const std::array submissions{RenderGraphQueueSubmission{RenderQueueSubmission{{1}, {1}, {}, {{1}, 1}}, {0, count}}};
+        RenderGraphLeaseTransfer transfer;
+        REQUIRE(fixture.graph.BeginFrame({1}).HasValue());
+        const auto execute =
+            fixture.graph.ExecuteGraph({{1}, compiled, workloads, instances, &fixture.lease, false, &transfer, submissions, {}, views});
+        if (beyondLimit) {
+            CHECK(execute.HasError());
+            CHECK(fixture.encoded.renderingBegins == 0);
+            fixture.graph.AbortFrame({1});
+            return;
+        }
+        REQUIRE(execute.HasValue());
+        CHECK(fixture.encoded.renderingBegins == count);
+        REQUIRE(fixture.graph.SubmitFrame({1}).HasValue());
+    }
 
     TEST_CASE("Vulkan VFX publication rejects active recording and closed admission without native writes or waits",
               "[unit][runtime][renderer][vulkan][vfx]") {
@@ -24,6 +112,51 @@ namespace {
         REQUIRE(fixture.graph.BeginShutdown().HasValue());
         REQUIRE(fixture.graph.UpdateVfxFrame(update).HasError());
         CHECK(status == VfxFrameWriteStatus::NotStarted);
+        CHECK(fixture.commandState.state.waitCalls == 0);
+    }
+
+    TEST_CASE("Vulkan canvas upload borrows one exact acquired frame before its first recording",
+              "[renderer][vulkan][graph][ui-paint][retirement]") {
+        NativeGraphFixture fixture;
+        fixture.resourceState.state.sizedAllocations = true;
+        constexpr std::array vertices{UiPaintVertex{{1, 1}}, UiPaintVertex{{4, 1}}, UiPaintVertex{{1, 4}}};
+        constexpr std::array<std::uint32_t, 3> indices{0, 1, 2};
+        constexpr std::array parameters{UiPaintParameters{.extent = {8, 8}}};
+        constexpr std::array sizes{sizeof(vertices), sizeof(indices), UiPaintFrameUpdate::ParameterStride};
+        constexpr std::array roles{RenderBufferUsage::Vertex, RenderBufferUsage::Index, RenderBufferUsage::Uniform};
+        NativeUiPaintFrameUpdate pending{.update = {1, vertices, indices, parameters}, .frame = {1}};
+        for (std::size_t index = 0; index < roles.size(); ++index) {
+            const RenderBufferDescriptor descriptor{.byteSize = sizes[index],
+                                                    .usage = roles[index],
+                                                    .access = RenderBufferAccess::HostVisible};
+            const auto plan = SubmissionTest::Take(fixture.resources.QueryBufferMemoryCost(descriptor));
+            pending.instances[index] =
+                SubmissionTest::Take(fixture.resources.CreateBuffer(descriptor, {}, TestSupport::PlacementFor(plan, index + 1)));
+        }
+        CHECK(fixture.graph.UpdateUiPaintFrame(pending).HasError());
+        REQUIRE(fixture.graph.BeginFrame({1}).HasValue());
+        auto stale = pending;
+        stale.frame = {2};
+        CHECK(fixture.graph.UpdateUiPaintFrame(stale).HasError());
+        REQUIRE(fixture.graph.UpdateUiPaintFrame(pending).HasValue());
+        const auto uniform = pending.instances[2];
+        CHECK(SubmissionTest::Take(fixture.resources.ReadUiPaintBuffer(uniform)).publication.revision == 1);
+        pending.update.revision = 2;
+
+        auto builder = SubmissionTest::Take(RenderGraphBuilder::Create({1, 1, 1, 1}));
+        const auto pass = SubmissionTest::Take(builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics));
+        const auto graph = SubmissionTest::Take(builder.Finalize());
+        const auto schedule = SubmissionTest::Take(CompileRenderGraph(graph));
+        const std::array queues{RenderQueueAssignment{RenderQueueRole::Graphics, {1}}};
+        const auto sync = SubmissionTest::Take(SynthesizeRenderGraphSynchronization(graph, schedule, queues, {}));
+        const auto compiled = SubmissionTest::Take(CompileRenderGraphExecution(graph, schedule, sync, queues));
+        const std::array workloads{RenderGraphPassWorkload{pass, std::monostate{}}};
+        const std::array submissions{RenderGraphQueueSubmission{RenderQueueSubmission{{1}, {1}, {}, {{1}, 1}}, {0, 1}}};
+        REQUIRE(fixture.graph.ExecuteGraph({{1}, compiled, workloads, {}, nullptr, false, nullptr, submissions}).HasValue());
+        CHECK(fixture.graph.UpdateUiPaintFrame(pending).HasError());
+        CHECK(SubmissionTest::Take(fixture.resources.ReadUiPaintBuffer(uniform)).publication.revision == 1);
+        fixture.graph.AbortFrame({1});
+        CHECK(fixture.graph.UpdateUiPaintFrame(pending).HasError());
         CHECK(fixture.commandState.state.waitCalls == 0);
     }
 

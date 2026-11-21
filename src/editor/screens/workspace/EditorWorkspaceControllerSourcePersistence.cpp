@@ -29,12 +29,18 @@ namespace Horo::Editor {
                     return true;
         }
         return std::ranges::any_of(m_viewModel.workspacePanelHost.DocumentTabs(), [](const WorkspaceDocumentTab &tab) {
-            return (tab.identity.key.kind == DocumentKind::Source || tab.identity.key.kind == DocumentKind::UiCanvas) && tab.dirty;
+            const auto kind = tab.identity.key.kind;
+            return tab.dirty && (kind == DocumentKind::Source || kind == DocumentKind::UiCanvas || kind == DocumentKind::BlackboardSchema ||
+                                 kind == DocumentKind::DecisionGraph || kind == DocumentKind::EnvironmentQuery);
         });
     }
 
     /** @copydoc EditorWorkspaceController::SaveSourceDocuments */
     Result<void> EditorWorkspaceController::SaveSourceDocuments() {
+        if (auto drained = DrainPrefabRecovery(); drained.HasError())
+            return drained;
+        if (auto drained = DrainUiCanvasRecovery(); drained.HasError())
+            return drained;
         NativeDurableFileSystem files;
         m_sourceSaveAllOutcome = m_sourceOpenService.Documents().SaveAll(files);
         RefreshSourceDocumentProjection();
@@ -49,15 +55,25 @@ namespace Horo::Editor {
         for (auto &canvas : m_uiCanvasDocuments) {
             if (!canvas.IsDirty())
                 continue;
-            if (!m_mutations)
-                return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::WriteFailed));
-            const auto saved = canvas.Save(ProjectRoot(), *m_mutations, files);
-            if (saved.HasError())
-                return Result<void>::Failure(saved.ErrorValue());
-            if (saved.Value().status != UiCanvasDocumentSaveStatus::Saved)
-                return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::Conflict));
+            if (auto saved = SaveUiCanvasSource(canvas); saved.HasError())
+                return saved;
         }
         RefreshUiCanvasProjection();
+        for (const auto &document : m_blackboardDocuments) {
+            const auto snapshot = document->Snapshot();
+            if (snapshot.HasError())
+                return Result<void>::Failure(snapshot.ErrorValue());
+            if (!snapshot.Value().dirty)
+                continue;
+            const auto saved = SaveBlackboardDocument(*document, snapshot.Value().revision);
+            RefreshBlackboardDocument(*document, saved);
+            if (saved.HasError())
+                return saved;
+        }
+        if (auto saved = SaveDecisionGraphDocuments(); saved.HasError())
+            return saved;
+        if (auto saved = SaveEnvironmentQueryDocuments(); saved.HasError())
+            return saved;
         return SaveTerrainDocuments();
     }
 
@@ -108,6 +124,38 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc EditorWorkspaceController::ResolveUiCanvasClose */
+    Result<bool> EditorWorkspaceController::ResolveUiCanvasClose(const UiCanvasDocumentStateId state, const SourceCloseDecision decision) {
+        if (decision == SourceCloseDecision::Cancel)
+            return Result<bool>::Success(true);
+        if (decision != SourceCloseDecision::Save && decision != SourceCloseDecision::Discard)
+            return Result<bool>::Failure(MakeError(UiCanvasDocumentErrors::InvalidDocument));
+        const auto canvas = std::ranges::find_if(m_uiCanvasDocuments, [state](const auto &entry) {
+            return entry.Identity().instance == state.instance;
+        });
+        if (canvas == m_uiCanvasDocuments.end() || canvas->CurrentState() != state)
+            return Result<bool>::Failure(MakeError(UiCanvasDocumentErrors::Conflict));
+        if (auto drained = DrainUiCanvasRecovery(); drained.HasError())
+            return Result<bool>::Failure(drained.ErrorValue());
+        if (decision == SourceCloseDecision::Save && canvas->IsDirty()) {
+            if (auto saved = SaveUiCanvasSource(*canvas); saved.HasError())
+                return Result<bool>::Failure(saved.ErrorValue());
+        }
+        if ((decision == SourceCloseDecision::Discard || (!canvas->IsDirty() && canvas->HasRecoveryCheckpoint())) && m_mutations &&
+            m_durableFiles) {
+            DocumentRecoveryService recovery(ProjectRoot(), *m_mutations, *m_durableFiles);
+            if (auto discarded = canvas->DiscardRecovery(m_workspaceSession, recovery); discarded.HasError())
+                return Result<bool>::Failure(discarded.ErrorValue());
+        }
+        auto &host = m_viewModel.workspacePanelHost;
+        if (const auto tab = host.CloseDocument(state.instance, WorkspaceDocumentClosePolicy::DiscardChanges); tab.HasError())
+            return Result<bool>::Failure(tab.ErrorValue());
+        static_cast<void>(canvas->Close(UiCanvasClosePolicy::DiscardChanges));
+        m_uiCanvasDocuments.erase(canvas);
+        RefreshUiCanvasProjection();
+        return Result<bool>::Success(true);
+    }
+
     /** @copydoc EditorWorkspaceController::CloseUiCanvasSource */
     void EditorWorkspaceController::CloseUiCanvasSource(const DocumentInstanceId instance) {
         const auto canvas = std::ranges::find_if(m_uiCanvasDocuments, [instance](const auto &entry) {
@@ -115,17 +163,58 @@ namespace Horo::Editor {
         });
         if (canvas == m_uiCanvasDocuments.end())
             return;
-        auto &host = m_viewModel.workspacePanelHost;
-        const auto closed = canvas->Close();
-        if (closed.HasValue() && host.CloseDocument(instance, WorkspaceDocumentClosePolicy::DiscardChanges).HasValue())
-            m_uiCanvasDocuments.erase(canvas);
-        else if (closed.HasError()) {
+        // Presentation offers explicit consent for dirty documents. A bare toolbar/tab command never discards data.
+        const auto outcome = canvas->IsDirty() ? Result<bool>::Failure(MakeError(UiCanvasDocumentErrors::DirtyDocument))
+                                               : ResolveUiCanvasClose(canvas->CurrentState(), SourceCloseDecision::Save);
+        if (outcome.HasError()) {
             const auto projection = std::ranges::find_if(m_viewModel.uiCanvasDocuments, [instance](const auto &entry) {
                 return entry.identity.instance == instance;
             });
             if (projection != m_viewModel.uiCanvasDocuments.end())
-                projection->diagnostic = closed.ErrorValue();
+                projection->diagnostic = outcome.ErrorValue();
         }
+    }
+
+    /** @copydoc EditorWorkspaceController::UiCanvasStates */
+    std::vector<UiCanvasDocumentStateId> EditorWorkspaceController::UiCanvasStates() const {
+        std::vector<UiCanvasDocumentStateId> states;
+        states.reserve(m_uiCanvasDocuments.size());
+        for (const auto &canvas : m_uiCanvasDocuments)
+            states.push_back(canvas.CurrentState());
+        return states;
+    }
+
+    /** @copydoc EditorWorkspaceController::ShutdownUiCanvasDocuments */
+    Result<void> EditorWorkspaceController::ShutdownUiCanvasDocuments(const bool discard) {
+        if (auto drained = DrainUiCanvasRecovery(); drained.HasError())
+            return drained;
+        m_uiCanvasRecoveryQueue.clear();
+        if (!discard) {
+            for (auto &canvas : m_uiCanvasDocuments) {
+                if (!canvas.IsDirty() && !canvas.HasRecoveryCheckpoint())
+                    continue;
+                if (!m_mutations || !m_durableFiles)
+                    return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
+                DocumentRecoveryService recovery(ProjectRoot(), *m_mutations, *m_durableFiles);
+                if (auto written = canvas.Autosave(m_workspaceSession, recovery); written.HasError())
+                    return written;
+            }
+        }
+        while (!m_uiCanvasDocuments.empty()) {
+            const auto state = m_uiCanvasDocuments.back().CurrentState();
+            if (discard) {
+                if (auto closed = ResolveUiCanvasClose(state, SourceCloseDecision::Discard); closed.HasError())
+                    return Result<void>::Failure(closed.ErrorValue());
+                continue;
+            }
+            auto &host = m_viewModel.workspacePanelHost;
+            if (auto closed = host.CloseDocument(state.instance, WorkspaceDocumentClosePolicy::DiscardChanges); closed.HasError())
+                return closed;
+            static_cast<void>(m_uiCanvasDocuments.back().Close(UiCanvasClosePolicy::DiscardChanges));
+            m_uiCanvasDocuments.pop_back();
+        }
+        RefreshUiCanvasProjection();
+        return Result<void>::Success();
     }
 
     /** @copydoc EditorWorkspaceController::ProcessWorkspaceDocumentCommand */
@@ -159,6 +248,16 @@ namespace Horo::Editor {
             close.command = CloseSequenceDocument;
             close.documentInstance = instance;
             static_cast<void>(ProcessSequenceDocumentCommand(close));
+        } else if (CloseEnvironmentQuerySource(instance) || CloseDecisionGraphSource(instance)) {
+            return true;
+        } else if (auto *blackboard = FindBlackboardDocument(instance)) {
+            const auto snapshot = blackboard->Snapshot();
+            if (snapshot.HasValue()) {
+                if (snapshot.Value().dirty)
+                    RefreshBlackboardDocument(*blackboard, Result<void>::Failure(MakeError(BlackboardDocumentErrors::Dirty)));
+                else
+                    static_cast<void>(ResolveBlackboardClose({instance, snapshot.Value().revision}, SourceCloseDecision::Save));
+            }
         } else if (m_pcgDocuments.Snapshot(instance).HasValue()) {
             static_cast<void>(ClosePCGDocument(instance, false));
         } else if (const auto canvas = std::ranges::find_if(m_uiCanvasDocuments,

@@ -1,5 +1,6 @@
 #include "QualificationHost.h"
 
+#include "AndroidGameActivityJni.h"
 #include "Horo/Platform/Internal/AndroidLifecycleAdapter.h"
 #include "Horo/Platform/Internal/AndroidWindowHost.h"
 #include "Horo/Runtime/Render/Internal/VulkanAndroidBackendModule.h"
@@ -7,11 +8,14 @@
 
 #include <android/log.h>
 #include <array>
+#include <atomic>
+#include <chrono>
 #include <exception>
 #include <game-activity/native_app_glue/android_native_app_glue.h>
 #include <limits>
 #include <optional>
 #include <thread>
+#include <utility>
 
 namespace Horo::AndroidQualification {
     using namespace Horo::Platform;
@@ -19,6 +23,90 @@ namespace Horo::AndroidQualification {
     using namespace Horo::Render;
 
     namespace {
+        constexpr auto MinimumFrameAttemptInterval = std::chrono::milliseconds{16};
+        constexpr auto ConservingFrameAttemptInterval = std::chrono::milliseconds{32};
+        FramePacingMailbox PacingPublications;
+        std::atomic_uint64_t PacingDiagnosticRevision{};
+
+        /** @brief Cold JNI binding to one Activity's latest attempt policy; no JNI calls from frame admission. */
+        class PacingBinding final {
+        public:
+            ~PacingBinding() {
+                Detach();
+            }
+
+            void Bind(android_app &app) {
+                const auto *native = app.activity;
+                if (app.destroyRequested || !native || !native->vm || !native->javaGameActivity)
+                    return;
+                const GameActivityJniAttachment connection{native->vm};
+                auto *env = connection.Environment();
+                if (!env)
+                    return;
+                const auto concrete = env->GetObjectClass(native->javaGameActivity);
+                // The generated PackageActivity inherits the selected Vulkan composition.
+                const auto type = concrete ? env->GetSuperclass(concrete) : nullptr;
+                const auto bind = type ? env->GetMethodID(type, "horoBindPacing", "(J)Z") : nullptr;
+                const auto detach = bind ? env->GetMethodID(type, "horoDetachPacing", "(J)V") : nullptr;
+                const JNINativeMethod callback{const_cast<char *>("horoPacingEvent"), const_cast<char *>("(JI)V"),
+                                               reinterpret_cast<void *>(&Observe)};
+                const bool registered = !env->ExceptionCheck() && detach && env->RegisterNatives(type, &callback, 1) == JNI_OK;
+                if (type)
+                    env->DeleteLocalRef(type);
+                if (concrete)
+                    env->DeleteLocalRef(concrete);
+                if (env->ExceptionCheck())
+                    env->ExceptionClear();
+                if (!registered)
+                    return;
+
+                token_ = PacingPublications.Acquire();
+                if (!token_)
+                    return;
+                // GameActivity holds this global reference until android_main has returned.
+                activity_ = native->javaGameActivity;
+                vm_ = native->vm;
+                detach_ = detach;
+                // Keep the lifetime gate armed before Java can retain the peer.
+                const auto bound = env->CallBooleanMethod(activity_, bind, static_cast<jlong>(token_));
+                const bool failed = env->ExceptionCheck();
+                if (failed)
+                    env->ExceptionClear();
+                if (failed || bound != JNI_TRUE)
+                    Detach();
+            }
+
+            void Detach() noexcept {
+                const auto token = std::exchange(token_, 0);
+                if (!token)
+                    return;
+                PacingPublications.Revoke(token);
+                const GameActivityJniAttachment connection{vm_};
+                if (auto *env = connection.Environment()) {
+                    env->CallVoidMethod(activity_, detach_, static_cast<jlong>(token));
+                    if (env->ExceptionCheck())
+                        env->ExceptionClear();
+                }
+                activity_ = nullptr;
+            }
+
+            [[nodiscard]] FramePacing::Mode Mode() const noexcept {
+                return PacingPublications.Read(token_);
+            }
+
+        private:
+            /** @brief UI-lane producer. A late Java callback can only compare its revoked token. */
+            static void JNICALL Observe(JNIEnv *, jobject, jlong token, const jint mode) noexcept {
+                if (token > 0 && mode >= 0 && mode <= static_cast<jint>(FramePacing::Mode::ThermalConservation))
+                    PacingPublications.Publish(static_cast<FramePacingMailbox::Token>(token), static_cast<FramePacing::Mode>(mode));
+            }
+
+            FramePacingMailbox::Token token_{};
+            jobject activity_{};
+            JavaVM *vm_{};
+            jmethodID detach_{};
+        };
+
         enum class FrameStage : std::size_t {
             Begin,
             Execute,
@@ -51,6 +139,12 @@ namespace Horo::AndroidQualification {
             return IsVulkanAndroidBackpressure(outcome.ErrorValue()) ? "backpressure" : "failed";
         }
 
+        /** @brief Closed diagnostic vocabulary for the native frame owner's current attempt policy. */
+        const char *PacingModeName(const FramePacing::Mode mode) noexcept {
+            constexpr std::array names{"baseline", "power-conservation", "thermal-conservation"};
+            return names[static_cast<std::size_t>(mode)];
+        }
+
         /** @brief Skips only exact native backpressure; success here is not a presented-frame receipt. */
         Result<void> RetryOrFailure(Result<void> outcome) {
             if (outcome.HasError() && IsVulkanAndroidBackpressure(outcome.ErrorValue()))
@@ -71,6 +165,8 @@ namespace Horo::AndroidQualification {
         std::unique_ptr<AndroidLifecycleAdapter> adapter;
         std::unique_ptr<AndroidWindowHost> windows;
         std::unique_ptr<PresentationAdmission> presentation;
+        FramePacing pacing{MinimumFrameAttemptInterval, ConservingFrameAttemptInterval};
+        PacingBinding activityPacing;
         RenderBackendRegistry registry;
         std::unique_ptr<IRenderBackend> backend;
         AndroidActivityGeneration activity;
@@ -80,7 +176,21 @@ namespace Horo::AndroidQualification {
         std::array<std::uint64_t, 3> pending{};
         std::uint64_t presentAccepted{}; /**< At most one accepted Present per bounded frame request; never completion evidence. */
         std::optional<HostObservation> observation;
+        std::optional<FramePacing::Mode> observedPacing;
         bool reportNextOutcome{true}, reportFirstPresent{true};
+
+        /** @brief Publishes the policy selected by the real frame owner when it changes. */
+        void ObservePacing(const FramePacing::Mode mode) noexcept {
+            if (observedPacing == mode)
+                return;
+            auto previous = PacingDiagnosticRevision.load(std::memory_order_relaxed);
+            if (previous == static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) ||
+                !PacingDiagnosticRevision.compare_exchange_strong(previous, previous + 1, std::memory_order_relaxed))
+                return;
+            observedPacing = mode;
+            __android_log_print(ANDROID_LOG_INFO, "HoroPackageQualification", "host-pacing revision=%llu state=%s",
+                                static_cast<unsigned long long>(previous + 1), PacingModeName(mode));
+        }
 
         /** @brief Reports transition-only canonical/window facts already obtained by the ordinary host pump. */
         void Observe(const AndroidLifecycleSnapshot &current, const AndroidWindowSnapshot &native, bool ready) noexcept {
@@ -255,7 +365,7 @@ namespace Horo::AndroidQualification {
     }
 
     /** @copydoc QualificationHost::Create */
-    Result<std::unique_ptr<QualificationHost>> QualificationHost::Create() {
+    Result<std::unique_ptr<QualificationHost>> QualificationHost::Create(android_app &app) {
         using Outcome = Result<std::unique_ptr<QualificationHost>>;
         auto lifecycle = AndroidLifecycleController::Create(std::this_thread::get_id());
         if (lifecycle.HasError())
@@ -278,6 +388,7 @@ namespace Horo::AndroidQualification {
             return Outcome::Failure(committed.ErrorValue());
         if (auto active = state->ActivateRenderer(); active.HasError())
             return Outcome::Failure(active.ErrorValue());
+        state->activityPacing.Bind(app);
         return Outcome::Success(std::unique_ptr<QualificationHost>(new QualificationHost(std::move(state))));
     }
 
@@ -305,8 +416,10 @@ namespace Horo::AndroidQualification {
         if (lifecycle.HasError())
             return Result<void>::Failure(lifecycle.ErrorValue());
         state_->Observe(lifecycle.Value(), native.Value(), available.Value());
-        if (!available.Value() || lifecycle.Value().process != AndroidProcessState::Running ||
-            lifecycle.Value().activity != AndroidActivityState::Resumed)
+        const auto mode =
+            lifecycle.Value().activity == AndroidActivityState::Resumed ? state_->activityPacing.Mode() : FramePacing::Mode::Baseline;
+        state_->ObservePacing(mode);
+        if (!state_->pacing.TryAdmit(lifecycle.Value(), FramePacing::Clock::now(), mode))
             return Result<void>::Success();
         return state_->Render(extent);
     }
@@ -315,6 +428,7 @@ namespace Horo::AndroidQualification {
     Result<bool> QualificationHost::PollShutdown() {
         if (state_->drained)
             return Result<bool>::Success(true);
+        state_->activityPacing.Detach();
         if (auto closed = state_->BeginShutdown(); closed.HasError())
             return Result<bool>::Failure(closed.ErrorValue());
         const auto drained = state_->backend->PollDrain();

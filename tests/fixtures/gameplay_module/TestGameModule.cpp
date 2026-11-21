@@ -28,6 +28,7 @@
 #include <format>
 #include <memory>
 #include <stdexcept>
+#include <utility>
 
 using namespace Horo;
 using namespace Horo::Gameplay;
@@ -64,6 +65,7 @@ namespace {
     Prefab::PrefabOperation retainedSpawn;
     Prefab::PrefabOperation retainedDespawn;
     Prefab::PrefabInstance retainedInstance;
+    std::weak_ptr<const GameplayPrefabContext> prefabCapabilityProbe;
 }  // namespace
 
 /** @brief Copies real module-created operation ownership into the host before native image retirement. */
@@ -72,6 +74,11 @@ extern "C" HORO_GAME_EXPORT void HoroTestCopyPrefabOperations(Prefab::PrefabOper
     *spawn = retainedSpawn;
     *despawn = retainedDespawn;
     *instance = retainedInstance;
+}
+
+/** @brief Copies the precise owner-issued grant observed by the headless qualification behavior. */
+extern "C" HORO_GAME_EXPORT void HoroTestCopyPrefabCapability(std::shared_ptr<const GameplayPrefabContext> *destination) {
+    *destination = prefabCapabilityProbe.lock();
 }
 
 #if defined(HORO_TEST_GAMEPLAY_PHYSICS) && HORO_TEST_GAMEPLAY_PHYSICS
@@ -190,22 +197,63 @@ private:
 
 HORO_BEHAVIOR(MoveBehavior, "game.tests.dynamic_mover")
 
+/** @brief Drives a declared Scene transform through the ordinary fixed gameplay command path. */
+class ReplicatedPresentationMotion final : public IBehaviorInstance {
+public:
+    static BehaviorDescriptor DescribeBehavior() {
+        BehaviorDescriptor descriptor;
+        descriptor.displayName = "Replicated Presentation Motion";
+        descriptor.phases.push_back({BehaviorPhase::Gameplay, "game.tests.replicated_presentation_motion", {}, {}, {}});
+        return descriptor;
+    }
+
+    void OnFixedUpdate(BehaviorContext &context, FixedDeltaTime) override {
+        auto transform = context.LocalTransform();
+        if (transform.HasError())
+            return;
+        auto moved = transform.Value();
+        moved.translation.y -= 0.125F;
+        static_cast<void>(context.SetLocalTransform(moved));
+    }
+};
+
+HORO_BEHAVIOR(ReplicatedPresentationMotion, "game.tests.replicated_presentation_motion")
+
 #if defined(HORO_TEST_GAMEPLAY_NAVIGATION) && HORO_TEST_GAMEPLAY_NAVIGATION
 namespace {
     std::shared_ptr<const GameplayNavigationResult> navigationClientCompleted;
-}
+    std::weak_ptr<const GameplayNavigationContext> navigationClientScope;
+    const std::optional<GameplayNavigationHandle> *navigationClientHandle{};
+}  // namespace
 
 /** @brief Transfer the actual native consumer's completed result to host regression ownership. */
 extern "C" HORO_GAME_EXPORT void HoroTestTakeNavigationResult(void *output) {
     *static_cast<std::shared_ptr<const GameplayNavigationResult> *>(output) = std::move(navigationClientCompleted);
 }
 
+/** @brief Transfers retained native callback access to the owning test process. */
+extern "C" HORO_GAME_EXPORT void HoroTestTakeNavigationSubmission(std::shared_ptr<const GameplayNavigationContext> *scope,
+                                                                  std::optional<GameplayNavigationHandle> *handle) {
+    *scope = navigationClientScope.lock();
+    *handle = navigationClientHandle ? *navigationClientHandle : std::nullopt;
+    navigationClientScope.reset();
+    navigationClientHandle = nullptr;
+}
+
 /** @brief Actual native module consumer of the same request/poll path used by Lua. */
 class NavigationClientBehavior final : public IBehaviorInstance {
 public:
+    ~NavigationClientBehavior() override {
+        if (navigationClientHandle == &request_) {
+            navigationClientHandle = nullptr;
+            navigationClientScope.reset();
+        }
+    }
+
     static BehaviorDescriptor DescribeBehavior() {
         BehaviorDescriptor descriptor;
         descriptor.displayName = "Native Navigation Client";
+        descriptor.fields = {{"destinationX", 9.0}, {"destinationZ", 9.0}, {"captureSubmission", false}};
         return descriptor;
     }
 
@@ -214,16 +262,32 @@ public:
         if (!navigation)
             return;
         if (!request_) {
+            Math::Vec3 destination{9, 0, 9};
+            for (const auto &field : context.Fields()) {
+                if (field.name == "destinationX")
+                    destination.x = static_cast<float>(std::get<double>(field.value));
+                if (field.name == "destinationZ")
+                    destination.z = static_cast<float>(std::get<double>(field.value));
+                if (field.name == "captureSubmission")
+                    captureSubmission_ = std::get<bool>(field.value);
+            }
             auto submitted =
-                navigation->Submit({.start = {1, 0, 1}, .destination = {9, 0, 9}, .context = Telemetry::CaptureOperationContext()});
-            if (submitted.HasValue())
+                navigation->Submit({.start = {1, 0, 1}, .destination = destination, .context = Telemetry::CaptureOperationContext()});
+            if (submitted.HasValue()) {
                 request_ = std::move(submitted).Value();
+                if (captureSubmission_) {
+                    navigationClientScope = navigation;
+                    navigationClientHandle = &request_;
+                }
+            }
             return;
         }
         auto result = request_->Poll();
         if (result.HasError() || !result.Value())
             return;
         navigationClientCompleted = result.Value();
+        if (captureSubmission_)
+            return;
         auto transform = context.LocalTransform();
         if (transform.HasValue()) {
             auto changed = transform.Value();
@@ -234,6 +298,7 @@ public:
 
 private:
     std::optional<GameplayNavigationHandle> request_;
+    bool captureSubmission_{};
 };
 HORO_BEHAVIOR(NavigationClientBehavior, "game.tests.navigation_client")
 #endif
@@ -292,6 +357,23 @@ private:
 };
 
 HORO_BEHAVIOR(PrefabSpawnerBehavior, "game.tests.prefab_spawner")
+
+/** @brief Exposes the actual native module capability without performing spawn work inside a callback. */
+class PrefabCapabilityProbeBehavior final : public IBehaviorInstance {
+public:
+    static BehaviorDescriptor DescribeBehavior() {
+        BehaviorDescriptor descriptor;
+        descriptor.displayName = "Prefab Capability Probe";
+        descriptor.phases.push_back({BehaviorPhase::Gameplay, "game.tests.prefab_capability_probe", {}, {}, {}});
+        return descriptor;
+    }
+
+    void OnFixedUpdate(BehaviorContext &context, FixedDeltaTime) override {
+        prefabCapabilityProbe = context.PrefabContext();
+    }
+};
+
+HORO_BEHAVIOR(PrefabCapabilityProbeBehavior, "game.tests.prefab_capability_probe")
 
 namespace {
     class DurableCandidate final : public IPreparedPersistenceState, public IPublishedGameplayPreparationRetirement {
@@ -554,6 +636,7 @@ namespace {
             if (retirement_) {
                 ++retirement_->started;
                 retirement_->physics = context.physics;
+                retirement_->animation = context.animation;
             }
             if (retirement_ && (retirement_->failPhase == 2 || retirement_->failPhase == 5)) {
                 auto acquired = events_->Acquire(90, 1, 91, 1, context.cancellation);

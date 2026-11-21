@@ -621,6 +621,15 @@ TEST_CASE("Real cooked typed root and child intent restores with one root placem
     REQUIRE(captured.prefabs.instances.size() == 1);
     const auto &recipe = captured.prefabs.instances[0];
     CHECK(recipe.placement == root);
+    REQUIRE(recipe.members.size() == 2);
+    const auto firstScene = *f.scenes.ActiveScene();
+    const auto liveLookup = Take(f.context->FindPersistent(identity));
+    CHECK(Take(liveLookup.ResolveMember(recipe.members[0].source.sourceObject, firstScene)).entity == instance.Root());
+    for (const auto &member : recipe.members) {
+        const auto mapped = Take(liveLookup.ResolveMember(member.source.sourceObject, firstScene));
+        CHECK(mapped.provenance == member.source);
+        CHECK(mapped.entity == Take(captured.identities.Resolve(member.record.identity, member.record.generation)));
+    }
     CHECK(std::ranges::none_of(recipe.overrides.records, [&](const auto &record) {
         const auto *address = std::get_if<PrefabObjectAddress>(&record.target);
         return address && *address == objects[0].key.object;
@@ -632,10 +641,20 @@ TEST_CASE("Real cooked typed root and child intent restores with one root placem
     f.Ready("Load private reconstruction and owner restore");
     f.context = Take(f.services->Bind(f.behaviors, f.components, 1));
     const auto restored = Take(f.context->FindPersistent(identity));
-    CHECK(*Take(f.scenes.ActiveScene()->Get(restored.Root())).localTransform == root);
+    const auto restoredScene = *f.scenes.ActiveScene();
+    CHECK_FALSE(restoredScene.SameIncarnation(firstScene));
+    CHECK(liveLookup.ResolveMember(recipe.members[0].source.sourceObject, restoredScene).HasError());
+    CHECK(*Take(restoredScene.Get(restored.Root())).localTransform == root);
     const auto current = Take(f.services->Inventory()->Capture());
+    for (const auto &member : recipe.members) {
+        const auto mapped = Take(restored.ResolveMember(member.source.sourceObject, restoredScene));
+        CHECK(mapped.provenance == member.source);
+        CHECK(mapped.entity == Take(current.identities.Resolve(member.record.identity, member.record.generation)));
+        CHECK(mapped.entity.runtime == restoredScene.RuntimeId());
+    }
     const auto childRef = Take(current.identities.Resolve(recipe.members[1].record.identity, {1}));
-    CHECK(*Take(f.scenes.ActiveScene()->Get(childRef)).localTransform == child);
+    CHECK(*Take(restoredScene.Get(childRef)).localTransform == child);
+    CHECK(restored.ResolveMember(Take(PrefabObjectAddress::Create({}, {999})), restoredScene).HasError());
 }
 
 namespace {

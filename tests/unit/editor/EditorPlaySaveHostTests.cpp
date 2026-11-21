@@ -1,7 +1,11 @@
+#include "../runtime/ai/AiSceneTestSupport.h"
+#include "EditorPlaySaveAi.h"
 #include "EditorPlaySaveHost.h"
 #include "Horo/Platform/SecureRandom.h"
+#include "Horo/Runtime/Save/SaveDiagnostics.h"
 #include "SaveFilesystemTestSupport.h"
 
+#include <algorithm>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
@@ -22,12 +26,30 @@ namespace {
     }
 
     /** @brief Builds real camera state, not a synthetic archive or a fixture-only production serializer. */
-    RuntimeSceneDefinition Definition() {
+    RuntimeSceneDefinition Definition(const AI::TestSupport::ActivationFixture *ai = nullptr) {
         SceneDefinitionBuilder builder({41}, {3});
         RuntimeEntityDefinition camera{.object = {1}};
         camera.components.camera = CameraComponent{};
+        if (ai) {
+            camera.components.aiAgent = ai->agent.agent;
+            camera.components.aiController = ai->agent.controller;
+        }
         builder.Add(std::move(camera));
+        if (ai)
+            builder.Add({.object = {2}});
         return Value(std::move(builder).Build());
+    }
+
+    /** @brief Stores the current runtime projection for one Scene entity. */
+    AI::BlackboardStoredEntityReference BlackboardEntity(EntityRef entity) {
+        return {entity.runtime.value, entity.entity.index, entity.entity.generation};
+    }
+
+    /** @brief Builds an ordinary homogeneous, bounded entity collection. */
+    AI::BlackboardCollectionValue BlackboardEntities(EntityRef entity) {
+        AI::BlackboardCollectionValue collection{.elementKind = AI::BlackboardValueKind::EntityReference, .count = 1};
+        collection.elements[0] = BlackboardEntity(entity);
+        return collection;
     }
 
     /** @brief Supplies actual isolated Test root capability; production host selection is tested separately. */
@@ -47,10 +69,15 @@ namespace {
     }
 
     /** @brief Captures the actual initial Scene using the production core adapter and canonical snapshot builder. */
-    RuntimeSaveSnapshot CaptureForPolicy(RuntimeSceneService &scenes, const PlaySaveStorageSchema &schema) {
+    RuntimeSaveSnapshot CaptureForPolicy(RuntimeSceneService &scenes, const PlaySaveStorageSchema &schema,
+                                         const AI::AiSaveCaptureParticipant *ai = nullptr) {
         CanonicalStateParticipantRegistry registry;
-        auto adapter = std::make_shared<PlaySaveSceneCapture>(scenes, schema.baseline, schema.identities);
+        auto adapter = std::make_shared<PlaySaveSceneCapture>(scenes, schema.baseline, schema.identities,
+                                                              std::weak_ptr<const std::vector<Editor::PlaySaveGameplayBinding>>{}, nullptr,
+                                                              nullptr, ai != nullptr);
         REQUIRE(registry.Register(PlaySaveSceneDescriptor(), std::move(adapter)).HasValue());
+        if (ai)
+            REQUIRE(registry.Register(ai->descriptor, ai->adapter).HasValue());
         const auto participants = Value(registry.Snapshot());
         const auto scene = *scenes.ActiveScene();
         auto builder = Value(RuntimeSaveCaptureBuilder::Create({Test::Id<CapturedStateId>(51),
@@ -83,6 +110,84 @@ namespace {
                 .projectBuildId = config.projectBuildId};
     }
 
+    class SupplementalCapture final : public ICanonicalStateAdapter {
+    public:
+        explicit SupplementalCapture(SaveRecordId record) noexcept : record_(record) {}
+
+        Result<CanonicalCaptureDisposition> Capture(const CanonicalCaptureContext &, ICanonicalCaptureSink &sink) const override {
+            constexpr std::array data{std::byte{0x47}};
+            const auto written = sink.WriteCopied(record_, data);
+            return written.HasError() ? Result<CanonicalCaptureDisposition>::Failure(written.ErrorValue())
+                                      : Result<CanonicalCaptureDisposition>::Success(CanonicalCaptureDisposition::Captured);
+        }
+
+    private:
+        SaveRecordId record_;
+    };
+
+    class SupplementalRestore final : public IStagedRestoreParticipant,
+                                      public ICanonicalRestorePreparedState,
+                                      public IStagedRestoreFinalPublicationCheck {
+    public:
+        SupplementalRestore(const CanonicalStateParticipantDescriptor &descriptor, bool &live, bool reject)
+            : requirement_{descriptor.participant, descriptor.schemaVersion, descriptor.scope}, live_(live), reject_(reject) {}
+
+        const StagedRestoreParticipantRequirement &Requirement() const noexcept override {
+            return requirement_;
+        }
+
+        Result<void> Decode(const StagedRestoreContext &) override {
+            return Result<void>::Success();
+        }
+
+        Result<void> Validate(const StagedRestoreContext &) override {
+            return Result<void>::Success();
+        }
+
+        Result<void> Instantiate(const StagedRestoreContext &) override {
+            return Result<void>::Success();
+        }
+
+        const ICanonicalRestorePreparedState *PreparedState() const noexcept override {
+            return this;
+        }
+
+        Result<void> ApplyState(const ICanonicalRestoreDependencyLookup &) override {
+            return Result<void>::Success();
+        }
+
+        Result<void> FixupReferences(const ICanonicalRestoreDependencyLookup &) override {
+            return Result<void>::Success();
+        }
+
+        Result<void> ValidateAndArm() override {
+            if (reject_)
+                return Result<void>::Failure(MakeError(SaveErrors::RestoreActivationStale));
+            armed_ = true;
+            return Result<void>::Success();
+        }
+
+        void PublishPrepared() noexcept override {
+            live_ = armed_;
+        }
+
+        void RollbackPrepared() noexcept override {
+            armed_ = false;
+        }
+
+    private:
+        StagedRestoreParticipantRequirement requirement_;
+        bool &live_;
+        bool reject_;
+        bool armed_{};
+    };
+
+    /** @brief Allows a fixture to seed an older archive before the live host claims its namespace. */
+    enum class HostStartup {
+        Immediate,
+        Deferred
+    };
+
     /** @brief Owns a genuine scheduler, Scene, canonical participants and ordinary filesystem sandbox. */
     struct Fixture final {
         TemporaryDirectory directory;
@@ -94,14 +199,19 @@ namespace {
         CancellationSource lifetime;
         CancellationToken frameToken{lifetime.Token()};
         Gameplay::BehaviorRegistry behaviors;
+        std::shared_ptr<AI::AiSceneRuntime> aiRuntime;
+        std::optional<AI::TestSupport::ActivationFixture> aiFixture;
         RuntimeSceneService scenes{SceneRuntimeId{701}};
+        std::shared_ptr<PlaySaveAiServices> ai;
         std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner;
         std::shared_ptr<PlaySaveStorageSchema> schema{std::make_shared<PlaySaveStorageSchema>(PlaySaveStorageSchema{Definition(), {}, {}})};
         std::filesystem::path blockedRoot;
         std::unique_ptr<EditorPlaySaveHost> host;
         std::uint64_t frame{};
+        bool acceptAiRestore{true};
 
-        explicit Fixture(bool failOpen = false, bool sceneOwnedGameplay = false) {
+        explicit Fixture(bool failOpen = false, bool sceneOwnedGameplay = false, bool sceneOwnedAi = false,
+                         HostStartup startup = HostStartup::Immediate) {
             schema->identities = {{Value(PersistentEntityId::Parse("7d00b1e9-ec8b-407b-a132-d349f5ccaf76")),
                                    {1},
                                    AuthoredPersistentEntityProvenance{{41}, {1}},
@@ -112,6 +222,8 @@ namespace {
                 REQUIRE(scenes.AddActivationParticipant(behaviorOwner->MakeActivationParticipant()).HasValue());
                 schema->lifecycle = Gameplay::BehaviorLifecycleParticipant();
             }
+            if (sceneOwnedAi)
+                BindAi();
             REQUIRE(scenes.Startup(frameToken).HasValue());
             REQUIRE(scenes.QueuePreparation(schema->baseline).HasValue());
             REQUIRE(scenes.OnPhase(RuntimePhase::CommitDeferredLifecycleChanges, {.frameNumber = ++frame, .cancellation = frameToken})
@@ -119,6 +231,12 @@ namespace {
             REQUIRE(scenes.ActiveScene());
             if (behaviorOwner)
                 REQUIRE(behaviorOwner->ActivatePublished().HasValue());
+            if (startup == HostStartup::Immediate)
+                OpenHost(failOpen);
+        }
+
+        /** @brief Opens the product's exclusive slot namespace after any fixture seeding is complete. */
+        void OpenHost(bool failOpen = false, std::optional<EditorPlaySaveSupplement> supplement = {}) {
             auto config = Storage(directory.Path());
             if (failOpen) {
                 blockedRoot = config.root.CanonicalPath();
@@ -127,19 +245,89 @@ namespace {
                 REQUIRE(blocker.good());
                 blocker << "Fixture-owned file blocks the real namespace root.";
             }
-            host = Value(EditorPlaySaveHost::Create(scenes, {jobs, operations, clock, wall, std::move(config)}, schema, {}, behaviorOwner));
+            host = Value(EditorPlaySaveHost::Create(scenes, {jobs, operations, clock, wall, std::move(config), ai, std::move(supplement)},
+                                                    schema, {}, behaviorOwner));
             if (!failOpen)
                 Ready();
         }
 
+        /** @brief Composes actual AI lifecycle and the same product capture/restore handoff. */
+        void BindAi() {
+            aiFixture = AI::TestSupport::MakeFixture(1, 701, 701, 0, 2);
+            BindAiReferenceKeys();
+            schema->baseline = Definition(&*aiFixture);
+            schema->identities.push_back({Value(PersistentEntityId::Parse("42b1c909-1766-4e56-a49d-9248992aa2e7")),
+                                          {3},
+                                          AuthoredPersistentEntityProvenance{{41}, {2}},
+                                          PersistentEntityDisposition::Live});
+            aiRuntime = std::make_shared<AI::AiSceneRuntime>(Value(AI::AiSceneRuntime::Create()));
+            ai = std::make_shared<PlaySaveAiServices>(scenes, aiRuntime);
+            schema->ai = ai->Descriptor();
+            auto restore = [this, weak = std::weak_ptr{ai}](const RuntimeSceneView &scene) {
+                const auto owner = weak.lock();
+                return owner && acceptAiRestore ? owner->Take(scene) : Result<AI::AiSceneRestoredPopulation>::Success({});
+            };
+            REQUIRE(scenes
+                        .AddActivationParticipant(std::make_unique<AI::AiSceneActivationParticipant>(*aiRuntime,
+                                                                                                     std::span{&aiFixture->descriptor, 1},
+                                                                                                     std::nullopt, std::move(restore)))
+                        .HasValue());
+        }
+
+        /** @brief Adds optional scalar and collection keys to the fixture's actual compiled Blackboard. */
+        void BindAiReferenceKeys() {
+            using namespace AI;
+            const auto identity = aiFixture->schema->Identity();
+            const std::array keys{aiFixture->schema->Keys().front(),
+                                  BlackboardKeyDescriptor{.key = AI::TestSupport::MakeIdentity<BlackboardKeyId>(identity.Value() + 2),
+                                                          .kind = BlackboardValueKind::EntityReference,
+                                                          .presence = BlackboardKeyPresence::Optional},
+                                  BlackboardKeyDescriptor{.key = AI::TestSupport::MakeIdentity<BlackboardKeyId>(identity.Value() + 3),
+                                                          .kind = BlackboardValueKind::EntityReference,
+                                                          .cardinality = BlackboardValueCardinality::Collection,
+                                                          .maximumCollectionElements = 2,
+                                                          .presence = BlackboardKeyPresence::Optional}};
+            aiFixture->schema = std::make_shared<const BlackboardSchema>(
+                Value(BlackboardSchema::Capture({.identity = identity, .version = aiFixture->schema->Version(), .keys = keys})));
+            aiFixture->plan = AI::TestSupport::MakePlan(aiFixture->schema, aiFixture->descriptor.decisionAsset.Value());
+            aiFixture->descriptor.blackboardSchema = aiFixture->schema;
+            aiFixture->descriptor.decisionPlan = aiFixture->plan;
+        }
+
+        /** @brief Mutates one Blackboard through the existing Play capture barrier and owner capability. */
+        void SetAiValue(AI::AgentHandle agent, bool value) {
+            REQUIRE(host->BeginMutation().HasValue());
+            const auto owner = aiRuntime->CapabilityAtSafePoint();
+            auto batch = Value(owner.BeginBlackboardWrite(agent));
+            const auto key = aiFixture->schema->Keys().front().key;
+            REQUIRE(batch.Stage({key, AI::BlackboardValue{AI::BlackboardScalarValue{value}}}).HasValue());
+            REQUIRE(owner.CommitBlackboardWrite(agent, std::move(batch)).HasValue());
+            REQUIRE(host->EndMutation().HasValue());
+        }
+
+        /** @brief Writes both reference shapes under the actual Play Save barrier. */
+        void SetAiReferences(AI::AgentHandle agent, EntityRef target) {
+            REQUIRE(host->BeginMutation().HasValue());
+            const auto owner = aiRuntime->CapabilityAtSafePoint();
+            auto batch = Value(owner.BeginBlackboardWrite(agent));
+            const auto keys = aiFixture->schema->Keys();
+            REQUIRE(batch.Stage({keys[1].key, AI::BlackboardValue{AI::BlackboardScalarValue{BlackboardEntity(target)}}}).HasValue());
+            REQUIRE(batch.Stage({keys[2].key, AI::BlackboardValue{BlackboardEntities(target)}}).HasValue());
+            REQUIRE(owner.CommitBlackboardWrite(agent, std::move(batch)).HasValue());
+            REQUIRE(host->EndMutation().HasValue());
+        }
+
         ~Fixture() {
-            host->BeginRetirement();
+            if (host)
+                host->BeginRetirement();
             jobs.StopAccepting();
             jobs.Shutdown(ShutdownPolicy::Cancel);
-            for (std::size_t phase = 0; phase < MaximumSaveParticipantCount + 8 && !host->IsSettled(); ++phase)
-                Pump();
-            REQUIRE(host->IsSettled());
-            host.reset();
+            if (host) {
+                for (std::size_t phase = 0; phase < MaximumSaveParticipantCount + 8 && !host->IsSettled(); ++phase)
+                    Pump();
+                REQUIRE(host->IsSettled());
+                host.reset();
+            }
             scenes.Shutdown();
         }
 
@@ -167,6 +355,20 @@ namespace {
                 std::this_thread::yield();
             }
             FAIL("Actual Play save owner did not settle before fixture deadline");
+        }
+
+        /** @brief Waits for the actual rejected operation, then returns its redacted owner projection. */
+        std::shared_ptr<const Editor::PlaySaveSnapshot> Rejected() {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+            while (std::chrono::steady_clock::now() < deadline) {
+                Pump();
+                const auto snapshot = host->Snapshot();
+                if (snapshot && !snapshot->operationPending && snapshot->error)
+                    return snapshot;
+                std::this_thread::yield();
+            }
+            FAIL("The rejected Play operation did not settle before the fixture deadline.");
+            return {};
         }
 
         /** @brief Mutates the real Scene under the same actual capture barrier used by Play callbacks. */
@@ -213,6 +415,71 @@ TEST_CASE("Play sandbox saves current real Scene and loads it through the sole "
     CHECK(f.schema->baseline.Revision() == SceneDefinitionRevision{3});
 }
 
+TEST_CASE("Play Save captures an optional subsystem and gates its publication with the restored Scene", "[editor][play][save][host]") {
+    Fixture f{false, false, false, HostStartup::Deferred};
+    const auto record = Test::Id<SaveRecordId>(90);
+    const CanonicalStateParticipantDescriptor descriptor{Value(SaveParticipantId::Parse("horo.test.supplement")),
+                                                         Value(ParticipantSchemaVersion::Create(1)),
+                                                         SaveParticipantScope::PersistentWorld,
+                                                         SaveParticipantRole::Capture | SaveParticipantRole::Restore,
+                                                         false,
+                                                         {1, 1, 1},
+                                                         {},
+                                                         {record}};
+    OperationId prepared{};
+    std::size_t settlements{};
+    bool live = false;
+    bool postCommit = false;
+    bool reject = false;
+    f.OpenHost(false,
+               EditorPlaySaveSupplement{descriptor,
+                                        [&](SaveWorldId world, Security::SecureRandomSource &, const SaveOperationHandle &operation) {
+        REQUIRE(operation.IsValid());
+        REQUIRE(world.IsValid());
+        prepared = operation.Id();
+        return Result<std::shared_ptr<const ICanonicalStateAdapter>>::Success(std::make_shared<SupplementalCapture>(record));
+    }, [&](SaveWorldId world, std::span<const std::byte> bytes) {
+        REQUIRE(world.IsValid());
+        REQUIRE(bytes.size() == 1);
+        CHECK(bytes.front() == std::byte{0x47});
+        auto receipt = std::make_unique<SupplementalRestore>(descriptor, live, reject);
+        auto *check = receipt.get();
+        return Result<EditorPlaySupplementRestore>::Success({std::move(receipt), check});
+    }, [&] {
+        postCommit = live;
+    }, [&](const SaveOperationSnapshot &snapshot) {
+        CHECK(snapshot.IsTerminal());
+        CHECK(snapshot.operation == prepared);
+        CHECK(snapshot.commit == SaveOperationCommitOutcome::Committed);
+        ++settlements;
+        return Result<void>::Success();
+    }});
+    CHECK_FALSE(prepared);
+    REQUIRE(f.host->Request({.kind = Editor::PlaySaveCommandKind::SaveNew}).HasValue());
+    f.Ready();
+    REQUIRE(prepared);
+    CHECK(settlements == 1);
+    auto page = f.Page();
+    REQUIRE(page.rows.size() == 1);
+    const auto command = Value(f.host->Snapshot()->manager->Command(SaveManagerCommandKind::Load, page.rows.front().slot));
+    const auto original = f.scenes.ActiveScene()->RuntimeId();
+    SECTION("accepted publication transfers the supplement before notifying its owner") {
+        REQUIRE(f.host->Request({.kind = Editor::PlaySaveCommandKind::Load, .selection = command}).HasValue());
+        f.Ready();
+        CHECK(f.scenes.ActiveScene()->RuntimeId() != original);
+        CHECK(live);
+        CHECK(postCommit);
+    }
+    SECTION("rejected publication keeps both former owners") {
+        reject = true;
+        REQUIRE(f.host->Request({.kind = Editor::PlaySaveCommandKind::Load, .selection = command}).HasValue());
+        REQUIRE(f.Rejected()->error);
+        CHECK(f.scenes.ActiveScene()->RuntimeId() == original);
+        CHECK_FALSE(live);
+        CHECK_FALSE(postCommit);
+    }
+}
+
 TEST_CASE("Play sandbox rejects stale slot consent and does not replace "
           "authoring or publish an extra slot",
           "[editor][play][save][host]") {
@@ -227,6 +494,52 @@ TEST_CASE("Play sandbox rejects stale slot consent and does not replace "
     CHECK(f.host->Request({.kind = Editor::PlaySaveCommandKind::Load, .selection = old}).HasError());
     CHECK(f.Page().rows.size() == 1);
     CHECK(f.scenes.ActiveScene()->RuntimeId() == SceneRuntimeId{701});
+}
+
+TEST_CASE("Play slot Save and Load replace the AI Scene owner with its saved Blackboard", "[editor][play][save][host][ai]") {
+    Fixture f{false, false, true};
+    const auto original = f.scenes.ActiveScene();
+    REQUIRE(original);
+    const auto agent = Value(f.aiRuntime->Snapshot()).Agents().front().handle;
+    f.SetAiValue(agent, true);
+    const auto savedTarget = original->Find({2});
+    REQUIRE(savedTarget);
+    f.SetAiReferences(agent, *savedTarget);
+    const auto saved = Value(f.aiRuntime->CaptureCanonicalState(*original));
+    REQUIRE(f.host->Request({.kind = Editor::PlaySaveCommandKind::SaveNew, .displayName = "AI checkpoint"}).HasValue());
+    f.Ready();
+    const auto page = f.Page();
+    REQUIRE(page.rows.size() == 1);
+    const auto command = Value(f.host->Snapshot()->manager->Command(SaveManagerCommandKind::Load, page.rows.front().slot));
+    f.SetAiValue(agent, false);
+    f.SetAiReferences(agent, *original->Find({1}));
+    const auto live = Value(f.aiRuntime->CaptureCanonicalState(*original));
+    CHECK(live != saved);
+    REQUIRE(f.aiRuntime->StartTaskAtSafePoint(agent, AI::TestSupport::MakeIdentity<AI::TaskId>(71)).HasValue());
+    SECTION("a fully consumed AI record publishes alongside its reconstructed Scene") {
+        REQUIRE(f.host->Request({.kind = Editor::PlaySaveCommandKind::Load, .selection = command}).HasValue());
+        f.Ready();
+        const auto restored = f.scenes.ActiveScene();
+        REQUIRE(restored);
+        CHECK_FALSE(restored->SameIncarnation(*original));
+        CHECK(f.aiRuntime->Find(agent).HasError());
+        CHECK(restored->Find({2}) != savedTarget);
+        auto expected = saved;
+        auto &entries = AI::TestSupport::RestoreHarness::Blackboard(expected).entries;
+        REQUIRE(restored->Find({2}));
+        entries[1].value = AI::BlackboardValue{AI::BlackboardScalarValue{BlackboardEntity(*restored->Find({2}))}};
+        entries[2].value = AI::BlackboardValue{BlackboardEntities(*restored->Find({2}))};
+        CHECK(Value(f.aiRuntime->CaptureCanonicalState(*restored)) == expected);
+        CHECK_FALSE(Value(f.aiRuntime->Snapshot()).Agents().front().hasRunningTask);
+    }
+    SECTION("a participant which omits AI restore cannot publish its Scene") {
+        f.acceptAiRestore = false;
+        REQUIRE(f.host->Request({.kind = Editor::PlaySaveCommandKind::Load, .selection = command}).HasValue());
+        REQUIRE(f.Rejected());
+        CHECK(f.scenes.ActiveScene()->SameIncarnation(*original));
+        CHECK(Value(f.aiRuntime->CaptureCanonicalState(*original)) == live);
+        CHECK(Value(f.aiRuntime->Find(agent)).hasRunningTask);
+    }
 }
 
 TEST_CASE("Play retirement retains actual accepted worker until scheduler "
@@ -260,6 +573,39 @@ TEST_CASE("Play retirement retains actual accepted worker until scheduler "
     REQUIRE(operation);
     REQUIRE_FALSE(operation->operations.empty());
     CHECK(operation->operations.back().state == OperationState::Cancelled);
+}
+
+TEST_CASE("Play Save reads an earlier reference-free AI slot under the current policy", "[editor][play][save][host][ai]") {
+    Fixture f{false, false, true, HostStartup::Deferred};
+    const auto original = f.scenes.ActiveScene();
+    REQUIRE(original);
+    const auto agent = Value(f.aiRuntime->Snapshot()).Agents().front().handle;
+    const auto saved = Value(f.aiRuntime->CaptureCanonicalState(*original));
+    const auto &descriptor = *f.schema->ai;
+    const auto old = Value(AI::BindAiSaveCapture(descriptor.participant, descriptor.ownedRecords.front(),
+                                                 DefaultRuntimeSaveCopiedRecordBytes, f.aiRuntime, [&f] {
+        return f.scenes.ActiveScene();
+    }));
+    REQUIRE(old.descriptor.schemaVersion.Value() == AI::AiCanonicalRecordVersion);
+    const auto captured = CaptureForPolicy(f.scenes, *f.schema, &old);
+    auto storage = Value(PlaySaveStorage::Open(Storage(f.directory.Path()), f.schema));
+    const auto slot = Value(storage->NewSlot());
+    const auto header = Value(storage->Header(slot, 1, 0));
+    const auto archive = Value(BuildPlaySaveArchive(captured, header));
+    (void)Value(storage->Commit(slot, archive, {.displayName = "Legacy AI checkpoint"}));
+    storage.reset();
+
+    f.OpenHost();
+    const auto page = f.Page();
+    REQUIRE(page.rows.size() == 1);
+    const auto command = Value(f.host->Snapshot()->manager->Command(SaveManagerCommandKind::Load, page.rows.front().slot));
+    f.SetAiValue(agent, true);
+    REQUIRE(f.host->Request({.kind = Editor::PlaySaveCommandKind::Load, .selection = command}).HasValue());
+    f.Ready();
+    const auto restored = f.scenes.ActiveScene();
+    REQUIRE(restored);
+    CHECK_FALSE(restored->SameIncarnation(*original));
+    CHECK(Value(f.aiRuntime->CaptureCanonicalState(*restored)) == saved);
 }
 
 TEST_CASE("Play archive policy admits real writer output and counts header "
@@ -340,6 +686,13 @@ TEST_CASE("Explicit Play Refresh retries the same real root after asynchronous "
     const auto failed = f.host->Snapshot();
     REQUIRE_FALSE(failed->operationPending);
     REQUIRE(failed->error);
+    const auto descriptors = SaveDiagnosticErrorDescriptors();
+    const auto observed = std::ranges::find_if(descriptors, [&](const auto *descriptor) {
+        return failed->error->code.Value() == descriptor->code.Value();
+    });
+    REQUIRE(observed != descriptors.end());
+    CHECK(failed->error->message == (*observed)->summary);
+    CHECK(failed->error->diagnostics.empty());
     CHECK(failed->availability == Editor::PlaySaveAvailability::Failed);
     CHECK_FALSE(failed->manager);
     CHECK(f.host->Request({.kind = Editor::PlaySaveCommandKind::SaveNew}).HasError());

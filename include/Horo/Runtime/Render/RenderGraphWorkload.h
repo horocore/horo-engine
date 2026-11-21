@@ -7,18 +7,20 @@
 #include "Horo/Runtime/Render/ExposureGpuWorkload.h"
 #include "Horo/Runtime/Render/LightCullingKernel.h"
 #include "Horo/Runtime/Render/MultiviewGraphWorkload.h"
+#include "Horo/Runtime/Render/NativeReconstructionKernel.h"
 #include "Horo/Runtime/Render/RenderGraphExecution.h"
 #include "Horo/Runtime/Render/UiPaintWorkload.h"
 #include "Horo/Runtime/Render/VfxGpuKernel.h"
 #include "Horo/Runtime/Render/VfxGpuSimulation.h"
 #include "Horo/Runtime/Render/VfxGraphWorkload.h"
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <variant>
 
 namespace Horo::Render {
-    /** @brief Clears or preserves one whole single-mip, single-layer, single-sample graph color texture. */
+    /** @brief Clears or preserves one whole single-mip, single-sample graph color texture, including its admitted layers. */
     struct RenderGraphColorAttachment {
         RenderGraphResourceId texture;
         PrimaryOutputAttachment operations; /**< Clear/Load and Store are required to preserve declared graph contents. */
@@ -41,7 +43,8 @@ namespace Horo::Render {
 
     /** @brief Copies one tightly packed whole RGBA8 base level from a registered host-visible buffer to a registered texture.
      * @details Source requires CopySource and exactly byteCount bytes. Destination requires CopyDestination and exactly extent,
-     * TwoD, one mip, one layer, one sample and Rgba8Unorm. No offsets, row padding, partial uploads, allocation or wait is implied.
+     * TwoD, one mip, one layer, one sample and the declared format (Rgba8Unorm, R32Float or Rgba32Float).
+     * No offsets, row padding, partial uploads, allocation or wait is implied.
      * Graph uses are source Read/CopySource and destination Write/CopyDestination. Submission leases retain both resources;
      * subsequent compiled graph uses establish the final layout. This operation does not implement CreateTexture(initialData).
      */
@@ -50,6 +53,56 @@ namespace Horo::Render {
         RenderGraphResourceId destination;
         FramebufferExtent extent;
         std::size_t byteCount{};
+        RenderTextureFormat format{RenderTextureFormat::Rgba8Unorm}; /**< Exact tightly packed source and destination pixel format. */
+    };
+
+    /** @brief Copies two bounded, caller-selected tiles of the exact stereo R32Float coverage producer into one staging buffer.
+     * @details The source is the same submitted graph's owned coverage attachment. Tiles are tightly packed in eye order.
+     * Only diagnostic observations are exposed. This copy carries no pixel verdict or compositor capability.
+     */
+    struct RenderGraphStereoCoverageCopy final {
+        static constexpr std::uint32_t MaximumTileAxis = 8;
+        static constexpr std::size_t MaximumPixels = 2 * MaximumTileAxis * MaximumTileAxis;
+        RenderGraphResourceId source, destination;
+        std::array<MultiviewRenderRectangle, 2> tiles;
+
+        /** @brief Returns exactly the packed byte length, or zero for malformed tile dimensions. */
+        [[nodiscard]] constexpr std::size_t PackedBytes() const noexcept {
+            std::size_t pixels{};
+            for (const auto &tile : tiles) {
+                if (!tile.width || !tile.height || tile.width > MaximumTileAxis || tile.height > MaximumTileAxis)
+                    return 0;
+                pixels += static_cast<std::size_t>(tile.width) * tile.height;
+            }
+            return pixels * sizeof(float);
+        }
+    };
+
+    /** @brief A device-owned closed stereo coverage reducer, retained through accepted queue execution. */
+    class IResidentStereoCoverageReducer {
+    public:
+        virtual ~IResidentStereoCoverageReducer() = default;
+    };
+
+    /** @brief Counters written for one eye by the closed coverage reducer. */
+    struct StereoCoverageTally final {
+        std::uint32_t visited{}, unresolved{};
+    };
+
+    /** @brief Reduces the exact paired motion coverage mask in the producer's graphics submission.
+     * @details The mask is sampled read. The exact two eye views belong to the paired coverage raster and are
+     * retained by its normal graph lease. The result is a storage read/write over two zero-initialized tallies,
+     * preceded by a full copy from the reducer's immutable reset source. No compositor admission is implied.
+     */
+    struct RenderGraphStereoCoverageReduction final {
+        using Tallies = std::array<StereoCoverageTally, 2>;
+        static constexpr std::size_t CounterBytes = sizeof(Tallies);
+        static_assert(CounterBytes == 16);
+
+        RenderGraphResourceId mask, reset, result;
+        std::array<RenderTextureViewHandle, 2> eyes;
+        std::array<MultiviewRenderRectangle, 2> rectangles;
+        std::shared_ptr<IResidentStereoCoverageReducer> reducer;
     };
 
     /** @brief One bounded cooked light-culling dispatch over four distinct whole graph buffers.
@@ -129,7 +182,9 @@ namespace Horo::Render {
     struct RenderGraphMaterialRaster final {
         static constexpr std::size_t MaximumDraws = 128;
         static constexpr std::size_t MaximumReads = RenderGraphLimits::HardMaxResources;
-        static constexpr std::size_t MaximumRetainedDraws = MaximumDraws * 8;
+        /** @brief Bounds four directional shadow tiles, opaque scene, display transform, overlays and output encode. */
+        static constexpr std::size_t MaximumRetainedPasses = 8;
+        static constexpr std::size_t MaximumRetainedDraws = MaximumDraws * MaximumRetainedPasses;
         RenderGraphResourceId color, depth;
         RenderTextureViewHandle colorView, depthView;
         FramebufferExtent extent;
@@ -141,11 +196,48 @@ namespace Horo::Render {
         bool depthOnly{};
     };
 
+    /** @brief Exact graph image and separately resolved whole-image view generation. */
+    struct RenderGraphReconstructionImage final {
+        RenderGraphResourceId resource;
+        RenderTextureViewHandle view;
+    };
+
+    /** @brief One native reconstruction operation submitted with the canonical graph queue and lease.
+     * @details Images are indexed by NativeReconstructionImage. Unused roles are empty. Inputs use Sampled Read,
+     * outputs use Storage Write, and every role is on a distinct whole texture. Native preparation resolves the exact
+     * pipeline, view generation, image formats and GPU completion ownership.
+     */
+    struct RenderGraphNativeReconstruction final {
+        static constexpr auto ImageCount = static_cast<std::size_t>(NativeReconstructionImage::Count);
+        static constexpr auto MaximumPassesPerFrame = MultiviewExtractionLimits::HardMaximumViews;
+        NativeReconstructionDispatchPlan dispatch;
+        std::array<RenderGraphReconstructionImage, ImageCount> images;
+        std::shared_ptr<IResidentNativeReconstructionKernel> kernel;
+    };
+
     /** @brief Exact typed operation; an empty workload represents an ordering-only pass. */
     using RenderGraphWorkload =
         std::variant<std::monostate, PrimaryOutputAttachment, RenderGraphColorAttachment, RenderGraphBufferCopy, RenderGraphLightCulling,
                      RenderGraphVfx, RenderGraphDepthAttachment, RenderGraphMultiview, RenderGraphUiPaint, RenderGraphMaterialRaster,
-                     RenderGraphVfxGpuCompute, RenderGraphVfxGpuDraw, RenderGraphExposureGpu, RenderGraphTextureUpload>;
+                     RenderGraphVfxGpuCompute, RenderGraphVfxGpuDraw, RenderGraphExposureGpu, RenderGraphTextureUpload,
+                     RenderGraphNativeReconstruction, RenderGraphStereoCoverageCopy, RenderGraphStereoCoverageReduction>;
+
+    /** @brief Validates exact native reconstruction graph roles before resolving backend descriptors.
+     * @param request Immutable execution request. @param pass Exact compiled compute pass.
+     * @param workload One typed dispatch over graph-local images.
+     * @return Success or typed invalid graph. Native ownership and image descriptor validation follow independently.
+     */
+    [[nodiscard]] Result<void> ValidateNativeReconstructionGraphWorkload(const RenderGraphExecutionRequest &request,
+                                                                         const RenderGraphExecutionPass &pass,
+                                                                         const RenderGraphNativeReconstruction &workload);
+
+    /** @brief Matches one captured texture against the closed shader role and dispatch extents.
+     * @param dispatch Validated packed dispatch. @param image Exact closed image role.
+     * @param descriptor Actual resident texture descriptor.
+     * @return True for the required sample/storage usage, supported format and whole image shape.
+     */
+    [[nodiscard]] bool MatchesNativeReconstructionImage(const NativeReconstructionDispatchPlan &dispatch, NativeReconstructionImage image,
+                                                        const RenderTextureDescriptor &descriptor) noexcept;
 
     /** @brief Checks exact whole-upload shape and byte bounds against captured resource descriptors without native mutation.
      * @param upload Explicit tightly packed upload value. @param source Exact source buffer descriptor.

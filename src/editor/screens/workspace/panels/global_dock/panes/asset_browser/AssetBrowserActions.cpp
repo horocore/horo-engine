@@ -3,6 +3,7 @@
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "editor/screens/workspace/AiAssetPresentation.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPane.h"
@@ -16,6 +17,25 @@
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Offers bounded workspace history without resolving paths or reading metadata in the UI. */
+        void DrawRecentAiAssets(const EditorWorkspaceViewModel &viewModel, const EditorGuiContext &context,
+                                EditorWorkspaceViewCommandData &command) {
+            if (viewModel.recentAiAssets.empty() ||
+                !Ui::BeginContextSubmenu(AssetBrowserPane::kTextScope.Text(context.localization, "action.recent_ai").c_str(),
+                                         context.theme.fonts, "location.history"))
+                return;
+            for (const auto &asset : viewModel.recentAiAssets) {
+                const auto *presentation = FindAiAssetPresentation(asset.type.Value());
+                if (!presentation)
+                    continue;
+                const std::string label = asset.path + "###recent_ai_" + asset.asset.ToString();
+                if (Ui::ContextMenuItem(label.c_str(), nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal,
+                                        Ui::UiIconRegistry::Token(presentation->icon), asset.available))
+                    command = {.command = EditorWorkspaceViewCommand::OpenRecentAiAsset, .recentAiAsset = asset.asset};
+            }
+            Ui::EndContextSubmenu();
+        }
+
         void DrawPasteAction(const std::filesystem::path &destination, const ContentBrowserClipboardMode clipboardMode,
                              const EditorGuiContext &context, EditorWorkspaceViewCommandData &command) {
             const ILocalizationService &localization = context.localization;
@@ -83,15 +103,37 @@ namespace Horo::Editor {
     void DrawAssetBrowserBackgroundActions(const EditorWorkspaceViewModel &viewModel, AssetBrowserInteractionSession &interactionSession,
                                            EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
         const ILocalizationService &localization = context.localization;
-        constexpr std::array actionKeys = {"action.paste_here",
-                                           "action.move_here",
-                                           "action.create_folder",
-                                           "action.create_lua_behavior",
-                                           "action.create_native_behavior",
-                                           "action.import_here",
-                                           "action.refresh"};
+        const auto &directory = viewModel.contentBrowser;
+        const bool canCreateQuery = viewModel.environmentQueryCreationAvailable && directory.rootKind == ContentBrowserRootKind::Assets;
+        const bool canCreateBlackboard = viewModel.blackboardCreationAvailable && directory.rootKind == ContentBrowserRootKind::Assets;
+        const bool canCreateStateMachine = canCreateBlackboard && !viewModel.decisionSchemaChoices.empty();
+        constexpr std::string_view createMachineAction = "action.create_state_machine";
+        constexpr std::string_view createBlackboardAction = "action.create_blackboard";
+        constexpr std::string_view createQueryAction = "action.create_environment_query";
+        const bool canCreateTask = canCreateStateMachine && !viewModel.decisionTaskChoices.empty();
+        constexpr std::string_view createTreeAction = "action.create_behavior_tree";
+        constexpr std::string_view createUtilityAction = "action.create_utility";
+        constexpr std::array actionKeys{"action.paste_here",
+                                        "action.move_here",
+                                        "action.create_folder",
+                                        createBlackboardAction.data(),
+                                        createQueryAction.data(),
+                                        createMachineAction.data(),
+                                        createTreeAction.data(),
+                                        createUtilityAction.data(),
+                                        "action.create_lua_behavior",
+                                        "action.create_native_behavior",
+                                        "action.import_here",
+                                        "action.refresh",
+                                        "action.recent_ai"};
         float widestLabel = 0.0F;
         for (const char *key : actionKeys) {
+            if (viewModel.recentAiAssets.empty() && std::string_view{key} == "action.recent_ai")
+                continue;
+            if ((!canCreateQuery && key == createQueryAction) || (!canCreateBlackboard && key == createBlackboardAction) ||
+                (!canCreateStateMachine && key == createMachineAction) ||
+                (!canCreateTask && (key == createTreeAction || key == createUtilityAction)))
+                continue;
             const std::string &label = AssetBrowserPane::kTextScope.Text(localization, key);
             widestLabel =
                 std::max(widestLabel, context.theme.fonts.sans->CalcTextSizeA(Theme::TextPx::Label(), FLT_MAX, 0.0F, label.c_str()).x);
@@ -102,14 +144,41 @@ namespace Horo::Editor {
         if (!Ui::BeginContextWindowMenu("##ContentBrowserBackgroundMenu"))
             return;
 
-        const ContentBrowserDirectory &directory = viewModel.contentBrowser;
         DrawPasteAction(directory.absoluteCurrentPath, viewModel.contentBrowserClipboard.mode, context, command);
+        DrawRecentAiAssets(viewModel, context, command);
         Ui::ContextMenuSeparator();
         if (Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, "action.create_folder") +
                                  "###content_browser_action_create_folder")
                                     .c_str(),
                                 nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.create")) {
             interactionSession.OpenCreateFolder();
+        }
+        if (canCreateBlackboard && Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, createBlackboardAction) +
+                                                        "###content_browser_create_blackboard")
+                                                           .c_str(),
+                                                       nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.create")) {
+            interactionSession.OpenCreateBlackboard(directory.absoluteCurrentPath);
+        }
+        if (canCreateStateMachine && Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, createMachineAction) +
+                                                          "###content_browser_create_state_machine")
+                                                             .c_str(),
+                                                         nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.create")) {
+            interactionSession.OpenCreateStateMachine(directory.absoluteCurrentPath);
+        }
+        if (canCreateTask) {
+            const auto choice = [&](std::string_view action, AI::DecisionPlanKind kind) {
+                if (Ui::ContextMenuItem(AssetBrowserPane::kTextScope.Text(localization, action).c_str(), nullptr, context.theme.fonts,
+                                        Ui::ContextMenuItemTone::Normal, "action.create"))
+                    interactionSession.OpenCreateTaskDecision(directory.absoluteCurrentPath, kind, viewModel.availableBehaviorsRevision);
+            };
+            choice(createTreeAction, AI::DecisionPlanKind::BehaviorTree);
+            choice(createUtilityAction, AI::DecisionPlanKind::Utility);
+        }
+        if (canCreateQuery && Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, createQueryAction) +
+                                                   "###content_browser_create_environment_query")
+                                                      .c_str(),
+                                                  nullptr, context.theme.fonts, Ui::ContextMenuItemTone::Normal, "action.create")) {
+            interactionSession.OpenCreateQuery(directory.absoluteCurrentPath);
         }
         if (Ui::ContextMenuItem((AssetBrowserPane::kTextScope.Text(localization, "action.create_lua_behavior") +
                                  "###content_browser_create_lua_behavior")

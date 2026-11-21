@@ -4,9 +4,8 @@ include_guard(GLOBAL)
 include("${CMAKE_CURRENT_LIST_DIR}/HoroCoreSourceSets.cmake")
 include("${CMAKE_CURRENT_LIST_DIR}/HoroRendererCoreDependencies.cmake")
 
-function(horo_add_android_renderer_core)
+function(horo_add_android_foundation_core)
     horo_populate_renderer_json()
-    horo_populate_renderer_vulkan_headers()
     set(source_root "${PROJECT_SOURCE_DIR}/src")
 
     # The input-only qualification already owns Utf8.cpp; extend the same Foundation target.
@@ -19,6 +18,12 @@ function(horo_add_android_renderer_core)
     target_compile_definitions(HoroFoundation PUBLIC HORO_ENABLE_TELEMETRY=0)
     target_include_directories(HoroFoundation PRIVATE
         "$<TARGET_PROPERTY:nlohmann_json::nlohmann_json,INTERFACE_INCLUDE_DIRECTORIES>")
+endfunction()
+
+function(horo_add_android_renderer_core)
+    horo_add_android_foundation_core()
+    horo_populate_renderer_vulkan_headers()
+    set(source_root "${PROJECT_SOURCE_DIR}/src")
 
     add_library(HoroFoundationJsonInternal INTERFACE)
     target_include_directories(HoroFoundationJsonInternal INTERFACE "${source_root}/foundation/json")

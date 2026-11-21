@@ -12,28 +12,22 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
+#include <optional>
 #include <span>
 #include <string>
 #include <variant>
 #include <vector>
 
 namespace Horo::AI {
-    struct QueryIdentityTag;
     struct QueryStageIdentityTag;
-    struct QueryItemTypeIdentityTag;
     struct QueryContextIdentityTag;
     struct QueryGeneratorIdentityTag;
     struct QueryTestIdentityTag;
     struct QueryPropertyIdentityTag;
     struct QueryProviderIdentityTag;
-    struct QueryResultSchemaIdentityTag;
 
-    /** @brief Stable authored EQS asset identity; AssetRegistry binds it to an AssetId outside HoroAI. */
-    using QueryId = AiStableIdentity<QueryIdentityTag>;
     /** @brief Stable authored stage identity, independent of label or array position. */
     using QueryStageId = AiStableIdentity<QueryStageIdentityTag>;
-    /** @brief Stable item payload type identity. */
-    using QueryItemTypeId = AiStableIdentity<QueryItemTypeIdentityTag>;
     /** @brief Stable context type identity. */
     using QueryContextId = AiStableIdentity<QueryContextIdentityTag>;
     /** @brief Stable generator descriptor identity. */
@@ -44,8 +38,6 @@ namespace Horo::AI {
     using QueryPropertyId = AiStableIdentity<QueryPropertyIdentityTag>;
     /** @brief Stable identity of a native, script, or package descriptor provider. */
     using QueryProviderId = AiStableIdentity<QueryProviderIdentityTag>;
-    /** @brief Stable identity of an authored query result schema. */
-    using QueryResultSchemaId = AiStableIdentity<QueryResultSchemaIdentityTag>;
 
     /** @brief Current authored EQS schema version; cooked artifact versions are separate. */
     inline constexpr std::uint32_t CurrentEnvironmentQuerySchemaVersion = 1;
@@ -143,6 +135,7 @@ namespace Horo::AI {
         QueryContextId id;
         QueryDescriptorOrigin origin;
         std::size_t maximumPayloadBytes{64};
+        std::string displayName; /**< Optional editor label. Identity and fingerprinting use the typed descriptor fields. */
     };
 
     /** @brief Exact context dependency and compatible schema versions for one stage descriptor. */
@@ -153,6 +146,12 @@ namespace Horo::AI {
         constexpr auto operator<=>(const QueryContextRequirement &) const noexcept = default;
     };
 
+    /** @brief One optional stable-ID property that selects a context requirement from an inert descriptor. */
+    struct QueryContextChoice final {
+        QueryPropertyId property;
+        std::vector<QueryContextRequirement> options; /**< The first option is used when the property is omitted. */
+    };
+
     /** @brief Inert generator metadata; execution callbacks belong to a later host-composed provider seam. */
     struct QueryGeneratorDescriptor final {
         QueryGeneratorId id;
@@ -161,6 +160,7 @@ namespace Horo::AI {
         QueryVersionRange outputItemVersion;
         std::vector<QueryContextRequirement> contexts;
         std::vector<QueryPropertyDescriptor> properties;
+        std::optional<QueryContextChoice> contextChoice;
     };
 
     /** @brief Inert test metadata over one typed candidate item. */
@@ -171,6 +171,7 @@ namespace Horo::AI {
         QueryVersionRange inputItemVersion;
         std::vector<QueryContextRequirement> contexts;
         std::vector<QueryPropertyDescriptor> properties;
+        std::optional<QueryContextChoice> contextChoice;
     };
 
     /** @brief Hard ceilings for untrusted EQS metadata, independent of product profile settings. */
@@ -187,6 +188,21 @@ namespace Horo::AI {
         static constexpr std::size_t UnknownStageBytes = 4'096;
         static constexpr std::size_t DisplayNameBytes = 128;
         static constexpr std::uint32_t MaximumResults = 4'096;
+    };
+
+    /** @brief Project budget for completed adaptive results retained by one Scene. */
+    struct QueryResultCacheLimits final {
+        static constexpr std::size_t HardEntries = 256;
+        static constexpr std::size_t HardBytes = 128 * 1024 * 1024;
+
+        std::size_t maximumEntries{};
+        std::size_t maximumBytes{};
+        std::uint64_t lifetimeTicks{};
+
+        [[nodiscard]] constexpr bool WithinHardLimits() const noexcept {
+            return maximumEntries > 0 && maximumEntries <= HardEntries && maximumBytes > 0 && maximumBytes <= HardBytes &&
+                   lifetimeTicks > 0;
+        }
     };
 
     /** @brief Borrowed descriptor contributions synchronously captured as inert owned metadata. */
@@ -291,6 +307,7 @@ namespace Horo::AI {
         QueryTestId test;
         std::vector<QueryContextRequirement> contexts;
         std::vector<QueryPropertyValue> properties;
+        QueryContextId selectedContext; /**< Resolved authored or default context when the descriptor provides a choice. */
 
         bool operator==(const QueryPlanStage &) const = default;
     };

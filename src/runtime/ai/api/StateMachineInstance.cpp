@@ -134,6 +134,7 @@ namespace Horo::AI {
             return Result<void>::Failure(started.ErrorValue());
         childOutcomes_.fill(AiTaskState::Idle);
         lastTick_.reset();
+        committedTransitionCount_ = 0;
         return Result<void>::Success();
     }
 
@@ -394,6 +395,7 @@ namespace Horo::AI {
                                                               StateMachineActions *const actions) {
         if (!ValidStep(tick, events))
             return Result<StateMachineStepResult>::Failure(MakeError(StateMachineErrors::StepInvalid));
+        committedTransitionCount_ = 0;
         EvaluationFence fence(evaluating_, actions_, actions);
         const auto resumed = lifecycle_.PrepareResume(AiTaskResumeReason::FixedTick, current.agent);
         if (resumed.HasError())
@@ -443,6 +445,7 @@ namespace Horo::AI {
             auto terminal = CommitTransition(*transition, blackboard, tick, actions);
             if (terminal.HasError())
                 return Fail(terminal.ErrorValue());
+            committedTransitions_[committedTransitionCount_++] = transition->id;
             if (terminal.Value())
                 return Result<StateMachineStepResult>::Success({StateMachineStepDisposition::Terminal, {}, transition->id, count + 1});
             visited[nextLeaf] = true;

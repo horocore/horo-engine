@@ -16,6 +16,8 @@ namespace Horo::Runtime {
         if (!publicationCheck || !ownership || !admission.scene.IsValid() || limits.maximumAttachments == 0 ||
             limits.maximumEntities == 0 || limits.maximumResources == 0)
             return Result<void>::Failure(MakeError(SceneErrors::BaselineInvalid));
+        if (!definition.ChildScenes().empty())
+            return Result<void>::Failure(MakeError(SceneErrors::BaselineUnsupported, "A baseline cannot own an Activated Scene child."));
         if (definition.Entities().size() > limits.maximumEntities || resources.size() > limits.maximumResources)
             return Result<void>::Failure(MakeError(SceneErrors::BaselineCapacityExceeded));
         const auto dependencies = definition.AssetDependencies();

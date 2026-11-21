@@ -1,5 +1,10 @@
 #include "PackageProjectSession.h"
 
+#include "Horo/Packages/GameplayPackageModuleHost.h"
+
+#include <algorithm>
+#include <new>
+
 namespace Horo::Application::Internal {
     namespace {
         /** @brief Explicit owner lifetime failures, distinct from portable package diagnostics. */
@@ -16,6 +21,7 @@ namespace Horo::Application::Internal {
         std::optional<Packages::PackageInstallService> install;
         std::unique_ptr<Packages::PackageLifecycleService> lifecycle;
         std::unique_ptr<PackageApplication> application;
+        Packages::GameplayPackageModuleHost *gameplayModules{};
     };
 
     /** @copydoc PackageProjectSession::Create */
@@ -26,7 +32,12 @@ namespace Horo::Application::Internal {
                                                                 request.platform != policy.platform || request.mode != policy.mode ||
                                                                 request.requirePublisherVerification != policy.requirePublisherVerification)
             return Result<std::shared_ptr<PackageProjectSession>>::Failure(SessionError("packages.host.policy_mismatch"));
+        if (policy.gameplayModules && !std::ranges::any_of(policy.lifecycle.moduleHosts, [&policy](const auto &host) {
+            return host.get() == policy.gameplayModules;
+        }))
+            return Result<std::shared_ptr<PackageProjectSession>>::Failure(SessionError("packages.host.policy_mismatch"));
         auto impl = std::make_unique<Impl>();
+        impl->gameplayModules = policy.gameplayModules;
         auto cache = Packages::PackageCacheStore::Create(services.files, policy.cacheRoot, policy.limits.validation);
         if (cache.HasError())
             return Result<std::shared_ptr<PackageProjectSession>>::Failure(cache.ErrorValue());
@@ -85,6 +96,41 @@ namespace Horo::Application::Internal {
         if (impl_->closed)
             return Outcome::Failure(SessionError("packages.host.closed"));
         return Outcome::Success(impl_->install->InstalledRecord());
+    }
+
+    /** @copydoc PackageProjectSession::DecisionCatalogGeneration */
+    std::uint64_t PackageProjectSession::DecisionCatalogGeneration() const noexcept {
+        if (std::this_thread::get_id() != impl_->owner || impl_->closed || !impl_->gameplayModules)
+            return 0;
+        const auto active = impl_->lifecycle->Active();
+        if (!active)
+            return 0;
+        const auto host = impl_->gameplayModules->Identity();
+        const bool selected = std::ranges::any_of(active->modules, [host](const auto &module) {
+            return module.role == Extensions::ExtensionModuleRole::RuntimeParticipant &&
+                   module.outcome == Packages::PackageModuleOutcome::Active && module.host == host;
+        });
+        return selected ? active->generation : 0;
+    }
+
+    /** @copydoc PackageProjectSession::AcquireDecisionNodes */
+    Result<PackageDecisionNodeLeaves> PackageProjectSession::AcquireDecisionNodes(std::uint64_t activation) const {
+        using Outcome = Result<PackageDecisionNodeLeaves>;
+        if (activation == 0 || activation != DecisionCatalogGeneration())
+            return Outcome::Failure(SessionError("packages.host.decision_catalog_stale"));
+        auto acquired = impl_->gameplayModules->AcquireActiveDecisionNodes(*impl_->lifecycle);
+        if (acquired.HasError())
+            return Outcome::Failure(std::move(acquired).ErrorValue());
+        try {
+            PackageDecisionNodeLeaves leaves;
+            auto contributions = std::move(acquired).Value();
+            leaves.reserve(contributions.size());
+            for (auto &entry : contributions)
+                leaves.push_back(std::move(entry.nodes));
+            return Outcome::Success(std::move(leaves));
+        } catch (const std::bad_alloc &) {
+            return Outcome::Failure(SessionError("packages.host.decision_catalog_storage"));
+        }
     }
 
     /** @copydoc PackageProjectSession::Pump */

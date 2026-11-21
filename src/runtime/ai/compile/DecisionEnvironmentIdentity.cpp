@@ -7,47 +7,6 @@
 
 namespace Horo::AI::Detail {
     namespace {
-        void WriteValue(DecisionWriter &writer, const BlackboardValue &value) {
-            writer.Unsigned(value.index(), 1);
-            std::visit([&]<typename VisitedValue>(const VisitedValue &item) {
-                using T = std::decay_t<decltype(item)>;
-                if constexpr (std::is_same_v<T, BlackboardScalarValue>)
-                    WriteScalar(writer, item);
-                else if constexpr (std::is_same_v<T, BlackboardCollectionValue>) {
-                    writer.Enumeration(item.elementKind);
-                    if (!writer.Count(item.count, MaximumBlackboardCollectionElements))
-                        return;
-                    for (std::size_t index = 0; index < item.count; ++index)
-                        WriteScalar(writer, item.elements[index]);
-                } else {
-                    writer.Unsigned(item.schemaVersion, 4);
-                    writer.Unsigned(item.serializedType, 4);
-                    if (!writer.Count(item.size, MaximumBlackboardOpaqueBytes))
-                        return;
-                    writer.Bytes({reinterpret_cast<const std::uint8_t *>(item.bytes.data()), item.size});
-                }
-            }, value);
-        }
-
-        void WriteKey(DecisionWriter &writer, const BlackboardKeyDescriptor &key) {
-            writer.IdentityValue(key.key);
-            writer.Enumeration(key.kind);
-            writer.Enumeration(key.cardinality);
-            writer.Unsigned(key.maximumCollectionElements, 4);
-            writer.Enumeration(key.presence);
-            writer.Enumeration(key.access);
-            writer.Unsigned(key.defaultValue.has_value(), 1);
-            if (key.defaultValue)
-                WriteValue(writer, *key.defaultValue);
-        }
-
-        void WriteSchema(DecisionWriter &writer, const BlackboardSchema &schema) {
-            writer.IdentityValue(schema.Identity());
-            writer.Unsigned(schema.Version(), 4);
-            writer.Enumeration(schema.UnknownValuePolicy());
-            WriteSequence<BlackboardKeyDescriptor>(writer, schema.Keys(), MaximumBlackboardKeys, WriteKey);
-        }
-
         void WritePort(DecisionWriter &writer, const DecisionNodePort &port) {
             writer.Unsigned(port.id);
             writer.Enumeration(port.direction);
@@ -113,7 +72,7 @@ namespace Horo::AI::Detail {
                 return std::pair{schema->Identity(), schema->Version()};
             });
             for (const auto *schema : schemas)
-                WriteSchema(writer, *schema);
+                WriteBlackboardSchema(writer, *schema);
             return Result<void>::Success();
         }
     }  // namespace

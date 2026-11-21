@@ -153,7 +153,7 @@ namespace Horo::Render::AndroidVulkan {
             return Result<bool>::Failure(lease.ErrorValue());
         const auto created = CreateSurface(std::move(lease).Value());
         if (created.HasError())
-            return Result<bool>::Failure(created.ErrorValue());
+            return IsPending(created.ErrorValue()) ? Result<bool>::Success(false) : Result<bool>::Failure(created.ErrorValue());
         return Result<bool>::Success(true);
     }
 

@@ -94,6 +94,57 @@ namespace Horo::XR {
         CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id).down);
     }
 
+    TEST_CASE("Assigned XR actions remain with the exact host player and context through replacement", "[unit][xr][input]") {
+        ProjectionFixture fixture;
+        constexpr Input::PlayerId headsetPlayer = 7;
+        constexpr Input::PlayerId otherPlayer = 2;
+        fixture.router.AssignKeyboardMouse(otherPlayer);
+        auto assigned = fixture.router.ActionCollectionForPlayer(fixture.context, headsetPlayer);
+        REQUIRE(assigned.HasValue());
+        const auto port = std::move(assigned).Value();
+        auto created = XRInputProjection::Create(port, fixture.session, fixture.bindings, 4);
+        REQUIRE(created.HasValue());
+        auto projection = std::move(created).Value();
+        const auto sample = [&](const Input::InputActionCollection &collection, const XRInputProjection &source) {
+            auto opened = collection.Begin(fixture.collector.Commit());
+            REQUIRE(opened.HasValue());
+            auto frame = std::move(opened).Value();
+            REQUIRE(source.Append(*fixture.Snapshot(), fixture.session, fixture.revision, fixture.origin, 4, frame).HasValue());
+            REQUIRE(frame.Commit().HasValue());
+        };
+        fixture.collector.BeginFrame(1);
+        sample(port, projection);
+        {
+            // Same authored category does not grant a different context incarnation this player's live press.
+            auto foreign = fixture.router.PushContext(fixture.action.context, Input::InputContextKind::Gameplay);
+            CHECK_FALSE(fixture.router.ReadAction(foreign, fixture.action.id, headsetPlayer).down);
+        }
+        CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id, otherPlayer).down);
+        CHECK(fixture.router.ReadAction(fixture.context, fixture.action.id, headsetPlayer).pressed);
+        CHECK(fixture.router.PlayerForKeyboardMouse() == otherPlayer);
+        fixture.router.AssignKeyboardMouse(Input::PlayerId{4});
+        fixture.collector.BeginFrame(2);
+        sample(port, projection);
+        CHECK(fixture.router.ReadAction(fixture.context, fixture.action.id, headsetPlayer).down);
+        CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id, Input::PlayerId{4}).down);
+
+        REQUIRE(projection.Reset().HasValue());
+        const auto replacementPort = fixture.router.ActionCollectionForPlayer(fixture.context, otherPlayer);
+        REQUIRE(replacementPort.HasValue());
+        CHECK(XRInputProjection::Create(replacementPort.Value(), fixture.session, fixture.bindings, 4).HasError());
+        fixture.collector.BeginFrame(3);
+        fixture.router.BeginFrame(fixture.collector.Commit());
+        CHECK(fixture.router.ReadAction(fixture.context, fixture.action.id, headsetPlayer).released);
+        CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id, otherPlayer).released);
+
+        auto replacement = XRInputProjection::Create(replacementPort.Value(), fixture.session, fixture.bindings, 4);
+        REQUIRE(replacement.HasValue());
+        fixture.collector.BeginFrame(4);
+        sample(replacementPort.Value(), replacement.Value());
+        CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id, headsetPlayer).down);
+        CHECK(fixture.router.ReadAction(fixture.context, fixture.action.id, otherPlayer).pressed);
+    }
+
     TEST_CASE("XR input preparation binds its same reservation only after canonical session issuance", "[unit][xr][input]") {
         ProjectionFixture fixture;
         auto port = fixture.Port();
@@ -115,6 +166,29 @@ namespace Horo::XR {
         REQUIRE(frame.Commit().HasValue());
         CHECK(fixture.router.ReadAction(fixture.context, fixture.action.id).pressed);
         CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id).pressed);
+    }
+
+    TEST_CASE("Input can refresh only the exact issued player port and still requires a neutral cutoff", "[unit][xr][input]") {
+        ProjectionFixture fixture;
+        auto assigned = fixture.router.ActionCollectionForPlayer(fixture.context, Input::PlayerId{7});
+        REQUIRE(assigned.HasValue());
+        auto port = std::move(assigned).Value();
+        const auto stale = port;
+        const auto old = XRInputProjection::Create(port, fixture.session, fixture.bindings, 4);
+        REQUIRE(old.HasValue());
+        REQUIRE_FALSE(fixture.router.RefreshPlayerActionCollection(port).Value());
+
+        Input::InputRouter foreign;
+        CHECK(foreign.RefreshPlayerActionCollection(port).HasError());
+        REQUIRE(fixture.router.SetActionMap({fixture.action}).HasValue());
+        REQUIRE(fixture.router.RefreshPlayerActionCollection(port).Value());
+        CHECK(stale.Begin(fixture.collector.Commit()).HasError());
+        CHECK(XRInputProjection::Create(port, fixture.session, fixture.bindings, 4).HasError());
+        fixture.router.BeginFrame(fixture.collector.Commit());
+        CHECK(XRInputProjection::Create(port, fixture.session, fixture.bindings, 4).HasValue());
+
+        fixture.context = {};
+        CHECK(fixture.router.RefreshPlayerActionCollection(port).HasError());
     }
 
     TEST_CASE("XR input bind cannot revive a reservation revoked during native preparation", "[unit][xr][input]") {

@@ -44,6 +44,11 @@ namespace Horo::Runtime::Ui {
     /** @brief Largest numerator or denominator admitted for a user-facing UI scale factor. */
     inline constexpr std::uint32_t MaximumUiCanvasScaleFactorComponent = 4'096;
 
+    /** @brief Largest supported minimum target preference in whole logical DIPs. */
+    inline constexpr std::uint32_t MaximumUiAccessibleTargetDips = 64;
+    /** @brief Standard product target preference in whole logical DIPs. */
+    inline constexpr std::uint32_t DefaultUiAccessibleTargetDips = 24;
+
     /** @brief Positive bounded rational used for UI and accessibility text scale. */
     struct UiCanvasScaleFactor final {
         std::uint32_t numerator{1};   /**< Positive scale numerator. */
@@ -134,9 +139,11 @@ namespace Horo::Runtime::Ui {
 
     /** @brief Complete native-free viewport evidence consumed by Runtime UI resolution. */
     struct UiCanvasViewportEvidence final {
-        UiCanvasPixelExtent pixelExtent;    /**< Positive drawable physical extent. */
-        UiCanvasDeviceScale dpiScale;       /**< Optional positive physical-pixels-per-DIP evidence. */
-        UiCanvasPixelInsets safeAreaInsets; /**< Platform-reported physical safe-area insets. */
+        UiCanvasPixelExtent pixelExtent;          /**< Positive drawable physical extent. */
+        UiCanvasDeviceScale dpiScale;             /**< Optional positive physical-pixels-per-DIP evidence. */
+        UiCanvasPixelInsets safeAreaInsets;       /**< Platform-reported physical safe-area insets. */
+        UiCanvasScaleFactor userUiScale;          /**< Captured uniform user scale, composed once with authored scale. */
+        std::uint32_t minimumControlTargetDips{}; /**< Per-view control geometry policy from the presentation owner. */
 
         /** @brief Checks viewport and optional DPI evidence without inventing unavailable values. @return Whether evidence is valid. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -162,6 +169,7 @@ namespace Horo::Runtime::Ui {
         UiCanvasScaleFactor uiScale{};                        /**< Canonical all-UI scale used by pixelsPerDip. */
         UiCanvasScaleFactor fontScale{};                      /**< Canonical text-only accessibility scale. */
         UiPixelSnapMode pixelSnap{UiPixelSnapMode::Disabled}; /**< Downstream pixel-snap policy. */
+        UiCanvasScaleFactor userUiScale;                      /**< Exact independent user scale consumed for this resolution. */
 
         /** @brief Checks resolved extents, scales, safe rectangle, and closed policy values. @return Whether the projection is usable. */
         [[nodiscard]] bool IsValid() const noexcept;

@@ -351,7 +351,7 @@ class RuntimeSaveService final {
 public:
     RuntimeSaveService(IRuntimeSessionHost&, CanonicalStateParticipantRegistry&,
                        SaveStorageAdapter&, SaveNamespaceBinding&,
-                       PlatformServices&, JobSystem&, OperationStore&);
+                       PlatformHostServices&, JobSystem&, OperationStore&);
     Result<SaveOperationHandle> SaveSlotAsync(
         SaveAddress, SaveRequest, CancellationToken);
     Result<RestoreOperationHandle> LoadSlotAsync(
@@ -1840,6 +1840,12 @@ for work that never ran. Metrics use only stage/outcome dimensions. Correlation
 uses safe numeric operation and parent IDs in an isolated diagnostic snapshot;
 paths, display names, accounts, payloads and raw provider/error text are excluded.
 JobSystem and retained PlatformRequest contexts preserve this snapshot boundary.
+The Play sandbox projects errors before sharing them with the operation history
+or editor presentation. Its storage job publishes a sanitized job result and
+keeps the producer's result inside the storage owner. Each projected cause uses
+only its registered Save descriptor. Unknown causes use the generic diagnostic
+code, and projection stops at the fixed diagnostic cause limit. Source text and
+attached diagnostic fields never cross this boundary.
 
 Current production hooks cover participant capture, archive finalization,
 migration execution, slot commit/recovery, staged restore preparation, arbiter
@@ -1858,7 +1864,13 @@ inputs. It creates no second event store. Input work is bounded to 32 sources,
 missing input is represented explicitly. Only closed stage/outcome names and
 validated unsigned aggregates enter the summary; raw rows and source paths are
 never copied. The summary describes retained observations, not lifetime totals;
-queue/dispatcher drops and retention can limit evidence.
+queue/dispatcher drops and retention can limit evidence. The summary lists the
+data categories it includes and excludes and reports failure counts using the
+closed Save failure taxonomy. Failed or cancelled rows with missing or invalid
+category evidence contribute to the unclassified count.
+Editor and CLI bundles withhold both the Save telemetry namespace and the Save
+error domain from their raw JSON evidence. A Save error embedded as a cause in
+another subsystem's crash record is omitted with its entire cause subtree.
 
 ## Qualification And Implementation Status
 

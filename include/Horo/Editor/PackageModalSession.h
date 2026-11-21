@@ -32,6 +32,10 @@ namespace Horo::Editor {
          * @param generation Expected opening. @param enabled Typed selection. @return Operation or typed failure. */
         [[nodiscard]] Result<Application::PackageOperationId> Activate(PackageModalGeneration generation,
                                                                        std::span<const Packages::EnabledPackageExtension> enabled);
+        /** @brief Forwards explicit module-role selections through the same opening fence and application authority.
+         * @param generation Expected opening. @param enabled Exact selected module roles. @return Operation or typed failure. */
+        [[nodiscard]] Result<Application::PackageOperationId> ActivateModules(PackageModalGeneration generation,
+                                                                              std::span<const Packages::EnabledPackageModule> enabled);
         /** @brief Cancels the exact projected operation; does not destroy application work.
          * @param generation Expected opening. @return Typed outcome. */
         [[nodiscard]] Result<void> Cancel(PackageModalGeneration generation);

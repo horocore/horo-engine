@@ -266,3 +266,26 @@ TEST_CASE("Atomic package output reserves private candidate names without changi
         CHECK(fs::is_empty(root.path));
     }
 }
+
+TEST_CASE("Atomic owned shader slices publish only the verified written bytes", "[editor][shader-cook][atomic]") {
+    OutputRoot root;
+    const auto destination = root.path / "published inventory";
+    const std::array<std::uint8_t, 2> exact{{'a', 'b'}};
+    const std::array<AtomicShaderCookAuxiliaryFile, 2> files{{{"shaders/entry.horoshdr", exact}, {"shaders/entry.reflection.json", exact}}};
+    const auto verify = [](const fs::path &stage, const void *context) {
+        CHECK(Read(stage / "shaders/entry.horoshdr") == "ab");
+        CHECK(Read(stage / "shaders/entry.reflection.json") == "ab");
+        if (*static_cast<const bool *>(context))
+            return Result<void>::Success();
+        return Result<void>::Failure(MakeError(Render::ShaderCompilerPipelineErrors::ToolOutputInvalid));
+    };
+    const bool reject = false;
+    CHECK(PublishAtomicShaderCookFiles(destination, ".release-slices-", files, verify, &reject).HasError());
+    CHECK(fs::is_empty(root.path));
+    const bool accept = true;
+    REQUIRE(PublishAtomicShaderCookFiles(destination, ".release-slices-", files, verify, &accept).HasValue());
+    CHECK(Read(destination / "shaders/entry.horoshdr") == "ab");
+    CHECK(PublishAtomicShaderCookFiles(destination, ".release-slices-", files, verify, &accept).HasError());
+    CHECK(Read(destination / "shaders/entry.reflection.json") == "ab");
+    CHECK(std::distance(fs::directory_iterator(root.path), fs::directory_iterator{}) == 1);
+}

@@ -105,6 +105,45 @@ namespace Horo::XR {
         CHECK(runtime.Snapshot().state == XRSessionState::Visible);
     }
 
+    TEST_CASE("Fake steps fence runtime sample time independently of render prediction", "[xr][fake][interactive]") {
+        XRFakeRuntime runtime;
+        const auto session = Activate(runtime);
+        REQUIRE(runtime.Step(session, Event(XRSessionEvent::Started)).status == XRFrameStatus::Ok);
+        auto earlier = Frame(session, 100);
+        earlier.actionSampleTime = XRRuntimeTime::Create(40).Value();
+        const auto first = runtime.Step(session, earlier);
+        REQUIRE(first.status == XRFrameStatus::Ok);
+
+        auto oldSample = Frame(session, 200);
+        oldSample.actionSampleTime = XRRuntimeTime::Create(39).Value();
+        oldSample.event = XRSessionEvent::BecameVisible;
+        const auto rejected = runtime.Step(session, oldSample);
+        CHECK(rejected.status == XRFrameStatus::InvalidInput);
+        CHECK_FALSE(rejected.consumed);
+        CHECK(rejected.nextStep == first.nextStep);
+        CHECK(runtime.Snapshot().state == XRSessionState::Running);
+
+        auto heldSample = oldSample;
+        heldSample.actionSampleTime = earlier.actionSampleTime;
+        REQUIRE(runtime.Step(session, heldSample).status == XRFrameStatus::Ok);
+        CHECK(runtime.Snapshot().state == XRSessionState::Visible);
+
+        const auto later = Frame(session, 300);
+        auto backward = Frame(session, 400);
+        backward.actionSampleTime = XRRuntimeTime::Create(45).Value();
+        REQUIRE(runtime.LoadScript(session, std::span{&later, 1}) == XRFrameStatus::Ok);
+        const std::array invalidScript{later, backward};
+        CHECK(runtime.LoadScript(session, invalidScript) == XRFrameStatus::InvalidInput);
+        const auto preserved = runtime.Step(session);
+        REQUIRE(preserved.status == XRFrameStatus::Ok);
+        CHECK(preserved.nextStep == 1);
+        CHECK(preserved.actionSampleTime == later.actionSampleTime);
+
+        const auto replacement = Activate(runtime);
+        REQUIRE(runtime.Step(replacement, Event(XRSessionEvent::Started)).status == XRFrameStatus::Ok);
+        CHECK(runtime.Step(replacement, Frame(replacement, 100)).status == XRFrameStatus::Ok);
+    }
+
     TEST_CASE("Loaded fake scripts and interactive steps cannot silently share a cursor", "[xr][fake][interactive]") {
         XRFakeRuntime runtime;
         const auto session = Activate(runtime);

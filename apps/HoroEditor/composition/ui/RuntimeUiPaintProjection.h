@@ -5,6 +5,7 @@
  */
 #include "Horo/Runtime/Ui/RuntimeUiService.h"
 #include "Horo/Runtime/Ui/UiElementCatalog.h"
+#include "Horo/Runtime/Ui/UiHitTesting.h"
 #include "Horo/Runtime/Ui/UiTheme.h"
 
 namespace Horo::Runtime {
@@ -85,15 +86,23 @@ namespace Horo::Application::Internal {
          * @return Canonical descriptor, valid until this projection is replaced or destroyed.
          */
         [[nodiscard]] const Runtime::Ui::UiCanvasDescriptor &Canvas() const noexcept;
+        /** @brief Reserves a separate extractor over this exact declaration and admitted source.
+         * @param service Same canonical publisher. @param view View issued by the caller's presentation host.
+         * @return Independent projection or typed source/capacity failure. Call only at a source safe point.
+         */
+        [[nodiscard]] Result<std::unique_ptr<RuntimeUiPaintProjection>> ForkForView(const Runtime::Ui::RuntimeUiService &service,
+                                                                                    Runtime::Ui::UiRenderViewId view) const;
         ~RuntimeUiPaintProjection();
         RuntimeUiPaintProjection(const RuntimeUiPaintProjection &) = delete;
         RuntimeUiPaintProjection &operator=(const RuntimeUiPaintProjection &) = delete;
         /** @brief Extracts the current derived publication using the exact admitted source; never advances animation clocks.
          * @param service Same actual canonical publisher. @param frame Actual animation publication.
+         * @param worldHit Optional output for the World canvas hit snapshot paired with the returned render snapshot.
          * @return Immutable extracted frame or original stale/capacity/projection failure; no partial snapshot is issued.
          */
         [[nodiscard]] Result<Runtime::Ui::UiRenderSnapshot> Extract(const Runtime::Ui::RuntimeUiService &service,
-                                                                    const Runtime::Ui::UiAnimationFrameLease &frame);
+                                                                    const Runtime::Ui::UiAnimationFrameLease &frame,
+                                                                    std::optional<Runtime::Ui::UiHitTestSnapshot> *worldHit = nullptr);
 
     private:
         std::unique_ptr<Storage> storage_;

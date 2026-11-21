@@ -12,6 +12,8 @@ namespace Horo::Network::NetworkErrors {
     extern const ErrorCodeDescriptor NetworkModeInvalid;
     /** @brief A required host participant is not installed or failed before publication. */
     extern const ErrorCodeDescriptor NetworkModeUnavailable;
+    /** @brief A valid peer is still synchronizing its exact initial world state. */
+    extern const ErrorCodeDescriptor ReplicationInitialStatePending;
     /** @brief A role, Scene, session or authority generation was replaced. */
     extern const ErrorCodeDescriptor NetworkModeStale;
     /** @brief A mode composition has stopped accepting startup, travel or gameplay work. */

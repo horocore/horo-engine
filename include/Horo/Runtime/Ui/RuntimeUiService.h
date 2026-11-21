@@ -124,6 +124,18 @@ namespace Horo::Runtime::Ui {
          * @param instance Exact host-admitted incarnation. @return Immutable generation lease or canonical failure.
          */
         [[nodiscard]] Result<UiReloadLease> Acquire(RuntimeUiInstanceId instance) const;
+        /** @brief Copies redacted diagnostics through the active application-owned Runtime UI service.
+         * @param instance Exact active instance selected by the host.
+         * @param lease Exact current generation previously acquired from this service.
+         * @param canvas Authored canvas to inspect.
+         * @param limits Independent row budgets for the capture.
+         * @param route Exact route incarnation, or empty for canvas actions.
+         * @return Owned diagnostic records or the original owner, generation, target or capacity failure.
+         * @pre On the service owner thread, outside dispatch and publication.
+         */
+        [[nodiscard]] Result<UiCanvasInspectionSnapshot> Inspect(RuntimeUiInstanceId instance, const UiReloadLease &lease,
+                                                                 UiCanvasId canvas, const UiCanvasInspectionLimits &limits = {},
+                                                                 std::optional<UiRouteInstanceId> route = {}) const;
         /** @brief Pins one exact private Scene candidate for trusted source/native preparation, never normal extraction.
          * @param prepared Same-service unconsumed canonical transition. @param instance Exact incoming/rebound source.
          * @return Immutable generation pin or typed foreign/revoked/lifecycle failure. Abandonment revokes later admission;

@@ -6,6 +6,7 @@
 #include "Horo/Scene/PrefabComponentProjection.h"
 #include "NavigationAgentJson.h"
 #include "ScenePrefabProjectionContext.h"
+#include "SceneSourceInternal.h"
 
 #include <algorithm>
 #include <cstddef>
@@ -209,6 +210,7 @@ namespace Horo::SceneSource {
                     .light = ActiveComponent(object.components.light),
                     .audioSource = ActiveComponent(object.components.audioSource),
                     .audioListener = ActiveComponent(object.components.audioListener),
+                    .uiCanvas = object.components.uiCanvas,
                     .navigationSurface = ActiveComponent(object.components.navigationSurface),
                     .navigationRegion = ActiveComponent(object.components.navigationRegion),
                     .navigationModifier = ActiveComponent(object.components.navigationModifier),
@@ -246,6 +248,8 @@ namespace Horo::SceneSource {
         Result<SceneAssembly> BeginSceneAssembly(const SceneSourceView &document, const Runtime::SceneDefinitionId sceneId,
                                                  const Runtime::SceneDefinitionRevision revision,
                                                  const std::optional<TriggerVolumeConversionContext> &triggerBinding) {
+            if (!document.childScenes.empty())
+                return Result<SceneAssembly>::Failure(MakeError(Detail::SceneChildReferencesUnsupported));
             SceneAssembly assembly{Runtime::SceneDefinitionBuilder{sceneId, revision}, {}};
             if (auto authored = AddAuthoredObjects(document, assembly.builder, assembly.occupied, triggerBinding); authored.HasError())
                 return Result<SceneAssembly>::Failure(authored.ErrorValue());

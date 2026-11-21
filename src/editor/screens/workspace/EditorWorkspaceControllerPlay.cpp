@@ -5,6 +5,7 @@
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <algorithm>
+#include <array>
 #include <cinttypes>
 #include <cmath>
 #include <cstddef>
@@ -176,11 +177,17 @@ namespace Horo::Editor {
         m_prePlayDocumentPanelId = m_viewModel.activeDocumentPanelId;
         LoadDocumentAssetMeshes();  // Cold SAME cache preparation before the XR Scene participant captures exact leases.
         BindPlaySaveSources();
+        const auto desktopView = m_mountedWorldPlaySelected ? EditorPlayViewSource::MountedWorld : EditorPlayViewSource::AuthoredCamera;
         const Result<void> started =
             m_playSession.Start(m_document.Snapshot(), m_gameplayRegistry->Registry(), m_gameplayRegistry->Components(), m_playSceneFactory,
-                                m_triggerBinding,
-                                m_selectedXrPlayHost ? m_selectedXrPlayHost->ViewSource() : EditorPlayViewSource::AuthoredCamera,
-                                m_selectedXrPlayHost);
+                                m_triggerBinding, m_selectedXrPlayHost ? m_selectedXrPlayHost->ViewSource() : desktopView,
+                                m_selectedXrPlayHost,
+                                m_defaultScenePath ? m_defaultScenePath->lexically_relative(ProjectRoot()) : std::filesystem::path{},
+                                &m_primitiveMeshCache, {.decision = [this] {
+            return m_gameplayRegistry->AcquireDecisionAuthoringGeneration();
+        }, .perception = [this] {
+            return m_gameplayRegistry->AcquirePlayPerceptionGeneration();
+        }});
         m_viewModel.activeDocumentPanelId = "horo.game";
         SyncPanelHost(WorkspaceDockArea::Document, "horo.game");
         if (started.HasError())
@@ -248,6 +255,77 @@ namespace Horo::Editor {
                 break;
         }
         m_viewModel.playError = m_playSession.LastError().has_value() ? m_playSession.LastError()->message : std::string{};
+        RefreshPlayDecisionProblem();
+        const auto scene = m_playSession.SceneView();
+        const auto selected = m_selection.Current().primary;
+        m_playSession.RefreshAgentInspection(scene && selected ? scene->Find(Runtime::SceneObjectId{selected->value}) : std::nullopt);
+        const auto history = m_playSession.AgentInspectionHistory();
+        m_viewModel.playAgentInspection.assign(history.begin(), history.end());
+        m_viewModel.playDecisionDebug = m_playSession.ReadDecisionDebugState();
+    }
+
+    /** @copydoc EditorWorkspaceController::SetPlayDecisionInspectorVisibility */
+    void EditorWorkspaceController::SetPlayDecisionInspectorVisibility(const std::optional<AI::AgentHandle> agent) {
+        m_playSession.SetDecisionDebugView(agent);
+        m_viewModel.playDecisionDebug = m_playSession.ReadDecisionDebugState();
+    }
+
+    /** @copydoc EditorWorkspaceController::ResolvePlayDecisionProblemObject */
+    std::optional<SceneObjectId> EditorWorkspaceController::ResolvePlayDecisionProblemObject(
+        const EditorPlayDecisionProblem &problem) const {
+        if (!problem.entity || !problem.entity->IsValid() || problem.entity->runtime != problem.scene ||
+            m_viewModel.playViewSource == EditorPlayViewSource::MountedWorld || m_playSession.AuthoringRevision() != m_document.Revision())
+            return std::nullopt;
+        const auto scene = m_playSession.SceneView();
+        if (!scene || !scene->IsCurrent() || scene->RuntimeId() != problem.scene)
+            return std::nullopt;
+        const auto entity = scene->Get(*problem.entity);
+        if (entity.HasError() || !entity.Value().authoredObject || !entity.Value().components || !entity.Value().components->aiAgent ||
+            entity.Value().components->aiAgent->agent != problem.agent)
+            return std::nullopt;
+        const SceneObjectId object{entity.Value().authoredObject->value};
+        if (!m_document.Contains(object))
+            return std::nullopt;
+        return object;
+    }
+
+    /** @copydoc EditorWorkspaceController::RefreshPlayDecisionProblem */
+    void EditorWorkspaceController::RefreshPlayDecisionProblem() {
+        auto &problem = m_viewModel.playDecisionProblem;
+        const auto scene = m_playSession.SceneView();
+        const bool playing = m_viewModel.playState == EditorPlayState::Playing || m_viewModel.playState == EditorPlayState::Paused;
+        if (!playing || !scene || !scene->IsCurrent()) {
+            problem.reset();
+            m_viewModel.playDecisionObjectAvailable = false;
+            return;
+        }
+        if (problem && problem->scene != scene->RuntimeId())
+            problem.reset();
+        if (auto captured = m_playSession.ReadDecisionProblem(); captured && captured->scene == scene->RuntimeId() && captured->tick > 0 &&
+                                                                 captured->agent.IsValid() && (!problem || captured->tick > problem->tick))
+            problem = std::move(captured);
+        m_viewModel.playDecisionObjectAvailable = problem && ResolvePlayDecisionProblemObject(*problem).has_value();
+    }
+
+    /** @copydoc EditorWorkspaceController::NavigatePlayDecisionProblem */
+    void EditorWorkspaceController::NavigatePlayDecisionProblem(const PlayDecisionNavigationRequest &request) {
+        const auto &problem = m_viewModel.playDecisionProblem;
+        const auto state = m_playSession.State();
+        if ((state != EditorPlaySessionState::Playing && state != EditorPlaySessionState::Paused) || !problem || !problem->entity ||
+            request.tick != problem->tick || request.agent != problem->agent || request.entity != *problem->entity)
+            return;
+        const auto object = ResolvePlayDecisionProblemObject(*problem);
+        if (!object) {
+            m_viewModel.playDecisionObjectAvailable = false;
+            return;
+        }
+        if (m_selection.SetObjects({*object}, object).HasError()) {
+            m_viewModel.playDecisionObjectAvailable = false;
+            return;
+        }
+        m_viewModel.hierarchyRevealObject = object;
+        m_viewModel.hierarchyRevealRevision = m_document.Revision();
+        RefreshSelectionProjection();
     }
 
     void EditorWorkspaceController::UpdatePlayPresentation(const float elapsedSeconds) {
@@ -322,6 +400,11 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::ExtractPlayViewportScene() {
+        if (m_playSession.UsesMountedViewport()) {
+            if (m_viewportScene.runtimeSceneId.IsValid())
+                ClearSimulatorViewport();
+            return;
+        }
         const auto playScene = m_playSession.SceneView();
         if (!playScene)
             return;
@@ -383,6 +466,8 @@ namespace Horo::Editor {
             m_viewModel.physicsEditError.clear();
         m_viewModel.physicsSelectionRevision = m_selection.Current().revision.value;
         const SelectionSnapshot &selection = m_selection.Current();
+        if (m_viewModel.selectionRevision != selection.revision.value)
+            InvalidateAgentSceneSelection();
         if (selection.primary || !selection.objects.empty())
             m_viewModel.prefabSelection.reset();
         m_viewModel.primarySelection = selection.primary;

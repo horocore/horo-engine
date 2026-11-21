@@ -1,3 +1,4 @@
+#include "CliOutputContractFixture.h"
 #include "ScriptModuleHostTestSupport.h"
 
 #include <algorithm>
@@ -23,18 +24,24 @@ namespace Horo::Extensions::Tests {
 
         ExternalProcessResult Run(const SignedPackage &package, std::vector<std::string> arguments, std::string &output) {
             NativeExternalProcessRunner process;
-            return Take(process.Run({.executable = HORO_MODULE_SCRIPT_CLI,
-                                     .arguments = std::move(arguments),
-                                     .workingDirectory = package.root,
-                                     .environment = {.set = {{"HOME", package.root.string()}, {"USERPROFILE", package.root.string()}}},
-                                     .timeout = std::chrono::seconds{30},
-                                     .onOutput =
-                                         [&output](ProcessOutputLine line) {
-                output += line.text;
-                output += '\n';
+            const auto result =
+                Take(process.Run({.executable = HORO_MODULE_SCRIPT_CLI,
+                                  .arguments = std::move(arguments),
+                                  .workingDirectory = package.root,
+                                  .environment = {.set = {{"HOME", package.root.string()}, {"USERPROFILE", package.root.string()}}},
+                                  .timeout = std::chrono::seconds{30},
+                                  .onOutput =
+                                      [&output](ProcessOutputLine line) {
+                if (line.stream == ProcessOutputStream::StandardOutput) {
+                    output += line.text;
+                    output += '\n';
+                }
             },
-                                     .maximumOutputBytes = 65536},
-                                    {}));
+                                  .maximumOutputBytes = 65536},
+                                 {}));
+            if (result.reason == ProcessTerminationReason::Exited && result.exitCode == 0)
+                Horo::Tests::CliContract::ValidateEnvelope(nlohmann::json::parse(output));
+            return result;
         }
     }  // namespace
 

@@ -79,6 +79,8 @@ namespace Horo::Runtime::Ui {
 
     /** @copydoc UiAnimationOwner::PreparePresentation */
     Result<void> UiAnimationOwner::PreparePresentation(Storage &storage, const UiAnimationViewport &viewport) {
+        if (viewport.minimumControlTargetDips > MaximumUiAccessibleTargetDips)
+            return Result<void>::Failure(MakeError(UiErrors::PresentationProfileMalformed));
         auto *canvas = storage.publisher.Current()->Canvas(storage.definition.canvas);
         const auto &tree = canvas->tree;
         if (auto projections = PrepareControlProjections(storage); projections.HasError())
@@ -103,6 +105,7 @@ namespace Horo::Runtime::Ui {
             return projected;
         // Layout lookup requires handle order; authored style inputs retain their separate tree-preorder contract.
         std::ranges::sort(storage.work.layoutDescriptors, {}, &UiLayoutElementDescriptor::element);
+        ApplyControlTargetPolicy(storage, viewport.minimumControlTargetDips);
         auto evaluator = UiDeclarativeLayoutEvaluator::Create(storage.work.layoutDescriptors, storage.definition.intrinsicProvider.get());
         if (evaluator.HasError())
             return Result<void>::Failure(evaluator.ErrorValue());
@@ -114,20 +117,48 @@ namespace Horo::Runtime::Ui {
                                               viewport.canvas,
                                               viewport.policy,
                                               storage.candidate.presentation.revision};
-        auto layout =
-            canvas->layoutEngine->Prepare(tree, {sources, viewport.constraints, viewport.content, &evaluator.Value(), viewport.fontScale});
+        auto layout = canvas->layoutEngine->Prepare(tree, {sources, viewport.constraints, viewport.content, &evaluator.Value(),
+                                                           viewport.fontScale, viewport.inlineDirection});
         if (layout.HasError())
             return Result<void>::Failure(layout.ErrorValue());
         storage.candidate.layout.emplace(std::move(layout).Value());
         return PrepareDerivedPresentation(storage);
     }
 
+    /** @copydoc UiAnimationOwner::ApplyControlTargetPolicy */
+    void UiAnimationOwner::ApplyControlTargetPolicy(Storage &storage, const std::uint32_t minimumDips) {
+        if (minimumDips == 0)
+            return;
+        const auto *canvas = storage.publisher.Current()->Canvas(storage.definition.canvas);
+        const auto minimum = static_cast<std::int32_t>(minimumDips) * UiScalarUnitsPerDip;
+        for (const auto &control : canvas->controls) {
+            const auto descriptor = std::ranges::lower_bound(storage.work.layoutDescriptors, control.control.Element(), {},
+                                                             &UiLayoutElementDescriptor::element);
+            if (descriptor != storage.work.layoutDescriptors.end() && descriptor->element == control.control.Element())
+                descriptor->minimumInteractiveExtent = minimum;
+        }
+    }
+
+    /** @copydoc UiAnimationOwner::PrepareClipping */
+    Result<UiLayoutClipEngine::PreparedUpdate> UiAnimationOwner::PrepareClipping(Storage &storage, UiLayoutClipEngine &engine,
+                                                                                 const UiLayoutSnapshot &layout) {
+        const auto *canvas = storage.publisher.Current()->Canvas(storage.definition.canvas);
+        std::optional<UiFocusBringIntoViewRequest> request;
+        if (storage.accessibility.revision != 0 && canvas->focus) {
+            const auto revealed = canvas->focus->RevealInLayout(layout);
+            if (revealed.HasError())
+                return Result<UiLayoutClipEngine::PreparedUpdate>::Failure(revealed.ErrorValue());
+            if (revealed.Value() && PreparedRouteTargetEligible(storage, revealed.Value()->target.element))
+                request = revealed.Value();
+        }
+        return engine.Prepare(canvas->tree, layout, {canvas->clipPolicies, request});
+    }
+
     /** @copydoc UiAnimationOwner::PrepareDerivedPresentation */
     Result<void> UiAnimationOwner::PrepareDerivedPresentation(Storage &storage) {
         auto *canvas = storage.publisher.Current()->Canvas(storage.definition.canvas);
-        const auto &tree = canvas->tree;
         if (canvas->clipping) {
-            auto clipped = canvas->clipping->Prepare(tree, storage.candidate.layout->Candidate(), {canvas->clipPolicies, {}});
+            auto clipped = PrepareClipping(storage, *canvas->clipping, storage.candidate.layout->Candidate());
             if (clipped.HasError())
                 return Result<void>::Failure(clipped.ErrorValue());
             storage.candidate.clipping.emplace(std::move(clipped).Value());

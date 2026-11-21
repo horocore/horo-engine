@@ -29,6 +29,18 @@ namespace {
         }
     };
 
+    class ReflowTextMetrics final : public UiLayoutIntrinsicProvider {
+    public:
+        Result<UiLayoutIntrinsicMeasurement> MeasureText(const UiLayoutIntrinsicRequest &request) const override {
+            const auto height = request.available.width < 50 ? 40 : 20;
+            return Result<UiLayoutIntrinsicMeasurement>::Success({{request.available.width, height}, NoUiBaseline, true, false});
+        }
+
+        Result<UiLayoutIntrinsicMeasurement> MeasureImage(const UiLayoutIntrinsicRequest &request) const override {
+            return MeasureText(request);
+        }
+    };
+
     UiDocumentPresentationProfiles CompactProfiles() {
         UiLayoutStyle compact;
         compact.width = UiLength::Dip(80);
@@ -96,6 +108,14 @@ TEST_CASE("Actual owner selects durable alternatives per attachment before compu
     CheckCompactFrame(first);
     const auto &derived = first.Attachments().front();
     const auto child = first.Controls().front().source.element;
+    const auto splitGeometry = first.FindViewGeometry(view);
+    REQUIRE(splitGeometry.has_value());
+    CHECK(&splitGeometry->layout == &*derived.layout);
+    CHECK(splitGeometry->clipping == &*derived.clipping);
+    const auto primaryGeometry = first.FindViewGeometry(Receipt(first, 1).view);
+    REQUIRE(primaryGeometry.has_value());
+    CHECK(&primaryGeometry->layout == &first.Layout());
+    CHECK_FALSE(first.FindViewGeometry({ReloadTests::Owner(), 21, 2}).has_value());
     REQUIRE(participant.Inspect().has_value());
     REQUIRE(participant.Inspect()->Descriptor().selection->profile == Stable<UiPresentationProfileId>(30));
     REQUIRE_FALSE(participant.InputEligible(view));
@@ -122,8 +142,36 @@ TEST_CASE("Actual owner selects durable alternatives per attachment before compu
     REQUIRE(participant.Detach(attached.Value()).HasValue());
     REQUIRE_FALSE(participant.InputEligible(view));
     REQUIRE(participant.UpdateAttachment(attached.Value(), changed).HasError());
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    CHECK_FALSE(Frame(participant).FindViewGeometry(view).has_value());
     fixture.host->Shutdown();
-    REQUIRE(derived.layout->Get(child).HasValue());
+    REQUIRE(first.FindViewGeometry(view)->layout.Get(child).HasValue());
+}
+
+TEST_CASE("Responsive owner remeasures text at the narrowed scaled viewport before publishing",
+          "[runtime_ui][responsive][integration][accessibility]") {
+    HostOptions options;
+    options.intrinsicProvider = std::make_shared<ReflowTextMetrics>();
+    options.explicitLayoutOrigins = true;
+    options.reflowText = true;
+    HostFixture fixture{options};
+    auto &participant = *fixture.participant;
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    const auto ordinary = Frame(participant);
+    const auto child = ordinary.Controls().front().source.element;
+    REQUIRE(ordinary.Layout().Get(child).Value().measurement.desired.height == 20);
+
+    auto viewport = Config().viewport;
+    viewport.constraints.maximum.width = viewport.content.extent.width = 70;
+    viewport.canvas = Revision<UiLayoutCanvasRevision>(2);
+    REQUIRE(participant.SetViewport(viewport).HasValue());
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    const auto compact = Frame(participant);
+    CHECK(compact.Layout().Get(child).Value().measurement.desired.height == 40);
+    CHECK(compact.Layout().Descriptor().interaction > ordinary.Layout().Descriptor().interaction);
+    CHECK(ordinary.Layout().Get(child).Value().measurement.desired.height == 20);
+    fixture.host->Shutdown();
+    CHECK(participant.SetViewport(viewport).HasError());
 }
 
 TEST_CASE("Unchanged responsive frames retain interaction while later attachments join the actual primary fence",

@@ -10,9 +10,12 @@
 
 #include <array>
 #include <memory>
+#include <optional>
 #include <span>
 
 namespace Horo::Network {
+    class INetworkInitialStateHost;
+    class INetworkStateUpdateHost;
     /** @brief Explicit invocation intent; transport qualification never publishes a gameplay world. */
     enum class NetworkWorldCompositionPurpose : std::uint8_t {
         Gameplay,
@@ -39,6 +42,34 @@ namespace Horo::Network {
         auto operator<=>(const NetworkWorldBindingRecord &) const noexcept = default;
     };
 
+    /** @brief Explicit registered Prefab lifecycle lane and its required negotiated feature. */
+    struct NetworkPrefabLifecyclePolicy final {
+        MessageIdentityDescriptor control;
+        ProtocolFeatureId feature;
+    };
+
+    /** @brief Explicit negotiated route for the complete authored Scene baseline. */
+    struct NetworkAuthoredScenePolicy final {
+        MessageIdentityDescriptor control;
+        ProtocolFeatureId feature;
+    };
+
+    /** @brief Negotiated reliable lane for initial fields and the client's publication receipt. */
+    struct NetworkInitialStatePolicy final {
+        MessageIdentityDescriptor control;
+        ProtocolFeatureId feature;
+        std::size_t maximumWireBytes{};
+    };
+
+    /** @brief Explicit negotiated lane for bounded full Update records after initial publication. */
+    struct NetworkStateUpdatePolicy final {
+        MessageIdentityDescriptor snapshot;
+        ProtocolFeatureId feature;
+        ChannelId channel;
+        std::uint32_t maximumMessagesPerTick{};
+        std::size_t maximumBytesPerTick{};
+    };
+
     /** @brief Host-selected immutable authorization and registry identities, captured before listening. */
     struct NetworkWorldBindingPolicy final {
         MessageIdentityDescriptor control;
@@ -46,6 +77,10 @@ namespace Horo::Network {
         NetworkPrincipalId expectedServer;
         CredentialProvenanceId expectedProvenance;
         NetworkCapabilityId authorityPublisher;
+        std::optional<NetworkPrefabLifecyclePolicy> prefabLifecycle; /**< Opt-in protected lifecycle messages. */
+        std::optional<NetworkAuthoredScenePolicy> authoredScene;     /**< Required baseline on configured peers. */
+        std::optional<NetworkInitialStatePolicy> initialState;       /**< Require confirmed initial fields before gameplay traffic. */
+        std::optional<NetworkStateUpdatePolicy> stateUpdates;        /**< Bounded post-initial full projected records. */
     };
 
     /** @brief Deep-owned values and the same immutable codec snapshot, captured by the actual host admission composition.
@@ -59,6 +94,8 @@ namespace Horo::Network {
         ChannelId controlChannel{};
         std::uint32_t maximumPeers{64};
         std::uint64_t maximumPendingTicks{5000};
+        std::shared_ptr<INetworkInitialStateHost> initialStateHost; /**< Host-owned live capture and apply adapters. */
+        std::shared_ptr<INetworkStateUpdateHost> stateUpdateHost;   /**< Separate owner for the optional Snapshot lane. */
     };
 
     inline constexpr std::size_t NetworkWorldBindingWireBytes = 60;

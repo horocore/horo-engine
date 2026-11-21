@@ -1,12 +1,19 @@
 #pragma once
 
+#include "Horo/Editor/AgentEditorDiagnosticsSnapshot.h"
+#include "Horo/Editor/AgentSceneSelectionSnapshot.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorSurfaceEventContext.h"
 #include "Horo/Editor/Localization/LocalizedGui.h"
 #include "Horo/Editor/WorkspaceDockArea.h"
 #include "Horo/Runtime/Input.h"
 
+#include <cstddef>
+#include <filesystem>
+#include <functional>
 #include <memory>
+#include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -25,6 +32,10 @@ namespace Horo::Application {
     class INetworkDebuggerControl;
 }  // namespace Horo::Application
 
+namespace Horo::Platform {
+    class IProjectReadFiles;
+}
+
 namespace Horo {
     class IBuildOutputQuery;
     class IOperationControl;
@@ -37,6 +48,10 @@ namespace Horo::Extensions {
     struct EditorThemeFrame;
 }  // namespace Horo::Extensions
 
+namespace Horo::PlatformServices {
+    class IPlatformDiagnostics;
+}
+
 namespace Horo::Editor {
     struct NavigationViewportAccess;
     class EditorDataBus;
@@ -44,8 +59,15 @@ namespace Horo::Editor {
     class IXRSimulatorArtifacts;
     class IEditorGuiRenderer;
     class IEditorViewportRenderer;
+    class SourceDocumentSnapshot;
+    struct SourceContextRange;
     struct EditorWorkspaceViewCommandData;
     struct EditorWorkspaceViewModel;
+
+    namespace Proposals {
+        class ChangeSet;
+        struct WorkspaceEditPlan;
+    }  // namespace Proposals
 
     /** @brief Context injected when a panel is attached to the workspace. */
     struct PanelContext {
@@ -70,6 +92,29 @@ namespace Horo::Editor {
         std::weak_ptr<IXRSimulatorArtifacts>
             xrSimulatorArtifacts{};      /**< Same admitted project source/publication port, revoked before retirement. */
         XRSimulatorModel *xrSimulator{}; /**< Explicit application model; invalidated when panel detaches. */
+        PlatformServices::IPlatformDiagnostics *platformDiagnostics{};  /**< Host-owned owner-lane diagnostics capability. */
+        std::function<std::optional<std::size_t>()> sceneObjectCount{}; /**< Narrow owner-lane authoring observation. */
+        std::string_view projectIdentity{};                             /**< Validated project identity borrowed during attachment. */
+        const std::filesystem::path *projectFileRoot{};                 /**< Exact native root borrowed during attachment. */
+        /** @brief Copies the already-open active Source document on the owner lane, leaving output unchanged on failure. */
+        std::function<bool(SourceDocumentSnapshot &)> activeSourceSnapshot{};
+        /** @brief Copies the current nonempty source selection and its exact snapshot on the owner lane. */
+        std::function<bool(SourceDocumentSnapshot &, SourceContextRange &)> activeSourceRange{};
+        /** @brief Borrows the current list of open Source snapshots for a synchronous owner-lane read.
+         * @details Copy chosen snapshots before returning to the workspace. The borrow expires on the next model update.
+         */
+        std::function<std::span<const SourceDocumentSnapshot>()> openSourceSnapshots{};
+        /** @brief Captures bounded selected Scene object IDs on the workspace owner lane. */
+        std::function<std::optional<AgentSceneSelectionSnapshot>()> captureSceneSelection{};
+        /** @brief Optional rooted read authority for explicit saved-file review, bound to generation one. */
+        std::shared_ptr<const Platform::IProjectReadFiles> agentProjectFiles{};
+        std::string_view agentProjectReadIdentity{}; /**< Exact workspace reader identity, borrowed during attachment. */
+        /** @brief Captures findings from the active editor document on the workspace owner lane. */
+        std::function<std::optional<AgentEditorDiagnosticsSnapshot>()> captureEditorDiagnostics{};
+        /** @brief Stages an exact planned operation for presentation after the workspace draw. */
+        std::function<bool(const Proposals::ChangeSet &, const Proposals::WorkspaceEditPlan &, std::size_t,
+                           EditorWorkspaceViewCommandData &)>
+            requestSourceReview{};
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */

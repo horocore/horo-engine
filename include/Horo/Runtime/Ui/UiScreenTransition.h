@@ -40,7 +40,8 @@ namespace Horo::Runtime::Ui {
         RouteBusy,
         Collecting,
         RetentionFull,
-        Stopped
+        Stopped,
+        StartupDisplayPending
     };
 
     /** @brief Value-only progress; stages describe actual work rather than an estimated percentage. */
@@ -51,12 +52,19 @@ namespace Horo::Runtime::Ui {
         std::uint64_t timeoutTicks{};
     };
 
+    /** @brief Display gate for an independently composed startup screen. */
+    struct UiScreenStartupDisplay final {
+        bool awaitingFirstPresentation{}; /**< No successful receipt for the current startup canvas yet. */
+        std::uint64_t remainingTicks{};   /**< Full minimum while awaiting presentation, then the remaining elapsed duration. */
+    };
+
     /** @brief Complete request copied at admission; clocks use host-supplied monotonic ticks. */
     struct UiScreenTransitionRequest final {
         UiRuntimeAssetLoadRequest asset;
-        RuntimeUiInstanceId instance; /**< Same owner, strictly increasing slot across all admitted screens. */
-        UiRouteId route;              /**< Actual cooked route to activate in the selected canvas. */
-        std::uint64_t timeoutTicks{}; /**< Positive deadline covering loading, composition and commit. */
+        RuntimeUiInstanceId instance;               /**< Same owner, strictly increasing slot across all admitted screens. */
+        UiRouteId route;                            /**< Actual cooked route to activate in the selected canvas. */
+        std::uint64_t timeoutTicks{};               /**< Positive deadline covering loading, composition and commit. */
+        std::uint64_t minimumStartupDisplayTicks{}; /**< Optional first-screen duration measured from an actual presentation receipt. */
     };
 
     /** @brief Fixed publisher retention bounds reserved at creation. */
@@ -158,6 +166,17 @@ namespace Horo::Runtime::Ui {
          * @return Whether this is the current screen's authoritative generation.
          */
         [[nodiscard]] bool IsCurrent(const UiReloadLease &lease) const noexcept;
+        /** @brief Records an exact presentation of the current screen at the owner cutoff.
+         * @param screen Whole-screen lease used to submit the presented snapshot.
+         * @param receipt Exact terminal evidence for the current transition canvas.
+         * @param now Nondecreasing tick from the same owner clock used by Begin and Poll.
+         * @return Whether input eligibility advanced, or a typed stale, lifecycle or clock failure.
+         * @details The first accepted successful receipt starts a configured startup display minimum. Skipped, failed and repeated
+         *          receipts cannot start or restart the minimum. Use this path for the startup canvas when a minimum is configured.
+         */
+        [[nodiscard]] Result<bool> ApplyPresentation(const UiReloadLease &screen, const UiPresentationReceipt &receipt, std::uint64_t now);
+        /** @brief Reads the display gate at the last admitted owner clock tick. @return Empty fields when no minimum applies. */
+        [[nodiscard]] UiScreenStartupDisplay StartupDisplay() const noexcept;
         /** @brief Returns the latest value-only progress. @return Last observed progress. */
         [[nodiscard]] UiScreenTransitionProgress Progress() const noexcept;
         /** @brief Borrows terminal failure detail including original loader/composition errors.

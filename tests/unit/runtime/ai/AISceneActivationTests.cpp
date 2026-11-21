@@ -1,4 +1,6 @@
+#include "AITaskSchedulerTestSupport.h"
 #include "AiSceneTestSupport.h"
+#include "Horo/AI/PerceptionSpatialBroadphase.h"
 
 namespace Horo::AI {
     namespace {
@@ -38,6 +40,34 @@ namespace Horo::AI {
             CHECK(retained.Value().state == AiAgentActivationState::Active);
             CHECK(retained.Value().hasBlackboard);
             CHECK(retained.Value().hasRunningTask);
+        }
+
+        TEST_CASE("AI preview preserves only missing controller descriptors and still rejects incompatible bindings",
+                  "[unit][ai][scene][activation]") {
+            auto runtime = std::move(AiSceneRuntime::Create({.missingController = AiMissingControllerPolicy::PreserveInactive})).Value();
+            auto fixture = MakeFixture(21, 31, 17, 0);
+            SECTION("Missing descriptor publishes an inert record") {
+                auto prepared = runtime.PrepareScene(fixture.binding, std::array{fixture.agent}, {});
+                REQUIRE(prepared.HasValue());
+                auto candidate = std::move(prepared).Value();
+                REQUIRE(candidate->ValidatePublication().HasValue());
+                candidate->Publish();
+                const auto snapshot = runtime.Snapshot();
+                REQUIRE(snapshot.HasValue());
+                REQUIRE(snapshot.Value().Agents().size() == 1);
+                const auto &agent = snapshot.Value().Agents().front();
+                CHECK(agent.state == AiAgentActivationState::Degraded);
+                CHECK(agent.agent == fixture.agent.agent);
+                CHECK(agent.controller == fixture.agent.controller);
+                CHECK_FALSE(agent.hasBlackboard);
+                ExpectError(runtime.StartTaskAtSafePoint(agent.handle, MakeIdentity<TaskId>(41)), AIErrors::HandleInvalid);
+            }
+            SECTION("Existing descriptor with an incompatible authored plan is an error") {
+                fixture.agent.controller->decisionAsset = MakeIdentity<DecisionGraphAssetId>(999);
+                const auto prepared = runtime.PrepareScene(fixture.binding, std::array{fixture.agent}, std::array{fixture.descriptor});
+                ExpectError(prepared, AIErrors::ControllerDescriptorIncompatible);
+                ExpectError(runtime.Snapshot(), AIErrors::RuntimeUnavailable);
+            }
         }
 
         TEST_CASE("Disabling an AI agent cancels owned task state before revoking capabilities", "[unit][ai][scene][activation]") {
@@ -134,6 +164,7 @@ namespace Horo::AI {
             auto scene = Runtime::RuntimeScene::Create(definition.Value(), Runtime::SceneRuntimeId{47});
             REQUIRE(scene.HasValue());
 
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
             auto runtime = std::move(AiSceneRuntime::Create()).Value();
             const auto descriptors = std::array{fixture.descriptor};
             AiSceneActivationParticipant participant{runtime, descriptors};
@@ -148,6 +179,159 @@ namespace Horo::AI {
             REQUIRE(snapshot.Value().Agents().size() == 1);
             CHECK(snapshot.Value().Agents().front().owner.runtime == Runtime::SceneRuntimeId{47});
             CHECK(snapshot.Value().Agents().front().owner.entity.generation == 1);
+
+            SECTION("Agent inspection owns only explicitly disclosed values and rejects stale generations") {
+                const auto &record = snapshot.Value().Agents().front();
+                const auto key = fixture.schema->Keys().front().key;
+                const auto task = MakeIdentity<TaskId>(41);
+                const auto started = runtime.StartTaskAtSafePoint(record.handle, task);
+                REQUIRE(started.HasValue());
+                const auto hidden = runtime.CaptureAgentInspectionAtSafePoint(scene.Value()->View(), record.handle, {});
+                REQUIRE(hidden.HasValue());
+                REQUIRE(hidden.Value().keys.size() == 1);
+                CHECK(hidden.Value().keys.front().key == key);
+                CHECK(hidden.Value().keys.front().status == AiInspectionValueStatus::Redacted);
+                CHECK_FALSE(hidden.Value().keys.front().value);
+                REQUIRE(hidden.Value().task);
+                CHECK(hidden.Value().task->definition == task);
+                CHECK(hidden.Value().task->occurrence == started.Value());
+                CHECK(hidden.Value().task->state == AiTaskState::Running);
+
+                const auto visible = runtime.CaptureAgentInspectionAtSafePoint(scene.Value()->View(), record.handle, std::array{key});
+                REQUIRE(visible.HasValue());
+                CHECK(visible.Value().blackboardRevision == hidden.Value().blackboardRevision);
+                CHECK(visible.Value().keys.front().status == AiInspectionValueStatus::Present);
+                CHECK(visible.Value().keys.front().value == fixture.schema->Keys().front().defaultValue);
+                const auto foreign = Runtime::RuntimeScene::Create(definition.Value(), Runtime::SceneRuntimeId{48});
+                REQUIRE(foreign.HasValue());
+                ExpectError(runtime.CaptureAgentInspectionAtSafePoint(foreign.Value()->View(), record.handle, {}), AIErrors::HandleInvalid);
+                REQUIRE(runtime.RetireOwnerAtSafePoint(record.owner).Value() == 1);
+                ExpectError(runtime.CaptureAgentInspectionAtSafePoint(scene.Value()->View(), record.handle, {}), AIErrors::HandleInvalid);
+                CHECK(visible.Value().keys.front().value == fixture.schema->Keys().front().defaultValue);
+            }
+
+            SECTION("A failed Decision callback is attributable only to its exact live entity generation") {
+                const auto &agent = snapshot.Value().Agents().front();
+                REQUIRE(runtime.ConfigureTaskSchedulerAtSafePoint(jobs).HasValue());
+                auto decision = std::make_shared<SchedulerTestSupport::Probe>();
+                decision->fail = true;
+                REQUIRE(runtime.RegisterDecisionAtSafePoint(agent.handle, {}, std::make_shared<int>(1), decision).HasValue());
+                const auto scheduler = runtime.TaskSchedulerAtSafePoint();
+                REQUIRE(scheduler.HasValue());
+                CHECK_FALSE(runtime.ReadDecisionFailureAtSafePoint(scene.Value()->View()).Value());
+                REQUIRE(scheduler.Value()->EvaluateAtDecision(1).HasValue());
+                CHECK_FALSE(runtime.ReadDecisionFailureAtSafePoint(scene.Value()->View()).Value());
+                REQUIRE(scheduler.Value()->CommitAtIntentDispatch(1).HasValue());
+
+                const auto failure = runtime.ReadDecisionFailureAtSafePoint(scene.Value()->View());
+                REQUIRE(failure.HasValue());
+                REQUIRE(failure.Value());
+                CHECK(failure.Value()->tick == 1);
+                CHECK(failure.Value()->origin.agent == agent.handle);
+                CHECK(failure.Value()->origin.identity == agent.agent.agent);
+                CHECK(failure.Value()->entity == agent.owner);
+                CHECK(failure.Value()->error.code.Value() == AIErrors::CapabilityUnavailable.code.Value());
+                const auto inspection = runtime.CaptureAgentInspectionAtSafePoint(scene.Value()->View(), agent.handle, {});
+                REQUIRE(inspection.HasValue());
+                REQUIRE(inspection.Value().decisionFailure);
+                CHECK(inspection.Value().decisionTick == 1);
+                CHECK(inspection.Value().decisionFailure->code.Value() == AIErrors::CapabilityUnavailable.code.Value());
+                auto foreign = Runtime::RuntimeScene::Create(definition.Value(), Runtime::SceneRuntimeId{48});
+                REQUIRE(foreign.HasValue());
+                ExpectError(runtime.ReadDecisionFailureAtSafePoint(foreign.Value()->View()), AIErrors::TaskContextInvalid);
+
+                REQUIRE(runtime.RetireOwnerAtSafePoint(agent.owner).Value() == 1);
+                const auto retired = runtime.ReadDecisionFailureAtSafePoint(scene.Value()->View());
+                REQUIRE(retired.HasValue());
+                REQUIRE(retired.Value());
+                CHECK_FALSE(retired.Value()->entity);
+                CHECK(retired.Value()->error.code.Value() == failure.Value()->error.code.Value());
+            }
+        }
+
+        TEST_CASE("AI scene activation stages and retires its exact Perception authorization",
+                  "[unit][ai][scene][activation][perception]") {
+            auto runtime = std::move(AiSceneRuntime::Create()).Value();
+            PerceptionSpatialBroadphase spatial;
+            bool capturePositions = true;
+            const AiScenePerceptionPositionSource positions = [&](const Runtime::RuntimeSceneView &) {
+                if (!capturePositions)
+                    return Result<std::vector<AiScenePerceptionPosition>>::Failure(MakeError(AIErrors::PerceptionDependencyMissing));
+                return Result<std::vector<AiScenePerceptionPosition>>::Success({});
+            };
+            AiSceneActivationParticipant participant{runtime, {}, AiScenePerceptionActivationInput{spatial, {}, positions}};
+            Runtime::SceneDefinitionBuilder builder{{71}, {1}};
+            builder.Add({.object = {1}});
+            auto definition = std::move(builder).Build();
+            REQUIRE(definition.HasValue());
+            const auto first = Runtime::RuntimeScene::Create(definition.Value(), {31});
+            const auto second = Runtime::RuntimeScene::Create(definition.Value(), {32});
+            REQUIRE(first.HasValue());
+            REQUIRE(second.HasValue());
+
+            auto initial = participant.Prepare(definition.Value(), first.Value()->View());
+            REQUIRE(initial.HasValue());
+            CHECK_FALSE(spatial.Current());
+            REQUIRE(initial.Value()->ValidatePublication().HasValue());
+            initial.Value()->Publish();
+            auto previous = spatial.Current();
+            REQUIRE(previous);
+            CHECK(previous->Scene() == Runtime::SceneRuntimeId{31});
+            CHECK(previous->ReadAuthorization()->IsCurrent());
+
+            SECTION("failed position capture retains the published predecessor") {
+                capturePositions = false;
+                ExpectError(participant.Prepare(definition.Value(), second.Value()->View()), AIErrors::PerceptionDependencyMissing);
+                CHECK(spatial.Current() == previous);
+                CHECK(previous->ReadAuthorization()->IsCurrent());
+            }
+            SECTION("abandoning a staged replacement has no publication effect") {
+                auto abandoned = participant.Prepare(definition.Value(), second.Value()->View());
+                REQUIRE(abandoned.HasValue());
+                CHECK(spatial.Current() == previous);
+                abandoned.Value()->Shutdown();
+                CHECK(spatial.Current() == previous);
+                CHECK(previous->ReadAuthorization()->IsCurrent());
+            }
+            SECTION("changed candidate Scene invalidates the detached spatial proof") {
+                auto stale = participant.Prepare(definition.Value(), second.Value()->View());
+                REQUIRE(stale.HasValue());
+                Runtime::SceneCommandBuffer commands;
+                REQUIRE(commands.Create({}).IsValid());
+                REQUIRE(second.Value()->Commit(commands).HasValue());
+                ExpectError(stale.Value()->ValidatePublication(), AIErrors::PerceptionSpatialStale);
+                stale.Value()->Shutdown();
+                CHECK(spatial.Current() == previous);
+                CHECK(previous->ReadAuthorization()->IsCurrent());
+            }
+            SECTION("stale predecessor fences the detached replacement until it is staged again") {
+                auto stale = participant.Prepare(definition.Value(), second.Value()->View());
+                REQUIRE(stale.HasValue());
+                const auto refreshed = spatial.Publish(first.Value()->View(), 2, {}, {});
+                REQUIRE(refreshed.HasValue());
+                ExpectError(stale.Value()->ValidatePublication(), AIErrors::PerceptionSpatialStale);
+                stale.Value()->Shutdown();
+                CHECK(spatial.Current() == refreshed.Value());
+                CHECK(refreshed.Value()->ReadAuthorization()->IsCurrent());
+
+                auto replacement = participant.Prepare(definition.Value(), second.Value()->View());
+                REQUIRE(replacement.HasValue());
+                REQUIRE(replacement.Value()->ValidatePublication().HasValue());
+                replacement.Value()->Publish();
+                auto current = spatial.Current();
+                REQUIRE(current);
+                CHECK(current->Scene() == Runtime::SceneRuntimeId{32});
+                CHECK_FALSE(refreshed.Value()->ReadAuthorization()->IsCurrent());
+                initial.Value()->Shutdown();
+                CHECK(spatial.Current() == current);
+                CHECK(current->ReadAuthorization()->IsCurrent());
+                replacement.Value()->Shutdown();
+                CHECK_FALSE(current->ReadAuthorization()->IsCurrent());
+            }
+
+            initial.Value()->Shutdown();
+            CHECK_FALSE(spatial.Current());
+            CHECK_FALSE(previous->ReadAuthorization()->IsCurrent());
         }
 
     }  // namespace

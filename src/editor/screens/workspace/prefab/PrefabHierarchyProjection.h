@@ -31,6 +31,8 @@ namespace Horo::Editor {
         bool changed{};
         bool sourcePresent{true};
         bool effectivePresent{true};
+        std::optional<Prefab::PrefabValueOverrideTarget> revertValue;
+        std::optional<Prefab::PrefabComponentOverrideTarget> revertComponent;
     };
 
     /** @brief Read-only source-qualified row; no component mutation authority is carried. */

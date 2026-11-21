@@ -85,4 +85,17 @@ namespace Horo::Editor {
         const std::filesystem::path &root, const std::filesystem::path &destination, std::span<const std::byte> bytes,
         const Assets::AssetSourceIdentity &expected, DurableFileSystem &files, DocumentRecoveryLimits limits = {},
         CancellationToken cancellation = {});
+
+    /** @brief Publishes a recovery envelope with a fresh project-local Assets staging attempt.
+     * @param root Canonical project root. @param destination Exact recovery slot. @param bytes Complete envelope.
+     * @param expected Exact accepted recovery identity. @param attempt Fresh host UUID and payload identity.
+     * @param files Durable owner. @param limits Shared retention budgets. @param cancellation Cooperative observer.
+     * @return The same tracked durability receipt as PublishDocumentRecovery.
+     * @pre Caller retains the shared project mutation lease. The attempt uses ProjectLocal placement.
+     * @details Its private stage does not occupy a document recovery quota slot.
+     */
+    [[nodiscard]] Result<Assets::AssetSourcePublication> PublishDocumentRecoveryAttempt(
+        const std::filesystem::path &root, const std::filesystem::path &destination, std::span<const std::byte> bytes,
+        const Assets::AssetSourceIdentity &expected, const Assets::AssetSourcePublicationAttempt &attempt, DurableFileSystem &files,
+        DocumentRecoveryLimits limits = {}, CancellationToken cancellation = {});
 }  // namespace Horo::Editor

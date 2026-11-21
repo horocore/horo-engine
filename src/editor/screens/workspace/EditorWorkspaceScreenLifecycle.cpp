@@ -1,5 +1,8 @@
 #include "EditorWorkspaceScreen.h"
+#include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "PlatformProjectSettingsOwner.h"
+#include "editor/input/EditorInputActions.h"
 #include "editor/screens/NavigationErrors.h"
 
 namespace Horo::Editor::WorkspaceScreenDetail {
@@ -11,7 +14,10 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             leaveCapture_.prefabSettingsRevision = controller_->PrefabSettingsRevision();
             static_cast<void>(controller_->HasDirtySourceDocuments());
             leaveCapture_.sourceDocuments = controller_->ViewModel().sourceDocuments;
+            leaveCapture_.uiCanvasStates = controller_->UiCanvasStates();
             leaveCapture_.terrainRevisions = controller_->TerrainDocumentRevisions();
+            leaveCapture_.decisionGraphRevisions = controller_->DecisionGraphRevisions();
+            leaveCapture_.environmentQueryRevisions = controller_->EnvironmentQueryRevisions();
             leaveCapture_.prefabDocuments = controller_->ViewModel().prefabDocuments;
             auto graphs = controller_->PCGDocuments().Snapshots();
             if (graphs.HasError())
@@ -60,6 +66,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return Result<LeaveDecision>::Failure(prefabs.ErrorValue());
         if (const auto graphs = controller_->ShutdownPCGDocuments(); graphs.HasError())
             return Result<LeaveDecision>::Failure(graphs.ErrorValue());
+        if (const auto canvases = controller_->ShutdownUiCanvasDocuments(); canvases.HasError())
+            return Result<LeaveDecision>::Failure(canvases.ErrorValue());
         return Result<LeaveDecision>::Success({.disposition = Allow, .requirement = std::nullopt});
     }
 
@@ -87,6 +95,10 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return Result<LeaveDecision>::Failure(world.ErrorValue());
         if (const auto graphs = controller_->ShutdownPCGDocuments(true); graphs.HasError())
             return Result<LeaveDecision>::Failure(graphs.ErrorValue());
+        if (const auto canvases = controller_->ShutdownUiCanvasDocuments(true); canvases.HasError())
+            return Result<LeaveDecision>::Failure(canvases.ErrorValue());
+        if (const auto ai = controller_->DiscardAiDocumentAutosaves(); ai.HasError())
+            return Result<LeaveDecision>::Failure(ai.ErrorValue());
         return Result<LeaveDecision>::Success({.disposition = Allow, .requirement = std::nullopt});
     }
 
@@ -97,12 +109,15 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (resolution.subject != 1 || resolution.revision != 1)
             return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
         if (controller_ && resolution.action != Stay) {
-            if (controller_->TerrainDocumentRevisions() != leaveCapture_.terrainRevisions)
+            if (controller_->TerrainDocumentRevisions() != leaveCapture_.terrainRevisions ||
+                controller_->DecisionGraphRevisions() != leaveCapture_.decisionGraphRevisions ||
+                controller_->EnvironmentQueryRevisions() != leaveCapture_.environmentQueryRevisions)
                 return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
             if (controller_->PrefabSettingsRevision() != leaveCapture_.prefabSettingsRevision)
                 return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
             static_cast<void>(controller_->HasDirtySourceDocuments());
-            if (controller_->ViewModel().sourceDocuments.size() != leaveCapture_.sourceDocuments.size())
+            if (controller_->ViewModel().sourceDocuments.size() != leaveCapture_.sourceDocuments.size() ||
+                controller_->UiCanvasStates() != leaveCapture_.uiCanvasStates)
                 return Result<LeaveDecision>::Failure(MakeError(NavigationErrors::WorkspaceStaleLeaveSubject));
             for (const auto &captured : leaveCapture_.sourceDocuments) {
                 const auto current = controller_->SourceDocuments().Snapshot(captured.Identity().instance);
@@ -127,6 +142,11 @@ namespace Horo::Editor::WorkspaceScreenDetail {
 
     /** @copydoc EditorWorkspaceScreen::OnLeave */
     void EditorWorkspaceScreen::OnLeave() {
+        RevokeEditorDiagnostics();
+        if (platformSettings_)
+            platformSettings_->Close();
+        platformSettings_.reset();
+        platformSources_.reset();
         RevokeSimulatorArtifacts();
         DetachXrInput();
         workspaceControllerLifetime_.reset();
@@ -136,10 +156,14 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (controller_) {
             static_cast<void>(controller_->ShutdownPrefabSettings(true));
             static_cast<void>(controller_->ShutdownCollisionSettings(true));
+            controller_->SetPackageDecisionNodeSource({});
+            packageDecisionCatalog_.reset();
             if (packages_.retire)
                 static_cast<void>(packages_.retire(std::filesystem::path{controller_->ViewModel().projectRoot}));
             SaveExtensionWorkspace();
             controller_->FlushAutosave();
+            if (const auto canvases = controller_->ShutdownUiCanvasDocuments(); canvases.HasError())
+                LOG_ERROR("editor.ui_canvas", "Canvas recovery shutdown incomplete: %s", canvases.ErrorValue().message.c_str());
             if (const auto terrain = controller_->ShutdownTerrainDocuments(); terrain.HasError())
                 LOG_ERROR("editor.terrain", "Terrain document shutdown incomplete: %s", terrain.ErrorValue().message.c_str());
             if (const auto prefabs = controller_->ShutdownPrefabDocuments(); prefabs.HasError())
@@ -160,6 +184,10 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         static_cast<void>(contributions_.statusItems.Update("horo.status.document", EditorStatusItemContent{.available = false}));
         static_cast<void>(contributions_.statusItems.Update("horo.status.selection", EditorStatusItemContent{.available = false}));
         contributions_.panels.DetachAll();
+        agentProjectFiles_.reset();
+        agentProjectReadIdentity_.clear();
+        settings_.SetInputProfilePaths(std::nullopt);
+        input_.profilePaths.reset();
         RestoreWorkspaceInputProfile();
         input_.context.Reset();
         viewportSceneState_.Clear();
@@ -170,7 +198,9 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     /** @copydoc EditorWorkspaceScreen::RestoreWorkspaceInputProfile */
     void EditorWorkspaceScreen::RestoreWorkspaceInputProfile() {
         if (input_.previousProfile.has_value()) {
-            if (const Result<void> restored = input_.router.SetProfile(std::move(*input_.previousProfile)); restored.HasError()) {
+            const auto profile = settings_.Snapshot().settings.keymap.profile;
+            if (const Result<void> restored = ActivateEditorInputProfile(input_.router, profile, settings_.ContributedInputActions());
+                restored.HasError()) {
                 LOG_ERROR("editor.input", "Unable to restore editor input profile: %s", restored.ErrorValue().message.c_str());
             }
             input_.previousProfile.reset();

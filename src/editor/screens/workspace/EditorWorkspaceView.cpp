@@ -468,9 +468,11 @@ namespace Horo::Editor {
 
         constexpr float menuH = kMenuBarH;
         const float recoveryH = viewModel.recoveryAvailable ? kRecoveryBarH : 0.0F;
+        const bool pairedRecovery = viewModel.prefabApplyRecovery || viewModel.prefabApplyRecoveryNotice != PrefabApplyRecoveryNotice::None;
+        const float pairedRecoveryH = pairedRecovery ? kRecoveryBarH : 0.0F;
         const float externalConflictH = viewModel.sceneExternalConflict ? kRecoveryBarH : 0.0F;
         // The shell has already removed its persistent status-bar height.
-        const float activityBarH = (std::max)(0.0F, display.y - menuH - recoveryH - externalConflictH);
+        const float activityBarH = (std::max)(0.0F, display.y - menuH - recoveryH - pairedRecoveryH - externalConflictH);
 
         float curY = 0.0F;
 
@@ -482,8 +484,12 @@ namespace Horo::Editor {
         curY += menuH;
 
         if (viewModel.recoveryAvailable) {
-            DrawRecoveryBar(ImVec2(0.0F, curY), ImVec2(display.x, recoveryH), outCommand);
+            DrawRecoveryBar(ImVec2(0.0F, curY), ImVec2(display.x, recoveryH), viewModel, false, outCommand);
             curY += recoveryH;
+        }
+        if (pairedRecovery) {
+            DrawRecoveryBar(ImVec2(0.0F, curY), ImVec2(display.x, pairedRecoveryH), viewModel, true, outCommand);
+            curY += pairedRecoveryH;
         }
         if (viewModel.sceneExternalConflict) {
             DrawExternalConflictBar(ImVec2(0.0F, curY), ImVec2(display.x, externalConflictH), outCommand);
@@ -711,7 +717,9 @@ namespace Horo::Editor {
         ImGui::PopStyleColor(4);
     }
 
-    void EditorWorkspaceView::DrawRecoveryBar(const ImVec2 &pos, const ImVec2 &size, EditorWorkspaceViewCommandData &outCommand) const {
+    /** @copydoc EditorWorkspaceView::DrawRecoveryBar */
+    void EditorWorkspaceView::DrawRecoveryBar(const ImVec2 &pos, const ImVec2 &size, const EditorWorkspaceViewModel &viewModel,
+                                              const bool paired, EditorWorkspaceViewCommandData &outCommand) const {
         ImGui::SetNextWindowPos(pos);
         ImGui::SetNextWindowSize(size);
         ImGui::SetNextWindowBgAlpha(1.0F);
@@ -719,48 +727,61 @@ namespace Horo::Editor {
         ImGui::PushStyleColor(ImGuiCol_Border, Theme::Warn());
         ImGui::PushStyleVar(ImGuiStyleVar_WindowRounding, 0.0F);
         ImGui::PushStyleVar(ImGuiStyleVar_WindowBorderSize, 1.0F);
-        ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(12.0F, 0.0F));
-        ImGui::Begin("##SceneRecoveryBar", nullptr,
+        ImGui::Begin(paired ? "##PrefabApplyRecoveryBar" : "##SceneRecoveryBar", nullptr,
                      ImGuiWindowFlags_NoTitleBar | ImGuiWindowFlags_NoResize | ImGuiWindowFlags_NoMove | ImGuiWindowFlags_NoScrollbar |
                          ImGuiWindowFlags_NoSavedSettings);
 
-        const std::string &message = m_context.localization.Get("editor", "workspace.recovery.available");
-        const std::string &restore = m_context.localization.Get("editor", "workspace.recovery.restore");
-        const std::string &discard = m_context.localization.Get("editor", "workspace.recovery.discard");
-        constexpr float buttonWidth = 96.0F;
+        const auto messageKey = !paired                         ? "workspace.recovery.available"
+                                : viewModel.prefabApplyRecovery ? "workspace.paired_recovery.available"
+                                : viewModel.prefabApplyRecoveryNotice == PrefabApplyRecoveryNotice::Reopen
+                                    ? "workspace.paired_recovery.reopen"
+                                    : "workspace.paired_recovery.invalid";
+        const auto &message = m_context.localization.Get("editor", messageKey);
         constexpr float buttonHeight = 28.0F;
-        constexpr float gap = 8.0F;
+        const float padding = Ui::ScaledLayoutValue(12.0F);
+        const float minX = pos.x + padding;
+        const float maxX = pos.x + size.x - padding;
         const float buttonY = pos.y + (size.y - buttonHeight) * 0.5F;
-        const float discardX = pos.x + size.x - 12.0F - buttonWidth;
-        const float restoreX = discardX - gap - buttonWidth;
-        const float messageMaxX = restoreX - 12.0F;
+        float messageMaxX = maxX;
+        const auto drawAction = [&](const char *key, const Ui::ButtonVariant variant) {
+            const auto &label = m_context.localization.Get("editor", key);
+            const float available = (std::max)(0.0F, messageMaxX - minX);
+            const float width = (std::min)(available, ImGui::CalcTextSize(label.c_str()).x + padding * 2.0F);
+            if (width <= 0.0F)
+                return false;
+            const float x = messageMaxX - width;
+            messageMaxX = x - Ui::ScaledLayoutValue(8.0F);
+            ImGui::SetCursorScreenPos(ImVec2(x, buttonY));
+            return Ui::Button({.label = label.c_str(),
+                               .size = ImVec2(width, buttonHeight),
+                               .variant = variant,
+                               .componentSize = Ui::ComponentSize::Small});
+        };
 
-        ImGui::PushClipRect(ImVec2(pos.x + 12.0F, pos.y), ImVec2((std::max)(pos.x + 12.0F, messageMaxX), pos.y + size.y), true);
-        ImGui::SetCursorScreenPos(ImVec2(pos.x + 12.0F, pos.y + (size.y - ImGui::GetTextLineHeight()) * 0.5F));
-        ImGui::TextUnformatted(message.c_str());
-        ImGui::PopClipRect();
-
-        ImGui::SetCursorScreenPos(ImVec2(restoreX, buttonY));
-        if (Ui::Button(Ui::ButtonProps{
-                .label = restore.c_str(),
-                .size = ImVec2(buttonWidth, buttonHeight),
-                .variant = Ui::ButtonVariant::Primary,
-                .componentSize = Ui::ComponentSize::Small,
-            })) {
-            outCommand.command = EditorWorkspaceViewCommand::RestoreSceneRecovery;
+        using enum EditorWorkspaceViewCommand;
+        if (paired) {
+            if (viewModel.prefabApplyRecovery && drawAction("workspace.paired_recovery.review", Ui::ButtonVariant::Primary)) {
+                outCommand.command = ReviewPrefabApplyRecovery;
+                outCommand.prefabApplyRecovery = viewModel.prefabApplyRecovery;
+            }
+        } else {
+            if (drawAction("workspace.recovery.discard", Ui::ButtonVariant::Secondary))
+                outCommand.command = DiscardSceneRecovery;
+            if (drawAction("workspace.recovery.restore", Ui::ButtonVariant::Primary))
+                outCommand.command = RestoreSceneRecovery;
         }
-        ImGui::SetCursorScreenPos(ImVec2(discardX, buttonY));
-        if (Ui::Button(Ui::ButtonProps{
-                .label = discard.c_str(),
-                .size = ImVec2(buttonWidth, buttonHeight),
-                .variant = Ui::ButtonVariant::Secondary,
-                .componentSize = Ui::ComponentSize::Small,
-            })) {
-            outCommand.command = EditorWorkspaceViewCommand::DiscardSceneRecovery;
+
+        if (messageMaxX > minX) {
+            ImGui::PushClipRect(ImVec2(minX, pos.y), ImVec2(messageMaxX, pos.y + size.y), true);
+            ImGui::SetCursorScreenPos(ImVec2(minX, pos.y + (size.y - ImGui::GetTextLineHeight()) * 0.5F));
+            ImGui::TextUnformatted(message.c_str());
+            if (ImGui::IsItemHovered() && ImGui::CalcTextSize(message.c_str()).x > messageMaxX - minX)
+                Ui::ShowTooltip(message.c_str(), &m_context.theme.fonts);
+            ImGui::PopClipRect();
         }
 
         ImGui::End();
-        ImGui::PopStyleVar(3);
+        ImGui::PopStyleVar(2);
         ImGui::PopStyleColor(2);
     }
 

@@ -1,6 +1,8 @@
 #include "Horo/Runtime/Ui/UiRenderGeometry.h"
 
 #include "Horo/Runtime/Ui/UiErrors.h"
+#include "Horo/Runtime/Ui/UiVisualAccessibility.h"
+#include "UiCpuWorkProbe.h"
 #include "UiRenderGeometryInternal.h"
 
 #include <algorithm>
@@ -30,7 +32,7 @@ namespace Horo::Runtime::Ui {
         inline constexpr std::uint64_t BuildingLease = std::numeric_limits<std::uint64_t>::max();
 
         [[nodiscard]] constexpr bool IsKnown(const UiRenderGeometryPrimitive value) noexcept {
-            return value >= UiRenderGeometryPrimitive::SolidRectangle && value <= UiRenderGeometryPrimitive::NineSliceRectangle;
+            return value >= UiRenderGeometryPrimitive::SolidRectangle && value <= UiRenderGeometryPrimitive::VisualIndicators;
         }
 
         [[nodiscard]] bool FitsRange(const std::uint32_t first, const std::uint32_t count, const std::size_t size) noexcept {
@@ -77,6 +79,8 @@ namespace Horo::Runtime::Ui {
                 key.primitive = SolidRectangle;
             else if constexpr (std::is_same_v<DrawType, UiBorderDraw>)
                 key.primitive = BorderRectangle;
+            else if constexpr (std::is_same_v<DrawType, UiVisualIndicatorDraw>)
+                key.primitive = VisualIndicators;
             else if constexpr (std::is_same_v<DrawType, UiImageDraw>) {
                 key.primitive = ImageRectangle;
                 key.resource = draw.resource;
@@ -109,6 +113,8 @@ namespace Horo::Runtime::Ui {
                 const bool visible = draw.width > 0 && command.rect.extent.width > 0 && command.rect.extent.height > 0;
                 return Result<std::array<std::size_t, 2>>::Success(visible ? std::array<std::size_t, 2>{16, 24}
                                                                            : std::array<std::size_t, 2>{0, 0});
+            } else if constexpr (std::is_same_v<DrawType, UiVisualIndicatorDraw>) {
+                return Result<std::array<std::size_t, 2>>::Success({0, 0});
             } else {
                 if (draw.run >= snapshot.TextRuns().size())
                     return Failure<std::array<std::size_t, 2>>(UiErrors::RenderGeometryInvalid);
@@ -320,6 +326,27 @@ namespace Horo::Runtime::Ui {
             }, command.payload);
         }
 
+        /** @brief Realizes a stable indicator slot without allocating when state or visibility changes. */
+        [[nodiscard]] Result<void> AppendIndicators(const UiRenderSnapshot &snapshot, const UiDrawCommand &command,
+                                                    const UiLogicalTransform &transform, const UiVisualStateMask state) {
+            if (!HasUiVisualIndicators(state) || command.opacity == 0.0F)
+                return Result<void>::Success();
+            std::array<UiDrawCommand, UiVisualIndicatorLimits::Commands> shapes;
+            const auto count = ProjectUiVisualIndicators(state, command, shapes);
+            if (count.HasError())
+                return Result<void>::Failure(count.ErrorValue());
+            for (const auto &shape : std::span<const UiDrawCommand>{shapes}.first(count.Value())) {
+                const auto required = RequiredGeometry(snapshot, shape);
+                if (required.HasError())
+                    return Result<void>::Failure(required.ErrorValue());
+                if (required.Value()[0] > limits.vertices - vertices.size() || required.Value()[1] > limits.indices - indices.size())
+                    return Failure(UiErrors::RenderGeometryCapacityExceeded);
+                if (const auto added = AppendCommand(snapshot, shape, transform); added.HasError())
+                    return added;
+            }
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> ApplyPixelSnapping(const UiResolvedScreenCanvas &canvas,
                                                       const std::span<UiRenderVertex> targetVertices) const {
             if (!canvas.IsValid())
@@ -370,7 +397,9 @@ namespace Horo::Runtime::Ui {
                 const auto firstVertex = vertices.size();
                 const auto firstIndex = indices.size();
                 const auto &transform = snapshot.Transforms()[command.transform];
-                const auto appendResult = AppendCommand(snapshot, command, transform);
+                const auto *indicators = std::get_if<UiVisualIndicatorDraw>(&command.payload);
+                const auto appendResult = indicators ? AppendIndicators(snapshot, command, transform, indicators->state)
+                                                     : AppendCommand(snapshot, command, transform);
                 if (appendResult.HasError())
                     return appendResult;
                 batch->vertexCount += static_cast<std::uint32_t>(vertices.size() - firstVertex);
@@ -398,6 +427,7 @@ namespace Horo::Runtime::Ui {
     /** @brief Preallocated geometry slots for one exact view. */
     struct UiRenderGeometryArena::Storage final {
         UiRenderGeometryArenaDescriptor descriptor;
+        UiCpuWorkStatistics cpuWork{descriptor.measureCpuWork};
         UiRenderGeometryArenaState lifecycle{UiRenderGeometryArenaState::Active};
         std::vector<std::shared_ptr<UiRenderGeometryPlan::Storage>> slots;
         std::size_t nextSlot{};
@@ -523,6 +553,36 @@ namespace Horo::Runtime::Ui {
         return storage_->batches;
     }
 
+    /** @copydoc UiRenderGeometryPlan::Inspect */
+    Result<UiRenderGeometryInspection> UiRenderGeometryPlan::Inspect(const std::size_t maximumIndices) const {
+        using Inspection = UiRenderGeometryInspection;
+        if (!IsValid())
+            return Failure<Inspection>(UiErrors::RenderGeometryLifecycleUnavailable);
+        const auto indices = Indices();
+        if (indices.size() > maximumIndices)
+            return Failure<Inspection>(UiErrors::RenderGeometryCapacityExceeded);
+        const auto batches = Batches();
+        const auto vertices = Vertices();
+        const auto &descriptor = Descriptor();
+        const auto clipped = std::ranges::count_if(batches, [](const UiRenderGeometryBatch &batch) {
+            return batch.key.clip != NoUiRenderIndex;
+        });
+        double twiceArea{};
+        // Published geometry owns complete triangle triples with validated indices.
+        for (std::size_t index = 0; index < indices.size(); index += 3) {
+            const auto &a = vertices[indices[index]];
+            const auto &b = vertices[indices[index + 1]];
+            const auto &c = vertices[indices[index + 2]];
+            twiceArea += std::abs((static_cast<double>(b.x) - a.x) * (static_cast<double>(c.y) - a.y) -
+                                  (static_cast<double>(b.y) - a.y) * (static_cast<double>(c.x) - a.x));
+        }
+        constexpr double twiceSquareUnitsPerSquareDip = 2.0 * UiScalarUnitsPerDip * UiScalarUnitsPerDip;
+        return Result<Inspection>::Success(
+            {descriptor.view, descriptor.snapshotRevision, descriptor.batchCount, descriptor.vertexCount, descriptor.indexCount,
+             static_cast<std::uint32_t>(SourceSnapshot().Clips().size()), static_cast<std::uint32_t>(clipped),
+             vertices.size_bytes() + indices.size_bytes() + batches.size_bytes(), twiceArea / twiceSquareUnitsPerSquareDip});
+    }
+
     /** @copydoc UiRenderGeometryArena::Create */
     Result<UiRenderGeometryArena> UiRenderGeometryArena::Create(const UiRenderGeometryArenaDescriptor &descriptor) {
         if (!descriptor.view.IsValid())
@@ -555,6 +615,7 @@ namespace Horo::Runtime::Ui {
                                                                       const UiResolvedScreenCanvas *canvas) {
         if (!storage_)
             return Failure<UiRenderGeometryPlan>(UiErrors::RenderGeometryLifecycleUnavailable);
+        UiCpuWorkProbe work{storage_->cpuWork};
         if (storage_->lifecycle != UiRenderGeometryArenaState::Active) {
             ++storage_->failedBuilds;
             return Failure<UiRenderGeometryPlan>(UiErrors::RenderGeometryLifecycleUnavailable);
@@ -582,6 +643,7 @@ namespace Horo::Runtime::Ui {
         storage_->peakVertices = std::max(storage_->peakVertices, static_cast<std::uint32_t>(slot->vertices.size()));
         storage_->peakIndices = std::max(storage_->peakIndices, static_cast<std::uint32_t>(slot->indices.size()));
         storage_->peakBatches = std::max(storage_->peakBatches, static_cast<std::uint32_t>(slot->batches.size()));
+        work.Succeed();
         return Result<UiRenderGeometryPlan>::Success(UiRenderGeometryPlan{std::move(slot)});
     }
 
@@ -609,6 +671,11 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiRenderGeometryArena::State */
     UiRenderGeometryArenaState UiRenderGeometryArena::State() const noexcept {
         return storage_ ? storage_->lifecycle : UiRenderGeometryArenaState::Closed;
+    }
+
+    /** @copydoc UiRenderGeometryArena::CpuWorkStatistics */
+    UiCpuWorkStatistics UiRenderGeometryArena::CpuWorkStatistics() const noexcept {
+        return storage_ ? storage_->cpuWork : UiCpuWorkStatistics{};
     }
 
     /** @copydoc UiRenderGeometryArena::Statistics */

@@ -9,6 +9,8 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cstring>
+#include <format>
 #include <memory>
 #include <new>
 #include <string_view>
@@ -17,6 +19,12 @@
 
 namespace Horo::Render::Detail {
     namespace {
+        /** @brief Verifies that a successful native copy published this exact coherent readback receipt. */
+        bool IsCompletedCoverageCopy(const VulkanGraphResourceState &state, const RenderTimelinePoint completion, const std::size_t bytes) {
+            return completion.IsValid() && state.completion == completion && state.hasNativeState && state.contentsDefined &&
+                   state.logical.operation == RenderGraphSynchronizationOperation::CopyDestination && state.coverageReadbackBytes == bytes;
+        }
+
         [[nodiscard]] Error ResourceError(const ErrorCodeDescriptor &code, std::string message) {
             return MakeError(code, std::move(message));
         }
@@ -97,6 +105,9 @@ namespace Horo::Render::Detail {
             std::uint64_t vfxRevision{};
             std::uint32_t vfxInstances{};
             bool vfxPublished{};
+            VulkanUiPaintPublication uiPaint;
+            std::uint64_t lastUiPaintRevision{};
+            bool coverageInputSealed{};
         };
 
         struct Texture final : AllocationResource<VkImage, PFN_vkDestroyImage> {
@@ -104,6 +115,7 @@ namespace Horo::Render::Detail {
             RenderTextureDescriptor descriptor;
             VulkanGraphResourceState graphState;
             VkImageView colorView{VK_NULL_HANDLE};
+            VkImageView stencilView{VK_NULL_HANDLE};
             PFN_vkDestroyImageView destroyView{};
             bool borrowedView{};
 
@@ -112,6 +124,8 @@ namespace Horo::Render::Detail {
                     externalSource->RecordNativeRetirement(graphState.logical, graphState.hasNativeState);
                 if (colorView != VK_NULL_HANDLE && !borrowedView)
                     destroyView(this->device, colorView, nullptr);
+                if (stencilView != VK_NULL_HANDLE)
+                    destroyView(this->device, stencilView, nullptr);
             }
         };
 
@@ -167,16 +181,16 @@ namespace Horo::Render::Detail {
             PFN_vkDestroyImageView destroyImageView{nullptr};
         };
 
-        Result<void> MapParticleBuffer(Buffer &buffer) {
+        /** @brief Maps an allocator-proven coherent buffer for its exact resident lifetime. */
+        Result<void> MapCoherentBuffer(Buffer &buffer) {
             if (buffer.descriptor.access != RenderBufferAccess::HostVisible)
-                return Result<void>::Failure(ResourceError(VulkanBackendErrors::MemoryTypeUnavailable,
-                                                           "Particle mapping requires allocator-proven coherent memory."));
+                return Result<void>::Failure(
+                    ResourceError(VulkanBackendErrors::MemoryTypeUnavailable, "Host mapping requires allocator-proven coherent memory."));
             if (buffer.mapped)
                 return Result<void>::Success();
             void *mapped{};
             if (dispatch.mapMemory(device, buffer.memory, 0, buffer.descriptor.byteSize, 0, &mapped) != VK_SUCCESS || !mapped)
-                return Result<void>::Failure(
-                    ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Particle coherent memory mapping failed."));
+                return Result<void>::Failure(ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Coherent buffer mapping failed."));
             buffer.mapped = mapped;
             buffer.unmap = dispatch.unmapMemory;
             return Result<void>::Success();
@@ -314,6 +328,10 @@ namespace Horo::Render::Detail {
                 return true;
             if (initialData.size() > buffer.descriptor.byteSize)
                 return false;
+            if (buffer.mapped) {
+                std::ranges::copy(initialData, static_cast<std::byte *>(buffer.mapped));
+                return true;
+            }
             void *mapped{nullptr};
             if (dispatch.mapMemory(device, buffer.memory, 0, initialData.size(), 0, &mapped) != VK_SUCCESS)
                 return false;
@@ -478,6 +496,11 @@ namespace Horo::Render::Detail {
             return Result<RenderMemoryCostPlan>::Failure(
                 ResourceError(VulkanBackendErrors::ResourceUnsupported, "Vulkan texture memory-cost query failed: format is unavailable; " +
                                                                             DescribeRenderTextureRequest(descriptor)));
+        // Vulkan may store depth and stencil separately, without the padding in the CPU texel representation.
+        constexpr std::uint64_t depthStencilContentBytes = 4U + 1U;
+        const std::uint64_t nativePayload = descriptor.format == RenderTextureFormat::Depth32FloatStencil8
+                                                ? (*payload / *RenderTextureTexelBytes(descriptor.format)) * depthStencilContentBytes
+                                                : *payload;
         const VkImageCreateInfo info = VulkanResourceConversion::ImageCreateInfo(descriptor);
         VkImage image{VK_NULL_HANDLE};
         if (impl_->dispatch.createImage(impl_->device, &info, nullptr, &image) != VK_SUCCESS)
@@ -486,15 +509,18 @@ namespace Horo::Render::Detail {
         VkMemoryRequirements requirements{};
         impl_->dispatch.getImageRequirements(impl_->device, image, &requirements);
         impl_->dispatch.destroyImage(impl_->device, image, nullptr);
-        if (!VulkanResourceConversion::RequirementsValid(requirements, *payload))
+        if (!VulkanResourceConversion::RequirementsValid(requirements, nativePayload))
             return Result<RenderMemoryCostPlan>::Failure(
-                ResourceError(VulkanBackendErrors::ResourceCreationFailed, "The Vulkan texture requirements are invalid."));
+                ResourceError(VulkanBackendErrors::ResourceCreationFailed,
+                              std::format("Invalid Vulkan texture requirements for {}, logical bytes {}, required bytes {}, alignment {}",
+                                          DescribeRenderTextureRequest(descriptor), nativePayload, requirements.size,
+                                          requirements.alignment)));
         const RenderMemoryCostPlan cost{.memoryClass = RenderMemoryClass::PersistentDevice,
                                         .allocationClass = RenderMemoryAllocationClass::Dedicated,
                                         .provenance = RenderMemoryCostProvenance::Exact,
                                         .compatibility = VulkanResourceConversion::Compatibility(requirements.memoryTypeBits,
                                                                                                  RenderMemoryClass::PersistentDevice),
-                                        .payloadBytes = *payload,
+                                        .payloadBytes = nativePayload,
                                         .requiredBytes = requirements.size,
                                         .alignment = requirements.alignment};
         return Result<RenderMemoryCostPlan>::Success(cost);
@@ -560,13 +586,91 @@ namespace Horo::Render::Detail {
             return Outcome::Failure(ResourceError(VulkanBackendErrors::ResourceRequestInvalid,
                                                   "Particle buffer usage/extent differs from its closed word ABI."));
         if (hostVisible)
-            if (const auto mapped = impl_->MapParticleBuffer(buffer); mapped.HasError())
+            if (const auto mapped = impl_->MapCoherentBuffer(buffer); mapped.HasError())
                 return Outcome::Failure(mapped.ErrorValue());
         VulkanGraphResource resource{.kind = RenderGraphResourceKind::Buffer,
                                      .buffer = buffer.handle,
                                      .bufferDescriptor = buffer.descriptor,
                                      .state = &buffer.graphState};
         return Outcome::Success({source, resource, found->second, buffer.mapped});
+    }
+
+    /** @copydoc VulkanResourceRuntime::SealCoverageInput */
+    Result<VulkanCoverageInput> VulkanResourceRuntime::SealCoverageInput(const std::uint64_t instance, const RenderBufferUsage usage,
+                                                                         const std::span<const std::byte> expected) {
+        using Outcome = Result<VulkanCoverageInput>;
+        const auto found = impl_->buffers.find(instance);
+        if (found == impl_->buffers.end())
+            return Outcome::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
+        auto &buffer = *found->second;
+        if (buffer.descriptor.access != RenderBufferAccess::HostVisible || buffer.descriptor.usage != usage ||
+            buffer.descriptor.byteSize != expected.size() || !buffer.graphState.contentsDefined || buffer.graphState.hasNativeState)
+            return Outcome::Failure(MakeError(VulkanBackendErrors::ResourceRequestInvalid));
+        if (const auto mapped = impl_->MapCoherentBuffer(buffer); mapped.HasError())
+            return Outcome::Failure(mapped.ErrorValue());
+        if (std::memcmp(buffer.mapped, expected.data(), expected.size()) != 0)
+            return Outcome::Failure(MakeError(VulkanBackendErrors::ResourceRequestInvalid));
+        buffer.coverageInputSealed = true;
+        return Outcome::Success({buffer.handle, found->second});
+    }
+
+    /** @copydoc VulkanResourceRuntime::ExactStereoCoverageCounter */
+    Result<VulkanCoverageInput> VulkanResourceRuntime::ExactStereoCoverageCounter(const std::uint64_t instance) {
+        using Outcome = Result<VulkanCoverageInput>;
+        const auto found = impl_->buffers.find(instance);
+        if (found == impl_->buffers.end())
+            return Outcome::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
+        auto &buffer = *found->second;
+        if (buffer.descriptor.access != RenderBufferAccess::HostVisible ||
+            buffer.descriptor.usage != (RenderBufferUsage::Storage | RenderBufferUsage::CopyDestination) ||
+            buffer.descriptor.byteSize != RenderGraphStereoCoverageReduction::CounterBytes)
+            return Outcome::Failure(MakeError(VulkanBackendErrors::ResourceRequestInvalid));
+        if (const auto mapped = impl_->MapCoherentBuffer(buffer); mapped.HasError())
+            return Outcome::Failure(mapped.ErrorValue());
+        return Outcome::Success({buffer.handle, found->second});
+    }
+
+    /** @copydoc VulkanResourceRuntime::ResolveOwnedCoverageView */
+    Result<VulkanDrawViewBinding> VulkanResourceRuntime::ResolveOwnedCoverageView(const std::uint64_t instance) const {
+        const auto *view = Impl::Find(impl_->views, instance);
+        if (!view || view->texture->externalSource != nullptr)
+            return Result<VulkanDrawViewBinding>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
+        return MaterialCapture().ResolveDrawView(instance);
+    }
+
+    /** @copydoc VulkanResourceRuntime::ReadStereoCoverageReduction */
+    Result<void> VulkanResourceRuntime::ReadStereoCoverageReduction(std::uint64_t instance, RenderTimelinePoint completion,
+                                                                    RenderGraphStereoCoverageReduction::Tallies &destination) {
+        const auto found = impl_->buffers.find(instance);
+        if (found == impl_->buffers.end())
+            return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
+        auto &buffer = *found->second;
+        const auto &state = buffer.graphState;
+        if (!state.coverageReduction || state.completion != completion || !state.contentsDefined ||
+            state.logical.operation != RenderGraphSynchronizationOperation::Storage ||
+            state.logical.scope != RenderGraphPipelineScope::Compute ||
+            buffer.descriptor.byteSize != RenderGraphStereoCoverageReduction::CounterBytes)
+            return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
+        if (const auto mapped = impl_->MapCoherentBuffer(buffer); mapped.HasError())
+            return mapped;
+        std::memcpy(destination.data(), buffer.mapped, sizeof(destination));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc VulkanResourceRuntime::ReadStereoCoverage */
+    Result<void> VulkanResourceRuntime::ReadStereoCoverage(std::uint64_t instance, const RenderTimelinePoint completion,
+                                                           std::span<std::byte> destination) {
+        const auto found = impl_->buffers.find(instance);
+        if (found == impl_->buffers.end())
+            return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
+        auto &buffer = *found->second;
+        if (destination.empty() || buffer.descriptor.byteSize != destination.size() ||
+            !IsCompletedCoverageCopy(buffer.graphState, completion, destination.size()))
+            return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceIdentityInvalid));
+        if (const auto mapped = impl_->MapCoherentBuffer(buffer); mapped.HasError())
+            return mapped;
+        std::memcpy(destination.data(), buffer.mapped, destination.size());
+        return Result<void>::Success();
     }
 
     Result<std::uint64_t> VulkanResourceRuntime::CreateMesh(const RenderMeshDescriptor &descriptor, const std::uint64_t vertexBuffer,
@@ -631,20 +735,27 @@ namespace Horo::Render::Detail {
             allocation != Impl::AllocationFailure::None) {
             return Result<std::uint64_t>::Failure(Impl::AllocationError(allocation, "Texture"));
         }
+        const bool depth = VulkanResourceConversion::IsDepthFormat(descriptor.format);
+        const bool attachment = HasTextureUsage(descriptor.usage, RenderTextureUsage::RenderAttachment);
         if (descriptor.dimension == RenderTextureDimension::TwoD && descriptor.depth == 1 && descriptor.mipCount == 1 &&
-            descriptor.sampleCount == 1 && HasTextureUsage(descriptor.usage, RenderTextureUsage::RenderAttachment)) {
-            const VkImageViewCreateInfo view{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
-                                             .image = texture->handle,
-                                             .viewType = descriptor.layerCount == 1 ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_2D_ARRAY,
-                                             .format = VulkanResourceConversion::TextureFormat(descriptor.format),
-                                             .subresourceRange = {VulkanResourceConversion::Aspect(
-                                                                      VulkanResourceConversion::IsDepthFormat(descriptor.format)
-                                                                          ? RenderTextureAspect::Depth
-                                                                          : RenderTextureAspect::Color),
-                                                                  0, 1, 0, descriptor.layerCount}};
+            descriptor.sampleCount == 1 && attachment) {
+            VkImageViewCreateInfo view{.sType = VK_STRUCTURE_TYPE_IMAGE_VIEW_CREATE_INFO,
+                                       .image = texture->handle,
+                                       .viewType = descriptor.layerCount == 1 ? VK_IMAGE_VIEW_TYPE_2D : VK_IMAGE_VIEW_TYPE_2D_ARRAY,
+                                       .format = VulkanResourceConversion::TextureFormat(descriptor.format),
+                                       .subresourceRange = {VulkanResourceConversion::Aspect(depth ? RenderTextureAspect::Depth
+                                                                                                   : RenderTextureAspect::Color),
+                                                            0, 1, 0, descriptor.layerCount}};
             if (impl_->dispatch.createImageView(impl_->device, &view, nullptr, &texture->colorView) != VK_SUCCESS)
                 return Result<std::uint64_t>::Failure(
-                    ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Preparing a native graph color attachment view failed."));
+                    ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Preparing the native whole graph texture view failed."));
+            if (attachment && (descriptor.format == RenderTextureFormat::Depth24Stencil8 ||
+                               descriptor.format == RenderTextureFormat::Depth32FloatStencil8)) {
+                view.subresourceRange.aspectMask = VK_IMAGE_ASPECT_DEPTH_BIT | VK_IMAGE_ASPECT_STENCIL_BIT;
+                if (impl_->dispatch.createImageView(impl_->device, &view, nullptr, &texture->stencilView) != VK_SUCCESS)
+                    return Result<std::uint64_t>::Failure(
+                        ResourceError(VulkanBackendErrors::ResourceCreationFailed, "Preparing a native stencil attachment view failed."));
+            }
         }
         return impl_->Register(impl_->textures, std::move(texture));
     }
@@ -762,6 +873,7 @@ namespace Horo::Render::Detail {
     }
 
 #include "VulkanMaterialCapture.inl"
+#include "VulkanUiPaintUpload.inl"
 
     /** @copydoc VulkanResourceRuntime::CaptureGraphResources */
     Result<void> VulkanResourceRuntime::CaptureGraphResources(const RenderGraphExecutionRequest &request,
@@ -796,6 +908,7 @@ namespace Horo::Render::Detail {
                         ResourceError(VulkanBackendErrors::ResourceIdentityInvalid, "A graph texture identity is foreign or retired."));
                 captured.image = found->second->handle;
                 captured.colorView = found->second->colorView;
+                captured.stencilView = found->second->stencilView;
                 captured.textureDescriptor = found->second->descriptor;
                 captured.state = &found->second->graphState;
                 retention.resources.push_back(found->second);

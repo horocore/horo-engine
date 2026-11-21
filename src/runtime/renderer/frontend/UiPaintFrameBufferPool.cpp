@@ -39,12 +39,19 @@ namespace Horo::Render {
     /** @copydoc UiPaintFrameBufferPool::Create */
     Result<std::unique_ptr<UiPaintFrameBufferPool>> UiPaintFrameBufferPool::Create(RenderFrontend &frontend, UiPaintFrameBudget budget,
                                                                                    std::uint32_t slots) {
+        return CreateInternal(frontend, budget, slots, false);
+    }
+
+    /** @copydoc UiPaintFrameBufferPool::CreateInternal */
+    Result<std::unique_ptr<UiPaintFrameBufferPool>> UiPaintFrameBufferPool::CreateInternal(RenderFrontend &frontend,
+                                                                                           UiPaintFrameBudget budget, std::uint32_t slots,
+                                                                                           const bool exactSceneKernel) {
         using Creation = Result<std::unique_ptr<UiPaintFrameBufferPool>>;
         if (const auto admission = frontend.RequireOpenOwner(); admission.HasError())
             return Creation::Failure(admission.ErrorValue());
         if (!budget.IsValid() || slots == 0 || slots > 8)
             return Creation::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
-        if (!frontend.Capabilities().support.features.Supports(RenderCapability::UiPaint))
+        if (!exactSceneKernel && !frontend.Capabilities().support.features.Supports(RenderCapability::UiPaint))
             return Creation::Failure(MakeError(UiPaintFrameErrors::Unavailable));
         if (slots > frontend.Capabilities().support.limits.maxFramesInFlight)
             return Creation::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
@@ -82,6 +89,14 @@ namespace Horo::Render {
                                                                 std::span<const std::uint32_t> indices,
                                                                 std::span<const UiPaintParameters> parameters,
                                                                 const CancellationToken &cancellation) {
+        return UpdateInternal(slot, vertices, indices, parameters, cancellation, {});
+    }
+
+    /** @copydoc UiPaintFrameBufferPool::UpdateInternal */
+    Result<UploadedUiPaintFrame> UiPaintFrameBufferPool::UpdateInternal(std::uint32_t slot, std::span<const UiPaintVertex> vertices,
+                                                                        std::span<const std::uint32_t> indices,
+                                                                        std::span<const UiPaintParameters> parameters,
+                                                                        const CancellationToken &cancellation, const FrameToken frame) {
         using Upload = Result<UploadedUiPaintFrame>;
         if (closed_ || std::this_thread::get_id() != owner_ || slot >= count_ || vertices.size() > budget_.vertices ||
             indices.size() > budget_.indices || parameters.size() > budget_.parameters ||
@@ -100,7 +115,7 @@ namespace Horo::Render {
             return Upload::Failure(std::move(*failure));
         const auto revision = revisions_[slot] + 1;
         const UiPaintFrameUpdate update{revision, vertices, indices, parameters, cancellation};
-        if (const auto uploaded = state->frontend->UpdateUiPaintFrame(slots_[slot], update); uploaded.HasError())
+        if (const auto uploaded = state->frontend->UpdateUiPaintFrameInternal(frame, slots_[slot], update); uploaded.HasError())
             return Upload::Failure(uploaded.ErrorValue());
         revisions_[slot] = revision;
         return Upload::Success({slots_[slot], revision});

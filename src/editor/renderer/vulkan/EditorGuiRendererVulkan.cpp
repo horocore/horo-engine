@@ -109,7 +109,7 @@ namespace Horo::Editor {
                                          std::span{pixels, static_cast<std::size_t>(width) * static_cast<std::size_t>(height) * 4}});
         if (font.HasError())
             return fail(font.ErrorValue());
-        fontIdentity_ = font.Value();
+        AdoptFontTexture(font.Value());
         if (const auto prepared = InitializeSlots(); prepared.HasError())
             return fail(prepared.ErrorValue());
         if (const auto native = InitializeNative(); native.HasError())
@@ -117,7 +117,7 @@ namespace Horo::Editor {
         platformInitialized_ = ImGui_ImplSDL3_InitForVulkan(&window_);
         if (!platformInitialized_)
             return fail(MakeError(RendererErrors::GuiNativeInitializationFailed));
-        ImGui::GetIO().Fonts->SetTexID(static_cast<ImTextureID>(fontIdentity_));
+        ImGui::GetIO().Fonts->SetTexID(static_cast<ImTextureID>(FontTexture()));
         return Result<void>::Success();
     }
 
@@ -125,7 +125,7 @@ namespace Horo::Editor {
     Result<void> EditorGuiRendererVulkan::InitializeNative() {
         if (!ImGui_ImplVulkan_LoadFunctions(&Load, this))
             return Result<void>::Failure(MakeError(RendererErrors::GuiNativeInitializationFailed));
-        const auto font = Resolve(fontIdentity_);
+        const auto font = Resolve(FontTexture());
         if (font.HasError())
             return Result<void>::Failure(font.ErrorValue());
         const auto view = Render::Detail::RenderFrontendResourceAccess::BackendInstance(frontend_, font.Value().view);
@@ -207,8 +207,8 @@ namespace Horo::Editor {
         if (platformInitialized_)
             ImGui_ImplSDL3_Shutdown();
         platformInitialized_ = false;
-        if (ImGui::GetCurrentContext() && static_cast<std::uintptr_t>(ImGui::GetIO().Fonts->TexID) == fontIdentity_)
+        if (ImGui::GetCurrentContext() && static_cast<std::uintptr_t>(ImGui::GetIO().Fonts->TexID) == FontTexture())
             ImGui::GetIO().Fonts->SetTexID(0);
-        fontIdentity_ = 0;
+        AdoptFontTexture(0);
     }
 }  // namespace Horo::Editor

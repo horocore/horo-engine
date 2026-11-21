@@ -1,8 +1,105 @@
 #include "AllocationProbe.h"
 #include "HeadlessAnimationProductFixture.h"
+#include "HeadlessReplicaAnimationInputs.h"
+#include "Horo/Network/SceneReplicationApplyOwner.h"
+#include "ReplicationStateCodecTestSupport.h"
+
+#include <catch2/generators/catch_generators.hpp>
 
 namespace Horo::Network::AnimationProduct {
+    TEST_CASE("Replica animation consumes only committed public fields for its exact Scene actor",
+              "[animation][headless][product][replica-inputs]") {
+        namespace Rep = StateCodecTestSupport;
+        using App::HeadlessNetworkDetail::ReplicaAnimationInputs;
+        Rep::CodecFixture fixture;
+        auto mapping = Rep::Object();
+        const Runtime::SceneObjectId authored{1};
+        mapping.provenance.authoredObject = authored;
+        Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, {1}};
+        Runtime::RuntimeEntityDefinition definition;
+        definition.object = authored;
+        builder.Add(definition);
+        std::shared_ptr<Runtime::RuntimeScene> scene =
+            Take(Runtime::RuntimeScene::Create(Take(std::move(builder).Build()), mapping.entity.runtime));
+        REQUIRE(scene->View().Find(authored) == mapping.entity);
+        const auto field = Rep::FieldIdValue(1);
+        const bool velocity = GENERATE(false, true);
+        const auto property = velocity ? SceneReplicationProperty::LinearVelocityX : SceneReplicationProperty::TranslationX;
+        const std::array sceneBindings{SceneReplicationFieldBinding{field, property}};
+        const auto parameter = Take(Animation::GraphParameterId::Create(731));
+        const std::array bindings{App::HeadlessReplicaAnimationBinding{authored, field, parameter}};
+        const auto inputs = std::make_shared<ReplicaAnimationInputs>(bindings);
+        const auto sceneWriter =
+            Take(SceneReplicationApplyOwner::Create(scene, mapping.provenance.schema, mapping.provenance.schemaVersion, sceneBindings));
+        const auto writer = ReplicaAnimationInputs::Bind(inputs, sceneWriter);
+        CancellationSource world;
+        const CancellationToken live;
+        const Runtime::FixedStepContext tick{.cancellation = live};
+        const auto prepare = [&](ReplicationDecodedState decoded) {
+            const std::array updates{ReplicationApplyUpdate{mapping, Rep::Recipient(), std::move(decoded), live, world.Token()}};
+            return Take(writer->Prepare(updates));
+        };
+        const auto read = [&] {
+            const auto snapshot = inputs->Read(mapping.entity, tick);
+            REQUIRE(snapshot.parameters.size() == 1);
+            CHECK(snapshot.parameters.front().id == parameter);
+            return std::get<float>(snapshot.parameters.front().value);
+        };
+        auto initial = prepare(Take(fixture.codec->Decode(fixture.full, mapping)));
+        CHECK(inputs->Read(mapping.entity, tick).parameters.empty());
+        REQUIRE(initial->Commit(live).HasValue());
+        CHECK(read() == 1.0F);
+        CHECK(Take(scene->View().Get(mapping.entity)).localTransform->translation.x == (velocity ? 0.0F : 1.0F));
+        CHECK(inputs->Read({Runtime::SceneRuntimeId{90}, mapping.entity.entity}, tick).parameters.empty());
+
+        fixture.capture.Capture(2, 2.0);
+        auto next = prepare(Take(fixture.codec->Decode(Take(fixture.codec->Encode(fixture.capture.Pin())), mapping)));
+        CancellationSource cancelled;
+        cancelled.RequestCancellation();
+        REQUIRE(next->Commit(cancelled.Token()).HasError());
+        CHECK(read() == 1.0F);
+        auto retry = prepare(Take(fixture.codec->Decode(Take(fixture.codec->Encode(fixture.capture.Pin())), mapping)));
+        REQUIRE(retry->Commit(live).HasValue());
+        CHECK(read() == 2.0F);
+        CHECK(Take(scene->View().Get(mapping.entity)).localTransform->translation.x == (velocity ? 0.0F : 2.0F));
+        world.RequestCancellation();
+        CHECK(inputs->Read(mapping.entity, tick).parameters.empty());
+    }
+
 #if HORO_TEST_PHYSICS_NATIVE
+    TEST_CASE("Actual Headless product resolves cooked root motion without a gameplay command",
+              "[animation][headless][product][root-motion]") {
+        const bool listenPair = GENERATE(false, true);
+        Fixture fixture(true, listenPair, {}, true);
+        CHECK_FALSE(fixture.trace->Observe().rootMotion);
+        REQUIRE(fixture.Tick().HasValue());
+        const auto first = fixture.trace->Observe().rootMotion;
+        REQUIRE(first);
+        CHECK(first->disposition == Runtime::SceneRootMotionDisposition::Consumed);
+        CHECK(first->request.id.tick.Value() == 1);
+        CHECK(std::abs(first->applied.translation.x - 0.2F) < 0.00001F);
+        CHECK(std::abs(first->remaining.translation.x) < 0.00001F);
+        const auto unbound = App::InspectHeadlessAnimationEntity(*fixture.trace->entries[0].service, {4});
+        REQUIRE(unbound);
+        const auto unavailable = Take(fixture.trace->Owner()->Query(*unbound)).rootMotion;
+        REQUIRE(unavailable);
+        CHECK(unavailable->disposition == Runtime::SceneRootMotionDisposition::Unavailable);
+        REQUIRE(fixture.Tick().HasValue());
+        const auto second = fixture.trace->Observe().rootMotion;
+        REQUIRE(second);
+        CHECK(second->request.id.tick.Value() == 2);
+        CHECK(second->request.id.generation > first->request.id.generation);
+        CHECK(second->disposition == Runtime::SceneRootMotionDisposition::Consumed);
+        if (listenPair) {
+            const Runtime::SceneRuntimeId client{72};
+            const auto *replica = fixture.trace->Owner(client);
+            REQUIRE(replica);
+            const auto observed = Take(replica->Query(fixture.trace->Entity(client)));
+            REQUIRE(observed.component);
+            CHECK_FALSE(observed.rootMotion);
+        }
+    }
+
     TEST_CASE("Actual configured Headless product commits real cooked Graph or Clip pose once after native fixed work",
               "[animation][headless][product][canonical]") {
         bool clip{};
@@ -126,7 +223,8 @@ namespace Horo::Network::AnimationProduct {
 
     TEST_CASE("Actual Headless successful steady native Scene and Animation fixed frame performs no allocation",
               "[animation][headless][product][allocation]") {
-        Fixture fixture;
+        const bool rootMotion = GENERATE(false, true);
+        Fixture fixture(rootMotion, false, {}, rootMotion);
         REQUIRE(fixture.Tick().HasValue());
         REQUIRE(fixture.Tick().HasValue());
         auto result = Result<void>::Success();
@@ -138,7 +236,9 @@ namespace Horo::Network::AnimationProduct {
         }
         REQUIRE(result.HasValue());
         CHECK(measured.requests == 0);
-        CHECK(fixture.trace->Observe().component->currentPose.generation.Value() == 3);
+        const auto observed = fixture.trace->Observe();
+        CHECK(observed.component->currentPose.generation.Value() == 3);
+        CHECK(observed.rootMotion.has_value() == rootMotion);
     }
 
     TEST_CASE("Actual transport-qualified Headless listen pair aborts both real native Animation owners on later-world failure",
@@ -149,6 +249,7 @@ namespace Horo::Network::AnimationProduct {
         REQUIRE(first.component);
         const auto *client = fixture.trace->Owner({72});
         REQUIRE(client);
+        REQUIRE(Take(client->Query(fixture.trace->Entity({72}))).component);
         CHECK(first.instance.owner.Value() == 1001);
         fixture.trace->expected = first.component->currentPose;
         fixture.trace->failScene = {72};
@@ -157,10 +258,36 @@ namespace Horo::Network::AnimationProduct {
         REQUIRE(failed.HasError());
         CHECK(failed.ErrorValue().code.Value() == "test.headless.native_after_tick");
         CHECK(fixture.trace->observedOldPublication);
-        CHECK(fixture.inputs->calls == 4);
+        CHECK(fixture.inputs->calls == 2);
         CHECK(fixture.trace->Owner({71}) == nullptr);
         CHECK(fixture.trace->Owner({72}) == nullptr);
         CHECK(fixture.host->RunFrame().HasError());
+    }
+
+    TEST_CASE("Connected animation reads only its explicit presentation source in a real listen pair",
+              "[animation][headless][product][listen][presentation]") {
+        const auto publicInputs = std::make_shared<Inputs>();
+        publicInputs->playbackRate = 500'000;
+        Fixture fixture(false, true, publicInputs);
+        REQUIRE(fixture.Tick().HasValue());
+        const auto server = fixture.trace->Observe();
+        REQUIRE(server.component);
+        const auto *client = fixture.trace->Owner({72});
+        REQUIRE(client);
+        const auto replica = Take(client->Query(fixture.trace->Entity({72})));
+        REQUIRE(replica.component);
+        CHECK(server.component->domain == Animation::AnimationEvaluationDomain::AuthoritativeSimulation);
+        CHECK(replica.component->domain == Animation::AnimationEvaluationDomain::Presentation);
+
+        CHECK(fixture.inputs->calls == 2);
+        CHECK(fixture.inputs->lastScene == Runtime::SceneRuntimeId{71});
+        CHECK(publicInputs->calls == 2);
+        CHECK(publicInputs->lastScene == Runtime::SceneRuntimeId{72});
+        std::array<Math::Transform, 1> authorityPose;
+        std::array<Math::Transform, 1> replicaPose;
+        REQUIRE(fixture.trace->Owner()->CopyPose(server.entity, server.component->currentPose, authorityPose).HasValue());
+        REQUIRE(client->CopyPose(replica.entity, replica.component->currentPose, replicaPose).HasValue());
+        CHECK(std::abs(replicaPose[0].translation.x * 2.0F - authorityPose[0].translation.x) < 0.00001F);
     }
 
     TEST_CASE("Actual Headless Scene facade retirement defers its native aggregate until exact fixed abort",
@@ -171,6 +298,7 @@ namespace Horo::Network::AnimationProduct {
         fixture.trace->closeAfterTick = true;
         const auto stopped = fixture.Tick();
         REQUIRE(stopped.HasError());
+        CHECK(fixture.trace->closeRevokedDiscovery);
         CHECK(fixture.trace->closeDeferred);
         CHECK(fixture.trace->observedOldPublication);
         CHECK(fixture.trace->Owner() == nullptr);

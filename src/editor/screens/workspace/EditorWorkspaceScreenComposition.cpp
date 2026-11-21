@@ -1,5 +1,7 @@
 #include "EditorWorkspaceScreen.h"
+#include "Horo/AI/EnvironmentQuerySchema.h"
 #include "Horo/Application/ProjectSourceDocument.h"
+#include "Horo/Editor/EditorSettingsService.h"
 #include "Horo/Editor/EditorSettingsStore.h"
 #include "Horo/Editor/NavigationViewportSnapshot.h"
 #include "Horo/Editor/WorkspaceLayoutPersistence.h"
@@ -15,13 +17,46 @@
 #include "Horo/Prefab/PrefabValueOverrides.h"
 #include "PCGPreviewWorkspace.h"
 #include "ScriptModuleHostServices.h"
+#include "editor/input/EditorInputActions.h"
+#include "editor/source_editor/SourceReviewOverlay.h"
 
+#include <algorithm>
 #include <array>
 #include <span>
 #include <utility>
 
 namespace Horo::Editor::WorkspaceScreenDetail {
     namespace {
+        /** @brief Borrows the active Decision Graph projection only for the current owner-lane call. */
+        const DecisionGraphWorkspaceDocument *ActiveDecisionDocument(const EditorWorkspaceViewModel &model) {
+            const auto active = model.workspacePanelHost.ActiveDocument();
+            const auto found = std::ranges::find_if(model.decisionGraphDocuments, [active](const auto &document) {
+                return document.identity.instance == active;
+            });
+            return found == model.decisionGraphDocuments.end() ? nullptr : &*found;
+        }
+
+        /** @brief Copies complete Problems messages only, preserving order and recording omissions. */
+        void CopyDecisionProblems(AgentEditorDiagnosticsSnapshot &snapshot,
+                                  std::span<const AI::DecisionAssetValidationDiagnostic> diagnostics) {
+            auto remaining = AgentEditorDiagnosticsSnapshot::MaximumMessageBytes;
+            for (const auto &finding : diagnostics) {
+                if (snapshot.messages.size() == AgentEditorDiagnosticsSnapshot::MaximumMessages) {
+                    snapshot.truncated = true;
+                    break;
+                }
+                const auto &code = finding.code.Value();
+                constexpr std::size_t Separator = 2;
+                if (remaining < Separator || code.size() > remaining - Separator ||
+                    finding.message.size() > remaining - Separator - code.size()) {
+                    snapshot.truncated = true;
+                    continue;
+                }
+                snapshot.messages.push_back(code + ": " + finding.message);
+                remaining -= snapshot.messages.back().size();
+            }
+        }
+
         /** @brief Composes the explicit project loader and retains its cooperative lease through cache publication. */
         PrefabHierarchySourceCapture PrefabCapture(const std::filesystem::path &root, const ProjectMutationCoordinator *mutations,
                                                    Prefab::PrefabMetricHandles metrics,
@@ -99,7 +134,20 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     }  // namespace
 
     /** @copydoc EditorWorkspaceScreen::AttachWorkspacePanels */
-    void EditorWorkspaceScreen::AttachWorkspacePanels() {
+    void EditorWorkspaceScreen::AttachWorkspacePanels(std::string_view projectIdentity) {
+        const auto activeSource = [this](SourceDocumentSnapshot &output) {
+            const auto &model = controller_->ViewModel();
+            const auto active = model.workspacePanelHost.ActiveDocument();
+            if (!active)
+                return false;
+            const auto found = std::ranges::find_if(model.sourceDocuments, [active](const SourceDocumentSnapshot &source) {
+                return source.Revision() != 0 && source.Identity().instance == *active;
+            });
+            if (found == model.sourceDocuments.end())
+                return false;
+            output = *found;
+            return true;
+        };
         PanelContext panelContext{
             .dataBus = controller_->DataBus(),
             .guiRenderer = panelServices_.guiRenderer,
@@ -123,8 +171,91 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             .extensionTheme = services_.TryGetConst<Extensions::EditorThemeFrame>(),
             .xrSimulatorArtifacts = simulatorArtifacts_,
             .xrSimulator = panelServices_.xrSimulator,
+            .platformDiagnostics = panelServices_.platformDiagnostics,
+            .sceneObjectCount = [this]() -> std::optional<std::size_t> {
+            const auto &model = controller_->ViewModel();
+            if (model.projectRoot.empty() || model.documentRevision.value == 0 || model.worldDocument)
+                return std::nullopt;
+            return model.objects.size();
+        },
+            .projectIdentity = projectIdentity,
+            .projectFileRoot = &controller_->ProjectRoot(),
+            .activeSourceSnapshot = activeSource,
+            .activeSourceRange =
+                [this, activeSource](SourceDocumentSnapshot &output, SourceContextRange &range) {
+            SourceDocumentSnapshot source;
+            if (!activeSource(source))
+                return false;
+            const auto selected = view_.ReadSourceSelection(source);
+            if (!selected)
+                return false;
+            output = std::move(source);
+            range = *selected;
+            return true;
+        },
+            .openSourceSnapshots = [this]() -> std::span<const SourceDocumentSnapshot> {
+            return controller_->ViewModel().sourceDocuments;
+        },
+            .captureSceneSelection =
+                [this] {
+            return controller_->CaptureAgentSceneSelection();
+        },
+            .agentProjectFiles = agentProjectFiles_,
+            .agentProjectReadIdentity = agentProjectReadIdentity_,
+            .captureEditorDiagnostics =
+                [this] {
+            return CaptureEditorDiagnostics();
+        },
+            .requestSourceReview =
+                [](const Proposals::ChangeSet &proposal, const Proposals::WorkspaceEditPlan &plan, const std::size_t operation,
+                   EditorWorkspaceViewCommandData &command) {
+            if (command.command != EditorWorkspaceViewCommand::None)
+                return false;
+            auto overlay = SourceReviewOverlay::Capture(proposal, plan, operation);
+            if (overlay.HasError())
+                return false;
+            command.sourceReview = std::make_shared<const SourceReviewOverlay>(std::move(overlay).Value());
+            command.command = EditorWorkspaceViewCommand::ReviewSourceProposal;
+            return true;
+        },
         };
         contributions_.panels.AttachAll(panelContext);
+    }
+
+    /** @copydoc EditorWorkspaceScreen::CaptureEditorDiagnostics */
+    std::optional<AgentEditorDiagnosticsSnapshot> EditorWorkspaceScreen::CaptureEditorDiagnostics() {
+        ReconcileEditorDiagnostics();
+        const auto *document = ActiveDecisionDocument(controller_->ViewModel());
+        if (!document || !document->validation || document->validation->Empty())
+            return std::nullopt;
+        AgentEditorDiagnosticsSnapshot snapshot{.document = document->identity.instance.Value(),
+                                                .observation = ++editorDiagnosticsSequence_};
+        CopyDecisionProblems(snapshot, document->validation->Diagnostics());
+        if (snapshot.messages.empty())
+            return std::nullopt;
+        if (!editorDiagnosticsReview_)
+            editorDiagnosticsReview_.emplace(
+                EditorDiagnosticsReview{document->identity.instance, document->revision, document->validation});
+        snapshot.lifetime = editorDiagnosticsReview_->lifetime.Token();
+        return snapshot;
+    }
+
+    /** @copydoc EditorWorkspaceScreen::ReconcileEditorDiagnostics */
+    void EditorWorkspaceScreen::ReconcileEditorDiagnostics() {
+        if (!editorDiagnosticsReview_)
+            return;
+        const auto *document = ActiveDecisionDocument(controller_->ViewModel());
+        if (!document || document->identity.instance != editorDiagnosticsReview_->document ||
+            document->revision != editorDiagnosticsReview_->revision || document->validation != editorDiagnosticsReview_->validation)
+            RevokeEditorDiagnostics();
+    }
+
+    /** @copydoc EditorWorkspaceScreen::RevokeEditorDiagnostics */
+    void EditorWorkspaceScreen::RevokeEditorDiagnostics() noexcept {
+        if (editorDiagnosticsReview_) {
+            editorDiagnosticsReview_->lifetime.RequestCancellation();
+            editorDiagnosticsReview_.reset();
+        }
     }
 
     /** @copydoc EditorWorkspaceScreen::BindPlayFactory */
@@ -168,6 +299,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return Result<void>::Failure(capturedSources.ErrorValue());
         auto sources = std::move(capturedSources).Value();
         auto simulatorArtifacts = sources.simulatorArtifacts;
+        auto agentProjectFiles = sources.world;
+        auto agentProjectReadIdentity = sources.owner.ToString();
         auto resources = PrepareUiInspectorResources(services_, projectRoot, sources.owner);
         if (resources.HasError())
             return Result<void>::Failure(resources.ErrorValue());
@@ -186,8 +319,11 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             controller_.reset();
             return Result<void>::Failure(error);
         }
+        controller_->SelectMountedWorldPlay(services_.TryGetConst<EditorMountedWorldPlaySelected>() != nullptr);
         RevokeSimulatorArtifacts();
         simulatorArtifacts_ = std::move(simulatorArtifacts);
+        agentProjectFiles_ = std::move(agentProjectFiles);
+        agentProjectReadIdentity_ = std::move(agentProjectReadIdentity);
         uiInspectorResources_ = std::move(uiInspectorResources);
         return Result<void>::Success();
     }
@@ -199,6 +335,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                                                                   PCGEditorCatalog &&catalog,
                                                                                   PCGPreviewInputs &&previewInputs) const {
         const auto *bakeDependencies = services_.TryGetConst<Application::WorldBakeDependencySource>();
+        const auto *latticeFactory = services_.TryGetConst<AI::LatticeQueryAuthoringFactory>();
+        const auto *contextAccess = services_.TryGetConst<AI::QueryContextProviderAccess>();
         return EditorWorkspaceDependencies{.assets = {.mutableAssetRegistry = projectServices_.assetRegistry,
                                                       .source = std::move(sources.registry),
                                                       .importerCatalog = projectServices_.importerCatalog},
@@ -217,6 +355,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                            .mutations = projectServices_.mutations,
                                            .durableFiles = projectServices_.durableFiles,
                                            .jobs = &services_.Get<JobSystem>(),
+                                           .sourceNavigation = {.diagnosticOutput = services_.TryGet<BuildOutputStore>()},
                                            .gameplay = BindGameplayServices(services_, host_, BindPlayFactory(projectRoot)),
                                            .localization = &context_.localization,
                                            .engineEvents = &context_.engineEvents,
@@ -231,7 +370,10 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                                       .stageFactory = BindPrefabStageFactory(projectRoot)},
                                            .procedural = {.catalog = std::move(catalog), .previewInputs = std::move(previewInputs)},
                                            .terrainCook = services_.TryGetConst<Application::TerrainAuthoringCookFactory>(),
-                                           .terrainAssets = services_.TryGetConst<Application::TerrainAuthoringAssetFactory>()};
+                                           .terrainAssets = services_.TryGetConst<Application::TerrainAuthoringAssetFactory>(),
+                                           .latticeQueryFactory = latticeFactory ? *latticeFactory : nullptr,
+                                           .querySchema = services_.TryGetConst<AI::QuerySchemaRegistry>(),
+                                           .queryContextAccess = contextAccess ? *contextAccess : AI::QueryContextProviderAccess{}};
     }
 
     /** @copydoc EditorWorkspaceScreen::RestoreExtensionWorkspace */
@@ -307,41 +449,44 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     /** @copydoc EditorWorkspaceScreen::LoadProjectInputProfile */
     void EditorWorkspaceScreen::LoadProjectInputProfile(const std::filesystem::path &projectRoot) {
         input_.previousProfile = input_.router.Profile();
-        Input::InputBindingProfile merged{.profileId = "project-composed"};
-        const auto mergeProfile = [&](const Input::InputBindingProfile &profile, const std::string &source) {
-            Result<Input::InputBindingProfile> layered = Input::MergeBindingProfiles(merged, profile);
-            if (layered.HasError()) {
-                LOG_ERROR("editor.input", "Unable to layer input profile '%s': %s", source.c_str(), layered.ErrorValue().message.c_str());
-                return false;
-            }
-            merged = std::move(layered).Value();
-            return true;
-        };
-        const auto mergeFile = [&](const std::filesystem::path &path) {
-            if (std::error_code error; !std::filesystem::exists(path, error) || error) {
-                return true;
-            }
-            const Result<Input::InputBindingProfile> loaded = Input::LoadBindingProfile(path);
-            if (loaded.HasError()) {
-                LOG_ERROR("editor.input", "Keeping last valid input profile; '%s' is invalid: %s", path.string().c_str(),
-                          loaded.ErrorValue().message.c_str());
-                return false;
-            }
-            return mergeProfile(loaded.Value(), path.string());
-        };
-
-        // Defaults are resolved by the action descriptors. Profile layers then
-        // apply from project defaults to user-wide and project-user overrides.
-        if (!mergeFile(projectRoot / ".horo" / "input.json") || !mergeProfile(*input_.previousProfile, "editor-global")) {
+        input_.profilePaths.reset();
+        const auto metadata = Application::LoadProjectMetadata(projectRoot);
+        if (metadata.HasError()) {
+            LOG_ERROR("editor.input", "Keeping last valid input profile; project metadata is unavailable: %s",
+                      metadata.ErrorValue().message.c_str());
             return;
         }
-        if (const Result<Application::ProjectMetadata> metadata = Application::LoadProjectMetadata(projectRoot);
-            metadata.HasValue() &&
-            !mergeFile(ResolveEditorSettingsHomeDirectory() / ".horo" / "input" / "projects" / (metadata.Value().projectId + ".json"))) {
+        const auto paths = Input::ResolveBindingProfilePaths(projectRoot, ResolveEditorSettingsHomeDirectory(), metadata.Value().projectId);
+        if (paths.HasError()) {
+            LOG_ERROR("editor.input", "Keeping last valid input profile; project profile path is invalid: %s",
+                      paths.ErrorValue().message.c_str());
             return;
         }
-
-        const Result<void> applied = input_.router.SetProfile(std::move(merged));
+        const auto &editorProfile = paths.Value().editorUser;
+        input_.profilePaths = paths.Value();
+        std::error_code error;
+        const bool exists = std::filesystem::exists(editorProfile, error);
+        if (error) {
+            LOG_ERROR("editor.input", "Keeping last valid input profile; editor profile is inaccessible: %s", error.message().c_str());
+            return;
+        }
+        if (!exists) {
+            const auto migrated = Input::SaveBindingProfileAtomically(editorProfile, settings_.Snapshot().settings.keymap.profile);
+            if (migrated.HasError()) {
+                LOG_ERROR("editor.input", "Keeping last valid input profile; user profile migration failed: %s",
+                          migrated.ErrorValue().message.c_str());
+                return;
+            }
+        }
+        const std::array ordered{paths.Value().projectDefaults, paths.Value().editorUser, paths.Value().projectUser};
+        auto loaded = Input::LoadBindingProfileLayers(ordered);
+        if (loaded.HasError()) {
+            LOG_ERROR("editor.input", "Keeping last valid input profile; project profile layering failed: %s",
+                      loaded.ErrorValue().message.c_str());
+            return;
+        }
+        auto merged = std::move(loaded).Value();
+        const Result<void> applied = ActivateEditorInputProfile(input_.router, std::move(merged), settings_.ContributedInputActions());
         if (applied.HasError()) {
             LOG_ERROR("editor.input", "Keeping last valid input profile for project '%s': %s", projectRoot.string().c_str(),
                       applied.ErrorValue().message.c_str());

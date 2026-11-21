@@ -724,7 +724,7 @@ namespace Horo::Log {
     /** @copydoc Logger::Write */
     void Logger::Write(const std::string_view category, const Level level, const std::string_view message,
                        const std::span<const Telemetry::Field> fields) {
-        if (!IsEnabled(level))
+        if (DiagnosticsSuppressed() || !IsEnabled(level))
             return;
 
         LogContextSnapshot context = CaptureLogContext();
@@ -752,7 +752,8 @@ namespace Horo::Log {
 
     /** @copydoc Logger::WriteEmergency */
     void Logger::WriteEmergency(const std::string_view category, const Level level, const std::string_view message) noexcept {
-        EmergencyWrite(level, category, message);
+        if (!DiagnosticsSuppressed())
+            EmergencyWrite(level, category, message);
     }
 
     /** @copydoc Logger::DumpStartupInfo */

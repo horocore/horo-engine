@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -89,12 +90,20 @@ namespace Horo::Editor {
          * @details This is not semantic text equality. Both leases retain their roots throughout comparison, preventing
          *          address reuse from identifying another publication as the same root. */
         [[nodiscard]] bool SharesStateWith(const SourceDocumentSnapshot &other) const noexcept;
+        /** @brief Observe whether the source owner still publishes this exact revision.
+         * @return False for an inert snapshot, a newer publication, or a retired owner.
+         * @details The witness can be read from a worker without calling the owner-only document service.
+         * A stale snapshot remains an immutable byte lease.
+         */
+        [[nodiscard]] bool IsCurrent() const noexcept;
         /** @brief Returns the monotonic committed observation/edit revision. @return Zero when inert. */
         [[nodiscard]] std::uint64_t Revision() const noexcept;
         /** @brief Returns the revision of the last explicitly loaded or durably saved disk base. @return Zero when inert. */
         [[nodiscard]] std::uint64_t BaseRevision() const noexcept;
         /** @brief Returns exact validated current bytes. @return Read-only call-independent borrowed view. */
         [[nodiscard]] std::string_view Text() const noexcept;
+        /** @brief Share the exact immutable text with a bounded consumer without copying the document. */
+        [[nodiscard]] std::shared_ptr<const std::string> TextLease() const noexcept;
         /** @brief Returns exact last explicitly loaded or durably saved disk bytes. @return Read-only base view. */
         [[nodiscard]] std::string_view DiskBase() const noexcept;
         /** @brief Compares current authored bytes to the saved base, not notification revisions. @return False when equal and durability is
@@ -111,6 +120,13 @@ namespace Horo::Editor {
         friend class SourceDocumentService;
         explicit SourceDocumentSnapshot(std::shared_ptr<const Detail::SourceDocumentRoot> root) noexcept;
         std::shared_ptr<const Detail::SourceDocumentRoot> root_;
+    };
+
+    /** @brief Nonempty half-open byte selection in one exact source document revision. */
+    struct SourceContextRange final {
+        std::size_t offset{};
+        std::size_t length{};
+        auto operator<=>(const SourceContextRange &) const = default;
     };
 
     /** @brief Host-issued editor-view identity, scoped to a project session; zero denotes a non-view edit. */
@@ -151,6 +167,42 @@ namespace Horo::Editor {
         std::string_view insert; /**< Synchronously borrowed, copied before publication; never retained. */
         std::optional<SourceEditingView> beforeView{};
         std::optional<SourceEditingView> afterView{};
+    };
+
+    /** @brief A patch tied to an exact owner publication, including its document incarnation. */
+    struct SourceBatchEdit final {
+        SourceDocumentSnapshot source;
+        SourceTextEdit edit;
+    };
+
+    /** @brief One document result in request order, including unchanged documents. */
+    struct SourceBatchItem final {
+        SourceDocumentSnapshot snapshot;
+        bool changed{};
+    };
+
+    /** @brief An owner-issued receipt for one atomic buffer transaction. */
+    class SourceEditBatch final {
+    public:
+        /** @brief Reads the outcome for each requested document. */
+        [[nodiscard]] std::span<const SourceBatchItem> Items() const noexcept {
+            return data_ ? std::span<const SourceBatchItem>{data_->items} : std::span<const SourceBatchItem>{};
+        }
+
+        /** @brief Reports whether each changed document retained its undo entry at publication. */
+        [[nodiscard]] bool CanUndo() const noexcept {
+            return data_ && data_->undoable;
+        }
+
+    private:
+        friend class SourceDocumentService;
+
+        struct Data final {
+            std::vector<SourceBatchItem> items;
+            bool undoable{};
+        };
+
+        std::shared_ptr<const Data> data_;
     };
 
     /** @brief One history publication plus originating view metadata.
@@ -221,6 +273,17 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<SourceDocumentSnapshot> Edit(DocumentInstanceId instance, const SourceTextEdit &edit,
                                                           CancellationToken cancellation = {});
+        /** @brief Publishes one distinct-document batch on the owner lane after checking live snapshots and disk bases.
+         * @param edits Exact source snapshots and patches, borrowed only for this call. @param cancellation Cooperative observer.
+         * @return Per-document results or a typed failure. Failure leaves buffers and history intact. No disk writes occur.
+         */
+        [[nodiscard]] Result<SourceEditBatch> EditBatch(std::span<const SourceBatchEdit> edits, CancellationToken cancellation = {});
+        /** @brief Replays all changed documents in an exact batch receipt backward as one owner-lane operation.
+         * @param batch Receipt for the current publications. @param cancellation Cooperative observer.
+         * @return Updated snapshots in the order of changed items, or failure preserving all buffers and history.
+         */
+        [[nodiscard]] Result<std::vector<SourceDocumentSnapshot>> UndoBatch(const SourceEditBatch &batch,
+                                                                            CancellationToken cancellation = {});
         /** @brief Queries bounded history without I/O. @param instance Exact admitted session.
          * @return Availability or lifecycle/thread failure. */
         [[nodiscard]] Result<SourceHistoryState> History(DocumentInstanceId instance) const;

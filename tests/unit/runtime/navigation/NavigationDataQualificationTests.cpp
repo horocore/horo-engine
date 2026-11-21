@@ -101,6 +101,8 @@ namespace Horo::Navigation {
         const NavigationDataQualificationCorpus corpus;
         const auto valid = corpus.Record();
         REQUIRE(valid.payload.size() == 201);
+        constexpr std::size_t profileCountOffset = 20;
+        Probe::Measurement missingCount;
         for (std::size_t prefix = 0; prefix < valid.payload.size(); ++prefix) {
             auto malformed = valid;
             malformed.payload.resize(prefix);
@@ -110,13 +112,18 @@ namespace Horo::Navigation {
             RequireError(rejected, NavigationErrors::SourceEnvelopeInvalid);
             CHECK(measurement.largestRequest <= 4096);
             CHECK(measurement.requestedBytes <= 16U * 1024U);
+            if (prefix == profileCountOffset)
+                missingCount = measurement;
         }
         auto hostile = valid;
-        std::fill(hostile.payload.begin() + 20, hostile.payload.begin() + 24, std::byte{0xff});
+        const auto count = hostile.payload.begin() + profileCountOffset;
+        std::fill_n(count, sizeof(std::uint32_t), std::byte{0xff});
         Probe::Measurement measurement;
         const auto rejected = MeasuredDecode(hostile, measurement);
         RequireError(rejected, NavigationErrors::SourceEnvelopeInvalid);
-        CHECK(measurement.requests < 16);
+        // An untrusted count must cost no more allocations than a missing count at the same boundary.
+        CHECK(measurement.requests <= missingCount.requests);
+        CHECK(measurement.requestedBytes <= missingCount.requestedBytes);
         CHECK(measurement.largestRequest <= 4096);
         CHECK(measurement.requestedBytes <= 16U * 1024U);
         CHECK(corpus.Record() == valid);
@@ -199,6 +206,9 @@ namespace Horo::Navigation {
 
     TEST_CASE("Every observed definition allocation failure preserves stable owner capacity diagnostics without partial authored policy",
               "[unit][navigation][data_qualification][allocation_failure]") {
+#if defined(_MSC_VER) && _ITERATOR_DEBUG_LEVEL != 0
+        SKIP("MSVC Debug iterator-proxy injection is unsupported; Windows Release runs this exact allocation sweep.");
+#endif
         const NavigationDataQualificationCorpus corpus;
         const auto record = corpus.Record();
         Probe::Measurement successful;

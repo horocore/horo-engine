@@ -25,6 +25,12 @@
 #include <vector>
 
 namespace Horo::Character::Detail {
+    /** @brief Copied fixed-tick intent and whether it exists solely for a Scene Animation request. */
+    struct CharacterFrozenMovement final {
+        CharacterMovementRequest request;
+        bool sceneOnly{}; /**< A root-only command never advances the gameplay producer sequence. */
+    };
+
     /** @brief Owned intent plus a producer-lifetime fence sampled once at command closure. */
     struct CharacterQueuedMovement final {
         CharacterMovementRequest request;
@@ -202,12 +208,12 @@ namespace Horo::Character::Detail {
         }
 
         /** @brief Returns the prepared per-tick command ordering storage. */
-        [[nodiscard]] std::vector<CharacterMovementRequest> &CommandScratch() noexcept {
+        [[nodiscard]] std::vector<CharacterFrozenMovement> &CommandScratch() noexcept {
             return commandScratch_;
         }
 
         /** @brief Returns the prepared per-tick command ordering storage read-only. */
-        [[nodiscard]] const std::vector<CharacterMovementRequest> &CommandScratch() const noexcept {
+        [[nodiscard]] const std::vector<CharacterFrozenMovement> &CommandScratch() const noexcept {
             return commandScratch_;
         }
 
@@ -541,7 +547,7 @@ namespace Horo::Character::Detail {
         }
 
         std::vector<CharacterQueuedMovement> commands_;
-        std::vector<CharacterMovementRequest> commandScratch_;
+        std::vector<CharacterFrozenMovement> commandScratch_;
         std::vector<CharacterMovementResult> movementResults_;
         std::vector<CharacterSurfaceContact> contacts_;
         std::vector<Physics::PhysicsQueryHit> hits_;

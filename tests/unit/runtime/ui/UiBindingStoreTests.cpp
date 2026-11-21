@@ -72,7 +72,8 @@ namespace Horo::Runtime::Ui {
             return Take(UiElementTree::Create(slots, descriptor, elements));
         }
 
-        UiBindingProviderSchema Schema(const UiBindingProviderFlags flags = UiBindingProviderFlags::None) {
+        UiBindingProviderSchema Schema(const UiBindingProviderFlags flags = UiBindingProviderFlags::None,
+                                       const UiBindingPrivacyClass textPrivacy = UiBindingPrivacyClass::Public) {
             const auto property = [](const std::string_view id, const UiBindingValueType type) {
                 return UiBindingPropertyDescriptor{.id = Take(UiBindingPropertyId::Parse(id)),
                                                    .type = type,
@@ -81,10 +82,9 @@ namespace Horo::Runtime::Ui {
                                                               .minimumScalar = 0.0,
                                                               .maximumScalar = 1.0}};
             };
-            const std::array properties{property("enabled", UiBindingValueType::Boolean),
-                                        property("label", UiBindingValueType::BoundedText),
-                                        property("progress", UiBindingValueType::FixedScalar),
-                                        property("unused", UiBindingValueType::Boolean)};
+            std::array properties{property("enabled", UiBindingValueType::Boolean), property("label", UiBindingValueType::BoundedText),
+                                  property("progress", UiBindingValueType::FixedScalar), property("unused", UiBindingValueType::Boolean)};
+            properties[1].privacy = textPrivacy;
             UiBindingProviderDescriptor descriptor{Take(UiBindingProviderTypeId::Parse("game.hud.player")),
                                                    ModuleId{"game.hud"},
                                                    {1, 0, 0},
@@ -308,6 +308,38 @@ namespace Horo::Runtime::Ui {
                 layout.InvalidateBatch(fixture.tree, std::array{UiLayoutInvalidation{{}, fixture.tree.Revision(), UiLayoutDirtyKind::All}})
                     .HasValue());
             CHECK(Take(store.Apply(fixture.tree, std::array{fixture.Batch(changes)}, layout)).targetsChanged == 2);
+        }
+
+        TEST_CASE("Binding inspection reports provider evidence and never copies sensitive committed or fallback values",
+                  "[runtime_ui][binding][inspection]") {
+            Fixture fixture;
+            fixture.schema = Schema(UiBindingProviderFlags::None, UiBindingPrivacyClass::UserSensitive);
+            auto store = fixture.Store();
+            auto layout = fixture.Layout();
+            const auto changes = std::array{UiBindingPropertyUpdate{1, std::string("private")}, UiBindingPropertyUpdate{2, 0.75}};
+            REQUIRE(store.Apply(fixture.tree, std::array{fixture.Batch(changes)}, layout).HasValue());
+            ErrorIs(store.Inspect(fixture.tree, 0, 4), UiErrors::BindingCapacityExceeded);
+            ErrorIs(store.Inspect(fixture.tree, 1, 3), UiErrors::BindingCapacityExceeded);
+            const auto initial = Take(store.Inspect(fixture.tree, 1, 4));
+            REQUIRE(initial.providers.size() == 1);
+            CHECK(initial.providers[0].schema.Version() == fixture.schema.Version());
+            CHECK(initial.providers[0].schema.Properties().size() == fixture.schema.Properties().size());
+            CHECK(initial.providers[0].revision == Rev<UiBindingSnapshotRevision>(2));
+            CHECK(initial.providers[0].active);
+            REQUIRE(initial.bindings.size() == 4);
+            CHECK(initial.bindings[0].valueState == UiBindingValueInspection::Redacted);
+            CHECK_FALSE(initial.bindings[0].value);
+            CHECK(initial.bindings[1].value == UiBindingValue{0.75});
+            CHECK(initial.bindings[1].pending != UiBindingDirty::None);
+            REQUIRE(store.Unregister(fixture.tree, fixture.provider, layout).HasValue());
+            const auto revoked = Take(store.Inspect(fixture.tree, 1, 4));
+            CHECK_FALSE(revoked.providers[0].active);
+            CHECK(revoked.bindings[2].origin == UiBindingValueOrigin::Fallback);
+            CHECK(revoked.bindings[2].valueState == UiBindingValueInspection::Redacted);
+            CHECK_FALSE(revoked.bindings[2].value);
+            store.Shutdown();
+            ErrorIs(store.Inspect(fixture.tree, 1, 4), UiErrors::BindingLifecycleUnavailable);
+            CHECK(initial.bindings[1].value == UiBindingValue{0.75});
         }
 
         TEST_CASE("Unregister closes old provider batches and removes required values with typed optional fallback",

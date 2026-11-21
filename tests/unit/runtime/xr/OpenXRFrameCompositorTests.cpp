@@ -1,7 +1,147 @@
 #include "OpenXRFrameCompositorTestFixture.h"
+#include "support/OpenXREventScriptTestSupport.h"
 
 namespace Horo::Tests::OpenXR {
     namespace {
+        TEST_CASE("Native reconstruction underlay requires elected runtime support and explicit consent",
+                  "[unit][xr][compositor][passthrough]") {
+            const bool selected = GENERATE(false, true);
+            CompositorFixture f{false, false, false, NativeReprojectionRoute::None, selected, 2};
+            auto world = f.local;
+            world.kind = XRSpaceKind::World;
+            XRPassthroughScope scope{f.session, world, IdentityValue<XRPassthroughGrant>(1)};
+            if (!selected || !NativePassthroughExtensionRequest()) {
+                RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::OperationUnsupported);
+                CHECK(f.passthrough.featuresCreated == 0);
+                return;
+            }
+
+            SECTION("invalid grant is rejected before provider creation") {
+                scope.grant = {};
+                RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::OperationInvalid);
+            }
+            SECTION("native properties reject advertised capability without reconstruction") {
+                f.census.passthroughCapabilities = 0;
+                RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::OperationUnsupported);
+            }
+            SECTION("native layer capacity rejects the extra layer before acquisition") {
+                f.census.maximumLayers = 1;
+                RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::CapacityExceeded);
+            }
+            SECTION("platform denial does not create any native object") {
+                f.passthrough.createResult = XR_ERROR_NOT_PERMITTED_PASSTHROUGH_FB;
+                RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::PermissionDenied);
+            }
+            CHECK_FALSE(f.passthrough.liveFeature);
+            CHECK(f.passthrough.featuresCreated == 0);
+            CHECK(f.script.ends == 0);
+        }
+
+        TEST_CASE("Current native passthrough precedes the premultiplied projection on the exact released frame",
+                  "[unit][xr][compositor][passthrough]") {
+            if (!NativePassthroughExtensionRequest())
+                SKIP("This test requires the Meta Quest provider.");
+            const std::uint32_t maximumLayers = GENERATE(1U, 2U);
+            CompositorFixture f{false, false, false, NativeReprojectionRoute::None, true, maximumLayers};
+            f.Bind();
+            const XRPassthroughScope scope{f.session, f.local, IdentityValue<XRPassthroughGrant>(1)};
+            REQUIRE(f.native.owner.StartPassthrough(scope).HasValue());
+            CHECK(f.passthrough.running);
+            auto differentGrant = scope;
+            differentGrant.grant = IdentityValue<XRPassthroughGrant>(2);
+            RequireFailureIdentity(f.native.owner.StartPassthrough(differentGrant), XRErrors::CapacityExceeded);
+
+            const auto frame = f.Begin();
+            const auto color = f.Acquire(frame);
+            const std::array completed{color};
+            const auto plan = f.Plan(frame, color);
+            const std::array targets{NativeProjectionTarget{&f.color, color}};
+            REQUIRE(f.frames.Submit(frame, completed) == XRFrameStatus::Ok);
+            f.images.complete = true;
+            REQUIRE(f.color.PollRelease().Value());
+            REQUIRE(f.frames.Release(frame, color) == XRFrameStatus::Ok);
+            const NativePassthroughProjection receipt{frame, scope};
+            if (maximumLayers == 1) {
+                RequireFailureIdentity(f.compositor.EndPassthroughProjection(frame, plan, targets, receipt), XRErrors::CapacityExceeded);
+                CHECK(f.script.ends == 0);
+                f.Empty(frame);
+                return;
+            }
+
+            SECTION("correct receipt submits runtime underlay first and virtual alpha second") {
+                REQUIRE(f.compositor.EndPassthroughProjection(frame, plan, targets, receipt).HasValue());
+                CHECK(f.script.layers == 2);
+                CHECK(f.script.passthroughLayer == NativeHandle<XrPassthroughLayerFB>(30));
+                CHECK(f.script.projectionFlags == XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT);
+                CHECK(f.frames.Snapshot().phase == XRFramePhase::Idle);
+            }
+            SECTION("foreign frame and World origin leave the transaction available for abort") {
+                auto wrong = receipt;
+                wrong.frame = {};
+                RequireFailureIdentity(f.compositor.EndPassthroughProjection(frame, plan, targets, wrong), XRErrors::IdentityStale);
+                wrong = receipt;
+                wrong.scope.world.worldOriginRevision = IdentityValue<XRWorldOriginRevision>(2);
+                RequireFailureIdentity(f.compositor.EndPassthroughProjection(frame, plan, targets, wrong), XRErrors::IdentityStale);
+                CHECK(f.script.ends == 0);
+                f.Empty(frame);
+                CHECK(f.script.layers == 0);
+            }
+            SECTION("focus or provider loss withdraws the layer before another frame end") {
+                EventScript events;
+
+                struct ActiveEvents final {
+                    explicit ActiveEvents(EventScript &script) {
+                        EventScript::active = &script;
+                    }
+
+                    ~ActiveEvents() {
+                        EventScript::active = nullptr;
+                    }
+                } active{events};
+
+                events.session = f.native.script.lastSession;
+                OpenXRSessionEvents owner{f.native.owner, f.sessions, f.frames};
+                REQUIRE(owner.Bind({&EventScript::GetProc}, {}).HasValue());
+                SECTION("native focus leaves even when session is still visible") {
+                    events.Push(XR_SESSION_STATE_VISIBLE);
+                }
+                SECTION("native provider failure removes even a still-focused layer") {
+                    events.passthroughState = XR_PASSTHROUGH_STATE_CHANGED_RECOVERABLE_ERROR_BIT_FB;
+                }
+                REQUIRE(owner.Poll(true).HasValue());
+                CHECK_FALSE(f.passthrough.running);
+                CHECK(f.passthrough.pauses == 1);
+                RequireFailureIdentity(f.compositor.EndPassthroughProjection(frame, plan, targets, receipt),
+                                       XRErrors::OperationUnavailable);
+                CHECK(f.script.ends == 0);
+                f.Empty(frame);
+            }
+        }
+
+        TEST_CASE("Passthrough rollback redacts immediately and retains exact teardown debt", "[unit][xr][compositor][passthrough]") {
+            if (!NativePassthroughExtensionRequest())
+                SKIP("This test requires the Meta Quest provider.");
+            CompositorFixture f{false, false, false, NativeReprojectionRoute::None, true, 2};
+            const XRPassthroughScope scope{f.session, f.local, IdentityValue<XRPassthroughGrant>(1)};
+            f.passthrough.resumeResult = XR_ERROR_NOT_PERMITTED_PASSTHROUGH_FB;
+            const bool cleanupFails = GENERATE(false, true);
+            f.passthrough.failLayerDestroy = cleanupFails;
+            const auto denied = f.native.owner.StartPassthrough(scope);
+            f.passthrough.failLayerDestroy = false;
+            RequireFailureIdentity(denied, cleanupFails ? XRErrors::OperationUnavailable : XRErrors::PermissionDenied);
+            CHECK(f.passthrough.pauses == 1);
+            CHECK_FALSE(f.passthrough.running);
+            CHECK(f.passthrough.liveLayer == cleanupFails);
+            CHECK(f.passthrough.liveFeature == cleanupFails);
+            if (cleanupFails) {
+                REQUIRE(f.native.owner.StopPassthrough(scope).HasValue());
+                CHECK_FALSE(f.passthrough.liveLayer);
+                CHECK_FALSE(f.passthrough.liveFeature);
+            }
+            CHECK(f.passthrough.layersDestroyed == 1);
+            RequireFailureIdentity(f.native.owner.StartPassthrough(scope), XRErrors::IdentityStale);
+        }
+
         TEST_CASE("Lost XR frame retains image and native destruction debt before explicit quiescence reset",
                   "[unit][xr][compositor][retirement]") {
             CompositorFixture f;
@@ -54,6 +194,302 @@ namespace Horo::Tests::OpenXR {
             CHECK(f.sessions.ApplyEvent(f.session, XRSessionEvent::Ready).HasError());
             CHECK(f.script.ends == 0);
             CHECK(f.native.script.liveInstances == 1);
+        }
+
+        TEST_CASE("Optional native depth timeout keeps color projection and retains exact cleanup debt",
+                  "[unit][xr][reprojection][compositor]") {
+            CompositorFixture f{false, true, true};
+            f.CreateSynthesisPair();
+            f.Bind();
+            OpenXRReprojectionFrameImages pair{f.frames, f.motionOwner, f.synthesisDepthOwner};
+            const auto frame = f.Begin();
+            const auto color = f.Acquire(frame);
+            const std::array completed{color};
+            const auto plan = f.Plan(frame, color);
+            const std::array targets{NativeProjectionTarget{&f.color, color}};
+            f.swapScript.timeoutSwapchain = NativeHandle<XrSwapchain>(f.swapScript.creates);
+            const auto candidate = pair.Prepare(frame, completed);
+            REQUIRE(candidate.HasValue());
+            CHECK_FALSE(candidate.Value());
+            CHECK(f.frames.Snapshot().acquiredImages == 1);
+            CHECK(f.motionOwner.Phase() == NativeSwapchainPhase::Imported);
+            CHECK(f.synthesisDepthOwner.Phase() == NativeSwapchainPhase::Acquired);
+            REQUIRE(f.frames.Submit(frame, completed) == XRFrameStatus::Ok);
+            f.images.complete = true;
+            REQUIRE(f.color.PollRelease().Value());
+            REQUIRE(f.frames.Release(frame, color) == XRFrameStatus::Ok);
+            REQUIRE(f.compositor.EndProjection(frame, plan, targets).HasValue());
+            CHECK(f.script.layers == 1);
+
+            f.motionImages.complete = true;
+            REQUIRE_FALSE(pair.PollRetirement().Value());
+            CHECK(f.swapScript.releases == 2);
+            CHECK(f.synthesisDepthOwner.Phase() == NativeSwapchainPhase::Acquired);
+            const auto next = f.Begin();
+            const auto newColor = f.Acquire(next);
+            const std::array nextImages{newColor};
+            const auto blocked = pair.Prepare(next, nextImages);
+            REQUIRE(blocked.HasValue());
+            CHECK_FALSE(blocked.Value());
+            const auto nextPlan = f.Plan(next, newColor);
+            const std::array nextTargets{NativeProjectionTarget{&f.color, newColor}};
+            f.swapScript.timeoutSwapchain = XR_NULL_HANDLE;
+            REQUIRE(pair.PollRetirement().Value());
+            CHECK(f.swapScript.releases == 3);
+            CHECK(f.frames.Snapshot().releasedImages == 0);
+            REQUIRE(f.frames.Submit(next, nextImages) == XRFrameStatus::Ok);
+            REQUIRE(f.color.PollRelease().Value());
+            REQUIRE(f.frames.Release(next, newColor) == XRFrameStatus::Ok);
+            REQUIRE(f.compositor.EndProjection(next, nextPlan, nextTargets).HasValue());
+            CHECK(f.script.ends == 2);
+        }
+
+        TEST_CASE("Same-frame auxiliary pair registers atomically and color fallback waits only for registered release",
+                  "[unit][xr][reprojection][compositor]") {
+            const bool omit = GENERATE(false, true);
+            CompositorFixture f{false, true, true};
+            f.CreateSynthesisPair();
+            f.Bind();
+            OpenXRReprojectionFrameImages pair{f.frames, f.motionOwner, f.synthesisDepthOwner};
+            const auto frame = f.Begin();
+            const auto color = f.Acquire(frame);
+            const std::array completed{color};
+            const auto plan = f.Plan(frame, color);
+            const std::array targets{NativeProjectionTarget{&f.color, color}};
+            const auto result = pair.Prepare(frame, completed);
+            REQUIRE(result.HasValue());
+            REQUIRE(result.Value());
+            const auto &candidate = *result.Value();
+            CHECK(candidate.frame == frame);
+            CHECK(candidate.motion.evidence.kind == XRReprojectionImageKind::Motion);
+            CHECK(candidate.depth.evidence.kind == XRReprojectionImageKind::Depth);
+            CHECK(f.frames.Snapshot().acquiredImages == 1);
+            auto wrongFrame = frame;
+            ++wrongFrame.sequence;
+            CHECK(pair.Submit(wrongFrame, completed).HasError());
+            CHECK(pair.Submit(frame, {}).HasError());
+            CHECK(f.frames.Snapshot().acquiredImages == 1);
+            CHECK((f.frames.ValidateReprojectionSubmission(frame, completed, candidate.motion.evidence, candidate.motion.evidence) !=
+                   XRFrameStatus::Ok));
+
+            if (omit) {
+                REQUIRE(pair.Omit(frame).HasValue());
+                REQUIRE(f.frames.Submit(frame, completed) == XRFrameStatus::Ok);
+                CHECK(f.frames.Snapshot().acquiredImages == 1);
+            } else {
+                REQUIRE(pair.Submit(frame, completed).HasValue());
+                CHECK(f.frames.Snapshot().acquiredImages == 3);
+                CHECK(pair.Omit(frame).HasError());
+            }
+            f.images.complete = true;
+            REQUIRE(f.color.PollRelease().Value());
+            REQUIRE(f.frames.Release(frame, color) == XRFrameStatus::Ok);
+            f.motionImages.complete = true;
+            REQUIRE_FALSE(pair.PollRetirement().Value());
+            CHECK(f.swapScript.releases == 2);
+            CHECK(f.frames.Snapshot().releasedImages == (omit ? 1 : 2));
+            CHECK(f.compositor.EndProjection(frame, plan, targets).HasValue() == omit);
+            f.synthesisDepthImages.complete = true;
+            REQUIRE(pair.PollRetirement().Value());
+            CHECK(f.swapScript.releases == 3);
+            if (!omit)
+                REQUIRE(f.compositor.EndProjection(frame, plan, targets).HasValue());
+            CHECK(f.script.layers == 1);
+        }
+
+        TEST_CASE("OpenXR synthesis provider requires the accepted renderer policy and exact native attempt",
+                  "[unit][xr][compositor][reprojection]") {
+            CompositorFixture fallback{false, true};
+            CHECK(fallback.native.owner.RegisterReprojectionProvider(fallback.session, fallback.native.preflight.Attempt()).HasError());
+            CHECK(fallback.native.owner.RegisterReprojectionProvider(fallback.session, {}).HasError());
+        }
+
+        TEST_CASE("OpenXR ends the frame once with typed native synthesis chains or baseline color",
+                  "[unit][xr][compositor][reprojection]") {
+            enum class Handoff {
+                Exact,
+                Revoked,
+                LateRevoke,
+                ForeignOwner,
+                UnavailableCoverage,
+                UnresolvedSample,
+                WrongExtent,
+                ExplicitApplicationDelta,
+                MissingCurrentPeriod,
+                ShortPreviousPeriod,
+                MissingPreviousReference,
+                ReplacedReference,
+                MovedReference,
+                ContradictoryDelta,
+                NativeFailure
+            };
+            const auto handoff =
+                GENERATE(Handoff::Exact, Handoff::Revoked, Handoff::LateRevoke, Handoff::ForeignOwner, Handoff::UnavailableCoverage,
+                         Handoff::UnresolvedSample, Handoff::WrongExtent, Handoff::ExplicitApplicationDelta, Handoff::MissingCurrentPeriod,
+                         Handoff::ShortPreviousPeriod, Handoff::MissingPreviousReference, Handoff::ReplacedReference,
+                         Handoff::MovedReference, Handoff::ContradictoryDelta, Handoff::NativeFailure);
+            const auto route = GENERATE(NativeReprojectionRoute::FrameSynthesisExt, NativeReprojectionRoute::SpaceWarpFb);
+            const bool explicitDelta = handoff == Handoff::ExplicitApplicationDelta;
+            const auto cadence =
+                explicitDelta ? XRReprojectionCadenceMode::FixedInterval : XRReprojectionCadenceMode::ObservedNativePeriods;
+            CompositorFixture f{false, true, true, route, false, 1, cadence};
+            const bool extension = route == NativeReprojectionRoute::FrameSynthesisExt;
+            CHECK(f.synthesisExtents[0] == Render::FramebufferExtent{640, 512});
+            CHECK(f.synthesisExtents[1] == Render::FramebufferExtent{extension ? 800U : 640U, 512});
+            f.CreateSynthesisPair();
+            f.Bind();
+            auto provider = f.native.owner.RegisterReprojectionProvider(f.session, f.native.preflight.Attempt());
+            REQUIRE(provider.HasValue());
+            CHECK(f.native.owner.RegisterReprojectionProvider(f.session, f.native.preflight.Attempt()).HasError());
+            OpenXRReprojectionFrameImages pair{f.frames, f.motionOwner, f.synthesisDepthOwner};
+
+            const auto predictionPeriod = f.script.period;
+            if (handoff == Handoff::ShortPreviousPeriod)
+                f.script.period = 4'000'000;
+            const auto prior = f.Begin();
+            const auto priorColor = f.Acquire(prior);
+            if (!explicitDelta && handoff != Handoff::MissingPreviousReference)
+                f.RecordReference(prior);
+            const std::array priorImages{priorColor};
+            const auto priorPlan = f.Plan(prior, priorColor);
+            f.images.complete = true;
+            REQUIRE(f.frames.Submit(prior, priorImages) == XRFrameStatus::Ok);
+            REQUIRE(f.color.PollRelease().Value());
+            REQUIRE(f.frames.Release(prior, priorColor) == XRFrameStatus::Ok);
+            const std::array priorTargets{NativeProjectionTarget{&f.color, priorColor}};
+            REQUIRE(f.compositor.EndProjection(prior, priorPlan, priorTargets).HasValue());
+
+            f.script.prediction += 5'000'000;
+            f.script.period = handoff == Handoff::MissingCurrentPeriod ? 0 : predictionPeriod;
+            const auto frame = f.Begin();
+            const auto color = f.Acquire(frame);
+            if (!explicitDelta)
+                f.RecordReference(frame, handoff == Handoff::MovedReference ? Math::Vec3{0.25F, 0.0F, 0.0F} : Math::Vec3{},
+                                  handoff == Handoff::ReplacedReference ? 2 : 1);
+            const std::array images{color};
+            const auto plan = f.Plan(frame, color);
+            const std::array targets{NativeProjectionTarget{&f.color, color}};
+            const auto prepared = pair.Prepare(frame, images);
+            REQUIRE(prepared.HasValue());
+            REQUIRE(prepared.Value());
+            const auto &acquired = *prepared.Value();
+            REQUIRE(pair.Submit(frame, images).HasValue());
+            REQUIRE(f.color.PollRelease().Value());
+            REQUIRE(f.frames.Release(frame, color) == XRFrameStatus::Ok);
+            f.motionImages.complete = true;
+            f.synthesisDepthImages.complete = true;
+            REQUIRE(pair.PollRetirement().Value());
+
+            std::array<XRReprojectionViewInput, 2> eyes{};
+            for (std::uint32_t eye = 0; eye < eyes.size(); ++eye) {
+                const auto [width, height] = f.synthesisExtents[eye];
+                const XRRenderRectangle rectangle{0, 0, width, height};
+                eyes[eye] = {plan.Views()[eye].id,
+                             {acquired.motion.evidence.image, rectangle, eye},
+                             {acquired.depth.evidence.image, rectangle, eye},
+                             0.25F,
+                             0.75F,
+                             0.2F,
+                             300.0F};
+            }
+            if (handoff == Handoff::WrongExtent) {
+                const auto wrongWidth = extension ? eyes.front().motion.rectangle.width : eyes.back().motion.rectangle.width - 1;
+                eyes.back().motion.rectangle.width = wrongWidth;
+                eyes.back().depth.rectangle.width = wrongWidth;
+            }
+            const float delta = explicitDelta || handoff == Handoff::ContradictoryDelta ? 0.125F : 0.0F;
+            XRReprojectionInputs input{priorPlan.PredictedDisplayTime(), prior.sequence,
+                                       XRReprojectionSpaceDelta{f.local, {delta, 0.0F, 0.0F}, Math::Quaternion::Identity()}, eyes};
+            // These completed classification values are scripted with the other native fixture inputs.
+            std::array<XRReprojectionViewCoverage, 2> reported{};
+            for (std::size_t eye = 0; eye < eyes.size(); ++eye) {
+                const auto &rect = eyes[eye].motion.rectangle;
+                reported[eye] = {eyes[eye].view, eyes[eye].motion, eyes[eye].depth, std::uint64_t{rect.width} * rect.height, 0};
+            }
+            if (handoff != Handoff::UnavailableCoverage)
+                input.coverage.emplace(XRReprojectionCoverage{.session = f.session,
+                                                              .frameSequence = frame.sequence,
+                                                              .prediction = plan.PredictedDisplayTime(),
+                                                              .previousFrameSequence = prior.sequence,
+                                                              .previousPrediction = priorPlan.PredictedDisplayTime(),
+                                                              .views = reported});
+            if (handoff == Handoff::UnresolvedSample)
+                reported.back().unresolvedSamples = 1;
+            auto expected = f.frames.ValidateReprojection(frame, plan, input);
+            if (handoff == Handoff::UnavailableCoverage)
+                CHECK(expected == XRReprojectionStatus::CoverageUnavailable);
+            else if (handoff == Handoff::UnresolvedSample)
+                CHECK(expected == XRReprojectionStatus::CoverageRejected);
+            else if (handoff == Handoff::WrongExtent || handoff == Handoff::ContradictoryDelta)
+                CHECK(expected == XRReprojectionStatus::InputsInvalid);
+            else if (handoff == Handoff::MissingCurrentPeriod || handoff == Handoff::ShortPreviousPeriod ||
+                     handoff == Handoff::MissingPreviousReference || handoff == Handoff::ReplacedReference ||
+                     handoff == Handoff::MovedReference)
+                CHECK(expected == XRReprojectionStatus::HistoryUnavailable);
+            else
+                REQUIRE(expected == XRReprojectionStatus::Ready);
+            if (handoff == Handoff::Revoked)
+                f.native.owner.RevokeReprojectionProvider(provider.Value());
+            if (handoff == Handoff::LateRevoke) {
+                f.spaces.providerOwner = &f.native.owner;
+                f.spaces.revokeDuringBorrow = &provider.Value();
+            }
+            if (handoff == Handoff::NativeFailure)
+                f.script.endResult = XR_ERROR_RUNTIME_FAILURE;
+            const NativeReprojectionSubmission synthesis{provider.Value(), f.motionOwner,
+                                                         handoff == Handoff::ForeignOwner ? f.motionOwner : f.synthesisDepthOwner, input};
+            const auto actual = f.compositor.EndReprojectedProjection(frame, plan, targets, synthesis);
+            CHECK(f.script.ends == 2);
+            if (handoff == Handoff::NativeFailure) {
+                CHECK(actual.HasError());
+                CHECK(f.compositor.RetainedFault() != nullptr);
+                CHECK(f.compositor.EndReprojectedProjection(frame, plan, targets, synthesis).HasError());
+                CHECK(f.script.ends == 2);
+                f.Recover();
+            } else {
+                REQUIRE(actual.HasValue());
+                if (expected == XRReprojectionStatus::Ready && handoff != Handoff::Exact && !explicitDelta)
+                    expected = XRReprojectionStatus::InputsInvalid;
+                CHECK(actual.Value() == expected);
+            }
+            for (std::size_t eye = 0; eye < eyes.size(); ++eye) {
+                const auto &ext = f.script.ext[eye];
+                const auto &fb = f.script.fb[eye];
+                const bool synthesized = handoff == Handoff::Exact || explicitDelta || handoff == Handoff::NativeFailure;
+                if (!synthesized) {
+                    CHECK(f.script.encoded[eye].next == nullptr);
+                    continue;
+                }
+                if (extension) {
+                    CHECK(ext.type == XR_TYPE_FRAME_SYNTHESIS_INFO_EXT);
+                    CHECK(ext.next == nullptr);
+                    CHECK(ext.motionVectorScale.x == 1.0F);
+                    CHECK(ext.motionVectorScale.y == 1.0F);
+                    CHECK(ext.motionVectorScale.z == 1.0F);
+                    CHECK(ext.motionVectorOffset.z == 0.0F);
+                    CHECK(fb.type == XR_TYPE_UNKNOWN);
+                } else {
+                    CHECK(fb.type == XR_TYPE_COMPOSITION_LAYER_SPACE_WARP_INFO_FB);
+                    CHECK(fb.next == nullptr);
+                    CHECK(ext.type == XR_TYPE_UNKNOWN);
+                }
+                const auto motion = extension ? ext.motionVectorSubImage : fb.motionVectorSubImage;
+                const auto depth = extension ? ext.depthSubImage : fb.depthSubImage;
+                CHECK(motion.swapchain != depth.swapchain);
+                CHECK(motion.swapchain != f.script.encoded[eye].subImage.swapchain);
+                CHECK(motion.imageArrayIndex == eye);
+                CHECK(depth.imageArrayIndex == eye);
+                const auto [width, height] = f.synthesisExtents[eye];
+                CHECK(motion.imageRect.extent.width == static_cast<std::int32_t>(width));
+                CHECK(motion.imageRect.extent.height == static_cast<std::int32_t>(height));
+                CHECK(depth.imageRect.extent.width == static_cast<std::int32_t>(width));
+                CHECK(depth.imageRect.extent.height == static_cast<std::int32_t>(height));
+                CHECK((extension ? ext.appSpaceDeltaPose.position.x : fb.appSpaceDeltaPose.position.x) == delta);
+                CHECK((extension ? ext.minDepth : fb.minDepth) == 0.25F);
+                CHECK((extension ? ext.maxDepth : fb.maxDepth) == 0.75F);
+                CHECK((extension ? ext.nearZ : fb.nearZ) == 0.2F);
+                CHECK((extension ? ext.farZ : fb.farZ) == 300.0F);
+            }
         }
 
         TEST_CASE("Native XR compositor snapshots admitted pacing before loader callbacks", "[unit][xr][compositor][pacing]") {
@@ -131,7 +567,10 @@ namespace Horo::Tests::OpenXR {
         }
 
         TEST_CASE("Native XR compositor submits complete released array views and fences reacquisition", "[unit][xr][compositor]") {
-            CompositorFixture f;
+            const bool requestSpaceWarp = GENERATE(false, true);
+            CompositorFixture f{false, requestSpaceWarp};
+            if (requestSpaceWarp)
+                REQUIRE(f.native.plan.Decision(XRCapability::SpaceWarp).state == XRFeatureDecisionState::BaselineProjection);
             f.Bind();
             const auto frame = f.Begin();
             const auto image = f.Acquire(frame);
@@ -156,6 +595,8 @@ namespace Horo::Tests::OpenXR {
             REQUIRE(f.compositor.EndProjection(frame, plan, owners).HasValue());
             CHECK(f.script.layers == 1);
             CHECK(f.script.views == 2);
+            CHECK(f.script.encoded[0].next == nullptr);
+            CHECK(f.script.encoded[1].next == nullptr);
             CHECK(f.script.encoded[0].subImage.imageArrayIndex == 0);
             CHECK(f.script.encoded[1].subImage.imageArrayIndex == 1);
             CHECK(std::abs(f.script.encoded[0].fov.angleLeft + 0.78539816F) < 0.00001F);

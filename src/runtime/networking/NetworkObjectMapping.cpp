@@ -10,6 +10,17 @@ namespace Horo::Network {
         template <typename T> Result<T> Fail(const ErrorCodeDescriptor &code) {
             return Result<T>::Failure(MakeError(code));
         }
+
+        /** @brief Allows intent bytes only on the exact, generation-qualified occurrence anchor. */
+        bool ValidPrefabMapping(const NetworkObjectMappingEntry &entry) {
+            const auto &prefab = entry.provenance.prefab;
+            if (prefab && prefab->occurrence.Epoch() != entry.object.Epoch())
+                return false;
+            if (!entry.prefabIntent)
+                return true;
+            return prefab && prefab->occurrence == entry.object && !entry.prefabIntent->empty() &&
+                   entry.prefabIntent->size() <= MaximumNetworkPrefabIntentBytes;
+        }
     }  // namespace
 
     NetworkObjectMappingSnapshot::NetworkObjectMappingSnapshot(const ReplicationAuthorityEpoch epoch, const Runtime::SceneRuntimeId scene,
@@ -40,6 +51,18 @@ namespace Horo::Network {
         }
     }
 
+    /** @copydoc NetworkObjectMapping::CloneForPublication */
+    Result<NetworkObjectMapping> NetworkObjectMapping::CloneForPublication() const {
+        auto allocated = Create(epoch_, scene_, maximumSlots_);
+        if (allocated.HasError())
+            return allocated;
+        auto candidate = std::move(allocated).Value();
+        candidate.slots_.assign(slots_.begin(), slots_.end());
+        candidate.entityIndex_.assign(entityIndex_.begin(), entityIndex_.end());
+        candidate.liveCount_ = liveCount_;
+        return Result<NetworkObjectMapping>::Success(std::move(candidate));
+    }
+
     std::vector<NetworkObjectMapping::SlotRecord>::iterator NetworkObjectMapping::LowerBound(const std::uint64_t slot) noexcept {
         return std::ranges::lower_bound(slots_, slot, {}, &SlotRecord::slot);
     }
@@ -68,14 +91,14 @@ namespace Horo::Network {
         if (const auto active = RequireActive(); active.HasError())
             return Result<void>::Failure(active.ErrorValue());
         if (!entry.object.IsValid() || entry.object.Epoch() != epoch_ || !entry.entity.IsValid() || entry.entity.runtime != scene_ ||
-            !entry.provenance.IsValid())
+            !entry.provenance.IsValid() || !ValidPrefabMapping(entry))
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkObjectMappingInvalid));
         if (const auto entity = LowerBound(entry.entity); entity != entityIndex_.end() && entity->entity == entry.entity)
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkObjectMappingConflict));
         return Result<void>::Success();
     }
 
-    Result<void> NetworkObjectMapping::ReconcileSlot(const NetworkObjectMappingEntry &entry) {
+    Result<void> NetworkObjectMapping::ReconcileSlot(const NetworkObjectMappingEntry &entry, RegistrationSequence sequence) {
         const auto found = LowerBound(entry.object.Slot());
         if (found == slots_.end() || found->slot != entry.object.Slot()) {
             if (slots_.size() == maximumSlots_)
@@ -87,23 +110,78 @@ namespace Horo::Network {
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkObjectMappingConflict));
         if (found->generation == std::numeric_limits<std::uint32_t>::max())
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkObjectGenerationExhausted));
-        if (entry.object.Generation() != found->generation + 1)
+        const auto generation = entry.object.Generation();
+        const bool current =
+            sequence == RegistrationSequence::ExactSuccessor ? generation == found->generation + 1 : generation > found->generation;
+        if (!current)
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkObjectMappingUnknown));
-        found->generation = entry.object.Generation();
+        found->generation = generation;
         found->live = entry;
         return Result<void>::Success();
     }
 
     /** @copydoc NetworkObjectMapping::Register */
     Result<void> NetworkObjectMapping::Register(const NetworkObjectMappingEntry &entry) {
+        return RegisterWithSequence(entry, RegistrationSequence::ExactSuccessor);
+    }
+
+    /** @copydoc NetworkObjectMapping::RegisterReplica */
+    Result<void> NetworkObjectMapping::RegisterReplica(const NetworkObjectMappingEntry &entry) {
+        return RegisterWithSequence(entry, RegistrationSequence::NewerReplica);
+    }
+
+    /** @brief Validates and updates both indexes without allocating. */
+    Result<void> NetworkObjectMapping::RegisterWithSequence(const NetworkObjectMappingEntry &entry, RegistrationSequence sequence) {
         if (const auto valid = ValidateRegistration(entry); valid.HasError())
             return valid;
-        if (const auto reconciled = ReconcileSlot(entry); reconciled.HasError())
+        if (const auto reconciled = ReconcileSlot(entry, sequence); reconciled.HasError())
             return reconciled;
         const auto entity = LowerBound(entry.entity);
         entityIndex_.emplace(entity, entry.entity, entry.object);
         ++liveCount_;
         return Result<void>::Success();
+    }
+
+    /** @copydoc NetworkObjectMapping::NextDynamicObject */
+    Result<NetworkObjectId> NetworkObjectMapping::NextDynamicObject() const {
+        constexpr auto maximumGeneration = std::numeric_limits<std::uint32_t>::max();
+        const auto reusable = std::ranges::find_if(slots_, [](const SlotRecord &slot) {
+            return !slot.live && slot.generation < maximumGeneration;
+        });
+        if (reusable != slots_.end())
+            return NetworkObjectId::Create(epoch_, reusable->slot, reusable->generation + 1);
+        if (slots_.size() == maximumSlots_)
+            return Fail<NetworkObjectId>(NetworkErrors::NetworkObjectMappingCapacityExceeded);
+
+        std::uint64_t unused = 1;
+        for (const auto &slot : slots_) {
+            if (slot.slot != unused)
+                break;
+            if (unused == std::numeric_limits<std::uint64_t>::max())
+                return Fail<NetworkObjectId>(NetworkErrors::NetworkObjectMappingCapacityExceeded);
+            ++unused;
+        }
+        return NetworkObjectId::Create(epoch_, unused, 1);
+    }
+
+    /** @copydoc NetworkObjectMapping::RegisterDynamic */
+    Result<void> NetworkObjectMapping::RegisterDynamic(Runtime::EntityRef entity, const NetworkObjectProvenance &provenance,
+                                                       std::shared_ptr<const std::vector<std::byte>> prefabIntent) {
+        auto object = NextDynamicObject();
+        if (object.HasError())
+            return Result<void>::Failure(object.ErrorValue());
+        return Register({object.Value(), entity, provenance, std::move(prefabIntent)});
+    }
+
+    /** @copydoc NetworkObjectMapping::RetireDynamic */
+    Result<void> NetworkObjectMapping::RetireDynamic(Runtime::EntityRef entity) {
+        const auto object = Find(entity);
+        if (object.HasError())
+            return Result<void>::Failure(object.ErrorValue());
+        const auto &entry = *LowerBound(object.Value().Slot())->live;
+        if (entry.provenance.authoredObject)
+            return Result<void>::Failure(MakeError(NetworkErrors::NetworkObjectMappingInvalid));
+        return Retire(object.Value());
     }
 
     /** @copydoc NetworkObjectMapping::Resolve */

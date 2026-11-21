@@ -115,6 +115,22 @@ namespace Horo::Vfx {
         CHECK_FALSE(ValidateParticleSystemDescriptor(unknown.Value(), Registry()).Value().Accepted());
     }
 
+    TEST_CASE("Particle descriptors admit only explicit boolean flash tags", "[unit][vfx][particle-descriptor]") {
+        CHECK_FALSE(ParseParticleSystemDescriptor(ValidJson()).Value().photosensitiveFlash);
+        auto source = ValidJson();
+        source.insert(source.rfind('}'), ",\"photosensitiveFlash\":true");
+        const auto parsed = ParseParticleSystemDescriptor(source);
+        REQUIRE(parsed.HasValue());
+        CHECK(parsed.Value().photosensitiveFlash);
+        const auto validated = ValidateParticleSystemDescriptor(parsed.Value(), Registry());
+        REQUIRE(validated.Value().Accepted());
+        CHECK(validated.Value().descriptor->Data().photosensitiveFlash);
+        source.replace(source.find("true"), 4, "1");
+        const auto invalid = ParseParticleSystemDescriptor(source);
+        REQUIRE(invalid.HasError());
+        RequireError(invalid.ErrorValue(), VfxErrors::ParticleDescriptorMalformed);
+    }
+
     TEST_CASE("Particle descriptor parses and admits canonical source", "[unit][vfx][particle-descriptor]") {
         auto parsed = ParseParticleSystemDescriptor(ValidJson());
         REQUIRE(parsed.HasValue());

@@ -145,6 +145,11 @@ kinds. A deterministic depth-first traversal sorts outgoing nested placements by
 kind and placement ID. A cycle across kinds, such as `A NestedPlacement B` and
 `B VariantParent A`, is still a cycle.
 
+Expansion failures retain the traversed composition edges in order in
+`Error::diagnostics`. Each entry identifies the owner, target, kind and placement
+ID when applicable. The bounded summary can show the edge count and final edge
+for deep paths.
+
 V1 enforces these independent limits:
 
 - at most 8 `VariantParent` edges in one resolution path;

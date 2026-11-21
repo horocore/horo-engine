@@ -2200,3 +2200,76 @@ failed preparation preserves the active mount. Source changes withdraw actual
 registrations before recomputation. Document replacement, close, workspace
 teardown and explicit stop revoke the bridge before native shutdown. No packaged
 artifact or policy is edited by inspection.
+
+### Standalone committed World admission
+
+The headless standalone project Scene host accepts an explicit
+`--world-mount <absolute-cook-root> <cook-target> <manifest-sha256> <index-asset-id>
+<dependency-asset-id> <x-mm> <y-mm> <z-mm>` launch selection. It pins one committed
+Assets generation and accepts only the selected `world.index`, its matching
+`world.dependencies` and every corresponding `world.cell` envelope. The runtime
+mount owns the verified cell payload provider, partition registry, source planner,
+scheduler and residency ledgers. Its lifecycle is scoped to the private Scene
+candidate and retires before that Scene service. Missing content and mismatched
+targets, manifests, dependency siblings or cell identities fail startup without
+publishing a partial mount.
+
+The standalone host requires the Horo axis convention. It takes its origin from
+the three explicitly selected signed millimeter coordinates. Those coordinates
+grant no camera, entity or geometry authority to the ordinary Scene. A read-only
+origin observation requires a live Scene service and expires when the mount
+retires. This route uses the committed cook store during cold startup and travel.
+
+A standalone launch can also pin one startup cell with
+`--world-start-cell <x> <y> <z> <lod> <layer> <occurrence> <definition> <revision>`.
+The planner must publish the exact pin for that mounted cell. Its load verifies and
+decodes the sole CoreEcs provider using the independently pinned Scene definition
+and revision. Activation publishes the Streamed occurrence through the private
+parent Scene's structural commit and advances residency only after the receipt.
+Retirement observes actual parent shutdown before acknowledging the cell. Missing
+content, external asset dependencies, hard co-load requirements, compressed cells,
+and unsupported providers reject startup before mode publication.
+
+The standalone host can instead request one live cell with
+`--world-live-cell <x> <y> <z> <lod> <layer> <occurrence> <definition> <revision>
+<frame-ns> <unit-ns> <maximum-entities>`. Preparation runs on the existing job
+owner and activation and removal use the ordinary Scene structural cutoff.
+`--world-live-assets <maximum-assets> <maximum-encoded-bytes>` additionally admits
+the cell's named asset closure. The worker checks types against the pinned project
+registry and reads the exact committed World's verified envelopes. Asset leases
+remain with the structural group through native retirement. The mounted owner
+can admit multiple explicitly selected occurrences with an explicit resident
+count and one in-flight operation. A canonical lease keyed by the exact
+mounted manifest and asset identity shares one immutable allocation across
+cells. Every consumer pins that allocation until its positive Scene removal
+receipt. The charged CPU capacity returns after physical release of the final
+cache allocation, including any remaining detached payload pins. The encoded-byte
+ceiling applies to each cell's closure and to the mount's total retained cache
+capacity. The standalone arguments keep the default live capacity of one
+occurrence. Hard co-load requirements, other payload providers and in-frame
+replacement remain unsupported.
+
+Archive installation, ongoing gameplay-driven scheduling, gameplay focal
+positions and XR view projection require separate host composition.
+
+### Editor Play committed World ingress
+
+`HoroEditor --project <root> --play-world-mount <cook-root> <cook-target>
+<manifest-sha256> <index-asset-id> <dependency-asset-id> <x-mm> <y-mm> <z-mm>`
+selects a committed World for the exact startup project. The Play Scene owner
+uses the same mounted World adapter and shared typed option parser as standalone.
+A failed manifest or project check prevents Scene publication for that Play
+attempt. The canonical origin is readable after the selected Scene publishes
+and its leases expire when Play ends. Preview, prefab authoring and ordinary
+Play without this selection keep independent Scene ownership.
+
+Desktop Play can add `--play-world-cell <x> <y> <z> <lod> <layer> <occurrence>
+<definition> <revision> <camera> <draw-ids>`, where draw IDs are ascending,
+comma-separated authored object IDs. The selected cell uses the standalone
+planner and tracked Scene activation. The selected camera and procedural draws
+must all have canonical anchors. Preparation publishes one exact viewport packet
+for the mounted origin and the frontend-issued view. The editor graph uses this
+packet for mesh preparation and its existing static-mesh pass. It withdraws that
+pass on Scene or origin retirement and does not use the local-transform viewport
+extractor for a selected World cell. Navigation, XR and Save still require
+their owning World composition.

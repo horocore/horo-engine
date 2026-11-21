@@ -161,6 +161,39 @@ namespace Horo::Runtime::Ui {
             return std::move(result).Value();
         }
 
+        TEST_CASE("Geometry profiling reports exact plans, bounded local coverage and lost builds",
+                  "[runtime_ui][render_geometry][profile]") {
+            const auto snapshot = MakeSnapshot(2);
+            auto arena = std::move(UiRenderGeometryArena::Create({snapshot.Descriptor().view, {64, 96, 16}, 1, true})).Value();
+            auto built = arena.Build(snapshot);
+            REQUIRE(built.HasValue());
+            auto plan = std::move(built).Value();
+            const auto exceeded = plan.Inspect(65);
+            REQUIRE(exceeded.HasError());
+            CHECK(exceeded.ErrorValue().code.Value() == UiErrors::RenderGeometryCapacityExceeded.code.Value());
+            const auto record = plan.Inspect(66);
+            REQUIRE(record.HasValue());
+            CHECK(record.Value().snapshot == snapshot.Descriptor().snapshotRevision);
+            CHECK(record.Value().drawBatches == 5);
+            CHECK(record.Value().vertices == 44);
+            CHECK(record.Value().indices == 66);
+            CHECK(record.Value().clips == 0);
+            CHECK(record.Value().geometryBytes == plan.Vertices().size_bytes() + plan.Indices().size_bytes() + plan.Batches().size_bytes());
+            constexpr double solids = 2.0 * 100.0 * 50.0;
+            constexpr double border = 200.0 * 50.0 - 192.0 * 42.0;
+            constexpr double images = 3.0 * 64.0 * 64.0;
+            constexpr double glyphs = 2.0 * 32.0 * 16.0;
+            CHECK(record.Value().canvasTriangleArea == (solids + border + images + glyphs) / (64.0 * 64.0));
+            REQUIRE(arena.Build(snapshot).HasError());
+            const auto timing = arena.CpuWorkStatistics();
+            CHECK(timing.enabled);
+            CHECK(timing.attempts == 2);
+            CHECK(timing.succeeded == 1);
+            CHECK(arena.Statistics().failedBuilds == 1);
+            arena.Close();
+            CHECK(plan.Inspect(66).Value().snapshot == record.Value().snapshot);
+        }
+
         TEST_CASE("UI geometry generates indexed primitives and preserves authored batch order", "[runtime_ui][render_geometry]") {
             const auto snapshot = MakeSnapshot(2);
             auto arena = MakeArena();

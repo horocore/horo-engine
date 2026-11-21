@@ -1,8 +1,12 @@
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
 
+#include "Horo/AI/DecisionPlanCodec.h"
+
 #include <algorithm>
+#include <cmath>
 #include <cstring>
 #include <filesystem>
+#include <limits>
 
 namespace Horo::Editor {
     namespace {
@@ -68,6 +72,121 @@ namespace Horo::Editor {
     void AssetBrowserInteractionSession::OpenCreateFolder() {
         m_state.createFolderBuffer.fill('\0');
         m_state.openCreateFolder = true;
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::OpenCreateTaskDecision */
+    void AssetBrowserInteractionSession::OpenCreateTaskDecision(std::string_view directory, AI::DecisionPlanKind family,
+                                                                std::uint64_t catalogRevision) {
+        m_state.createTaskDecision = {.directory = std::string{directory}, .family = family, .catalogRevision = catalogRevision};
+        m_state.initialTaskPalette = {};
+        if (family == AI::DecisionPlanKind::Utility)
+            m_state.createTaskDecision.score.emplace();
+        m_state.utilityMinimum = 0;
+        m_state.utilityMaximum = 1;
+        m_state.openCreateTaskDecision = true;
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::CanConfirmTaskDecision */
+    bool AssetBrowserInteractionSession::CanConfirmTaskDecision(const TaskDecisionCreationRequest &draft) noexcept {
+        if (draft.directory.empty() || !AI::IsValidBlackboardDisplayName(draft.name) || !draft.schema.IsValid() || !draft.task.IsValid() ||
+            !draft.provider.IsValid() || draft.version == 0 || draft.catalogRevision == 0)
+            return false;
+        if (draft.family == AI::DecisionPlanKind::BehaviorTree)
+            return !draft.score && draft.version <= std::numeric_limits<std::uint16_t>::max();
+        return draft.family == AI::DecisionPlanKind::Utility && draft.score && draft.score->key.IsValid() &&
+               std::isfinite(draft.score->maximum - draft.score->minimum) && draft.score->maximum > draft.score->minimum;
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::ConfirmTaskDecision */
+    std::optional<EditorWorkspaceViewCommandData> AssetBrowserInteractionSession::ConfirmTaskDecision(
+        const TaskDecisionCreationRequest &draft) {
+        if (!CanConfirmTaskDecision(draft))
+            return {};
+        return EditorWorkspaceViewCommandData{.command = EditorWorkspaceViewCommand::CreateTaskDecision, .newTaskDecision = draft};
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::OpenCreateStateMachine */
+    void AssetBrowserInteractionSession::OpenCreateStateMachine(std::string_view directory) {
+        m_state.createStateMachine = {.directory = std::string{directory}};
+        m_state.openCreateStateMachine = true;
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::CanConfirmStateMachine */
+    bool AssetBrowserInteractionSession::CanConfirmStateMachine(const StateMachineCreationRequest &draft) noexcept {
+        return !draft.directory.empty() && AI::IsValidBlackboardDisplayName(draft.name) && draft.schema.IsValid() &&
+               (draft.outcome == AI::DecisionStateTerminal::Succeeded || draft.outcome == AI::DecisionStateTerminal::Failed);
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::ConfirmStateMachine */
+    std::optional<EditorWorkspaceViewCommandData> AssetBrowserInteractionSession::ConfirmStateMachine(
+        const StateMachineCreationRequest &draft) {
+        if (!CanConfirmStateMachine(draft))
+            return {};
+        return EditorWorkspaceViewCommandData{.command = EditorWorkspaceViewCommand::CreateStateMachine, .newStateMachine = draft};
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::OpenCreateBlackboard */
+    void AssetBrowserInteractionSession::OpenCreateBlackboard(std::string_view directory) {
+        m_state.createBlackboard = {
+            .request = {.directory = std::string{directory}, .key = {.presence = AI::BlackboardKeyPresence::Optional}}};
+        m_state.openCreateBlackboard = true;
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::CanConfirmCreateBlackboard */
+    bool AssetBrowserInteractionSession::CanConfirmCreateBlackboard(const BlackboardCreationDraft &draft) noexcept {
+        const auto &request = draft.request;
+        return !request.directory.empty() && AI::IsValidBlackboardDisplayName(request.name) &&
+               AI::IsValidBlackboardDisplayName(request.keyName) &&
+               (request.key.presence != AI::BlackboardKeyPresence::Required || request.key.defaultValue.has_value());
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::ConfirmCreateBlackboard */
+    std::optional<EditorWorkspaceViewCommandData> AssetBrowserInteractionSession::ConfirmCreateBlackboard(
+        const BlackboardCreationDraft &draft) {
+        if (!CanConfirmCreateBlackboard(draft))
+            return {};
+        return EditorWorkspaceViewCommandData{.command = EditorWorkspaceViewCommand::CreateBlackboardSchema,
+                                              .newBlackboard = draft.request};
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::OpenCreateQuery */
+    void AssetBrowserInteractionSession::OpenCreateQuery(std::string_view directory) {
+        m_state.createQuery = {.directory = std::string{directory}};
+        m_state.openCreateQuery = true;
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::CanConfirmCreateQuery */
+    bool AssetBrowserInteractionSession::CanConfirmCreateQuery(const EnvironmentQueryCreationDraft &draft) noexcept {
+        if (draft.directory.empty() || draft.name.front() == char{} || draft.maximumResults <= 0 ||
+            draft.maximumResults > static_cast<int>(AI::EnvironmentQuerySchemaLimits::MaximumResults))
+            return false;
+        return draft.perceivedActors || (draft.stepMillimeters > 0 && draft.outerSteps >= 0 &&
+                                         draft.outerSteps <= static_cast<int>(AI::MaximumQueryLatticeOuterSteps) &&
+                                         (!draft.annulus || (draft.innerSteps >= 0 && draft.innerSteps <= draft.outerSteps)) &&
+                                         (!draft.distance || draft.radiusMillimeters > 0));
+    }
+
+    /** @copydoc AssetBrowserInteractionSession::ConfirmCreateQuery */
+    std::optional<EditorWorkspaceViewCommandData> AssetBrowserInteractionSession::ConfirmCreateQuery(
+        const EnvironmentQueryCreationDraft &draft) {
+        if (!CanConfirmCreateQuery(draft))
+            return {};
+        EditorWorkspaceViewCommandData command;
+        command.command = EditorWorkspaceViewCommand::CreateEnvironmentQuery;
+        EnvironmentQueryCreationRequest request{.directory = draft.directory,
+                                                .name = {draft.name.begin(), std::ranges::find(draft.name, char{})},
+                                                .maximumResults = static_cast<std::uint32_t>(draft.maximumResults)};
+        if (draft.perceivedActors) {
+            request.perception = draft.currentlySensed ? AI::QueryPerceptionMatch::CurrentlySensed : AI::QueryPerceptionMatch::Remembered;
+        } else {
+            request.lattice = {.stepMillimeters = static_cast<std::uint32_t>(draft.stepMillimeters),
+                               .outerSteps = static_cast<std::uint32_t>(draft.outerSteps),
+                               .innerSteps = draft.annulus ? std::optional{static_cast<std::uint32_t>(draft.innerSteps)} : std::nullopt};
+            if (draft.distance)
+                request.distance = AI::QueryPointDistanceTest{static_cast<std::uint32_t>(draft.radiusMillimeters), draft.preferNearer};
+        }
+        command.newEnvironmentQuery = std::move(request);
+        return command;
     }
 
     /** @copydoc AssetBrowserInteractionSession::Navigate */

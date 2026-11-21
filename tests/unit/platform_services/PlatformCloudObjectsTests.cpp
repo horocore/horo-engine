@@ -201,6 +201,10 @@ namespace Horo::PlatformServices {
                                     .objects = {Head(std::byte{1}, std::byte{11}, 0), Head(std::byte{2}, std::byte{12}, 3)},
                                     .hasMore = true};
         page.next = cursor.Value();
+        RequireError(ValidateCloudObjectPage(page, request, subject), CloudObjectErrors::InvalidPage);
+        const auto next = CloudListCursor::Copy(std::array{std::byte{9}});
+        REQUIRE(next.HasValue());
+        page.next = next.Value();
         REQUIRE(ValidateCloudObjectPage(page, request, subject).HasValue());
 
         page.objects.push_back(Head(std::byte{3}, std::byte{13}, 4));

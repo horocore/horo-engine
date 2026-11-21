@@ -193,6 +193,79 @@ namespace Horo::Editor {
             command.edit.value = 3.0;
             CheckRejectedEdit(document, values.Execute(command, sources, &schemas, Limits(), cancelled.Token()), unchanged, retained);
         }
+
+        TEST_CASE("Prefab scoped revert commits once and preserves unrelated orphan intent", "[unit][editor][prefab][history]") {
+            SceneDocument document;
+            EditorHistory history;
+            SceneDocumentCommandExecutor commands{document, history};
+            SceneDocumentPrefabValueCommands values{document, history};
+            const auto instance = Prefab::PrefabInstanceId::Create(9).Value();
+            const auto sources = Sources();
+            const auto schemas = Schemas();
+            const auto source = sources.Resolve(Asset(), instance, Limits()).Value();
+            const auto root = Prefab::PrefabObjectAddress::Create({}, {0}).Value();
+            const auto assignment =
+                Prefab::PreparePrefabValueEdit(source, {}, {Prefab::PrefabValueEditKind::Assign, Property(), false}, &schemas, Limits())
+                    .Value();
+            auto intent =
+                Prefab::PreparePrefabValueEdit(source, assignment.rebased,
+                                               {Prefab::PrefabValueEditKind::Assign, root, Math::Transform{{1, 2, 3}}}, &schemas, Limits())
+                    .Value()
+                    .rebased;
+            auto orphan = intent.records.front();
+            orphan.target = Prefab::PrefabObjectAddress::Create({}, {9}).Value();
+            orphan.componentSchemaVersion = 0;
+            orphan.value = Math::Transform{{3, 2, 1}};
+            intent.orphans.push_back(
+                {orphan, intent.authoredAgainst, intent.schemaRevision, Prefab::PrefabValueOverrideIssue::TargetRemoved});
+            REQUIRE(document.LoadSaved({}, {{instance, Prefab::PrefabAssetReference::Create(Asset()).Value(), {}, {}, intent}}).HasValue());
+
+            RevertScenePrefabOverridesCommand revert{instance,
+                                                     document.Revision(),
+                                                     source.Revision(),
+                                                     schemas.Revision(),
+                                                     Prefab::PrefabValueOverrideTarget{Property()},
+                                                     document.ReplacementEpoch()};
+            std::size_t remaining = 1;
+            SECTION("value") {
+                CHECK(std::holds_alternative<Prefab::PrefabValueOverrideTarget>(revert.target));
+            }
+            SECTION("component") {
+                revert.target = Prefab::PrefabComponentOverrideTarget{root, Type(), Property().ComponentInstance()};
+            }
+            SECTION("object") {
+                revert.target = root;
+                remaining = 0;
+            }
+            SECTION("instance") {
+                revert.target = AllScenePrefabOverrides{};
+            }
+            CancellationSource cancelled;
+            cancelled.RequestCancellation();
+            CheckRejectedEdit(document, values.Execute(revert, sources, &schemas, Limits(), cancelled.Token()), revert.expectedRevision,
+                              intent);
+            const auto result = values.Execute(revert, sources, &schemas, Limits());
+            REQUIRE(result.HasValue());
+            CHECK(result.Value().committed);
+            CHECK(result.Value().affectedPrefabInstances == std::vector{instance});
+            CHECK(document.Revision().value == revert.expectedRevision.value + 1);
+            CHECK(document.IsDirty());
+            const auto after = document.PrefabInstances()[0].valueOverrides;
+            if (std::holds_alternative<AllScenePrefabOverrides>(revert.target))
+                CHECK_FALSE(after);
+            else {
+                REQUIRE(after);
+                CHECK(after->records.size() == remaining);
+                if (remaining != 0)
+                    CHECK(after->records.front().target == Prefab::PrefabValueOverrideTarget{root});
+                CHECK(after->orphans == intent.orphans);
+            }
+            REQUIRE(commands.Undo().HasValue());
+            CHECK_FALSE(document.IsDirty());
+            CHECK(document.PrefabInstances()[0].valueOverrides == intent);
+            REQUIRE(commands.Redo().HasValue());
+            CHECK(document.PrefabInstances()[0].valueOverrides == after);
+        }
     }  // namespace
 }  // namespace Horo::Editor
 

@@ -58,6 +58,51 @@ presentation generation after replacement or resize, including a changed receipt
 while readiness remains true. Presentation readiness and Activity permission are
 separate: frame execution additionally requires Running and Resumed states.
 
+The qualification host enforces a 16 ms baseline interval between frame
+attempts on its monotonic clock. Android Battery Saver and severe-or-higher
+thermal pressure each select a 32 ms interval. The thermal reason takes
+precedence while both apply. The host returns to the baseline from the last
+actual attempt once neither active signal requests conservation. Pause and
+presentation loss stop attempts, and resume starts without a backlog. The
+policy gates frame attempts after input
+commit and leaves display refresh, simulation scheduling and authored
+settings to their existing owners.
+The deployment report can carry the native owner's selected pacing mode
+alongside Android's distinct thermal observation.
+
+The Vulkan qualification Activity observes Android's thermal status while it
+is resumed. Its optional deployment evidence contains a process-local
+revision and a platform status. A paused Activity publishes `inactive`.
+Missing service or registration failure is reported as `unsupported` or
+`unavailable`. The Activity sends only the current conservation decision to
+its native frame owner. Retirement revokes that Activity's mailbox token before
+attempting Java cleanup. JNI binding and retirement run outside frame admission.
+
+At resume, the Activity samples Android's system low-memory state once.
+While resumed, Android's legacy running trim levels can publish
+`moderate`, `low`, or `critical`. UI-hidden events describe visibility
+and background trim levels describe the process's reclaim priority.
+Android 14 and later use the resume snapshot alone because the platform
+omits the legacy running levels. The deployment report contains the typed
+state and its process-local revision.
+
+The resumed Vulkan Activity reads Android Battery Saver on entry and whenever
+the protected power-mode broadcast arrives. The observer reads the current
+value from Android's PowerManager and publishes only state transitions. The
+deployment report carries `enabled`, `disabled`, `inactive`, `unsupported`,
+or `unavailable`. The same foreground receiver independently reports battery
+charge percentage and charging state from Android's protected sticky battery
+broadcast. A missing or malformed snapshot gives `unavailable`. An explicit
+battery-absent report gives `unsupported`. Pausing the current Activity
+withdraws both observations.
+
+The resumed, focused Activity obtains the Android-reported refresh rate from
+the display attached to its window. It samples on focus and on notifications
+for that display, and withdraws the value on focus loss or window detachment.
+The optional report records a bounded rate in millihertz when a rate is
+available. Frame cadence, display completion, and OpenXR headset refresh have
+their own authorities.
+
 ## Nonblocking acquisition and retirement
 
 Availability polling observes the native output and advances retirement. It does
@@ -84,6 +129,10 @@ After destroying an old surface tuple, the readiness poll returns unavailable
 with that native output genuinely absent. A later poll imports the replacement;
 the application can observe the real loss boundary even when window facts did
 not change. This uses no synthetic busy timer or fabricated completion.
+During the next import, native surface loss or temporarily inconsistent
+Android and Vulkan extents leave presentation unavailable. The backend rolls
+back that candidate and retries on a later poll. Unsupported formats and
+other native failures keep their explicit errors.
 
 The maintenance extension's present fences cover presentation resource lifetime,
 which differs from command completion. The Vulkan specification describes both

@@ -5,11 +5,15 @@
 #include "Horo/Security/ArtifactSignature.h"
 #include "OpenXRComponentManifest.h"
 
+#include <span>
+#include <string>
+#include <vector>
+
 namespace Horo::Application::Internal {
     /** @brief Signed deployment attestation bound to one exact component and explicit installed-product policy.
      * @details The initial profile permits no extra bundled dependencies. Remaining OS ABI dependencies belong to
-     * the exact installer-qualified deployment contract. RTLD_LOCAL and an absolute library path do not prove that
-     * contract; absent configured trusted product policy remains unavailable before native loading.
+     * the exact installer-qualified deployment contract. The Windows x64 profile also compares the digest-verified
+     * loader's direct PE imports with the signed set. A separate native load policy must enforce runtime OS ABI ownership.
      */
     class VerifiedOpenXRDeployment final {
     public:
@@ -32,11 +36,17 @@ namespace Horo::Application::Internal {
         [[nodiscard]] const Sha256Digest &ComponentIdentity() const noexcept;
         /** @brief Returns actual trusted signature evidence retained through native retirement. @return Immutable evidence. */
         [[nodiscard]] const Security::VerifiedArtifactEvidence &Evidence() const noexcept;
+        /** @brief Number of externally supplied OS ABI entries in the signed deployment contract. */
+        [[nodiscard]] std::uint8_t OsAbiDependencyCount() const noexcept;
+        /** @brief Borrows canonical bounded signed OS ABI basenames. @return Immutable vocabulary retained through the lease. */
+        [[nodiscard]] std::span<const std::string> OsAbiDependencies() const noexcept;
 
     private:
         /** @brief Stores only completely verified exact deployment evidence. */
-        VerifiedOpenXRDeployment(const Sha256Digest &component, Security::VerifiedArtifactEvidence evidence);
+        VerifiedOpenXRDeployment(const Sha256Digest &component, Security::VerifiedArtifactEvidence evidence,
+                                 std::vector<std::string> osAbiDependencies);
         Sha256Digest component_;
         Security::VerifiedArtifactEvidence evidence_;
+        std::vector<std::string> osAbiDependencies_;
     };
 }  // namespace Horo::Application::Internal

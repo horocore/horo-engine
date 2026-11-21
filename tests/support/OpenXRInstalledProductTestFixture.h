@@ -94,7 +94,8 @@ namespace Horo::Tests::OpenXRProduct {
         std::unique_ptr<Host::PackageProjectHost> host;
         std::shared_ptr<Application::PackageApplication> application;
 
-        explicit InstalledProductFixture(const std::filesystem::path &loader, std::optional<std::string> bindingDocument = std::nullopt) {
+        explicit InstalledProductFixture(const std::filesystem::path &loader, std::optional<std::string> bindingDocument = std::nullopt,
+                                         std::optional<Json> osDependencies = std::nullopt) {
             REQUIRE(roots->Add(key.root).HasValue());
             verifier = std::make_shared<Security::ArtifactVerifier>(Security::CreateMbedTlsSignatureProvider(), roots);
             std::ifstream input{loader, std::ios::binary};
@@ -109,7 +110,10 @@ namespace Horo::Tests::OpenXRProduct {
                     return Result<Security::DetachedSignatureEnvelope>::Failure(MakeError(Horo::SecurityErrors::MissingEvidence));
                 return Result<Security::DetachedSignatureEnvelope>::Success(signature);
             });
-            const auto deployment = Deployment(loaderSignature.artifactDigest).dump();
+            auto deploymentFields = Deployment(loaderSignature.artifactDigest);
+            if (osDependencies)
+                deploymentFields["osAbiDependencies"] = std::move(*osDependencies);
+            const auto deployment = deploymentFields.dump();
             const auto component = Component(loaderSignature.artifactDigest, ComputeSha256(TextBytes(deployment))).dump();
             const auto bindings = bindingDocument ? std::move(*bindingDocument) : Bindings().dump();
             const std::vector<std::pair<std::string, std::string>> contents{{"horo-package.toml", "schemaVersion = 1\n"},

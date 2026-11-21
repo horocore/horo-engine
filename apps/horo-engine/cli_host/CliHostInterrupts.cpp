@@ -65,6 +65,10 @@ namespace Horo::Application::Internal {
         if (sigaction(SIGTERM, &action, &terminate_) != 0)
             return Result<void>::Failure(MakeError(Cli::CliErrors::HostFailure));
         terminateInstalled_ = true;
+        action.sa_handler = SIG_IGN;
+        if (sigaction(SIGPIPE, &action, &pipe_) != 0)
+            return Result<void>::Failure(MakeError(Cli::CliErrors::HostFailure));
+        pipeInstalled_ = true;
 #endif
         relay_ = std::jthread([&stop](std::stop_token shutdown) {
             while (!shutdown.stop_requested()) {
@@ -91,6 +95,8 @@ namespace Horo::Application::Internal {
         if (interruptInstalled_)
             SetConsoleCtrlHandler(Handler, FALSE);
 #else
+        if (pipeInstalled_)
+            sigaction(SIGPIPE, &pipe_, nullptr);
         if (terminateInstalled_)
             sigaction(SIGTERM, &terminate_, nullptr);
         if (interruptInstalled_)

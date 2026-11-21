@@ -1,3 +1,4 @@
+#include "Horo/Foundation/Logging/LogContext.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 #include "Horo/Runtime/Save/SaveRestoreTransaction.h"
 
@@ -17,6 +18,7 @@ namespace Horo::Runtime {
                                                                     Result<SaveRestoreReferenceContext> callbackFailure) noexcept {
             static_assert(std::is_nothrow_move_constructible_v<Result<SaveRestoreReferenceContext>>);
             try {
+                const Log::ScopedDiagnosticSuppression suppressResolverDiagnostics;
                 return resolver.Resolve(context, prepared);
             } catch (const std::bad_alloc &) {
                 return std::move(allocationFailure);
@@ -42,7 +44,10 @@ namespace Horo::Runtime {
             std::vector<StagedRestorePreparedParticipant> prepared;
             prepared.reserve(staged_.size());
             for (std::size_t index = 0; index < staged_.size(); ++index) {
-                const auto *projection = staged_[index]->PreparedState();
+                const auto *projection = [&] {
+                    const Log::ScopedDiagnosticSuppression suppressParticipantDiagnostics;
+                    return staged_[index]->PreparedState();
+                }();
                 if (!projection)
                     return FailPreparation(MakeError(SaveErrors::RestoreAdapterContractInvalid), StagedRestorePhase::FixupReferences,
                                            index);

@@ -32,15 +32,41 @@ namespace {
         std::shared_ptr<Evidence> evidence_;
     };
 
+    /** @brief Starts real Foundation work and keeps its immutable lease pinned until the test releases it. */
+    class BlockingBackend final : public INavigationQueryBackend {
+    public:
+        explicit BlockingBackend(std::shared_ptr<Gate> gate) : gate_(std::move(gate)) {}
+
+        NavigationProviderCapabilities Capabilities() const noexcept override {
+            return MakeAvailablePathQueryCapabilities(1, Request().requirement.limits, 1);
+        }
+
+        Result<NavigationPath> FindPath(const NavigationPathRequest &, const CancellationToken &token) const override {
+            std::unique_lock lock(gate_->mutex);
+            gate_->entered = true;
+            gate_->changed.notify_all();
+            gate_->changed.wait_for(lock, std::chrono::seconds(3), [this] {
+                return gate_->released;
+            });
+            return Result<NavigationPath>::Failure(
+                MakeError(token.IsCancellationRequested() ? NavigationErrors::QueryCancelled : NavigationErrors::NoNavigationData));
+        }
+
+    private:
+        std::shared_ptr<Gate> gate_;
+    };
+
     struct Fixture final {
-        JobSystem jobs{{.workerCount = 0}};
+        JobSystem jobs;
         NavigationWorldLifecycle world{std::move(NavigationWorldLifecycle::Create(4)).Value()};
         NavigationCoordinator coordinator{std::move(NavigationCoordinator::Create(jobs, Limits())).Value()};
         NavigationAgentSceneBinding binding{World(), Activation().scene, Activation().sceneGeneration};
         std::shared_ptr<GameplayNavigationContext> context;
 
-        explicit Fixture(std::shared_ptr<Evidence> evidence = {}) {
-            if (evidence)
+        explicit Fixture(std::shared_ptr<Evidence> evidence = {}, std::shared_ptr<Gate> gate = {}) : jobs({.workerCount = gate ? 1u : 0u}) {
+            if (gate)
+                Activate(world, std::make_unique<BlockingBackend>(std::move(gate)));
+            else if (evidence)
                 Activate(world, std::make_unique<ContextBackend>(std::move(evidence)));
             else
                 Activate(world);
@@ -122,6 +148,43 @@ TEST_CASE("Navigation caller cancellation reaches canonical publication and revo
     REQUIRE(fixture.context->DrainRetired().Value());
     REQUIRE(fixture.coordinator.IsDrained());
     ErrorIs(fixture.context->Submit({}), NavigationCapabilityErrors::ScopeRevoked);
+}
+
+TEST_CASE("Navigation module revocation abandons its unpublished or unconsumed results without draining another caller") {
+    Fixture fixture;
+    auto path = fixture.context->Submit({});
+    REQUIRE(path.HasValue());
+    SECTION("still awaiting dispatch") {}
+    SECTION("already published to the canonical coordinator") {
+        fixture.Publish();
+        REQUIRE_FALSE(fixture.coordinator.IsDrained());
+    }
+    const auto other = fixture.coordinator.Submit(fixture.world, Input(Caller(2)), 1);
+    REQUIRE(other.HasValue());
+    fixture.context->Revoke();
+    REQUIRE(fixture.context->DrainRetired().Value());
+    ErrorIs(path.Value().Poll(), NavigationCapabilityErrors::ScopeRevoked);
+    REQUIRE(fixture.coordinator.IsRetained(other.Value()));
+    REQUIRE(fixture.coordinator.Abandon(other.Value()));
+    CHECK(fixture.coordinator.IsDrained());
+}
+
+TEST_CASE("Revoked Navigation scopes wait for their actual worker fence without publishing late results") {
+    auto gate = std::make_shared<Gate>();
+    Fixture fixture{{}, gate};
+    auto path = fixture.context->Submit({});
+    REQUIRE(path.HasValue());
+    REQUIRE(fixture.coordinator.Dispatch(1) == 1);
+    REQUIRE(gate->AwaitEntry());
+    fixture.context->Revoke();
+    CHECK_FALSE(fixture.context->DrainRetired().Value());
+    ErrorIs(path.Value().Poll(), NavigationCapabilityErrors::ScopeRevoked);
+    gate->Release();
+    fixture.jobs.Shutdown(ShutdownPolicy::Drain);
+    REQUIRE(fixture.context->DrainRetired().Value());
+    CHECK(fixture.coordinator.IsDrained());
+    CHECK(fixture.coordinator.Commit(Current(std::array{Caller()}, 2)) == 0);
+    ErrorIs(path.Value().Poll(), NavigationCapabilityErrors::ScopeRevoked);
 }
 
 TEST_CASE("Navigation host scope pressure never admits an unbounded result record") {

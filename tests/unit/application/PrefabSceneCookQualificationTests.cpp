@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <catch2/generators/catch_generators.hpp>
+#include <filesystem>
 #include <nlohmann/json.hpp>
 
 namespace {
@@ -158,5 +159,23 @@ TEST_CASE("Production repeated prefab cook retains generation across malformed b
     CHECK(host.Cook(fixture.request).HasError());
     fixture.AssertRetained(previous.Value().generation);
     CHECK(RequirePublishedReference(fixture, previous.Value().generation, 8) == reference);
+    CHECK(fixture.jobs.AdmissionSnapshot().queued == std::array<std::size_t, 3>{});
+}
+
+TEST_CASE("Production prefab cooked scene reload survives removal of authored sources and failed recook",
+          "[native][prefab-cook][qualification][distribution]") {
+    HostFixture fixture;
+    WriteReferenceScene(fixture, 8);
+    auto host = fixture.MakeHost();
+    const auto published = host.Cook(fixture.request);
+    REQUIRE(published.HasValue());
+    const auto reference = RequirePublishedReference(fixture, published.Value().generation, 8);
+    for (const auto *relative : {"assets/level.scene", "assets/hierarchy.prefab", "assets/second.prefab"}) {
+        REQUIRE(std::filesystem::remove(fixture.project.dir.path / relative));
+    }
+    CHECK(RequirePublishedReference(fixture, published.Value().generation, 8) == reference);
+    REQUIRE(host.Cook(fixture.request).HasError());
+    fixture.AssertRetained(published.Value().generation);
+    CHECK(RequirePublishedReference(fixture, published.Value().generation, 8) == reference);
     CHECK(fixture.jobs.AdmissionSnapshot().queued == std::array<std::size_t, 3>{});
 }

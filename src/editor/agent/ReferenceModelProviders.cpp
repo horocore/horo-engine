@@ -3,10 +3,13 @@
 #include "ReferenceModelStream.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
+#include <charconv>
 #include <cstddef>
 #include <curl/curl.h>
 #include <limits>
+#include <map>
 #include <nlohmann/json.hpp>
 #include <sstream>
 #include <string_view>
@@ -46,14 +49,27 @@ namespace Horo::Agent {
             }
         };
 
-        /** @brief Keep URL validation simple and reject implicit redirect or credential-bearing endpoints. */
-        bool ValidEndpoint(std::string_view endpoint, Protocol protocol) {
+        /** @brief Recognizes a loopback authority with an explicit numeric port before any optional base path. */
+        bool IsLoopbackEndpoint(const std::string_view endpoint) {
+            constexpr std::array hosts{std::string_view{"http://localhost:"}, std::string_view{"http://127.0.0.1:"},
+                                       std::string_view{"http://[::1]:"}};
+            const auto host = std::ranges::find_if(hosts, [endpoint](const auto candidate) {
+                return endpoint.starts_with(candidate);
+            });
+            if (host == hosts.end())
+                return false;
+            const auto authority = endpoint.substr(host->size());
+            const auto port = authority.substr(0, authority.find('/'));
+            unsigned number{};
+            const auto parsed = std::from_chars(port.data(), port.data() + port.size(), number);
+            return parsed.ec == std::errc{} && parsed.ptr == port.data() + port.size() && number > 0 && number <= 65535;
+        }
+
+        /** @brief Keeps endpoint admission independent from credentials, query text and local transport policy. */
+        bool ValidEndpoint(std::string_view endpoint, Protocol protocol, const bool local) {
             const bool secure = endpoint.starts_with("https://");
-            const bool local = endpoint.starts_with("http://localhost:") || endpoint.starts_with("http://127.0.0.1:") ||
-                               endpoint.starts_with("http://[::1]:");
             return endpoint.size() >= 9 && (secure || local) && (protocol != Protocol::Ollama || local) &&
-                   endpoint.find('@') == std::string_view::npos && endpoint.find('?') == std::string_view::npos &&
-                   endpoint.find('#') == std::string_view::npos;
+                   endpoint.find_first_of("@?#\\") == std::string_view::npos;
         }
 
         /** @brief Map an HTTP status without retaining remote response text. */
@@ -71,6 +87,16 @@ namespace Horo::Agent {
             return {code, message.str(), status};
         }
 
+        /** @brief Keep local endpoint problems actionable without exposing URLs or remote response text. */
+        ModelError TransportError(Protocol protocol, CURLcode result) {
+            using enum ModelErrorCode;
+            if (protocol == Protocol::Ollama && result == CURLE_COULDNT_CONNECT)
+                return {Unavailable, "Local model service is unreachable. Start it or check its configured port.", std::nullopt};
+            if (protocol == Protocol::Ollama && result == CURLE_OPERATION_TIMEDOUT)
+                return {Unavailable, "Local model request timed out. Wait for the model to load and retry.", std::nullopt};
+            return {Transport, "Model HTTP transport failed", std::nullopt};
+        }
+
         /** @brief Own the bounded response buffer and cancellation state for one HTTP transfer. */
         struct HttpContext final {
             std::string pending;
@@ -85,41 +111,47 @@ namespace Horo::Agent {
         /** @brief Feed complete response lines to the parser without retaining unbounded payloads. */
         std::size_t WriteResponse(char *data,  // NOSONAR: libcurl's C callback requires a mutable char pointer.
                                   std::size_t size, std::size_t count,
-                                  void *user) {  // NOSONAR: libcurl requires this exact C callback signature.
+                                  void *user) noexcept {  // NOSONAR: libcurl requires this exact C callback signature.
             auto &state = *static_cast<HttpContext *>(user);
-            if (size != 0 && count > (std::numeric_limits<std::size_t>::max)() / size) {
-                state.oversized = true;
-                return 0;
-            }
-            const std::size_t bytes = size * count;
-            if (state.stop.stop_requested()) {
-                state.cancelled = true;
-                return 0;
-            }
-            long responseStatus = 0;
-            curl_easy_getinfo(state.curl, CURLINFO_RESPONSE_CODE, &responseStatus);
-            if (responseStatus < 200 || responseStatus >= 300)
-                return bytes;
-            if (bytes > kMaximumDiscoveryBytes || state.pending.size() > kMaximumDiscoveryBytes - bytes) {
-                state.oversized = true;
-                return 0;
-            }
-            state.pending.append(data, bytes);
-            std::size_t newline;
-            while ((newline = state.pending.find('\n')) != std::string::npos) {
-                bool accepted = false;
-                try {
-                    accepted = newline <= kMaximumLineBytes && state.consume(std::string_view(state.pending).substr(0, newline));
-                } catch (...) {  // NOSONAR: no user callback exception may unwind across libcurl's C frame.
-                    state.invalid = true;
-                }
-                if (!accepted) {
-                    state.oversized = newline > kMaximumLineBytes;
+            try {
+                if (size != 0 && count > (std::numeric_limits<std::size_t>::max)() / size) {
+                    state.oversized = true;
                     return 0;
                 }
-                state.pending.erase(0, newline + 1);
+                const std::size_t bytes = size * count;
+                if (state.stop.stop_requested()) {
+                    state.cancelled = true;
+                    return 0;
+                }
+                long responseStatus = 0;
+                curl_easy_getinfo(state.curl, CURLINFO_RESPONSE_CODE, &responseStatus);
+                if (responseStatus < 200 || responseStatus >= 300)
+                    return bytes;
+                if (bytes > kMaximumDiscoveryBytes || state.pending.size() > kMaximumDiscoveryBytes - bytes) {
+                    state.oversized = true;
+                    return 0;
+                }
+                state.pending.append(data, bytes);
+                std::size_t newline;
+                while ((newline = state.pending.find('\n')) != std::string::npos) {
+                    bool accepted = false;
+                    try {
+                        accepted = newline <= kMaximumLineBytes && state.consume(std::string_view(state.pending).substr(0, newline));
+                    } catch (...) {  // NOSONAR: no user callback exception may unwind across libcurl's C frame.
+                        state.invalid = true;
+                    }
+                    if (!accepted) {
+                        state.oversized = newline > kMaximumLineBytes;
+                        return 0;
+                    }
+                    state.pending.erase(0, newline + 1);
+                }
+                return bytes;
+            } catch (...) {
+                // Buffer growth can fail before the guarded consumer is entered; never unwind through libcurl.
+                state.invalid = true;
+                return 0;
             }
-            return bytes;
         }
 
         /** @brief Abort an in-flight transfer when its caller requests cancellation. */
@@ -148,7 +180,7 @@ namespace Horo::Agent {
         }
 
         /** @brief Translate a completed transfer and its final fragment into the neutral outcome. */
-        ModelOutcome FinishHttpResponse(const HttpContext &context, CURLcode result, long status) {
+        ModelOutcome FinishHttpResponse(const HttpContext &context, Protocol protocol, CURLcode result, long status) {
             using enum ModelErrorCode;
             if (context.stop.stop_requested() || context.cancelled)
                 return {ModelError{Cancelled, "Model request cancelled", std::nullopt}};
@@ -157,7 +189,7 @@ namespace Horo::Agent {
             if (context.invalid)
                 return {ModelError{Protocol, "Invalid model response", std::nullopt}};
             if (result != CURLE_OK)
-                return {ModelError{Transport, "Model HTTP transport failed", std::nullopt}};
+                return {TransportError(protocol, result)};
             if (status < 200 || status >= 300)
                 return {HttpError(status)};
             if (!context.pending.empty()) {
@@ -174,7 +206,8 @@ namespace Horo::Agent {
         /** @brief Perform one real bounded HTTP request with a per-line or buffered response consumer. */
         ModelOutcome HttpRequest(const ModelProviderConfig &config, Protocol protocol, std::string_view path, const std::string *body,
                                  const std::string *bearer, std::stop_token stop, const std::function<bool(std::string_view)> &consume) {
-            if (!ValidEndpoint(config.endpoint, protocol) || config.timeout.count() <= 0 ||
+            const bool local = IsLoopbackEndpoint(config.endpoint);
+            if (!ValidEndpoint(config.endpoint, protocol, local) || config.timeout.count() <= 0 ||
                 config.timeout.count() > (std::numeric_limits<long>::max)() || !consume) {
                 return {ModelError{ModelErrorCode::InvalidRequest, "Invalid model provider endpoint or timeout", std::nullopt}};
             }
@@ -193,7 +226,8 @@ namespace Horo::Agent {
                 return {ModelError{ModelErrorCode::Transport, "Cannot initialize model HTTP client", std::nullopt}};
             // URL and TLS policy are configured together before callbacks or any transfer.
             if (curl_easy_setopt(curl, CURLOPT_URL, url.c_str()) != CURLE_OK ||
-                curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK) {
+                curl_easy_setopt(curl, CURLOPT_SSLVERSION, CURL_SSLVERSION_TLSv1_3) != CURLE_OK ||
+                (local && curl_easy_setopt(curl, CURLOPT_PROXY, "") != CURLE_OK)) {
                 curl_easy_cleanup(curl);
                 return {ModelError{ModelErrorCode::Transport, "Cannot configure model HTTP transport", std::nullopt}};
             }
@@ -215,7 +249,7 @@ namespace Horo::Agent {
             curl_slist_free_all(headers);
             curl_easy_cleanup(curl);
             std::ranges::fill(authorization, '\0');
-            return FinishHttpResponse(context, result, status);
+            return FinishHttpResponse(context, protocol, result, status);
         }
 
         /** @brief Serialize one assistant turn's intents without sending vendor types across the public boundary. */
@@ -237,6 +271,7 @@ namespace Horo::Agent {
         Json RequestMessages(const ModelRequest &request, Protocol protocol) {
             using enum ModelRole;
             Json messages = Json::array();
+            std::map<std::string_view, std::string_view> pendingLocalTools;
             for (const auto &message : request.messages) {
                 std::string role = "user";
                 if (message.role == System)
@@ -246,17 +281,32 @@ namespace Horo::Agent {
                 if (message.role == Tool)
                     role = "tool";
                 Json item = {{"role", role}, {"content", message.text}};
-                if (message.role == Tool && protocol == Protocol::OpenAI)
-                    item["tool_call_id"] = message.toolCallId;
+                if (message.role == Tool) {
+                    if (protocol == Protocol::OpenAI) {
+                        item["tool_call_id"] = message.toolCallId;
+                    } else {
+                        const auto tool = pendingLocalTools.find(message.toolCallId);
+                        if (tool == pendingLocalTools.end())
+                            return nullptr;
+                        item["tool_name"] = tool->second;
+                        pendingLocalTools.erase(tool);
+                    }
+                } else if (!pendingLocalTools.empty()) {
+                    return nullptr;
+                }
                 if (!message.toolIntents.empty()) {
                     Json calls = RequestToolCalls(message.toolIntents, protocol);
                     if (calls.is_null())
                         return nullptr;
                     item["tool_calls"] = std::move(calls);
+                    if (protocol == Protocol::Ollama)
+                        for (const auto &intent : message.toolIntents)
+                            if (!pendingLocalTools.try_emplace(intent.callId, intent.name).second)
+                                return nullptr;
                 }
                 messages.push_back(std::move(item));
             }
-            return messages;
+            return pendingLocalTools.empty() ? std::move(messages) : Json(nullptr);
         }
 
         /** @brief Serialize host-admitted JSON schemas for provider-native tool declarations. */
@@ -348,7 +398,7 @@ namespace Horo::Agent {
                     return {ModelError{ModelErrorCode::InvalidRequest, "Model event sink is required", std::nullopt}};
                 const Json payload = RequestJson(request, m_protocol);
                 if (payload.is_null())
-                    return {ModelError{ModelErrorCode::InvalidRequest, "Invalid tool parameter schema", std::nullopt}};
+                    return {ModelError{ModelErrorCode::InvalidRequest, "Invalid tool schema or conversation history", std::nullopt}};
                 SensitiveCredential credential{ResolveCredential()};
                 if (credential.Invalid())
                     return {ModelError{ModelErrorCode::CredentialUnavailable, "Model credential unavailable", std::nullopt}};
@@ -363,6 +413,8 @@ namespace Horo::Agent {
                     return {ModelError{ModelErrorCode::Cancelled, "Model request cancelled", std::nullopt}};
                 if (parser.Invalid())
                     return {ModelError{ModelErrorCode::Protocol, "Invalid model stream", std::nullopt}};
+                if (m_protocol == Protocol::Ollama && outcome.error && outcome.error->httpStatus == 404)
+                    return {ModelError{ModelErrorCode::InvalidRequest, "Configured local model was not found", 404}};
                 if (!outcome.Succeeded())
                     return outcome;
                 return parser.Finish();
@@ -389,6 +441,38 @@ namespace Horo::Agent {
     /** @copydoc CreateOllamaModelProvider */
     std::unique_ptr<IModelProvider> CreateOllamaModelProvider(ModelProviderConfig config) {
         return std::make_unique<ReferenceProvider>(Protocol::Ollama, std::move(config), ModelCredentialResolver{});
+    }
+
+    /** @copydoc ConfirmOllamaModelTools */
+    ModelOutcome ConfirmOllamaModelTools(const ModelProviderConfig &config, std::string_view model, std::stop_token cancellation) {
+        using enum ModelErrorCode;
+        std::string request;
+        try {
+            if (!model.empty() && model.size() <= 256)
+                request = Json{{"model", model}}.dump();
+        } catch (const Json::exception &) {
+            return {ModelError{InvalidRequest, "Invalid installed model identifier", std::nullopt}};
+        }
+        if (request.empty())
+            return {ModelError{InvalidRequest, "Invalid installed model identifier", std::nullopt}};
+
+        std::string body;
+        auto outcome = HttpRequest(config, Protocol::Ollama, "/api/show", &request, nullptr, cancellation, [&body](std::string_view line) {
+            if (line.size() > kMaximumDiscoveryBytes - body.size())
+                return false;
+            body.append(line);
+            return true;
+        });
+        if (!outcome.Succeeded()) {
+            if (outcome.error->httpStatus == 404)
+                return {ModelError{InvalidRequest, "Configured local model was not found", 404}};
+            return outcome;
+        }
+        const auto response = Json::parse(body, nullptr, false);
+        const auto features = response.find("capabilities");
+        if (features != response.end() && features->is_array() && std::ranges::find(*features, "tools") != features->end())
+            return {};
+        return {ModelError{UnsupportedCapability, "The installed model does not advertise tools", std::nullopt}};
     }
 
     /** @copydoc CreateOpenAIModelProvider */

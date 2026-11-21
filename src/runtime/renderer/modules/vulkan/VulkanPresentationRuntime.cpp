@@ -231,6 +231,8 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
         // Reject incompatible output facts transactionally, before abandoning an acquired image
         // or retiring a still-valid predecessor. Reuse these exact facts after retirement.
+        if (impl_->outputRevision == std::numeric_limits<std::uint64_t>::max())
+            return Result<void>::Failure(MakeError(RenderPresentationErrors::OutputUnavailable));
         const auto selected = impl_->SelectChainInfo(extent, mode);
         if (selected.HasError())
             return Result<void>::Failure(selected.ErrorValue());
@@ -255,6 +257,7 @@ namespace Horo::Render::Detail {
         impl_->DestroyChain();
         if (auto created = impl_->CreateChain(selected.Value()); created.HasError())
             return created;
+        ++impl_->outputRevision;
         impl_->resizing = false;
         impl_->needsReconfiguration = false;
         return Result<void>::Success();
@@ -329,6 +332,22 @@ namespace Horo::Render::Detail {
         if (!impl_->chain || impl_->format == VK_FORMAT_UNDEFINED)
             return Result<VkFormat>::Failure(MakeError(RenderPresentationErrors::DrawableUnavailable));
         return Result<VkFormat>::Success(impl_->format);
+    }
+
+    /** @copydoc VulkanPresentationRuntime::ObserveOutput */
+    Result<RenderPresentationOutput> VulkanPresentationRuntime::ObserveOutput() const {
+        if (const auto access = impl_->Access(true); access.HasError())
+            return Result<RenderPresentationOutput>::Failure(access.ErrorValue());
+        if (!impl_->chain || impl_->resizing || impl_->needsReconfiguration)
+            return Result<RenderPresentationOutput>::Failure(MakeError(RenderPresentationErrors::OutputUnavailable));
+        // The selected BGRA8 UNORM WSI pair is the portable unmanaged SDR contract. RGBA8 WSI remains available
+        // to the legacy viewport, which does not request the color-managed preview path.
+        if (impl_->format != VK_FORMAT_B8G8R8A8_UNORM)
+            return Result<RenderPresentationOutput>::Failure(MakeError(RenderPresentationErrors::OutputUnsupported));
+        return Result<RenderPresentationOutput>::Success({.requested = {},
+                                                          .active = {},
+                                                          .display = {.revision = impl_->outputRevision, .attached = true},
+                                                          .revision = impl_->outputRevision});
     }
 
     /** @copydoc VulkanPresentationRuntime::BeginFrame */

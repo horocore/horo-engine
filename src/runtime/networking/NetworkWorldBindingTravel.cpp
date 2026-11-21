@@ -4,7 +4,9 @@
 
 namespace Horo::Network {
     /** @copydoc NetworkWorldBindingController::PrepareTravel */
-    Result<void> NetworkWorldBindingController::PrepareTravel(const std::span<const NetworkModeWorld> worlds) {
+    Result<void> NetworkWorldBindingController::PrepareTravel(const std::span<const NetworkModeWorld> worlds,
+                                                              const NetworkAuthoredSceneProjection &authored,
+                                                              NetworkAuthoredSceneProjection client) {
         if (auto checked = Reconcile(impl_->nowTick); checked.HasError())
             return checked;
         for (const auto &peer : impl_->peers) {
@@ -13,7 +15,7 @@ namespace Horo::Network {
                 return Result<void>::Failure(
                     MakeError(NetworkErrors::NetworkModeUnavailable, "A cancelled remote prepare retains its finite expiry fence."));
         }
-        return impl_->worlds.PrepareTravel(worlds, impl_->nowTick, impl_->setup.maximumPendingTicks);
+        return impl_->worlds.PrepareTravel(worlds, impl_->nowTick, impl_->setup.maximumPendingTicks, authored, std::move(client));
     }
 
     /** @copydoc NetworkWorldBindingController::TravelPending */
@@ -33,13 +35,15 @@ namespace Horo::Network {
         const auto *prepared = impl_->worlds.PreparedServerBinding();
         if (!prepared)
             return true;  // A remote client still requires the matching authenticated CommitTravel.
-        return std::ranges::none_of(impl_->peers, [prepared](const Impl::Peer &peer) {
-            return peer.lifecycle && peer.sendsWorld && (peer.frameBytes != 0 || peer.sent != *prepared);
+        return std::ranges::none_of(impl_->peers, [this, prepared](const Impl::Peer &peer) {
+            return peer.lifecycle && peer.sendsWorld &&
+                   (peer.frameBytes != 0 || peer.sent != *prepared || !impl_->AuthoredSent(peer, prepared->worldSession));
         });
     }
 
     /** @copydoc NetworkWorldBindingController::Commit */
-    Result<void> NetworkWorldBindingController::Commit(const Runtime::RuntimePhase phase) {
+    Result<void> NetworkWorldBindingController::Commit(const Runtime::RuntimePhase phase, std::uint64_t localSimulationTick,
+                                                       const CancellationToken &cancellation) {
         if (auto checked = impl_->CheckOwner(); checked.HasError())
             return checked;
         const Impl::BusyScope busy{impl_->busy};
@@ -70,6 +74,9 @@ namespace Horo::Network {
             if (reservedCommit)
                 impl_->ReleaseCommitReservations(*reservedCommit);
             impl_->worlds.CancelTravel();
+        } else if (impl_->setup.policy.initialState) {
+            impl_->ApplyInitial(localSimulationTick, cancellation);
+            impl_->ApplyStateUpdates(localSimulationTick, cancellation);
         }
         // No network send occurs here. After local publication each exact reserved
         // sequence remains owned until accepted, deadline, or typed peer failure.
@@ -95,6 +102,10 @@ namespace Horo::Network {
         for (auto &peer : impl_->peers) {
             if (peer.pending && peer.pending->kind == NetworkWorldBindingKind::PrepareTravel) {
                 peer.pending.reset();
+                peer.frameBytes = 0;
+            }
+            if (peer.authoredPending && !impl_->worlds.AuthorityAuthored(peer.authoredPending->session)) {
+                peer.authoredPending.reset();
                 peer.frameBytes = 0;
             }
         }

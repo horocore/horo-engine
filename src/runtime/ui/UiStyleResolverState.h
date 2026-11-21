@@ -154,10 +154,16 @@ namespace Horo::Runtime::Ui {
                 tree.SourceDocumentRevision() != request.sources.document || tree.Revision() != request.sources.tree ||
                 tree.Size() != request.elements.size() || tree.Size() > descriptor.elementCapacity)
                 return StyleInternal::Failure(UiErrors::StyleSourceStale);
-            for (const auto &element : request.elements)
-                if (const auto valid = StyleInternal::ValidateElementInput(registry, element, descriptor.propertyCapacity);
-                    valid.HasError())
+            for (const auto &element : request.elements) {
+                UiStylePropertyId property;
+                if (const auto valid = StyleInternal::ValidateElementInput(registry, element, descriptor.propertyCapacity,
+                                                                           request.failure ? &property : nullptr);
+                    valid.HasError()) {
+                    if (request.failure && tree.Get(element.element).HasValue())
+                        *request.failure = {element.element, property};
                     return Result<void>::Failure(valid.ErrorValue());
+                }
+            }
 
             if (const auto preorder = tree.Preorder(std::span<UiElementHandle>{traversalScratch.data(), tree.Size()}); preorder.HasError())
                 return StyleInternal::Failure(UiErrors::StyleSourceStale);
@@ -212,8 +218,11 @@ namespace Horo::Runtime::Ui {
                 const StyleInternal::WorkingStyle *parent =
                     node.parent < 0 ? nullptr : &candidateNodes[static_cast<std::uint32_t>(node.parent)].style;
                 auto resolved = StyleInternal::ResolveElement(registry, request.elements[index], parent, descriptor.propertyCapacity);
-                if (resolved.HasError())
+                if (resolved.HasError()) {
+                    if (request.failure)
+                        request.failure->element = request.elements[index].element;
                     return Result<void>::Failure(resolved.ErrorValue());
+                }
                 node.style = std::move(resolved).Value();
                 node.dirty = false;
                 node.resolved = true;

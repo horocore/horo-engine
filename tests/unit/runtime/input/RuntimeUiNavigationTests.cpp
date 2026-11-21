@@ -155,31 +155,6 @@ namespace Horo::Runtime::Ui {
             CHECK(create(fixture.descriptor).HasError());
         }
 
-        TEST_CASE("Canonical glyph vocabulary has stable supported controls and typed missing capabilities", "[runtime_ui][glyph]") {
-            using enum Input::BindingControlKind;
-            const std::array kinds{Key, PointerButton, GamepadButton, GamepadAxis};
-            const std::array counts{static_cast<std::size_t>(Input::Key::Count), static_cast<std::size_t>(Input::PointerButton::Count),
-                                    static_cast<std::size_t>(Input::GamepadButton::Count),
-                                    static_cast<std::size_t>(Input::GamepadAxis::Count)};
-            for (std::size_t kind = 0; kind < kinds.size(); ++kind) {
-                for (std::size_t control = kind == 0 ? 1 : 0; control < counts[kind]; ++control) {
-                    const Input::InputGlyphId id{kinds[kind], static_cast<std::uint16_t>(control)};
-                    const auto before = Tests::AllocationProbe::Count();
-                    const auto glyph = Input::CanonicalGlyph(id);
-                    const auto after = Tests::AllocationProbe::Count();
-                    CHECK(before == after);
-                    CHECK(glyph.id == id);
-                    CHECK(glyph.support == Input::InputGlyphSupport::CanonicalLabel);
-                    CHECK_FALSE(glyph.label.empty());
-                }
-                CHECK(Input::CanonicalGlyph({kinds[kind], 65535}).support == Input::InputGlyphSupport::Unsupported);
-            }
-            CHECK(Input::CanonicalGlyph({Input::BindingControlKind::PointerWheelX, 0}).label == "Wheel X");
-            CHECK(Input::CanonicalGlyph({Input::BindingControlKind::PointerWheelY, 0}).label == "Wheel Y");
-            CHECK(Input::CanonicalGlyph({Input::BindingControlKind::PointerWheelX, 1}).support == Input::InputGlyphSupport::Unsupported);
-            CHECK(Input::CanonicalGlyph({Input::BindingControlKind::RawGamepadAxis, 1}).support == Input::InputGlyphSupport::Unsupported);
-        }
-
         TEST_CASE("Full action queue refuses submit without changing earlier admitted commands", "[runtime_ui][navigation][capacity]") {
             Fixture fixture;
             const UiActionSource source{fixture.actions.Owner(), fixture.graph.CurrentFocus().Value()->element};
@@ -388,6 +363,113 @@ namespace Horo::Runtime::Ui {
             CHECK(fixture.actions.QueuedCount() == 2);
         }
 
+        TEST_CASE("Two virtual players route independently through a shared Input context across device replacement",
+                  "[runtime_ui][navigation][qualification]") {
+            Input::InputService input;
+            const Input::InputContextId contextId{"qualification.ui"};
+            auto map = DefaultUiNavigationActions(contextId);
+            UiNavigationInputDescriptor firstDescriptor{.player = 0};
+            for (std::size_t index = 0; index < UiNavigationActionCount; ++index)
+                firstDescriptor.actions[index] = map[index].id;
+            auto secondDescriptor = firstDescriptor;
+            secondDescriptor.player = 1;
+            REQUIRE(input.Router().SetActionMap(std::move(map)).HasValue());
+            auto context = input.Router().PushContext(contextId, Input::InputContextKind::FocusedGuiWidget);
+
+            const auto firstOwner = Owner();
+            auto secondOwner = firstOwner;
+            secondOwner.instance.slot += 20;
+            secondOwner.canvas.slot += 20;
+            secondOwner.scope.player = UiFocusPlayerId{firstOwner.instance.ownership, 23, 1};
+            secondOwner.scope.presentationLayer.slot += 20;
+            auto firstFocus = Graph(firstOwner);
+            auto secondNodes = Nodes(secondOwner);
+            for (auto &node : secondNodes)
+                node.element.slot += 20;
+            auto secondGraph =
+                UiFocusGraph::Create({secondOwner, Stable<UiElementId>(11), UiFocusRecoveryPolicy::DefaultThenFirst, 8, 4, 4}, secondNodes);
+            REQUIRE(secondGraph.HasValue());
+            auto secondFocus = std::move(secondGraph).Value();
+            auto firstActions = UiActionRouter::Create({ActionOwner(firstOwner), 4}).Value();
+            auto secondActions = UiActionRouter::Create({ActionOwner(secondOwner), 4}).Value();
+            Input::VirtualGamepad first{input.Collector()};
+            Input::VirtualGamepad second{input.Collector()};
+            Input::VirtualGamepad substitute{input.Collector()};
+            input.BeginFrame(1);
+            const auto original = first.Connect("First physical mapping");
+            const auto secondDevice = second.Connect("Second physical mapping");
+            (void)input.CommitFrame();
+            REQUIRE(input.Router().AssignGamepad(0, original));
+            REQUIRE(input.Router().AssignGamepad(1, secondDevice));
+
+            auto firstPrepared = UiNavigationInput::Create(firstDescriptor, input.Router(), context, firstFocus, firstActions);
+            auto secondPrepared = UiNavigationInput::Create(secondDescriptor, input.Router(), context, secondFocus, secondActions);
+            REQUIRE(firstPrepared.HasValue());
+            REQUIRE(secondPrepared.HasValue());
+            auto firstAdapter = std::move(firstPrepared).Value();
+            auto secondAdapter = std::move(secondPrepared).Value();
+            auto pump = [&](const std::uint64_t time) {
+                auto a = firstAdapter.Pump(input.Router(), context, firstFocus, firstActions, time);
+                auto b = secondAdapter.Pump(input.Router(), context, secondFocus, secondActions, time);
+                REQUIRE(a.HasValue());
+                REQUIRE(b.HasValue());
+                return std::array{a.Value(), b.Value()};
+            };
+            (void)pump(0);
+            input.BeginFrame(2);
+            REQUIRE(first.Press(Input::GamepadButton::DPadDown));
+            REQUIRE(second.Press(Input::GamepadButton::South));
+            (void)input.CommitFrame();
+            const auto initial = pump(1);
+            REQUIRE(initial[0].focus);
+            CHECK_FALSE(initial[0].requests[0]);
+            CHECK_FALSE(initial[1].focus);
+            REQUIRE(initial[1].requests[0]);
+            CHECK(firstFocus.CurrentFocus().Value()->id == Stable<UiElementId>(12));
+            CHECK(secondFocus.CurrentFocus().Value()->id == Stable<UiElementId>(11));
+            CHECK(secondActions.QueuedCount() == 1);
+
+            input.BeginFrame(3);
+            first.Disconnect();
+            REQUIRE(second.Release(Input::GamepadButton::South));
+            const auto replacement = substitute.Connect("Replacement physical mapping");
+            REQUIRE(substitute.Press(Input::GamepadButton::South));
+            (void)input.CommitFrame();
+            REQUIRE(replacement != original);
+            REQUIRE(input.Router().AssignGamepad(0, replacement));
+            const auto lost = pump(2);
+            CHECK_FALSE(lost[0].requests[0]);
+            CHECK_FALSE(lost[1].requests[0]);
+            CHECK(firstActions.QueuedCount() == 0);
+            CHECK(secondActions.QueuedCount() == 1);
+
+            input.BeginFrame(4);
+            REQUIRE(substitute.Release(Input::GamepadButton::South));
+            (void)input.CommitFrame();
+            (void)pump(3);
+            input.BeginFrame(5);
+            REQUIRE(substitute.Press(Input::GamepadButton::South));
+            REQUIRE(second.Press(Input::GamepadButton::DPadDown));
+            (void)input.CommitFrame();
+            const auto restored = pump(4);
+            REQUIRE(restored[0].requests[0]);
+            CHECK(restored[0].presentation.device == replacement);
+            REQUIRE(restored[1].focus);
+            CHECK_FALSE(restored[1].requests[0]);
+            CHECK(firstActions.QueuedCount() == 1);
+            CHECK(secondActions.QueuedCount() == 1);
+            CHECK(firstFocus.CurrentFocus().Value()->id == Stable<UiElementId>(12));
+            CHECK(secondFocus.CurrentFocus().Value()->id == Stable<UiElementId>(12));
+
+            secondAdapter.Shutdown();
+            input.BeginFrame(6);
+            REQUIRE(second.Release(Input::GamepadButton::DPadDown));
+            (void)input.CommitFrame();
+            const auto stopped = pump(5);
+            CHECK(stopped[1].status == UiNavigationInputStatus::Stopped);
+            CHECK(secondActions.QueuedCount() == 1);
+        }
+
         TEST_CASE("Published reload and profile changes require explicit rebind without touching old queued actions",
                   "[runtime_ui][navigation][reload]") {
             Fixture fixture;
@@ -442,7 +524,7 @@ namespace Horo::Runtime::Ui {
             CHECK(fixture.adapter->Presentation().modality == Input::InputModality::Unknown);
         }
 
-        TEST_CASE("Raw unmapped navigation reports unsupported capability and glyph identities remain canonical",
+        TEST_CASE("Raw unmapped navigation uses numbered fallback glyphs and rejects out of range identities",
                   "[runtime_ui][navigation][validation]") {
             Fixture fixture;
             auto profile = fixture.input.Router().Profile();
@@ -452,9 +534,10 @@ namespace Horo::Runtime::Ui {
             REQUIRE(fixture.input.Router().SetProfile(profile).HasValue());
             const auto candidate =
                 UiNavigationInput::Create(fixture.descriptor, fixture.input.Router(), fixture.context, fixture.graph, fixture.actions);
-            REQUIRE(candidate.HasError());
-            CHECK(candidate.ErrorValue().code.Value() == UiErrors::NavigationCapabilityUnsupported.code.Value());
-            CHECK(Input::CanonicalGlyph({Input::BindingControlKind::RawGamepadButton, 0}).support == Input::InputGlyphSupport::Unsupported);
+            REQUIRE(candidate.HasValue());
+            CHECK(Input::CanonicalGlyph({Input::BindingControlKind::RawGamepadButton, 0}).label == "Raw button 0");
+            CHECK(Input::CanonicalGlyph({Input::BindingControlKind::RawGamepadButton, 256}).support ==
+                  Input::InputGlyphSupport::Unsupported);
             CHECK(Input::CanonicalGlyph({Input::BindingControlKind::GamepadButton, 65000}).support ==
                   Input::InputGlyphSupport::Unsupported);
             CHECK(Input::CanonicalGlyph({Input::BindingControlKind::Key, 0}).support == Input::InputGlyphSupport::Unsupported);

@@ -22,8 +22,10 @@ namespace Horo::Packages::Detail {
             const auto &root = declared.root;
             auto &manifest = declared.manifest;
             const auto entries = package.archive->Manifest().Entries();
-            // This composition exposes only the registered importer catalog. Other extension points need their own explicit host owners.
-            if (!std::ranges::all_of(manifest.contributions, [](const auto &contribution) {
+            // The provider-only profile has one RAII publication owner. Independent catalogs cannot commit a mixed batch atomically.
+            const bool providerOnly =
+                manifest.contributions.size() == 1 && manifest.contributions.front().type == "platform.services.provider";
+            if (!providerOnly && !std::ranges::all_of(manifest.contributions, [](const auto &contribution) {
                 return contribution.type == "asset.importer";
             }))
                 return Result<PackageActivationCandidate>::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));

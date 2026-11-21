@@ -287,6 +287,7 @@ namespace Horo::Runtime::Ui {
         Disabled = 1U << 6U,
         Invalid = 1U << 7U,
         Busy = 1U << 8U,
+        HighContrast = 1U << 9U, /**< Immutable host preference, composable with Focused and other control state. */
     };
 
     /** @brief Converts one named state bit to a mask. @param state Closed state bit. */
@@ -452,10 +453,17 @@ namespace Horo::Runtime::Ui {
         std::span<const UiStyleAnimationSample> animation; /**< Borrowed sampled values, never retained by resolution. */
     };
 
+    /** @brief Exact resident location of a rejected style input, when available. */
+    struct UiStyleFailureLocation final {
+        UiElementHandle element;
+        UiStylePropertyId inlineProperty; /**< Authored override rejected by validation; empty for wider failures. */
+    };
+
     /** @brief Inputs for one bounded VariableUpdate style candidate. */
     struct UiStyleUpdateRequest final {
         UiStyleSourceRevisions sources;
         std::span<const UiStyleElementInput> elements;
+        UiStyleFailureLocation *failure{}; /**< Optional borrowed output, cleared before Prepare and never retained. */
     };
 
     /** @brief Closed invalidation strengths for one exact retained-tree revision. */

@@ -110,6 +110,19 @@ namespace Horo::Runtime::Ui {
         return state_->registry.Acquire(instance);
     }
 
+    /** @copydoc RuntimeUiService::Inspect */
+    Result<UiCanvasInspectionSnapshot> RuntimeUiService::Inspect(const RuntimeUiInstanceId instance, const UiReloadLease &lease,
+                                                                 const UiCanvasId canvas, const UiCanvasInspectionLimits &limits,
+                                                                 const std::optional<UiRouteInstanceId> route) const {
+        using Snapshot = Result<UiCanvasInspectionSnapshot>;
+        if (const auto valid = Detail::CheckOwner(state_); valid.HasError())
+            return Snapshot::Failure(valid.ErrorValue());
+        if (const auto *publisher = state_->registry.Publisher(instance))
+            return publisher->Inspect(lease, canvas, limits, route);
+        const auto unavailable = state_->registry.Acquire(instance);
+        return Snapshot::Failure(unavailable.HasError() ? unavailable.ErrorValue() : MakeError(UiErrors::InstanceStateInvalid));
+    }
+
     /** @copydoc RuntimeUiService::AcquirePrepared */
     Result<UiReloadLease> RuntimeUiService::AcquirePrepared(const UiSceneReconciliation::Prepared &prepared,
                                                             const RuntimeUiInstanceId instance) const {

@@ -2,6 +2,7 @@
 #include "BehaviorTreeAsyncTestSupport.h"
 #include "Horo/AI/AITaskScheduler.h"
 
+#include <catch2/generators/catch_generators.hpp>
 #include <limits>
 #include <semaphore>
 #include <thread>
@@ -57,6 +58,123 @@ namespace Horo::AI {
                 CHECK(destroyedWhilePinned);
                 CHECK(pin.expired());
             }
+        }
+
+        TEST_CASE("AI staged scheduler population reuses exact retired capacity and defers evaluator cancellation",
+                  "[unit][ai][scheduler][lifetime]") {
+            Harness h({.maximumAgents = 1, .evaluationsPerTick = 1, .workUnitsPerTick = 1, .commandsPerTick = 1});
+            const AiAgentSchedulePolicy policy{.workUnitsPerTick = 1, .commandsPerTick = 1};
+            auto resident = h.Register(0, policy);
+            auto replacement = std::make_shared<Probe>();
+            const std::array retire{h.Handle(0)};
+            const AgentHandle next{h.incarnation, {0, 2}};
+            const std::array add{AiScheduledDecisionRegistration{next, MakeIdentity<AgentId>(1), policy, h.image, replacement}};
+            {
+                auto rolledBack = h.scheduler->PreparePopulationChange(add, retire);
+                REQUIRE(rolledBack.HasValue());
+                REQUIRE(rolledBack.Value()->ValidatePublication().HasValue());
+            }
+            CHECK(resident->cancelled == 0);
+            REQUIRE(h.scheduler->EvaluateAtDecision(1).HasValue());
+            REQUIRE(h.scheduler->CommitAtIntentDispatch(1).HasValue());
+            CHECK(resident->evaluations == 1);
+            CHECK(replacement->evaluations == 0);
+
+            auto staged = h.scheduler->PreparePopulationChange(add, retire);
+            REQUIRE(staged.HasValue());
+            REQUIRE(staged.Value()->ValidatePublication().HasValue());
+            staged.Value()->Publish();
+            CHECK(resident->cancelled == 0);
+            CHECK(h.scheduler->Wake(h.Handle(0), {.explicitRequest = true}).HasError());
+            REQUIRE(h.scheduler->Wake(next, {.explicitRequest = true}).HasValue());
+            staged.Value()->FinishRetirements();
+            staged.Value()->FinishRetirements();
+            CHECK(resident->cancelled == 1);
+            REQUIRE(h.scheduler->EvaluateAtDecision(2).HasValue());
+            REQUIRE(h.scheduler->CommitAtIntentDispatch(2).HasValue());
+            CHECK(resident->evaluations == 1);
+            CHECK(replacement->evaluations == 1);
+        }
+
+        TEST_CASE("AI scheduler withholds only the selected generation's decision slice", "[unit][ai][scheduler][debug]") {
+            Harness h({.maximumAgents = 2, .evaluationsPerTick = 2, .workUnitsPerTick = 2, .commandsPerTick = 2});
+            const AiAgentSchedulePolicy policy{.workUnitsPerTick = 1, .commandsPerTick = 1};
+            const auto selected = h.Register(0, policy);
+            const auto unrelated = h.Register(1, policy);
+            REQUIRE(h.scheduler->Wake(h.Handle(0), {.explicitRequest = true}).HasValue());
+
+            const auto held = h.scheduler->EvaluateAtDecisionWithPausedAgent(1, h.Handle(0));
+            REQUIRE(held.HasValue());
+            CHECK(held.Value().evaluated == 1);
+            CHECK(held.Value().workUnits == 1);
+            REQUIRE(h.scheduler->CommitAtIntentDispatch(1).HasValue());
+            CHECK(selected->evaluations == 0);
+            CHECK(unrelated->committed == 1);
+
+            unrelated->remaining = 1;
+            const AgentHandle stale{h.incarnation, {0, 2}};
+            const auto released = h.scheduler->EvaluateAtDecisionWithPausedAgent(2, stale);
+            REQUIRE(released.HasValue());
+            CHECK(released.Value().evaluated == 2);
+            REQUIRE(h.scheduler->CommitAtIntentDispatch(2).HasValue());
+            CHECK(selected->committed == 1);
+            CHECK(selected->reasons.explicitRequest);
+            CHECK(unrelated->committed == 2);
+
+            unrelated->remaining = 1;
+            REQUIRE(h.scheduler->EvaluateAtDecisionWithPausedAgent(3, h.Handle(0)).HasValue());
+            REQUIRE(h.scheduler->CommitAtIntentDispatch(3).HasValue());
+            CHECK(selected->committed == 1);
+            CHECK(unrelated->committed == 3);
+        }
+
+        TEST_CASE("AI staged retirement fences evaluated intents before dispatch", "[unit][ai][scheduler][lifetime]") {
+            Harness h;
+            auto resident = h.Register(0);
+            REQUIRE(h.scheduler->EvaluateAtDecision(1).HasValue());
+            REQUIRE(resident->intents == 1);
+            const std::array retire{h.Handle(0)};
+            const std::array add{
+                AiScheduledDecisionRegistration{h.Handle(1), MakeIdentity<AgentId>(2), {}, h.image, std::make_shared<Probe>()}};
+            ExpectError(h.scheduler->PreparePopulationChange(add, retire), AIErrors::SchedulerPhaseInvalid);
+            auto staged = h.scheduler->PreparePopulationChange({}, retire);
+            REQUIRE(staged.HasValue());
+            REQUIRE(staged.Value()->ValidatePublication().HasValue());
+            staged.Value()->Publish();
+            REQUIRE(h.scheduler->CommitAtIntentDispatch(1).HasValue());
+            CHECK(resident->committed == 0);
+            CHECK(resident->cancelled == 0);
+            staged.Value()->FinishRetirements();
+            CHECK(resident->cancelled == 1);
+        }
+
+        TEST_CASE("AI staged scheduler population preserves residents on rejection and rejects stale publication",
+                  "[unit][ai][scheduler][lifetime]") {
+            Harness h({.maximumAgents = 3, .evaluationsPerTick = 3, .workUnitsPerTick = 2, .commandsPerTick = 2});
+            const AiAgentSchedulePolicy policy{.workUnitsPerTick = 1, .commandsPerTick = 1};
+            auto resident = h.Register(0, policy);
+            auto stagedExecutor = std::make_shared<Probe>();
+            CancellationSource cancellation;
+            const std::array add{AiScheduledDecisionRegistration{h.Handle(1), MakeIdentity<AgentId>(2), policy, h.image, stagedExecutor,
+                                                                 cancellation.Token()},
+                                 AiScheduledDecisionRegistration{h.Handle(2), MakeIdentity<AgentId>(3), policy, h.image,
+                                                                 std::make_shared<Probe>()}};
+            ExpectError(h.scheduler->PreparePopulationChange(add, {}), AIErrors::SchedulerBudgetExhausted);
+            CHECK(h.scheduler->Wake(h.Handle(1), {.explicitRequest = true}).HasError());
+            auto retiredBeforePublish = h.scheduler->PreparePopulationChange(std::span{add}.first(1), {});
+            REQUIRE(retiredBeforePublish.HasValue());
+            cancellation.RequestCancellation();
+            ExpectError(retiredBeforePublish.Value()->ValidatePublication(), AIErrors::SchedulerPolicyInvalid);
+            auto stale = h.scheduler->PreparePopulationChange(std::span{add}.last(1), {});
+            REQUIRE(stale.HasValue());
+            auto other = h.Register(1, policy);
+            ExpectError(stale.Value()->ValidatePublication(), AIErrors::SchedulerPhaseInvalid);
+            REQUIRE(h.scheduler->EvaluateAtDecision(1).HasValue());
+            REQUIRE(h.scheduler->CommitAtIntentDispatch(1).HasValue());
+            CHECK(resident->evaluations == 1);
+            CHECK(other->evaluations == 1);
+            CHECK(stagedExecutor->evaluations == 0);
+            CHECK(stagedExecutor->cancelled == 0);
         }
 
         TEST_CASE("AI declared modes preserve stable identity or authored priority independent of registration order",
@@ -142,6 +260,48 @@ namespace Horo::AI {
             CHECK(probe->intents == 1);
             REQUIRE(h.scheduler->CommitAtIntentDispatch(1).HasValue());
             CHECK(probe->committed == 2);  // An exhausted tick cannot borrow the next tick's command allowance.
+        }
+
+        TEST_CASE("Event-only AI decisions stay idle until woken and retain bounded unfinished work", "[unit][ai][scheduler]") {
+            const bool reduced = GENERATE(false, true);
+            AiTaskSchedulerSettings settings{.workUnitsPerTick = 3, .commandsPerTick = 3, .mode = AiSchedulingMode::BestEffort};
+            if (reduced)
+                settings.simulationProfile = AiDecisionSimulationProfile{10, 20, 30, 3, 1};
+            Harness h(settings);
+            auto reactive = h.Register(0, {.intervalTicks = 0, .workUnitsPerTick = 3, .commandsPerTick = 3});
+            if (reduced)
+                REQUIRE(h.scheduler->SetRelevanceAtSafePoint(h.Handle(0), {.anchorDistanceMillimeters = 15}).HasValue());
+            const auto runTick = [&](const std::uint64_t tick) {
+                const auto result = h.scheduler->EvaluateAtDecision(tick);
+                REQUIRE(result.HasValue());
+                REQUIRE(h.scheduler->CommitAtIntentDispatch(tick).HasValue());
+                return result.Value();
+            };
+
+            CHECK(runTick(1).evaluated == 1);
+            CHECK(reactive->reasons.activation);
+            CHECK_FALSE(reactive->reasons.polling);
+            for (std::uint64_t tick = 2; tick <= 20; ++tick) {
+                const auto idle = runTick(tick);
+                CHECK(idle.evaluated == 0);
+                CHECK(idle.workUnits == 0);
+            }
+
+            reactive->remaining = 4;
+            REQUIRE(h.scheduler->Wake(h.Handle(0), {.blackboard = true}).HasValue());
+            REQUIRE(h.scheduler->Wake(h.Handle(0), {.perception = true, .task = true}).HasValue());
+            const auto admitted = runTick(21);
+            CHECK(admitted.evaluated == 1);
+            CHECK(admitted.workUnits == 3);
+            CHECK(reactive->reasons.blackboard);
+            CHECK(reactive->reasons.perception);
+            CHECK(reactive->reasons.task);
+            CHECK_FALSE(reactive->reasons.polling);
+            CHECK(reactive->remaining == 1);
+            CHECK(runTick(22).evaluated == 1);
+            CHECK(reactive->reasons.explicitRequest);
+            CHECK(reactive->remaining == 0);
+            CHECK(runTick(23).evaluated == 0);
         }
 
         TEST_CASE("AI starvation promotion gives bounded service under sustained urgent traffic", "[unit][ai][scheduler]") {
@@ -235,12 +395,37 @@ namespace Horo::AI {
             REQUIRE(report.HasValue());
             REQUIRE(report.Value().firstFailure);
             CHECK(report.Value().firstFailure->code.Value() == AIErrors::CapabilityUnavailable.code.Value());
+            REQUIRE(report.Value().firstFailureOrigin);
+            CHECK(report.Value().firstFailureOrigin->agent == h.Handle(1));
+            CHECK(report.Value().firstFailureOrigin->phase == AiSchedulingFailurePhase::Evaluate);
+            CHECK(h.scheduler->CompletedReportAtSafePoint() == nullptr);
             REQUIRE(h.scheduler->CommitAtIntentDispatch(2).HasValue());
             CHECK(failing->committed == 0);
             h.scheduler->Shutdown();
             h.scheduler->Shutdown();
             ExpectError(h.scheduler->EvaluateAtDecision(3), AIErrors::SchedulerPhaseInvalid);
             ExpectError(h.scheduler->Wake(h.Handle(1), {.task = true}), AIErrors::TaskContextInvalid);
+        }
+
+        TEST_CASE("The completed AI report identifies a failed commit and clears its origin on the next clean tick",
+                  "[unit][ai][scheduler]") {
+            Harness h;
+            auto probe = h.Register(0);
+            probe->failCommit = true;
+            REQUIRE(h.scheduler->EvaluateAtDecision(1).HasValue());
+            REQUIRE(h.scheduler->CommitAtIntentDispatch(1).HasValue());
+            const auto *completed = h.scheduler->CompletedReportAtSafePoint();
+            REQUIRE(completed);
+            REQUIRE(completed->firstFailureOrigin);
+            CHECK(completed->firstFailureOrigin->agent == h.Handle(0));
+            CHECK(completed->firstFailureOrigin->identity == MakeIdentity<AgentId>(1));
+            CHECK(completed->firstFailureOrigin->phase == AiSchedulingFailurePhase::Commit);
+            probe->failCommit = false;
+            REQUIRE(h.scheduler->EvaluateAtDecision(2).HasValue());
+            CHECK(h.scheduler->CompletedReportAtSafePoint() == nullptr);
+            REQUIRE(h.scheduler->CommitAtIntentDispatch(2).HasValue());
+            REQUIRE(h.scheduler->CompletedReportAtSafePoint());
+            CHECK_FALSE(h.scheduler->CompletedReportAtSafePoint()->firstFailureOrigin);
         }
 
         TEST_CASE("AI cancellation published after ordering prevents a later peer from evaluating", "[unit][ai][scheduler]") {
@@ -308,6 +493,46 @@ namespace Horo::AI {
                 return Result<void>::Success();
             }
         };
+
+        TEST_CASE("Budgeted AI workers reject every revoked ancestor before and after their slice", "[unit][ai][scheduler][jobs]") {
+            struct Slice final : IAiBudgetedTaskJob {
+                CancellationSource &source;
+                mutable std::size_t calls{};
+
+                explicit Slice(CancellationSource &cancellation) : IAiBudgetedTaskJob(1), source(cancellation) {}
+
+                Result<void> RunSlice(const AiTaskOperationContext &, const CancellationToken &, AiWorkBudget &) const override {
+                    ++calls;
+                    source.RequestCancellation();
+                    return Result<void>::Success();
+                }
+            };
+
+            CancellationSource source;
+            AiTaskOperationContext operation;
+            CancellationToken job;
+            SECTION("operation") {
+                operation.cancellation = source.Token();
+            }
+            SECTION("capability") {
+                operation.capabilityCancellation = source.Token();
+            }
+            SECTION("owner") {
+                operation.ownerCancellation = source.Token();
+            }
+            SECTION("Foundation job") {
+                job = source.Token();
+            }
+            Slice work{source};
+            auto late = work.Run(operation, job);
+            REQUIRE(late.HasError());
+            CHECK(IsJobCancelled(late.ErrorValue()));
+            CHECK(work.calls == 1);
+            auto early = work.Run(operation, job);
+            REQUIRE(early.HasError());
+            CHECK(IsJobCancelled(early.ErrorValue()));
+            CHECK(work.calls == 1);
+        }
 
         TEST_CASE("AI workers consume the declared owner allowance and retain canonical task failure", "[unit][ai][scheduler][jobs]") {
             using namespace BehaviorTreeAsyncTestSupport;

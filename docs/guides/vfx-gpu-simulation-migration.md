@@ -112,7 +112,7 @@ before moving any GPU owner. Failure leaves caller-owned simulators intact.
 
 GPU units share the same scene owner and snapshot ring. `RenderWorldSnapshot::GpuBatches()` contains
 issued preparation values, the last accepted generation, optional immutable pending work, a lifetime
-revocation token and the captured render-origin delta. It contains no CPU particle substitutes,
+revocation token, the captured render-origin delta and the host-projected draw suppression. It contains no CPU particle substitutes,
 live-world pointer or native lease. Generation one denotes the genuine uploaded initial state;
 accepted submissions advance generation, while extraction and graph encoding do not.
 
@@ -126,7 +126,8 @@ The host must retain the canonical runtime pause/activation authority rather tha
 pause state in the extractor.
 
 CPU and GPU batches consume one aggregate batch, particle-lane and draw allowance. GPU capacity is
-charged because its live count stays on the GPU. Frame-ring bytes include the real retained GPU batch
+charged because its live count stays on the GPU. Suppressed GPU batches retain their batch and particle capacity
+reservation and consume no draw allowance. Frame-ring bytes include the real retained GPU batch
 values and actual vector capacities; no emitter obtains a separate free frame allowance. The renderer's
 native backing and observation ledger remains separate from this extraction slice and must also fit
 the host's aggregate reservation.
@@ -149,9 +150,10 @@ receipt may activate the logical simulator. Transfer that activated owner throug
 the mixed `VfxWorld::Prepare` overload; no VFX client selects or calls a native API.
 
 For each intended logical step, use the owner-phase acknowledgement/step/extraction
-sequence above. Supply the captured batch's receipt, generation, lifetime token and
-origin delta to `RenderFrameScope::ScheduleVfxGpu`; include pending work only when
-advancing. Merge its workloads, initial states and required waits into the real
+sequence above. Use `VfxGpuGraphRequest::UseBatch` to copy the captured batch's
+authority, origin delta and presentation policy before `RenderFrameScope::ScheduleVfxGpu`.
+Include pending work only when advancing. When a batch suppresses drawing, view
+attachments can be omitted and pending compute still runs. Merge its workloads, initial states and required waits into the real
 frontend graph and submission. Encoding success does not advance the world:
 authentic native-accepted receipts reach the owner-drained acknowledgement queue
 only after actual submission acceptance. Explicit observation preparation is a

@@ -35,12 +35,6 @@ namespace Horo::AI {
         bool enabled{true};             /**< The host enables service cadences only while their owning subtree is active. */
     };
 
-    /** @brief Compiler-admitted node's declared dependency on a typed perception listener. */
-    struct DecisionWakePerceptionDependency final {
-        DecisionNodeId node;
-        PerceptionListenerTypeId listener;
-    };
-
     /** @brief Lowerable deterministic work admission; wall-clock timing is never used. */
     struct DecisionWakeBudget final {
         static constexpr std::size_t HardEvaluationsPerTick = 8;
@@ -109,7 +103,7 @@ namespace Horo::AI {
          */
         [[nodiscard]] Result<bool> NotifyPerception(AgentHandle agent, PerceptionListenerTypeId listener);
         /**
-         * @brief Binds or revokes one node's exact current task generation; does not start a task.
+         * @brief Binds or revokes a node's task generation and drops any unfrozen wake from the previous task.
          * @param node Admitted identity. @param task Exact live handle, or empty to revoke.
          * @return Success or typed invalid/foreign/duplicate task binding failure.
          */

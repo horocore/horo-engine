@@ -442,6 +442,36 @@ namespace Horo::Editor {
         CHECK(projected.animation == binding);
     }
 
+    TEST_CASE("Selection export retains a Scene canvas and its exact typed registry dependency", "[prefab][creation][ui-canvas]") {
+        namespace Ui = Runtime::Ui;
+        const auto asset = PrefabAsset(2).Asset();
+        const Runtime::UiCanvasComponent canvas{
+            {asset, Ui::UiDocumentId::Create({7}).Value(), Ui::UiCanvasId::Create({4}).Value(), Ui::UiDocumentRevision::Create(2).Value()}};
+        const auto snapshot = Capture({SceneObjectSnapshot{.id = {10}, .name = "Canvas", .components = {.uiCanvas = canvas}}});
+        const bool wrongType = GENERATE(false, true);
+        const auto type = wrongType ? std::string_view{"core.mesh"} : Ui::UiDocumentAssetTypeName;
+        Assets::AssetRegistry registry;
+        REQUIRE(registry.Publish({Record(asset, type, "assets/canvas.uicanvas")}).status == Assets::AssetRegistryBuildStatus::Complete);
+        std::vector<PrefabCreationBoundary> boundaries;
+        const auto exported = Export(snapshot, registry, boundaries);
+        if (wrongType) {
+            CHECK(exported.HasError());
+            CHECK(snapshot.objects.front().components.uiCanvas == canvas);
+            return;
+        }
+        REQUIRE(exported.HasValue());
+        CHECK(boundaries.empty());
+        CHECK(exported.Value().Data().referencedAssets == std::vector{asset});
+        REQUIRE(exported.Value().Data().objects.front().components.size() == 1);
+        Runtime::RuntimeComponentSet projected;
+        std::optional<Runtime::PrimitiveMeshDescriptor> primitive;
+        const auto decoded =
+            SceneSource::ProjectPrefabBuiltinComponent(exported.Value().Data().objects.front().components.front(), projected, primitive);
+        REQUIRE(decoded.HasValue());
+        CHECK(decoded.Value());
+        CHECK(projected.uiCanvas == canvas);
+    }
+
     TEST_CASE("Selection animation export rejects missing or mistyped dependency without altering captured source",
               "[prefab][creation][animation][failure]") {
         const auto binding = Tests::SceneAnimation::Binding();

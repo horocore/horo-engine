@@ -40,7 +40,7 @@ namespace Horo::WorldCook::Detail {
             if (core.HasError())
                 return Result<EncodedWorld>::Failure(core.ErrorValue());
             const std::array payloads{StreamingCellPayloadBytes{StreamingCellProvider::CoreEcs, StreamingCellPayloadRequirement::Required,
-                                                                Runtime::SceneCellPayloadCodecVersion, core.Value()}};
+                                                                Runtime::SceneCellPayloadWireVersion(*entry.payload), core.Value()}};
             auto cell = EncodeStreamingCellArtifact(entry.payload->Identity().cell, payloads, limits.cell, cancellation);
             if (cell.HasError())
                 return Result<EncodedWorld>::Failure(cell.ErrorValue());

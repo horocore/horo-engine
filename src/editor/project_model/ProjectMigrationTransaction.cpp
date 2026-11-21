@@ -2,6 +2,7 @@
 
 #include "../../application/project/ProjectErrors.h"
 #include "GeneratedProjectCompatibility.h"
+#include "Horo/Application/ProjectSourceDocument.h"
 #include "Horo/Foundation/Logging/Logger.h"
 
 #include <algorithm>
@@ -621,6 +622,100 @@ namespace Horo::Editor {
             }
             return evidence;
         }
+
+        /** @brief Reads the current source and admits only the exact requested migration identities. */
+        Result<ProjectSourceDocument> ReadTransactionSource(const ProjectMigrationTransactionRequest &request) {
+            auto source = LoadProjectSourceDocument(request.projectRoot);
+            if (source.HasError())
+                return Result<ProjectSourceDocument>::Failure(
+                    Failure(ProjectErrors::MigrationInputChanged, "Migration request no longer matches authoritative project metadata."));
+            const auto &metadata = source.Value().metadata;
+            if (metadata.projectId != request.sourceMetadata.projectId || metadata.horoVersion != request.sourceMetadata.horoVersion ||
+                metadata.persistentContract != request.sourceMetadata.persistentContract ||
+                metadata.migrationHistoryHead != request.sourceMetadata.migrationHistoryHead ||
+                request.plan.source != request.sourceBaseline || request.plan.target != request.targetDecision.contractBaseline ||
+                (!request.plan.definitions.empty() &&
+                 request.plan.definitions.back().targetContract != request.targetDecision.persistentContract))
+                return Result<ProjectSourceDocument>::Failure(
+                    Failure(ProjectErrors::MigrationInputChanged,
+                            "Migration request no longer matches authoritative project metadata or target contract."));
+            return source;
+        }
+
+        /** @brief Transaction-owned documents and the history identity reported after publication. */
+        struct TransactionDocuments {
+            MigrationHistoryHead historyHead;
+            std::vector<PreparedMigrationDocument> documents;
+        };
+
+        /** @brief Uses the same final root and receipt construction for publish and verification. */
+        Result<TransactionDocuments> BuildTransactionDocuments(const ProjectMigrationTransactionRequest &request,
+                                                               const ProjectMetadata &authoritativeMetadata, const std::string &operationId,
+                                                               WallClock &clock, const PreparedProjectMigration &candidate) {
+            using Return = Result<TransactionDocuments>;
+            json history = {{"receipts", json::array()}};
+            if (const auto historyPath = request.projectRoot / ".horo/migration_history.json"; std::filesystem::exists(historyPath)) {
+                const auto old = Read(historyPath, request.limits.maxHistoryBytes);
+                if (old.HasError())
+                    return Return::Failure(old.ErrorValue());
+                if (!authoritativeMetadata.migrationHistoryHead.has_value() ||
+                    Hash(old.Value()).bytes != authoritativeMetadata.migrationHistoryHead->content.bytes)
+                    return Return::Failure(Failure(ProjectErrors::MigrationRecoveryFailed,
+                                                   "Migration history does not match the authoritative history head."));
+                auto parsedHistory = ParseCanonicalHistory(old.Value());
+                if (parsedHistory.HasError())
+                    return Return::Failure(parsedHistory.ErrorValue());
+                history = std::move(parsedHistory).Value();
+            } else if (authoritativeMetadata.migrationHistoryHead.has_value())
+                return Return::Failure(
+                    Failure(ProjectErrors::MigrationRecoveryFailed, "Project metadata references a missing migration history."));
+            json definitions = json::array();
+            for (const auto &definition : request.plan.definitions)
+                definitions.push_back({{"id", definition.id.value}, {"hash", Hex(definition.hash)}});
+            json receipt = {{"operationId", operationId},
+                            {"sourceRelease", FormatHoroVersion(request.sourceMetadata.horoVersion.value)},
+                            {"sourceBaseline", FormatHoroVersion(request.sourceBaseline.value)},
+                            {"targetRelease", FormatHoroVersion(request.targetDecision.release.value)},
+                            {"definitions", std::move(definitions)},
+                            {"engineBuildIdentity", request.engineBuildIdentity},
+                            {"completedAt", UtcText(clock.UtcNow())}};
+            receipt["previousHead"] = request.sourceMetadata.migrationHistoryHead.has_value()
+                                          ? json(Hex(request.sourceMetadata.migrationHistoryHead->content))
+                                          : json(nullptr);
+            history["receipts"].push_back(std::move(receipt));
+            const std::string historyText = history.dump() + "\n";
+            if (historyText.size() > request.limits.maxHistoryBytes)
+                return Return::Failure(Failure(ProjectErrors::MigrationCapacityInsufficient, "Migration history exceeds its byte budget."));
+            const MigrationHistoryHead historyHead{Hash(Bytes(historyText))};
+            const auto migratedProject = candidate.ReadCandidateDocument(".horo/project.json");
+            if (migratedProject.HasError())
+                return Return::Failure(
+                    Failure(ProjectErrors::MigrationPublishFailed, "Migration candidate removed the authoritative project metadata."));
+            json metadata;
+            try {
+                metadata = json::parse(reinterpret_cast<const char *>(migratedProject.Value().data()),  // NOSONAR
+                                       reinterpret_cast<const char *>(migratedProject.Value().data() +
+                                                                      migratedProject.Value().size()));  // NOSONAR
+            } catch (const std::exception &) {                                                           // NOSONAR(cpp:S1181)
+                return Return::Failure(Failure(ProjectErrors::MigrationPublishFailed, "Project metadata is malformed."));
+            }
+            if (!metadata.is_object() || !metadata.contains("projectId") || !metadata["projectId"].is_string() ||
+                metadata["projectId"].get_ref<const std::string &>() != request.sourceMetadata.projectId)
+                return Return::Failure(
+                    Failure(ProjectErrors::MigrationPublishFailed, "Migration candidate changed the immutable project identity."));
+            metadata["horoVersion"] = FormatHoroVersion(request.targetDecision.release.value);
+            metadata["persistentContract"] = FormatPersistentContractHash(request.targetDecision.persistentContract);
+            metadata["migrationHistoryHead"] = Hex(historyHead.content);
+            metadata.erase("compatibilityProof");
+            const std::string metadataText = metadata.dump(2) + "\n";
+            std::vector<PreparedMigrationDocument> transactionDocuments;
+            transactionDocuments.push_back(
+                {.path = ".horo/migration_history.json", .kind = MigrationDocumentKind::ProjectSettings, .bytes = Bytes(historyText)});
+            transactionDocuments.push_back(
+                {.path = ".horo/project.json", .kind = MigrationDocumentKind::ProjectMetadata, .bytes = Bytes(metadataText)});
+            return Return::Success({historyHead, std::move(transactionDocuments)});
+        }
+
     }  // namespace
 
     /** @copydoc ParseMigrationRecoveryContractId */
@@ -655,8 +750,10 @@ namespace Horo::Editor {
     /** @copydoc ProjectMigrationTransactionService::ProjectMigrationTransactionService */
     ProjectMigrationTransactionService::ProjectMigrationTransactionService(DurableFileSystem &files, WallClock &wallClock,
                                                                            ProjectMutationCoordinator &mutations, JobSystem &jobs,
-                                                                           const ProjectMigrationStoragePolicy &storagePolicy) noexcept
-        : files_(files), wallClock_(wallClock), mutations_(mutations), jobs_(jobs), storagePolicy_(storagePolicy) {}
+                                                                           const ProjectMigrationStoragePolicy &storagePolicy,
+                                                                           ProjectMigrationExecutionServices executionServices) noexcept
+        : files_(files), wallClock_(wallClock), mutations_(mutations), jobs_(jobs), storagePolicy_(storagePolicy),
+          executionServices_(std::move(executionServices)) {}
 
     /** @copydoc ProjectMigrationTransactionService::InspectStorageAdmission */
     Result<ProjectMigrationStorageAdmission> ProjectMigrationTransactionService::InspectStorageAdmission(
@@ -699,16 +796,9 @@ namespace Horo::Editor {
             return Result<ProjectMigrationTransactionResult>::Failure(
                 Failure(ProjectErrors::MigrationRecoveryFailed,
                         "Pending migration recovery must finish before starting another transaction."));
-        const auto authoritativeMetadata = LoadProjectMetadata(request.projectRoot);
-        if (authoritativeMetadata.HasError() || authoritativeMetadata.Value().projectId != request.sourceMetadata.projectId ||
-            authoritativeMetadata.Value().horoVersion != request.sourceMetadata.horoVersion ||
-            authoritativeMetadata.Value().persistentContract != request.sourceMetadata.persistentContract ||
-            request.plan.source != request.sourceBaseline || request.plan.target != request.targetDecision.contractBaseline ||
-            (!request.plan.definitions.empty() &&
-             request.plan.definitions.back().targetContract != request.targetDecision.persistentContract))
-            return Result<ProjectMigrationTransactionResult>::Failure(
-                Failure(ProjectErrors::MigrationInputChanged,
-                        "Migration request no longer matches authoritative project metadata or target contract."));
+        const auto authoritativeSource = ReadTransactionSource(request);
+        if (authoritativeSource.HasError())
+            return Result<ProjectMigrationTransactionResult>::Failure(authoritativeSource.ErrorValue());
         const auto admission = InspectStorageAdmission(request);
         if (admission.HasError())
             return Result<ProjectMigrationTransactionResult>::Failure(admission.ErrorValue());
@@ -733,7 +823,7 @@ namespace Horo::Editor {
         const auto operationRoot = request.projectRoot / ".horo/local/migration" / operationId;
         const auto stagingRoot = operationRoot / "staging";
         std::error_code error;
-        if (!std::filesystem::create_directories(stagingRoot, error) || error)  // NOSONAR(cpp:S2083)
+        if (!std::filesystem::create_directories(operationRoot, error) || error)  // NOSONAR(cpp:S2083)
             return Result<ProjectMigrationTransactionResult>::Failure(
                 Failure(ProjectErrors::MigrationPublishFailed, "Cannot reserve migration operation directory."));
         Journal journal{.operationId = operationId,
@@ -746,8 +836,8 @@ namespace Horo::Editor {
         if (auto result = WriteJournal(files_, operationRoot, journal); result.HasError())
             return Result<ProjectMigrationTransactionResult>::Failure(result.ErrorValue());
         LOG_DEBUG("editor.project_migration.transaction", "Journal state operation=%s state=Preparing.", operationId.c_str());
-        auto prepared =
-            ProjectMigrationExecutor::Prepare(request.projectRoot, stagingRoot, request.plan, jobs_, request.limits, request.cancellation);
+        auto prepared = ProjectMigrationExecutor::Prepare(request.projectRoot, stagingRoot, request.plan, jobs_, request.limits,
+                                                          request.cancellation, executionServices_);
         if (prepared.HasError()) {
             std::filesystem::remove_all(operationRoot, error);
             return Result<ProjectMigrationTransactionResult>::Failure(prepared.ErrorValue());
@@ -760,67 +850,13 @@ namespace Horo::Editor {
             return Result<ProjectMigrationTransactionResult>::Failure(
                 Failure(ProjectErrors::MigrationInputChanged, unchanged.ErrorValue().message));
 
-        json history = {{"receipts", json::array()}};
-        if (const auto historyPath = request.projectRoot / ".horo/migration_history.json"; std::filesystem::exists(historyPath)) {
-            const auto old = Read(historyPath, request.limits.maxHistoryBytes);
-            if (old.HasError())
-                return Result<ProjectMigrationTransactionResult>::Failure(old.ErrorValue());
-            if (!authoritativeMetadata.Value().migrationHistoryHead.has_value() ||
-                Hash(old.Value()).bytes != authoritativeMetadata.Value().migrationHistoryHead->content.bytes)
-                return Result<ProjectMigrationTransactionResult>::Failure(
-                    Failure(ProjectErrors::MigrationRecoveryFailed, "Migration history does not match the authoritative history head."));
-            auto parsedHistory = ParseCanonicalHistory(old.Value());
-            if (parsedHistory.HasError())
-                return Result<ProjectMigrationTransactionResult>::Failure(parsedHistory.ErrorValue());
-            history = std::move(parsedHistory).Value();
-        } else if (authoritativeMetadata.Value().migrationHistoryHead.has_value())
-            return Result<ProjectMigrationTransactionResult>::Failure(
-                Failure(ProjectErrors::MigrationRecoveryFailed, "Project metadata references a missing migration history."));
-        json definitions = json::array();
-        for (const auto &definition : request.plan.definitions)
-            definitions.push_back({{"id", definition.id.value}, {"hash", Hex(definition.hash)}});
-        json receipt = {{"operationId", operationId},
-                        {"sourceRelease", FormatHoroVersion(request.sourceMetadata.horoVersion.value)},
-                        {"sourceBaseline", FormatHoroVersion(request.sourceBaseline.value)},
-                        {"targetRelease", FormatHoroVersion(request.targetDecision.release.value)},
-                        {"definitions", std::move(definitions)},
-                        {"engineBuildIdentity", request.engineBuildIdentity},
-                        {"completedAt", UtcText(wallClock_.UtcNow())}};
-        receipt["previousHead"] = request.sourceMetadata.migrationHistoryHead.has_value()
-                                      ? json(Hex(request.sourceMetadata.migrationHistoryHead->content))
-                                      : json(nullptr);
-        history["receipts"].push_back(std::move(receipt));
-        const std::string historyText = history.dump() + "\n";
-        const MigrationHistoryHead historyHead{Hash(Bytes(historyText))};
-        const auto migratedProject = candidate.ReadCandidateDocument(".horo/project.json");
-        if (migratedProject.HasError())
-            return Result<ProjectMigrationTransactionResult>::Failure(
-                Failure(ProjectErrors::MigrationPublishFailed, "Migration candidate removed the authoritative project metadata."));
-        json metadata;
-        try {
-            metadata =
-                json::parse(reinterpret_cast<const char *>(migratedProject.Value().data()),                                    // NOSONAR
-                            reinterpret_cast<const char *>(migratedProject.Value().data() + migratedProject.Value().size()));  // NOSONAR
-        } catch (const std::exception &) {  // NOSONAR(cpp:S1181)
-            return Result<ProjectMigrationTransactionResult>::Failure(
-                Failure(ProjectErrors::MigrationPublishFailed, "Project metadata is malformed."));
-        }
-        if (!metadata.is_object() || !metadata.contains("projectId") || !metadata["projectId"].is_string() ||
-            metadata["projectId"].get_ref<const std::string &>() != request.sourceMetadata.projectId)
-            return Result<ProjectMigrationTransactionResult>::Failure(
-                Failure(ProjectErrors::MigrationPublishFailed, "Migration candidate changed the immutable project identity."));
-        metadata["horoVersion"] = FormatHoroVersion(request.targetDecision.release.value);
-        metadata["persistentContract"] = FormatPersistentContractHash(request.targetDecision.persistentContract);
-        metadata["migrationHistoryHead"] = Hex(historyHead.content);
-        metadata.erase("compatibilityProof");
-        const std::string metadataText = metadata.dump(2) + "\n";
-        std::vector<PreparedMigrationDocument> transactionDocuments;
-        transactionDocuments.push_back(
-            {.path = ".horo/migration_history.json", .kind = MigrationDocumentKind::ProjectSettings, .bytes = Bytes(historyText)});
-        transactionDocuments.push_back(
-            {.path = ".horo/project.json", .kind = MigrationDocumentKind::ProjectMetadata, .bytes = Bytes(metadataText)});
-        if (auto finalized =
-                ProjectMigrationExecutor::Finalize(candidate, transactionDocuments, request.plan.targetValidator, request.cancellation);
+        const auto transactionDocuments =
+            BuildTransactionDocuments(request, authoritativeSource.Value().metadata, operationId, wallClock_, candidate);
+        if (transactionDocuments.HasError())
+            return Result<ProjectMigrationTransactionResult>::Failure(transactionDocuments.ErrorValue());
+        const auto &historyHead = transactionDocuments.Value().historyHead;
+        if (auto finalized = ProjectMigrationExecutor::Finalize(candidate, transactionDocuments.Value().documents,
+                                                                request.plan.targetValidator, request.cancellation);
             finalized.HasError())
             return Result<ProjectMigrationTransactionResult>::Failure(finalized.ErrorValue());
         if (const std::uint64_t maximumDeclaredOutput =
@@ -918,6 +954,44 @@ namespace Horo::Editor {
                   changed.size(), cleanupDeferred ? "true" : "false");
         return Result<ProjectMigrationTransactionResult>::Success(
             {operationId, historyHead, std::move(changed), cancellationDeferred, cleanupDeferred});
+    }
+
+    /** @copydoc ProjectMigrationTransactionService::Verify */
+    Result<ProjectMigrationDryRunResult> ProjectMigrationTransactionService::Verify(
+        const ProjectMigrationTransactionRequest &request) const {
+        using Return = Result<ProjectMigrationDryRunResult>;
+        if (request.cancellation.IsCancellationRequested())
+            return Return::Failure(MakeError(ProjectErrors::MigrationCancelled));
+        if (request.plan.definitions.empty() || !request.plan.targetValidator)
+            return Return::Failure(
+                Failure(ProjectErrors::MigrationCatalogInvalid, "Verification requires an exact plan and target validator."));
+        if (InspectPendingRecovery(request.projectRoot).action != MigrationRecoveryAction::None)
+            return Return::Failure(Failure(ProjectErrors::MigrationRecoveryFailed, "Pending migration recovery blocks verification."));
+        const auto source = ReadTransactionSource(request);
+        if (source.HasError())
+            return Return::Failure(source.ErrorValue());
+        const auto operationId = OperationId();
+        auto verified = ProjectMigrationExecutor::VerifiedDryRun(request.projectRoot, request.plan, jobs_, request.limits,
+                                                                 request.cancellation, executionServices_,
+                                                                 [&](const PreparedProjectMigration &candidate)
+                                                                     -> Result<std::vector<PreparedMigrationDocument>> {
+            auto built = BuildTransactionDocuments(request, source.Value().metadata, operationId, wallClock_, candidate);
+            if (built.HasError())
+                return Result<std::vector<PreparedMigrationDocument>>::Failure(std::move(built).ErrorValue());
+            return Result<std::vector<PreparedMigrationDocument>>::Success(std::move(built).Value().documents);
+        });
+        if (verified.HasError())
+            return verified;
+        if (request.cancellation.IsCancellationRequested())
+            return Return::Failure(MakeError(ProjectErrors::MigrationCancelled));
+        if (InspectPendingRecovery(request.projectRoot).action != MigrationRecoveryAction::None)
+            return Return::Failure(Failure(ProjectErrors::MigrationRecoveryFailed, "Migration recovery started during verification."));
+        const auto latest = ReadTransactionSource(request);
+        if (latest.HasError())
+            return Return::Failure(latest.ErrorValue());
+        if (latest.Value().sourceFingerprint != source.Value().sourceFingerprint)
+            return Return::Failure(Failure(ProjectErrors::MigrationInputChanged, "Project metadata changed during verification."));
+        return verified;
     }
 
     /** @copydoc ProjectMigrationTransactionService::InspectPendingRecovery */

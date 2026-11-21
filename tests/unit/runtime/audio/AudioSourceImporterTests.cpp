@@ -228,6 +228,45 @@ namespace Horo::Audio {
         CHECK(sink.samples.empty());
     }
 
+    TEST_CASE("WAV rejects duplicate sampler chunks even when the first declares no loops", "[unit][audio][import]") {
+        auto bytes = WaveFixture(false);
+        std::vector<std::byte> sampler;
+        AppendFour(sampler, "smpl");
+        AppendLittle<std::uint32_t>(sampler, 36);
+        for (std::size_t field = 0; field < 9; ++field)
+            AppendLittle<std::uint32_t>(sampler, 0);
+        bytes.insert(bytes.begin() + 36, sampler.begin(), sampler.end());
+        StoreLittle32(bytes, 4, static_cast<std::uint32_t>(bytes.size() - 8));
+        SampleSink valid;
+        REQUIRE(Import(bytes, valid).HasValue());
+        REQUIRE_FALSE(valid.samples.empty());
+        bytes.insert(bytes.begin() + 36, sampler.begin(), sampler.end());
+        StoreLittle32(bytes, 4, static_cast<std::uint32_t>(bytes.size() - 8));
+        SampleSink rejected;
+        CHECK(HasErrorCode(Import(bytes, rejected), AudioErrors::SourceInvalid));
+        CHECK(rejected.samples.empty());
+        CHECK(rejected.offsets.empty());
+    }
+
+    TEST_CASE("Audio source corpus rejects unsupported loop semantics and truncated Vorbis headers", "[unit][audio][import]") {
+        for (const auto fieldOffset : {84U, 96U, 100U}) {
+            auto bytes = WaveFixture(true);
+            StoreLittle32(bytes, fieldOffset, 1);
+            SampleSink sink;
+            CHECK(HasErrorCode(Import(bytes, sink), AudioErrors::SourceUnsupported));
+            CHECK(sink.samples.empty());
+        }
+        const auto ogg = DecodeBase64(TestFixtures::OggVorbisSilenceBase64);
+        for (const auto size : {0U, 4U, 26U, 27U, 28U, 29U, 45U, 57U, 63U, 128U}) {
+            auto bytes = std::vector<std::byte>(ogg.begin(), ogg.begin() + size);
+            SampleSink sink;
+            const auto imported = Import(bytes, sink);
+            REQUIRE(imported.HasError());
+            CHECK(imported.ErrorValue().domain.Value() == "horo.audio");
+            CHECK(sink.samples.empty());
+        }
+    }
+
     TEST_CASE("Audio import measures gated LUFS short-term loudness and inter-sample true peak", "[unit][audio][import]") {
         auto bytes = SineFixture();
         SampleSink sink;

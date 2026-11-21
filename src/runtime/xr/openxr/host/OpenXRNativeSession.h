@@ -4,7 +4,10 @@
  * @brief Non-installed explicit host composition and native session ownership contract.
  */
 
+#include "Horo/XR/XRLightEstimate.h"
 #include "Horo/XR/XRLoaderPreflight.h"
+#include "Horo/XR/XRPassthrough.h"
+#include "Horo/XR/XRSpatialAnchors.h"
 #include "OpenXRHostBindings.h"
 #include "OpenXRNativeCensus.h"
 
@@ -13,17 +16,63 @@
 #include <optional>
 #include <span>
 #include <thread>
+#include <utility>
 
 namespace Horo::XR::OpenXRInternal {
+    class OpenXRSwapchain;
+
     /** @brief Fixed native discovery limits; oversized publications fail, never truncate. */
     inline constexpr std::size_t MaximumNativeExtensions = 128;
     inline constexpr std::size_t MaximumNativeLayers = 32;
     inline constexpr std::size_t MaximumEnabledExtensions = 16;
 
+    /** @brief Current selected native ownership for one exact passthrough scope. */
+    enum class NativePassthroughState : std::uint8_t {
+        Absent,
+        Active,
+        Retiring,
+    };
+
+    /** @brief Host facts established before making a native extension eligible for discovery. */
+    enum class NativeExtensionEligibility : std::uint8_t {
+        Eligible,
+        Unsupported,
+        Denied
+    };
+
     /** @brief Private native extension policy; host construction copies names only during bounded activation. */
     struct NativeExtensionRequest final {
         std::string_view name;
         bool required{};
+        std::uint32_t minimumVersion{1};                    /**< Minimum version for the extension entry point. */
+        std::span<const std::string_view> dependencies{};   /**< Other explicitly admitted routes required by this request. */
+        std::optional<XRLoaderApiVersion> promotedToCore{}; /**< Earliest usable core API when the host implements that route. */
+        NativeExtensionEligibility eligibility{};           /**< Selected host/platform support and policy admission. */
+    };
+
+    /** @brief Returns passthrough negotiation metadata supplied by the product's linked provider.
+     * @return The optional extension request. A backend without a provider returns an empty value. */
+    [[nodiscard]] std::optional<NativeExtensionRequest> NativePassthroughExtensionRequest() noexcept;
+
+    /** @brief Native extension evidence retained for the exact selected discovery attempt. */
+    enum class NativeExtensionState : std::uint8_t {
+        Absent,
+        Discovered,
+        Enabled,
+        PromotedToCore,
+        VersionIncompatible,
+        DependencyMissing,
+        Unsupported,
+        Denied,
+        ProviderFailed,
+    };
+
+    /** @brief Value-only observation of native discovery and extension policy. */
+    struct NativeExtensionAdmission final {
+        NativeExtensionState state{};
+        std::uint32_t discoveredVersion{};
+        std::uint32_t minimumVersion{};                  /**< Zero when the host did not request this extension. */
+        std::optional<XRLoaderApiVersion> coreVersion{}; /**< Selected native API when the core route is admitted. */
     };
 
     /** @brief Non-owning private native tuple; valid only during a fenced control-thread host operation before Close. */
@@ -34,6 +83,76 @@ namespace Horo::XR::OpenXRInternal {
         std::uint32_t maximumActions; /**< Zero for discovery-only borrows; negotiated bound after activation. */
         std::uint32_t maximumSpaces;  /**< Zero before activation; exact accepted feature-plan space capacity. */
         std::uint64_t incarnation;    /**< Native child creation receipt; never a Horo session/candidate identity or clock. */
+    };
+
+    class OpenXRNativeSession;
+    struct NativeFeatureProviderIssuer;
+
+    /** @brief Non-callable receipt for one admitted provider on an exact native owner and session. */
+    class NativeFeatureProviderHandle final {
+        friend class OpenXRNativeSession;
+
+        NativeFeatureProviderHandle(std::weak_ptr<const NativeFeatureProviderIssuer> issuer, XRSessionId session, std::uint64_t incarnation,
+                                    std::size_t slot, std::uint64_t generation) noexcept
+            : issuer_(std::move(issuer)), session_(session), incarnation_(incarnation), slot_(slot), generation_(generation) {}
+
+        std::weak_ptr<const NativeFeatureProviderIssuer> issuer_;
+        XRSessionId session_;
+        std::uint64_t incarnation_;
+        std::size_t slot_;
+        std::uint64_t generation_;
+    };
+
+    /** @brief Symbol alternatives for the same typed provider contract. */
+    struct NativeFeatureProviderRoute final {
+        std::string_view extension;       /**< Exact host-requested extension policy. */
+        std::string_view extensionSymbol; /**< Official ABI on the enabled extension route. */
+        std::string_view coreSymbol{};    /**< Equivalent ABI when the policy admits the core route. */
+    };
+
+    /** @brief Generation-fenced callable borrow, valid only for one serialized native operation. */
+    struct NativeFeatureProviderBorrow final {
+        NativeSessionBorrow native;
+        NativeExtensionAdmission admission;
+        PFN_xrVoidFunction function;
+    };
+
+    /** @brief Non-callable evidence that one exact renderer-admitted native synthesis route is registered. */
+    class NativeReprojectionProvider final {
+        friend class OpenXRNativeSession;
+
+        NativeReprojectionProvider(NativeFeatureProviderHandle handle, XRLoaderPreflightAttempt attempt,
+                                   NativeReprojectionOffer offer) noexcept
+            : handle_(std::move(handle)), attempt_(attempt), offer_(offer) {}
+
+        NativeFeatureProviderHandle handle_;
+        XRLoaderPreflightAttempt attempt_;
+        NativeReprojectionOffer offer_;
+    };
+
+    /** @brief Non-callable proof of the selected dispatch and both private native allocations. */
+    class NativePreparedReprojectionProvider final {
+        friend class OpenXRNativeSession;
+
+        NativePreparedReprojectionProvider(XRLoaderPreflightAttempt attempt, std::uint64_t incarnation, NativeReprojectionOffer offer,
+                                           std::array<const OpenXRSwapchain *, 2> owners, std::array<XrSwapchain, 2> allocations,
+                                           PFN_xrVoidFunction end) noexcept
+            : attempt_(attempt), incarnation_(incarnation), offer_(offer), owners_(owners), allocations_(allocations), end_(end) {}
+
+        XRLoaderPreflightAttempt attempt_;
+        std::uint64_t incarnation_;
+        NativeReprojectionOffer offer_;
+        std::array<const OpenXRSwapchain *, 2> owners_;
+        std::array<XrSwapchain, 2> allocations_;
+        PFN_xrVoidFunction end_;
+    };
+
+    /** @brief Synchronous typed dispatch and exact native eye limits from the registered synthesis provider. */
+    struct NativeReprojectionProviderBorrow final {
+        XRLoaderPreflightAttempt attempt;
+        NativeReprojectionOffer offer;
+        XrSession session;
+        PFN_xrEndFrame end;
     };
 
     /** @brief Exact host publication fence, called before acquisition and before exposing a native candidate. */
@@ -59,6 +178,7 @@ namespace Horo::XR::OpenXRInternal {
         std::span<const NativeExtensionRequest> extensions;
         std::span<const std::string_view> layers;
         bool developmentLayersApproved{};
+        bool optionalReprojection{}; /**< Explicit host request to census native auxiliary input contracts. */
     };
 
     /** @brief Native facts borrowed only during one serialized prepared-owner operation. */
@@ -74,6 +194,12 @@ namespace Horo::XR::OpenXRInternal {
     struct NativeSessionPreparation final {
         const XRLoaderPreflightSnapshot &preflight;
         XRLoaderPreflightAttempt activeAttempt;
+    };
+
+    /** @brief Describes which prefix belongs to one failed native session preparation. */
+    enum class NativeSessionPreparationScope : std::uint8_t {
+        Owner,   /**< Full initial startup owns the selected instance and system. */
+        Session, /**< Reversible probe borrows the already selected instance and system. */
     };
 
     /** @brief Borrowed activation input; no spans or snapshot references escape Create. */
@@ -102,6 +228,16 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Retains an exact verified loader lease and borrows host-selected ports. */
         OpenXRNativeSession(std::shared_ptr<const Platform::DynamicLibrary> loader, IOpenXRGraphicsBinding &graphics,
                             const IOpenXRCompositionFence &fence) noexcept;
+#if defined(__ANDROID__)
+        /** @brief Retains Activity-scoped bootstrap inputs alongside the exact selected loader.
+         * @param loader Verified loader for the admitted Android package.
+         * @param graphics Exact host-selected graphics binding, borrowed through teardown.
+         * @param fence Exact host composition fence, borrowed through teardown.
+         * @param application Host-owned VM and retained Activity and application context references.
+         */
+        OpenXRNativeSession(std::shared_ptr<const Platform::DynamicLibrary> loader, IOpenXRGraphicsBinding &graphics,
+                            const IOpenXRCompositionFence &fence, NativeOpenXRAndroidApplication application) noexcept;
+#endif
         /** @brief Performs reverse-order cleanup; host must quiesce native users and Renderer first. */
         ~OpenXRNativeSession();
         OpenXRNativeSession(const OpenXRNativeSession &) = delete;
@@ -128,10 +264,12 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Creates an unpublished native session so real session-dependent facts can be enumerated.
          * @param request Exact discovery/preflight/attempt with independently validated selected graphics binding; no Horo session identity
          * exists yet.
-         * @return Preparation outcome; failure follows the same debt-preserving reverse cleanup.
+         * @param scope Ownership rollback scope on failure. Session-scoped probes retain the selected discovery.
+         * @return Preparation outcome; failure reverses its owned resource prefix or retains exact cleanup debt.
          * @post Session() remains invalid. No feature plan or space/format availability is fabricated.
          */
-        [[nodiscard]] Result<void> PrepareSession(const NativeSessionPreparation &request);
+        [[nodiscard]] Result<void> PrepareSession(const NativeSessionPreparation &request,
+                                                  NativeSessionPreparationScope scope = NativeSessionPreparationScope::Owner);
         /** @brief Borrows an unpublished session solely for bounded backend discovery/negotiation.
          * @param request Exact successful preparation attempt and retained install/runtime.
          * @return Prepared native tuple; no activation or frame-use authority is transferred.
@@ -183,6 +321,66 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] XRSessionId Session() const noexcept;
         /** @brief Returns whether negotiation enabled an exact extension; false while unpublished. */
         [[nodiscard]] bool HasExtension(std::string_view name) const noexcept;
+        /** @brief Inspects actual native synthesis offers without enabling them or claiming a Renderer producer.
+         * @param attempt Exact retained discovery attempt.
+         * @param session Exact published owner when checking a proposed swapchain on the active session.
+         * @return Bounded native-only evidence or the original stale/owner error. Optional query errors become offer state.
+         */
+        [[nodiscard]] Result<NativeReprojectionOffer> DiscoverReprojection(XRLoaderPreflightAttempt attempt,
+                                                                           std::optional<XRSessionId> session = std::nullopt) const;
+        /** @brief Registers the exact enabled wire route once the selected renderer feature plan admits synthesis.
+         * @param session Exact published owner. @param attempt Exact retained native selection.
+         * @return An owner-fenced native provider or typed policy, sizing or dispatch error.
+         */
+        [[nodiscard]] Result<NativeReprojectionProvider> RegisterReprojectionProvider(const XRSessionId &session,
+                                                                                      XRLoaderPreflightAttempt attempt);
+        /** @brief Seals the native route and dispatch for both exact staged auxiliary swapchains.
+         * @param request Same private native session. @param motion Staged motion owner. @param depth Staged depth owner.
+         * @return Dispatch and allocation proof, or typed failure. Does not admit the capability or register a provider.
+         * @pre The caller retains both supplied owners through adoption or canceled preparation.
+         */
+        [[nodiscard]] Result<NativePreparedReprojectionProvider> PrepareReprojectionProvider(const NativeSessionPreparation &request,
+                                                                                             const OpenXRSwapchain &motion,
+                                                                                             const OpenXRSwapchain &depth) const;
+        /** @brief Registers the sealed dispatch after the exact staged allocations have been adopted.
+         * @param session Issued session. @param prepared Sealed route. @param motion Same adopted motion owner.
+         * @param depth Same adopted depth owner.
+         * @return One registered provider or typed rejection. No rediscovery or dispatch lookup occurs.
+         */
+        [[nodiscard]] Result<NativeReprojectionProvider> RegisterPreparedReprojectionProvider(
+            const XRSessionId &session, const NativePreparedReprojectionProvider &prepared, const OpenXRSwapchain &motion,
+            const OpenXRSwapchain &depth);
+        /** @brief Obtains typed xrEndFrame dispatch and exact native bounds for a synchronous call.
+         * @param provider Owner-issued registration. @return Borrow or its original stale or native owner error.
+         */
+        [[nodiscard]] Result<NativeReprojectionProviderBorrow> BorrowReprojectionProvider(const NativeReprojectionProvider &provider) const;
+        /** @brief Revokes this renderer route before its resources retire. @param provider Exact issued registration. */
+        void RevokeReprojectionProvider(const NativeReprojectionProvider &provider) noexcept;
+        /** @brief Copies extension evidence while the exact discovered owner is current on the control thread.
+         * @param attempt Exact discovery attempt. @param name Known extension policy name or advertised native name.
+         * @return Owned observation or typed invalid, stale or wrong-thread failure.
+         */
+        [[nodiscard]] Result<NativeExtensionAdmission> ReadExtensionAdmission(XRLoaderPreflightAttempt attempt,
+                                                                              std::string_view name) const;
+        /** @brief Revalidates the active session and copies its extension admission before binding a native provider.
+         * @param session Exact live session. @param name Extension route used by the provider.
+         * @return Evidence for that route or the typed session/extension inspection failure.
+         */
+        [[nodiscard]] Result<NativeExtensionAdmission> ReadExtensionAdmission(const XRSessionId &session, std::string_view name) const;
+        /** @brief Resolves exactly one admitted symbol and publishes the versioned provider for this session.
+         * @param session Exact active session. @param route Requested extension and applicable symbol alternatives.
+         * @return Non-callable receipt, or a typed policy, stale or provider-resolution failure.
+         */
+        [[nodiscard]] Result<NativeFeatureProviderHandle> RegisterFeatureProvider(const XRSessionId &session,
+                                                                                  NativeFeatureProviderRoute route);
+        /** @brief Revalidates the complete owner before a bounded, allocation-free successful callable borrow.
+         * @param handle Exact provider receipt. @return Current tuple and function, or typed stale/owner failure.
+         */
+        [[nodiscard]] Result<NativeFeatureProviderBorrow> BorrowFeatureProvider(const NativeFeatureProviderHandle &handle) const;
+        /** @brief Revokes only the captured provider publication; stale or foreign receipts have no effect.
+         * @param handle Exact provider registration to retire on the owner lane.
+         */
+        void RevokeFeatureProvider(const NativeFeatureProviderHandle &handle) noexcept;
         /**
          * @brief Borrows the exact complete native tuple for explicitly composed downstream native adapters.
          * @param session Exact Horo identity; stale owner/capability/device evidence rejects the borrow.
@@ -192,8 +390,112 @@ namespace Horo::XR::OpenXRInternal {
          */
         [[nodiscard]] Result<NativeSessionBorrow> Borrow(const XRSessionId &session) const;
 
+        /** @brief Opens an enabled native anchor route for an explicitly granted World scope. */
+        [[nodiscard]] Result<void> StartSpatialAnchors(const XRAnchorScope &scope, XrSpace world, const XRAnchorLimits &limits,
+                                                       const std::shared_ptr<XRSpatialAnchors> &publication);
+        /** @brief Creates one native anchor and its portable ID on the control lane. */
+        [[nodiscard]] Result<XRSpatialAnchorId> CreateSpatialAnchor(const XRAnchorScope &scope, XrSpace world, const XRAnchorPose &pose,
+                                                                    XRRuntimeTime now);
+        /** @brief Locates at most one anchor in the original World and publishes its bounded observation. */
+        [[nodiscard]] Result<void> SampleSpatialAnchor(const XRAnchorScope &scope, XrSpace world, const XRSpatialAnchorId &id,
+                                                       XRRuntimeTime now);
+        /** @brief Invalidates one portable ID before releasing its native children. */
+        [[nodiscard]] Result<void> RetireSpatialAnchor(const XRAnchorScope &scope, XrSpace world, const XRSpatialAnchorId &id);
+        /** @brief Revokes portable access and destroys native children, retaining cleanup debt on failure. */
+        [[nodiscard]] Result<void> StopSpatialAnchors(const XRAnchorScope &scope, XRAnchorWithdrawal reason);
+
+        /** @brief Opens cold access after the host grants separate protected-local persistence consent. */
+        [[nodiscard]] Result<void> OpenSpatialAnchorStore(const XRAnchorScope &scope, XrSpace world, const CancellationSource &grant);
+        /** @brief Checks exact live store authority without enumerating or reading durable storage. */
+        [[nodiscard]] Result<std::uint64_t> CheckSpatialAnchorStore(const XRAnchorScope &scope, XrSpace world);
+        /** @brief Saves one freshly localized anchor under a host-created opaque name. */
+        [[nodiscard]] Result<void> PersistSpatialAnchor(const XRAnchorScope &scope, XrSpace world, const XRSpatialAnchorId &id,
+                                                        XRRuntimeTime now, std::string_view name);
+        /** @brief Lists bounded provider-private names for the protected store adapter. Cold operation. */
+        [[nodiscard]] Result<std::size_t> ReadSpatialAnchorStore(const XRAnchorScope &scope, XrSpace world,
+                                                                 std::span<XrSpatialAnchorPersistenceNameMSFT> names);
+        /** @brief Resolves a stored name into a fresh Locating identity in the current session. */
+        [[nodiscard]] Result<std::optional<XRSpatialAnchorId>> RestoreSpatialAnchor(const XRAnchorScope &scope, XrSpace world,
+                                                                                    XRRuntimeTime now, std::string_view name);
+        /** @brief Revokes and retires the connection independently of the live anchors. */
+        [[nodiscard]] Result<void> CloseSpatialAnchorStore(const XRAnchorScope &scope);
+
+        /** @brief Creates an estimator on the exact enabled session after separate app and OS approval.
+         * @param scope Already consented purpose and calibrated World scope. @param limits Explicit cadence and expiry.
+         * @return Success, or typed capability, permission, identity, resource or validation failure.
+         * @pre App must check focus and actual OS clearance and provide a fresh grant on the native control lane.
+         */
+        [[nodiscard]] Result<void> StartLightEstimation(const XRLightEstimateScope &scope, const XRLightEstimateLimits &limits);
+        /** @brief Samples one bounded native result after the minimum cadence.
+         * @param scope Exact still-approved scope. @param world Synchronous borrow of the same calibrated World child.
+         * @param now Current runtime-clock cutoff for request, admission and freshness.
+         * @return True for a new publication, false for cadence or the same provider update, or a typed failure.
+         * @pre The application must suspend this producer and retire the grant on focus loss, origin replacement or privacy revocation.
+         */
+        [[nodiscard]] Result<bool> AdvanceLightEstimation(const XRLightEstimateScope &scope, XrSpace world, XRRuntimeTime now);
+        /** @brief Copies current estimate evidence without calling the native feature.
+         * @param scope Exact still-approved scope. @param now Cutoff in the same runtime clock.
+         * @return Current estimate, or a typed stale, incompatible or unavailable result.
+         */
+        [[nodiscard]] Result<XRLightEstimate> ReadLightEstimation(const XRLightEstimateScope &scope, XRRuntimeTime now) const;
+        /** @brief Revokes exact publication and retires the native child before its parent.
+         * @param scope Exact scope to revoke; stale scopes cannot revoke a current grant.
+         * @return Success or a retryable typed error retaining native cleanup debt.
+         */
+        [[nodiscard]] Result<void> StopLightEstimation(const XRLightEstimateScope &scope);
+
+        /** @brief Creates and starts one selected FB reconstruction underlay after app and runtime permission.
+         * @param scope Fresh, explicitly approved visual composition grant for a focused session and exact World.
+         * @return Success or typed unsupported, denied, invalid, capacity or native failure.
+         * @pre The app has independently verified focus, runtime permission and current operator consent.
+         */
+        [[nodiscard]] Result<void> StartPassthrough(const XRPassthroughScope &scope);
+        /** @brief Immediately stops publishing the exact grant and releases its native layer and feature.
+         * @param scope Exact current grant. @return Success or retryable native cleanup debt.
+         */
+        [[nodiscard]] Result<void> StopPassthrough(const XRPassthroughScope &scope);
+        /** @brief Reads exact scope authorization and retained cleanup on the native control lane. */
+        [[nodiscard]] NativePassthroughState ReadPassthrough(const XRPassthroughScope &scope) const noexcept;
+        /** @brief Withdraws exact scope admission and requests pause; retains native cleanup ownership. */
+        void RevokePassthrough(const XRPassthroughScope &scope) noexcept;
+
     private:
-        [[nodiscard]] Result<void> ResolveGlobal();
+        friend class OpenXRProtectedAnchorStore;
+
+        /** @brief Compensates an unpublished write on its exact connection, even after scope withdrawal. */
+        [[nodiscard]] Result<void> DiscardSpatialAnchorWrite(const XRAnchorScope &scope, std::uint64_t generation, std::string_view name);
+        friend class OpenXRFrameCompositor;
+        friend class OpenXRSessionEvents;
+        friend class OpenXRHandTracking;
+        friend class OpenXRPlaneCapture;
+
+        /** @brief Dispatch already resolved by a native child while preparing this exact native session. */
+        struct PreparedFeatureDispatch final {
+            std::uint64_t incarnation;
+            PFN_xrVoidFunction function;
+        };
+
+        /** @brief Publishes an admitted route using existing prepared dispatch or a new lookup on the exact active session. */
+        [[nodiscard]] Result<NativeFeatureProviderHandle> RegisterFeatureProvider(const XRSessionId &session,
+                                                                                  NativeFeatureProviderRoute route,
+                                                                                  std::optional<PreparedFeatureDispatch> prepared);
+
+        /** @brief Checks either prepared discovery or an exact active session before native feature queries. */
+        [[nodiscard]] Result<NativeDiscoveryBorrow> BorrowFeatureDiscovery(XRLoaderPreflightAttempt attempt,
+                                                                           const std::optional<XRSessionId> &session) const;
+        /** @brief Reads exact active owner plane capabilities before creating a spatial context. */
+        [[nodiscard]] Result<NativePlaneCensus> DiscoverPlaneProvider(XRLoaderPreflightAttempt attempt, const XRSessionId &session) const;
+
+        /** @brief Finds the bounded host-requested policy slot for this exact extension name. */
+        [[nodiscard]] std::size_t ExtensionSlot(std::string_view name) const noexcept;
+        /** @brief Checks the exact generation before lending or revoking a provider. */
+        [[nodiscard]] bool OwnsFeatureProvider(const NativeFeatureProviderHandle &handle) const noexcept;
+        /** @brief Resolves global dispatch from the selected loader, bootstrapping Android before enumeration. */
+        [[nodiscard]] Result<void> ResolveGlobal(const NativeDiscoveryRequest &request);
+#if defined(__ANDROID__)
+        /** @brief Initializes the selected loader through the retained Android application context and mandatory policy. */
+        [[nodiscard]] Result<void> InitializeAndroidLoader(std::span<const NativeExtensionRequest> requested);
+#endif
         [[nodiscard]] Result<void> DiscoverAndNegotiate(const NativeDiscoveryRequest &request);
         /** @brief Validates a bounded layer publication and admits only explicitly approved requested layers. */
         [[nodiscard]] Result<void> DiscoverLayers(std::span<const std::string_view> requested);
@@ -201,12 +503,19 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> EnableLayer(std::string_view name, std::span<const XrApiLayerProperties> available);
         /** @brief Combines runtime/layer publications and admits host graphics before optional feature extensions. */
         [[nodiscard]] Result<void> NegotiateExtensions(std::span<const NativeExtensionRequest> requested);
-        /** @brief Enables one previously validated policy name only when its bounded publication contains it. */
-        [[nodiscard]] Result<void> EnableExtension(std::string_view name, bool required, std::span<const XrExtensionProperties> available);
+        /** @brief Resolves validated feature requests against the census and retains the resulting policy evidence. */
+        [[nodiscard]] Result<void> AdmitRequestedExtensions(std::span<const NativeExtensionRequest> requested, std::string_view bindingName,
+                                                            std::span<const XrExtensionProperties> publication);
+        /** @brief Copies one unique, admitted name into the native instance request. */
+        [[nodiscard]] Result<void> EnableExtension(std::string_view name);
         /** @brief Enumerates one bounded global/layer extension publication without truncation. */
         [[nodiscard]] Result<void> CollectExtensions(const char *layer,
                                                      std::array<XrExtensionProperties, MaximumNativeExtensions> &available,
                                                      std::uint32_t &availableCount) const;
+        /** @brief Returns exactly the provider-owned optional extension requests, in selection order. */
+        [[nodiscard]] static std::span<const NativeExtensionRequest> ReprojectionExtensionRequests() noexcept;
+        /** @brief Removes exact enabled optional reprojection names before the sole create-refusal retry. */
+        [[nodiscard]] bool OmitRefusedReprojectionExtensions() noexcept;
         [[nodiscard]] Result<void> CreateInstance(const NativeDiscoveryRequest &request);
         [[nodiscard]] Result<void> ResolveInstance();
         [[nodiscard]] Result<void> SelectSystem();
@@ -223,6 +532,23 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> CheckPreparation(const NativeSessionPreparation &request) const;
         /** @brief Destroys a native session and releases its graphics binding only after native success. */
         [[nodiscard]] Result<void> DestroySession();
+        /** @brief Revokes evidence and retires the light child, retaining failed native retirement for retry. */
+        [[nodiscard]] Result<void> RetireLightEstimation();
+        [[nodiscard]] Result<void> RetireSpatialAnchors(XRAnchorWithdrawal reason);
+        [[nodiscard]] Result<void> RetireSpatialAnchorStore();
+        [[nodiscard]] Result<std::shared_ptr<XRSpatialAnchors>> BorrowAnchorStore(const XRAnchorScope &scope, XrSpace world) const;
+        [[nodiscard]] Result<std::shared_ptr<XRSpatialAnchors>> BorrowAnchorPublication(const XRAnchorScope &scope, XrSpace world) const;
+
+        /** @brief Passes an otherwise unhandled OpenXR event to the linked passthrough provider.
+         * @param buffer Exact native event borrowed during the owner-lane poll. */
+        void ObservePassthroughEvent(const XrEventDataBuffer &buffer) noexcept;
+        /** @brief Cleans up the current passthrough child before native session retirement. */
+        [[nodiscard]] Result<void> RetirePassthrough();
+        /** @brief Redacts the layer and attempts native pause on consent/focus/origin/runtime loss. */
+        void RevokePassthrough() noexcept;
+        /** @brief Calls native frame end with the exact live reconstruction underlay and prevalidated projection. */
+        [[nodiscard]] Result<XrResult> EndPassthroughFrame(const XRPassthroughScope &scope, XrSession session,
+                                                           const XrFrameEndInfo &projection, PFN_xrEndFrame dispatch);
         /** @brief Preserves the existing native phase/result-to-Horo mapping across split retirement implementation. */
         [[nodiscard]] static Error NativeFailure(const char *operation, XrResult result);
 
@@ -247,6 +573,9 @@ namespace Horo::XR::OpenXRInternal {
 
         const std::thread::id controlThread_{std::this_thread::get_id()};
 
+#if defined(__ANDROID__)
+        NativeOpenXRAndroidApplication androidApplication_; /**< Outlives loader_ during reverse member destruction. */
+#endif
         std::shared_ptr<const Platform::DynamicLibrary> loader_;
         IOpenXRGraphicsBinding *graphics_;
         const IOpenXRCompositionFence *fence_;
@@ -289,6 +618,103 @@ namespace Horo::XR::OpenXRInternal {
 
         NegotiatedNames names_;
 
+        struct FeatureProvider final {
+            PFN_xrVoidFunction function{};
+            std::uint64_t generation{};
+            bool failed{};
+        };
+
+        struct ExtensionEvidence final {
+            std::array<char, XR_MAX_EXTENSION_NAME_SIZE> name{};
+            NativeExtensionAdmission admission;
+        };
+
+        std::array<XrExtensionProperties, MaximumNativeExtensions> discoveredExtensions_{};
+        std::array<ExtensionEvidence, MaximumEnabledExtensions> extensionEvidence_{};
+        std::array<FeatureProvider, MaximumEnabledExtensions> featureProviders_{};
+        std::shared_ptr<const NativeFeatureProviderIssuer> providerIssuer_;
+        std::uint64_t providerGeneration_{};
+        bool registeringProvider_{};
+        std::uint32_t discoveredExtensionCount_{};
+        std::size_t extensionEvidenceCount_{};
+
+        struct LightEstimator final {
+            XrLightEstimatorANDROID handle{XR_NULL_HANDLE};
+            PFN_xrDestroyLightEstimatorANDROID destroy{};
+            PFN_xrGetLightEstimateANDROID get{};
+            XrSpace world{XR_NULL_HANDLE};
+            XRLightEstimateScope scope;
+            XRLightEstimateLimits limits;
+            mutable XRRuntimeTime lastClock; /**< Control-lane high-water mark shared by sampling and reads. */
+            XRRuntimeTime lastRequest;
+            XRRuntimeTime lastSample;
+            std::optional<XRLightEstimate> current;
+            bool active{};
+        };
+
+        LightEstimator light_;
+        XRLightEstimateGrant lastLightGrant_;
+        mutable bool lightCall_{}; /**< Rejects teardown or reentrant use while a native light operation borrows the owner. */
+
+        struct SpatialAnchors final {
+            struct Slot final {
+                XRSpatialAnchorId id;
+                XrSpatialAnchorMSFT anchor{XR_NULL_HANDLE};
+                XrSpace space{XR_NULL_HANDLE};
+                XRRuntimeTime lastSample;
+            };
+
+            std::weak_ptr<XRSpatialAnchors> publication;
+            XRAnchorScope scope;
+            XrSpace world{XR_NULL_HANDLE};
+            PFN_xrCreateSpatialAnchorMSFT create{};
+            PFN_xrCreateSpatialAnchorSpaceMSFT createSpace{};
+            PFN_xrDestroySpatialAnchorMSFT destroy{};
+            PFN_xrDestroySpace destroySpace{};
+            PFN_xrLocateSpace locate{};
+            std::array<Slot, XRSpatialAnchors::MaximumAnchors> slots{};
+            std::uint32_t maximumAnchors{};
+            bool admitted{};
+
+            [[nodiscard]] bool Resolve(const NativeSessionBorrow &native, PFN_xrGetInstanceProcAddr getProc);
+            [[nodiscard]] Result<void> Release(Slot &slot);
+            void Withdraw(XRAnchorWithdrawal reason);
+        } anchors_;
+
+        struct SpatialAnchorStore final {
+            XrSpatialAnchorStoreConnectionMSFT connection{XR_NULL_HANDLE};
+            PFN_xrDestroySpatialAnchorStoreConnectionMSFT destroy{};
+            PFN_xrPersistSpatialAnchorMSFT persist{};
+            PFN_xrEnumeratePersistedSpatialAnchorNamesMSFT enumerate{};
+            PFN_xrCreateSpatialAnchorFromPersistedNameMSFT restore{};
+            PFN_xrUnpersistSpatialAnchorMSFT remove{};
+            std::optional<XrSpatialAnchorPersistenceNameMSFT> pendingRemoval;
+            CancellationToken consent;
+            bool admitted{};
+
+            [[nodiscard]] Result<std::size_t> Read(std::span<XrSpatialAnchorPersistenceNameMSFT> names) const;
+            [[nodiscard]] Result<void> UndoPendingWrite();
+        } anchorStore_;
+
+        std::uint64_t anchorStoreGeneration_{};
+
+        XRAnchorGrant lastAnchorGrant_;
+        bool anchorCall_{};
+
+        struct Passthrough final {
+            XRPassthroughScope scope;
+            XrPassthroughFB feature{XR_NULL_HANDLE};
+            XrPassthroughLayerFB layer{XR_NULL_HANDLE};
+            PFN_xrPassthroughPauseFB pause{};
+            PFN_xrDestroyPassthroughLayerFB destroyLayer{};
+            PFN_xrDestroyPassthroughFB destroy{};
+            bool started{}; /**< Native start obligation remains even after logical revocation. */
+            bool admitted{};
+        };
+
+        Passthrough passthrough_;
+        XRPassthroughGrant lastPassthroughGrant_;
+        bool passthroughCall_{};
         bool graphicsPrepared_{};
         bool retirementCall_{}; /**< Rejects reentrant native destruction while preserving explicit retry after return. */
     };

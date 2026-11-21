@@ -453,9 +453,23 @@ struct AgentContext {
 };
 ```
 
-The context is assembled on the C++ side by the `AgentContextProvider` and
-serialized into the system prompt (or tool-call preamble) before each
-request reaches the LLM.
+The C++ context provider assembles the selected evidence before the request
+reaches the model.
+
+The editor Agent turn's explicit attachment path captures an ordered typed preview
+bound to one project generation, trust revision, request and provider residence.
+Source ranges use an already-open immutable source snapshot. A selected file may
+use the bounded rooted file reader. Diagnostics and build status use the
+authenticated read-only MCP query route. An editor owner may use the owned result
+of a query prepared on a worker while the MCP owner pumps its queue. Selected
+scene evidence, build output, notes and reports can arrive as revisioned text
+attachments from their owners. No document is opened during this preparation.
+
+The preview exposes the exact redacted provider payload and its provenance.
+After the user confirms it, the turn rechecks the project, trust and producer
+revisions and consumes the matching consent. Attachment text travels as
+user-role evidence. The completed conversation excludes these ephemeral context
+messages, so a later request must separately confirm its selected context.
 
 ## Request Pipeline
 
@@ -517,6 +531,17 @@ agent tool call goes through that bridge, but availability remains distinct from
 admission and authorization. The effective tool set is derived from host role,
 project trust, user policy, context scope, capabilities, and operation approval.
 The model may request a tool; it never decides its own authority.
+
+The editor turn runtime receives a host-selected provider and an existing
+authenticated in-process MCP session. It waits on a host worker while the
+canonical MCP controller dispatches through its registered owners. Each turn
+admits one inference or tool operation at a time, bounds its history, rounds,
+stream events, tool calls, output-token allowance and deadline, and returns one
+terminal outcome. One editor runtime admits one active turn and rejects
+concurrent or reentrant work. Malformed or repeated tool intents are rejected before their
+round submits any tool. Tool execution keeps the controller's approval check,
+and termination of the turn cancels a still-pending exact operation. The
+runtime does not retry provider requests or publish partial conversation history.
 
 ## Internal IDE Communication
 
@@ -705,6 +730,66 @@ deterministic tools, but it cannot let model output, voice, gaze, pointing, or a
 gesture approve its own mutation. Destructive and immersive scene changes always
 retain the visible proposal and revision-bound approval boundary.
 
+Structured source patches use a versioned object with a files array. A file
+record declares an operation, its project-relative path, and the operation's
+allowed text, destination, or original-byte hunks. The editor supplies the
+proposal identity and the exact source snapshots offered to the model. Parsing
+checks duplicate fields, finite limits, project path policy, and the original
+hunk bytes. It returns a typed proposal without opening, editing, or saving any
+file. Recovery uses its separate committed envelope.
+
+Unified text diffs use paired project-relative paths, declared old and new
+line ranges, and exact source context. The decoder accepts plain unified
+headers and matching Git text headers, preserves source line endings, and
+recognizes the missing-final-newline marker. Creates and complete deletions
+use the unified null-file sentinel. Renames are represented explicitly in the
+structured format. Git hash text supplies no source revision authority.
+
+Workspace edit planning binds one admitted proposal to explicit read-only
+observations of its source and destination paths. Current source leases must
+match both the buffer and saved-base evidence. The workspace host supplies
+observed absence for creates and renames. The planner produces one bounded
+preview or typed conflict per operation in canonical proposal order. Its output
+retains the exact proposal digest and never changes source, history, or disk.
+Permissions, paths, and revision evidence are checked again by the mutation
+owner before application.
+
+The source editor projects the selected operation from that plan into its
+existing gutter and text decorations. It maps original byte coordinates to
+display coordinates and retains the exact source publication. Navigation
+only moves the caret. A newer source publication or a tentative widget edit
+retires the markers and reports a conflict until a new plan is selected.
+The local model panel offers review for a complete JSON change or unified diff
+returned to a turn with explicitly selected whole source files. The open-tab
+picker retains the exact selected snapshots across pages. One consent action
+covers all displayed redacted context. Proposal admission is limited to the
+unredacted file snapshots sent in that turn. Each completed-reply card shows
+the admitted path and queues the corresponding existing source tab through
+the workspace command lane. Reviews remain scoped to each tab. Rejecting a
+proposal records the choice against its digest and disables its chat actions.
+
+A review decision set binds its canonical file and hunk indices to the
+proposal digest. File and bulk decisions update their selected units
+atomically. Structural operations have one file decision. Acceptance and
+undo validate current workspace evidence before publishing a decision.
+The detached review encoding retains the current unit states and proposal
+digest for recovery. It carries no source bytes or mutation authority.
+The chat shows one change range at a time for each selected edit. Its
+controls use the original byte range and the canonical hunk index for the
+decision, even if the displayed file later becomes stale.
+
+The Local Model panel can explicitly replace the recovery checkpoint at
+`.horo/local/agent/source-review` with the admitted proposal and its current decisions. The
+checkpoint keeps the exact proposal, including the reviewed change text, and
+the allowed path identities. It excludes the provider conversation and its
+request context. The editor publishes the file durably on its storage worker
+under an exclusive project-file lease. Restoring builds a new read-only plan
+from current open source snapshots. Each restored acceptance requires matching
+path, buffer and saved-base digests, and valid original ranges. Editor
+revision counters may differ after reopening a byte-identical source. The
+checkpoint preserves the decisions at save time. Undo tracks decisions made
+in the current review session.
+
 ## Backend Providers
 
 The system supports pluggable LLM backends:
@@ -737,6 +822,17 @@ enum class AgentProvider {
 - Has no network dependency after its model/runtime is available
 - Reports model capabilities, context limits, cost class, and availability
   through the same provider contract as remote adapters
+
+`HoroEditor --local-agent` enables the Local Model panel in the workspace.
+Enter the loopback HTTP service address and an installed model, or discover
+models from that address. Discovery and explicitly submitted text run on a
+worker. The workspace keeps running while the service responds. The panel sends
+the entered message, and workspace detachment cancels pending work.
+
+The panel can authorize a single read-only MCP query for the displayed scene
+object count. The worker checks that the selected installed model supports
+tools before sending the prompt. Its authenticated session exposes only the
+approved count, and releases the snapshot when the turn ends.
 
 ### Cloud Provider
 
@@ -784,14 +880,93 @@ struct ConversationRecord {
 };
 ```
 
+The private history owner publishes bounded SQLite images under
+`.horo/local/agent/conversations.sqlite`. It uses an exclusive project-file
+lease and durable atomic replacement. The host opens the store on an editor
+worker. Corrupt, foreign-project, and unsupported images produce an empty,
+unavailable view.
+The original images remain available for recovery. Committed streaming
+responses reopen as incomplete. The history owner requires its own host text
+filter and keeps only admitted display text, numeric usage, and opaque typed
+attachment and tool references. Provider request envelopes and tool payloads
+remain ephemeral.
+Version 1 images remain readable. The next durable write publishes the current
+version, which adds a build output reference kind.
+
+The Local Model panel opens the committed project's history on the editor I/O
+lane. After a plain text exchange, the panel shows the exact redacted prompt
+and response before offering a save. Approval writes both messages as a single
+project-scoped operation. The editor owns the background model operation and
+continues to poll history and turn completion while the panel is hidden.
+Detaching the workspace cancels the operation and discards late replies.
+
+The panel also offers recovery for an explicitly approved plain-text request.
+It commits the reviewed, redacted prompt and an empty response checkpoint on
+the history worker before starting inference. While a plain response streams,
+the user can freeze and approve a redacted draft of the complete lines received
+so far. Later deltas never change that preview. A successful reply requires its
+own review before the panel completes the same checkpoint. A restart after an
+interruption shows the saved prompt, any approved draft, and an incomplete-response
+marker.
+
+Saved conversation management uses the same project worker and is bound to the
+selected conversation. The panel supports rename, archive, restore, and deletion
+after confirmation. An export reads the sanitized JSON projection. The user can
+copy that exact preview from the panel.
+
 History is searchable from the chat panel. Old conversations are
 auto-archived after 30 days (configurable).
 
 ### Context Injection
 
-Users can explicitly add context to a prompt:
+The Local Model panel can review a Source document chosen from the open tabs,
+the active Source document, or the explicit selection in its existing editor widget.
+The workspace supplies an immutable editor snapshot, without opening or
+reading a file. The panel shows the redacted bytes and local destination
+before issuing one-use approval. Range approval also checks that the same
+selection still exists. Redaction checks any intersecting sensitive line
+and enclosing private-key block before clipping to the selected range.
+Source edits, close, and workspace detachment invalidate the preview before
+provider dispatch. After a successful contextual turn, a separate history
+approval records only the displayed numeric document or build output reference.
+An executed scene count tool can be recorded through the same review. These
+conversation records contain localized host labels and an opaque reference
+scoped to the turn.
 
-- **Selection**: "Use the selected object" — current selection is injected
+The separate saved-file action takes an explicit project-relative path. The
+workspace's rooted read authority reads a bounded text file on the agent worker
+without opening a Source tab. The panel previews the redacted result and the
+inference worker verifies the same saved revision before using the approval.
+These saved-file attachments and responses remain ephemeral.
+
+The user can explicitly capture bounded clipboard text as a note or report.
+The panel freezes the selected bytes at capture, identifies the attachment type
+and revision, and displays the redacted preview before consent. Later clipboard
+changes have no effect on the frozen preview. The clipboard is read only on
+that selection, and the attachment and response remain out of conversation history.
+
+The panel offers separate previews for the active gameplay build and the last
+completed build of the current project. It reads only the retained output for
+the selected operation, marks omitted output, and redacts the text before review.
+The active and completed builds also offer separate diagnostics previews. The
+selected operation contributes a bounded capture of its warnings and errors to
+an authenticated, read-only MCP session on the agent worker. The session exposes
+only the project's diagnostic query for that capture and is closed before model
+inference. The worker returns the revisioned page for redaction and review.
+The active Decision Graph can expose its current Problems through the same
+query. The workspace supplies only bounded findings from that open document and
+revokes the review when the active document, its revision, or its validation
+result changes.
+Changes to the selected operation's output invalidate its approval. Other
+builds and process logs have no effect while the selected output is retained.
+
+The workspace can also capture up to sixteen selected IDs from the current
+ordinary Scene for a separate local-model review. The capture identifies the
+scene and selection revisions. A scene edit, replacement, or selection change
+revokes its witness before the next dispatch. It stays out of conversation history.
+
+Other intended editor context surfaces include:
+
 - **Viewport**: "What's in front of the camera?" — viewport frustum snapshot
 - **Console**: "Check the last error" — recent console log entries
 - **File**: drag-and-drop a file reference into the chat input
@@ -878,6 +1053,22 @@ its authoritative owner.
 3. Clicking the AI Chat button in the right activity bar toggles it open
 4. Opening the panel establishes (or resumes) a conversation
 5. Closing the panel hides it; the conversation persists in the background
+
+The local chat panel displays completed, redacted lines while an inference
+without tools is running, including turns with explicitly approved attachments.
+The display polls the bounded worker draft without waiting for the producer.
+Final delivery uses the terminal response. A live display does not approve
+conversation storage or create a history checkpoint.
+Regenerate resubmits the last plain prompt to the same selected model and
+endpoint. The separate composer keeps its current draft. Context-bearing and
+tool turns require a new explicit selection and approval.
+The panel reports when the approved scene-count tool starts and how it settles.
+This transient status is emitted only for admitted dispatch and carries no tool
+arguments or result payload. The query can finish before the assistant response.
+The chat's text fields own workspace keyboard focus only while active. Hiding
+the panel releases that input context while the editor continues polling the
+turn. Actions use the dock's available width and expose clipped labels through
+focused and hovered tooltips.
 
 ### Activity Bar Button
 

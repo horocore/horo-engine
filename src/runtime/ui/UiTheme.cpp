@@ -88,7 +88,7 @@ namespace Horo::Runtime::Ui {
                 if (const auto result =
                         ThemeInternal::ProjectSurface(snapshot, surfaces[index], descriptor.properties, layoutInputs[index], paints[index]);
                     result.HasError())
-                    return result;
+                    return Result<void>::Failure(result.ErrorValue());
             std::ranges::sort(layoutInputs, {}, &UiLayoutElementDescriptor::element);
             return Result<void>::Success();
         }

@@ -342,7 +342,7 @@ namespace Horo::Runtime::Ui {
             CHECK(retained->render.Commands().size() == 2);
         }
 
-        TEST_CASE("Theme creation and preparation expose capacity and generation failures", "[runtime_ui][theme][failure]") {
+        TEST_CASE("Theme creation exposes owner and generation failures", "[runtime_ui][theme][failure]") {
             SECTION("mismatched canvas owner") {
                 auto descriptor = Descriptor();
                 ++descriptor.layout.canvas.generation;
@@ -359,17 +359,23 @@ namespace Horo::Runtime::Ui {
                 auto runtime = std::move(owner).Value();
                 ErrorIs(runtime.BeginChange(), UiErrors::GenerationExhausted);
             }
-            SECTION("preparation allocation failed") {
-                auto owner = Runtime();
-                const auto change = owner.BeginChange().Value();
-                auto definition = Definition();
-                auto result = [&] {
-                    Horo::Tests::AllocationProbe::ScopedFailure fail;
-                    return owner.Prepare(change, std::move(definition), Theme());
-                }();
-                ErrorIs(result, UiErrors::CapacityExceeded);
-                REQUIRE(owner.Prepare(change, Definition(), Theme()).HasValue());
-            }
+        }
+
+        TEST_CASE("Theme preparation reports injected allocation exhaustion and can retry", "[runtime_ui][theme][failure][allocation]") {
+#if defined(_MSC_VER) && _ITERATOR_DEBUG_LEVEL != 0
+            SKIP("MSVC checked-STL allocation injection can terminate in noexcept container moves");
+#else
+            auto owner = Runtime();
+            const auto change = owner.BeginChange().Value();
+            auto definition = Definition();
+            const auto theme = Theme();
+            auto result = [&] {
+                Horo::Tests::AllocationProbe::ScopedFailure fail;
+                return owner.Prepare(change, std::move(definition), theme);
+            }();
+            ErrorIs(result, UiErrors::CapacityExceeded);
+            REQUIRE(owner.Prepare(change, Definition(), theme).HasValue());
+#endif
         }
     }  // namespace
 }  // namespace Horo::Runtime::Ui

@@ -15,6 +15,11 @@ namespace Horo::Render {
         return Result<void>::Failure(MakeError(VulkanBackendErrors::PresentationUnsupported));
     }
 
+    /** @copydoc IVulkanCommandPort::ObservePresentationOutput */
+    Result<RenderPresentationOutput> IVulkanCommandPort::ObservePresentationOutput() const {
+        return Result<RenderPresentationOutput>::Failure(MakeError(RenderPresentationErrors::OutputUnsupported));
+    }
+
     /** @copydoc IVulkanLoaderPort::CreatePresentationSurface */
     Result<VkSurfaceKHR> IVulkanLoaderPort::CreatePresentationSurface(VkInstance) {
         return Result<VkSurfaceKHR>::Failure(MakeError(VulkanBackendErrors::PresentationUnsupported));

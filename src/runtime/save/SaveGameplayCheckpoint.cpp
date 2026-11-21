@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Save/SaveGameplayCheckpoint.h"
 
+#include "Horo/Foundation/Logging/LogContext.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 
 #include <algorithm>
@@ -219,7 +220,10 @@ namespace Horo::Runtime {
         try {
             // Pin selection across project code that may synchronously change the active retry point.
             const auto checkpoint = *active_;
-            auto staged = source.Stage(checkpoint, context, participants);
+            auto staged = [&] {
+                const Log::ScopedDiagnosticSuppression suppressSourceDiagnostics;
+                return source.Stage(checkpoint, context, participants);
+            }();
             if (staged.HasError())
                 return fail(staged.ErrorValue());
             return PrepareStaging(context, std::move(operation), std::move(participants), std::move(staged).Value());

@@ -86,6 +86,10 @@ namespace Horo::Editor {
         // Vulkan's positive-height viewport has top-left framebuffer origin; flip only the clip-space Y component.
         for (std::size_t column = 0; column < 4; ++column)
             clipFromLocal.values[column * 4 + 1] *= -1;
+        // DXC lowers the HLSL viewport MVP to a transposed SPIR-V matrix. Pack that matrix before reflecting its native strides.
+        for (std::size_t row = 0; row < 4; ++row)
+            for (std::size_t column = row + 1; column < 4; ++column)
+                std::swap(clipFromLocal.values[column * 4 + row], clipFromLocal.values[row * 4 + column]);
         const auto &presentation = instance.presentation;
         const std::array tint{presentation.tint.x, presentation.tint.y, presentation.tint.z, presentation.tintStrength};
         const std::array camera{0.0F, 0.0F, 0.0F, static_cast<float>(scene.lights.size())};

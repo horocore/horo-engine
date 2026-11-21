@@ -4,6 +4,7 @@
 #include "GameplayVfxHostAccess.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Gameplay/BehaviorRuntime.h"
+#include "Horo/Gameplay/GameplayAnimationContext.h"
 #include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
@@ -75,6 +76,7 @@ namespace Horo::Gameplay {
             bool enabledCallbackActive{};
             bool started{};
             bool destroyed{};
+            std::shared_ptr<const GameplayNavigationContext> navigation;
             std::shared_ptr<const GameplayPrefabContext> prefabs;
             std::shared_ptr<const GameplayVfxContext> vfx;
         };
@@ -97,6 +99,7 @@ namespace Horo::Gameplay {
 
             Impl &runtime;
             Instance &instance;
+            BehaviorFixedEvidence *fixedEvidence{}; /**< Caller-owned opt-in diagnostic, valid only during fixed dispatch. */
             std::span<const GameplayInputAction> input;
             Runtime::SceneCommandBuffer &commands;
             bool allowSimulationMutation{true};
@@ -104,6 +107,22 @@ namespace Horo::Gameplay {
 
             [[nodiscard]] std::shared_ptr<const GameplayVfxContext> VfxContext() const noexcept override {
                 return instance.vfx;
+            }
+
+            [[nodiscard]] std::shared_ptr<const GameplayAnimationContext> AnimationContext() const noexcept override {
+                if (!allowSimulationMutation)
+                    return {};
+                const auto &typeId = instance.component.typeId;
+                const auto exact = std::ranges::lower_bound(runtime.animationBehaviors, typeId, {}, &BehaviorAnimationGrant::type);
+                if (exact != runtime.animationBehaviors.end() && exact->type == typeId)
+                    return exact->context;
+                if (!runtime.animation)
+                    return {};
+                const auto module = runtime.animation->ModuleId();
+                const auto type = std::string_view{instance.component.typeId.Value()};
+                if (type.size() <= module.size() || !type.starts_with(module) || type[module.size()] != '.')
+                    return {};
+                return runtime.animation;
             }
 
             [[nodiscard]] GameplayEntityRef Entity() const noexcept override {
@@ -134,6 +153,12 @@ namespace Horo::Gameplay {
                     return Result<void>::Failure(
                         MakeError(GameplayErrors::InvalidBehaviorComponent, "This lifecycle phase cannot mutate simulation transforms."));
                 commands.SetLocalTransform(instance.entity, transform);
+                if (fixedEvidence) {
+                    if (fixedEvidence->transformCount < fixedEvidence->transforms.size())
+                        fixedEvidence->transforms[fixedEvidence->transformCount++] = {instance.entity, transform};
+                    else
+                        fixedEvidence->truncated = true;
+                }
                 return Result<void>::Success();
             }
 
@@ -146,7 +171,7 @@ namespace Horo::Gameplay {
             [[nodiscard]] std::shared_ptr<const GameplayNavigationContext> NavigationContext() const noexcept override {
                 if (runtime.navigation && !instance.component.typeId.Value().starts_with(runtime.navigation->Binding().moduleId + "."))
                     return {};
-                return runtime.navigation;
+                return instance.navigation ? instance.navigation : runtime.navigation;
             }
 
             [[nodiscard]] std::shared_ptr<const GameplayPhysicsContext> PhysicsContext() const noexcept override {
@@ -253,7 +278,32 @@ namespace Horo::Gameplay {
             return Result<void>::Success();
         }
 
+        /** @brief Binds path-only ownership after the exact entity and Navigation registry have been published. */
+        [[nodiscard]] Result<void> InitializeAgentNavigation(Instance &instance) const {
+            if (instance.navigation) {
+                instance.navigation->Revoke();
+                instance.navigation.reset();
+            }
+            if (!navigation || !navigation->HasBehaviorAgentPaths() ||
+                !instance.component.typeId.Value().starts_with(navigation->Binding().moduleId + "."))
+                return Result<void>::Success();
+            const auto entity = SceneView().Get(instance.entity);
+            if (entity.HasError())
+                return Result<void>::Failure(entity.ErrorValue());
+            const auto &agent = entity.Value().components->navigationAgent;
+            if (!agent || !agent->enabled)
+                return Result<void>::Success();
+            const auto grant = navigation->ForBehaviorEntity(
+                {navigation->Binding().scene.scene, instance.entity.entity.index, instance.entity.entity.generation});
+            if (grant.HasError())
+                return Result<void>::Failure(grant.ErrorValue());
+            instance.navigation = grant.Value();
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] Result<void> InitializePrefabContext(Instance &instance) const {
+            if (auto bound = InitializeAgentNavigation(instance); bound.HasError())
+                return bound;
             if (auto bound = InitializeVfxContext(instance); bound.HasError())
                 return bound;
             if (!prefabs || !prefabs->Binding().AdmitsBehavior(instance.component.typeId))
@@ -388,25 +438,39 @@ namespace Horo::Gameplay {
 
             /** @brief Constructs and activates the prepared new suffix, retaining the existing exact rollback boundary. */
             [[nodiscard]] Result<void> AttachCommittedInstances(const std::size_t first) {
+                struct AttachmentRollback final {
+                    StructuralCandidate &candidate;
+                    std::size_t firstInstance;
+                    std::size_t firstEvent;
+                    bool committed{};
+
+                    ~AttachmentRollback() noexcept {
+                        if (committed)
+                            return;
+                        candidate.RollbackAdditions(firstInstance);
+                        // FixedUpdate cannot drain pending events during structural notifications.
+                        candidate.owner.events.next.resize(firstEvent);
+                    }
+                } rollback{*this, first, owner.events.next.size()};
+
                 for (Instance &instance : additions) {
                     if (owner.shutdownRequested)
-                        return FailAdditions(first, "Gameplay shutdown requested during structural notifications.");
-                    if (auto admitted = owner.InitializePrefabContext(instance); admitted.HasError()) {
-                        RollbackAdditions(first);
+                        return Result<void>::Failure(MakeError(GameplayErrors::GameplayFactoryFailed,
+                                                               "Gameplay shutdown requested during structural notifications."));
+                    if (auto admitted = owner.InitializePrefabContext(instance); admitted.HasError())
                         return admitted;
-                    }
                     if (!TryCreateInstance(instance))
-                        return FailAdditions(first, "Spawned behavior factory threw an exception.");
+                        return Result<void>::Failure(
+                            MakeError(GameplayErrors::GameplayFactoryFailed, "Spawned behavior factory threw an exception."));
                     if (instance.implementation == nullptr)
-                        return FailAdditions(first, "Spawned behavior factory returned no instance.");
+                        return Result<void>::Failure(
+                            MakeError(GameplayErrors::GameplayFactoryFailed, "Spawned behavior factory returned no instance."));
                     // Capacity and all component copies were prepared before the aggregate commit fence.
                     owner.instances.push_back(std::move(instance));
                 }
-                if (auto activated = owner.ActivateInstances(first); activated.HasError()) {
-                    const Error error = activated.ErrorValue();
-                    RollbackAdditions(first);
-                    return Result<void>::Failure(error);
-                }
+                if (auto activated = owner.ActivateInstances(first); activated.HasError())
+                    return activated;
+                rollback.committed = true;
                 return Result<void>::Success();
             }
 
@@ -425,12 +489,6 @@ namespace Horo::Gameplay {
                 for (std::size_t index = owner.instances.size(); index > first; --index)
                     (void)owner.RollbackInstance(owner.instances[index - 1]);
                 owner.instances.resize(first);
-            }
-
-            /** @brief Reports a postcommit factory fault after deterministic partial-instance teardown. */
-            [[nodiscard]] Result<void> FailAdditions(const std::size_t first, const char *message) {
-                RollbackAdditions(first);
-                return Result<void>::Failure(MakeError(GameplayErrors::GameplayFactoryFailed, message));
             }
 
             std::shared_ptr<Impl> lifetime;
@@ -506,6 +564,8 @@ namespace Horo::Gameplay {
         };
 
         [[nodiscard]] bool RollbackInstance(Instance &instance, const bool committedRetirement = false) noexcept {
+            if (instance.navigation)
+                instance.navigation->Revoke();
             if (committedRetirement)
                 Detail::GameplayVfxHostAccess::RetireEntityClient(instance.vfx);
             bool complete = true;
@@ -540,6 +600,8 @@ namespace Horo::Gameplay {
             if (shutdown)
                 return;
             shutdown = true;
+            if (animationLifetime)
+                animationLifetime->RequestCancellation();
             Detail::GameplayVfxHostAccess::RevokeClient(vfx);
             if (character)
                 character->Revoke();
@@ -573,6 +635,9 @@ namespace Horo::Gameplay {
         std::shared_ptr<const GameplayNavigationContext> navigation;
         std::shared_ptr<const GameplayPrefabContext> prefabs;
         std::shared_ptr<const GameplayVfxContext> vfx;
+        std::shared_ptr<const GameplayAnimationContext> animation;
+        std::vector<BehaviorAnimationGrant> animationBehaviors;
+        std::optional<CancellationSource> animationLifetime;
         mutable std::shared_ptr<const Runtime::SceneStructuralReceipt> vfxStructuralReceipt;
         std::vector<Instance> instances;
         bool shutdown{};

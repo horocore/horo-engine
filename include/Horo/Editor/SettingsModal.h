@@ -32,10 +32,12 @@ namespace Horo::Editor {
 
     /** @brief Explicit project openings captured as revocable borrows during modal construction. */
     struct SettingsModalProjectOpening final {
-        const NavigationProjectSettingsSession *navigation{};     /**< Borrowed only until its revocable opening is captured. */
-        std::weak_ptr<CollisionProjectSettingsSession> collision; /**< Never extends the project or Scene owner lifetime. */
-        std::optional<Error> collisionError;                      /**< Preserves the original typed opening failure for presentation. */
-        std::weak_ptr<PrefabProjectSettingsSession> prefab;       /**< Exact project opening, revoked by owner shutdown. */
+        const NavigationProjectSettingsSession *navigation{};        /**< Borrowed only until its revocable opening is captured. */
+        std::weak_ptr<CollisionProjectSettingsSession> collision;    /**< Never extends the project or Scene owner lifetime. */
+        std::optional<Error> collisionError;                         /**< Preserves the original typed opening failure for presentation. */
+        std::weak_ptr<PrefabProjectSettingsSession> prefab;          /**< Exact project opening, revoked by owner shutdown. */
+        std::shared_ptr<ConfigurationSettingsSession> configuration; /**< Modal-owned shared draft with weak source-owner callbacks. */
+        std::optional<Error> configurationError; /**< Original typed project opening failure; no User-source fallback. */
     };
 
     /** @brief Host-owned editor settings workflow and its transient settings draft. */

@@ -160,14 +160,13 @@ namespace Horo::Runtime::Ui::LayoutInternal {
             return minimum ? ResolveLength(length, available) : ResolveOptionalMaximum(length, available);
         }
 
-        [[nodiscard]] Result<FlowBounds> ResolveFlowBounds(const FlowLayoutContext &context, const UiLayoutStyle &style) {
-            auto minimum = ResolveItemBound(style, context.horizontal, true, context.parentMain);
-            auto maximum = ResolveItemBound(style, context.horizontal, false, context.parentMain);
+        [[nodiscard]] Result<FlowBounds> ResolveFlowBounds(const FlowLayoutContext &context, const UiLayoutElementDescriptor &descriptor) {
+            auto minimum = ResolveItemBound(descriptor.style, context.horizontal, true, context.parentMain);
+            auto maximum = ResolveItemBound(descriptor.style, context.horizontal, false, context.parentMain);
             if (minimum.HasError() || maximum.HasError())
                 return Failure<FlowBounds>(UiErrors::LayoutInvalid);
-            if (minimum.Value() > maximum.Value())
-                maximum = minimum;
-            return Result<FlowBounds>::Success({minimum.Value(), maximum.Value()});
+            const auto floor = std::max(minimum.Value(), descriptor.minimumInteractiveExtent);
+            return Result<FlowBounds>::Success({floor, std::max(floor, maximum.Value())});
         }
 
         [[nodiscard]] bool IsFlowFrozen(const FlowLayoutContext &context, const std::uint32_t index) noexcept {
@@ -214,7 +213,7 @@ namespace Horo::Runtime::Ui::LayoutInternal {
                 const auto *child = context.childDescriptors[index];
                 if (child == nullptr)
                     return Failure(UiErrors::LayoutSourceStale);
-                const auto bounds = ResolveFlowBounds(context, child->style);
+                const auto bounds = ResolveFlowBounds(context, *child);
                 if (bounds.HasError())
                     return Result<void>::Failure(bounds.ErrorValue());
                 const auto base = MainValue(context.children[index].measurement.desired, context.horizontal);
@@ -232,7 +231,7 @@ namespace Horo::Runtime::Ui::LayoutInternal {
                 const auto *child = context.childDescriptors[index];
                 if (child == nullptr)
                     return Failure<std::uint64_t>(UiErrors::LayoutSourceStale);
-                const auto bounds = ResolveFlowBounds(context, child->style);
+                const auto bounds = ResolveFlowBounds(context, *child);
                 if (bounds.HasError())
                     return Result<std::uint64_t>::Failure(bounds.ErrorValue());
                 if (const bool atBound = growing ? context.placementScratch[index].mainExtent >= bounds.Value().maximum
@@ -258,7 +257,7 @@ namespace Horo::Runtime::Ui::LayoutInternal {
             const auto *child = context.childDescriptors[index];
             if (child == nullptr)
                 return Failure<FlowDistributionStep>(UiErrors::LayoutSourceStale);
-            const auto bounds = ResolveFlowBounds(context, child->style);
+            const auto bounds = ResolveFlowBounds(context, *child);
             if (bounds.HasError())
                 return Result<FlowDistributionStep>::Failure(bounds.ErrorValue());
             const auto weight = FlowItemWeight(*child, context.children[index].measurement, context.horizontal, growing);
@@ -291,7 +290,7 @@ namespace Horo::Runtime::Ui::LayoutInternal {
                 const auto *child = context.childDescriptors[index];
                 if (child == nullptr)
                     return Failure<bool>(UiErrors::LayoutSourceStale);
-                const auto bounds = ResolveFlowBounds(context, child->style);
+                const auto bounds = ResolveFlowBounds(context, *child);
                 if (bounds.HasError())
                     return Result<bool>::Failure(bounds.ErrorValue());
                 if (const bool atBound = growing ? context.placementScratch[index].mainExtent >= bounds.Value().maximum

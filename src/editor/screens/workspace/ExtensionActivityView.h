@@ -72,6 +72,7 @@ namespace Horo::Editor {
         std::vector<CommandBinding> commands_;
         std::uint64_t commandSurfaceRevision_{};
         std::uint64_t commandSettingsRevision_{~std::uint64_t{0}};
+        std::uint64_t commandInputRevision_{~std::uint64_t{0}};
         bool commandBindingsValid_{};
         /** @brief Rebuilds command shortcuts only after module publication or committed settings change. */
         void PrepareCommands();

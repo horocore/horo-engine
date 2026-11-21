@@ -45,4 +45,16 @@ namespace Horo::Editor::Offline {
                                                      const std::filesystem::path &destination,
                                                      const Application::Internal::AuthenticatedMetalCookInputs &inputs,
                                                      bool includeLookVariant = false);
+    /** @brief Cooks Vulkan manual exposure through the same pinned analytic and SDR product family.
+     * @param repositoryRoot Actual source tree. @param analyticRoot Exact original producer generation.
+     * @param destination New absent stage. @param scratch Existing independent compiler directory.
+     * @param tools Selected locked DXC, SPIR-V validation and reflection identities in that order.
+     * @param compiler Compiler from the existing host admission boundary.
+     * @return Complete exact package after decoder validation and atomic publication.
+     */
+    [[nodiscard]] Result<void> CookVulkanManualColorOutput(const std::filesystem::path &repositoryRoot,
+                                                           const std::filesystem::path &analyticRoot,
+                                                           const std::filesystem::path &destination, const std::filesystem::path &scratch,
+                                                           std::span<const Render::ShaderCompilerToolIdentity, 3> tools,
+                                                           const Render::IShaderCompilerAdapter &compiler);
 }  // namespace Horo::Editor::Offline

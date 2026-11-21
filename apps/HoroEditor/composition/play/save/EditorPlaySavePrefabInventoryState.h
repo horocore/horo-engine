@@ -60,8 +60,10 @@ namespace Horo::Application::Internal {
             }
 
             void Cancel() noexcept override {
-                if (!entry->published)
-                    entry->cancelled = true;
+                if (entry->published)
+                    return;
+                entry->cancelled = true;
+                entry->source = {};
             }
 
             std::shared_ptr<Entry> entry;
@@ -334,17 +336,20 @@ namespace Horo::Application::Internal {
             const auto &entry = *(*found)->entry;
             if (!AvailableTo(entry, creator))
                 return Invalid<Prefab::PrefabPersistentLookup>("Durable prefab occurrence is unavailable to this creator grant.");
+            if (entry.runtime.empty() || entry.runtime.size() != entry.recipe.members.size() ||
+                entry.recipe.members.front().record.disposition != Runtime::PersistentEntityDisposition::Live)
+                return Invalid<Prefab::PrefabPersistentLookup>("Durable prefab occurrence has no live root.");
             Prefab::PrefabPersistentLookup result;
             result.entities.reserve(entry.runtime.size());
+            result.provenance.reserve(entry.runtime.size());
             for (std::size_t index = 0; index < entry.runtime.size(); ++index) {
                 if (entry.recipe.members[index].record.disposition == Runtime::PersistentEntityDisposition::Tombstone)
                     continue;
                 if (view.Value().Get(entry.runtime[index]).HasError())
                     return Invalid<Prefab::PrefabPersistentLookup>("Durable prefab member incarnation is no longer live.");
                 result.entities.push_back(entry.runtime[index]);
+                result.provenance.push_back(entry.recipe.members[index].source);
             }
-            if (result.entities.empty())
-                return Invalid<Prefab::PrefabPersistentLookup>("Durable prefab occurrence has no live root.");
             result.publication = *found;
             return Outcome::Success(std::move(result));
         }

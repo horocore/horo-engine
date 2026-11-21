@@ -128,9 +128,24 @@ namespace Horo::Editor {
         RefreshAvailableBehaviorProjection();
     }
 
+    /** @copydoc EditorWorkspaceController::SetPackageDecisionNodeSource */
+    void EditorWorkspaceController::SetPackageDecisionNodeSource(std::shared_ptr<const ProjectPackageDecisionNodeSource> source) {
+        if (source == m_packageDecisionNodes)
+            return;
+        m_packageDecisionNodes = std::move(source);
+        if (m_gameplayRegistry)
+            RefreshAvailableBehaviorProjection();
+    }
+
     void EditorWorkspaceController::RefreshAvailableBehaviorProjection() {
+        if (const auto catalog = m_gameplayRegistry->ReplacePackageDecisionNodeSource(m_packageDecisionNodes); catalog.HasError()) {
+            // A new package publication cannot retain a catalog for a withdrawn prior activation.
+            static_cast<void>(m_gameplayRegistry->ReplacePackageDecisionNodeSource({}));
+            LOG_WARN("editor.gameplay", "Package Decision catalog rejected: %s", catalog.ErrorValue().code.Value().c_str());
+        }
         ++m_viewModel.availableBehaviorsRevision;
         InvalidateInspectorBehaviorBindings();
+        RefreshDecisionTaskChoices();
         m_viewModel.availableBehaviors.clear();
         for (const Gameplay::BehaviorRegistration &registration : m_gameplayRegistry->Registry().Registrations())
             m_viewModel.availableBehaviors.push_back(registration.descriptor);
@@ -140,8 +155,8 @@ namespace Horo::Editor {
     }
 
     void EditorWorkspaceController::ApplyPendingGameplayRegistry() {
-        if (!m_pendingGameplayRegistry || m_playSession.State() == EditorPlaySessionState::Starting ||
-            m_playSession.State() == EditorPlaySessionState::Stopping)
+        if (!m_pendingGameplayRegistry || m_playSession.UsesCookedDecisionExecution() ||
+            m_playSession.State() == EditorPlaySessionState::Starting || m_playSession.State() == EditorPlaySessionState::Stopping)
             return;
         if (m_playSession.IsActive() && !m_playSession.PrepareSaveRetirement())
             return;
@@ -168,7 +183,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::CanApplyNativeGameplayReload */
     bool EditorWorkspaceController::CanApplyNativeGameplayReload() {
-        if (m_nativeGameplayReloadQuarantined || !m_nativeGameplayReloadPending ||
+        if (m_nativeGameplayReloadQuarantined || !m_nativeGameplayReloadPending || m_playSession.UsesCookedDecisionExecution() ||
             m_playSession.State() == EditorPlaySessionState::Starting || m_playSession.State() == EditorPlaySessionState::Stopping)
             return false;
         return m_playSession.PrepareSaveRetirement();
@@ -311,6 +326,10 @@ namespace Horo::Editor {
         m_nativeGameplayReloadQuarantined = true;
         m_nativeGameplayReloadPending = false;
         m_pendingGameplayRegistry.reset();
+        m_viewModel.decisionProviderMetadata.reset();
+        m_viewModel.decisionTaskChoices.clear();
+        m_viewModel.behaviorTreeTaskChoices.clear();
+        m_viewModel.decisionTaskPaletteChoices.clear();
         if (m_playSession.State() == EditorPlaySessionState::Reloading)
             m_playSession.DegradeAfterReload(std::move(error));
     }

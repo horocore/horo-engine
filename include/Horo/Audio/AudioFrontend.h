@@ -5,8 +5,10 @@
  */
 
 #include "Horo/Audio/AudioCommandStaging.h"
+#include "Horo/Audio/AudioDeviceNegotiation.h"
 #include "Horo/Audio/AudioDeviceTiming.h"
 #include "Horo/Audio/AudioVoiceControls.h"
+#include "Horo/Audio/AudioVoiceStateMachine.h"
 
 #include <memory>
 #include <optional>
@@ -43,6 +45,27 @@ namespace Horo::Audio {
         const ErrorCodeDescriptor *error{}; /**< Static Audio failure identity; populated only for Rejected. */
     };
 
+    /** @brief Backend evidence admitted for one exact open; frame counts are expressed at their paired rates. */
+    struct AudioOpenedOutputTiming final {
+        AudioDeviceTimingReport observations; /**< Original quality, source, epoch and timestamps. */
+        std::uint32_t processingSampleRate{};
+        std::uint32_t processingCallbackFrames{};
+        std::uint32_t nativeSampleRate{};
+        std::optional<std::uint32_t> nativePeriodFrames; /**< API-reported size when available; independent of hardware latency. */
+        AudioFormatDeviationReason callbackPeriodDeviation{AudioFormatDeviationReason::None};
+    };
+
+    /** @brief Requested policy and independently negotiated output timing for the current frontend. */
+    struct AudioFrontendOutputTiming final {
+        AudioLatencyProfile requestedProfile{AudioLatencyProfile::Balanced};
+        std::uint32_t requestedSampleRate{};
+        AudioDevicePeriodRequest requestedPeriod;
+        std::optional<AudioOpenedOutputTiming> opened;      /**< Empty before valid Open and after output admission closes. */
+        AudioTimingFrames mixerDspLatency;                  /**< Declared algorithmic delay of the admitted mix path. */
+        AudioTimingFrames resamplerLookAhead;               /**< Admitted input read-ahead bound, separate from device latency. */
+        std::optional<AudioTimingFrames> decodedQueueDepth; /**< Current queued decoded frames, absent for resident playback. */
+    };
+
     /** @brief Owned status with the original failure retained through cleanup. */
     struct AudioFrontendSnapshot final {
         AudioFrontendPhase phase{AudioFrontendPhase::Prepared};
@@ -52,6 +75,9 @@ namespace Horo::Audio {
         std::optional<Error> failure;
         std::size_t pendingOperations{};
         std::size_t retainedOperationResults{};
+        std::optional<AudioVoiceSnapshot>
+            terminalVoice{}; /**< Stable voice outcome after detached retirement; independent of transport results. */
+        AudioFrontendOutputTiming outputTiming;
     };
 
     /**

@@ -8,10 +8,16 @@
 #include "Horo/Foundation/ErrorCode.h"
 
 namespace Horo::AI::AIErrors {
+    /** @brief A custom sense factory or evaluation failed or returned invalid bounded output. */
+    extern const ErrorCodeDescriptor PerceptionProviderFailed;
+    /** @brief An environment-query generator or test threw instead of returning its typed provider result. */
+    extern const ErrorCodeDescriptor EnvironmentQueryProviderFailed;
     /** @brief Fixed-tick scheduler settings, registration or cooperative limits are invalid. */
     extern const ErrorCodeDescriptor SchedulerPolicyInvalid;
     /** @brief A cooperative owner or worker slice attempted work beyond its admitted allowance. */
     extern const ErrorCodeDescriptor SchedulerBudgetExhausted;
+    /** @brief An admitted decision script failed to execute or returned an invalid callback result. */
+    extern const ErrorCodeDescriptor DecisionScriptCallbackFailed;
     /** @brief Scheduler was called reentrantly, after closure, or with an invalid phase/clock. */
     extern const ErrorCodeDescriptor SchedulerPhaseInvalid;
     /** @brief Deterministic admission requires owner evaluation instead of timing-dependent worker jobs. */
@@ -32,6 +38,8 @@ namespace Horo::AI::AIErrors {
     extern const ErrorCodeDescriptor TaskTransitionInvalid;
     /** @brief A failed AI task omitted a valid typed failure family or cause. */
     extern const ErrorCodeDescriptor TaskFailureInvalid;
+    /** @brief A valid Navigation query found no complete path for an admitted movement task. */
+    extern const ErrorCodeDescriptor NavigationTaskUnreachable;
     /** @brief The selected composition deliberately provides no gameplay-AI runtime. */
     extern const ErrorCodeDescriptor RuntimeUnavailable;
     /** @brief A gameplay-AI runtime or deterministic harness exhausted its declared capacity. */

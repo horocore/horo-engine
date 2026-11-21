@@ -20,6 +20,8 @@
 
 namespace Horo::Gameplay {
     namespace Detail {
+        inline constexpr std::size_t MaximumRecordedNativeArtifactBytes = 512U * 1024U * 1024U;
+
         /** @brief Pin native SDK deleter code independently of module instances and defer owned shadow cleanup. */
         struct GameModuleCodeImage final {
             explicit GameModuleCodeImage(std::unique_ptr<Platform::DynamicLibrary> loaded) : library(std::move(loaded)) {}
@@ -28,6 +30,7 @@ namespace Horo::Gameplay {
             ~GameModuleCodeImage() noexcept;
             std::unique_ptr<Platform::DynamicLibrary> library;
             std::filesystem::path shadowArtifact;
+            std::optional<Sha256Digest> recordedArtifact;
         };
 
         /** @brief Generation-owned native contributions; shutdown retires each registry before the code image. */
@@ -80,7 +83,8 @@ namespace Horo::Gameplay {
         [[nodiscard]] Result<void> CaptureGeneratedContributions(const GeneratedGameplayDescriptorBundle &bundle);
         [[nodiscard]] Result<void> FreezeRegistries(std::span<const GameplayCapabilityId> hostCapabilities);
         [[nodiscard]] Result<void> RegisterAndStart(std::span<const GameplayCapabilityId> hostCapabilities,
-                                                    const std::optional<GameplayReplicationAdmissionPolicy> &replicationAdmission);
+                                                    const std::optional<GameplayReplicationAdmissionPolicy> &replicationAdmission,
+                                                    const GameModuleAnimationFactory &animationFactory);
         /** @brief Checks the actual frozen generation without self-pinning its owner or invoking runtime callbacks. */
         [[nodiscard]] Result<void> AdmitReplication(const GameplayReplicationAdmissionPolicy &policy) const;
         [[nodiscard]] Result<GameModuleReloadSnapshot> PrepareReload();
@@ -101,12 +105,17 @@ namespace Horo::Gameplay {
         std::shared_ptr<GameplayCharacterContext> character;
         std::shared_ptr<GameplayNavigationContext> navigation;
         std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi;
+        std::shared_ptr<const GameplayAnimationContext> animation;
         IGameModule *gameplayModule{};
+        CreateGameModuleFunction create{}; /**< Copied generated lifecycle entry point pinned by codeImage. */
         DestroyGameModuleFunction destroy{};
         std::string moduleId;
         std::string buildFingerprint;
         std::uint64_t descriptorRevision{};
         std::vector<AI::DecisionNodeRegistration> decisionNodes;
+        mutable std::weak_ptr<const AI::DecisionNodeGeneration> decisionGeneration; /**< Owner-thread exact capture cache. */
+        std::atomic_bool decisionFactoryAdmission{};                                /**< Opens only after successful module activation. */
+        std::vector<AI::PerceptionSenseRegistration> perceptionSenses;
         std::filesystem::path loadedArtifactPath;
         std::atomic_bool runtimeLeaseAdmission{true};
         std::thread::id ownerThread{std::this_thread::get_id()};

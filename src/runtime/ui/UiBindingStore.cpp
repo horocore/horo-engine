@@ -320,6 +320,52 @@ namespace Horo::Runtime::Ui {
         return storage_->ValidateTree(tree);
     }
 
+    /** @copydoc UiBindingStore::Inspect */
+    Result<UiBindingInspectionSnapshot> UiBindingStore::Inspect(const UiElementTree &tree, const std::size_t maximumProviders,
+                                                                const std::size_t maximumBindings) const {
+        const auto owner = ValidateOwner(tree);
+        if (owner.HasError())
+            return Result<UiBindingInspectionSnapshot>::Failure(owner.ErrorValue());
+        const auto &storage = *storage_;
+        if (storage.providers.size() > maximumProviders || storage.targets.size() > maximumBindings)
+            return Failure<UiBindingInspectionSnapshot>(UiErrors::BindingCapacityExceeded);
+
+        try {
+            UiBindingInspectionSnapshot snapshot{storage.canvas, storage.treeRevision, storage.current};
+            snapshot.providers.reserve(storage.providers.size());
+            snapshot.bindings.reserve(storage.targets.size());
+            for (const auto &provider : storage.providers) {
+                snapshot.providers.push_back(
+                    {provider.instance, provider.schema, provider.scope, provider.revision, provider.active, provider.writesRevoked});
+            }
+            for (const auto &target : storage.targets) {
+                const auto &provider = storage.providers[target.provider];
+                const auto &bound = target.bound;
+                auto &row = snapshot.bindings.emplace_back(bound.binding, bound.element, bound.property, target.direction,
+                                                           provider.instance, target.property, bound.origin);
+                row.pending = target.pending;
+                if (provider.schema.Properties()[target.property].privacy != UiBindingPrivacyClass::Public) {
+                    row.valueState = UiBindingValueInspection::Redacted;
+                } else if (bound.origin != UiBindingValueOrigin::Unavailable) {
+                    row.valueState = UiBindingValueInspection::Visible;
+                    row.value = bound.value;
+                }
+                if (target.admission) {
+                    row.write =
+                        provider.active && !provider.writesRevoked ? UiBindingWriteInspection::Admitted : UiBindingWriteInspection::Revoked;
+                    row.trigger = target.admission->trigger;
+                }
+                if (target.command) {
+                    row.pendingRequest = target.command->request;
+                    row.pendingOperation = target.command->operation;
+                }
+            }
+            return Result<UiBindingInspectionSnapshot>::Success(std::move(snapshot));
+        } catch (const std::bad_alloc &) {
+            return Failure<UiBindingInspectionSnapshot>(UiErrors::BindingCapacityExceeded);
+        }
+    }
+
     /** @copydoc UiBindingStore::Current */
     UiBindingApplyResult UiBindingStore::Current() const noexcept {
         return storage_ ? storage_->current : UiBindingApplyResult{};

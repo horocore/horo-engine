@@ -217,7 +217,7 @@ namespace Horo::Editor::DesignSystem {
 
     /** @brief Applies one global UI scale to resolved component metrics. */
     inline void ApplyGlobalUiScale(DesignTokens &tokens, const float scale) noexcept {
-        const float clamped = std::clamp(scale, 1.0F, 2.0F);
+        const float clamped = std::clamp(scale, 0.5F, 3.0F);
         tokens.sizes.uiScale = clamped;
 
         // Resolve all numeric presentation metrics from one scale so component size,
@@ -263,6 +263,7 @@ namespace Horo::Editor::DesignSystem {
         }
         for (float &spacing : tokens.components.spacing)
             spacing *= clamped;
+        NormalizeDesignTokens(tokens);
     }
 
     /**

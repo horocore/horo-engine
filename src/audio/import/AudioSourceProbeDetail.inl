@@ -2,6 +2,7 @@ struct WaveProbeState final {
     SourceProbe probe{.container = AudioContainerIds::Wave, .codec = AudioCodecIds::Pcm};
     std::uint16_t blockAlign{};
     std::optional<std::uint64_t> dataBytes;
+    bool samplerChunkSeen{};
 };
 
 struct WaveEncoding final {
@@ -80,6 +81,10 @@ struct WaveEncoding final {
             return Result<std::vector<AudioLoopRegion>>::Failure(read.ErrorValue());
         const auto start = ReadLittle<std::uint32_t>(std::span{loop}.subspan(8));
         const auto inclusiveEnd = ReadLittle<std::uint32_t>(std::span{loop}.subspan(12));
+        // The schema represents forward, integer-frame, indefinite loops only.
+        if (ReadLittle<std::uint32_t>(std::span{loop}.subspan(4)) != 0 || ReadLittle<std::uint32_t>(std::span{loop}.subspan(16)) != 0 ||
+            ReadLittle<std::uint32_t>(std::span{loop}.subspan(20)) != 0)
+            return Result<std::vector<AudioLoopRegion>>::Failure(MakeImportError(AudioErrors::SourceUnsupported));
         if (inclusiveEnd < start || inclusiveEnd == std::numeric_limits<std::uint32_t>::max())
             return Result<std::vector<AudioLoopRegion>>::Failure(MakeImportError(AudioErrors::SourceInvalid));
         loops.push_back({AudioAssetElementId{index + 1}, start, static_cast<std::uint64_t>(inclusiveEnd) + 1});
@@ -101,11 +106,12 @@ struct WaveEncoding final {
             return Result<void>::Failure(MakeImportError(AudioErrors::SourceInvalid));
         state.dataBytes = byteCount;
     } else if (EqualFour(header, "smpl")) {
-        if (!state.probe.loops.empty())
+        if (state.samplerChunkSeen)
             return Result<void>::Failure(MakeImportError(AudioErrors::SourceInvalid));
         auto loops = ParseWaveLoops(reader, offset, byteCount);
         if (loops.HasError())
             return Result<void>::Failure(loops.ErrorValue());
+        state.samplerChunkSeen = true;
         state.probe.loops = std::move(loops).Value();
     }
     return Result<void>::Success();

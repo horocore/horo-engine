@@ -67,6 +67,15 @@ namespace Horo::Editor {
             case Sequence:
                 OpenEmbeddedSequenceSource(result);
                 return true;
+            case BlackboardSchema:
+                OpenEmbeddedBlackboardSource(result);
+                return true;
+            case DecisionGraph:
+                OpenEmbeddedDecisionGraphSource(result);
+                return true;
+            case EnvironmentQuery:
+                OpenEmbeddedEnvironmentQuerySource(result);
+                return true;
             case UiCanvas:
                 OpenEmbeddedUiCanvasSource(result);
                 return true;

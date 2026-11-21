@@ -26,6 +26,13 @@ namespace Horo::Editor {
 
         /** @brief Releases draft admission and all source leases on document detach/close. */
         void Clear() noexcept;
+        /** @brief Requests a one-shot focus after the workspace accepts the element selection.
+         * @param source Exact preview carrying the current diagnostic.
+         * @param element Authored element named by the diagnostic.
+         * @param property Exact inline override named by the resolver.
+         */
+        void QueueStyleProblemFocus(const UiCanvasWorkspaceDocument &source, Runtime::Ui::UiElementId element,
+                                    Runtime::Ui::UiStylePropertyId property) noexcept;
         /** @brief Draws a selected canonical element and emits one fenced command on Apply.
          * @param source Immutable cached host projection. @param context Shared design/localization context.
          * @param output Typed gesture receiver; drawing never mutates the document owner.
@@ -67,6 +74,16 @@ namespace Horo::Editor {
         /** @brief Emit an owned fenced request. @param command Canonical command. @param output Host receiver. */
         void Emit(const UiCanvasSetPresentation &command, EditorWorkspaceViewCommandData &output) const;
 
+        /** @brief Detached focus intent fenced to one document state and style-resource publication. */
+        struct StyleProblemFocus final {
+            DocumentInstanceId document;
+            UiCanvasDocumentStateId state;
+            Runtime::Ui::UiElementId element;
+            Runtime::Ui::UiStylePropertyId property;
+            std::uint64_t resourcePublication{};
+        };
+
+        std::optional<StyleProblemFocus> styleProblemFocus_;
         std::optional<UiInspectorContext> context_;
         Runtime::Ui::UiElementPresentation baseline_;
         Runtime::Ui::UiElementPresentation presentation_;

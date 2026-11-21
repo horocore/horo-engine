@@ -12,8 +12,17 @@ namespace Horo::Animation::Detail {
      * between that fence and publication. Aborting an armed candidate remains valid before the fence.
      */
     struct GraphSceneCommitAccess final {
+        /** @brief Stages on an isolated worker while the owning Scene waits for all callbacks to retire. */
+        [[nodiscard]] static GraphInstanceOutcome EvaluateIsolated(AnimationGraphInstance &instance, const GraphEvaluationInput &input,
+                                                                   const CancellationToken &publicationCancellation) {
+            return instance.EvaluateExclusive(input, publicationCancellation);
+        }
+
         /** @brief Checks candidate identity, owner thread and cancellation before arming publication. */
         [[nodiscard]] static GraphInstanceOutcome Prepare(AnimationGraphInstance &instance, AnimationTickId tick);
+        /** @brief Copies the fully evaluated candidate's actual root delta before the Scene commit fence. */
+        [[nodiscard]] static GraphInstanceOutcome ReadRootMotion(const AnimationGraphInstance &instance, AnimationTickId tick,
+                                                                 AnimationRootMotionDelta &output);
         /** @brief Publishes an already armed candidate without cancellation or other fallible work. */
         [[nodiscard]] static GraphInstancePublication Publish(AnimationGraphInstance &instance) noexcept;
     };

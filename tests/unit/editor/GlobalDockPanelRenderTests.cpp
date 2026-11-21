@@ -12,12 +12,14 @@
 #include "OwnedTestDirectory.h"
 #include "WorldCompositionSourceTestSupport.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "editor/screens/workspace/WorkspacePathText.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneChrome.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPaneLayout.h"
 #include "editor/screens/workspace/panels/global_dock/GlobalDockPanel.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPaneLayout.h"
 #include "editor/screens/workspace/panels/global_dock/panes/build_output/GlobalDockBuildOutputPane.h"
 #include "editor/screens/workspace/panels/global_dock/panes/operations/GlobalDockOperationsPane.h"
+#include "editor/screens/workspace/panels/global_dock/panes/platform/PlatformDiagnosticsPane.h"
 #include "editor/screens/workspace/panels/world_composition/WorldCompositionTab.h"
 #include "runtime/assets/importer/builtin/obj_mesh/ObjMeshImporter.h"
 
@@ -37,6 +39,31 @@
 #include <vector>
 
 namespace {
+    /** @brief Records presentation queries without any service, SDK or mutable queue ownership. */
+    class TestPlatformDiagnostics final : public Horo::PlatformServices::IPlatformDiagnostics {
+    public:
+        mutable unsigned queries{};
+        unsigned commands{};
+        bool allowCommand{};
+
+        [[nodiscard]] Horo::Result<Horo::PlatformServices::PlatformDiagnosticsSnapshot> Query() const override {
+            ++queries;
+            Horo::PlatformServices::PlatformDiagnosticsSnapshot snapshot;
+            snapshot.offline.active = 17;
+            snapshot.offline.activeCapacity = 64;
+            snapshot.offline.retained = 23;
+            snapshot.offline.retainedCapacity = 256;
+            snapshot.canSuspendPending = allowCommand;
+            return Horo::Result<Horo::PlatformServices::PlatformDiagnosticsSnapshot>::Success(snapshot);
+        }
+
+        [[nodiscard]] Horo::Result<std::size_t> SuspendPending(Horo::PlatformServices::PlatformProviderGeneration,
+                                                               Horo::PlatformServices::PlatformOfflineQueueGeneration) override {
+            ++commands;
+            return Horo::Result<std::size_t>::Success(0);
+        }
+    };
+
     class TestGlobalDockPane final : public Horo::Editor::IGlobalDockPane {
     public:
         TestGlobalDockPane() : IGlobalDockPane("test.global_dock") {}
@@ -161,7 +188,7 @@ namespace {
         CHECK((*world)->GetDisplayName() == "workspace.panel.world_composition");
 
         const auto &panels = registry.GetAllPanels();
-        REQUIRE(std::ranges::none_of(panels, [](const std::shared_ptr<IWorkspacePanel> &panel) {
+        REQUIRE(std::ranges::any_of(panels, [](const std::shared_ptr<IWorkspacePanel> &panel) {
             return panel->GetId() == "horo.input_mapping";
         }));
         const auto globalDock = std::ranges::find_if(panels, [](const std::shared_ptr<IWorkspacePanel> &panel) {
@@ -170,6 +197,7 @@ namespace {
         REQUIRE((globalDock != panels.end()));
         auto concreteDock = std::dynamic_pointer_cast<GlobalDockPanel>(*globalDock);
         REQUIRE(concreteDock);
+        CHECK(concreteDock->ActivatePane("horo.global_dock.platform"));
         REQUIRE(concreteDock->ActivatePane("test.global_dock.custom"));
     }
 
@@ -546,6 +574,28 @@ TEST_CASE("Content browser renders responsive layouts and every dock tab", "[uni
         REQUIRE((tabPanel.ActiveTab() == tab));
     }
 
+    TestPlatformDiagnostics platformDiagnostics;
+    GlobalDockPanel platformPanel;
+    REQUIRE(platformPanel.RegisterPane(std::make_unique<PlatformDiagnosticsPane>()));
+    REQUIRE(platformPanel.ActivatePane("horo.global_dock.platform"));
+    PanelContext platformContext{.dataBus = editorEvents, .platformDiagnostics = &platformDiagnostics};
+    platformPanel.OnAttach(platformContext);
+    for (const bool allowed : {false, true}) {
+        platformDiagnostics.allowCommand = allowed;
+        for (const float width : {260.0F, 900.0F}) {
+            ImGui::NewFrame();
+            RenderAtWidth(width, "PlatformDiagnosticsMatrix", platformPanel, context);
+            ImGui::Render();
+        }
+    }
+    CHECK(platformDiagnostics.queries == 4);
+    CHECK(platformDiagnostics.commands == 0);
+    platformPanel.OnDetach();
+    ImGui::NewFrame();
+    RenderAtWidth(260.0F, "PlatformDiagnosticsDetached", platformPanel, context);
+    ImGui::Render();
+    CHECK(platformDiagnostics.queries == 4);
+
     Log::StructuredLogStore logStore{8};
     for (std::size_t level = 0; level < 5; ++level) {
         logStore.Append(Log::StructuredLogRecord{
@@ -625,12 +675,13 @@ TEST_CASE("Content browser renders responsive layouts and every dock tab", "[uni
                                  .operationQuery = &operationStore,
                                  .operationControl = &operationStore};
     BuildOutputStore clickableBuildOutputStore{4};
+    const std::filesystem::path diagnosticPath{u8"/tmp/HoroProject/assets/g\u00f6lge-\u0131\u015f\u0131k.glsl"};
     clickableBuildOutputStore.Append(BuildOutputRecord{
         .timestampUtc = std::chrono::system_clock::now(),
         .severity = DiagnosticSeverity::Error,
         .stage = "compile",
         .message = "Clickable diagnostic",
-        .source = DiagnosticSourceLocation{.absolutePath = "/tmp/HoroProject/assets/shader.glsl", .line = 12, .column = 3},
+        .source = DiagnosticSourceLocation{.absolutePath = WorkspacePathText(diagnosticPath), .line = 12, .column = 3},
     });
     PanelContext clickableActivityContext{.dataBus = editorEvents, .buildOutputQuery = &clickableBuildOutputStore};
     GlobalDockPanel clickableBuild{GlobalDockTab::BuildOutput};
@@ -654,7 +705,7 @@ TEST_CASE("Content browser renders responsive layouts and every dock tab", "[uni
     ImGui::Render();
     REQUIRE((diagnosticCommand.command == EditorWorkspaceViewCommand::OpenDiagnosticSource));
     REQUIRE(diagnosticCommand.diagnosticSource.has_value());
-    REQUIRE((diagnosticCommand.diagnosticSource->absolutePath == "/tmp/HoroProject/assets/shader.glsl"));
+    REQUIRE((diagnosticCommand.diagnosticSource->absolutePath == diagnosticPath));
     REQUIRE((diagnosticCommand.diagnosticSource->line == 12U));
     REQUIRE((diagnosticCommand.diagnosticSource->column == 3U));
     clickableBuild.OnDetach();

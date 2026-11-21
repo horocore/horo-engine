@@ -53,10 +53,8 @@ namespace Horo::Application::PrefabCookDetail {
                                           const ProjectCompatibilityInspector &compatibility,
                                           const Release::ReleaseExecutionPlan *releasePlan);
     /** @brief Composes source-free scene strategies and host-key wrappers from pinned canonical source/domain inputs. */
-    [[nodiscard]] Result<PreparedCatalog> PrepareCatalog(const PrefabSceneCookRequest &request, const HostCapture &host,
-                                                         const Assets::AssetCookInputSnapshot &inputs,
-                                                         const Prefab::PrefabLimitProfile &limits,
-                                                         const Assets::CookerCatalogSnapshot &catalog,
-                                                         const CancellationToken &cancellation,
-                                                         SceneSource::ScenePrefabExpansionOwner &expansion);
+    [[nodiscard]] Result<PreparedCatalog> PrepareCatalog(
+        const PrefabSceneCookRequest &request, const HostCapture &host, const Assets::AssetCookInputSnapshot &inputs,
+        const Prefab::PrefabLimitProfile &limits, const Assets::CookerCatalogSnapshot &catalog, const CancellationToken &cancellation,
+        SceneSource::ScenePrefabExpansionOwner &expansion, std::optional<Assets::AssetRecord> &failedSource);
 }  // namespace Horo::Application::PrefabCookDetail

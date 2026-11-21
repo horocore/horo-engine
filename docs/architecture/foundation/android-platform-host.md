@@ -287,9 +287,123 @@ identity/digest/provenance and loader source policy. They do not package a vendo
 or development API layer as an implicit dependency. Non-XR Android profiles contain no
 OpenXR loader/backend artifact or runtime probe.
 
+The private OpenXR native owner accepts the Android host's Java VM, a global
+reference to the process application Context and a global reference to the
+selected Activity. The host manages JNI attachment and reference destruction.
+It retains the Context through loader unload and the Activity through native
+instance retirement. Activity replacement requires a new native owner after the
+old instance has retired.
+
+The platform-private `AcquireGameActivityJniApplication` operation reads the
+active GameActivity on its native control thread and acquires separate JNI
+global reference owners for the application Context and Activity. The GameActivity
+input bridge shares the same scoped thread attachment. Application composition
+can retain the Context independently if the loader remains loaded after an
+Activity exits. Final reference release obtains a JNI environment on the
+releasing thread. The current Input and Vulkan profiles request no XR
+application references during startup.
+
+The native owner resolves `xrInitializeLoaderKHR` from the verified package
+loader and passes the application Context before enumerating layers or
+extensions. The selected Android product must require
+`XR_KHR_android_create_instance`. Only after that policy is enabled does the
+owner chain the exact Activity into instance creation. A missing host lease,
+unavailable loader entry point or failed initialization prevents native
+discovery.
+
+If a confirmed cold OpenXR launch exits before the host can read its live
+process identity, the deploy command looks for the Activity's launch receipt
+and its uncaught Java crash receipt in a bounded qualification-tag log read.
+The two receipts must match the private nonce, package UID, PID, and process
+start ticks. A confirmed crash remains a failed launch. The command reports
+that the original process exited without attempting to stop a replacement.
+The Java observer forwards the original exception to Android's crash handler.
+
+The signed `qualification-openxr-development` APK compiles the same Android
+loader initialization and Activity instance ABI used by `HoroXROpenXR`. Its
+GameActivity queues one cold diagnostic on resume and consumes it after pending
+commands. Pause, stop and destruction cancel a queued diagnostic. The installed
+base APK's exact stored ABI image is checked against the compiled lock digest
+and opened by descriptor and offset. The diagnostic reports the HMD system
+query and runtime version only after successful instance retirement. Native
+session and graphics activation require separate product composition and device
+qualification.
+
+If native instance destruction fails, the Activity keeps the exact instance,
+JNI references and loader for retry on its control lane. The recorded
+diagnostic stays failed even if a later retry succeeds. Host exit polls the
+retained owner within a 30-second retry window. If retirement remains uncertain,
+the process terminates with the failed ownership still retained.
+
 Developer deployment selects a device explicitly. Install, launch, log capture,
 termination, timeout, and disconnect use argv-based process APIs and bounded
 output. Multiple connected devices never cause implicit target selection.
+
+For the qualification packages, `python scripts/project.py android-deploy`
+takes the existing signed package output directory, declared profile, Android
+SDK and a specific ADB serial. It verifies the staged APK, the activity
+component and the installed byte digest before launching. It selects the
+device's current ADB transport and Android user explicitly for install and launch. A
+replacement connection requires a new invocation. Missing,
+unauthorized, disconnected or incompatible targets return portable failure
+codes and no automatic device retry or downgrade.
+
+Deployment can require the expected host and connection explicitly. The
+report separates the requested mode from the selected ADB inventory's USB,
+emulator or TCP/IP classification. Ambiguous inventory cannot satisfy an
+explicit connection request. The signed APK, its embedded provenance digest
+and source revision, the renderer declaration and packaged ABIs identify the
+artifact. The provenance includes the producer's Java dependency inventory
+and the checked-in dependency lock digest.
+
+The OpenXR deployment diagnostic requires explicit host, connection, device
+and `--runtime openxr` selection. The command accepts a single closed marker
+from the verified cold process, validates its runtime result and ABI, and stops
+that exact diagnostic process before reporting `diagnostic_complete`. The
+observation records only the diagnostic stage, native result and numeric
+runtime version. The report keeps physical XR qualification separate.
+
+The command emits one JSON record. Process evidence is restricted to the
+matching package UID, PID and kernel start ticks. The log query accepts only
+entries timestamped after the device clock sample immediately before launch and
+through the sample after capture. The host's monotonic interval bounds both
+samples. Unavailable timestamps or a detected clock discontinuity yield a
+partial result. The process identity is rechecked before accepting the capture.
+Only closed, profile-specific facts leave the tool. The input-only package
+records entry after the GameActivity callback and input bridge are ready.
+The Vulkan qualification package must report both lifecycle and renderer
+counters before the host marks the deployment complete.
+The host waits for the applicable evidence or a crash marker within the same
+deadline. Cancellation, unverifiable installation, missing evidence and
+crashes retain a partial result. Before
+replacing an APK, the command checks whether its package already has a process.
+After an attributed launch, failure gives cleanup its own five-second deadline.
+Cleanup checks the selected transport, installed digest and process identity
+before requesting a stop for the exact package and user. The JSON reports
+stopped, already_exited or unconfirmed alongside the deployment error.
+The first Activity attests to a cold launch with a single-use random marker
+and the process's kernel start ticks. Ordinary launch and recovery after an
+interrupted start both require one matching record from the candidate UID and PID
+inside the device clock window. The host rechecks the live process incarnation
+after reading the receipt and before stopping it. An older APK that emits only
+the nonce needs a rebuild before it can produce attributable launch evidence.
+The receipt is never included in the deployment report. Warm or ambiguous
+responses and disconnected transports can leave cleanup unconfirmed.
+A successful operation leaves the app running. The renderer declaration
+comes from the package. Renderer counters describe
+observed acceptance, with GPU and physical presentation completion outside
+this diagnostic contract.
+
+Pass `--diagnostic-bundle` with a new absolute `.zip` path in an existing
+ordinary directory to retain the same portable report, including partial
+outcomes. The ZIP contains `android/deployment.json` and a digest manifest
+with the report's exact byte count and SHA-256. Publication uses the same
+filesystem and refuses to replace an existing destination. The filesystem
+must support hard links. The report and archive exclude raw logcat output,
+device serials, UIDs, PIDs, launch receipts and installed paths. An archive
+write failure leaves the recorded deployment outcome intact and returns a
+portable `bundleError` alongside it. A successful ordinary deployment keeps
+its app running even if the later archive write fails.
 
 ## Diagnostics And Crash Evidence
 

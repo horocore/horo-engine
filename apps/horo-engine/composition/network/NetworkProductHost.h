@@ -1,5 +1,6 @@
 #pragma once
 
+#include "HeadlessSceneLoadBoundary.h"
 #include "Horo/Application/NetworkDebugger.h"
 #include "Horo/Network/NetworkModeComposition.h"
 #include "Horo/Runtime/RuntimeHost.h"
@@ -9,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <thread>
 
 namespace Horo::Application::Internal {
     class ModeParticipant;
@@ -28,6 +30,8 @@ namespace Horo::Application::Internal {
         std::optional<Network::NetworkWorldBindingSetup> worldBinding; /**< Required for network gameplay, not transport qualification. */
         NetworkFixedParticipantFactory fixedParticipant;               /**< Optional cold factory from the SAME world composition. */
         NetworkNativeRetirementPoll pollRetirement;                    /**< Exact same owner retained until actual native retirement. */
+        std::optional<HeadlessSceneTravelLoad> sceneTravelLoad;        /**< Shared candidate load budget for configured Scene travel. */
+        NetworkAiHealthSource aiHealth;                                /**< Read-only source from the same configured Scene owners. */
     };
 
     // Application-owned bridge: target admission precedes the canonical runtime lifecycle.
@@ -43,7 +47,8 @@ namespace Horo::Application::Internal {
         NetworkProductHost(const NetworkProductHost &) = delete;
         NetworkProductHost &operator=(const NetworkProductHost &) = delete;
         NetworkProductHost(ConstructionKey, std::unique_ptr<Runtime::RuntimeHost> runtime, ModeParticipant *mode,
-                           std::shared_ptr<NetworkDebuggerService> debugger, NetworkNativeRetirementPoll retirement = {}) noexcept;
+                           std::shared_ptr<NetworkDebuggerService> debugger, NetworkNativeRetirementPoll retirement = {},
+                           NetworkAiHealthSource aiHealth = {}) noexcept;
         ~NetworkProductHost() noexcept;
 
         [[nodiscard]] Result<void> Startup();
@@ -84,6 +89,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] const ClientConnectionAttemptTerminal *ClientConnectionTerminal() const noexcept;
         [[nodiscard]] Result<void> DisconnectClient(Network::NetworkModeWorldKind world, Network::NetworkOperationGeneration generation);
         [[nodiscard]] Result<Network::NetworkModeRoleView> Role(Network::NetworkModeWorldKind world, Runtime::SceneRuntimeId scene) const;
+        /** @brief Reads committed AI health for a currently published authority world on the host owner lane. */
+        [[nodiscard]] std::optional<HeadlessAiHealth> AiHealth(Network::NetworkModeWorld world) const;
         /** @brief Acquire role-derived permission from the same committed world used by this actual mode host. */
         [[nodiscard]] Result<Network::ReplicationWorldReadLease> AcquireReplication(Network::NetworkModeWorldKind world,
                                                                                     const Network::ReplicationWorldWorkRequest &request,
@@ -98,6 +105,8 @@ namespace Horo::Application::Internal {
 
     private:
         NetworkNativeRetirementPoll pollRetirement_;
+        NetworkAiHealthSource aiHealth_;
+        const std::thread::id owner_{std::this_thread::get_id()};
         std::shared_ptr<NetworkDebuggerService> debugger_;
         std::unique_ptr<Runtime::RuntimeHost> runtime_;
         ModeParticipant *mode_{};  // Borrowed from runtime_'s lifecycle participant.

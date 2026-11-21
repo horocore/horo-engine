@@ -6,7 +6,9 @@
  */
 
 #include "Horo/Runtime/Render/MaterialBindingErrors.h"
+#include "Horo/Runtime/Render/NativeReconstructionKernel.h"
 #include "Horo/Runtime/Render/RenderBackendRegistry.h"
+#include "Horo/Runtime/Render/UiPaintFrameUpload.h"
 #include "Horo/Runtime/Render/VfxFrameUpload.h"
 #include "VulkanHostGraphicsRequirements.h"
 
@@ -205,6 +207,8 @@ namespace Horo::Render {
         [[nodiscard]] virtual Result<bool> PollPresentationAvailability(FramebufferExtent extent);
         /** @brief Realizes an explicit idle output transition; DrawableUnavailable retains its native debt for retry. */
         [[nodiscard]] virtual Result<void> ResizePresentation(FramebufferExtent extent, PresentMode mode);
+        /** @brief Observes the realized unmanaged SDR output. @return Exact attachment facts or typed unavailable/unsupported. */
+        [[nodiscard]] virtual Result<RenderPresentationOutput> ObservePresentationOutput() const;
         /** @brief Starts an offscreen frame in preallocated native storage. */
         [[nodiscard]] virtual Result<FrameToken> BeginFrame(const FrameDescriptor &descriptor) = 0;
         /** @brief Encodes exact typed graph submissions, retaining the frontend's one completion lease. */
@@ -212,6 +216,11 @@ namespace Horo::Render {
 
         /** @brief Reports native material commands independently of graph-only fake ports. */
         [[nodiscard]] virtual bool SupportsMaterialCommands() const noexcept {
+            return false;
+        }
+
+        /** @brief Reports exact graphics recording and graph attachment support. */
+        [[nodiscard]] virtual bool SupportsGraphMaterialRaster() const noexcept {
             return false;
         }
 
@@ -223,6 +232,23 @@ namespace Horo::Render {
         /** @brief Publishes a prepared VFX block only through the canonical command owner's retirement proof. */
         [[nodiscard]] virtual Result<void> UpdateVfxFrame(const NativeVfxFrameUpdate &) {
             return Result<void>::Failure(MakeError(VfxFrameErrors::Unavailable));
+        }
+
+        /** @brief Publishes a complete UI slot through the exact native completion owner. */
+        [[nodiscard]] virtual Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &) {
+            return Result<void>::Failure(MakeError(UiPaintFrameErrors::Unavailable));
+        }
+
+        /** @brief Realizes exact offline UI paint through this device's shared command owner. */
+        [[nodiscard]] virtual Result<std::shared_ptr<IResidentUiPaintKernel>> RealizeUiPaintKernel(const CookedUiPaintKernel &) {
+            return Result<std::shared_ptr<IResidentUiPaintKernel>>::Failure(MakeError(UiPaintFrameErrors::Unavailable));
+        }
+
+        /** @brief Cold realization through the device's canonical reconstruction command owner. */
+        [[nodiscard]] virtual Result<std::shared_ptr<IResidentNativeReconstructionKernel>> RealizeNativeReconstructionKernel(
+            const CookedNativeReconstructionKernel &) {
+            return Result<std::shared_ptr<IResidentNativeReconstructionKernel>>::Failure(
+                MakeError(NativeReconstructionErrors::Unsupported));
         }
 
         [[nodiscard]] virtual Result<NativeVfxGpuPreparationResources> QueryVfxGpuNativePreparationResources(
@@ -264,6 +290,12 @@ namespace Horo::Render {
         [[nodiscard]] virtual Result<void> SubmitFrame(FrameToken frame) = 0;
         /** @brief Discards only unsent active-frame command tickets. */
         virtual void AbortFrame(FrameToken frame) noexcept = 0;
+
+        /** @copydoc IRenderBackend::ObserveGraphSubmissionAcceptance */
+        [[nodiscard]] virtual std::optional<bool> ObserveGraphSubmissionAcceptance(RenderTimelinePoint, std::uint64_t) const noexcept {
+            return std::nullopt;
+        }
+
         [[nodiscard]] virtual Result<bool> ObserveSubmission(const RenderCpuWait &wait) = 0;
         /** @brief Closes native command admission and cancels unsent work. */
         [[nodiscard]] virtual Result<void> BeginShutdownCommands() = 0;

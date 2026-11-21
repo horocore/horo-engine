@@ -152,6 +152,23 @@ namespace {
         CHECK(application->Restore().HasError());
     }
 
+    TEST_CASE("Observing package execution trust does not bind or advance a project", "[packages][application][host]") {
+        HostFixture fixture;
+        const auto root = std::filesystem::canonical(fixture.project.Path());
+        CHECK_FALSE(fixture.host->ActivationTrustRequired(root));
+        CHECK(fixture.host->Generation() == 0);
+        CHECK(fixture.source.calls.load() == 0);
+        const auto application = fixture.Acquire();
+        REQUIRE(application);
+        const auto generation = fixture.host->Generation();
+        REQUIRE(generation != 0);
+        CHECK_FALSE(fixture.host->ActivationTrustRequired(root));
+        CHECK_FALSE(fixture.host->ActivationTrustRequired(root / "a-different-project"));
+        CHECK(fixture.host->Generation() == generation);
+        CHECK(fixture.source.calls.load() == 0);
+        CHECK_FALSE(application->Current().Value());
+    }
+
     TEST_CASE("Package installed snapshot fences exact fresh owner generation without restoring", "[packages][application][host]") {
         HostFixture fixture;
         auto application = fixture.Acquire();

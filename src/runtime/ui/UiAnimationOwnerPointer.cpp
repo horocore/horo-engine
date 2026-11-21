@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Ui/UiFeedback.h"
 #include "UiAnimationOwnerInternal.h"
 
 #include <algorithm>
@@ -162,12 +163,16 @@ namespace Horo::Runtime::Ui {
             const auto previous = canvas->focus->CurrentFocus();
             if (previous.HasError())
                 return Result<void>::Failure(previous.ErrorValue());
-            if (const auto changed = canvas->focus->SetFocus(target); changed.HasError())
+            const auto changed = canvas->focus->SetFocus(target);
+            if (changed.HasError())
                 return Result<void>::Failure(changed.ErrorValue());
             if (previous.Value() && previous.Value()->element != target)
                 if (const auto lost = Input(previous.Value()->element, UiControlInputKind::FocusLost, event); lost.HasError())
                     return lost;
-            return Input(target, UiControlInputKind::FocusGained, event);
+            const auto gained = Input(target, UiControlInputKind::FocusGained, event);
+            if (gained.HasValue() && input_.feedback)
+                (void)input_.feedback->ObserveFocus(canvas->focus->Owner(), changed.Value());
+            return gained;
         }
 
         void CleanupTargets(const std::span<const UiElementHandle> targets) {
@@ -212,6 +217,8 @@ namespace Horo::Runtime::Ui {
                 return Result<void>::Failure(handled.ErrorValue());
             ++owner_.storage_->commandRevision;
             ++owner_.storage_->pendingCommands;
+            if (input_.feedback && handled.Value().transition == UiControlTransitionKind::Cancelled)
+                (void)input_.feedback->ObserveControlTransition(controlInput, handled.Value().transition);
             if (!handled.Value().defaultActionPending)
                 return Result<void>::Success();
             if (input_.writtenDefaults == input_.defaults.size()) {
@@ -221,8 +228,11 @@ namespace Horo::Runtime::Ui {
             auto applied = owner_.ApplyControlDefault(input_.view, record->source);
             if (applied.HasError())
                 return Result<void>::Failure(applied.ErrorValue());
-            if (applied.Value())
+            if (applied.Value()) {
                 input_.defaults[input_.writtenDefaults++] = *applied.Value();
+                if (input_.feedback)
+                    (void)input_.feedback->ObserveControl(*applied.Value());
+            }
             return Result<void>::Success();
         }
 

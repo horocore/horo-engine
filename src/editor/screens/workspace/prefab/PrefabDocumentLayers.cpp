@@ -27,7 +27,9 @@ namespace Horo::Editor {
     /** @copydoc PrefabDocumentSession::Before */
     Result<PrefabDocumentSession::Edit> PrefabDocumentSession::Before(const Edit &edit) const {
         return std::visit([&]<typename T>(const T &value) -> Result<Edit> {
-            if constexpr (std::is_same_v<T, LayerReplacement>) {
+            if constexpr (std::is_same_v<T, SourceReplacement>) {
+                return Result<Edit>::Success(Edit{source_});
+            } else if constexpr (std::is_same_v<T, LayerReplacement>) {
                 auto layer = Layer(value.placement);
                 return layer.HasError() ? Result<Edit>::Failure(layer.ErrorValue()) : Result<Edit>::Success(Edit{std::move(layer).Value()});
             } else {
@@ -53,6 +55,10 @@ namespace Horo::Editor {
                     if (!value.overrides)
                         return Result<std::size_t>::Success(0);
                     auto encoded = Prefab::SerializePrefabValueOverrides(*value.overrides, limits_);
+                    return encoded.HasError() ? Result<std::size_t>::Failure(encoded.ErrorValue())
+                                              : Result<std::size_t>::Success(encoded.Value().size());
+                } else if constexpr (std::is_same_v<T, SourceReplacement>) {
+                    const auto encoded = value->SerializeCanonical();
                     return encoded.HasError() ? Result<std::size_t>::Failure(encoded.ErrorValue())
                                               : Result<std::size_t>::Success(encoded.Value().size());
                 } else

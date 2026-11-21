@@ -38,6 +38,34 @@ namespace Horo::PlatformServices {
     }  // namespace
 
     namespace CloudObjectErrors {
+        const ErrorCodeDescriptor NotFound{Domain,
+                                           ErrorCode{"platform.cloud.not_found"},
+                                           ErrorSeverity::Error,
+                                           "The requested cloud object was not found.",
+                                           "Reconcile this observation through the save coordinator.",
+                                           false,
+                                           false};
+        const ErrorCodeDescriptor RevisionChanged{Domain,
+                                                  ErrorCode{"platform.cloud.revision_changed"},
+                                                  ErrorSeverity::Error,
+                                                  "The cloud object revision changed during transfer.",
+                                                  "Refetch the exact key before retrying.",
+                                                  false,
+                                                  false};
+        const ErrorCodeDescriptor PartialTransfer{Domain,
+                                                  ErrorCode{"platform.cloud.partial_transfer"},
+                                                  ErrorSeverity::Error,
+                                                  "The cloud transfer did not produce the exact complete object.",
+                                                  "Discard staging and reconcile the original intent.",
+                                                  false,
+                                                  false};
+        const ErrorCodeDescriptor CleanupPending{Domain,
+                                                 ErrorCode{"platform.cloud.cleanup_pending"},
+                                                 ErrorSeverity::Error,
+                                                 "Native cloud staging cleanup is pending.",
+                                                 "Retain the provider lease and reconcile the original intent.",
+                                                 false,
+                                                 false};
         const ErrorCodeDescriptor InvalidRequest{Domain,
                                                  ErrorCode{"platform.cloud.invalid_request"},
                                                  ErrorSeverity::Error,
@@ -131,6 +159,60 @@ namespace Horo::PlatformServices {
                                                           false};
     }  // namespace CloudObjectErrors
 
+    /** @copydoc CloudBlobStagingBuffer::CloudBlobStagingBuffer */
+    CloudBlobStagingBuffer::CloudBlobStagingBuffer(CloudBlobStagingBuffer &&other) noexcept
+        : bytes_(std::move(other.bytes_)), digest_(std::move(other.digest_)), exactBytes_(other.exactBytes_),
+          closed_(std::exchange(other.closed_, true)) {}
+
+    /** @copydoc CloudBlobStagingBuffer::operator= */
+    CloudBlobStagingBuffer &CloudBlobStagingBuffer::operator=(CloudBlobStagingBuffer &&other) noexcept {
+        if (this != &other) {
+            bytes_ = std::move(other.bytes_);
+            digest_ = std::move(other.digest_);
+            exactBytes_ = other.exactBytes_;
+            closed_ = std::exchange(other.closed_, true);
+        }
+        return *this;
+    }
+
+    /** @copydoc CloudBlobStagingBuffer::Begin */
+    Result<CloudBlobStagingBuffer> CloudBlobStagingBuffer::Begin(const std::uint64_t exactBytes, const std::uint64_t maximumBytes,
+                                                                 std::optional<CloudBlobDigest> digest) {
+        if (maximumBytes == 0 || maximumBytes > MaximumCloudObjectPayloadBytes)
+            return Result<CloudBlobStagingBuffer>::Failure(MakeError(CloudObjectErrors::InvalidLimits));
+        if (exactBytes > maximumBytes)
+            return Result<CloudBlobStagingBuffer>::Failure(MakeError(CloudObjectErrors::PayloadTooLarge));
+        CloudBlobStagingBuffer result;
+        result.exactBytes_ = exactBytes;
+        result.digest_ = std::move(digest);
+        result.bytes_.bytes_.reserve(static_cast<std::size_t>(exactBytes));
+        return Result<CloudBlobStagingBuffer>::Success(std::move(result));
+    }
+
+    /** @copydoc CloudBlobStagingBuffer::Append */
+    Result<void> CloudBlobStagingBuffer::Append(const std::span<const std::byte> bytes) {
+        if (closed_)
+            return Failure(CloudObjectErrors::InvalidRequest);
+        if (bytes.size() > exactBytes_ - bytes_.bytes_.size()) {
+            closed_ = true;
+            return Failure(CloudObjectErrors::PayloadTooLarge);
+        }
+        bytes_.bytes_.insert(bytes_.bytes_.end(), bytes.begin(), bytes.end());
+        return Result<void>::Success();
+    }
+
+    /** @copydoc CloudBlobStagingBuffer::Finish */
+    Result<CloudBlobOwnedBytes> CloudBlobStagingBuffer::Finish() {
+        if (closed_)
+            return Result<CloudBlobOwnedBytes>::Failure(MakeError(CloudObjectErrors::InvalidRequest));
+        closed_ = true;
+        if (bytes_.bytes_.size() != exactBytes_)
+            return Result<CloudBlobOwnedBytes>::Failure(MakeError(CloudObjectErrors::PartialTransfer));
+        if (digest_ && ComputeSha256(bytes_.Bytes()) != *digest_)
+            return Result<CloudBlobOwnedBytes>::Failure(MakeError(CloudObjectErrors::IntegrityMismatch));
+        return Result<CloudBlobOwnedBytes>::Success(std::move(bytes_));
+    }
+
     /** @copydoc ValidateCloudObjectContractLimits */
     Result<void> ValidateCloudObjectContractLimits(const CloudObjectContractLimits &limits) {
         if (limits.maxPageEntries == 0 || limits.maxPageEntries > MaximumCloudObjectPageEntries || limits.maxObjectBytes == 0 ||
@@ -193,6 +275,8 @@ namespace Horo::PlatformServices {
         }
         if (page.next.has_value() && (!page.next->IsValid() || !Fits(page.next->Bytes().size(), limits.maxCursorBytes)))
             return Failure(CloudObjectErrors::InvalidPage);
+        if (page.next && request.cursor && *page.next == *request.cursor)
+            return Failure(CloudObjectErrors::InvalidPage);
         return Result<void>::Success();
     }
 
@@ -207,7 +291,7 @@ namespace Horo::PlatformServices {
         if (!ValidHead(result.head, limits) || result.head.key != request.key)
             return Failure(CloudObjectErrors::InvalidPage);
         if (result.bytes.Bytes().size() != result.head.sizeBytes)
-            return Failure(CloudObjectErrors::InvalidPage);
+            return Failure(CloudObjectErrors::PartialTransfer);
         if (result.bytes.Bytes().size() > request.maximumBytes)
             return Failure(CloudObjectErrors::PayloadTooLarge);
         if (result.head.transportDigest.has_value() && ComputeSha256(result.bytes.Bytes()) != *result.head.transportDigest)

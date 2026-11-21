@@ -27,6 +27,7 @@ namespace Horo::Runtime::Ui {
         Mouse,
         Touch,
         Pen,
+        WorldRay,
         Count
     };
     /** @brief Explicit focused alternatives to spatial-only gestures. */
@@ -39,7 +40,7 @@ namespace Horo::Runtime::Ui {
         Count
     };
 
-    /** @brief One normalized viewport-pixel sample copied from admitted immutable input. */
+    /** @brief One admitted viewport pointer or backend-neutral world ray. */
     struct UiPointerSample final {
         UiPointerId pointer;
         UiPointerEdge edge{UiPointerEdge::Count};
@@ -47,6 +48,7 @@ namespace Horo::Runtime::Ui {
         UiPointerButton button{UiPointerButton::Primary};
         float pixelX{};
         float pixelY{};
+        std::optional<Math::Ray> worldRay; /**< Required for WorldRay except on cancellation. */
     };
 
     /** @brief Exact-generation authored gesture eligibility; no callback or payload object is retained. */
@@ -179,6 +181,12 @@ namespace Horo::Runtime::Ui {
             UiPointerInteractionResult &result;
         };
 
+        /** @brief Target and location prevalidated before the batch dispatches any callbacks. */
+        struct ResolvedSample final {
+            std::optional<UiHitTestResult> hit;
+            std::optional<UiLogicalPoint> position;
+        };
+
         /** @brief Updates physical displacement and permanently disarms tap recognition after exceeding slop. */
         UiLogicalPoint ObservePosition(Contact &contact, UiLogicalPoint position) const noexcept;
         /** @brief Marks paired touch participation and cancels an active drag before the new press. */
@@ -216,8 +224,11 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] Result<bool> Emit(const UiPointerInteractionEnvironment &environment, UiElementHandle target,
                                         const UiGestureEvent &gesture, UiLogicalPoint position, std::uint64_t &nextSequence,
                                         UiPointerInteractionResult &result);
+        /** @brief Validates a sample and resolves its position against the current immutable presentation. */
+        [[nodiscard]] Result<ResolvedSample> ResolveSample(const UiPointerInteractionEnvironment &environment,
+                                                           const UiResolvedScreenCanvas &canvasSpace, const UiPointerSample &sample) const;
         /** @brief Applies one admitted sample to its actual capture slot. @return Ordered prefix or typed failure. */
-        [[nodiscard]] Result<void> ProcessSample(const UiPointerInteractionEnvironment &environment, const UiScreenPointerQuery &query,
+        [[nodiscard]] Result<void> ProcessSample(const UiPointerInteractionEnvironment &environment, const ResolvedSample &resolved,
                                                  const UiPointerSample &sample, std::uint64_t &nextSequence,
                                                  UiPointerInteractionResult &result);
         /** @brief Emits at most one long press per held slot without catch-up. @return Routed admission or typed failure. */

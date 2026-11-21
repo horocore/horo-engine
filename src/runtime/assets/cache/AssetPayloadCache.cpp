@@ -53,6 +53,14 @@ namespace Horo::Assets {
         return allocation_ && allocation_ == other.allocation_;
     }
 
+    AssetPayloadRetainedBytes::AssetPayloadRetainedBytes(std::shared_ptr<const Detail::AssetPayloadAccounting> accounting) noexcept
+        : accounting_(std::move(accounting)) {}
+
+    /** @copydoc AssetPayloadRetainedBytes::Bytes */
+    std::size_t AssetPayloadRetainedBytes::Bytes() const noexcept {
+        return accounting_ ? accounting_->retainedBytes.load() : 0;
+    }
+
     /** @copydoc AssetPayloadCache::Create */
     Result<std::unique_ptr<AssetPayloadCache>> AssetPayloadCache::Create(const std::size_t maximumEntries,
                                                                          const std::size_t maximumPayloadBytes) {
@@ -120,6 +128,11 @@ namespace Horo::Assets {
     void AssetPayloadCache::Shutdown() noexcept {
         closed_ = true;
         entries_.clear();
+    }
+
+    /** @copydoc AssetPayloadCache::ObserveRetainedPayloadBytes */
+    AssetPayloadRetainedBytes AssetPayloadCache::ObserveRetainedPayloadBytes() const noexcept {
+        return AssetPayloadRetainedBytes{accounting_};
     }
 
     /** @copydoc AssetPayloadCache::Snapshot */

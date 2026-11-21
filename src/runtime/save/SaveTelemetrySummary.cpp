@@ -14,7 +14,12 @@ namespace Horo::Runtime {
         constexpr std::array<std::string_view, 4> Outcomes{"succeeded", "failed", "cancelled", "interrupted"};
         constexpr std::array<std::string_view, 5> Evidence{"duration_ns", "bytes", "retries", "dropped_work", "queue_depth"};
 
+        constexpr auto FailureCategories = std::to_array<std::string_view>(
+            {"validation", "compatibility", "storage", "cancellation", "quota", "corruption", "participant", "lifecycle", "unclassified"});
+        static_assert(FailureCategories.size() == static_cast<std::size_t>(SaveFailureCategory::Count) + 1);
+
         struct Summary {
+            std::array<std::uint64_t, FailureCategories.size()> failures{};
             std::array<std::array<std::uint64_t, 4>, 9> counts{};
             std::array<std::array<std::uint64_t, 5>, 9> evidence{};
             std::uint64_t rows{};
@@ -27,6 +32,15 @@ namespace Horo::Runtime {
         /** @brief Saturates aggregate evidence rather than allowing retained inputs to wrap counters. */
         void Add(std::uint64_t &total, const std::uint64_t value) noexcept {
             total += std::min(value, std::numeric_limits<std::uint64_t>::max() - total);
+        }
+
+        /** @brief Admits only known Save failure categories; older or malformed observations remain unclassified. */
+        std::size_t FailureIndex(const nlohmann::json &fields) {
+            const auto unclassified = static_cast<std::size_t>(SaveFailureCategory::Count);
+            const auto field = fields.find("failure_category");
+            if (field == fields.end() || !field->is_number_unsigned())
+                return unclassified;
+            return static_cast<std::size_t>(std::min(field->get<std::uint64_t>(), static_cast<std::uint64_t>(unclassified)));
         }
 
         /** @brief Accepts only fixed Save event names and unsigned scalar evidence; ignores all other fields. */
@@ -67,6 +81,8 @@ namespace Horo::Runtime {
             const auto index = static_cast<std::size_t>(stageIndex - Stages.begin());
             ++summary.counts[index][static_cast<std::size_t>(outcomeIndex - Outcomes.begin())];
             ++summary.rows;
+            if (*outcomeIndex == "failed" || *outcomeIndex == "cancelled")
+                ++summary.failures[FailureIndex(*fields)];
             for (std::size_t field = 0; field < 4; ++field)
                 Add(summary.evidence[index][field], values[field]);
             summary.evidence[index][4] = std::max(summary.evidence[index][4], values[4]);
@@ -108,6 +124,13 @@ namespace Horo::Runtime {
                                   {"invalid_rows", summary.invalid},
                                   {"missing_sources", summary.missing},
                                   {"truncated", summary.truncated}};
+            using Json = nlohmann::json;
+            output["data_categories"] = {
+                {"included", Json::array({"stage_outcomes", "failure_categories", "numeric_totals"})},
+                {"excluded", Json::array({"save_payload", "display_text", "storage_identity", "local_paths", "provider_text"})},
+            };
+            for (std::size_t category = 0; category < FailureCategories.size(); ++category)
+                output["failure_categories"][FailureCategories[category]] = summary.failures[category];
             for (std::size_t stage = 0; stage < Stages.size(); ++stage) {
                 auto &entry = output["stages"][Stages[stage]];
                 for (std::size_t outcome = 0; outcome < Outcomes.size(); ++outcome)

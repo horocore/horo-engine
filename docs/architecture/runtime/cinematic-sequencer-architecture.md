@@ -420,13 +420,21 @@ The Camera owner commits one immutable selection after `VariableUpdate` and befo
 `RenderExtraction`; late changes apply to the next rendered frame. The baseline is a
 one-view `HardCut`. `SingleViewBlend` is a Camera-owned backend-neutral pose/
 projection interpolation, while `DualViewCrossFade` requires an explicitly admitted
-two-view frontend capability and budget. Fallback to a hard cut must be authored;
-transition modes are never silently substituted. Rendering consumes the resulting
+two-view frontend capability and budget. An authored `LinearThenHardCut` policy
+preserves the window and uses linear single-view interpolation when two views
+are denied and the single-view owner and projection pair can support it. It uses
+a hard cut when that intermediate mode is unavailable. The existing direct
+`HardCut` and `Fail` choices keep their meaning. The Editor refreshes the exact
+viewport capacity after resource preparation and before publishing the camera.
+When an active dual-view transition loses capacity, the authored fallback
+evaluates at the current sequence position without seeking or advancing playback.
+The Camera owner fences unpublished proposals across capacity changes and keeps
+already committed frames immutable. Rendering consumes the resulting
 camera snapshot, selection epoch and generic discontinuity evidence without choosing
 camera authority or exposing backend APIs to Cinematic Runtime. ADR-119 owns the
 complete contract.
 
-The implemented baseline composition is `HoroEngine::CinematicCameraRuntime`:
+The implemented composition is `HoroEngine::CinematicCameraRuntime`:
 `CinematicCameraPlayback` consumes the canonical frame-plan camera keys and
 required scene bindings, then submits copied proposals to the view's
 `HoroEngine::CameraRuntime` owner. The editor viewport controller uses the same
@@ -434,6 +442,20 @@ composition for programmatic preview and extracts its committed camera without
 changing the authoring camera. See the
 [hard-cut runtime integration guide](../../guides/hard-camera-cut-runtime-migration.md)
 for public target ownership, lifecycle and caller migration.
+
+Canonical frame-plan camera keys carry the authored transition tier, explicit
+fallback, integer duration and Linear/SmoothStep curve. `CameraService` admits
+host-selected hard-cut-only or single-view interpolation support. This one-view
+composition rejects required dual-view cross-fades with a typed unsupported
+result. Its explicit hard-cut fallback preserves the authored destination.
+True cross-fade admission still requires frontend compositor and resource-budget
+implementation and qualification.
+
+Camera proposals carry the exact Scene structural revision sampled by their
+producer. Camera commit requires the current Scene view and rejects stale pending
+proposals or same-frame re-extraction after a Scene mutation. Hosts republish
+camera values for a new rendered frame after a rebase, preserving immutable
+decisions already paired with older frame-owned model transforms.
 
 ### 4. Event Track
 
@@ -621,6 +643,14 @@ that token. They publish the resulting gameplay pause revision through
 pause token holds the whole simulation domain. A granted HUD token suppresses only
 the selected HUD band/route generation and preserves other suppression owners.
 Headless hosts can provide a no-op HUD owner only when there is no HUD to suppress.
+
+The player HUD association exposes bounded suppression receipts to presenters.
+The first receipt withdraws input and cancels capture in that association. Nested
+receipts may end in any order. The final release preserves the underlying host
+visibility policy and requires a fresh presentation receipt before input reopens.
+A cinematic ending during UI reload can release its receipt against the same
+publisher before the association refreshes. Association shutdown invalidates
+all receipts. The cinematic host retains only its own suppression receipt.
 
 An incoming gameplay pause holds `FollowGameplay` players and reports
 `HeldByGameplayPause`; `PlayerOnly` players report

@@ -4,7 +4,7 @@
  * @brief Non-installed application-owner access to the one aggregate-owned published Physics/Character pair.
  */
 #include "../PhysicsSceneStateTarget.h"
-#include "Horo/Physics/CharacterWorld.h"
+#include "CharacterSceneFixedAccess.h"
 #include "Horo/Physics/PhysicsSceneActivation.h"
 
 namespace Horo::Physics::Detail {
@@ -16,6 +16,8 @@ namespace Horo::Physics::Detail {
         PhysicsWorld &physics;
         Character::CharacterWorld &character;
         Runtime::SceneRuntimeId scene;
+        std::span<const PhysicsSceneCharacterBinding> characterBindings; /**< Borrowed from the same published aggregate. */
+        std::span<const PhysicsSceneBodyBinding> bodyBindings;           /**< Borrowed from the same published aggregate. */
     };
 
     /** @brief Verifies publication and exact paired lifetime without exporting world ownership to the SDK. */

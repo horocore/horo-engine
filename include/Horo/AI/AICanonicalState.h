@@ -6,6 +6,8 @@
 #include "Horo/AI/AISceneComponents.h"
 #include "Horo/AI/BlackboardSchema.h"
 
+#include <array>
+#include <functional>
 #include <optional>
 #include <span>
 #include <vector>
@@ -59,6 +61,53 @@ namespace Horo::AI {
         std::vector<AiAgentCanonicalState> agents; /**< Stable AgentId order on capture. */
         [[nodiscard]] bool operator==(const AiCanonicalState &) const noexcept = default;
     };
+
+    /** @brief Legacy reference-free Save wire version. */
+    inline constexpr std::uint32_t AiCanonicalRecordVersion = 1;
+    /** @brief Save wire version with durable entity references and the same canonical AI state model. */
+    inline constexpr std::uint32_t AiCanonicalReferenceRecordVersion = 2;
+
+    /** @brief Opaque persistent entity identity and exact durable generation supplied by the Save host. */
+    struct AiSavedEntityReference final {
+        std::array<std::uint8_t, 16> identity{};
+        std::uint64_t generation{};
+    };
+
+    /** @brief Projects a current Blackboard entity through an admitted persistent Scene identity map. */
+    using AiSaveEntityProjector = std::function<Result<AiSavedEntityReference>(const BlackboardStoredEntityReference &)>;
+    /** @brief Resolves a durable entity against the exact reconstructed Scene. */
+    using AiSaveEntityResolver = std::function<Result<BlackboardStoredEntityReference>(const AiSavedEntityReference &)>;
+
+    /**
+     * @brief Encodes the canonical base-agent population for a single bounded Save participant record.
+     * @param state Exact canonical population in ascending agent and Blackboard key order.
+     * @param maximumBytes Byte allowance granted by the Save participant.
+     * @return Owned record bytes or a typed version, shape, or capacity failure.
+     * @param project Optional durable resolution policy. When provided, writes reference-capable wire version 2.
+     */
+    [[nodiscard]] Result<std::vector<std::uint8_t>> EncodeAiCanonicalStateRecord(const AiCanonicalState &state, std::size_t maximumBytes,
+                                                                                 const AiSaveEntityProjector &project = {});
+
+    /**
+     * @brief Decodes a bounded Save participant record into the canonical AI model without mutating a Scene.
+     * @param bytes Complete record payload.
+     * @param maximumBytes Byte allowance granted by the Save participant.
+     * @param resolve Optional resolver required for records containing entity references.
+     * @return Detached population or a typed version, shape, or capacity failure.
+     * @details Actual destination Scene, controller, and Blackboard schema validation belongs to canonical restore.
+     */
+    [[nodiscard]] Result<AiCanonicalState> DecodeAiCanonicalStateRecord(std::span<const std::uint8_t> bytes, std::size_t maximumBytes,
+                                                                        const AiSaveEntityResolver &resolve = {});
+
+    /**
+     * @brief Validates the complete wire payload without producing a Scene-local population.
+     * @param bytes Exact participant record bytes.
+     * @param maximumBytes Admitted payload bound.
+     * @param requiredVersion Wire version declared by the Save participant.
+     * @return Success or a typed wire version, shape, or capacity failure.
+     */
+    [[nodiscard]] Result<void> ValidateAiCanonicalStateRecord(std::span<const std::uint8_t> bytes, std::size_t maximumBytes,
+                                                              std::uint32_t requiredVersion);
 
     /** @brief Explicit stable key rename/removal; an invalid destination deliberately discards the source. */
     struct BlackboardKeyMigration final {

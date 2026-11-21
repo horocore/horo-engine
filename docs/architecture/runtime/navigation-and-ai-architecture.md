@@ -159,6 +159,35 @@ and topology generations are checked before native work; malformed topology, all
 failure, cancellation, and stale requests remain typed Horo failures. The descriptor is
 an activation seam, not the durable NavMesh artifact schema owned by NAV-002.7.
 
+The cooked Detour factory admits a selected canonical closure containing one
+nonempty tile in an exact scope, surface, and agent profile. It checks the
+encoded build geometry against the immutable definition and copies the authored
+area/filter registry. Admission validates that native grid quantization and
+shared-edge neighbors can preserve the cooked data. Multiple tiles, off-mesh
+links, and unrepresentable topology receive typed errors. The host still
+selects the provider and supplies the complete admitted closure and resource
+limits.
+
+An authoritative headless product can select this provider with
+`--navigation recast-detour` alongside a committed `cooked:<Scene AssetId>`
+selection. The host keeps the full Scene UUID for tile admission and reads the
+registered Navigation definition and project runtime policy from the local
+workspace before it builds the Scene. The cooked artifact must have that exact
+project policy. A missing
+surface, foreign scope, unsupported topology, or unavailable provider rejects
+startup. The paired client of a listen server retains its ordinary presentation
+Scene. This path installs logical registration and retirement along with the
+provider world. Character movement and gameplay query publication require their
+own host composition.
+
+Editor Play can opt into the same provider with `--play-navigation-scene <Scene AssetId>`
+alongside `--project`, `--cooked-root`, and `--cook-target`. The application
+compares the active Play projection with that committed Scene before using its
+full UUID for Navigation admission. Unsaved runtime differences, missing committed
+content, and unsupported topology fail Play preparation. The Play session
+owns the world through shutdown and a later Play session prepares a new
+world. This option applies to Play only.
+
 Private runtime and build source groups are separate. A runtime-only provider composition
 excludes Recast voxelization/build objects and their private link dependencies; enabling
 the bake capability adds them for tools. Runtime topology/crowd support retains only its
@@ -362,6 +391,26 @@ down the coordinator/JobSystem before provider code unload. The additive public
 `NavigationMovement.h` belongs solely to `HoroNavigationRuntime`; existing consumers
 need no migration or dependency changes. Headless hosts compose the same lifecycle;
 Null navigation remains typed unavailable rather than fabricating movement.
+
+The standalone terminal composition owns an explicit native path-only grant for its
+installed immutable cooked Recast world. The project registry supplies the traversal
+filter, the project profile supplies query work limits, and the caller supplies a
+bounded deadline in simulation ticks. The immutable topology generation also
+identifies its sealed filter table, static overlay and baked coordinate frame. The
+project profile keeps its own revision. The real fixed owner commits eligible path
+results before Gameplay and dispatches newly submitted work after the successful
+simulation step. The independent best-effort grant excludes movement and is
+unavailable with deterministic cooked AI dispatch. HoroNetworkProductHost composes
+the grant through HoroGameplayNavigationIntegration and retains its exact
+Navigation owner during shutdown until worker and request fences drain.
+
+A behavior attached to an enabled Navigation agent receives a path-only
+attachment scope. It resolves the actual Scene entity generation through the
+installed agent registry and tags each canonical submission with that handle.
+The module-wide caller quota still covers attachment and module requests.
+Committed despawn abandons the exact agent reservations and retained handles
+return scope revocation. Cancelled despawn keeps the attachment and its results
+available. Completed value copies remain historical snapshots.
 
 `HoroNavigationCharacterIntegration` is the downstream NAV-004.9 composition
 boundary. It depends on `HoroNavigationRuntime` and `HoroCharacterInput`; neither
@@ -1213,6 +1262,103 @@ origins carry a stable `PerceptionProviderId` plus a non-zero descriptor version
 Duplicate identities conflict across all origins instead of introducing implicit
 source precedence.
 
+Custom spatial provider execution uses `Horo/AI/PerceptionSenseProvider.h`, owned
+by `HoroEngine::AI`. `PerceptionSenseGeneration` captures inert contracts and the
+actual native executable owner's revocable admission alias. Capture never invokes
+a factory. The host admits the exact registry listener, descriptor versions and
+capabilities before constructing one agent/listener-bound instance. Copied source
+locations and origin labels are diagnostic metadata, never executable authority.
+Native and verified package roles acquire the same generation through their
+actual module host. Retirement closes admission before image unload; an instance
+pins that image until its module-owned destroy callback has returned on the owner
+thread. No callback may survive solely through a copied function pointer.
+
+Providers receive bounded frozen candidate identities and canonical positions.
+They return only binary outcomes indexed into that invocation's candidate set;
+they receive no Scene, blackboard, command or event capability. Built-in sense and
+stimulus identities are reserved, so this extension cannot forge Gameplay hearing,
+damage or team authority. Output indices must be unique and ascending. Exceptions,
+invalid output and declared-work overruns quarantine only the offending instance;
+original typed provider failures remain visible. Agent/global allowances reserve
+the full declared provider and validation cost before callbacks, charging an
+aliased allowance once. Native callback compliance is part of the admitted native
+module contract; source metadata cannot sandbox arbitrary native machine code.
+
+`Horo/AI/PerceptionSenseScene.h` belongs to `AISceneIntegration`. Its owner-only
+`RunPerceptionSenseAtSensePoll` gathers from the actual current spatial owner,
+charges a bounded query unit, and revalidates the publication lease and every
+entity generation after the provider returns. All outcomes stage into a private
+memory candidate before replacing agent memory. Truncation and omitted candidates
+are unknown evidence, not sensing loss. Blackboard projection remains a separate
+`BlackboardSync` transaction under the existing declared-key projection contract.
+This adapter is a composition seam; a host must explicitly dispatch it at the
+named phase. Native/package registration alone does not prove product dispatch.
+
+The configured headless authority can opt in with an already admitted native
+generation, explicit spatial positions and layer/radius policy, and bounded
+memory and work policy. Initial Scene and prefab admission stage the instances
+against the same spatial publication before making either owner visible. The
+fixed host polls the current publication before decisions and gameplay. Retrying
+the same tick preserves the first result without replaying native callbacks.
+Aggregate rejection discards detached instances. Despawn revokes the retired
+agent before destroying its instances. The same structural publication removes
+retired subject and emitter generations from surviving agents' memory, so those
+records cannot consume capacity before the next native sense pass. In a Scene
+with an installed AI structural participant, ordinary authored agent creation
+and retirement use the same owner transaction and reserve identity before
+subsequent prefab admission. This scope
+covers custom spatial observations and
+keeps Gameplay-event admission and blackboard projection in their existing
+owners. Canonical AI restore is unavailable for this opt-in until the restore
+transaction can stage fresh sensing instances and the paired endpoint publication.
+
+A headless project capture may explicitly read a bounded Perception policy from
+the project source boundary. Its schema 1 record selects the full cooked Scene
+asset ID and revision, an absolute signed-millimeter world origin, and controller
+IDs with stable listener/sense selectors and endpoint layers/masks. Provider and
+stimulus declarations still come from the admitted frozen registry. Scene position
+evidence composes the available current or prospective entity hierarchy in
+canonical local meters and adds the explicit origin after millimeter quantization.
+Missing detached ancestry or a mismatched Scene revision denies capture.
+
+Standalone terminal launches can add `--game-perception-policy <project-relative path>`
+to the existing explicit native cooked controller selection. The policy uses schema
+2 and adds a `native` object with `listeners` (stable `id` and registered `sense`),
+`radiusMillimeters`, `visibleLayers`, and `workUnitsPerTick`. The host grants
+only its spatial candidate capability and uses the canonical fixed-tick memory
+policy. The same prepared gameplay image supplies inert sense/stimulus contracts
+for registry admission, then issues the callable generation after real module
+startup on the already paired Scene. A listener cannot name an unregistered
+sense, and an insufficient aggregate allowance fails startup before exposing the
+world. Connected hosts receive no native Perception grant.
+
+A schema 2 controller may add a nonempty `decisionWatches` array. Each entry
+names a cooked Decision `node` and a `listener` already declared by the same
+controller. For example, `"decisionWatches": [{"node": 2, "listener": 91}]`
+selects event-only evaluation for that controller in Editor Play and
+authoritative headless sessions. Scene admission checks both identities before
+creating the Decision executor. The graph wakes on watched Perception changes,
+including retirement of an observed source in a committed Scene update. It also
+wakes on committed Blackboard dependencies, accepted task continuation events,
+and the next fixed deadline of an active service or time limit.
+Other controllers retain their fixed-tick cadence. In Editor Play and headless
+product launch, an explicit `settings.ai.scheduler.mode` must be `bestEffort`
+when the project declares these watches. If omitted, the watches select the
+mode. Authored scheduler and Perception limits and development grants still
+apply.
+Deterministic headless replay requires its regular fixed-tick scheduling policy.
+
+The native public capture path rejects Script origins. The private VM admission
+path is available only to `Gameplay::LuaPerceptionSenseProgram`, which uses the
+existing Lua sandbox and allocator with a bounded instruction hook. Its callback
+tier forbids Lua allocation and accepts only scalar integer positions, returning
+boolean/nil outcomes; it exposes no mutation, filesystem, clock, logging or random
+capability. The entire evaluation shares one instruction allowance. VM/source
+creation occurs at activation and each instance has its own enforced memory
+ceiling. Actual executable-parent revocation is mandatory; a Script label or
+unrelated decision-node lease is insufficient. The package host compiles only
+verified declared script bytes and retains its selected native perception parent.
+
 Registry capture resolves every listener against the identity-sorted sense and
 stimulus sets and against product-supplied, backend-neutral capability bits. A
 missing dependency, incompatible declared version interval, or capability rejects
@@ -1334,8 +1480,12 @@ typed stale after revocation. Accepted policy changes followed by capacity/type/
 write failure therefore cannot expose old denied facts through ordinary readers.
 Other unleased keys retain their usual read behavior. Rejected policy proposals
 never revoke the old lease, preserving the genuinely valid old publication.
-Hosts choose a memory profile of at most 16 for this projection. General multi-sense
-scheduler/batch orchestration remains the separate GAI-002.9 owner.
+Hosts choose a memory profile of at most 16 for this projection. Each listener owns
+one prepared publisher. All senses stage their observations in the same listener
+memory before BlackboardSync, where the publisher coalesces the changes into a
+single revisioned transaction. Preparation rejects incompatible projection keys
+before sensing. A recursive sync cannot mutate memory because it must first open
+a blackboard write batch while the original notification is still active.
 
 Debug reads require current Scene, filter and blackboard fences. After policy
 replacement, entity recycling, blackboard replacement/teardown or another blackboard
@@ -1367,9 +1517,12 @@ semantics.
 Migration: Gameplay event hosts pass their Scene's filter owner to Capture and
 project all declared event listeners, subjects and provenance senders with enabled
 sense sets. Sight hosts stage completed observations with the current publication,
-then invoke PublishAtBlackboardSync after all senses have staged, using distinct
-writable EntityReference and WorldCoordinate collection keys. Both keys need the
-admitted profile capacity. Generated public-header consumers and AI/sight regressions
+then invoke PublishAtBlackboardSync after all senses have staged. C++ integrations
+must rebuild and replace direct PerceptionPublication construction with
+PrepareAtSafePoint, passing the live listener, blackboard and distinct writable
+EntityReference and WorldCoordinate collection keys at composition. Both keys need
+the admitted profile capacity. Reprepare after schema or instance replacement.
+Generated public-header consumers and AI/sight regressions
 cover the added core policy and integration boundary; no native/backend dependency
 is added to HoroAI.
 
@@ -1379,7 +1532,7 @@ query seam:
 | Sense | Timing Owner / Model | Authority & Source | Query Seam | Purpose |
 |---|---|---|---|---|
 | **Sight** | Periodic time-sliced (`PerceptionManager` tick) | `PerceptionManager` + `PhysicsWorld` | `PhysicsWorld::Raycast` / `Sweep` for LOS occlusion; `SceneRuntime` spatial index for candidates | Visual detection within FOV cone, peripheral angle, and sight radius |
-| **Hearing** | Periodic time-sliced / stimulus queue drain | `PerceptionManager` + `AudioStimulusEmitter` | Distance attenuation + optional `PhysicsWorld` acoustic obstruction raycast | Acoustic detection of footsteps, gunshots, explosions, and environmental noise |
+| **Hearing** | Bounded drain of committed Gameplay sound facts at the admitted sensing window | Authoritative Gameplay producer through `Gameplay::PerceptionEventSource` | Producer-admitted attenuation/occlusion evidence and exact source/recipient generations; no Audio-renderer queue authority | Acoustic detection of footsteps, gunshots, explosions, and environmental noise |
 | **Damage** | Event-driven (immediate on hit) | `HealthSystem` / `CombatSystem` | Direct gameplay event carrying instigator entity, damage amount, and hit direction | Detection of inflicted harm, alerting agent to attacker identity/direction |
 | **Touch** | Event-driven (fixed physics tick) | `PhysicsWorld` collision dispatcher | Contact manifolds and trigger overlap events | Immediate awareness of physical contact, collisions, and proximity penetration |
 | **Team** | Event-driven, after Gameplay authorizes one delivery | Gameplay/squad system | Exact recipient, sender and subject generations plus disclosure and perception-filter admission | Transient per-agent memory of an already delivered message |
@@ -1471,11 +1624,13 @@ window, which must close before replacement or teardown. Producer filters are
 frozen for that window; policy changes close it and capture a new producer batch.
 Durable squad knowledge never enters this adapter or its transient memories.
 
-Migration: `AIPerceptionMemory::Observe` remains available for sight, hearing and
-other sense kernels, but rejects the built-in Team sense or Team stimulus identity.
-Team producers use the captured Gameplay delivery path. The caller audit found
-only memory regression tests and the new route using `Observe`, with no existing
-production team producer to migrate. Health/combat and squad producer systems and
+Migration: `AIPerceptionMemory::Observe` remains available for sight and other
+sense kernels, including the custom spatial Scene adapter. It rejects
+the built-in Team/Team and Hearing/Sound identities. Committed Gameplay team and
+sound deliveries use `RouteGameplayPerceptionEvent`, which alone accesses the
+private `ObserveAdmitted` boundary after validating its captured delivery proof.
+A copied observation or an Audio playback event cannot supply that proof.
+Health/combat and squad producer systems and
 a complete PerceptionManager do not yet exist in this checkout; this integration
 consumes their typed committed output at the explicit host boundary, without
 implementing gameplay communication, topology or network transport.
@@ -1486,12 +1641,14 @@ Perception uses a hybrid execution model balancing immediate reactivity and
 bounded compute cost:
 
 1. **Hybrid Execution Model**:
-   - **Event-Driven Inputs (`Damage`, `Touch`, team affiliation/distress)**:
-     Dispatched immediately when gameplay events occur or collected during the
-     fixed simulation tick. Work is $O(E)$ where $E$ is the emitted event count.
-   - **Continuous Periodic Inputs (`Sight`, `Hearing`, team awareness relay)**:
-     Evaluated at scheduled intervals across fixed simulation ticks and distributed evenly via
-     time-slicing.
+   - **Event-Driven Inputs (`Damage`, `Touch`, committed hearing and team messages)**:
+     Gameplay producers commit typed facts and recipient/filter decisions during
+     their fixed-tick work. The admitted sensing window drains a bounded captured
+     batch; Audio rendering and AI memory cannot mint producer authority.
+   - **Continuous Periodic Inputs (`Sight`, custom spatial senses)**:
+     Evaluated at scheduled intervals across fixed simulation ticks and distributed
+     through time-slicing. Gameplay/squad systems own any periodic team relay and
+     communication topology; AI consumes only their explicitly delivered facts.
 2. **Time-Sliced Raycast Budgets**:
    - The engine enforces hard limits per fixed simulation tick:
      - `maxSightRaycastsPerTick`: Maximum physics LOS raycasts allowed across all
@@ -2121,10 +2278,10 @@ ADR-021 coarse group               ADR-022 fine phase
 3. SystemPhase::AiDecision      -> AiDecisionEvaluate
 4. SystemPhase::AiIntentDispatch-> NavIntentCommit
                                    + typed combat/animation intent enqueue
-5. SystemPhase::Gameplay        -> CharacterControllerLocomotion
-                                   + IBehaviorInstance::OnFixedUpdate
-                               then AnimationRigUpdate
-                               then variable-rate RenderExtraction (not a fixed phase)
+5. SystemPhase::Gameplay        -> IBehaviorInstance::OnFixedUpdate
+                                   + Gameplay command staging
+Host continues the canonical Animation/Character/Physics fixed tick below,
+then publishes committed state for variable-rate RenderExtraction.
 ```
 
 ### Phase Contracts
@@ -2145,6 +2302,36 @@ ADR-021 coarse group               ADR-022 fine phase
 4. **`SystemPhase::AiIntentDispatch` (Action/Navigation Intent Dispatch)**:
    - Translates decision outputs into typed intents. Navigation and steering commit in `NavIntentCommit`.
    - Combat actions and animation triggers enqueue as typed intents consumed later; they are not absorbed into `NavIntentCommit`.
+   - A gameplay AI task can dispatch an authored graph trigger through `GameplayAiContext::QueueTaskAnimationTrigger`.
+     Dispatch requires a live task owned by the module and an Animation grant for the same module and Scene. The
+     trigger targets the agent's exact entity generation. The Animation fixed step commits the graph transition
+     and publishes its state events to readers of the committed pose.
+   - A host can hand an exact running AI task to `AiNavigationMovementTask` for MoveTo or Follow.
+     The binding checks that Navigation and AI own the same Scene entity, then uses the existing movement controller.
+     At `NavIntentCommit`, the host publishes query results and calls `PrepareSafeMotion`, which advances the
+     existing velocity pipeline once using prior Character feedback. The host commits the avoidance result and
+     submits only that safe publication via `NavigationCharacterAdapter`. After Character commits the fixed step,
+     the adapter returns the achieved displacement to the velocity pipeline for the next tick.
+     `SceneAiNavigationMotion` sequences those calls for a single Scene-owned AI task. It retains the
+     submitted tick until Character publishes matching feedback and hands motion-stage failures back to AI.
+     The application resolves a Character controller from the published Physics aggregate using the actual
+     Scene incarnation and the entity generation captured when that controller was created.
+     Standalone project startup can select its authored movement actors explicitly. It prepares the registered
+     Navigation agent and Character controller together and includes each actor's caller in path publication.
+     The configured standalone host accepts task requests during cooked evaluation, dispatches them through
+     the scheduler, and submits safe motion before the native Character step. The next tick consumes feedback
+     from the prior committed native step. An aborted animated attempt discards its outstanding feedback.
+     An actor may select an authored motion-start graph trigger. Intent dispatch queues it through the Scene
+     Animation owner for that same entity generation and reports a rejected trigger to the originating task.
+     This host explicitly selects `BestEffortExternalFeedback` for the asynchronous path and crowd providers.
+     A deterministic cooked Scene requires deterministic scheduling. Replay capture requires that timing contract.
+     The binding publishes Navigation admission errors, provider failures, arrival and cancellation to the original
+     AI task. A superseded movement can never complete the replacement task or authorize its motion.
+     For a behavior-tree node, the host binds the continuation captured during evaluation at intent dispatch.
+     `AiNavigationIntentDispatch` retains one staged movement per agent and the cooked Scene scheduler publishes
+     it within the command allowance in `AiIntentDispatch`. A rejected admission is delivered to that same task.
+     Navigation offers a detached terminal candidate, and the next decision evaluation consumes it on the
+     original task.
 5. **`SystemPhase::Gameplay` (Behavior Script Step & Locomotion)**:
    - Generic object-attached gameplay behaviors (`IBehaviorInstance::OnFixedUpdate`) and character controllers step **after** AI decision evaluation.
    - This group is not the AI decision phase.
@@ -2165,6 +2352,95 @@ explicit asset-document routes. Decision/EQS graph tabs reuse the shared Horo
 `GraphViewSnapshot`/`GraphEditCommand` surface, while subsystem document
 controllers own semantic validation, history, save/conflict and compilation.
 Cooked plans and live Scene-owned instances never become editor document state.
+
+The HoroEditor executable composition captures the built-in EQS descriptor registry
+from AI Scene Integration and publishes a read-only schema view to the workspace.
+The native point-lattice descriptor, initial source construction and candidate
+generation share the same typed identifiers and bounds. A source tab may validate
+against that schema without retaining an execution plan, acquiring a Scene
+capability or starting a provider. Unknown authored stages remain inspectable.
+
+Native point-lattice settings expose `BuiltinPointQuerySettings::distanceTests`
+in execution order. A caller that previously read the optional `distance` member
+reads the corresponding `QueryPointDistanceStageSettings` entry by its
+`QueryStageId`. Edits supply the same ordered identities with replacement values
+so undo, redo and source publication preserve each stage and its authored order.
+Existing query files retain the same serialized layout.
+The source tab can append a native distance stage and remove a distance stage by
+its exact identity. A structural edit includes the current field values in one
+undoable transaction. Appending preserves the semantic order of existing stages.
+
+The lattice generator and each distance test choose a location independently
+from the installed descriptor options. The native options are querier location,
+world origin and target location. Old sources use querier location.
+A target preview uses exactly two selected Scene objects. The primary selection
+is the querier and the other object is the target. Changing either selection
+invalidates the retained preview. A compiled stage retains
+only its selected requirement, and preview evaluates each test against its
+own captured location from the pinned Scene.
+
+An application can add named location descriptors to the native choices and
+provide a matching registry and capability set to the workspace. The editor
+uses the registered names for authoring. It invokes a selected provider on the
+Scene owner before handing the captured values to the preview worker. Missing
+grants and mismatched provider versions fail before any provider call.
+Authoring callers now read `option.id` from each generator or distance context
+choice. The optional `option.displayName` is for presentation. Saved query
+properties continue to store only the stable context identity.
+
+The deterministic native point-query admission path uses those same authored
+kernels on the simulation owner. It reserves both lattice passes and the
+bounded test lookup and evaluation. It rejects a retired Scene revision before
+publishing a winner. A Decision task can commit the winning point through the
+existing typed Blackboard binding at BlackboardSync.
+
+The editor can frame a retained sampled point in the authoring viewport while
+its saved query source and pinned Scene revision still match. The command
+identifies the exact preview publication and resolves the point from that
+publication. It changes the viewport camera only.
+
+A Decision task can store a `QueryOutput` property with the query, result
+schema and version, item type, Blackboard key and timeout. The Decision compiler
+requires a writable scalar point or entity key declaration. Runtime binding
+checks the saved query and item contract against the actual plan before starting
+work. The new property kind appends to the source wire vocabulary. Graphs without
+it keep the same bytes. Readers that predate it reject graphs that use it.
+
+When the application supplies the target query schema registry, the Decision
+cooker publishes registered queries in the same asset generation. The query
+payload contains the label-free reconstruction recipe and a digest of the
+admitted item, stage and context contracts. Loading checks that digest against
+the host registry before yielding a plan. Decision roots resolve the query ID
+to an actual registered asset and include its dependency through nested graphs.
+Missing queries, incompatible result versions and mismatched destination types
+fail before the asset generation is published.
+
+Headless controller admission resolves these query references against the same
+committed generation as the selected Decision plans. It rejects missing or
+ambiguous query IDs and checks the result contract against the compiled
+Blackboard destination before making the controller available.
+
+Cooked Behavior Tree execution routes the explicit query property through the
+Scene owner's task binder after descriptor and Blackboard validation. It still
+uses the registered executor's normal begin, resume and retirement routing.
+Missing owner binding produces a typed capability failure before native
+factory construction. The graph retains the binder with the provider
+generation while preserving the existing cooked instance layout.
+The Scene's BlackboardSync entry point resolves the task's exact live agent
+and writes through that agent's existing Blackboard owner. Mutable Blackboard
+access stays within the Scene owner.
+
+The headless gameplay composition retains the admitted plans for its exact
+world and supplies the task binder for both initial and prefab-spawned agents.
+Its fixed-step order publishes Blackboard results before Decision, dispatches
+intents, and advances active queries against bounded per-agent and world work
+allowances. Native point queries capture the live entity hierarchy in global
+millimeters using the mounted world's current origin when present.
+
+Each native distance stage can store a positive integer relative score weight.
+An omitted weight means `1` and keeps existing source payloads valid. The scorer
+normalizes enabled scoring stages by their total weight. A filter-only stage
+retains its weight for future edits and contributes only its filter result.
 
 1. **Pure Semantic Graph Assets**:
    - Persisted graph identity is established by typed assets: `BehaviorTreeAsset` (`.horo_bt`), `StateMachineAsset` (`.horo_sm`), and `UtilityAiAsset` (`.horo_utility`).
@@ -2408,8 +2684,57 @@ without pinning the retired module.
    - Running instances migrate at tick boundaries: compatible active paths retain state; incompatible edits trigger `OnAbort()` on active tasks and restart evaluation from the root node.
    - Stale or invalid plans never replace the active runtime plan and log typed compiler diagnostics.
 
+`BehaviorTreeInstance::Replace` is the existing standalone tree safe-point seam.
+Its task-slot reservation is captured at `Create`: an absent
+`BehaviorTreeInstanceBinding::availableTaskSlots` means exactly the initial plan's
+requirement; an explicit capacity is an exclusive range already reserved by the
+host. Replacement revalidates that capacity, integer range and subplan support.
+A growing tree cannot claim adjacent identities by resizing an internal array.
+Within an admitted range, incompatible replacement prepares node, service,
+traversal and async-mailbox storage before cancelling the old generation. Allocation
+failure preserves the prior plan, running tasks and continuations. Success retires
+removed callbacks/continuations and requires a strictly later evaluation tick;
+an event in the old tick cannot execute the replacement. Compatible replacement
+retains live task state and its mailbox but obeys the same tick fence.
+Executor-reuse checks include exact provider/key bindings and the callback-role
+set, so changed node/type bindings cannot execute through the old frozen adapter.
+The prepared-executor `Replace` overload installs freshly bound callbacks in the
+same storage transaction; it always restarts opaque provider state. These tree
+invariants do not establish composed BT/HSM/Utility state or schema migration;
+the complete closure replacement transaction remains required by GAI-003.11.
+
+For an active Scene agent in deterministic scheduling, the Scene owner can
+replace a flat cooked tree at a completed tick boundary. Admission checks the
+exact previous plan and the same root and Blackboard schema. The existing
+Blackboard values and read leases remain valid. Compatible trees keep the
+original provider bindings, running task identities, and completion mailbox.
+Changes that require a restart reserve a fresh task interval before publication
+and retire the previous tree with `PlanReplaced`. Either path uses the new plan
+from the next tick.
+
+Scene-owned graph composition acquires its exclusive physical task range through
+`AiSceneRuntime::ReserveDecisionTaskSlotsAtSafePoint`. Compiler occurrence offsets
+are relative to that range; they cannot establish ownership of live Scene task
+indices. The move-only reservation captures the actual agent's schema publication
+and cancellation ancestry. Failed admission consumes no indices; issued indices
+are never recycled, even after a failed graph creation. Zero-task ranges are valid.
+`CaptureDecisionSnapshotAtSafePoint` obtains the frozen observation from that same
+owner after blackboard synchronization. Both APIs require its actual owner lane.
+The reservation overload of `DecisionGraphInstance::Create` checks schema and range
+before provider factories, retains the scope, and propagates its independent owner
+cancellation to all families and detached continuations. Owner cancellation retires
+existing graph tasks without trying to read an already-revoked snapshot. Workers
+remain cooperative: they check both operation ancestors and the Foundation job
+token at bounded intervals, while image leases pin running callbacks to completion.
+This seam does not by itself implement composed active-path/schema migration.
+
 1. **Save And Restore**:
    - Under ADR-114, the AI subsystem contributes one owned canonical state adapter to `RuntimeSaveService` and captures state only at the aggregate save snapshot safe point. Component reflection and Scene serialization are not alternate authorities.
+   - The bounded base-agent Save record carries `AiCanonicalState` directly. It preserves ordered agents, authored controller identities and complete ordered Blackboard entries. Wire version 1 remains readable for records without entity values. Version 2 projects entity scalars and collection members to a persistent identity and durable generation. The reader checks the wire against the participant schema. Only the exact reconstructed Scene and its admitted identity map can turn a saved reference into a live Blackboard projection.
+   - The AI capture adapter binds an explicit current Scene source and checks the Save capture's incarnation, structural revision, owner lane, and storage allowance before copying a record. The product opts in by registering the adapter and using the decoded state in aggregate Scene restore.
+   - The Scene activation participant can accept a host-selected decoded population for the exact reconstructed Scene. It projects agents from the reconstructed entity slots, validates the complete saved population by stable agent identity, and stages Blackboards before decision scheduler construction. The Scene publication checks the candidate revision and cancellation again before transferring ownership. Rejected candidates leave live agents and transient work intact.
+   - Editor Play binds AI capture and reference projection when the host installs a Save session. Its slot manifest requires the AI record under its declared owner. Workers validate the bounded wire payload. The Scene prehook decodes and resolves references after entity reconstruction, and the final aggregate requires the AI activation participant to have consumed the population. A missing or tombstoned entity, a different durable generation, or a partial AI population rejects the whole load and preserves the prior Scene. Editor Play rejects cross-world restore and Navigation state outside its installed Save scopes. Other hosts must opt in with their own explicit identity and Save policies.
+   - This record contains base-agent state only. Decision continuation and perception memory require explicit canonical ownership and product policy before the Save participant can include them.
    - Durable state includes plan asset/schema identity, bounded execution-frame stacks keyed by stable `DecisionNodeId`, serializable decorator/timer memory, and schema-approved blackboard values.
    - `JobHandle`, cancellation tokens, path/query handles, pointers, and cooked array indices are transient and never serialized. Restore resolves plans in staging and restarts asynchronous work only after atomic state application. Missing or incompatible plans reset the affected agent to its root with a typed diagnostic.
 
@@ -2686,6 +3011,53 @@ exact active agents with `RegisterDecisionAtSafePoint`, and calls
 and shutdown fence retained decisions and intents and cancel their workers.
 The process JobSystem and worker-owned image pins must drain before code unload.
 
+Structural callers can stage a complete scheduler population change at the owner
+safe point. Admission checks the population that would remain after exact
+generation retirements and reserves the final deterministic allowances before
+publishing any registration. Publication removes retired handles and signals
+their worker cancellation before Scene commit. Evaluator cancellation runs
+only after all Scene owners have published. Abandoning the staged candidate
+keeps existing handles, budgets and callbacks intact.
+
+Blackboard schema assets use the versioned semantic .horo_bb payload and
+project asset type core.blackboard_schema. Their immutable cooked schema
+retains stable key IDs, types, defaults, access, and version policy. The source
+codec also accepts an authoring envelope with an ordered list of stable key IDs
+and optional labels. Existing semantic-only assets remain readable. Cooking
+validates both representations and emits the existing semantic-only payload.
+Decision cooking captures authored schemas from the pinned registry and records the
+selected schema asset dependencies. Duplicate semantic schema versions reject
+the capture. The cooker and runtime fingerprint the same canonical schema
+fields. Configured headless admission can therefore resolve schemas from the
+verified committed generation when no in-memory schema catalog was supplied.
+The exact native provider generation still comes from the host.
+
+The configured headless authority can explicitly select committed decision assets
+for controller identities. An authored initial Scene supplies the graph identity,
+decision family and stable schema identity when the host has no separate
+controller descriptor. All declarations of a selected controller must agree
+on those fields. Prefab-only controllers and optional Perception endpoint
+metadata still need an explicit project descriptor. Selection uses the full
+project AssetId and verifies the cooked plan against that declaration and the
+captured compiler environment. The shared
+initial and structural Scene owners retain the executable closure with its root
+bindings and recheck provider currentness at publication. A missing selected
+artifact rejects startup. An invalid authenticated payload preserves the codec
+error. An additional deterministic execution policy turns admitted flat
+Behavior Trees with an authored execution task into Scene-owned scheduled
+decisions. Initial activation and prefab creation reserve the exact agent's
+blackboard, task slots, evaluator and slice allowance within the aggregate
+publication. Rollback leaves the live scheduler and task-slot allocator
+unchanged. Prefab retirement revokes the task scope at publication and
+cancels running work after Scene commit.
+
+The configured authoritative headless owner evaluates and dispatches those
+decisions on its actual fixed clock before Gameplay. A same-tick downstream
+retry does not replay a completed AI slice. The current flat-tree executor
+has no Scene command writer, so its dispatch commits no typed gameplay
+intents. Other cooked graph shapes require an execution contract before
+admission.
+
 Each registration owns one coalesced wake slot. Existing `DecisionWakePolicy`
 requests can be forwarded as typed `DecisionWakeReasons`; activation, blackboard,
 perception, task completion and explicit requests bypass cadence. Fixed-tick
@@ -2693,7 +3065,29 @@ polling coalesces missed intervals without catch-up. Authored priority, overdue
 age and persistent `AgentId` determine stable admission independently of registration
 order. After the declared starvation age, overdue agents precede ordinary priority.
 `AiSchedulingReport` exposes starved/deferred, exhausted/yielded, failure and
-cancellation counts plus the original first callback error.
+cancellation counts plus the original first callback error and its exact agent
+generation, authored identity, and phase. A flat Behavior Tree also preserves
+its first `Start` or `Resume` result error as advisory evidence for the cooked
+graph and node. A normal `Failed` task state still participates in selector
+fallback. A raw provider error preserves that same branch behavior and remains
+available for diagnostics even when a fallback succeeds. Fatal evaluation or
+commit failures take precedence in the Scene's completed report.
+The scene owner reads the completed tick after dispatch. Its detached diagnostic
+retains the error after entity retirement, with a target only if that generation is live at
+capture. Navigation revalidates the copied entity against the current Scene
+before applying a selection.
+Native consumers rebuild against the extended scheduler report and evaluator
+interface. Existing evaluators inherit the empty advisory implementation.
+
+Recovery follows the lifetime that admitted the work. Navigation and gameplay
+capability admission reject unavailable services or full request storage with
+typed errors. An admitted query retires on cancellation or stale inputs and
+keeps provider failures on the requesting task. Cooperative scheduler yields
+use the next admitted slice. A failed callback follows the owning node's
+terminal or fallback policy. Native sensing suspends the failed recipient for
+its activation lifetime. A rejected query output remains on the owning task
+through its next decision evaluation. These failures leave unrelated Scene
+owners and their budgets active.
 
 Positive finite per-agent and global evaluation/work/command/submission limits
 are validated before registration. Deterministic admission requires interval one
@@ -2709,7 +3103,12 @@ its agent or borrowing future tick capacity. `AiWorkBudget` is cooperative: a pr
 must consume before every bounded node/query/command step and check cancellation
 between steps. It does not preempt arbitrary C++ code or bound the elapsed time
 of a single step. A slice is reserved before invoking callbacks; repeated calls
-in the same tick cannot renew allowances. Incomplete command batches retain their
+in the same tick cannot renew allowances. A single-occurrence cooked Behavior
+Tree can reserve its bounded priority, traversal and service work before
+starting the tick. If the allowance is insufficient, the graph preserves its
+continuations and does not advance its evaluation tick. The scheduler still
+owns cadence. Other cooked shapes need separate budgeting contracts before
+they can use this entry point. Incomplete command batches retain their
 bounded storage and fence further evaluation until drained; no command or decision
 catch-up extends the tick. Hosts provide an executor with immutable frozen inputs
 and preallocated resumable state/intents; its owner-only commit queues Scene
@@ -2734,6 +3133,14 @@ phases and recompose/rebind after restore or scene replacement. Scheduling state
 worker leases and outstanding intent batches are transient and never serialized.
 
 ## Debugging And Visualization
+
+The owner can opt an admitted EQS execution into a bounded preview. The preview
+samples stable generator indices across the generated list and reports completed
+test decisions, normalized contributions, and the ranked winner prefix. It omits
+raw provider readings, context values, actor handles, and provider error text.
+An explicit owner grant allows generated world points to be drawn. Reads mark
+retired authority as stale and suppress point geometry in that state. The copied
+snapshot is presentation data and carries no authority to navigate an entity.
 
 [ADR-110](../../adr/110-navigation-editor-surface-and-command-ownership.md)
 maps navigation tooling onto the shared editor architecture. A persistent
@@ -2765,9 +3172,13 @@ direct widget writes. Provider UI remains inert metadata/host-rendered schema.
 
 AI simulation executes as a fixed-timestep pipeline within the engine's fixed
 update loop, defined by [Runtime Lifecycle Architecture](./runtime-lifecycle.md).
-Six ordered phases execute in each simulation tick; they implement the ADR-021
-coarse groups. A variable-rate presentation
-bridge runs afterward and consumes the committed snapshots:
+The four AI/navigation stages below implement the corresponding ADR-021 coarse
+groups; they are not a complete engine tick or a second scheduler. Gameplay
+command staging and the Animation/Character/Physics owners continue in the
+canonical Runtime Lifecycle order. Authoritative Animation pose/root motion is
+prepared before Character movement and the single Physics step; post-Physics
+Animation overrides follow Character finalization. A variable-rate presentation
+bridge consumes only the subsequent committed publication:
 
 ```text
 PerceptionSensePoll
@@ -2782,11 +3193,19 @@ AiDecisionEvaluate
  NavIntentCommit
         |  (Pathfinding queries, steering & avoidance velocity)
         v
-CharacterControllerLocomotion  (Physics Integration)
-        |  (Committed world transforms & collision contacts)
+ Gameplay command staging
         v
- AnimationRigUpdate
-        |  (Skeletal pose evaluation)
+Authoritative Animation pose/root motion + frozen Character query evidence
+        v
+CharacterControllerLocomotion: bounded query movement + staged commands
+        v
+ Physics: apply commands and step once
+        v
+ Character support/root finalization (no second movement)
+        v
+ Typed post-Physics Animation overrides
+        v
+ Deferred structural commit + atomic subsystem/transform/event publication
         v
   RenderExtraction  (variable-rate presentation bridge; not a numbered phase)
         |  (Immutable presentation snapshot)
@@ -2794,34 +3213,47 @@ CharacterControllerLocomotion  (Physics Integration)
 
 ### Phase Contracts And Invariants
 
-Phases 1-6 run inside the fixed simulation tick and may mutate simulation state
-under the phase contracts below. `RenderExtraction` is the following
-variable-rate presentation bridge, not a seventh fixed-tick phase.
+The first four contracts describe AI/navigation work inside the host's fixed
+tick. The fifth describes the Character owner boundary, not an immediately
+adjacent scheduler phase: authoritative Animation preparation precedes Character
+movement, and Physics completion precedes finalization. The numbering below is
+explanatory, not a new engine phase enumeration. `RenderExtraction` is the
+following variable-rate presentation bridge.
 
 1. **`PerceptionSensePoll`**:
-   - Gathers all ADR-024 sensory stimuli (Sight line-of-sight candidates, Hearing events, Damage dispatches, Touch/Proximity overlaps, and Team/Affiliation events or bounded relays) into staged per-agent stimulus buffers.
-   - Operates as a read-only pass over physics spatial structures and audio event queues.
+   - Gathers bounded spatial candidates and admitted Gameplay hearing, damage, touch/proximity and team deliveries into staged per-agent stimulus buffers. Team topology and relay selection remain Gameplay-owned.
+   - Operates as a read-only pass over current spatial/Physics evidence and captured Gameplay event batches; Audio-renderer queues do not authorize hearing or team observations.
+   - A native sense provider fault in a current Scene suspends that recipient's sensing until its activation is replaced. Other recipients continue within their own budgets. Queries of the suspended recipient return the original fault so callers can select a fallback. Scene or policy failures still fail the poll.
    - Invariant: Does NOT mutate agent blackboard state, behavior tree node states, or world transforms.
 2. **`BlackboardSync`**:
    - Ingests staged stimulus buffers into each agent's `BlackboardState`.
    - Evaluates stimulus decay over time, updates last known target locations, adjusts agent alert levels, and processes incoming team/squad broadcast events.
+   - A rejected EQS destination write remains attached to the exact task and is reported with its original cause when that task resumes. The owner does not retry the rejected output or interrupt publication for unrelated agents. Rebuild native consumers of the updated `DecisionQueryTask` type.
    - Invariant: All blackboard mutations are completed within this phase; blackboards become read-only during subsequent decision evaluation.
 3. **`AiDecisionEvaluate`**:
    - Evaluates behavior trees, finite state machines, or utility AI models against current blackboard state.
    - Selects agent actions, targets, and tactical states.
+   - Lua decision callbacks report an instruction cutoff as scheduler budget exhaustion, an allocation refusal as task capacity exhaustion, and an invalid result or runtime script error as a callback failure. The decision graph owns fallback selection. Decision VMs omit `pcall` and `xpcall` so the host can enforce the instruction cutoff through the entire callback. Existing decision scripts using these functions should express recoverable conditions through ordinary return values or graph branches.
    - Invariant: Pure decision evaluation. Does NOT directly manipulate physics bodies, apply forces, or invoke rendering commands. Emits high-level movement/action intent.
 4. **`NavIntentCommit`**:
    - Translates movement intent into concrete navigation actions: submits asynchronous pathfinding requests, follows active waypoints, and evaluates the selected local safe-velocity capability.
    - Computes desired kinematic horizontal/vertical velocity vectors for character locomotion.
    - Invariant: Submits desired velocity to character controllers without stepping the physics world directly.
 5. **`CharacterControllerLocomotion`**:
-   - Executes character controller updates within the physics tick step. Resolves collisions, ground support, slope limits, stepping, and external forces.
-   - Commits authoritative entity world positions, orientations, and velocities.
-   - Invariant: Transforms and velocities committed in this phase represent the authoritative simulation state for the tick.
-6. **`AnimationRigUpdate`**:
-   - Evaluates animation blend trees, locomotion state machines, and procedural IK based on committed locomotion velocity and active action tags.
-   - Computes skeletal bone transform matrices.
-   - Invariant: Evaluates presentation pose from committed simulation data; animation updates do not retroactively alter physics locomotion within the same tick.
+   - Consumes admitted movement intent and pre-Physics Animation/root-motion evidence. The Character owner performs bounded query movement and stages its root/Physics commands.
+   - The Physics owner applies commands and steps once. Character support, attachment and authoritative collision-root transforms are finalized from the completed results without a second move.
+   - Invariant: AI and Navigation neither step Physics nor publish partial Character transforms. The host publishes committed subsystem state after post-Physics Animation overrides and deferred structural changes.
+
+### Animation And Physics Owner Boundaries
+
+Animation is not a single AI-owned phase after locomotion. The canonical
+[Runtime Lifecycle simulation tick](./runtime-lifecycle.md#simulation-tick)
+prepares authoritative pose/root motion before Character movement and composes
+typed Animation overrides after Physics and Character finalization. Variable-rate
+pose interpolation cannot emit authoritative root motion or step Physics.
+AI emits typed intent/parameters; the composed host retains these owner boundaries.
+This mapping does not change an ADR's acceptance status or qualify a product AI
+dispatcher merely because the stage names appear in documentation.
 
 ### Variable-Rate Presentation Bridge — `RenderExtraction`
 
@@ -2841,14 +3273,16 @@ The execution of AI simulation phases is strictly governed by the host process's
   ├── Phase 2: BlackboardSync (SERVER-PRIVATE)
   ├── Phase 3: AiDecisionEvaluate (SERVER-PRIVATE)
   ├── Phase 4: NavIntentCommit & Avoidance
-  └── Phase 5: CharacterControllerLocomotion (Physics Authority)
+  └── Canonical host tick: Animation preparation, Character movement,
+      one Physics step, Character finalization, post-Physics overrides,
+      deferred changes and atomic publication
            │
            │ (Replicated Public Transforms, Velocities, Action Tags)
            ▼ [ Network Transport Layer ]
 [ Client Host (Presentation-Only Peer) ]
   ├── Network Jitter Buffer & Snapshot Ingestion
   ├── Transform Interpolation (alpha)
-  ├── Client AnimationRigUpdate (Visual Blending)
+  ├── Client Animation presentation from committed replicated state
   └── RenderExtraction Bridge -> Viewport Presentation
   (NO perception queries, NO blackboards, NO decision trees)
 ```
@@ -2857,13 +3291,57 @@ The execution of AI simulation phases is strictly governed by the host process's
 
 | Host Role | Authority Scope | Executed Phases | Network Replication Output |
 |---|---|---|---|
-| **Standalone** | Full local simulation and presentation authority. | Fixed phases 1–6, then the variable-rate extraction bridge. | None (local single process). |
-| **Dedicated Server** | Authoritative simulation owner for all AI agents. | Fixed phases 1–5; phase 6 only when authoritative skeletal hitboxes require it; no presentation bridge. | Replicates entity `NetworkId`, transform, velocity, and public animation tags. |
+| **Standalone** | Full local simulation and presentation authority. | AI/navigation stages within the canonical host fixed tick, then variable-rate extraction of committed state. | None (local single process). |
+| **Dedicated Server** | Authoritative simulation owner for all AI agents. | AI/navigation stages and the host's admitted canonical Animation/Character/Physics pipeline; no presentation extraction. | Replicates entity `NetworkId`, transform, velocity, and public animation tags. |
 | **Client** | Presentation-only consumer for server-replicated AI. | Client animation update plus the variable-rate extraction bridge; no authoritative AI phases for server-owned agents. | Receives replication; submits no AI authority. |
+
+The configured dedicated host verifies the selected cook generation, then builds its
+runtime providers from the selected Scene, typed asset dependencies and explicitly
+admitted gameplay catalogs. Animation and prefab dependency tables come from their
+own payload codecs. Unreferenced presentation payloads stay outside the runtime
+providers. Headless AI health reports bounded counters from the last committed
+decision tick for the published authority world.
 
 ### Authority, Privacy, And Security Boundaries
 
 - **Clients Never Run Authoritative AI**: Connected clients NEVER run `PerceptionSensePoll`, `BlackboardSync`, `AiDecisionEvaluate`, or `NavIntentCommit` for server-owned AI agents. Clients receive replicated transform, velocity, and state tags from the server.
+- The configured headless host selects the AI owner policy from the individual
+  world in the validated network mode plan. Its listen-server client world
+  keeps authored AI bindings inactive for Scene identity and structural
+  lifetime. It receives an empty controller catalog and no execution
+  capabilities. Controller admission, Blackboard instances, and Perception
+  providers belong to the authority world. Host diagnostics for Blackboard,
+  Decision failures, and Perception also require the authoritative world.
+  A client world keeps this boundary even when it shares a listen-server
+  process with the authority or receives declared state for the same object.
+  Client animation in the configured headless host reads only its explicitly
+  selected public presentation source. Without that source, the graph uses its
+  authored defaults. The server or standalone gameplay animation source is
+  never inherited by a connected client World, including in a listen server.
+  Its graph evaluates and publishes in the Presentation domain, which disables
+  authoritative clip notify workspaces and publications.
+  Headless composition can bind explicitly declared scalar fields of individual
+  authored, replicated Scene actors to their client graph parameters. The
+  binding receives values from the authenticated Spawn and Snapshot routes
+  after the Scene transaction succeeds. Missing fields supply no graph
+  override. Reads use the exact Scene entity incarnation, and the
+  presentation inputs expire with replication admission or World retirement.
+  A schema can select world-space Character linear velocity axes in metres
+  per second. The headless authority resolves the authored actor's enabled
+  controller and reads its achieved velocity from the matching completed
+  Character and Physics tick. An idle controller contributes zero movement for
+  that tick. An unavailable sample rejects the publication.
+  These fields affect the client's selected graph inputs without writing
+  Physics state.
+  Existing transform-only declarations use the same field identifiers and
+  values. Rebuild native consumers of the observed Scene capture factory.
+  A schema can also declare a signed AnimationActionTag field and select one
+  authoritative graph and action slot. Explicit action bindings assign
+  positive tags. Idle or unlisted actions publish zero. The client can bind
+  the tag to an integer presentation-graph parameter. The tag carries no
+  action handles, queues, clip time, or request history.
+  Existing Scene animation configurations retain the authoritative default.
+  Rebuild native consumers for the appended configuration field.
 - **Server State Privacy**: Agent perception memories (e.g. sight awareness meters, target tracking scores) and `BlackboardState` internal representations (behavior tree execution nodes, patrol indices, threat scoring matrices) are **server-private**.
 - **No Private State Serialization**: Network replication protocols MUST NOT synchronize private perception data or blackboard state to clients. Only publicly observable gameplay attributes (positions, rotations, locomotion speeds, equip states, public audio cues) are sent over the wire. This prevents client-side wallhacks, radar exploits, and unnecessary bandwidth consumption.
 
@@ -2877,6 +3355,236 @@ The engine supports two explicit simulation scheduling modes for AI:
 | **Best-Effort Bounded Time-Slicing** | Distance- and significance-based Level of Detail (Simulation LOD). Agents near players update at full frequency; distant agents update at fractional rates (e.g. 1/2, 1/4 rate) with bounded maximum latency guarantees. Job queues are amortized across workers within fixed per-tick execution budgets. | High-density open-world scenes, large-scale RTS/RPG titles, single-player games exceeding per-tick CPU budgets. | Standalone, Dedicated Server |
 
 Client hosts in networked multiplayer run neither mode for remote AI; they perform presentation-only state interpolation.
+
+The replay evidence comparator validates bounded, contiguous fixed-tick windows
+before comparing them. The manifest declares each boundary as deterministic,
+nondeterministic, or omitted and identifies its schema and content. Canonical
+AI state uses the existing record encoder. The selected decision subject uses
+the existing versioned trace and its exact consumed Blackboard observation.
+Comparison reports the first differing tick and, when both sides recorded it,
+the first differing subsystem boundary with its publication identities.
+
+The deterministic Scene owner can arm one selected agent for its next fixed
+tick. The scheduler records the trace during that agent's original budgeted
+decision step. After intent dispatch and the committed Scene tick, the owner
+can detach the trace and canonical AI population for off-owner comparison.
+
+The configured standalone headless product can opt in with
+`--ai-replay <agent-id> <fixed-tick>`, using the cooked Scene and its
+native gameplay decision bindings. Both arguments are positive decimal
+identities. The host stages the capture during fixed preparation and publishes
+it only when that fixed attempt commits. After the run, the command reports
+the selected trace identity and the canonical AI state hash. A selection that
+produces no committed evidence is reported as an error.
+
+The headless digest uses the reference-capable canonical AI record. The opted-in
+host records the original root Scene entity bindings at activation. A Blackboard
+entity reference must match the current Scene incarnation and a live original
+binding. Its encoded identity is the authored Scene definition ID followed by
+the authored object ID, both unsigned 64-bit big-endian values, with generation
+one for the original authored occurrence. References to stale, gameplay-spawned,
+or mounted entities fail capture until those owners can supply stable identities.
+
+`--ai-replay-output <absolute-new-directory>` also writes a neutral
+`evidence.json` report under an existing caller-controlled parent. The
+headless host stages the report beside its destination and publishes the
+complete directory without replacing any existing entry. The version 1
+report carries the stable Scene and agent IDs, fixed tick, canonical AI
+digest and its record revision, and the semantic decision records from the
+original versioned trace. Stable 64-bit identifiers are decimal strings.
+Blackboard values and process-local handles stay out of the report. The report
+also records authored Scene input and the available Perception, EQS, Physics
+and Character observations. The portable manifest lists coverage per boundary,
+names the nondeterministic providers, and lists uncaptured inputs and state
+beside the affected boundaries. The comparer verifies those declarations against
+the recorded sections.
+The Scene input digest covers the encoded definition and exact payload bytes loaded
+for its declared dependencies, including collision materials. Reusing an asset
+ID with different payload bytes yields an incompatible replay profile. This
+identity covers the root Scene and its declared dependencies. Independently
+published runtime groups and streamed cells are outside this input scope.
+Reports with the earlier Scene input or manifest schema must be regenerated for
+comparison.
+The Perception input digest covers frozen spatial participants, their global
+positions and disclosure policy before sensing. Provider outputs and private
+state are listed as omissions. For built-in point queries, the report records
+the selected agent's terminal result and its later successful Blackboard write
+at their respective ticks. The verified cooked query inventory identifies the
+comparison profile. Gameplay evidence records fixed callbacks and authored
+transform submissions in command order. The source profile uses the active
+native module's descriptor, SDK build identity and verified private image bytes,
+or the admitted Lua source and behavior identity. Native replay preparation
+requires a host-controlled writable module directory for its private sibling.
+Module-private state, deferred Scene publication, and external Gameplay inputs
+remain explicit omissions. Input
+playback requires an additional input recording.
+
+An independently granted native path scope can run alongside cooked decisions.
+When present, replay reports the Navigation coordinator's terminal path outcomes
+with the selected cooked asset and query profile. The manifest labels this
+boundary `nondeterministic` because worker completion can move between ticks.
+The comparer checks profile compatibility and leaves these outcomes out of
+deterministic equality. Motion intents that consume best-effort feedback retain
+their independent scheduler timing contract.
+
+Canonical Physics replay records the bound executable and solver build, platform
+ABI, current floating-point controls, world settings, compiled collision filters
+and surface identity. Comparison rejects a different configuration before
+examining body motion. A host without verified solver identity reports a typed
+replay capture error. Older Physics records must be regenerated for comparison.
+
+Use `--ai-replay-window <agent-id> <first-tick> <tick-count>` to capture up to 32
+consecutive fixed ticks for the selected agent. The output is published only once
+the complete window commits. A multi-tick report uses version 2 and contains
+the original version 1 evidence records in tick order.
+
+Use `horo-engine --compare-ai-replay <recorded evidence.json> <replayed evidence.json>`
+to compare single ticks or windows with matching coverage and content identities.
+The command reads bounded files without opening a project and prints the first
+differing boundary and its publication revisions. Exit code `0` indicates equality
+within the declared coverage, `1` indicates divergence, and `2` indicates invalid
+or incompatible evidence. Reports written before comparison metadata was added
+must be regenerated for this command.
+
+Use `horo-engine --ai-replay-timeline <evidence.json> [max-events]` for a
+privacy-filtered JSON projection. It orders events by fixed tick, then boundary
+and source ordinal. Query outcomes and Blackboard writes retain their shared
+operation identity. The export includes bounded counts, stable identities and
+publication digests. It excludes raw Blackboard values, positions, paths and
+provider payloads. The event limit defaults to 512 and accepts 1 to 4096. The
+`droppedEvents` field counts every projected event beyond that limit.
+For a diverging boundary, the comparison also prints a JSON address with the
+tick, agent, boundary and first differing record ordinal. Its two redacted
+operation summaries identify the respective decision node, query, or movement
+recipient. When the evidence only identifies a publication or state hash, a
+null ordinal points to that boundary's summary row.
+
+When native Perception polls the selected agent, the timeline also includes the
+post-poll stimulus memory. Each row carries the authored source, listener,
+sense and stimulus type, its first and last sensed ticks, and the sensed flag.
+The sample counts source identities it cannot project back to the authored
+Scene and reports an unavailable read separately from empty memory. These
+observations are diagnostic and do not alter deterministic spatial comparison.
+
+At the Scene safe point, the live agent inspection API copies the selected
+agent generation, Blackboard schema and revision, directly owned task, and
+Perception memory identity and age. Hosts pass an explicit set of Blackboard
+keys approved for display. Other rows keep their type and identity with no
+value. Opaque values, revoked reads, and diagnostic messages stay out of the
+snapshot. A fresh capture refuses a retired agent or a foreign Scene.
+Editor Play samples the selected live entity only on completed Decision ticks.
+It retains up to eight snapshots and samples at most once every four fixed ticks.
+Pausing does not add duplicate samples, and a changed or stale selection clears
+the previous history. In the Game panel, AI agent inspector shows the selected
+agent's task, failures, stimulus ages, and typed Blackboard rows. Rows can be
+filtered by key identity or type. Comparing with a retained tick highlights
+changed disclosed values from the same Blackboard generation. The Play host
+uses the default redacted Blackboard view. Pass
+`--play-ai-inspect-key <schema-id> <key-id>` for each explicitly approved
+key in the selected cooked Play Scene. The selection is carried across editor
+restarts only within the same project. Navigation registration shows the
+selected entity's live profile, filter, and enabled state when the host has
+admitted Navigation.
+Running tasks in the selected cooked decision include their graph and node
+identity. The inspector copies these directly from the live task lifecycles
+after a completed Decision tick, retains at most 32, and counts any additional
+tasks.
+For cooked Editor Play, `--play-ai-perception-policy <project-relative file>`
+selects the same project Perception schema used by standalone. The policy
+must identify the exact committed Scene and admitted native sense generation.
+Sensing runs before Decision using the Play fixed quantum. The inspector reads
+memory after the completed tick and exposes ages and identities without
+sensed coordinates or provider payloads.
+The selected Play agent also gets a read-only Decision trace sample at the
+inspector's fixed-tick cadence. The host publishes it only after the full
+Play tick commits. The Game inspector shows active nodes, state-machine
+transitions, and any omitted record count from the same trace used for replay.
+Read-only inspection is available for cooked Decision Play sessions.
+`--play-ai-debug` grants the visible Game inspector control over its exact
+selected agent generation. Pause skips that agent's next decision slice
+without consuming the scheduler budget. Step permits a single ordinary slice,
+and resume clears the hold. One breakpoint targets a node in an exact cooked
+occurrence and plan. A matching committed visit holds the agent from the next
+fixed tick. Closing the inspector or changing the selected generation releases
+the hold and discards the breakpoint. Gameplay, Perception, and other agents
+continue on the normal fixed-tick schedule.
+
+### Project AI settings
+
+The canonical project document can declare `settings.ai` with
+`schemaVersion: 1`. The application resolves it through
+`HoroEngine::ProjectSettings` and validates scheduler budgets with the same
+validator used to create a Scene scheduler. Projects that omit `settings.ai`
+continue to use the host's defaults. Renderer selection and editor-local
+visualization preferences stay outside the AI policy.
+
+The optional `scheduler` object accepts `maximumAgents`,
+`evaluationsPerTick`, `workUnitsPerTick`, `commandsPerTick`,
+`workerSubmissionsPerTick`, `pendingWorkers`, and `starvationTicks`.
+Omitted limits retain the runtime defaults. The `mode` accepts
+`deterministic` or `bestEffort`. Best-effort may provide a
+`simulationProfile` with increasing `fullDistanceMillimeters`,
+`reducedDistanceMillimeters`, and `suspensionDistanceMillimeters`, plus
+`reducedIntervalTicks` greater than one and a positive `demotionDelayTicks`.
+Editor Decision Play requires deterministic timing and rejects an incompatible
+project profile before admitting the Scene's Decision providers.
+The headless network-product launcher captures the same project source before
+world composition and applies its budgets to the authoritative cooked Decision
+scheduler. The launcher's current cooked Decision path requires deterministic
+timing. Release Scene cooking validates the AI policy from the exact captured
+project document before publishing any cooked generation.
+
+The optional `perception.maximumWorkUnitsPerTick` sets the project ceiling for
+native Scene Perception. Editor Play and headless launch reject a selected Scene
+policy above that ceiling before binding its sensing providers. A Scene within
+the ceiling keeps its authored per-tick budget.
+
+The optional `query.maximumWorkUnitsPerTick` caps the combined work issued to
+headless environment queries on each authoritative tick. Replay comparison
+detects changes to the effective query budget. The default retains the
+existing query replay profile identity.
+
+The Play agent inspector reports the stable IDs, capability requirements and
+current availability of the agent's admitted Perception providers. The
+inspector reads an owned snapshot and does not invoke those providers.
+
+The optional `development` object declares boolean `liveMutation` and
+`replayCapture` permissions. Both default to false in an authored AI policy.
+Editor Play requires both the project permission and the explicit
+`--play-ai-debug` request for live mutation when an AI policy is present.
+For the standalone development CLI, authored settings must grant
+`replayCapture` before an explicit AI replay request can proceed. Legacy
+projects without an AI policy retain the explicit development command.
+The permission check denies both operations for a packaged execution profile.
+Build the packaged headless executable with
+`-DHORO_NETWORK_PRODUCT_PROFILE=Packaged`. That executable rejects AI replay
+capture before loading a Scene or binding providers, even when project settings
+grant development access. Its terminal surface has no live mutation command.
+
+### Scene decision scheduling tiers
+
+Hosts can compose an `AiDecisionSimulationProfile` through
+`AiTaskSchedulerSettings` in best-effort mode. The Scene-configured scheduler
+accepts the latest `AiDecisionRelevance` for an exact registered agent through
+`SetRelevanceAtSafePoint`. The host supplies integer millimetres from the nearest
+simulation anchor, active gameplay or streaming region membership, gameplay
+pins, and committed urgent stimuli. Missing distance evidence preserves full
+cadence. The camera and renderer are outside the input contract.
+
+| Admitted tier | Work and retained state |
+| --- | --- |
+| Full | Runs the registered cadence and accepts owner wakes. Gameplay pins and urgent stimuli select this tier regardless of distance. |
+| Reduced | Uses the slower of the registered cadence and the profile interval. Gameplay events can advance evaluation. Routine polling follows the reduced cadence. |
+| Event-only | Suppresses periodic evaluation and admits gameplay wakes. Retained intents can finish publishing under the existing command budget. |
+| Suspended | Drops uncommitted intents, cancels optional workers, and suppresses pending worker publication before mailbox pumping. The agent registration, schema, blackboard, and canonical controller state remain owned by the Scene. |
+
+Closer relevance and gameplay pins promote on the next decision boundary. A
+demotion requires the same candidate tier for the profile's positive fixed-tick
+delay. A suspended registration can wake to event-only on committed perception
+or an explicit owner request and is reclassified from the latest facts. Its
+executor retains canonical state and retires transient callback identities when
+its optional work is cancelled. Deterministic scheduling rejects a relevance
+profile and keeps every admitted agent at its reserved full-rate cadence.
 
 ## Gameplay AI Profiles And Simulation Budgets
 

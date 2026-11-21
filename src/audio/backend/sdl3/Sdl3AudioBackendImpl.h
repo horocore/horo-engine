@@ -130,7 +130,9 @@ namespace Horo::Audio::Backend {
             }
 
             bool operator()(const Quiesce &request) const noexcept {
-                return backend.callback.lifecycle.load() == Sdl3AudioBackendState::Rendering && request.epoch == backend.epoch;
+                const auto phase = backend.callback.lifecycle.load();
+                return (phase == Sdl3AudioBackendState::Priming || phase == Sdl3AudioBackendState::Rendering) &&
+                       request.epoch == backend.epoch;
             }
 
             bool operator()(const Stop &request) const noexcept {

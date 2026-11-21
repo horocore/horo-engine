@@ -45,3 +45,52 @@ both have drained. Policy or partition replacement creates a new owner lifetime;
 keep old authorities and borrowed services alive until their exact tokens drain.
 Moved-from coordinators support destruction only. Successful commands use preallocated
 bounded metadata; typed error diagnostics use the existing Foundation allocation model.
+
+## Scheduler owner timing
+
+Build the opt-in target in separate headless Debug and Release trees with the
+same compiler and platform. For a single-config Ninja build, use the following
+commands for Debug and repeat them with a different build directory and
+`-DCMAKE_BUILD_TYPE=Release`.
+
+```sh
+cmake -S . -B build/scheduler-debug -G Ninja -DBUILD_TESTING=ON -DHORO_BUILD_EDITOR_GUI=OFF -DCMAKE_BUILD_TYPE=Debug
+cmake --build build/scheduler-debug --target HoroStreamingSchedulerBenchmark
+build/scheduler-debug/tests/HoroStreamingSchedulerBenchmark 512
+```
+
+Keep the work count identical between configurations. The optional argument
+accepts 16 to 4096 measured owner quanta per queue depth, following 32 warmup
+quanta. Both runs sustain a preallocated queue with mixed eligibility and
+urgent arrivals. Every eighth quantum holds the only capacity unit and checks
+that the fully deferred queue and denied reservation preserve ownership.
+Successful dispatches exercise priority and oldest-admissible selection
+followed by success, cancellation or failure retirement.
+
+The executable writes JSON Lines with the build configuration, compiler,
+platform, queue occupancy, admission counts and raw p50, p95, p99 and maximum
+nanoseconds by phase. The timer-only sample shows the cost of reading the
+clock. Timing covers synchronous owner operations. Eligibility construction,
+benchmark validation and fixture setup happen outside the measured intervals.
+Use these measurements for scheduler overhead. Frame impact requires a host
+running streaming in its normal frame loop, including provider and native
+retirement work.
+
+### Qualification sample
+
+On Linux x86-64 in Docker Desktop on a Ryzen 7 9800X3D, GNU 15.2.0 ran
+512 measured quanta per queue depth on revision `5833c4efd`. Each profile
+admitted 448 operations, selected the oldest admissible operation 112 times
+and denied 64 reservations at capacity.
+
+| Queue depth | Debug eligible selection p95 | Release eligible selection p95 | Debug completion p95 | Release completion p95 |
+| --- | ---: | ---: | ---: | ---: |
+| 16 | 3.938 µs | 0.461 µs | 0.641 µs | 0.050 µs |
+| 128 | 105.708 µs | 4.399 µs | 1.062 µs | 0.060 µs |
+
+On the same revision, a separate headless Debug build compiled and linked
+with `-fsanitize=address,undefined` and `-fno-omit-frame-pointer`. All 435
+`HoroWorldStreamingTests` cases passed with leak detection and halt-on-error
+enabled. The scope includes pressured admission, stale worker completions,
+cancellation, reservation release and shutdown. Frame timing with live
+streaming and native retirement requires separate measurement.

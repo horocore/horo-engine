@@ -45,10 +45,41 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    /** @copydoc EditorWorkspaceController::CaptureAgentSceneSelection */
+    std::optional<AgentSceneSelectionSnapshot> EditorWorkspaceController::CaptureAgentSceneSelection() {
+        const auto &selection = m_selection.Current();
+        const auto documentRevision = m_document.Revision().value;
+        if (m_viewModel.projectRoot.empty() || m_viewModel.worldDocument || !m_document.State().IsValid() || !selection.revision.value ||
+            selection.objects.empty())
+            return std::nullopt;
+        if (!m_agentSceneSelectionLifetime)
+            m_agentSceneSelectionLifetime.emplace();
+        AgentSceneSelectionSnapshot snapshot{.documentEpoch = m_document.ReplacementEpoch(),
+                                             .documentRevision = documentRevision,
+                                             .selectionRevision = selection.revision.value,
+                                             .objectCount = std::min(selection.objects.size(), AgentSceneSelectionSnapshot::MaximumObjects),
+                                             .truncated = selection.objects.size() > AgentSceneSelectionSnapshot::MaximumObjects,
+                                             .lifetime = m_agentSceneSelectionLifetime->Token()};
+        for (std::size_t index = 0; index < snapshot.objectCount; ++index)
+            snapshot.objects[index] = selection.objects[index].value;
+        return snapshot;
+    }
+
+    /** @copydoc EditorWorkspaceController::InvalidateAgentSceneSelection */
+    void EditorWorkspaceController::InvalidateAgentSceneSelection() noexcept {
+        if (m_agentSceneSelectionLifetime) {
+            m_agentSceneSelectionLifetime->RequestCancellation();
+            m_agentSceneSelectionLifetime.reset();
+        }
+    }
+
     void EditorWorkspaceController::RefreshSceneProjections() {
         RefreshInspectorDocumentPort();
         ReconcileAudioPreview();
         const SceneDocumentSnapshot documentSnapshot = m_document.Snapshot();
+        if (m_viewModel.documentRevision != documentSnapshot.revision ||
+            m_viewModel.assetDropFence.replacementEpoch != m_document.ReplacementEpoch())
+            InvalidateAgentSceneSelection();
         m_viewModel.documentRevision = documentSnapshot.revision;
         m_viewModel.assetDropFence = {m_workspaceSession, documentSnapshot.revision, m_document.ReplacementEpoch()};
         m_viewModel.navigationScenePath =
@@ -119,33 +150,40 @@ namespace Horo::Editor {
         m_queuedDefinitionRevision = Runtime::SceneDefinitionRevision{snapshot.state.value};
     }
 
+    /** @copydoc EditorWorkspaceController::SynchronizeRuntimeScenePreview() */
     void EditorWorkspaceController::SynchronizeRuntimeScenePreview() {
+        if (const auto synced = SynchronizeRuntimeScenePreview(std::nullopt); synced.HasError())
+            LOG_ERROR("editor.viewport", "Camera authority commit failed: %s", synced.ErrorValue().message.c_str());
+    }
+
+    /** @copydoc EditorWorkspaceController::SynchronizeRuntimeScenePreview(std::optional<EditorViewportCrossFadeCapacity>) */
+    Result<void> EditorWorkspaceController::SynchronizeRuntimeScenePreview(const std::optional<EditorViewportCrossFadeCapacity> capacity) {
         if (m_playSession.IsActive()) {
             ExtractPlayViewportScene();
-            return;
+            return Result<void>::Success();
         }
         if (std::optional<Error> operationError = m_runtimeScene.TakeOperationError())
             LOG_ERROR("editor.runtime_scene", "Runtime scene operation failed: %s", operationError->message.c_str());
 
         const std::optional<Runtime::RuntimeSceneView> active = m_runtimeScene.ActiveScene();
         if (!active || (!m_cameraPreview && active->DefinitionRevision() == m_activeRuntimeRevision))
-            return;
+            return Result<void>::Success();
 
         LoadDocumentAssetMeshes();
         const SceneDocumentSnapshot document = m_document.Snapshot();
-        const auto camera = ResolveCameraCutPreview(*active);
-        if (camera.HasError()) {
-            LOG_ERROR("editor.viewport", "Camera authority commit failed: %s", camera.ErrorValue().message.c_str());
-            return;
-        }
-        Result<EditorViewportSceneSnapshot> extracted = ExtractEditorViewportScene(*active, m_queuedRuntimeRevision, camera.Value(),
-                                                                                   m_primitiveMeshCache, &document, &m_assetMeshCache);
+        auto camera = ResolveCameraCutPreview(*active, capacity);
+        if (camera.HasError())
+            return Result<void>::Failure(std::move(camera).ErrorValue());
+        Result<EditorViewportSceneSnapshot> extracted =
+            ExtractEditorViewportScene(*active, m_queuedRuntimeRevision, camera.Value().destination, m_primitiveMeshCache, &document,
+                                       &m_assetMeshCache);
         if (extracted.HasError()) {
             LOG_ERROR("editor.viewport", "Runtime scene extraction failed: %s", extracted.ErrorValue().message.c_str());
-            return;
+            return Result<void>::Success();
         }
         m_viewportScene = std::move(extracted).Value();
-        m_viewModel.viewportCamera = camera.Value();
+        m_viewportScene.cameraCrossFade = camera.Value().crossFade;
+        m_viewModel.viewportCamera = camera.Value().destination;
         ++m_viewportSceneRevision;
         if (!m_viewport.Current().transformPreviews.empty()) {
             const Result<void> reapplied =
@@ -170,6 +208,7 @@ namespace Horo::Editor {
             m_deferredRuntimeSnapshot.reset();
             QueueRuntimeScene(std::move(deferred));
         }
+        return Result<void>::Success();
     }
 
 }  // namespace Horo::Editor

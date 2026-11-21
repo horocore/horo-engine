@@ -1,5 +1,7 @@
 #include "ProjectMigrationUnitFixture.h"
 
+#include <nlohmann/json.hpp>
+
 namespace project_migration_tests {
     TEST_CASE("Pipeline Requires Terminal Validation", "[unit][application]") {
         auto builder = Horo::Application::ProjectMigrationPipelineBuilder::Begin({"test.invalid"});
@@ -119,7 +121,51 @@ namespace project_migration_tests {
         REQUIRE((result.HasError()));
         REQUIRE((result.ErrorValue().code.Value() == "project.migration.cancelled"));
         REQUIRE((project.Read("assets/a.txt") == before));
+        for (const auto &entry : std::filesystem::directory_iterator(project.root))
+            REQUIRE((!entry.path().filename().string().starts_with(".horo-migration-dry-run-")));
         jobs.Shutdown(Horo::ShutdownPolicy::Drain);
+    }
+
+    TEST_CASE("Verified Dry Run Cleans A Candidate After Definition Rejection", "[unit][application]") {
+        const auto definition = Definition("test.reject", Horo::Application::ProjectMigrationDefinitionKind::Sequential, "0.0.1", "0.1.0",
+                                           1, 2, Pipeline("test.reject", "A", "never produced"));
+        Horo::Application::ProjectMigrationPlan plan{.source = Version("0.0.1"), .target = Version("0.1.0"), .definitions = {definition}};
+        TemporaryProject project;
+        const std::string before = project.Read("assets/a.txt");
+        Horo::JobSystem jobs({.workerCount = 1, .maxQueuedJobs = 4});
+
+        const auto result = Horo::Application::ProjectMigrationExecutor::VerifiedDryRun(project.root, plan, jobs);
+        REQUIRE((result.HasError()));
+        REQUIRE((result.ErrorValue().code.Value() == TestFailure.code.Value()));
+        REQUIRE((project.Read("assets/a.txt") == before));
+        for (const auto &entry : std::filesystem::directory_iterator(project.root))
+            REQUIRE((!entry.path().filename().string().starts_with(".horo-migration-dry-run-")));
+    }
+
+    TEST_CASE("Migration Preparation Requires A Vacant Candidate And Bounded Inventory", "[unit][application]") {
+        using Horo::Application::ProjectMigrationExecutor;
+        using Horo::Application::ProjectMigrationPlan;
+
+        const auto definition = Definition("test.reserve", Horo::Application::ProjectMigrationDefinitionKind::Sequential, "0.0.1", "0.1.0",
+                                           1, 2, Pipeline("test.reserve", "A", "A"));
+        const ProjectMigrationPlan plan{.source = Version("0.0.1"), .target = Version("0.1.0"), .definitions = {definition}};
+        TemporaryProject project;
+        const auto staging = project.root / ".horo/local/staging";
+        Horo::JobSystem jobs({.workerCount = 1, .maxQueuedJobs = 4});
+
+        SECTION("Existing staging is neither reused nor cleaned up") {
+            project.Write(".horo/local/staging/assets/a.txt", "another operation");
+            const auto result = ProjectMigrationExecutor::Prepare(project.root, staging, plan, jobs);
+            REQUIRE((result.HasError()));
+            REQUIRE((result.ErrorValue().code.Value() == "project.migration.inventory_invalid"));
+            REQUIRE((project.Read(".horo/local/staging/assets/a.txt") == "another operation"));
+        }
+        SECTION("Inventory admission precedes staging reservation") {
+            const auto result = ProjectMigrationExecutor::Prepare(project.root, staging, plan, jobs, {.maxDocuments = 1});
+            REQUIRE((result.HasError()));
+            REQUIRE((result.ErrorValue().code.Value() == "project.migration.inventory_limit"));
+            REQUIRE_FALSE(std::filesystem::exists(staging));
+        }
     }
 
     TEST_CASE("Production Compression Migration Preserves Unknown Json Semantics", "[unit][application]") {
@@ -260,6 +306,40 @@ namespace project_migration_tests {
         REQUIRE((scene.find("\"unknown\": \"kept\"") != std::string::npos));
         REQUIRE((project.Read("assets/prefabs/player.prefab") == sourcePrefab));
         REQUIRE((project.Read("assets/scenes/main.horo") == sourceScene));
+    }
+
+    TEST_CASE("Production prefab adoption preserves nested placement IDs after a source move and reorder", "[unit][application][prefab]") {
+        ProductionMigrationFixture fixture;
+        TemporaryProject project;
+        project.Write(".horo/project.json", R"({"projectId":"nested-prefab-adoption","settings":{}})");
+        constexpr std::string_view parentPath = "assets/prefabs/assembly.prefab";
+        constexpr std::string_view movedPath = "assets/props/renamed.prefab";
+        project.Write("assets/prefabs/assembly.prefab.horo",
+                      R"({"schemaVersion":1,"assetId":"00112233-4455-6677-8899-aabbccddeeff","assetType":"core.prefab"})");
+        project.Write("assets/props/renamed.prefab.horo",
+                      R"({"schemaVersion":1,"assetId":"00112233-4455-6677-8899-aabbccddee01","assetType":"core.prefab"})");
+        project.Write(movedPath, R"({"projectVersion":"0.0.1","objects":[]})");
+        const auto legacyParent = nlohmann::json::parse(R"({
+            "projectVersion":"0.0.1","objects":[],
+            "composition":{"nestedPlacements":[
+              {"placementLocalId":99,"parentLocalId":null,"sourceAsset":"00112233-4455-6677-8899-aabbccddee01"},
+              {"placementLocalId":7,"parentLocalId":2,"sourceAsset":"00112233-4455-6677-8899-aabbccddee01"}
+            ]}
+        })");
+        project.Write(parentPath, legacyParent.dump());
+
+        const auto prepared = fixture.Prepare(project);
+        REQUIRE(prepared.HasValue());
+        const auto parentBytes = prepared.Value().ReadCandidateDocument(parentPath);
+        const auto movedBytes = prepared.Value().ReadCandidateDocument(movedPath);
+        REQUIRE(parentBytes.HasValue());
+        REQUIRE(movedBytes.HasValue());
+        const auto parent = nlohmann::json::parse(Text(parentBytes.Value()));
+        const auto moved = nlohmann::json::parse(Text(movedBytes.Value()));
+        CHECK(parent.at("projectVersion") == "0.1.0");
+        CHECK(parent.at("composition") == legacyParent.at("composition"));
+        CHECK(moved.at("assetId") == parent.at("composition").at("nestedPlacements").at(0).at("sourceAsset"));
+        CHECK(moved.at("assetId") == parent.at("composition").at("nestedPlacements").at(1).at("sourceAsset"));
     }
 
     TEST_CASE("Prefab migration exposes source adoption before references and a read only barrier", "[unit][application][prefab]") {

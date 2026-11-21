@@ -44,6 +44,12 @@ namespace Horo::Editor {
         [[nodiscard]] bool CanDraw(const EditorWorkspaceViewModel &viewModel, const EditorViewportTextureView &texture) const;
         void DrawUnavailable(const ImVec2 &origin, float width, float height, const EditorWorkspaceViewModel &viewModel,
                              const EditorGuiContext &context) const;
+        void DrawAgentInspection(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
+                                 const EditorGuiContext &context);
+        AI::AgentHandle inspectedAgent_;
+        std::string inspectionFilter_;
+        std::uint64_t comparisonTick_{};
+        bool inspectionOpen_{};
         IEditorViewportRenderer *viewportRenderer_{};
     };
 }  // namespace Horo::Editor

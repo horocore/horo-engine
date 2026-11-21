@@ -170,7 +170,7 @@ namespace Horo::AI {
                 return Invalid<void>();
             if (!state.call)
                 return Result<void>::Success();
-            if (!state.call->asset.IsValid() || state.call->kind >= DecisionPlanKind::Utility || !state.call->schema.IsValid())
+            if (!state.call->asset.IsValid() || state.call->kind >= DecisionPlanKind::Count || !state.call->schema.IsValid())
                 return Invalid<void>(AIErrors::DecisionAssetSubtreeIncompatible);
             return Result<void>::Success();
         }
@@ -255,11 +255,7 @@ namespace Horo::AI {
         try {
             if (auto admitted = AdmitSource(source, *decision); admitted.HasError())
                 return Result<Output>::Failure(admitted.ErrorValue());
-            std::ranges::sort(source.transitions, [](const auto &left, const auto &right) {
-                if (left.priority != right.priority)
-                    return left.priority > right.priority;
-                return left.id < right.id;
-            });
+            std::ranges::sort(source.transitions, StateMachineTransitionPrecedes);
             return Result<Output>::Success(
                 std::make_shared<const CookedStateMachinePlan>(ConstructionToken{}, std::move(decision), std::move(source)));
         } catch (const std::bad_alloc &) {

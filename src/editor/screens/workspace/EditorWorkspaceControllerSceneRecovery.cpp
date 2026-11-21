@@ -3,6 +3,7 @@
 #include "editor/document/SceneDocumentPersistence.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
+#include <algorithm>
 #include <utility>
 
 namespace Horo::Editor {
@@ -43,6 +44,11 @@ namespace Horo::Editor {
         }
         if (!InstallExternalScene(std::move(loaded).Value()))
             return;
+        FinishExternalSceneReplacement(false);
+    }
+
+    /** @copydoc EditorWorkspaceController::FinishExternalSceneReplacement */
+    void EditorWorkspaceController::FinishExternalSceneReplacement(const bool preserveRecovery) {
         if (m_sceneFileWatch != nullptr)
             m_sceneFileWatch->Reset();
         m_history.Clear();
@@ -53,7 +59,8 @@ namespace Horo::Editor {
         m_viewModel.sceneExternalConflict = false;
         m_sceneFileWatchErrorPresented = false;
         m_sceneFileWatchElapsedSeconds = 0.0F;
-        m_viewModel.recoveryAvailable = false;
+        if (!preserveRecovery)
+            m_viewModel.recoveryAvailable = false;
         m_lastAutosavedState = {};
         m_autosaveElapsedSeconds = 0.0F;
         m_autosaveRetryDelaySeconds = 0.0F;
@@ -70,27 +77,77 @@ namespace Horo::Editor {
         if (!loaded.Value().existed)
             return Result<LoadedProjectScene>::Failure(MakeError(ExternalSceneUnavailable));
         SceneDocument validated;
-        if (const auto result = validated.LoadSaved(loaded.Value().objects, loaded.Value().prefabInstances); result.HasError())
+        if (const auto result = validated.LoadSaved(loaded.Value().objects, loaded.Value().prefabInstances, loaded.Value().childScenes);
+            result.HasError())
             return Result<LoadedProjectScene>::Failure(result.ErrorValue());
         return loaded;
     }
 
     /** @copydoc EditorWorkspaceController::InstallExternalScene */
-    bool EditorWorkspaceController::InstallExternalScene(LoadedProjectScene scene) {
+    bool EditorWorkspaceController::InstallExternalScene(LoadedProjectScene scene, const bool preserveRecovery) {
         if (HasDirtyCollisionSettings()) {
             LOG_ERROR("editor.collision", "Save or discard collision settings before reloading the Scene owner.");
             return false;
         }
-        if (!DiscardSupersededRecovery(ProjectRoot(), *m_mutations, *m_durableFiles))
+        if (!preserveRecovery && !DiscardSupersededRecovery(ProjectRoot(), *m_mutations, *m_durableFiles))
             return false;
         if (auto closed = ShutdownCollisionSettings(); closed.HasError())
             return false;
-        if (const auto installed = m_document.LoadSaved(std::move(scene.objects), std::move(scene.prefabInstances)); installed.HasError()) {
+        if (const auto installed =
+                m_document.LoadSaved(std::move(scene.objects), std::move(scene.prefabInstances), std::move(scene.childScenes));
+            installed.HasError()) {
             LOG_ERROR("editor.scene_document", "External scene validation failed: %s", installed.ErrorValue().message.c_str());
             return false;
         }
         m_sceneFingerprint = std::move(scene.fingerprint);
         return true;
+    }
+
+    /** @copydoc EditorWorkspaceController::RestorePrefabApplyRecovery */
+    void EditorWorkspaceController::RestorePrefabApplyRecovery(const std::shared_ptr<const PrefabApplyRecoveryCandidate> &accepted) {
+        if (!accepted || accepted != m_viewModel.prefabApplyRecovery || m_mutations == nullptr || m_durableFiles == nullptr)
+            return;
+        const auto &prefabPath = accepted->prefab.path;
+        const auto &scenePath = accepted->scene.path;
+        const bool activeScene = m_defaultScenePath == scenePath;
+        const auto sourceKey = WorkspacePortablePathText(prefabPath.lexically_relative(ProjectRoot()));
+        const bool openPrefab = std::ranges::any_of(m_prefabDocuments, [&sourceKey](const auto &entry) {
+            return entry->Snapshot().identity.key.source.Value() == sourceKey;
+        });
+        if (openPrefab || m_playSession.State() != EditorPlaySessionState::Idle ||
+            (activeScene &&
+             (m_document.IsDirty() || HasDirtyCollisionSettings() || !PrepareNavigationSceneReplacement("Paired Prefab recovery")))) {
+            m_viewModel.prefabApplyRecoveryNotice = PrefabApplyRecoveryNotice::Blocked;
+            return;
+        }
+        if (const auto resolved = PrefabApplyTransaction::ResolvePendingRecovery(ProjectRoot(), *accepted, *m_mutations, *m_durableFiles);
+            resolved.HasError()) {
+            m_viewModel.prefabApplyRecoveryNotice = PrefabApplyRecoveryNotice::Failed;
+            LOG_WARN("editor.prefab", "Paired Prefab reconciliation failed: %s", resolved.ErrorValue().message.c_str());
+            auto current = PrefabApplyTransaction::InspectPendingRecovery(ProjectRoot());
+            if (current.HasValue() && current.Value() && *current.Value() != *accepted)
+                m_viewModel.prefabApplyRecovery = std::make_shared<const PrefabApplyRecoveryCandidate>(*current.Value());
+            return;
+        }
+
+        m_viewModel.prefabApplyRecoveryNotice = PrefabApplyRecoveryNotice::None;
+        m_viewModel.prefabApplyRecovery.reset();
+        m_prefabApplyRecoveryPendingOnDisk = false;
+        RetirePrefabHierarchy();
+        if (activeScene) {
+            const auto &selected =
+                accepted->action == PrefabApplyRecoveryAction::KeepPublished ? accepted->scene.planned : accepted->scene.original;
+            const SceneFileFingerprint wanted{true, selected.bytes, FormatSha256(selected.digest)};
+            if (m_sceneFingerprint != wanted) {
+                auto scene = ReadExternalSceneForReplacement();
+                if (scene.HasValue() && scene.Value().fingerprint == wanted && InstallExternalScene(std::move(scene).Value(), true)) {
+                    FinishExternalSceneReplacement(true);
+                    return;
+                }
+                m_viewModel.sceneExternalConflict = true;
+            }
+        }
+        RefreshSceneProjections();
     }
 
     /** @copydoc EditorWorkspaceController::RestoreSceneRecovery */
@@ -109,7 +166,8 @@ namespace Horo::Editor {
         }
         std::optional<ProjectSceneRecoveryRecord> recoveryRecord = std::move(recovery).Value();
         SceneDocument validatedRecovery;
-        if (auto validated = validatedRecovery.LoadRecovered(recoveryRecord->objects, recoveryRecord->prefabInstances);
+        if (auto validated =
+                validatedRecovery.LoadRecovered(recoveryRecord->objects, recoveryRecord->prefabInstances, recoveryRecord->childScenes);
             validated.HasError())
             return;
         if (auto closed = ShutdownCollisionSettings(); closed.HasError()) {
@@ -117,7 +175,8 @@ namespace Horo::Editor {
             return;
         }
         if (const Result<void> restored =
-                m_document.LoadRecovered(std::move(recoveryRecord->objects), std::move(recoveryRecord->prefabInstances));
+                m_document.LoadRecovered(std::move(recoveryRecord->objects), std::move(recoveryRecord->prefabInstances),
+                                         std::move(recoveryRecord->childScenes));
             restored.HasError()) {
             LOG_ERROR("editor.scene_recovery", "Recovery restore validation failed: %s", restored.ErrorValue().message.c_str());
             return;

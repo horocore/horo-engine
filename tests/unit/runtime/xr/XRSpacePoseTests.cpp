@@ -77,6 +77,28 @@ namespace Horo::XR {
         REQUIRE(*sample.Value().Components().positionMeters.value == Math::Vec3{1.0F, 2.0F, 3.0F});
     }
 
+    TEST_CASE("XR gameplay placement moves the calibrated World sample and preserves its observation identity", "[unit][xr][space-pose]") {
+        auto pose = Descriptor();
+        pose.target.kind = XRSpaceKind::World;
+        const Math::Transform placement{{5.0F, -2.0F, 4.0F}, {0.0F, 1.0F, 0.0F, 0.0F}};
+        const auto placed = PlaceXRWorldPose(pose, placement);
+        REQUIRE(placed.HasValue());
+        CHECK(placed.Value().Source() == pose.source);
+        CHECK(placed.Value().Target() == pose.target);
+        CHECK(placed.Value().Time().simulation == pose.time.simulation);
+        const auto &components = placed.Value().Components();
+        CHECK(components.positionMeters == Tracked(Math::Vec3{4.0F, 0.0F, 1.0F}));
+        CHECK(components.orientation == Tracked(placement.rotation));
+        CHECK(components.linearVelocityMetersPerSecond == Tracked(Math::Vec3{-4.0F, 0.0F, 0.0F}));
+        CHECK(components.angularVelocityRadiansPerSecond == pose.components.angularVelocityRadiansPerSecond);
+
+        auto scaled = placement;
+        scaled.scale.y = 2.0F;
+        RequireFailure(PlaceXRWorldPose(pose, scaled), XRErrors::PoseInvalid);
+        pose.target.kind = XRSpaceKind::Stage;
+        RequireFailure(PlaceXRWorldPose(pose, placement), XRErrors::CoordinateSpaceIncompatible);
+    }
+
     TEST_CASE("XR simulation and presentation timestamps cannot be mixed implicitly", "[unit][xr][space-pose]") {
         const auto session = Session();
         const auto origin = MakeGeneration<XRWorldOriginRevision>(9);

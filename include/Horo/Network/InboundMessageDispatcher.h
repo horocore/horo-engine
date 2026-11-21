@@ -135,6 +135,13 @@ namespace Horo::Network {
         struct Session;
         struct Handler;
 
+        /** @brief Registers an owner-bound lossy route on its exact channel and aggregate wire ceiling. */
+        [[nodiscard]] Result<void> RegisterSnapshotHandler(const InboundHandlerBinding &binding,
+                                                           const std::shared_ptr<IInboundMessageHandler> &handler, ChannelId channel,
+                                                           std::size_t maximumBytesPerTick);
+        [[nodiscard]] Result<void> AddHandler(const InboundHandlerBinding &binding, const std::shared_ptr<IInboundMessageHandler> &handler,
+                                              std::optional<ChannelId> channel, std::size_t maximumBytesPerTick);
+
         class ConstructionKey final {
             friend class InboundMessageDispatcher;
             ConstructionKey() = default;

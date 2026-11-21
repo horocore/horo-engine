@@ -48,6 +48,24 @@ def repository(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Path, P
     return repo, root, commit
 
 
+def test_nonblocking_heavy_build_lock_rejects_contention_and_can_retry(repository):
+    repo, _, _ = repository
+    with cache.heavy_build_lock(repo):
+        with pytest.raises(BlockingIOError):
+            with cache.heavy_build_lock(repo, blocking=False):
+                pytest.fail("A second heavy worker acquired an already owned physical lock")
+    with cache.heavy_build_lock(repo, blocking=False):
+        pass
+
+
+def test_nonblocking_heavy_build_lock_preserves_unverified_cleanup_guard(repository):
+    repo, _, _ = repository
+    cache.record_cleanup_failure(repo)
+    with pytest.raises(cache.CacheError, match="unverified descendants"):
+        with cache.heavy_build_lock(repo, blocking=False):
+            pytest.fail("Unverified cleanup must prevent a new heavy worker")
+
+
 def successful_build(source: Path, build: Path, binding: cache.CacheBinding) -> int:
     build.mkdir(parents=True)
     (build / "artifact.o").touch()
@@ -296,15 +314,62 @@ def test_corrupted_configuration_is_safe_miss(repository: tuple[Path, Path, str]
 def test_heavy_lock_is_exclusive_and_releases_after_exception(repository: tuple[Path, Path, str]) -> None:
     repo, root, _ = repository
     with cache.heavy_build_lock(repo):
-        competing = cache._FileLock(root / "heavy-build.lock", blocking=False)
+        competing = cache.heavy_build_lock(repo, blocking=False)
         with pytest.raises(BlockingIOError):
             enter_blocked_context(competing)
-    context = cache.heavy_build_lock(repo)
+    context = cache.heavy_build_lock(repo, blocking=False)
     error = RuntimeError("cancelled")
     with pytest.raises(RuntimeError, match="cancelled"):
         raise_in_context(context, error)
-    with cache._FileLock(root / "heavy-build.lock", blocking=False):
+    with cache.heavy_build_lock(repo, blocking=False):
         pass
+
+
+def test_nonblocking_heavy_admission_defers_and_can_retry_after_release(repository: tuple[Path, Path, str]) -> None:
+    repo, _, _ = repository
+    with cache.heavy_build_lock(repo):
+        with pytest.raises(BlockingIOError):
+            with cache.heavy_build_lock(repo, blocking=False):
+                pytest.fail("Busy admission entered the protected batch")
+    with cache.heavy_build_lock(repo, blocking=False):
+        pass
+
+
+
+def test_nonblocking_heavy_admission_never_enters_busy_body_and_can_retry_after_release(
+    repository: tuple[Path, Path, str],
+) -> None:
+    repo, _, _ = repository
+    entered = False
+    with cache.heavy_build_lock(repo):
+        with pytest.raises(BlockingIOError):
+            with cache.heavy_build_lock(repo, blocking=False):
+                entered = True
+    assert not entered
+    with cache.heavy_build_lock(repo, blocking=False):
+        entered = True
+    assert entered
+
+
+def test_heavy_lock_supports_nonblocking_admission(repository: tuple[Path, Path, str]) -> None:
+    repo, _, _ = repository
+    with cache.heavy_build_lock(repo, blocking=False):
+        with pytest.raises(BlockingIOError):
+            enter_blocked_context(cache.heavy_build_lock(repo, blocking=False))
+    with cache.heavy_build_lock(repo, blocking=False):
+        pass
+
+def test_heavy_lock_nonblocking_admission_refuses_a_busy_owner_without_stealing_it(repository: tuple[Path, Path, str]) -> None:
+    repo, root, _ = repository
+    with cache.heavy_build_lock(repo):
+        with pytest.raises(BlockingIOError):
+            with cache.heavy_build_lock(repo, blocking=False):
+                pytest.fail("Busy heavy work must not be admitted")
+        with pytest.raises(BlockingIOError):
+            with cache._FileLock(root / "heavy-build.lock", blocking=False):
+                pytest.fail("Refusal must preserve the original owner's lock")
+    with cache.heavy_build_lock(repo, blocking=False):
+        assert (root / "heavy-build.lock").exists()
 
 
 

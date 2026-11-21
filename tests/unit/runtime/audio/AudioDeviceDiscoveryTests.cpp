@@ -51,6 +51,15 @@ namespace Horo::Audio {
             }
         }
 
+        TEST_CASE("PipeWire can publish a device without claiming physical endpoint classification", "[audio][discovery]") {
+            auto snapshot = Snapshot(AudioBackendKind::PipeWire);
+            snapshot.devices.front().deviceClass = AudioDeviceClass::Unknown;
+            REQUIRE(ValidateAudioDeviceSnapshot(snapshot));
+            CHECK(ResolveAudioDevice(snapshot, snapshot.devices.front().id).status == AudioDeviceResolutionStatus::Resolved);
+            snapshot.backend = AudioBackendKind::NullAudio;
+            CHECK_FALSE(ValidateAudioDeviceSnapshot(snapshot));
+        }
+
         TEST_CASE("Audio discovery defaults never imply role or device fallback", "[audio][discovery]") {
             auto snapshot = Snapshot();
             const std::array roles{AudioDefaultDeviceRole::Console, AudioDefaultDeviceRole::Multimedia,

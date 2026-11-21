@@ -270,8 +270,15 @@ Admission joins selected metadata to the exact registered Input descriptor span;
 unregistered actions or mismatched context/type/required policy fail before native creation.
 Catalog profiles and physical controls use registered persistent Horo IDs; native
 paths, glyphs and localized labels are separate provider data. The initial action
-value vocabulary is digital, 1D and 2D, with one explicit controller role per action;
-pose/gesture/haptic action types are outside this initial binding contract.
+value vocabulary is digital, 1D and 2D, with one explicit controller role per action.
+
+The signed installed schema-one file can declare optional `haptics` routes with
+registered profile and set IDs, a controller role, the baseline native vibration
+path, and a localized label. Routes for the same role share a native output action
+and consume the existing action budget. The action remains separate from the
+canonical Input action schema. Product request admission requires its own active
+output scope and current device ownership. An installer declaration carries no
+player assignment or permission to submit effects.
 
 Schemas, suggestions, catalogs and persisted overrides have finite lifecycle-time
 bounds. Resolution validates all inputs before publishing canonical action order.
@@ -420,6 +427,14 @@ visibility-loss, instance-loss, and session-loss events are normal inputs. Every
 session-owned handle carries a generation so stale actions, spaces, swapchain
 images, and snapshots fail before native use.
 
+The OpenXR event adapter stops dispatch when it observes native session loss,
+instance loss, or missing event history. Both native loss notifications and
+lost-result codes revoke the canonical publication while keeping frame and
+resource retirement obligations. The editor consumes events before progressing
+the frame tail, and suppresses new input and render admission while the poll
+budget leaves events pending. Instance loss requires rebuilding the selected
+instance and graphics binding before another Play attempt.
+
 Frame submission follows the runtime's predicted timing contract:
 
 ```text
@@ -466,6 +481,18 @@ extensions disable the associated capability with an actionable reason; they do
 not prevent a baseline session unless the active project capability profile
 requires them.
 
+The native owner resolves a provider's selected extension or core symbol during
+session preparation. It retains the version evidence, callable and registration
+generation in fixed storage. A consumer holds a non-callable receipt and borrows
+the function only after verifying the exact owner, session and registration.
+Retiring or replacing that session revokes the receipt before destroying native
+objects. The editor uses this contract for the platform time conversion required
+by its projection profile. Optional hand tracking resolves its sampling dispatch
+before the feature plan and publishes that same callable only on the matching
+activated native session. A color-only composition leaves native depth disabled
+even if the runtime advertises its extension, then applies the project feature
+plan's fallback or rejection.
+
 The Horo-facing version-one plan uses stable `XRCapability` IDs, never native
 extension strings. Product policy must name each extra capability once and mark it
 required, optional with an explicit disable/baseline-projection fallback, or disabled.
@@ -473,6 +500,15 @@ Baseline-projection fallback is admitted only for optional depth composition, fi
 foveation, refresh-rate selection and visibility-mask optimization; it does not
 execute the missing feature. `AdmitXRPlannedFeature` rechecks current publication and
 rejects disabled, unrequested, stale and post-one paths before an adapter is called.
+
+The first-party Meta Quest provider is a separate build target under
+`src/runtime/xr/openxr/modules/meta_quest/`. It supplies native passthrough
+negotiation metadata, dispatch, and handling of its runtime events. The shared
+OpenXR backend retains session and frame ownership, and the application still
+requires the platform permission and operator grant. A product can build with
+`HORO_BUILD_XR_META_QUEST=OFF` and keep ordinary OpenXR projection, input, and
+tracking. The module is selected in the product build and has no runtime
+discovery or general ExtensionHost activation.
 
 ## Views And Coordinate Spaces
 
@@ -512,6 +548,52 @@ public contract migration.
 Reference-space changes, recentering, bounds changes, and world-origin rebasing
 are translated through an explicit adapter. Runtime tracking state never mutates
 authoritative gameplay transforms from a native callback.
+
+The selected OpenXR Play owner prepares distinct View and Local spaces and, when
+requested and admitted by the runtime census and host space budget, a Stage
+space. The Stage snapshot carries the optional finite X/Z play rectangle from
+the runtime's natural Stage origin. Space identities and bounds are copied by
+the exact published session with no native calls on read.
+
+An admitted reference-change notification carries the session, reference kind,
+effective runtime time, and whether its relative pose was available. The
+selected Play owner immediately closes the old frame and Input admission and
+drains its actual native session. The latest accepted change fences replacement
+until the effective runtime time. Only replacement admission reads that time
+from the retained instance, so a future change cannot delay native session
+retirement. Session loss preserves the same-instance replacement fence. A fresh
+Play publication acquires new space identities and measures its Stage rectangle
+again. The legacy editor scene
+continues to derive its tracking calibration from the authored float scene
+root. A canonical world-origin composition must project both the tracking
+anchor and XR geometry from the same world owner and origin generation.
+
+When the Editor selects OpenXR and an explicit mounted World cell, the private
+Scene activation participant captures the selected camera and meshes in the
+origin-relative basis. The mount verifies the private Scene incarnation,
+streaming reservation and source occurrence before exposing any geometry. The
+capture retains the renderer view, primitive resources and exact origin lease.
+The selected authored tracking root uses its own anchored World position and
+rigid orientation in that same origin. This defines the intended Local
+placement for reference calibration. It carries no measured physical alignment.
+OpenXR prepares the native spaces privately and observes the Local-to-World
+relation at a fresh sample from the admitted instance clock. The Scene
+candidate compares the observed rigid transform with the authored placement
+before publishing Play input or projection. A failed comparison retires the
+unpublished candidate through the existing owner. Mounted projection uses the
+retained origin-relative geometry and its original structural Scene and origin
+leases. Retirement, reference-space changes and origin replacements invalidate
+the correspondence. The existing desktop World projection continues through
+its live viewport owner.
+
+For an already prepared session, the OpenXR host can observe the exact native
+reference-to-created-World location from the current bound frame. The read
+requires the tracked position and orientation, matching reference and World
+space generations, matching runtime prediction and admitted frame. A
+reference change retires that read authority before any replacement frame.
+Observation of a runtime-created World only verifies that native relation.
+Admission into the mounted World requires the independent authored placement
+and its canonical origin lease.
 
 ## Rendering And Presentation
 
@@ -565,9 +647,134 @@ typed; a partial view set is never successful presentation.
 
 Dynamic resolution and fixed/gaze foveation use one immutable XR/Renderer plan that
 separates allocation extent, active render rectangle, scale, VRS/density mechanism,
-privacy state and fallback. Runtime space-warp depth/motion inputs remain post-1.0 until
-their exact semantics are admitted. Runtime asynchronous reprojection and guardian/
+privacy state and fallback. Runtime asynchronous reprojection and guardian/
 chaperone composition never become Horo passes.
+
+A project can request optional space warp through `xr.features.space_warp` with
+the ordinary projection fallback. The selected OpenXR Play composition publishes
+baseline projection. It has a color producer and omits the optional feature
+until the selected runtime and Renderer share a qualified auxiliary path.
+
+For that optional request, selected OpenXR discovery can enable the native
+frame-synthesis extension and report the missing producer dependency. If the
+runtime rejects the optional extension, the host retries instance creation
+once with ordinary projection extensions. An enabled route can publish its
+native motion/depth extent offer to the owning composition. The EXT route
+supplies one recommendation per stereo eye. The legacy FB route supplies one
+system recommendation. Invalid, unavailable and stale offers carry separate
+evidence. Producer and provider admission still require a qualified GPU path.
+
+The XR frame owner fences that future handoff with a typed per-session
+contract. Motion uses signed current-minus-previous XYZ in normalized device
+coordinates. Device depth is normalized with explicit metric endpoints, and
+the application-space delta is independent of the runtime-tracked eye poses.
+The exact image owners record formats, extents, usage and array layers at
+acquisition. Frame owners migrating from the scalar `XRReprojectionPolicy::extent`
+set `viewCount` and copy the runtime recommendations into `viewExtents` in
+projection order. A uniform recommendation is repeated for each view. Shared
+motion and depth images must cover the maximum width and height and supply
+enough layers. Submission validates the motion and depth rectangles against the
+individual view's recommendation. Evaluation requires completed Renderer
+submission and native release for those exact images. Only a successful native
+projection establishes history. Skipped frames, session or origin replacement,
+and incompatible views, allocations, or prediction times break that history.
+Failed optional inputs leave a separately valid ordinary projection available.
+The Vulkan graph can record one projection pass and one auxiliary motion/depth
+pass in the same graphics submission. It validates the shared publication and
+ordered view transforms before either pass records commands. Each pass owns
+distinct attachments, and the auxiliary pass uses each eye's rectangle.
+
+The Vulkan viewport shader cooker can also admit the separate
+`--multiview-coverage` program. It reprojects the same local point with the
+exact predecessor clip transform, then reads a two-by-two footprint from the
+full-resolution predecessor eye's forward D32 depth. The Vulkan image Y
+orientation is applied before the unfiltered loads. Border footprints and
+missing or cleared depth remain unknown. A nearer depth rejects the sample
+as occluded, and a farther depth rejects depth consistency. The R32Float
+attachment records distinct per-fragment observations, with zero reserved
+for an unwritten pixel. Agreement within the small device-depth comparison
+tolerance establishes depth consistency only. The owning graph still needs
+to verify current visible coverage and retire completed GPU evidence for
+the requested frame before any compositor reprojection is admitted. A
+stereo coverage graph pass requires a separate R32Float color and D32 depth
+target, the same visible scene and eye transforms as its color projection,
+and the initialized predecessor depth as a declared graphics sampled read.
+Two ordered static sampled descriptors name the exact predecessor eye views.
+The Vulkan recorder checks their native image, state and array-layer identity,
+and the graph completion lease retains those views with the submitted work.
+The normal Play viewport stages the optional packaged
+`multiview-coverage-vulkan` artifact and prepares two cold graph variants
+for the alternating retained depth slots. Only an adjacent completed native
+projection with compatible renderer history can supply the opposite eye
+views. The viewport can report a one-shot observation after its exact graphics
+submission completes. That observation identifies the current frame,
+predecessor, coverage images and completion point. The renderer's private
+diagnostic hook can request one bounded tile per eye before graph preparation.
+The same graphics submission copies those tiles into a small coherent buffer.
+The viewport reads it only after the exact submission completes and returns
+the classified samples with that observation. The projection diagnostic and
+the paired motion/depth raster use separate owned masks. The paired mask uses
+the negotiated auxiliary allocation and the exact per-eye output rectangles,
+including asymmetric layouts, with the same predecessor depth and geometry.
+The paired raster requires the same D32 depth test as the motion output.
+The current frontend cannot realize the per-eye D16 views, so Play retires
+that incomplete auxiliary acquisition and submits ordinary projection.
+Its observation also identifies the exact auxiliary acquisitions. The tile
+diagnostic uses the full projection mask and remains inactive in normal Play.
+With the matching cooked reduction program and a graphics queue that supports
+compute, Play clears the owned paired mask, replays the exact eye rectangles,
+and resets and dispatches both eye counters in the same graphics submission as
+the paired motion/depth producer. The GPU counts only pixels inside each eye's
+active rectangle. Cleared, missing, occluded and unknown samples are unresolved.
+Play observes the result on its existing retirement poll, before releasing the
+auxiliary image references. Incomplete or absent tallies leave ordinary
+projection available.
+
+For an eligible D32 writer, the selected viewport prepares both paired history
+slots before the Play Scene activates its canonical session. The canonical
+renderer stage revalidates the same graph and device capability generation.
+The receipt distinguishes an ordinary paired writer from a graph with a fully
+prepared reducer. Early cancellation and failed activation retire the viewport
+through the owning Scene even if native frame resources were never created.
+
+The native swapchain owner also supports private auxiliary preparation on an
+already prepared runtime session. It selects an offered format and retains the
+actual Vulkan array and eye views before any Horo target is published. Promotion
+adopts those same views once into the exact issued session and preplanned slot.
+An unissued image cannot be acquired or imported. Partial failure destroys the
+views before the swapchain, retaining any native destroy debt for retry.
+When the private Play viewport has the paired reducer, the unpublished Scene
+stages both writers and seals the native dispatch for their negotiated route.
+The immutable session plan admits synthesis only for that prepared pair. The
+active frame owner adopts the same two allocations after ordinary color
+preparation and registers their sealed dispatch. If staging fails, Play
+continues with ordinary projection and the Scene retains any unfinished
+cleanup ahead of native session retirement.
+Play holds the exact projected texture, publication and reserved graphics signal
+through GUI recording. The native backend must accept that signal before Play
+records canonical submission. A closed unissued recording drains as a
+zero-layer frame. Only the same accepted signal can qualify its paired GPU
+coverage counters.
+An explicit observed-cadence reprojection policy takes the actual display period from
+each native wait. The interval to the last successfully ended projection must
+fit both periods. That prior projection must also carry the same tracked
+Local or Stage to World reference as the current projection before an identity
+application-space delta can be submitted. A missing period, missing reference
+or changed transform leaves ordinary projection available.
+
+The Play frame coordinator imports both optional images only when there is
+adjacent committed projection history. It registers them with the frame only
+after the same accepted Vulkan signal finishes and both eyes report complete
+coverage at the negotiated extents. Those exact releases and counts can then
+feed the selected native synthesis chain. An incomplete acquire remains an
+optional wait and release obligation, so ordinary color projection can finish
+while the coordinator drains it and prevents auxiliary image reuse.
+
+See the [Khronos space-warp layer contract](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrCompositionLayerSpaceWarpInfoFB.html)
+for the distinction between runtime motion inputs and internal Renderer UV history.
+The [EXT per-view](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrFrameSynthesisConfigViewEXT.html)
+and [FB system](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrSystemSpaceWarpPropertiesFB.html)
+contracts require the respective extension to be enabled before issuing the size query.
 
 ## Deterministic Headless Session Harness
 
@@ -622,7 +829,21 @@ Input owns semantic action IDs, contexts, player assignment, user overrides and
 consumption. XROpenXR compiles the admitted plan into native action sets/actions/spaces,
 synchronizes and locates them, and keeps native paths private. XRRuntime publishes one
 bounded generation-scoped snapshot, and the host-composed XR/Input adapter joins it to
-the normal Input snapshot transaction before the cutoff.
+the normal Input snapshot transaction before the cutoff. Each session-state transition
+invalidates the previous cutoff. Regaining focus or restarting a retained session
+requires a fresh publication before the host can borrow tracking again.
+OpenXR profile notifications also revoke the previous tracking sample. Confirming
+the already selected startup fallback preserves the published controller bindings.
+Loss or replacement of a confirmed profile retires the selected input source
+through the Play lifecycle whether the event pump or the next action cutoff
+observes it first. Desktop Input continues to commit while a new Play occurrence
+prepares the current profile and fresh session.
+An observed interruption commits neutral XR actions before sampling can resume,
+including when focus is restored within the same native event batch. A controller
+with admitted grip or aim evidence and a matching native pose route withdraws its
+scalar actions when tracking is lost. A scalar-only attachment remains eligible
+on valid native action evidence. Pose recovery samples the same live controller
+again, while a disconnected controller requires fresh generation evidence.
 
 Rendering-time view/head poses are a distinct predicted-frame snapshot. They may reduce
 visual latency but cannot overwrite the Input snapshot, a tick-assigned gameplay frame,
@@ -636,6 +857,26 @@ no focus, routing, gameplay meaning or scene mutation. Haptic admission/cancella
 owned by the Input/application coordinator; XROpenXR owns native apply/stop and reports
 submission separately from physical completion.
 
+The OpenXR editor requests native hand tracking only when the project enables
+`xr.features.hand_tracking`. Its Input cutoff can admit two anatomical hands
+alongside its head and controller roles when `xr.limits.devices` is at least five.
+The selected instance must advertise the extension, the system must report
+support, and both trackers and their dispatch must prepare on the same native
+session. An unavailable optional hand provider leaves controller routing active.
+On a live cutoff, malformed optional hand evidence withdraws the entire hand
+sample while current controller actions continue. An inactive hand remains
+temporarily unavailable until fresh evidence arrives. Permission denial and
+unsupported hand dispatch close further hand sampling for that session. The
+redacted inspector reports the current hand availability against the exact
+cutoff. Required hand failures and shared session or clock failures still
+reject the input cutoff with their typed cause.
+The default pinch policy requires tracked thumb and index tips and uses their
+observed radii to determine contact. Host composition can supply a different
+typed policy. The policy receives a bounded copy of the joint evidence and the
+host revalidates the publication before committing Input. Raw joints and gesture
+candidates expire with their exact publication at focus loss, tracking failure,
+or session retirement.
+
 ## Interaction, Runtime UI, And Comfort
 
 XR interaction sources publish bounded generation-scoped ray/direct/proximity evidence.
@@ -645,15 +886,57 @@ and semantic action; gameplay alone validates use/grab intent; Character alone c
 collision-root movement. Source or target loss neutralizes capture/intents rather than
 reusing the last ray/hit.
 
+The selected Play owner exposes a synchronous interaction read for its committed Input
+cutoff and assigned local player. The existing Input pose sampling uses the same calibrated
+native World space for controller and hand evidence. Consumers select exact controller aim/grip or hand joint
+generations and provide the direction, distance, radius and confidence floor their own
+query needs. The read returns bounded World-space ray segments, points and proximity
+spheres in request order. Replaced or unfocused input and invalid probes reject the whole
+query. These live coordinates stay on the owner lane. World-space canvas resolution,
+contact ordering and focus or capture use the consuming domain's existing contracts.
+
 World-space canvases remain ordinary Runtime UI owner scopes with the same layout,
 localization, semantic accessibility and action-command model. Renderer owns per-view
 projection/depth/occlusion/pixels. A native composition layer does not become a second UI
 tree or bypass UI focus.
 
+Stereo canvas projection evaluates the same centered world plane through both live
+eye matrices and the acquired color rectangles. The canvas must intersect both
+views, remain within their near/far depth range, and meet the selected minimum
+projected span in pixels in both eyes. This admission keeps the authored
+plane unchanged for interaction. Opaque scene depth and presentation completion
+remain the consuming renderer and application's responsibilities.
+OpenXR Play captures `xr.world_canvas.minimum_span_pixels` from the admitted
+project configuration at reopen. Existing projects inherit a one-pixel floor.
+When a canvas is drawn, Play submits the ordinary projection and clears motion
+history at frame completion. The canvas has no matching signed motion or coverage
+writer. A subsequent scene-only frame establishes a new motion predecessor.
+The Vulkan Play projection initializes each acquired color layer and its matching
+depth layer before a later pass can load them. Per-eye viewport and scissor
+continue to follow the acquired rectangles, including asymmetric eye sizes.
+
 Locomotion produces tick-assigned gameplay intent. Continuous/snap movement and teleport
 reach Character through typed commands; moving the camera or recentering tracking space
 is not a collision-safe teleport. Camera/view composition combines committed Character
 root, calibration and tracked head pose without acquiring movement authority.
+
+`HoroEngine::XRCharacterLocomotion` is an opt-in bridge composed by the gameplay host.
+Submit routed intent during the bound scheduler's fixed dispatch before Character
+closes admission. The intent carries the exact XR tracking cutoff and player assignment.
+Character queues velocity and heading, and the Character-side placement owner validates
+the destination revision and clearance before committing a teleport. The application
+calibration owner handles recentering separately. Replacing the binding or shutting
+down revokes unfrozen Character commands and cancels pending placement and calibration.
+
+The gameplay host can bind `XRLocomotionPolicy` to that player's assignment and select
+smooth move, arm-swing, room-scale reconciliation, teleport or no translation.
+Snap turn is independent and uses distinct release and engage thresholds. The host
+provides committed action values, calibrated pose positions and the destination
+tick duration. Physical motion uses only fresh tracking samples in the same
+calibration, with authored speed and continuity bounds. Profile changes, tracking
+loss and origin changes reset the pose history and require a neutral tick before
+resuming. Teleport checks a destination through the installed gameplay query owner,
+with the Character placement check still deciding whether the root can move.
 
 When artificial locomotion/rotation exists, disable controls where gameplay permits,
 snap-turn configuration, speed/handedness, seated/standing/recenter behavior, motion-
@@ -664,6 +947,15 @@ silent fallbacks.
 Refresh rate, view extent and frame budget come from runtime/device capability
 snapshots; architecture does not prescribe a universal 90 Hz minimum. Each qualified
 tuple records its supported modes and measured comfort/performance evidence.
+
+The XR Setup inspection panel can request one finite controller vibration
+preview from a focused native Play session with an explicit Input player.
+The existing app owner captures the controller generation, session and
+signed binding revision, then validates them at its next control-lane pump.
+The receipt records runtime submission, rejection or cancellation. Closing
+the panel revokes only that receipt. Native cancellation remains owned by
+the selected action/session host through focus loss, replacement and
+shutdown. Simulator and desktop-only compositions omit the preview port.
 
 ## Mixed Reality And Privacy
 
@@ -681,6 +973,28 @@ failure states.
   dumps, metrics, replay, analytics, AI context and support bundles.
 - Permission revocation removes derived capability state and invalidates
   outstanding work.
+- Signed OpenXR Setup checks eye-gaze hardware support using the selected
+  instance's cold system properties. The installed Editor's explicit
+  `--xr-enable-eye-gaze` invocation makes `xr.features.eye_gaze` optional.
+  Setup can then grant eye pointing for the next Play session only. The
+  invocation and device census never grant consent. The preview is independent
+  of version-one feature profiles and contributes no requirements to them.
+- A consented Play preparation reserves one action and one space from the
+  admitted budget before attaching action sets. The same Input cutoff samples
+  the dedicated gaze pose with the reported OpenXR sample time. The owner
+  requires both components tracked and at most 50 ms old for pointing.
+  The native owner rechecks that same Play grant after the activity and
+  location calls, before issuing another query or publishing a pose.
+  It requests no velocity, retains one current pose privately, and projects
+  only redacted status to Setup. Pause, focus interruption, platform
+  permission denial, explicit revocation and session retirement discard the
+  grant and current pose.
+- The signed OpenXR host may opt into spatial planes with `--xr-enable-spatial-planes`.
+  XR Setup separately grants capture for the next Play session. The application
+  advances one asynchronous OpenXR future at the canonical focused Input cutoff
+  and resolves snapshots in the same calibrated World space. Pause, focus or tracking
+  loss, origin replacement, permission denial and retirement withdraw geometry.
+  Setup exposes only redacted state, and room geometry stays out of records and diagnostics.
 - Persistent anchors identify localization state and failure; they do not imply
   that every runtime supports cross-session restore.
 - Renderer consumes admitted passthrough/composition descriptors without owning
@@ -692,11 +1006,153 @@ states and fallbacks. `XRProjection1_0` and `XRTrackedInteraction1_0` require no
 them.
 
 Baseline passthrough is a runtime compositor-layer intent and exposes no raw camera
-frames. Live anchors use Horo generation-safe localization identity; durable restore is
-a separate capability with opaque protected provider references. Plane/mesh snapshots
+frames. `XRSpatialAnchors` owns live anchor identity on the canonical XR session control
+lane. Its fixed-capacity registry binds one explicitly admitted provider and purpose
+grant to an exact session, target reference space, and World-origin revision. Only
+fresh localized observations carry a pose. Locating, limited, lost, or expired
+observations carry no pose, and explicit access revocation denies reads. A focus or
+session continuity change rejects even results for a restarted native session with
+the same ID. The anchor registry observes the exact host-owned session lifecycle.
+Destroying that lifecycle revokes both live anchor access and staged Save publication,
+even if the anchor registry remains alive. The host withdraws the scope before
+releasing native resources or changing access, space, or origin. A Scene adapter must re-read the live anchor at its own safe
+point before using that pose. The portable contract introduces no provider support
+or migration of existing consumers.
+
+The OpenXR host can select the optional `XR_MSFT_spatial_anchor` route during
+extension admission. The native session owns the anchor and child space for
+each portable ID. It locates one anchor per explicit sample call in the
+original World space. Permission loss withdraws the portable publication
+before native retirement. Anchor spaces and handles retire before the session,
+with failed cleanup retained for retry. The application must supply a current
+focused grant and retire the grant before replacing its World space.
+Editor Play offers a one-session anchor preview with `xr.preview.spatial_anchors`
+or the signed-host invocation flag `--xr-enable-spatial-anchors`. An explicit
+Setup grant allows one anchor at the calibrated native World origin. The preview
+publishes localization status, samples at most once every 100 ms, and withdraws
+on interruption, origin replacement, or operator revocation.
+The project can separately offer protected storage through
+`xr.persistence.spatial_anchors`, which defaults to false. OpenXR discovery requests
+the storage extension and its live anchor dependency under that policy. Opening
+the store still requires a separate current operator grant.
+The Editor XR session owner binds the optional World anchor Save participant on
+its control thread after the live anchor scope exists. The adapter observes
+the same calibrated World scope and loses access when the separate store grant
+or the live anchor scope is revoked.
+XR Setup offers a separate one-use storage grant for the next Play session.
+The operator can revoke storage during Play and keep an independently granted
+live preview.
+Editor Play Save prepares the optional anchor record before canonical capture.
+A localized World anchor gets a protected lookup scoped to the Play sandbox
+world with a one-day expiry. Repeated saves in that scope reuse the lookup.
+The first native write remains provisional until that exact Save reaches a
+terminal outcome. A known unpublished result removes the write, with failed
+cleanup retried on the same connection. Committed and unknown outcomes retain
+the record because a published slot may refer to it.
+Load stages the record under the Scene restore transaction. The provider may
+start a new localization only after the Scene and anchor record commit.
+
+`HoroXRAnchorSaveIntegration` provides the separate optional local durability
+lane. The selected host binds one canonical Save participant per durable anchor
+record and supplies the exact current XR scope plus a protected local store.
+Version 1 stores only fixed-width provider and partition routing, an inert
+protected-store lookup key, the access revision and expiry. The native reference
+or localization map remains solely in that local store. The record contains no
+native handle, live XR identity, pose, sample time or environment observation.
+Share/export and cloud composition require a separate privacy decision.
+The host supplies the staged participant's final publication port to the
+aggregate Save commit gate. Restore validates provider, schema, current access
+and expiry before lookup and revalidates the active grant before publishing.
+Missing and stale records carry no reference. An available reference restores
+as Unlocalized until the selected provider produces new live evidence through
+`XRSpatialAnchors`. Provider failure rolls back staging. A host without a
+selected protected store cannot bind this participant.
+
+The native OpenXR host can separately admit `XR_MSFT_spatial_anchor_persistence`
+on the cold save/restore lane. The connection belongs to the live anchor scope
+and a revocable persistence grant. Enumeration and writes have a fixed
+capacity. A revoked write is removed before delivery, with cleanup debt retained
+for retry. Native restore creates a fresh Locating identity and publishes a pose
+only after a later successful tracking sample.
+
+The protected OpenXR Save adapter namespaces provider names by partition and
+access revision. It resolves expiry metadata on the cold lane and passes only
+the opaque lookup key to canonical Save. A replacement native store connection
+invalidates the earlier adapter, even within the same live anchor scope.
+
+Plane/mesh snapshots
 are bounded observed evidence and never mutate authored Scene, Physics or Navigation
-without an explicit destination-owned adapter and transaction. Hit tests cannot invoke
+without an explicit destination-owned adapter and transaction. The portable plane publication
+authorizes one session and calibrated World origin at a time. It accepts a complete ordered
+batch at a bounded cadence and expires it by runtime-clock age. The owning host withdraws
+the publication on tracking, permission, origin or session loss. An empty valid batch removes
+earlier observations. Provider identifiers and geometry from previous grants must not be
+persisted or reused by the host.
+
+Hit tests cannot invoke
 UI/gameplay/editor actions, and light estimates cannot rewrite authored lights/exposure.
+
+The Android OpenXR light estimator can be created only on the exact session
+that enabled the light-estimation extension, after application consent and
+platform scene-understanding permission. The native session owner retires the
+estimator before destroying its parent session. It publishes at most one ambient
+and one directional observation, with validity, the provider's update time
+and the exact World origin. Repeated samples do not extend their lifetime.
+Native intensity channels are provider-relative. Renderer admission requires
+an explicit conversion and lighting policy before these observations may
+influence scene lighting.
+
+The portable XR projection validates an explicit source color interpretation,
+relative scene scale, maximum channel value, and directional convention. It
+produces ACEScg ambient color and a renderer `RenderLight` in the calibrated
+World axes. The application supplies the directional identity from its scene
+lighting domain. Consecutive samples may blend while both remain fresh at the
+current presentation cutoff. Missing lobes, withdrawal and replaced grants
+discard the corresponding contribution. Keeping
+the same native timestamp cannot extend the age of a contribution. These values
+are presentation inputs and do not mutate authored lights or exposure. The
+[Android directional-light structure](https://registry.khronos.org/OpenXR/specs/1.1/man/html/XrDirectionalLightANDROID.html)
+carries provider RGB and a direction without selecting the engine's color or
+lighting policy.
+
+The Vulkan Editor viewport can prepare a separate multipass environment
+lighting program. It consumes an explicit, renderer-owned ambient and
+directional contribution on the same multiview frame binding as geometry.
+The selected XR host loads this optional program from the offline-cooked
+`shaders/runtime/multiview-environment-vulkan.horoshdr` and matching
+`.reflection.json` in its packaged asset root. Both absent selects the ordinary
+program. An incomplete or foreign artifact pair fails package validation.
+The Play host reads the optional application-owned light publication only on
+focused frames with the environment program admitted. It checks the exact frame,
+prediction, session, and calibrated World scope before binding renderer inputs.
+An absent, invalid, or withdrawn publication leaves that frame neutral.
+When an installed platform owner provides light permission evidence, Play can
+start the native estimator after a separate World-scoped application grant.
+It samples at the admitted tracking cutoff, projects through the bounded
+calibration policy, and rechecks the grant before encoding a lit frame.
+Withdrawal prevents further sampling. The native session retains any pending
+estimator retirement until the control lane can finish it.
+Each binding starts with neutral lighting. Omitted contributions use the same
+color as the ordinary projection, and withdrawing a contribution requires no
+change to scene lights, exposure, or the projection attachment layout.
+The app owns provider activation, permission, scope, and conversion to ACEScg.
+
+The FB reconstruction passthrough route requires an explicitly enabled
+version-3-or-newer extension, a separate operator grant, two admitted layer
+slots and platform permission. It submits the runtime reconstruction underlay
+before the same frame's virtual premultiplied projection. The Renderer must
+produce the exact alpha-bearing projection receipt. The native session owner
+withdraws the layer on focus, origin, runtime or consent loss and retires its
+native objects before retiring the session.
+
+The signed Editor Play composition accepts this permission from an explicit
+installed platform authority. Its next-Play operator grant is consumed once.
+The app validates the grant against the current session and the same prediction
+that maps the native reference space into calibrated World. The compositor
+uses the exact renderer alpha receipt only after the acquired image and GUI
+references retire. Without a platform authority or live grant, Play submits its
+ordinary opaque projection. The current installed platform compositions do
+not supply a passthrough permission authority.
 
 ## Android And Standalone XR
 
@@ -745,6 +1201,76 @@ native XR or persist local discovery/evidence into project settings. Metrics adm
 finite dimensions such as registered backend/profile/phase/outcome classes—never device
 names, serials, native strings/paths, live IDs, poses, gaze or environment geometry.
 
+The editor's XR Setup command reads the selected application's discovery and graphics
+evidence through the same typed port available to non-graphical consumers. A session
+test runs between complete frames while Play is idle. It creates and inspects an
+unpublished native session on the selected graphics binding, then retires it before
+reporting success. Native permission denial is reported separately. Test teardown
+failures keep ownership in the application for a bounded explicit retry, and block
+Play preparation until the owner has retired the abandoned session.
+
+The same packaged preflight produces a sealed runtime compatibility row after
+its private session is retired. The row keeps the signed component, deployment
+and loader digests, the accepted wire API and its declared interval, the vendor
+implementation version, the exact system/renderer facts, and finite graphics,
+time and hand extension evidence. The verified package owns the redistributable
+loader. The official loader selects the external runtime, and signed deployment
+metadata declares unique OS ABI dependency names. The application neither
+packages nor opens a vendor runtime directly. Device qualification consumes this
+row only while the verified installation, runtime attempt and exact graphics
+device remain current. Both Setup and the terminal probe require the same native
+opaque stereo target, shared eye extent, and RGBA8 UNORM format as Play. The row
+contains no physical-device test result.
+
+On Windows and Linux the packaged terminal host can supervise one bounded
+Desktop OpenXR probe through the installed Editor.
+
+```text
+horo-engine --probe-xr-package <windows|linux> system-default <runtime-name>
+  <hmd-system-name> <install-sha256> <editor-executable> <editor-sha256>
+  <installation-root> <project> <trust-roots> <catalog> <catalog-signature>
+  --connection desktop-local [--timeout-seconds 1..90]
+```
+
+Pass the command as one argument vector and quote runtime or file names with
+spaces in the calling terminal. Both digests use `sha256:` and 64 lowercase
+hexadecimal digits. The expected installation digest is the selected OpenXR
+component digest from package verification. The expected executable digest
+identifies the installed Editor artifact. The probe holds the installed product
+launch lease, removes OpenXR runtime/layer environment overrides, and passes the
+exact project and signed catalog paths to the child. The child privately
+compares the runtime-reported runtime and HMD names before running reversible
+preflight. The existing terminal interrupt handling and process deadline retire the child and its owned descendants.
+The terminal reads one bounded evidence record from the child's stdout. It
+publishes success to stdout only after a zero exit and an unchanged executable
+digest. A typed failure with the same requested installation, host, runtime/HMD
+identity, renderer and `desktop-local` connection reaches stderr only after a
+matching failure exit and successful process retirement. The record reports a
+fixed reason such as permission denial, rejected runtime, stale evidence or
+unsupported profile. Native diagnostic text and device labels stay in the
+child.
+
+With `--connection desktop-local`, the terminal emits one
+`horo-xr-desktop-qualification-v1` record. Its fields are the installed component
+digest, expected executable digest, host, loader route, renderer, digest of the
+explicit runtime/HMD pair, connection, and outcome. The `preflight` outcome on
+stdout appends runtime and graphics versions, reference-space and swapchain
+format counts, and the admitted provider route mask. Typed outcomes on stderr
+cover stale or busy packages, timeouts, unavailable runtime and rejected receipts.
+The timeout defaults to 90 seconds. Omit both options to keep the existing
+child-receipt format. This is packaged Desktop preflight evidence. Per-unit
+headset selection, remote installation, connection transport provenance,
+interaction profile, and physical-device smoke results require separate runs.
+
+XR Setup also presents the current session inspector. It joins session/capability
+generation and revision with the latest same-owner Input tracking cutoff. The
+report distinguishes waiting, unfocused, event backlog, current and retired
+evidence. Pose and hand rows summarize validity and confidence. Action rows
+show presence and binding/device generation, with an explicit omitted count
+beyond the display budget. The editor receives no action payloads, native
+handles, pose or joint coordinates, gaze, camera or room data. The inspector
+cannot authorize sensitive capture.
+
 Detailed capture is an explicit bounded operation with channels, duration/frame/byte
 limits, privacy purpose, retention/export and a manifest recording completeness,
 truncation and drops. Sensitive channels are unavailable unless separately admitted;
@@ -784,6 +1310,12 @@ extents are recorded from runtime enumeration, not a static headset table.
   blocking I/O, logging-string formatting, and contended locks.
 - Runtime event polling and frame submission occur on their declared owner
   threads. Native callbacks publish bounded state and do not mutate scene data.
+- The backend-neutral session and frame gates share the session coordinator's
+  construction thread. Adapters deliver generation-tagged events and complete
+  frame work on that thread. Off-thread calls cannot publish or retire state.
+- Activation checks its caller's cancellation token between resource stages.
+  A cancelled attempt retires the completed stages in reverse order and keeps
+  the previous session publication until another activation commits.
 - Diagnostics observe revisions and snapshots at their own cadence; they never
   stall frame production.
 - Extension providers, action/profile state, spaces, images, and captures are
@@ -808,6 +1340,10 @@ Required automated coverage includes:
 Physical-device evidence is required for every declared supported tuple. Missing
 hardware is reported as `NotRun`; deterministic fakes do not silently satisfy a
 device release gate.
+
+The [XR foundation qualification guide](../../guides/xr-foundation-qualification.md)
+maps foundation contracts to reproducible checks and identifies the owners of
+separate runtime and physical-device evidence.
 
 ## Related Documents
 

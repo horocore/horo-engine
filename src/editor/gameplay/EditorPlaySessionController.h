@@ -14,8 +14,10 @@
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "editor/document/RuntimeSceneConversion.h"
 
+#include <array>
 #include <memory>
 #include <optional>
+#include <span>
 
 namespace Horo::Editor {
     /** @brief Explicit editor play-mode lifecycle state. */
@@ -50,7 +52,7 @@ namespace Horo::Editor {
         /** @brief Admits isolated Play preparation from one committed authoring snapshot.
          * @param authoring Committed immutable document. @param registry Frozen registry outliving pending preparation and active Play.
          * @param factory Explicit application composition; absence supports assetless private callers only.
-         * @param viewSource Explicit authored-camera or selected-XR behavior.
+         * @param viewSource Explicit authored camera, selected XR, simulator or mounted World mode.
          * @param selectedXrHost Exact actual factory participant, mandatory only for selected XR; outlives Play.
          * @param triggerBinding Exact conversion capture. @return Success for accepted preparation or typed rejection.
          * @details Assetless preparation may finish immediately. Required assets retain Starting until owner update pumping completes.
@@ -67,8 +69,11 @@ namespace Horo::Editor {
          * @param components Frozen component descriptor registry for the active project generation.
          * @param factory Explicit host composition; absence admits only assetless private callers with no optional native services.
          * @param triggerBinding Exact project capture used when conversion is required.
-         * @param viewSource Explicit authored-camera or selected-XR behavior.
+         * @param viewSource Explicit authored camera, selected XR, simulator or mounted World mode.
          * @param selectedXrHost Exact factory participant identity, mandatory for selected XR; outlives Play.
+         * @param projectRelativeSource Current workspace-owned installed source route, required for authored children.
+         * @param viewportPrimitives Existing workspace primitive cache, required for the mounted World viewport.
+         * @param decisionProviders Synchronous exact Project provider acquisition, called only by an explicitly configured Play host.
          * @return Accepted preparation or a typed Play-gate/conversion/runtime activation error.
          * @pre Registry/module ownership outlives pending preparation and Play; reload waits until readiness.
          * @details No normal-frame wait: presentation/fixed updates pump bounded Scene progress while Starting.
@@ -79,7 +84,10 @@ namespace Horo::Editor {
                                          const Gameplay::ComponentRegistry &components, const EditorPlaySceneFactory &factory = {},
                                          const std::optional<SceneSource::TriggerVolumeConversionContext> &triggerBinding = {},
                                          EditorPlayViewSource viewSource = EditorPlayViewSource::AuthoredCamera,
-                                         const IEditorPlayXrHost *selectedXrHost = nullptr);
+                                         const IEditorPlayXrHost *selectedXrHost = nullptr,
+                                         const std::filesystem::path &projectRelativeSource = {},
+                                         Runtime::PrimitiveMeshCache *viewportPrimitives = nullptr,
+                                         const EditorPlayDecisionProviderSource &decisionProviders = {});
         /** @brief Selects explicit application lifetime storage before activation. No queue is discovered implicitly.
          * @param owner Cold bounded queue outliving the controller and actual scheduler join. */
         void ConfigureSaveRetirement(std::shared_ptr<EditorPlaySaveRetirement> owner) noexcept;
@@ -153,10 +161,34 @@ namespace Horo::Editor {
 
         [[nodiscard]] EditorPlaySessionState State() const noexcept;
         [[nodiscard]] bool IsActive() const noexcept;
+
+        /** @brief Stops hot provider replacement while the exact cooked Play lease is owned. */
+        [[nodiscard]] bool UsesCookedDecisionExecution() const noexcept {
+            return sceneHost_ && sceneHost_->UsesCookedDecisionExecution();
+        }
+
         /** @brief Borrows only a ready isolated Play Scene; pending/closed sessions expose no Scene.
          * @return Read-only current view or absence. Never transfers mutable Scene ownership.
          */
         [[nodiscard]] std::optional<Runtime::RuntimeSceneView> SceneView() const noexcept;
+        /** @brief Reads the selected ready host's completed Decision problem. */
+        [[nodiscard]] std::optional<EditorPlayDecisionProblem> ReadDecisionProblem() const;
+        static constexpr std::uint64_t AgentInspectionTickSpacing = EditorPlayAgentInspectionTickSpacing;
+        static constexpr std::size_t AgentInspectionHistoryLimit = 8;
+
+        /** @brief Samples only the selected live Play entity at a bounded rate and drops stale selection data. */
+        void RefreshAgentInspection(std::optional<Runtime::EntityRef> selection);
+        /** @brief Forwards visibility of the exact inspector generation to its session owner. */
+        void SetDecisionDebugView(std::optional<AI::AgentHandle> agent);
+        /** @brief Applies an owner-lane command between fixed attempts. */
+        [[nodiscard]] bool ApplyDecisionDebugCommand(const EditorPlayDecisionDebugCommand &command);
+        /** @brief Copies the live control state separately from the bounded inspection history. */
+        [[nodiscard]] std::optional<EditorPlayDecisionDebugState> ReadDecisionDebugState() const noexcept;
+
+        /** @brief Borrows chronological detached snapshots until the next refresh or Play transition. */
+        [[nodiscard]] std::span<const EditorPlayAgentInspection> AgentInspectionHistory() const noexcept;
+        /** @brief Indicates whether legacy viewport extraction is outside the selected Play composition. */
+        [[nodiscard]] bool UsesMountedViewport() const noexcept;
         /** @brief Borrows the actual Play host receipt synchronously; absence never implies no Physics. */
         [[nodiscard]] std::optional<EditorSceneCollisionReceipt> CollisionReceipt() const noexcept;
         [[nodiscard]] const std::optional<Error> &LastError() const noexcept;
@@ -168,6 +200,7 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> RejectFixedAttempt(const Runtime::FixedStepContext &context, Error error);
         [[nodiscard]] bool MatchesFixedAttempt(const Runtime::FixedStepContext &context) const noexcept;
         void FlushPendingStop() noexcept;
+        void ClearAgentInspection() noexcept;
 
         struct FixedAttempt final {
             EditorPlaySceneHost *scene{};
@@ -175,6 +208,7 @@ namespace Horo::Editor {
             Runtime::RuntimeDispatchFacts facts;
             bool consumesStep{};
             bool prepared{};
+            bool decisionsAdvanced{};
         };
 
         Runtime::RuntimeDispatchSource dispatchSource_;
@@ -186,12 +220,15 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> ReservePlayOwnership();
         /** @brief Acquires one configured owner and admits its asynchronous Scene preparation without waiting. */
         [[nodiscard]] Result<void> BeginPreparation(Runtime::RuntimeSceneDefinition definition, const Gameplay::BehaviorRegistry &registry,
-                                                    const EditorPlaySceneFactory &factory);
+                                                    const EditorPlaySceneFactory &factory, const EditorPlayChildSceneSource *childSource,
+                                                    Runtime::PrimitiveMeshCache *viewportPrimitives,
+                                                    const EditorPlayDecisionProviderSource &decisionProviders);
         /** @brief Starts the configured Scene and retains the actual pending registry through activation.
          * @param definition Validated owned Play definition. @param registry Live frozen registry retained by the Play unit.
          * @return Original Scene startup/preparation failure or genuine queue admission. */
         [[nodiscard]] Result<void> StartPreparedScene(Runtime::RuntimeSceneDefinition definition,
-                                                      const Gameplay::BehaviorRegistry &registry);
+                                                      const Gameplay::BehaviorRegistry &registry,
+                                                      const EditorPlayChildSceneSource *childSource);
         /** @brief Registers the canonical Scene-owned runtime before any Scene
          * preparation is admitted. */
         [[nodiscard]] Result<void> PrepareBehaviorOwner(const Gameplay::BehaviorRegistry &registry);
@@ -224,6 +261,10 @@ namespace Horo::Editor {
         EditorPlaySessionState state_{EditorPlaySessionState::Idle};
         Gameplay::ComponentRegistry prefabComponents_; /**< Owned inert schema snapshot, fixed for the complete Scene epoch. */
         std::unique_ptr<EditorPlaySceneHost> sceneHost_;
+        std::array<EditorPlayAgentInspection, AgentInspectionHistoryLimit> inspectionHistory_{};
+        std::optional<Runtime::EntityRef> inspectedOwner_;
+        std::size_t inspectionCount_{};
+        std::uint64_t lastInspectionTick_{};
         const Gameplay::BehaviorRegistry *pendingRegistry_{}; /**< Frozen module owner remains alive while Starting. */
         CancellationSource preparationCancellation_;
         std::uint64_t preparationFrame_{1};

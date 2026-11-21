@@ -40,8 +40,20 @@ namespace Horo::AI {
         Math::WorldCoordinate64 lastKnownPosition;
     };
 
+    /** @brief Simulation-owned sound committed for a specific recipient independently of audio presentation. */
+    struct HearingPerceptionEvent final {
+        PerceptionSourceRef source;
+        Math::WorldCoordinate64 location;
+        double intensity{};            /**< Finite normalized intensity in (0, 1]. */
+        double radiusMeters{};         /**< Finite positive maximum distance from the event location. */
+        std::uint64_t tags{};          /**< Producer-defined gameplay tag mask; never projected into listener memory. */
+        std::uint64_t emittedTick{};   /**< First simulation tick eligible for delivery. */
+        std::uint64_t lifetimeTicks{}; /**< Positive delivery lifetime; elapsed ticks must be strictly smaller. */
+    };
+
     /** @brief Typed payload supplied by an authoritative, read-only Gameplay event producer. */
-    using GameplayPerceptionEvent = std::variant<DamagePerceptionEvent, ProximityPerceptionEvent, TeamMessagePerceptionEvent>;
+    using GameplayPerceptionEvent =
+        std::variant<DamagePerceptionEvent, ProximityPerceptionEvent, TeamMessagePerceptionEvent, HearingPerceptionEvent>;
 
     /** @brief One explicit recipient delivery; never implies fan-out to another agent. */
     struct PerceptionEventDelivery final {

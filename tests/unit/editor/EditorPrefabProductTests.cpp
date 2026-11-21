@@ -7,6 +7,7 @@
 #include "PrefabSceneCookHostFixture.h"
 #include "editor/gameplay/EditorPlaySessionController.h"
 
+#include <array>
 #include <chrono>
 #include <functional>
 #include <thread>
@@ -255,6 +256,80 @@ namespace Horo::Application::PrefabEditorProductTest {
         CHECK_FALSE(host.Scenes().ActiveScene().has_value());
     }
 
+    TEST_CASE("Actual Editor Play promotes a cooked parent with its exact independent Core ECS child",
+              "[unit][editor][play][product][scene-instances]") {
+        using namespace PrefabCookTestSupport;
+        HostFixture fixture;
+        Observation observation;
+        PrepareProject(fixture, observation);
+        const auto childAsset = Id("00000000-0000-0000-0000-0000000000c2");
+        const auto childPath = ProjectPath::Parse("assets/child.horo").Value();
+        const auto childMetadata = ProjectPath::Parse("assets/child.horo.horo").Value();
+        const auto original = fixture.registry.Snapshot();
+        const auto records = original.Records();
+        std::vector<AssetRecord> registered(records.begin(), records.end());
+        registered.push_back({.id = childAsset,
+                              .type = Assets::AssetTypeId::Parse("core.scene").Value(),
+                              .sourcePath = childPath,
+                              .metadataPath = childMetadata});
+        REQUIRE(fixture.registry.Publish(std::move(registered)).status == AssetRegistryBuildStatus::Complete);
+
+        SceneSource::SceneObjectSnapshot child{.id = {700}, .name = "Independent child", .localTransform = {.translation = {3, 0, 0}}};
+        bool rejected = false;
+        SECTION("authorized cooked Core ECS child") {}
+        SECTION("an uncomposed child camera owner is explicitly unsupported") {
+            child.components.camera = Runtime::CameraComponent{};
+            rejected = true;
+        }
+        SECTION("an unsaved parent source does not match the committed bytes") {
+            rejected = true;
+        }
+
+        const std::array children{child};
+        fixture.WriteText(childPath.String(), SceneSource::EncodeSceneSource({children, {}}));
+        fixture.WriteText(childMetadata.String(), SidecarJson(childAsset.ToString(), "core.scene"));
+        Editor::SceneDocumentSnapshot authored{.revision = {1},
+                                               .state = {1},
+                                               .objects = {{.id = {1},
+                                                            .name = "Parent camera",
+                                                            .components = {.camera = Runtime::CameraComponent{}}}},
+                                               .childScenes = {{{29}, childAsset}}};
+        fixture.WriteText("assets/level.horo", SceneSource::EncodeSceneSource({authored.objects, {}, authored.childScenes}));
+        REQUIRE(fixture.Cook().HasValue());
+        if (rejected && !child.components.camera)
+            authored.objects.front().name = "Unsaved parent camera";
+        const auto registry = Registry(observation);
+        const auto components = Components();
+        Editor::EditorPlaySceneHost *owner{};
+        Editor::EditorPlaySessionController play;
+        const auto started = play.Start(authored, registry, components, Factory(fixture, false, Physics::PhysicsRuntimeMode::Null, &owner),
+                                        {}, Editor::EditorPlayViewSource::AuthoredCamera, nullptr, "assets/level.horo");
+        if (rejected) {
+            REQUIRE(started.HasError());
+            CHECK(play.State() == Editor::EditorPlaySessionState::Failed);
+            CHECK_FALSE(play.SceneView());
+            return;
+        }
+        if (started.HasError())
+            INFO(started.ErrorValue().message);
+        REQUIRE(started.HasValue());
+        PresentUntil(play, [&] {
+            return play.State() == Editor::EditorPlaySessionState::Playing;
+        });
+        REQUIRE(owner);
+        const auto root = play.SceneView();
+        REQUIRE(root);
+        const auto loaded = owner->Scenes().ActiveChildScene(root->RuntimeId(), {29});
+        REQUIRE(loaded);
+        CHECK(loaded->RuntimeId() != root->RuntimeId());
+        REQUIRE(loaded->Find({700}));
+        CHECK_FALSE(root->Find({700}));
+        CHECK_FALSE(loaded->Find({1}));
+        const auto retained = *loaded;
+        play.Stop();
+        CHECK_FALSE(retained.IsCurrent());
+    }
+
     TEST_CASE("Actual Editor Play grants committed prefab loading and revokes retained clients on Stop",
               "[prefab][editor][product][committed]") {
         Physics::PhysicsRuntimeMode mode{Physics::PhysicsRuntimeMode::Null};
@@ -330,12 +405,17 @@ namespace Horo::Application::PrefabEditorProductTest {
         REQUIRE(retired);
         REQUIRE(retired->CurrentTick().Value() == 3);
         REQUIRE(observation.operation);
-        REQUIRE(observation.operation->State() == Prefab::PrefabSpawnState::Pending);
+        RequirePendingPrefab(play, *observation.operation);
+        const auto previousScene = *play.SceneView();
+        const auto pending = *observation.operation;
         auto snapshot = play.QuiesceForReload();
         REQUIRE(snapshot.HasValue());
         CHECK(retired->CurrentTick().HasError());
         CHECK(observation.operation->State() == Prefab::PrefabSpawnState::Cancelled);
         REQUIRE(play.RestoreAfterReload(registry, snapshot.Value()).HasValue());
+        CHECK(play.SceneView()->SameIncarnation(previousScene));
+        CHECK(retired->Spawn(observation.request).HasError());
+        CHECK(pending.State() == Prefab::PrefabSpawnState::Cancelled);
         auto reloaded = host->PrefabServices(registry, components);
         REQUIRE(reloaded.HasValue());
         REQUIRE(reloaded.Value());
@@ -355,6 +435,12 @@ namespace Horo::Application::PrefabEditorProductTest {
         });
         if (const auto *error = next.Value().Failure())
             UNSCOPED_INFO(error->code.Value() << ": " << error->message);
+        REQUIRE(next.Value().State() == Prefab::PrefabSpawnState::Committed);
+        CHECK(pending.State() == Prefab::PrefabSpawnState::Cancelled);
+        CHECK(pending.Spawned().HasError());
+        const auto created = next.Value().Spawned().Value();
+        CHECK(created.ResolveMember({}, *play.SceneView()).HasValue());
+        next.Value().Cancel();
         CHECK(next.Value().State() == Prefab::PrefabSpawnState::Committed);
         play.Stop();
         CHECK(reloaded.Value()->CurrentTick().HasError());

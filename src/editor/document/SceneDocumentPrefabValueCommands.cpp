@@ -1,4 +1,5 @@
 #include "Horo/Prefab/PrefabErrors.h"
+#include "editor/document/PrefabOverrideScope.h"
 #include "editor/document/SceneDocumentInternal.h"
 
 #include <new>
@@ -8,7 +9,76 @@ namespace Horo::Editor {
     static_assert(std::is_nothrow_move_constructible_v<HistoryRecord>);
     static_assert(std::is_nothrow_swappable_v<std::optional<Prefab::PrefabValueOverrideSet>>);
 
+    /** @copydoc MatchesPrefabOverrideScope(const ScenePrefabRevertTarget&,const Prefab::PrefabValueOverrideRecord&) */
+    bool MatchesPrefabOverrideScope(const ScenePrefabRevertTarget &selection, const Prefab::PrefabValueOverrideRecord &record) {
+        if (const auto *value = std::get_if<Prefab::PrefabValueOverrideTarget>(&selection))
+            return record.target == *value;
+        const auto *property = std::get_if<Prefab::PrefabPropertyAddress>(&record.target);
+        if (const auto *component = std::get_if<Prefab::PrefabComponentOverrideTarget>(&selection))
+            return property && property->Object() == component->object && property->ComponentType() == component->type &&
+                   property->ComponentInstance() == component->instance;
+        if (const auto *object = std::get_if<Prefab::PrefabObjectAddress>(&selection))
+            return *object == (property ? property->Object() : std::get<Prefab::PrefabObjectAddress>(record.target));
+        return std::holds_alternative<AllScenePrefabOverrides>(selection);
+    }
+
+    /** @copydoc MatchesPrefabOverrideScope(const ScenePrefabRevertTarget&,const Prefab::PrefabComponentOverrideRecord&) */
+    bool MatchesPrefabOverrideScope(const ScenePrefabRevertTarget &selection, const Prefab::PrefabComponentOverrideRecord &record) {
+        const auto *add = std::get_if<Prefab::PrefabAddComponentOverride>(&record);
+        const auto *remove = std::get_if<Prefab::PrefabRemoveComponentOverride>(&record);
+        const auto &object = add ? add->object : remove->target.object;
+        if (const auto *component = std::get_if<Prefab::PrefabComponentOverrideTarget>(&selection))
+            return object == component->object && component->type == (add ? add->payload.component.typeId : remove->target.type) &&
+                   component->instance == (add ? add->payload.instance : remove->target.instance);
+        if (const auto *target = std::get_if<Prefab::PrefabObjectAddress>(&selection))
+            return object == *target;
+        return std::holds_alternative<AllScenePrefabOverrides>(selection);
+    }
+
+    /** @copydoc ErasePrefabOverrideScope */
+    void ErasePrefabOverrideScope(Prefab::PrefabValueOverrideSet &set, const ScenePrefabRevertTarget &selection) {
+        const auto erase = [&selection](auto &records) {
+            std::erase_if(records, [&selection](const auto &record) {
+                if constexpr (requires { record.original; })
+                    return MatchesPrefabOverrideScope(selection, record.original);
+                else
+                    return MatchesPrefabOverrideScope(selection, record);
+            });
+        };
+        erase(set.records);
+        erase(set.conflicts);
+        erase(set.orphans);
+        erase(set.componentRecords);
+        erase(set.componentConflicts);
+        erase(set.componentOrphans);
+    }
+
     namespace {
+        /** @brief Stages explicit removal and verifies that the remaining persisted envelope is structurally admissible. */
+        Result<Prefab::PrefabValueOverrideResolution> PrepareInstanceRevert(const ScenePrefabInstance &instance,
+                                                                            const RevertScenePrefabOverridesCommand &command,
+                                                                            const Prefab::EffectivePrefabCandidate &source,
+                                                                            const Prefab::PrefabValueSchemaSnapshot *schemas,
+                                                                            const Prefab::PrefabLimitProfile &limits,
+                                                                            const CancellationToken &cancellation) {
+            using Return = Result<Prefab::PrefabValueOverrideResolution>;
+            if (command.target.valueless_by_exception())
+                return Return::Failure(MakeError(Prefab::PrefabErrors::AddressInvalid));
+            if (const auto *component = std::get_if<Prefab::PrefabComponentOverrideTarget>(&command.target);
+                component && (!component->instance.IsValid() || component->type.Value().empty()))
+                return Return::Failure(MakeError(Prefab::PrefabErrors::AddressInvalid));
+            Prefab::PrefabValueOverrideResolution prepared;
+            if (instance.valueOverrides) {
+                prepared.rebased = *instance.valueOverrides;
+                ErasePrefabOverrideScope(prepared.rebased, command.target);
+                if (!prepared.rebased.IsEmpty() && prepared.rebased != *instance.valueOverrides)
+                    if (auto valid = Prefab::ResolvePrefabValueOverrides(source, prepared.rebased, schemas, limits, cancellation);
+                        valid.HasError())
+                        return Return::Failure(std::move(valid).ErrorValue());
+            }
+            return Return::Success(std::move(prepared));
+        }
+
         /** @brief Capture the complete semantic before/after value state and its bounded ownership before publication. */
         SceneCommandDelta CaptureValueDelta(const ScenePrefabInstance &instance, const std::optional<Prefab::PrefabValueOverrideSet> &after,
                                             const std::uint64_t epoch) {
@@ -34,7 +104,9 @@ namespace Horo::Editor {
             if (source.Value().Revision() != command.expectedSource)
                 return Result<Prefab::PrefabValueOverrideResolution>::Failure(
                     MakeError(Prefab::PrefabErrors::OverrideSourceStale, "Prefab source changed before override preparation."));
-            if constexpr (std::is_same_v<Command, EditScenePrefabComponentsCommand>) {
+            if constexpr (std::is_same_v<Command, RevertScenePrefabOverridesCommand>)
+                return PrepareInstanceRevert(instance, command, source.Value(), schemas, limits, cancellation);
+            else if constexpr (std::is_same_v<Command, EditScenePrefabComponentsCommand>) {
                 if (command.edits.empty() || command.edits.size() > 1024)
                     return Result<Prefab::PrefabValueOverrideResolution>::Failure(MakeError(Prefab::PrefabErrors::WorkBudgetExceeded));
                 auto current = instance.valueOverrides;
@@ -141,6 +213,17 @@ namespace Horo::Editor {
      * Prefab::PrefabSourceResolverSnapshot&,const Prefab::PrefabValueSchemaSnapshot*,const Prefab::PrefabLimitProfile&,const
      * CancellationToken&) */
     Result<SceneCommandResult> SceneDocumentPrefabValueCommands::Execute(const EditScenePrefabComponentsCommand &command,
+                                                                         const Prefab::PrefabSourceResolverSnapshot &sources,
+                                                                         const Prefab::PrefabValueSchemaSnapshot *schemas,
+                                                                         const Prefab::PrefabLimitProfile &limits,
+                                                                         const CancellationToken &cancellation) {
+        return ExecuteEdit(command, sources, schemas, limits, cancellation);
+    }
+
+    /** @copydoc SceneDocumentPrefabValueCommands::Execute(const RevertScenePrefabOverridesCommand&,const
+     * Prefab::PrefabSourceResolverSnapshot&,const Prefab::PrefabValueSchemaSnapshot*,const Prefab::PrefabLimitProfile&,const
+     * CancellationToken&) */
+    Result<SceneCommandResult> SceneDocumentPrefabValueCommands::Execute(const RevertScenePrefabOverridesCommand &command,
                                                                          const Prefab::PrefabSourceResolverSnapshot &sources,
                                                                          const Prefab::PrefabValueSchemaSnapshot *schemas,
                                                                          const Prefab::PrefabLimitProfile &limits,

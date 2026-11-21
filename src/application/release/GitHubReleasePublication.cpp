@@ -98,10 +98,44 @@ namespace Horo::Release {
             return found;
         }
 
-        [[nodiscard]] ReleaseArtifactRecord ManifestRecord(const ReleaseArtifactManifest &manifest) {
-            return {"manifest.json", ReleaseArtifactRole::Notice, manifest.CanonicalJson().size(), manifest.Digest()};
+        /** @brief Borrows the exact checked inventory and projects the root metadata for transport only. */
+        template <typename Visitor> Result<void> VisitPublishedFiles(const ReleasePublicationRequest &request, Visitor visit) {
+            for (const auto &artifact : request.manifest.Artifacts())
+                if (auto accepted = visit(artifact); accepted.HasError())
+                    return accepted;
+            const ReleaseArtifactRecord manifest{std::string{ReleaseManifestFilename}, ReleaseArtifactRole::Notice,
+                                                 request.manifest.CanonicalJson().size(), request.manifest.Digest()};
+            if (auto accepted = visit(manifest); accepted.HasError())
+                return accepted;
+            const auto &signature = request.verified.ManifestSignature();
+            if (!signature)
+                return Result<void>::Success();
+            const ReleaseArtifactRecord envelope{std::string{ReleaseManifestSignatureFilename}, ReleaseArtifactRole::Notice,
+                                                 signature->size, signature->digest};
+            return visit(envelope);
+        }
+
+        /** @brief Binds direct provider calls to the same frozen attempt as the publication dispatcher. */
+        bool MatchesReceipt(const ReleasePublicationRequest &request, const ReleasePublicationReceipt &receipt) {
+            return receipt.destination == ReleaseDestinationId{"github-releases"} && !receipt.remoteIdentity.empty() &&
+                   receipt.candidate == request.verified.Candidate() && receipt.manifestDigest == request.verified.ManifestDigest() &&
+                   receipt.artifactCount == request.manifest.Artifacts().size() &&
+                   receipt.manifestSignature == request.verified.ManifestSignature();
         }
     }  // namespace
+
+    /** @copydoc IGitHubReleaseClient::CommitVerified */
+    Result<void> IGitHubReleaseClient::CommitVerified(const GitHubReleaseIdentity &release, const ReleaseChannel &channel,
+                                                      const GitHubReleaseFinalMetadata &expected) {
+        if (expected.manifestSignature)
+            return Result<void>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
+        const auto manifest = ReadAsset(release, ReleaseManifestFilename);
+        if (manifest.HasError())
+            return Result<void>::Failure(manifest.ErrorValue());
+        if (manifest.Value().size != expected.manifestSize || manifest.Value().digest != expected.manifestDigest)
+            return Result<void>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
+        return Commit(release, channel, expected.manifestDigest);
+    }
 
     /** @copydoc GitHubReleasePublicationAdapter::GitHubReleasePublicationAdapter */
     GitHubReleasePublicationAdapter::GitHubReleasePublicationAdapter(std::string repository, IGitHubReleaseClient &client)
@@ -118,53 +152,46 @@ namespace Horo::Release {
         if (existing.HasError())
             return Result<ReleasePublicationReceipt>::Failure(existing.ErrorValue());
         const auto &release = existing.Value();
-        for (const auto &artifact : request.manifest.Artifacts()) {
-            auto uploaded = client_.UploadExact(release, AssetName(artifact.path), request.verified.Root() / artifact.path, artifact);
-            if (uploaded.HasError())
-                return Result<ReleasePublicationReceipt>::Failure(uploaded.ErrorValue());
-        }
-        const auto metadata = ManifestRecord(request.manifest);
-        if (auto uploaded = client_.UploadExact(release, metadata.path, request.verified.Root() / metadata.path, metadata);
-            uploaded.HasError())
+        const auto uploaded = VisitPublishedFiles(request, [&](const ReleaseArtifactRecord &record) {
+            return client_.UploadExact(release, AssetName(record.path), request.verified.Root() / record.path, record);
+        });
+        if (uploaded.HasError())
             return Result<ReleasePublicationReceipt>::Failure(uploaded.ErrorValue());
         return Result<ReleasePublicationReceipt>::Success({Destination(), request.verified.Candidate(), request.verified.ManifestDigest(),
-                                                           request.manifest.Artifacts().size(), std::to_string(release.releaseId)});
+                                                           request.manifest.Artifacts().size(), std::to_string(release.releaseId),
+                                                           request.verified.ManifestSignature()});
     }
 
     /** @copydoc GitHubReleasePublicationAdapter::VerifyRemote */
     Result<void> GitHubReleasePublicationAdapter::VerifyRemote(const ReleasePublicationRequest &request,
                                                                const ReleasePublicationReceipt &receipt) {
-        if (receipt.remoteIdentity.empty())
+        if (!MatchesReceipt(request, receipt))
             return Result<void>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
         auto existing = ExistingRelease(client_, repository_, request, receipt.remoteIdentity);
         if (existing.HasError())
             return Result<void>::Failure(existing.ErrorValue());
         const auto &release = existing.Value();
-        for (const auto &artifact : request.manifest.Artifacts()) {
-            const std::string name = AssetName(artifact.path);
-            auto remote = client_.ReadAsset(release, name);
+        return VisitPublishedFiles(request, [&](const ReleaseArtifactRecord &record) {
+            const auto name = AssetName(record.path);
+            const auto remote = client_.ReadAsset(release, name);
             if (remote.HasError())
                 return Result<void>::Failure(remote.ErrorValue());
-            if (!MatchesEvidence(remote.Value(), name, artifact))
+            if (!MatchesEvidence(remote.Value(), name, record))
                 return Result<void>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
-        }
-        const auto metadata = ManifestRecord(request.manifest);
-        auto remote = client_.ReadAsset(release, metadata.path);
-        if (remote.HasError())
-            return Result<void>::Failure(remote.ErrorValue());
-        if (!MatchesEvidence(remote.Value(), metadata.path, metadata))
-            return Result<void>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
-        return Result<void>::Success();
+            return Result<void>::Success();
+        });
     }
 
     /** @copydoc GitHubReleasePublicationAdapter::CommitChannel */
     Result<void> GitHubReleasePublicationAdapter::CommitChannel(const ReleasePublicationRequest &request,
                                                                 const ReleasePublicationReceipt &receipt) {
-        if (receipt.remoteIdentity.empty())
+        if (!MatchesReceipt(request, receipt))
             return Result<void>::Failure(MakeError(ReleaseErrors::PipelineOutputInvalid));
         auto existing = ExistingRelease(client_, repository_, request, receipt.remoteIdentity);
         if (existing.HasError())
             return Result<void>::Failure(existing.ErrorValue());
-        return client_.Commit(existing.Value(), request.channel, request.manifest.Digest());
+        const GitHubReleaseFinalMetadata expected{request.manifest.CanonicalJson().size(), request.verified.ManifestDigest(),
+                                                  request.verified.ManifestSignature()};
+        return client_.CommitVerified(existing.Value(), request.channel, expected);
     }
 }  // namespace Horo::Release

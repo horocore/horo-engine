@@ -82,9 +82,7 @@ namespace Horo::Application::PrefabCookTestSupport {
 
         HostFixture() {
             std::filesystem::create_directories(project.dir.path / ".horo/local");
-            WriteText(
-                ".horo/project.json",
-                R"({"horoVersion":"0.0.1","persistentContract":"sha256:0101010101010101010101010101010101010101010101010101010101010101","projectId":"p1","name":"Test","projectVersion":"0.1.0","createdAt":"2026-07-18T00:00:00Z","settings":{"renderBackend":"opengl"}})");
+            WriteProjectMetadata();
             WritePrefab();
             const std::vector<SceneSource::SceneObjectSnapshot> objects{{.id = {900}, .name = "Authoring name"}};
             const std::vector<SceneSource::ScenePrefabInstance> placements{
@@ -104,6 +102,18 @@ namespace Horo::Application::PrefabCookTestSupport {
 
         void WriteText(const std::string_view relative, const std::string_view text) const {
             WriteFile(project.dir.path / relative, {reinterpret_cast<const std::uint8_t *>(text.data()), text.size()});
+        }
+
+        /** @brief Writes the fixture's canonical project root with an optional authored AI policy. */
+        void WriteProjectMetadata(const std::string_view aiPolicy = {}) const {
+            std::string metadata =
+                R"({"horoVersion":"0.0.1","persistentContract":"sha256:0101010101010101010101010101010101010101010101010101010101010101","projectId":"p1","name":"Test","projectVersion":"0.1.0","createdAt":"2026-07-18T00:00:00Z","settings":{"renderBackend":"opengl")";
+            if (!aiPolicy.empty()) {
+                metadata += R"(,"ai":)";
+                metadata += aiPolicy;
+            }
+            metadata += "}}";
+            WriteText(".horo/project.json", metadata);
         }
 
         void WritePrefab(const float offset = 4, std::vector<AssetId> resources = {}) const {

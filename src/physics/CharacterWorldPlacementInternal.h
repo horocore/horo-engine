@@ -199,6 +199,39 @@ namespace Horo::Character::Detail {
         return Result<Math::Vec3>::Success(record.Value()->publication.position);
     }
 
+    /** @brief Preflights the exact placement publication without changing the resident record. */
+    [[nodiscard]] Result<CharacterTransformPublication> BuildPlacementPublication(const auto &impl, const CharacterControllerRecord &record,
+                                                                                  CharacterControllerHandle handle,
+                                                                                  CharacterPlacementOperation operation, std::uint64_t tick,
+                                                                                  Math::Vec3 position, Math::Quaternion heading) {
+        using Output = Result<CharacterTransformPublication>;
+        if (record.publication.publicationRevision == std::numeric_limits<std::uint64_t>::max())
+            return Output::Failure(MakeError(CharacterErrors::PublicationRevisionExhausted));
+        if (operation == CharacterPlacementOperation::Teleport && record.reservedTeleportTick != tick)
+            return Output::Failure(MakeError(CharacterErrors::InvalidState));
+        const CharacterTransformPublication
+            publication{handle, tick, record.publication.publicationRevision + 1,      position, heading, record.descriptor.up, false,
+                        false,  true, CharacterTransformAuthority::CharacterController};
+        if (const auto valid =
+                ValidateCharacterTransformPublication(publication, impl.descriptor.sceneGeneration, impl.descriptor.identity);
+            valid.HasError())
+            return Output::Failure(valid.ErrorValue());
+        return Output::Success(publication);
+    }
+
+    /** @brief Writes an already preflighted placement with registry and publication ownership held. */
+    inline void ApplyPlacementPublication(CharacterControllerRecord &record, CharacterPlacementOperation operation,
+                                          const CharacterTransformPublication &publication) noexcept {
+        record.publication = publication;
+        record.spawned = true;
+        if (operation == CharacterPlacementOperation::Teleport) {
+            record.lastMovement.reset();
+            record.locomotion.reset();
+            record.lastTeleportTick = publication.sourceTick;
+            record.reservedTeleportTick.reset();
+        }
+    }
+
     /** @brief Commits one validated placement after re-resolving the exact live controller record. */
     [[nodiscard]] Result<CharacterPlacementResult> PublishPlacement(const auto &guard, const CharacterControllerHandle &handle,
                                                                     const CharacterPlacementOperation operation, const std::uint64_t tick,
@@ -214,32 +247,13 @@ namespace Horo::Character::Detail {
             return Result<CharacterPlacementResult>::Failure(resolved.ErrorValue());
         auto *record = resolved.Value();
         const auto publicationLock = impl.synchronization.LockPublication();
-        if (record->publication.publicationRevision == std::numeric_limits<std::uint64_t>::max())
-            return Result<CharacterPlacementResult>::Failure(MakeError(CharacterErrors::PublicationRevisionExhausted));
-        const auto nextRevision = record->publication.publicationRevision + 1;
-        if (operation == CharacterPlacementOperation::Teleport && record->reservedTeleportTick != tick)
-            return Result<CharacterPlacementResult>::Failure(MakeError(CharacterErrors::InvalidState));
-        const CharacterTransformPublication publication{handle,       tick,
-                                                        nextRevision, position,
-                                                        heading,      record->descriptor.up,
-                                                        false,        false,
-                                                        true,         CharacterTransformAuthority::CharacterController};
-        if (const auto valid =
-                ValidateCharacterTransformPublication(publication, impl.descriptor.sceneGeneration, impl.descriptor.identity);
-            valid.HasError())
-            return Result<CharacterPlacementResult>::Failure(valid.ErrorValue());
-        record->publication = publication;
-        record->spawned = true;
-        if (operation == CharacterPlacementOperation::Teleport) {
-            record->lastMovement.reset();
-            record->locomotion.reset();
-        }
-        if (operation == CharacterPlacementOperation::Teleport) {
-            record->lastTeleportTick = tick;
-            record->reservedTeleportTick.reset();
-        }
+        const auto publication = BuildPlacementPublication(impl, *record, handle, operation, tick, position, heading);
+        if (publication.HasError())
+            return Result<CharacterPlacementResult>::Failure(publication.ErrorValue());
+        ApplyPlacementPublication(*record, operation, publication.Value());
         impl.debug.Commit(handle, tick, impl.descriptor.physicsSnapshotRevision);
-        return Result<CharacterPlacementResult>::Success({handle, operation, publication, recoveryIterations, recoveryIterations != 0});
+        return Result<CharacterPlacementResult>::Success(
+            {handle, operation, publication.Value(), recoveryIterations, recoveryIterations != 0});
     }
 
 }  // namespace Horo::Character::Detail

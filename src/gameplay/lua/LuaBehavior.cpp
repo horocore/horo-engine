@@ -4,6 +4,7 @@
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Physics/CharacterErrors.h"
+#include "LuaAnimationBinding.h"
 #include "LuaBehaviorMetadata.h"
 #include "LuaBehaviorSandbox.h"
 #include "LuaCharacterBinding.h"
@@ -144,6 +145,7 @@ namespace Horo::Gameplay {
             std::optional<CancellationSource> navigationLifetime;
             CancellationToken navigationToken;
             std::shared_ptr<const Runtime::Ui::RuntimeUiClient> ui;
+            Detail::LuaAnimationCallbackState animationCallback;
             bool uiBound{};
         };
 
@@ -261,8 +263,11 @@ namespace Horo::Gameplay {
 
         void PushContext(lua_State *state, BehaviorContext &context, const std::shared_ptr<const GameplayPhysicsContext> &physics,
                          const std::shared_ptr<const GameplayNavigationContext> &navigation,
-                         const std::shared_ptr<const GameplayVfxContext> &vfx) const {
+                         const std::shared_ptr<const GameplayVfxContext> &vfx,
+                         const std::shared_ptr<const GameplayAnimationContext> &animation) const {
             lua_newtable(state);
+            Detail::PushLuaAnimationContext(state, animation, context.Entity(), vm_.animationCallback);
+            lua_setfield(state, -2, "animation");
             Detail::PushLuaVfxContext(state, vfx);
             lua_setfield(state, -2, "vfx");
             Detail::PushLuaNavigationContext(state, navigation, vm_.navigationToken);
@@ -421,15 +426,17 @@ namespace Horo::Gameplay {
             const auto physics = context.PhysicsContext();
             const auto navigation = context.NavigationContext();
             const auto vfx = context.VfxContext();
+            const auto animation = context.AnimationContext();
+            const Detail::LuaAnimationCallback animationCallback(vm_.animationCallback);
             try {
                 BindCharacter(context);
-                Detail::UiScript::Protected(state,
-                                            [this, &context, &physics, &navigation, &vfx, name, delta, action, event](lua_State *inner) {
+                Detail::UiScript::Protected(state, [this, &context, &physics, &navigation, &vfx, &animation, name, delta, action,
+                                                    event](lua_State *inner) {
                     lua_rawgeti(inner, LUA_REGISTRYINDEX, vm_.behaviorRef);
                     lua_getfield(inner, -1, name);
                     if (lua_isnil(inner, -1))
                         return 0;
-                    PushContext(inner, context, physics, navigation, vfx);
+                    PushContext(inner, context, physics, navigation, vfx, animation);
                     const int argumentCount = PushCallbackArguments(inner, delta, action, event);
                     lua_call(inner, argumentCount, 0);
                     return 0;
@@ -567,6 +574,11 @@ namespace Horo::Gameplay {
         if (candidate.HasError())
             return Result<void>::Failure(candidate.ErrorValue());
         return ReplaceCompatible(std::move(candidate).Value());
+    }
+
+    /** @copydoc LuaBehaviorProgram::SourceDigest */
+    Sha256Digest LuaBehaviorProgram::SourceDigest() const noexcept {
+        return ComputeSha256(std::as_bytes(std::span{impl_->source}));
     }
 
     /** @copydoc LuaBehaviorProgram::Revision */

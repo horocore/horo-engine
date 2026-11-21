@@ -191,12 +191,21 @@ namespace Horo::AI {
     /** @brief Immutable owned observation stable across commits and expiring on generation replacement or teardown. */
     class BlackboardSnapshot final {
     public:
-        /** @brief Returns the captured revision. @return Revision or typed stale failure after generation expiry. */
+        /** @brief Returns the captured revision. @return Revision or typed stale failure after generation expiry or move. */
         [[nodiscard]] Result<std::uint64_t> Revision() const;
+
+        /** @brief Returns historical correlation identity without checking permission to read snapshot values.
+         * @return Revision captured when the owner created this snapshot.
+         */
+        [[nodiscard]] std::uint64_t CapturedRevision() const noexcept {
+            return revision_;
+        }
+
         /**
          * @brief Reads a typed value without exposing mutable instance storage.
          * @param key Stable schema key.
-         * @return Owned optional value or a typed stale/unknown-key failure, including revoked derived-value permission.
+         * @return Owned optional value or a typed stale/unknown-key failure, including moved-from observations and revoked
+         * derived-value permission.
          */
         [[nodiscard]] Result<std::optional<BlackboardValue>> Read(BlackboardKeyId key) const;
 
@@ -214,6 +223,13 @@ namespace Horo::AI {
 
     private:
         friend class BlackboardInstance;
+        friend class UtilitySelector;
+
+        /** @brief Reads an exact slot already bound to this immutable schema publication.
+         * @param index Slot in the snapshot's retained schema; caller verifies schema identity.
+         * @return Borrowed value, null for a missing value, or the same revocation error as Read.
+         */
+        [[nodiscard]] Result<const BlackboardValue *> ReadBound(std::size_t index) const;
 
         BlackboardSnapshot(BlackboardInstanceBinding binding, std::shared_ptr<const BlackboardSchema> schema,
                            std::vector<std::optional<BlackboardValue>> values, std::uint64_t revision,
@@ -262,6 +278,21 @@ namespace Horo::AI {
         [[nodiscard]] Result<BlackboardCanonicalState> CaptureCanonical() const;
         /** @brief Captures an immutable value copy for worker observation. @return Snapshot or stale failure. */
         [[nodiscard]] Result<BlackboardSnapshot> Snapshot() const;
+
+        /** @brief Retains the immutable schema on the owner safe-point thread without copying live values.
+         * @return The current schema lease, or an empty lease after teardown.
+         */
+        [[nodiscard]] std::shared_ptr<const BlackboardSchema> SchemaAtSafePoint() const noexcept {
+            return active_ ? schema_ : nullptr;
+        }
+
+        /** @brief Reads owner-thread publication metadata without copying live values.
+         * @return The active revision, or zero after teardown.
+         */
+        [[nodiscard]] std::uint64_t RevisionAtSafePoint() const noexcept {
+            return active_ ? revision_ : 0;
+        }
+
         /** @brief Copies one authorized key on the owner safe-point thread without allocating a snapshot.
          * @param key Stable schema key. @return Copied optional value or typed stale/unknown-key failure. */
         [[nodiscard]] Result<std::optional<BlackboardValue>> ReadAtSafePoint(BlackboardKeyId key) const;

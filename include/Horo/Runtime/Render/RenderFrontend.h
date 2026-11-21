@@ -1,6 +1,8 @@
 #pragma once
 
 #include "Horo/Runtime/Render/ClusteredLightGrid.h"
+#include "Horo/Runtime/Render/ImageProviderRegistry.h"
+#include "Horo/Runtime/Render/MultiviewSceneExtraction.h"
 #include "Horo/Runtime/Render/RenderGraphInspection.h"
 #include "Horo/Runtime/Render/RenderReadback.h"
 #include "Horo/Runtime/Render/VfxGpuGraphScheduling.h"
@@ -17,6 +19,7 @@
 #include "Horo/Runtime/Render/RenderParallelWork.h"
 #include "Horo/Runtime/Render/RenderShaderResources.h"
 
+#include <array>
 #include <memory>
 #include <span>
 #include <thread>
@@ -24,6 +27,7 @@
 
 namespace Horo::Render {
     class RenderFrontend;
+    class NativeReconstructionViewHistory;
     class IRenderGraphResourceLease;
     struct UiPaintFrameBuffers;
     struct UiPaintFrameUpdate;
@@ -280,6 +284,23 @@ namespace Horo::Render {
                                                          std::span<const RenderGraphQueueSubmission> submissions,
                                                          RenderGraphTransientResourcesHandle transientResources = {});
         /**
+         * @brief Records one scene graph with exact staged owners for every native temporal reconstruction workload.
+         * @param graph Exact compiled scene graph.
+         * @param workloads Complete workloads in compiled pass order.
+         * @param submissions Exact scheduler-owned graph submissions and their timelines.
+         * @param histories Staged view owners in temporal workload order, omitting spatial passes.
+         * @param transientResources Optional other scene transients; the history pairs must remain resident.
+         * @return Success or typed graph, owner, resource or native failure.
+         * @details Preflight rejection leaves plans staged for an explicit retry or cancellation. Accepted frames retain
+         * the owners through canonical GPU retirement. History becomes publishable only after successful presentation.
+         */
+        [[nodiscard]] Result<void> ExecuteNativeReconstructionScene(
+            const CompiledRenderGraphExecution &graph, std::span<const RenderGraphPassWorkload> workloads,
+            std::span<const RenderGraphQueueSubmission> submissions,
+            std::span<const std::shared_ptr<NativeReconstructionViewHistory>> histories,
+            RenderGraphTransientResourcesHandle transientResources = {});
+
+        /**
          * @brief Freezes borrowed inputs and schedules bounded preparation and CPU command recording.
          * @param jobs Const facade of the host worker pool; its owned scheduler continues servicing accepted jobs until host shutdown.
          * @param orderedPasses Immutable source views borrowed only during this call; all arrays are copied.
@@ -371,6 +392,7 @@ namespace Horo::Render {
 
     private:
         friend class RenderFrontend;
+        friend class UiPaintProgram;
 
         RenderFrameScope(RenderFrontend &owner, IRenderBackend &backend, FrameToken frame, std::uint64_t hostFrame) noexcept;
         /** @brief Common graph admission preserving one authoritative native completion lease. */
@@ -420,6 +442,10 @@ namespace Horo::Render {
         [[nodiscard]] MaterialExecutionOutcome ExecuteMaterialPassBoundary(const RenderMaterialPass &pass) noexcept;
         void Abort() noexcept;
         void Release() noexcept;
+        /** @brief Resolves accepted scene graph work separately from the optional GUI and window presentation tail. */
+        void FinishReconstructionSubmission(bool presented) noexcept;
+        /** @brief Discards recordings that have not reached native presentation. */
+        void CancelReconstructionScene() noexcept;
         /** @brief Enforces the one-shot frame admission gate shared by synchronous and worker routes. */
         [[nodiscard]] Result<void> ValidateExecutionAdmission() const;
         /** @brief Validates owner-side executor and target liveness before synchronous borrowing. */
@@ -445,6 +471,9 @@ namespace Horo::Render {
         bool uiComposing_{false}; /**< Owner-thread reentry fence spanning the complete ordered UI batch. */
         std::unique_ptr<Detail::RenderParallelWorkState> parallelWork_;
         std::unique_ptr<Detail::RenderParallelGraphWorkState> parallelGraphWork_;
+        std::array<std::shared_ptr<NativeReconstructionViewHistory>, MultiviewExtractionLimits::HardMaximumViews> reconstructionHistories_;
+        RenderTimelinePoint reconstructionGraphTail_; /**< Last scene-graph submission covering the authored final history states. */
+        std::size_t reconstructionHistoryCount_{};
     };
 
     /**
@@ -551,6 +580,17 @@ namespace Horo::Render {
         /** @brief Queries actual selected backend/device facts for pipeline cache identity outside an active frame.
          * @return Native-free compatibility facts or typed thread/lifecycle/unsupported failure. */
         [[nodiscard]] Result<RenderPipelineDeviceIdentity> QueryPipelineDeviceIdentity() const;
+
+        /** @brief Reports effective support for one exact declared image-provider route before device work.
+         * @param providers Host-composed sealed registry.
+         * @param route Exact configured category/provider/mode.
+         * @param evidence Borrowed owner-verified install/cook data and requested textures.
+         * @return Current device-generation readiness or typed owner, lifecycle, route or driver diagnostic.
+         * @details This cold discovery call uses only the already selected renderer. It never realizes a provider or falls back.
+         */
+        [[nodiscard]] Result<ImageProviderAvailability> DiscoverImageProvider(const ImageProviderRegistry &providers,
+                                                                              const ImageProviderRoute &route,
+                                                                              const ImageProviderEvidence &evidence) const;
         /** @copydoc IMaterialBindingBackend::Realize */
         [[nodiscard]] Result<std::unique_ptr<IResidentMaterialBinding>> Realize(const MaterialBindingDescriptor &descriptor) override;
 
@@ -662,6 +702,13 @@ namespace Horo::Render {
 
         [[nodiscard]] Result<std::shared_ptr<IResidentLightCullingKernel>> RealizeLightCullingKernel(
             const CookedLightCullingKernel &kernel);
+
+        /** @brief Realizes one closed offline-cooked native reconstruction entry on the render owner.
+         * @param kernel Exact cooked artifact and final-target reflection.
+         * @return Native lease or typed lifecycle, capability or backend failure.
+         */
+        [[nodiscard]] Result<std::shared_ptr<IResidentNativeReconstructionKernel>> RealizeNativeReconstructionKernel(
+            const CookedNativeReconstructionKernel &kernel);
 
         /**
          * @brief Updates exact ready frame-slot buffers before opening a frame; submitted slots remain immutable until complete.
@@ -950,6 +997,7 @@ namespace Horo::Render {
 
     private:
         friend class RenderFrameScope;
+        friend class NativeReconstructionViewHistory;
         friend class Detail::RenderFrontendResourceAccess;
         friend class Detail::RenderExternalTextureAccess;
         friend class Detail::PreparedRenderGraphTemplate;
@@ -1161,16 +1209,20 @@ namespace Horo::Render {
         RenderFrontendMemoryConfig memoryConfig_;
         friend class UiPaintFrameBufferPool;
         friend class UiPaintProgram;
+        /** @brief Shares exact resource binding for cold and active pre-record scene uploads. */
+        [[nodiscard]] Result<void> UpdateUiPaintFrameInternal(FrameToken frame, const UiPaintFrameBuffers &buffers,
+                                                              const UiPaintFrameUpdate &update);
         /** @brief Validate buffer creation at the existing owner boundary before any resource reservation. */
         [[nodiscard]] Result<void> AdmitUiPaintBufferRequest(const RenderBufferDescriptor &descriptor,
-                                                             std::span<const std::byte> initialData) const;
+                                                             std::span<const std::byte> initialData,
+                                                             bool stereoCoverageCounter = false) const;
         /** @brief Validate texture creation at the existing owner boundary before any resource reservation. */
         [[nodiscard]] Result<void> AdmitUiPaintTextureRequest(const RenderTextureDescriptor &descriptor,
                                                               std::span<const std::byte> initialData) const;
         /** @brief Admits a buffer with its nonallocating UI-owner retirement handoff before publication. */
         [[nodiscard]] Result<ResourceCreation<RenderBufferHandle>> CreateOwnedUiPaintBuffer(
             RenderMemoryScopeId scope, const RenderBufferDescriptor &descriptor, std::span<const std::byte> initialData,
-            const std::shared_ptr<Detail::UiPaintOwnerRetirement> &owner);
+            const std::shared_ptr<Detail::UiPaintOwnerRetirement> &owner, bool stereoCoverageCounter = false);
         /** @brief Admits a texture with its nonallocating UI-owner retirement handoff before publication. */
         [[nodiscard]] Result<ResourceCreation<RenderTextureHandle>> CreateOwnedUiPaintTexture(
             RenderMemoryScopeId scope, const RenderTextureDescriptor &descriptor, std::span<const std::byte> initialData,
@@ -1178,7 +1230,7 @@ namespace Horo::Render {
         /** @brief Admits exact complete-view depth storage for the noninstalled matching integration only. */
         [[nodiscard]] Result<ResourceCreation<RenderTextureHandle>> CreateMultiviewDepthTexture(RenderMemoryScopeId scope,
                                                                                                 FramebufferExtent extent,
-                                                                                                std::uint32_t viewCount);
+                                                                                                std::uint32_t viewCount, bool sampled);
         /** @brief Queues a previously admitted owned texture through the canonical budget, registry and upload owners. */
         [[nodiscard]] Result<ResourceCreation<RenderTextureHandle>> QueueOwnedTexture(
             RenderMemoryScopeId scope, const RenderTextureDescriptor &descriptor, std::span<const std::byte> initialData,

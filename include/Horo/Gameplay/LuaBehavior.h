@@ -5,6 +5,7 @@
  * @brief Sandboxed Lua 5.4 adapter producing the same behavior descriptor and lifecycle as native gameplay code.
  */
 
+#include "Horo/Foundation/Sha256.h"
 #include "Horo/Gameplay/BehaviorRegistry.h"
 #include "Horo/Gameplay/ReplicationRegistration.h"
 
@@ -93,6 +94,8 @@ namespace Horo::Gameplay {
         [[nodiscard]] Result<void> ReloadFiles(const std::filesystem::path &sourcePath, const std::filesystem::path &sidecarPath);
         /** @brief Monotonic source revision observed by live script instances at callback safe points. */
         [[nodiscard]] std::uint64_t Revision() const noexcept;
+        /** @brief Hashes the exact retained source for diagnostics without reopening its file. */
+        [[nodiscard]] Sha256Digest SourceDigest() const noexcept;
 
     private:
         friend class LuaBehaviorInstance;

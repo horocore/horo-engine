@@ -7,6 +7,7 @@
 
 #include "Horo/Navigation/NavigationAreas.h"
 #include "Horo/Navigation/NavigationBackend.h"
+#include "Horo/Navigation/NavigationBakeScopeId.h"
 #include "Horo/Navigation/NavigationMeshBuilder.h"
 
 #include <array>
@@ -16,6 +17,9 @@
 #include <span>
 
 namespace Horo::Navigation {
+    class NavigationCookedTile;
+    class NavigationDefinition;
+
     /** @brief One validated convex grounded polygon in provider-neutral vertex-index form. */
     struct GroundedNavigationPolygon final {
         std::array<std::uint32_t, 6> vertexIndices{}; /**< Counter-clockwise canonical-space indices; unused entries are zero. */
@@ -66,6 +70,28 @@ namespace Horo::Navigation {
      */
     [[nodiscard]] Result<std::unique_ptr<INavigationQueryBackend>> CreateRecastDetourNavigationQueryBackend(
         const RecastDetourProviderCreateInfo &info);
+
+    /** @brief Exact admitted inputs for the native provider's single-tile grounded materialization. */
+    struct RecastDetourCookedProviderCreateInfo final {
+        NavigationWorldId world;
+        NavigationGeneration topology;
+        NavigationBakeSurfaceKey surface;                                   /**< Exact scope and surface from host admission. */
+        NavigationAgentProfileId profile;                                   /**< Exact authored profile served by this provider. */
+        const NavigationDefinition &definition;                             /**< Validated authority for geometry, areas, and filters. */
+        std::span<const std::shared_ptr<const NavigationCookedTile>> tiles; /**< Complete selected runtime closure. */
+        Math::Vec3 nearestPointHalfExtents;
+        NavigationQueryLimits queryLimits;
+        std::uint32_t maximumConcurrentQueries{};
+        std::size_t maximumOwnedBytes{};
+        std::uint64_t capabilityRevision{};
+    };
+
+    /** @brief Creates a Detour query owner from an exact supported portable NavMesh closure.
+     * @param info Exact already-admitted closure and native resource limits, borrowed during this call only.
+     * @return Owned provider, or a typed error before publication. Multiple tiles, empty geometry, links, or adjacency
+     * the flat native provider cannot preserve are explicitly refused. No source, provider, policy or scope fallback. */
+    [[nodiscard]] Result<std::unique_ptr<INavigationQueryBackend>> CreateRecastDetourCookedNavigationQueryBackend(
+        const RecastDetourCookedProviderCreateInfo &info);
 
     /**
      * @brief Creates the pinned Recast grounded tile builder.

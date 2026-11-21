@@ -104,11 +104,12 @@ namespace Horo::Runtime::Ui {
         }
 
         UiPresentedInteractionState Presented(const UiCanvasInstanceId canvas, const UiInteractionRevision interaction,
-                                              const std::uint64_t snapshot = 1) {
+                                              const std::uint64_t snapshot = 1,
+                                              const std::optional<UiWorldCanvasProjection> world = std::nullopt) {
             auto state = std::move(UiPresentedInteractionState::Create(View(), canvas)).Value();
             REQUIRE(state
                         .Apply({state.View(), canvas, interaction, Rev<UiRenderSnapshotRevision>(snapshot),
-                                UiPresentationOutcome::Presented, UiPresentationReason::None})
+                                UiPresentationOutcome::Presented, UiPresentationReason::None, world})
                         .HasValue());
             return state;
         }
@@ -237,11 +238,9 @@ namespace Horo::Runtime::Ui {
                          "[runtime_ui][hit_test][world]") {
             auto store = HitStore(UiRenderMode::WorldSpace);
             auto snapshot = std::move(store.Publish(layout, projection)).Value();
-            auto presented = Presented(layout.Descriptor().canvas, layout.Descriptor().interaction);
-            const UiWorldRayQuery query{View(),
-                                        layout.Descriptor().canvas,
-                                        {{0.5F, -0.5F, 1.0F}, {0.0F, 0.0F, -1.0F}, 0.0F, 2.0F},
-                                        {{0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F}, {0.0F, -2.0F, 0.0F}}};
+            constexpr UiWorldCanvasProjection plane{{0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F}, {0.0F, -2.0F, 0.0F}};
+            auto presented = Presented(layout.Descriptor().canvas, layout.Descriptor().interaction, 1, plane);
+            const UiWorldRayQuery query{View(), layout.Descriptor().canvas, {{0.5F, -0.5F, 1.0F}, {0.0F, 0.0F, -1.0F}, 0.0F, 2.0F}};
             const auto hit = snapshot.HitTestWorld(query, presented);
             REQUIRE(hit.HasValue());
             REQUIRE(hit.Value().has_value());
@@ -257,6 +256,52 @@ namespace Horo::Runtime::Ui {
             auto unbounded = query;
             unbounded.ray.maximumDistance = std::numeric_limits<float>::infinity();
             RequireError(snapshot.HitTestWorld(unbounded, presented), UiErrors::HitTestInvalid);
+        }
+
+        TEST_CASE_METHOD(HitTestFixture, "World hit testing uses the exact successful placement and revokes it on presentation loss",
+                         "[runtime_ui][hit_test][world]") {
+            auto store = HitStore(UiRenderMode::WorldSpace);
+            const auto snapshot = std::move(store.Publish(layout, projection)).Value();
+            const auto canvas = layout.Descriptor().canvas;
+            const auto interaction = layout.Descriptor().interaction;
+            auto presented = Presented(canvas, interaction);
+            const UiWorldRayQuery query{View(), canvas, {{0.5F, -0.5F, 1.0F}, {0.0F, 0.0F, -1.0F}, 0.0F, 2.0F}};
+            RequireError(snapshot.HitTestWorld(query, presented), UiErrors::HitTestNotPresented);
+
+            constexpr UiWorldCanvasProjection plane{{0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F}, {0.0F, -2.0F, 0.0F}};
+            const UiPresentationReceipt first{View(),
+                                              canvas,
+                                              interaction,
+                                              Rev<UiRenderSnapshotRevision>(2),
+                                              UiPresentationOutcome::Presented,
+                                              UiPresentationReason::None,
+                                              plane};
+            REQUIRE(presented.Apply(first).HasValue());
+            REQUIRE(snapshot.HitTestWorld(query, presented).Value().has_value());
+
+            auto moved = first;
+            moved.snapshotRevision = Rev<UiRenderSnapshotRevision>(3);
+            moved.worldProjection->origin.x += 10.0F;
+            const auto adopted = presented.Apply(moved);
+            REQUIRE(adopted.HasValue());
+            CHECK_FALSE(adopted.Value());
+            CHECK_FALSE(snapshot.HitTestWorld(query, presented).Value().has_value());
+            CHECK(presented.Apply(first).HasError());
+
+            auto degenerate = first;
+            degenerate.snapshotRevision = Rev<UiRenderSnapshotRevision>(4);
+            degenerate.worldProjection->verticalExtent = plane.horizontalExtent;
+            RequireError(presented.Apply(degenerate), UiErrors::RenderPresentationInvalid);
+            CHECK(presented.LastObservedSnapshot() == moved.snapshotRevision);
+            CHECK_FALSE(snapshot.HitTestWorld(query, presented).Value().has_value());
+
+            auto lost = degenerate;
+            lost.outcome = UiPresentationOutcome::Failed;
+            lost.reason = UiPresentationReason::ExecutionFailure;
+            lost.worldProjection.reset();
+            REQUIRE(presented.Apply(lost).HasValue());
+            RequireError(snapshot.HitTestWorld(query, presented), UiErrors::HitTestNotPresented);
+            CHECK(presented.LastPresentedInteraction() == interaction);
         }
 
         TEST_CASE_METHOD(HitTestFixture, "Publication rejects stale sources and never overwrites leased slots",

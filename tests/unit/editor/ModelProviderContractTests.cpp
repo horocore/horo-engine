@@ -1,9 +1,14 @@
+#include "AgentLocalSceneTurn.h"
+#include "AgentTurnTestTools.h"
+#include "AllocationProbe.h"
 #include "Horo/Agent/ModelProvider.h"
 #include "Horo/Agent/ReferenceModelProviders.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <cstddef>
 #include <cstdlib>
 #include <memory>
+#include <optional>
 #include <stop_token>
 #include <string>
 #include <vector>
@@ -11,8 +16,8 @@
 namespace {
     using namespace Horo::Agent;
 
-    std::string Endpoint() {
-        const char *value = std::getenv("HORO_MODEL_TEST_ENDPOINT");
+    std::string Endpoint(const char *variable = "HORO_MODEL_TEST_ENDPOINT") {
+        const char *value = std::getenv(variable);
         REQUIRE(value != nullptr);
         return value;
     }
@@ -141,6 +146,131 @@ TEST_CASE("Real adapters carry the assistant intent and tool result into the nex
     }
 }
 
+TEST_CASE("Local HTTP inference completes an approved editor MCP tool round without credentials", "[agent][model][http]") {
+    auto provider = Create(false);
+    const auto discovery = provider->Discover({});
+    REQUIRE(discovery.outcome.Succeeded());
+    CHECK(discovery.residency == ModelResidency::OnDevice);
+    REQUIRE(discovery.models.size() == 1);
+    CHECK(discovery.models.front().id == "normal");
+    auto request = Request("editor-local-tool");
+    request.tools.push_back({"scene.inspect", "Read a bounded scene summary", R"({"type":"object"})"});
+    request.requiredFeatures.bits |= static_cast<std::uint32_t>(ModelFeature::Tools);
+    Horo::Agent::TestSupport::Tools tools;
+    const auto result = tools.Run(*provider, std::move(request));
+    REQUIRE(result.status == AgentTurnStatus::Completed);
+    REQUIRE(result.messages.size() == 4);
+    CHECK(tools.scene->calls == 1);
+    CHECK(result.messages.back().text == "Three objects");
+}
+
+TEST_CASE("The editor local scene turn probes model tools and returns only the approved count", "[agent][model][http]") {
+    const ModelProviderConfig config{.endpoint = Endpoint(), .timeout = std::chrono::seconds{2}};
+    auto entropy = std::make_shared<Horo::Mcp::Test::Entropy>();
+    std::vector<AgentToolActivity> activity;
+    const auto observe = [&](const AgentToolActivity event) {
+        activity.push_back(event);
+    };
+    const auto result = RunApprovedLocalSceneTurn(config, Request("editor-approved-tool"), 7, 3, entropy, {}, observe);
+    REQUIRE(result.status == AgentTurnStatus::Completed);
+    REQUIRE(result.messages.size() == 4);
+    CHECK(result.messages[2].role == ModelRole::Tool);
+    CHECK(result.messages[2].text == R"({"count":3})");
+    CHECK(result.messages.back().text == "Three objects");
+    REQUIRE(activity.size() == 2);
+    CHECK(activity.front().ordinal == 1);
+    CHECK_FALSE(activity.front().outcome);
+    CHECK(activity.back().ordinal == 1);
+    CHECK(activity.back().outcome == AgentTurnStatus::Completed);
+
+    activity.clear();
+    const auto unsupported = RunApprovedLocalSceneTurn(config, Request("normal"), 8, 4, entropy, {}, observe);
+    CHECK(unsupported.status == AgentTurnStatus::ProviderFailed);
+    CHECK(unsupported.providerError == ModelErrorCode::UnsupportedCapability);
+    CHECK(unsupported.messages.empty());
+    CHECK(activity.empty());
+}
+
+TEST_CASE("Local model discovery rejects malformed loopback authorities before transport", "[agent][model][http]") {
+    for (const auto endpoint :
+         {"http://localhost:0", "http://127.0.0.1:65536", "http://localhost:port", "http://[::1]:", "http://127.0.0.1:11434\\alternate"}) {
+        CAPTURE(endpoint);
+        const auto provider = CreateOllamaModelProvider({.endpoint = endpoint});
+        const auto discovery = provider->Discover({});
+        REQUIRE(discovery.outcome.error.has_value());
+        CHECK(discovery.outcome.error->code == ModelErrorCode::InvalidRequest);
+        CHECK_FALSE(discovery.outcome.error->httpStatus.has_value());
+    }
+}
+
+TEST_CASE("Local editor inference reports unavailable or missing models and the same provider recovers", "[agent][model][http]") {
+    auto provider = Create(false);
+    AgentTurnRuntime runtime;
+    const auto unavailable = runtime.Run(*provider, nullptr, 1, Request("editor-local-restart"), {});
+    CHECK(unavailable.status == AgentTurnStatus::ProviderFailed);
+    CHECK(unavailable.providerError == ModelErrorCode::Unavailable);
+    CHECK(unavailable.messages.empty());
+
+    const auto recovered = runtime.Run(*provider, nullptr, 2, Request("editor-local-restart"), {});
+    REQUIRE(recovered.status == AgentTurnStatus::Completed);
+    REQUIRE(recovered.messages.size() == 2);
+    CHECK(recovered.messages.back().text == "hello world");
+
+    const auto missing = runtime.Run(*provider, nullptr, 3, Request("editor-local-missing"), {});
+    CHECK(missing.status == AgentTurnStatus::ProviderFailed);
+    CHECK(missing.providerError == ModelErrorCode::InvalidRequest);
+    CHECK(missing.messages.empty());
+}
+
+TEST_CASE("Local tool results require an exact pending assistant intent", "[agent][model][http]") {
+    auto provider = Create(false);
+    auto request = Request("history");
+    request.messages.push_back({ModelRole::Assistant, "", "", {{"call-1", "scene_query", "{}"}}});
+    request.messages.push_back({ModelRole::Tool, R"({"nodes":2})", "unknown-call"});
+    const auto outcome = provider->Stream(request, [](const ModelEvent &) {
+        return true;
+    }, {});
+    REQUIRE(outcome.error.has_value());
+    CHECK(outcome.error->code == ModelErrorCode::InvalidRequest);
+    CHECK_FALSE(outcome.error->httpStatus.has_value());
+}
+
+TEST_CASE("Local inference distinguishes a stopped service and a loading model", "[agent][model][http]") {
+    auto offline = CreateOllamaModelProvider({.endpoint = Endpoint("HORO_MODEL_TEST_OFFLINE_ENDPOINT")});
+    const auto discovery = offline->Discover({});
+    REQUIRE(discovery.outcome.error);
+    CHECK(discovery.outcome.error->code == ModelErrorCode::Unavailable);
+    CHECK(discovery.outcome.error->message.find("configured port") != std::string::npos);
+    CHECK(discovery.models.empty());
+
+    auto loading = CreateOllamaModelProvider({.endpoint = Endpoint(), .timeout = std::chrono::milliseconds{200}});
+    std::vector<ModelEvent> events;
+    const auto status = loading->Stream(Request("editor-local-loading"), [&events](const ModelEvent &event) {
+        events.push_back(event);
+        return true;
+    }, {});
+    REQUIRE(status.error);
+    CHECK(status.error->code == ModelErrorCode::Unavailable);
+    CHECK(status.error->message.find("model to load") != std::string::npos);
+    CHECK(events.empty());
+}
+
+TEST_CASE("Local cancellation interrupts a quiet stream before it can publish completion", "[agent][model][http]") {
+    auto provider = CreateOllamaModelProvider({.endpoint = Endpoint(), .timeout = std::chrono::seconds{8}});
+    std::stop_source source;
+    std::vector<ModelEventKind> events;
+    const auto started = std::chrono::steady_clock::now();
+    const auto status = provider->Stream(Request("editor-local-idle"), [&events, &source](const ModelEvent &event) {
+        events.push_back(event.kind);
+        source.request_stop();
+        return true;
+    }, source.get_token());
+    REQUIRE(status.error);
+    CHECK(status.error->code == ModelErrorCode::Cancelled);
+    CHECK(events == std::vector{ModelEventKind::TextDelta});
+    CHECK(std::chrono::steady_clock::now() - started < std::chrono::seconds{5});
+}
+
 TEST_CASE("Real adapters preserve cancellation and sanitized failures", "[agent][model][http]") {
     for (const bool cloud : {false, true}) {
         DYNAMIC_SECTION((cloud ? "cloud" : "local")) {
@@ -171,6 +301,44 @@ TEST_CASE("Real adapters preserve cancellation and sanitized failures", "[agent]
             REQUIRE(limited.error->code == ModelErrorCode::RateLimited);
             REQUIRE(limited.error->message.find("private") == std::string::npos);
         }
+    }
+}
+
+TEST_CASE("HTTP response buffer allocation failure stays inside the C callback boundary", "[agent][model][http]") {
+    struct FailurePoint final {
+        std::optional<Horo::Tests::AllocationProbe::ScopedFailure> failure;
+        std::size_t bytes{};
+    };
+
+    for (const bool cloud : {false, true}) {
+        auto provider = Create(cloud);
+        auto request = Request("buffer-allocation");
+        FailurePoint point;
+        ModelOutcome outcome;
+        std::size_t completed{};
+        {
+            Horo::Tests::AllocationProbe::ScopedObserver observe{[](const std::size_t bytes, void *raw) noexcept {
+                auto &state = *static_cast<FailurePoint *>(raw);
+                if (state.bytes == 0 && bytes >= 8192) {
+                    state.bytes = bytes;
+                    state.failure.emplace(0);
+                }
+            }, &point};
+            outcome = provider->Stream(request, [&](const ModelEvent &event) {
+                if (event.kind == ModelEventKind::Completed)
+                    ++completed;
+                return true;
+            }, {});
+        }
+        REQUIRE(point.bytes >= 8192);
+        REQUIRE_FALSE(outcome.Succeeded());
+        REQUIRE(outcome.error);
+        CHECK(outcome.error->code == ModelErrorCode::Protocol);
+        CHECK(completed == 0);
+        auto recovered = provider->Stream(Request("normal"), [](const ModelEvent &) {
+            return true;
+        }, {});
+        CHECK(recovered.Succeeded());
     }
 }
 

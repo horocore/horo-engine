@@ -37,11 +37,14 @@ TEST_CASE("Animation Scene source retains all durable binding fields and require
         CHECK(source.Value().objects.front().components.animation == binding);
         CHECK(SceneSource::EncodeSceneSource({source.Value().objects, source.Value().prefabInstances}) == bytes);
         CHECK(Json::parse(bytes).at("schemaVersion") == 4);
-        for (const auto schema : {1, 2, 3, 5}) {
+        for (const auto schema : {1, 2, 3, 6}) {
             auto downgraded = Json::parse(bytes);
             downgraded["schemaVersion"] = schema;
             CHECK(SceneSource::DecodeSceneSource(downgraded.dump()).HasError());
         }
+        auto newer = Json::parse(bytes);
+        newer["schemaVersion"] = 5;
+        REQUIRE(SceneSource::DecodeSceneSource(newer.dump()).HasValue());
     }
     const auto legacy = SceneSource::DecodeSceneSource(R"({"schemaVersion":1,"objects":[]})");
     REQUIRE(legacy.HasValue());

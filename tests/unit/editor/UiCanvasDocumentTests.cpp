@@ -1,3 +1,4 @@
+#include "../../support/NativePublicationFiles.h"
 #include "Horo/Editor/UiCanvasDocument.h"
 #include "Horo/Foundation/Platform.h"
 
@@ -198,6 +199,48 @@ TEST_CASE("UI Canvas save detects external changes before replacing bytes", "[un
     REQUIRE_FALSE(session.IsDirty());
 }
 
+TEST_CASE("UI Canvas save preserves a late external write and rejects reentrant commands", "[unit][editor][ui_canvas][persistence]") {
+    TemporaryProject project;
+    NativeDurableFileSystem initial;
+    ProjectMutationCoordinator mutations(initial);
+    SaveInitialDocument(project, MakeDocument(1), mutations, initial);
+
+    DocumentIdentityRegistry registry;
+    auto opened = UiCanvasDocument::Open(OpenIdentity(registry), project.DocumentPath());
+    REQUIRE(opened.HasValue());
+    auto session = std::move(opened).Value();
+    REQUIRE(session.Replace(MakeDocument(2)).HasValue());
+    const auto before = session.CurrentState();
+
+    struct Interference final : Horo::TestSupport::NativePublicationFiles {
+        TemporaryProject &project;
+        UiCanvasDocument &canvas;
+        bool blocked{};
+
+        Interference(TemporaryProject &project, UiCanvasDocument &canvas) : project(project), canvas(canvas) {}
+
+        Result<void> WritePrivateDurable(const std::filesystem::path &path, std::span<const std::byte> bytes, bool &created,
+                                         std::filesystem::perms permissions) override {
+            const auto written = native.WritePrivateDurable(path, bytes, created, permissions);
+            if (written.HasValue()) {
+                blocked = canvas.Replace(MakeDocument(3)).HasError();
+                project.Write("external bytes after staging");
+            }
+            return written;
+        }
+    } files{project, session};
+
+    const auto receipt = session.Save(project.Root(), mutations, files);
+    REQUIRE(receipt.HasValue());
+    CHECK(receipt.Value().status == UiCanvasDocumentSaveStatus::Conflict);
+    CHECK(files.blocked);
+    CHECK(session.CurrentState() == before);
+    CHECK(session.IsDirty());
+    const auto current = initial.ReadFileBounded(project.DocumentPath(), 128);
+    REQUIRE(current.HasValue());
+    CHECK(std::string(current.Value().begin(), current.Value().end()) == "external bytes after staging");
+}
+
 TEST_CASE("UI Canvas sessions reject replacement or reload from another document identity", "[unit][editor][ui_canvas][identity]") {
     TemporaryProject project;
     NativeDurableFileSystem files;
@@ -254,6 +297,68 @@ TEST_CASE("UI Canvas reload and close enforce dirty and closed state policies", 
     const auto reloadClosed = session.Reload();
     REQUIRE(reloadClosed.HasError());
     REQUIRE(ErrorCodeText(reloadClosed.ErrorValue()) == "editor.ui_canvas_document.closed");
+}
+
+TEST_CASE("UI Canvas recovery checkpoints survive close and fence external source and newer owners",
+          "[unit][editor][ui_canvas][recovery]") {
+    TemporaryProject project;
+    NativeDurableFileSystem files;
+    ProjectMutationCoordinator mutations(files);
+    DocumentRecoveryService recovery(project.Root(), mutations, files);
+    SaveInitialDocument(project, MakeDocument(1), mutations, files);
+    const auto firstOwner = Assets::AssetId::Parse("12345678-1234-4234-8234-123456789abc").Value();
+    const auto nextOwner = Assets::AssetId::Parse("12345678-1234-4234-8234-123456789def").Value();
+
+    DocumentIdentityRegistry registry;
+    auto original = UiCanvasDocument::Open(OpenIdentity(registry), project.DocumentPath());
+    REQUIRE(original.HasValue());
+    auto first = std::move(original).Value();
+    REQUIRE(first.Replace(MakeDocument(2)).HasValue());
+    REQUIRE(first.Autosave(firstOwner, recovery).HasValue());
+    REQUIRE(LoadUiCanvasDocument(project.DocumentPath()).Value().document.Revision().Value() == 1);
+    const auto inspected = first.InspectRecovery(recovery);
+    REQUIRE(inspected.HasValue());
+    REQUIRE(inspected.Value());
+    REQUIRE(recovery.Discard(*inspected.Value()).HasValue());
+    REQUIRE(first.Autosave(firstOwner, recovery).HasValue());
+    const auto recaptured = first.InspectRecovery(recovery);
+    REQUIRE(recaptured.HasValue());
+    REQUIRE(recaptured.Value());
+    const auto checkpoint = *recaptured.Value();
+    REQUIRE(first.Close(UiCanvasClosePolicy::DiscardChanges).HasValue());
+    REQUIRE(registry.Close(first.Identity().instance).HasValue());
+
+    auto reopened = UiCanvasDocument::Open(OpenIdentity(registry), project.DocumentPath());
+    REQUIRE(reopened.HasValue());
+    auto document = std::move(reopened).Value();
+    const auto clean = document.CurrentState();
+    CHECK(clean.instance != first.Identity().instance);
+    SECTION("external edit prevents applying the recovery") {
+        const auto updated = SaveUiCanvasDocument(project.Root(), project.DocumentPath(), {.document = MakeDocument(8), .state = {1}}, {},
+                                                  true, mutations, files);
+        REQUIRE(updated.HasValue());
+        CHECK(document.Recover(clean, checkpoint, recovery).HasError());
+        CHECK_FALSE(document.IsDirty());
+        CHECK(document.InspectRecovery(recovery).Value() == std::optional{checkpoint});
+        CHECK(LoadUiCanvasDocument(project.DocumentPath()).Value().document.Revision().Value() == 8);
+    }
+    SECTION("explicit restore transfers recovery only after editing the new owner") {
+        CHECK(document.Recover(first.CurrentState(), checkpoint, recovery).HasError());
+        REQUIRE(document.Recover(clean, checkpoint, recovery).HasValue());
+        CHECK(document.IsDirty());
+        CHECK(document.Document().Revision().Value() == 2);
+        REQUIRE(document.Replace(MakeDocument(3)).HasValue());
+        REQUIRE(document.Autosave(nextOwner, recovery).HasValue());
+        const auto newest = document.InspectRecovery(recovery);
+        REQUIRE(newest.HasValue());
+        REQUIRE(newest.Value());
+        CHECK(newest.Value()->sessionOwner == nextOwner);
+        CHECK(document.DiscardRecovery(nextOwner, recovery, &checkpoint).HasError());
+        REQUIRE(document.Save(project.Root(), mutations, files).Value().status == UiCanvasDocumentSaveStatus::Saved);
+        REQUIRE(document.DiscardRecovery(nextOwner, recovery).HasValue());
+        CHECK_FALSE(document.InspectRecovery(recovery).Value());
+        CHECK(LoadUiCanvasDocument(project.DocumentPath()).Value().document.Revision().Value() == 3);
+    }
 }
 
 TEST_CASE("UI Canvas loading rejects missing malformed and future-version input", "[unit][editor][ui_canvas][validation]") {

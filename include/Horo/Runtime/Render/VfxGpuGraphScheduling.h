@@ -7,6 +7,8 @@
 #include <optional>
 
 namespace Horo::Render {
+    struct GpuVfxRenderBatch;
+
     /** @brief One immutable emitter contribution; all allowances are the remaining GLOBAL scene budget.
      * @details The preparation receipt is the only simulation handle. It retains no live world pointer or native API object.
      * New work is dispatched once for this builder/frame; repeated views depend on that same compute pass.
@@ -23,6 +25,12 @@ namespace Horo::Render {
         PrimaryOutputAttachment colorOperations;
         RenderGraphPassRef lightingComplete, outputTransform;
         std::uint32_t remainingDrawCalls{}, remainingPasses{}, remainingResources{}, remainingUsages{};
+        bool suppressDraw{}; /**< Admit compute and observation while omitting view resources and the graphics pass. */
+
+        /** @brief Copies coherent scene ownership, work and presentation cutoff into a host-authored graph request.
+         * @param batch Batch retained by the scene's immutable frame. @param advance Whether the host intends to advance simulation.
+         */
+        void UseBatch(const GpuVfxRenderBatch &batch, bool advance = true) noexcept;
     };
 
     /** @brief Owner-thread observation-only facts; excludes cold seed uploads and unrelated framebuffer test readback. */

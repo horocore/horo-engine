@@ -229,6 +229,12 @@ namespace Horo::Audio {
     CoreStereoSpatialRenderer::CoreStereoSpatialRenderer(AudioResampler converter, const AudioResamplerDescriptor &descriptor) noexcept
         : converter_(std::move(converter)), descriptor_(descriptor) {}
 
+    /** @copydoc CoreStereoSpatialRenderer::InputLookAheadFrames */
+    std::optional<std::uint32_t> CoreStereoSpatialRenderer::InputLookAheadFrames() const noexcept {
+        const auto *plan = converter_.Plan();
+        return plan ? std::optional{plan->Requirements().maximumLookAheadFrames} : std::nullopt;
+    }
+
     /** @copydoc CoreStereoSpatialRenderer::Update */
     Result<void> CoreStereoSpatialRenderer::Update(const AudioSpatialSource &source, const AudioSpatialListener *listener,
                                                    const AudioStereoSpatialSettings &settings) {

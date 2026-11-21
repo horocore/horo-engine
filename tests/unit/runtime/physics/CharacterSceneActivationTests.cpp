@@ -279,12 +279,45 @@ namespace Horo::Physics {
             CHECK(host.Borrow().Value().character.ActiveControllerCount() == 1);
             CHECK(host.Borrow().Value().physics.PublishedTick().completedTick == 0);
             CHECK(host.Borrow().Value().character.PublishedTick().completedTick == 0);
+            CHECK(host.ReadCharacterVelocity(first.RuntimeId(), {1}, {7}).HasError());
             const auto preparedRevision = host.Borrow().Value().character.Descriptor().physicsSnapshotRevision;
             RequireHostTick(host, "first tick");
             CHECK(host.Borrow().Value().character.Descriptor().physicsSnapshotRevision == preparedRevision);
+            REQUIRE(host.ReadCharacterVelocity(first.RuntimeId(), {1}, {7}).Value() == Math::Vec3{});
+            REQUIRE(host.Borrow().Value().characterBindings.size() == 1);
+            const auto controller = host.Borrow().Value().characterBindings.front().handle;
+            const auto actor = first.Find({1});
+            REQUIRE(actor.has_value());
+            CHECK(host.Borrow().Value().characterBindings.front().owner == *actor);
+            const auto resolved = host.ResolveCharacterController(first, *actor);
+            REQUIRE(resolved.HasValue());
+            CHECK(resolved.Value() == controller);
+            Runtime::SceneDefinitionBuilder foreignDefinition{first.DefinitionId(), first.DefinitionRevision()};
+            foreignDefinition.Add({.object = {1}});
+            const auto foreignSource = std::move(foreignDefinition).Build();
+            REQUIRE(foreignSource.HasValue());
+            auto foreignScene = Runtime::RuntimeScene::Create(foreignSource.Value(), first.RuntimeId());
+            REQUIRE(foreignScene.HasValue());
+            Test::RequireError(host.ResolveCharacterController(foreignScene.Value()->View(), *actor), PhysicsErrors::QuerySnapshotStale);
+            REQUIRE(
+                host.Borrow()
+                    .Value()
+                    .character
+                    .QueueMovementCommand(
+                        {.controller = resolved.Value(), .tick = 2, .sequence = 1, .desiredVelocityMetersPerSecond = Math::Vec3{2, 0, 0}})
+                    .HasValue());
             RequireHostTick(host, "second tick");
             CHECK(host.Borrow().Value().physics.PublishedTick().completedTick == 2);
             CHECK(host.Borrow().Value().character.PublishedTick().completedTick == 2);
+            const auto velocity = host.ReadCharacterVelocity(first.RuntimeId(), {1}, {7});
+            REQUIRE(velocity.HasValue());
+            CHECK(velocity.Value().x > 0.0F);
+            const auto completed = host.Borrow().Value().character.ControllerLocomotionSnapshot(controller);
+            REQUIRE(completed.HasValue());
+            CHECK(velocity.Value() == completed.Value().movement.achievedVelocityMetersPerSecond);
+            RequireHostTick(host, "idle after moving");
+            CHECK(host.ReadCharacterVelocity(first.RuntimeId(), {1}, {7}).Value() == Math::Vec3{});
+            CHECK(host.ReadCharacterVelocity(first.RuntimeId(), {1}, {99}).HasError());
             auto retained = host.Borrow().Value().character.IssueCapability().Value();
             RequireNativeDescendantRejected(assets, source, first.RuntimeId(), retained);
             CHECK(host.Borrow().Value().scene == first.RuntimeId());
@@ -292,6 +325,11 @@ namespace Horo::Physics {
             CHECK(replacement.RuntimeId() == Runtime::SceneRuntimeId{102});
             REQUIRE(host.Borrow().HasValue());
             CHECK(host.Borrow().Value().scene == replacement.RuntimeId());
+            Test::RequireError(host.ResolveCharacterController(first, *actor), PhysicsErrors::QuerySnapshotStale);
+            const auto replacementActor = replacement.Find({1});
+            REQUIRE(replacementActor.has_value());
+            CHECK(host.ResolveCharacterController(replacement, *replacementActor).HasValue());
+            CHECK(host.ReadCharacterVelocity(first.RuntimeId(), {1}, {7}).HasError());
             CHECK(host.Borrow().Value().character.ActiveControllerCount() == 1);
             CHECK(retained.Validate().HasError());
             auto replacementGrant = host.Borrow().Value().character.IssueCapability().Value();

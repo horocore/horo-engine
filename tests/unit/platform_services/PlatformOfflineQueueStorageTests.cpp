@@ -1,5 +1,6 @@
 #include "Horo/Foundation/Platform.h"
 #include "Horo/PlatformServices/PlatformOfflineQueueStorage.h"
+#include "PlatformOfflineQueueStorageTestSupport.h"
 
 #include <algorithm>
 #include <atomic>
@@ -19,6 +20,7 @@
 
 namespace {
     using namespace Horo::PlatformOfflineQueue;
+    using namespace Horo::PlatformOfflineQueue::Tests::StorageSupport;
 
     const Horo::ErrorCodeDescriptor kInjectedFailure{
         .domain = Horo::ErrorDomainId{"test.platform.offline"},
@@ -26,63 +28,6 @@ namespace {
         .defaultSeverity = Horo::ErrorSeverity::Error,
         .summary = "Injected offline storage failure.",
     };
-
-    struct TemporaryRoot final {
-        explicit TemporaryRoot(const bool nonAscii = false) {
-            const auto stamp = std::chrono::steady_clock::now().time_since_epoch().count();
-            std::filesystem::path name =
-                nonAscii ? std::filesystem::path{u8"horo-offline-queue-\u00fc"} : std::filesystem::path{"horo-offline-queue"};
-            name += "-" + std::to_string(stamp);
-            root = std::filesystem::temp_directory_path() / name;
-            std::filesystem::create_directories(root);
-            // Native publication authority requires canonical spelling, including macOS /var aliases.
-            root = std::filesystem::canonical(root);
-        }
-
-        ~TemporaryRoot() {
-            std::error_code ignored;
-            std::filesystem::remove_all(root, ignored);
-        }
-
-        std::filesystem::path root;
-    };
-
-    [[nodiscard]] PlatformOfflineIntentId Intent(const std::uint8_t value) {
-        PlatformOfflineIntentId identity;
-        identity.bytes.back() = static_cast<std::byte>(value);
-        return identity;
-    }
-
-    [[nodiscard]] PlatformOfflineSubjectPartition Partition(const std::uint8_t value) {
-        PlatformOfflineSubjectPartition partition;
-        partition.bytes.back() = static_cast<std::byte>(value);
-        return partition;
-    }
-
-    [[nodiscard]] std::vector<std::byte> Bytes(const std::string_view text) {
-        std::vector<std::byte> bytes(text.size());
-        std::ranges::copy(std::as_bytes(std::span{text.data(), text.size()}), bytes.begin());
-        return bytes;
-    }
-
-    [[nodiscard]] PlatformOfflineQueueRecord Record(
-        const std::uint8_t identity, const std::uint8_t partition, const std::uint64_t sequence, const std::string_view payload,
-        const PlatformOfflineOperationKind operation = PlatformOfflineOperationKind::ProgressionMutation) {
-        return PlatformOfflineQueueRecord{.identity = Intent(identity),
-                                          .partition = Partition(partition),
-                                          .state = PlatformOfflineIntentState::Pending,
-                                          .operation = operation,
-                                          .sequence = sequence,
-                                          .payload = Bytes(payload)};
-    }
-
-    [[nodiscard]] std::filesystem::path QueueDocument(const std::filesystem::path &root) {
-        for (const auto &entry : std::filesystem::recursive_directory_iterator(root)) {
-            if (entry.path().extension() == ".horoqueue")
-                return entry.path();
-        }
-        return {};
-    }
 
     class FaultingDurableFileSystem final : public Horo::DurableFileSystem {
     public:
@@ -92,17 +37,22 @@ namespace {
 
         [[nodiscard]] Horo::Result<Horo::ExclusiveFileLock> TryAcquireExclusive(const std::filesystem::path &,
                                                                                 const std::string_view) override {
+            if (failAcquire)
+                return Horo::Result<Horo::ExclusiveFileLock>::Failure(Horo::MakeError(kInjectedFailure, failureDetail));
             return Horo::Result<Horo::ExclusiveFileLock>::Success(Horo::ExclusiveFileLock{});
         }
 
         [[nodiscard]] Horo::Result<std::uint64_t> AvailableBytes(const std::filesystem::path &) const override {
+            if (failAvailable)
+                return Horo::Result<std::uint64_t>::Failure(Horo::MakeError(kInjectedFailure, failureDetail));
             return Horo::Result<std::uint64_t>::Success(1024 * 1024);
         }
 
         [[nodiscard]] Horo::Result<void> WriteDurable(const std::filesystem::path &, const std::span<const std::byte> bytes) override {
             prepared.assign(bytes.begin(), bytes.end());
             if (failWrite)
-                return Horo::Result<void>::Failure(Horo::MakeError(kInjectedFailure));
+                return Horo::Result<void>::Failure(
+                    Horo::WithCause(Horo::MakeError(kInjectedFailure, failureDetail), Horo::MakeError(kInjectedFailure, failureDetail)));
             return Horo::Result<void>::Success();
         }
 
@@ -129,6 +79,9 @@ namespace {
 
         bool failWrite{};
         bool failReplace{};
+        bool failAcquire{};
+        bool failAvailable{};
+        std::string failureDetail;
         std::vector<std::byte> prepared;
         std::vector<std::byte> published;
     };
@@ -218,6 +171,109 @@ namespace {
         std::atomic_bool releaseRequested_{};
     };
 
+    TEST_CASE("Offline quarantine survives restart without blocking another partition", "[platform-services][offline][storage][recovery]") {
+        TemporaryRoot temporary(true);
+        Horo::NativeDurableFileSystem files;
+        auto created = PlatformOfflineQueueStorage::Create(files, temporary.root);
+        REQUIRE(created.HasValue());
+        auto store = std::move(created).Value();
+        const std::vector corruptRecords{Record(1, 7, 1, "private-presence")};
+        REQUIRE(Publish(store, Partition(7), corruptRecords).HasValue());
+        const auto document = QueueDocument(temporary.root);
+        {
+            std::ofstream output(document, std::ios::binary | std::ios::trunc);
+            output << "corrupt-evidence";
+        }
+        REQUIRE(store.Quarantine(Partition(7)).HasValue());
+        CHECK(store.Quarantine(Partition(7)).HasValue());
+        CHECK(std::filesystem::file_size(document) == 16);
+        CHECK(Publish(store, Partition(7), {}).HasError());
+        const std::vector valid{Record(2, 8, 1, "valid-independent-lane")};
+        REQUIRE(Publish(store, Partition(8), valid).HasValue());
+        CHECK(store.Load(Partition(8)).Value() == valid);
+
+        auto reopened = PlatformOfflineQueueStorage::Create(files, temporary.root);
+        REQUIRE(reopened.HasValue());
+        CHECK(reopened.Value().Load(Partition(7)).HasError());
+        CHECK(Publish(reopened.Value(), Partition(7), {}).HasError());
+        CHECK(reopened.Value().Load(Partition(8)).Value() == valid);
+        // A surviving fence must prevent accidental empty-queue recovery even when the source document disappears.
+        REQUIRE(files.RemoveDurable(document).HasValue());
+        CHECK(reopened.Value().Load(Partition(7)).HasError());
+        CHECK(Publish(reopened.Value(), Partition(7), {}).HasError());
+        CHECK(store.Quarantine(Partition(8)).HasError());
+        CHECK(store.Quarantine(Partition(9)).HasError());
+        CHECK(store.Quarantine({}).HasError());
+    }
+
+    TEST_CASE("Quarantine reports checkpoint faults without deleting recovery evidence",
+              "[platform-services][offline][storage][recovery]") {
+        TemporaryRoot temporary;
+        Horo::NativeDurableFileSystem native;
+        auto initial = PlatformOfflineQueueStorage::Create(native, temporary.root);
+        REQUIRE(initial.HasValue());
+        const std::vector records{Record(1, 7, 1, "canonical-intent")};
+        REQUIRE(Publish(initial.Value(), Partition(7), records).HasValue());
+        const auto document = QueueDocument(temporary.root);
+        {
+            std::ofstream output(document, std::ios::binary | std::ios::trunc);
+            output << "recovery-evidence";
+        }
+        FaultingDurableFileSystem faulting;
+        auto created = PlatformOfflineQueueStorage::Create(faulting, temporary.root);
+        REQUIRE(created.HasValue());
+        faulting.failWrite = true;
+        const auto writeFailed = created.Value().Quarantine(Partition(7));
+        REQUIRE(writeFailed.HasError());
+        CHECK(writeFailed.ErrorValue().code.Value() == "injected_failure");
+        CHECK(std::filesystem::file_size(document) == 17);
+        faulting.failWrite = false;
+        faulting.failReplace = true;
+        const auto publicationUnknown = created.Value().Quarantine(Partition(7));
+        REQUIRE(publicationUnknown.HasError());
+        CHECK(publicationUnknown.ErrorValue().code.Value() == "platform.offline.storage_unknown");
+        CHECK(std::filesystem::file_size(document) == 17);
+        CHECK(faulting.published.empty());
+    }
+
+    TEST_CASE("Offline storage errors exclude protected partition paths and native detail",
+              "[platform-services][offline][storage][privacy]") {
+        TemporaryRoot temporary;
+        Horo::NativeDurableFileSystem native;
+        auto store = PlatformOfflineQueueStorage::Create(native, temporary.root);
+        REQUIRE(store.HasValue());
+        const std::vector records{Record(1, 7, 1, "canonical")};
+        REQUIRE(Publish(store.Value(), Partition(7), records).HasValue());
+        const auto document = QueueDocument(temporary.root);
+        {
+            std::ofstream output(document, std::ios::binary | std::ios::trunc);
+            output << "corrupt";
+        }
+        const auto corrupt = store.Value().Load(Partition(7));
+        REQUIRE(corrupt.HasError());
+        CHECK(corrupt.ErrorValue().code.Value() == "platform.offline.corrupt");
+        CHECK(corrupt.ErrorValue().message.find(temporary.root.generic_string()) == std::string::npos);
+        CHECK(corrupt.ErrorValue().message.find(document.filename().string()) == std::string::npos);
+        for (const unsigned failure : {0U, 1U, 2U}) {
+            FaultingDurableFileSystem faulting;
+            faulting.failureDetail = document.generic_string() + " private-native-cause";
+            faulting.failWrite = failure == 0;
+            faulting.failAcquire = failure == 1;
+            faulting.failAvailable = failure == 2;
+            auto failing = PlatformOfflineQueueStorage::Create(faulting, temporary.root);
+            REQUIRE(failing.HasValue());
+            const auto published = Publish(failing.Value(), Partition(8), std::vector{Record(2, 8, 1, "canonical")});
+            REQUIRE(published.HasError());
+            CHECK(published.ErrorValue().code.Value() == "injected_failure");
+            CHECK(published.ErrorValue().domain.Value() == kInjectedFailure.domain.Value());
+            CHECK(published.ErrorValue().severity == kInjectedFailure.defaultSeverity);
+            CHECK(published.ErrorValue().message.find(document.generic_string()) == std::string::npos);
+            CHECK(published.ErrorValue().message.find("private-native-cause") == std::string::npos);
+            CHECK(published.ErrorValue().cause.Get() == nullptr);
+            CHECK(published.ErrorValue().diagnostics.empty());
+        }
+    }
+
     TEST_CASE("Offline queue storage round-trips bounded versioned Horo intents atomically", "[platform-services][offline][storage]") {
         TemporaryRoot temporary;
         Horo::NativeDurableFileSystem files;
@@ -227,7 +283,7 @@ namespace {
         const auto partition = Partition(7);
         const std::vector records{Record(1, 7, 1, "achievement"), Record(2, 7, 2, "score")};
 
-        REQUIRE(store.Publish(partition, records).HasValue());
+        REQUIRE(Publish(store, partition, records).HasValue());
         const auto loaded = store.Load(partition);
         REQUIRE(loaded.HasValue());
         CHECK(loaded.Value() == records);
@@ -245,7 +301,7 @@ namespace {
         auto store = std::move(created).Value();
         const auto partition = Partition(4);
         const auto unknownOperation = Record(1, 4, 1, "opaque-canonical-payload", static_cast<PlatformOfflineOperationKind>(3));
-        const auto result = store.Publish(partition, std::span{&unknownOperation, 1});
+        const auto result = Publish(store, partition, std::span{&unknownOperation, 1});
         REQUIRE(result.HasError());
         CHECK(result.ErrorValue().code.Value() == "platform.offline.invalid_record");
     }
@@ -258,7 +314,7 @@ namespace {
         const auto partition = Partition(5);
         const std::vector duplicates{Record(1, 5, 1, "first"), Record(1, 5, 2, "second")};
 
-        const auto published = store.Publish(partition, duplicates);
+        const auto published = Publish(store, partition, duplicates);
         REQUIRE(published.HasError());
         CHECK(published.ErrorValue().code.Value() == "platform.offline.identity_conflict");
     }
@@ -273,7 +329,7 @@ namespace {
         const auto partition = Partition(3);
 
         const auto oversized = Record(1, 3, 1, "12345");
-        const auto oversizedResult = store.Publish(partition, std::span{&oversized, 1});
+        const auto oversizedResult = Publish(store, partition, std::span{&oversized, 1});
         REQUIRE(oversizedResult.HasError());
         CHECK(oversizedResult.ErrorValue().code.Value() == "platform.offline.payload_too_large");
     }
@@ -288,7 +344,7 @@ namespace {
         auto store = std::move(created).Value();
         const auto partition = Partition(3);
         const std::vector tooMany{Record(1, 3, 1, "a"), Record(2, 3, 2, "b"), Record(3, 3, 3, "c")};
-        const auto capacityResult = store.Publish(partition, tooMany);
+        const auto capacityResult = Publish(store, partition, tooMany);
         REQUIRE(capacityResult.HasError());
         CHECK(capacityResult.ErrorValue().code.Value() == "platform.offline.capacity_exceeded");
     }
@@ -302,7 +358,7 @@ namespace {
         auto store = std::move(created).Value();
         const auto partition = Partition(3);
         const std::vector valid{Record(1, 3, 1, "ok")};
-        REQUIRE(store.Publish(partition, valid).HasValue());
+        REQUIRE(Publish(store, partition, valid).HasValue());
         const auto path = QueueDocument(temporary.root);
         REQUIRE_FALSE(path.empty());
 
@@ -356,10 +412,10 @@ namespace {
         const std::vector first{Record(1, 9, 1, "first")};
         const std::vector second{Record(2, 9, 2, "second")};
 
-        REQUIRE(store.Publish(partition, first).HasValue());
+        REQUIRE(Publish(store, partition, first).HasValue());
         const auto lastPublished = files.published;
         files.failReplace = true;
-        const auto failed = store.Publish(partition, second);
+        const auto failed = Publish(store, partition, second);
         REQUIRE(failed.HasError());
         CHECK(failed.ErrorValue().code.Value() == "platform.offline.storage_unknown");
         CHECK(files.published == lastPublished);
@@ -378,7 +434,7 @@ namespace {
         std::optional<Horo::Result<void>> firstResult;
         std::optional<Horo::Result<void>> competingResult;
         std::thread firstPublisher([&] {
-            firstResult.emplace(store.Publish(partition, first));
+            firstResult.emplace(Publish(store, partition, first));
             files.NotifyPublicationFinished();
         });
 
@@ -393,7 +449,7 @@ namespace {
             REQUIRE(reachedReplacement);
         }
         std::thread competingPublisher([&] {
-            competingResult.emplace(store.Publish(partition, second));
+            competingResult.emplace(Publish(store, partition, second));
         });
         competingPublisher.join();
         const bool onlyFirstReachedReplacement = files.ReplacementAttempts() == 1;
@@ -408,7 +464,7 @@ namespace {
         const auto firstSnapshot = store.Load(partition);
         REQUIRE(firstSnapshot.HasValue());
         CHECK(firstSnapshot.Value() == first);
-        REQUIRE(store.Publish(partition, second).HasValue());
+        REQUIRE(Publish(store, partition, second).HasValue());
         CHECK(store.Load(partition).Value() == second);
     }
 
@@ -422,7 +478,7 @@ namespace {
         const auto invalid = Record(0, 11, 1, "invalid-identity");
         std::optional<Horo::Result<void>> result;
         std::thread publisher([&] {
-            result.emplace(store.Publish(Partition(11), std::span{&invalid, 1}));
+            result.emplace(Publish(store, Partition(11), std::span{&invalid, 1}));
             files.NotifyPublicationFinished();
         });
         const bool reachedReplacement = files.WaitUntilReplace();
@@ -445,7 +501,7 @@ namespace {
         const auto partition = Partition(12);
         const std::vector records{Record(1, 12, 1, "unicode-root")};
 
-        REQUIRE(store.Publish(partition, records).HasValue());
+        REQUIRE(Publish(store, partition, records).HasValue());
         CHECK(store.Load(partition).Value() == records);
     }
 
@@ -465,7 +521,7 @@ namespace {
 
         PlatformOfflineQueueRecord invalidRecord;
         invalidRecord.partition = Partition(4);
-        const auto publish = store.Publish(Partition(4), std::span{&invalidRecord, 1});
+        const auto publish = Publish(store, Partition(4), std::span{&invalidRecord, 1});
         REQUIRE(publish.HasError());
         CHECK(publish.ErrorValue().code.Value() == "platform.offline.invalid_record");
     }

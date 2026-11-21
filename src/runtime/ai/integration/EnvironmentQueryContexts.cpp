@@ -87,12 +87,15 @@ namespace Horo::AI {
         }
 
         /** @brief Invokes only a registered custom provider whose capabilities are available. */
-        [[nodiscard]] Result<QueryContextValue> ResolveCustom(const QueryContextId id, const QueryContextProviderRegistry &providers,
+        [[nodiscard]] Result<QueryContextValue> ResolveCustom(const QueryContextDescriptor &descriptor,
+                                                              const QueryContextProviderRegistry &providers,
                                                               const Runtime::RuntimeSceneView &scene,
                                                               const QueryContextCaptureSource &source) {
-            const auto *provider = providers.Find(id);
+            const auto *provider = providers.Find(descriptor.id);
             if (provider == nullptr)
                 return Result<QueryContextValue>::Failure(MakeError(AIErrors::EnvironmentQueryContextMissing));
+            if (provider->schemaVersion != descriptor.origin.version)
+                return Result<QueryContextValue>::Failure(MakeError(AIErrors::EnvironmentQueryVersionIncompatible));
             if ((provider->requiredCapabilities.bits & source.availableCapabilities.bits) != provider->requiredCapabilities.bits)
                 return Result<QueryContextValue>::Failure(MakeError(AIErrors::EnvironmentQueryContextCapabilityUnavailable));
             return provider->capture(provider->state, scene);
@@ -116,7 +119,7 @@ namespace Horo::AI {
                                                                     .version = 1})
                 return Result<QueryCapturedContext>::Failure(MakeError(AIErrors::EnvironmentQueryContextInvalid));
 
-            auto value = kind ? ResolveBuiltin(*kind, scene, source) : ResolveCustom(requirement.id, providers, scene, source);
+            auto value = kind ? ResolveBuiltin(*kind, scene, source) : ResolveCustom(*descriptor, providers, scene, source);
             if (value.HasError())
                 return Result<QueryCapturedContext>::Failure(value.ErrorValue());
             if (const auto valid = ValidateValue(scene, value.Value(), descriptor->maximumPayloadBytes); valid.HasError())
@@ -147,7 +150,12 @@ namespace Horo::AI {
 
     /** @copydoc QueryContextSnapshot::Scene */
     Runtime::SceneRuntimeId QueryContextSnapshot::Scene() const noexcept {
-        return scene_;
+        return scene_.RuntimeId();
+    }
+
+    /** @copydoc QueryContextSnapshot::MatchesScene */
+    bool QueryContextSnapshot::MatchesScene(const Runtime::RuntimeSceneView &scene) const noexcept {
+        return scene_.SameIncarnation(scene) && scene.IsCurrent() && scene.StructuralRevision() == sceneStructure_;
     }
 
     /** @copydoc QueryContextSnapshot::Revision */
@@ -211,15 +219,19 @@ namespace Horo::AI {
         if (!plan.Id().IsValid() || !source.availableCapabilities.IsValid() || source.executionRevision == 0)
             return SnapshotResult::Failure(MakeError(AIErrors::EnvironmentQueryContextInvalid));
         if (plan_.IsValid() && (plan_ != plan.Id() || source.executionRevision < latestRevision_ ||
-                                (latest_ != nullptr && latest_->Scene() != scene.RuntimeId())))
+                                (latest_ != nullptr && !latest_->scene_.SameIncarnation(scene))))
             return SnapshotResult::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
+        const auto structure = scene.StructuralRevision();
         if (latest_ != nullptr && source.executionRevision == latestRevision_)
-            return SnapshotResult::Success(latest_);
+            return latest_->MatchesScene(scene) ? SnapshotResult::Success(latest_)
+                                                : SnapshotResult::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
         if (const auto valid = ValidateEntity(scene, source.querier); valid.HasError())
             return SnapshotResult::Failure(valid.ErrorValue());
 
         auto captured = std::make_shared<QueryContextSnapshot>();
-        captured->scene_ = scene.RuntimeId();
+        captured->scene_ = scene;
+        captured->sceneStructure_ = structure;
+        captured->query_ = plan.Id();
         captured->revision_ = source.executionRevision;
         captured->values_.reserve(plan.RequiredContexts().size());
         for (const auto &requirement : plan.RequiredContexts()) {
@@ -228,6 +240,8 @@ namespace Horo::AI {
                 return SnapshotResult::Failure(resolved.ErrorValue());
             captured->values_.push_back(std::move(resolved).Value());
         }
+        if (!scene.IsCurrent() || scene.StructuralRevision() != structure)
+            return SnapshotResult::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
         plan_ = plan.Id();
         latestRevision_ = source.executionRevision;
         latest_ = std::move(captured);

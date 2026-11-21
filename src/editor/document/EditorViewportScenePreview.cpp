@@ -39,7 +39,7 @@ namespace Horo::Editor {
                 const auto view = scene.Get(entity);
                 if (view.HasError())
                     return Result<WorldPose>::Failure(view.ErrorValue());
-                const Math::Transform *local = view.Value().localTransform;
+                const Math::Transform *local = view.Value().PresentationLocalTransform();
                 if (entity.entity.index < overrides.size()) {
                     const auto &transformOverride = overrides[entity.entity.index];
                     if (transformOverride.present && transformOverride.entity == entity)

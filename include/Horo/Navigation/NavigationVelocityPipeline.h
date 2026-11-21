@@ -91,6 +91,13 @@ namespace Horo::Navigation {
         NavigationVelocityPipeline(const NavigationVelocityPipeline &) = delete;
         NavigationVelocityPipeline &operator=(const NavigationVelocityPipeline &) = delete;
 
+        /** @brief Check whether this pipeline advances the supplied movement owner.
+         * @param movement Candidate owner. @return True only for the exact borrowed controller.
+         */
+        [[nodiscard]] bool UsesMovement(const NavigationMovementController &movement) const noexcept {
+            return movement_ == &movement;
+        }
+
         /** @brief Advance the real movement operation and prepare one bounded solver request.
          * @param current Committed owner observation; feedback is supplied exclusively through ObserveFeedback.
          * @param snapshot Complete exact-tick immutable avoidance capture.

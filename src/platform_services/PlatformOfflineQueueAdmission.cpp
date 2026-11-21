@@ -136,24 +136,23 @@ namespace Horo::PlatformServices {
         }
 
         /** @brief Rebuilds a reduced operation from the live receipts in one aggregate state. */
-        template <typename StateType> void RecomputeOperation(StateType &state) {
+        template <typename StateType> [[nodiscard]] std::optional<PlatformOfflineOperation> ReduceLiveReceipts(const StateType &state) {
             auto first = state.receipts.begin();
             while (first != state.receipts.end() && !IsActive(first->state))
                 ++first;
-            if (first == state.receipts.end()) {
-                state.state = PlatformOfflineOperationState::Terminal;
-                return;
-            }
+            if (first == state.receipts.end())
+                return std::nullopt;
 
             auto combined = first->intent.operation;
             for (auto it = std::next(first); it != state.receipts.end(); ++it) {
                 if (!IsActive(it->state))
                     continue;
                 PlatformOfflineOperation next;
-                if (TryCoalesce(combined, it->intent.operation, next))
-                    combined = std::move(next);
+                if (!TryCoalesce(combined, it->intent.operation, next))
+                    return std::nullopt;
+                combined = std::move(next);
             }
-            state.operation = std::move(combined);
+            return combined;
         }
 
     }  // namespace
@@ -213,6 +212,12 @@ namespace Horo::PlatformServices {
         });
     }
 
+    /** @copydoc PlatformOfflineQueue::LiveReceiptsMatchOperation */
+    bool PlatformOfflineQueue::LiveReceiptsMatchOperation(const State &state) {
+        const auto reduced = ReduceLiveReceipts(state);
+        return reduced.has_value() && *reduced == state.operation;
+    }
+
     PlatformOfflineQueue::State *PlatformOfflineQueue::FindTail(const PlatformOfflineLaneKey &lane) noexcept {
         for (auto it = operations_.rbegin(); it != operations_.rend(); ++it) {
             if (it->lane == lane && it->state != PlatformOfflineOperationState::Terminal)
@@ -236,8 +241,8 @@ namespace Horo::PlatformServices {
     Result<std::optional<PlatformOfflineAdmission>> PlatformOfflineQueue::TryCoalesceTail(State *const tail,
                                                                                           const PlatformOfflineIntent &intent,
                                                                                           const TimePoint now, AdmissionCommit &commit) {
-        if (tail == nullptr || tail->state != PlatformOfflineOperationState::Pending || IsPresence(intent.operation) ||
-            !ReceiptsRemainLive(*tail, now))
+        if (tail == nullptr || tail->state != PlatformOfflineOperationState::Pending || tail->attempts != 0 ||
+            IsPresence(intent.operation) || !ReceiptsRemainLive(*tail, now))
             return Result<std::optional<PlatformOfflineAdmission>>::Success(std::nullopt);
 
         PlatformOfflineOperation combined;
@@ -333,7 +338,10 @@ namespace Horo::PlatformServices {
             state.terminalAt = now;
             return;
         }
-        RecomputeOperation(state);
+        if (state.attempts == 0) {
+            if (auto reduced = ReduceLiveReceipts(state); reduced.has_value())
+                state.operation = std::move(*reduced);
+        }
     }
 
     /** @copydoc PlatformOfflineQueue::Admit */

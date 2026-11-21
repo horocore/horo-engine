@@ -1,7 +1,12 @@
 #include "AndroidGameActivityInput.h"
+#if defined(HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY)
+#include "OpenXRDiagnosticHost.h"
+#endif
 #if defined(HORO_ANDROID_QUALIFICATION_VULKAN)
 #include "QualificationHost.h"
+#endif
 
+#if defined(HORO_ANDROID_QUALIFICATION_VULKAN) || defined(HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY)
 #include <chrono>
 #include <thread>
 #endif
@@ -68,17 +73,37 @@ namespace {
     }
 #endif
 
+#if defined(HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY)
+    /** @brief Drains a retained instance while the exact game Activity, Context and loader remain alive. */
+    void Shutdown(Horo::AndroidQualification::OpenXRDiagnosticHost &host) noexcept {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{30};
+        while (std::chrono::steady_clock::now() < deadline) {
+            if (host.PollRetirement())
+                return;
+            std::this_thread::sleep_for(std::chrono::milliseconds{100});
+        }
+        __android_log_write(ANDROID_LOG_ERROR, "HoroPackageQualification", "OpenXR instance retirement deadline expired");
+        std::terminate();
+    }
+#endif
+
     /** @brief One callback fanout; Input and optional renderer/lifecycle composition receive each command once. */
     struct CallbackOwner final {
         Horo::Platform::Android::GameActivityInput &input;
 #if defined(HORO_ANDROID_QUALIFICATION_VULKAN)
         Horo::AndroidQualification::QualificationHost &host;
 #endif
+#if defined(HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY)
+        Horo::AndroidQualification::OpenXRDiagnosticHost discovery;
+#endif
         bool failed{};
 
         /** @brief Preserves existing Input semantics before the selected host handles lifecycle/window observations. */
         void Command(android_app &app, std::int32_t command) {
             input.Command(command);
+#if defined(HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY)
+            discovery.Command(command);
+#endif
 #if defined(HORO_ANDROID_QUALIFICATION_VULKAN)
             if (auto observed = host.Command(app, command); observed.HasError()) {
                 Report(observed.ErrorValue());
@@ -88,7 +113,10 @@ namespace {
         }
 
         /** @brief Pumps only the explicitly selected renderer; no renderer is substituted after admission failure. */
-        void Pump() {
+        void Pump([[maybe_unused]] android_app &app) {
+#if defined(HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY)
+            discovery.Pump(app);
+#endif
 #if defined(HORO_ANDROID_QUALIFICATION_VULKAN)
             if (auto rendered = host.Pump(); rendered.HasError()) {
                 Report(rendered.ErrorValue());
@@ -104,6 +132,10 @@ namespace {
         app.onAppCmd = [](android_app *source, std::int32_t command) {
             static_cast<CallbackOwner *>(source->userData)->Command(*source, command);
         };
+#if !defined(HORO_ANDROID_QUALIFICATION_VULKAN) && !defined(HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY)
+        if (owner.input.Status() == Horo::Platform::Android::InputAdmission::Accepted)
+            __android_log_write(ANDROID_LOG_INFO, "HoroPackageQualification", "host-entry input=accepted");
+#endif
         std::uint64_t frame{};
         while (app.destroyRequested == 0 && !owner.failed) {
             collector.BeginFrame(++frame);
@@ -112,7 +144,7 @@ namespace {
             const auto &snapshot = collector.Commit();
             static_cast<void>(snapshot);
             if (app.destroyRequested == 0 && !owner.failed)
-                owner.Pump();
+                owner.Pump(app);
         }
         app.onAppCmd = nullptr;
         app.userData = nullptr;
@@ -127,7 +159,7 @@ extern "C" void android_main(android_app *app) {
     if (input.Status() != Horo::Platform::Android::InputAdmission::Accepted)
         __android_log_write(ANDROID_LOG_ERROR, "HoroPackageQualification", "Android input bridge unavailable");
 #if defined(HORO_ANDROID_QUALIFICATION_VULKAN)
-    auto created = Horo::AndroidQualification::QualificationHost::Create();
+    auto created = Horo::AndroidQualification::QualificationHost::Create(*app);
     if (created.HasError()) {
         Report(created.ErrorValue());
         return;
@@ -139,5 +171,8 @@ extern "C" void android_main(android_app *app) {
 #else
     CallbackOwner owner{input};
     Run(*app, collector, owner);
+#endif
+#if defined(HORO_ANDROID_QUALIFICATION_OPENXR_DISCOVERY)
+    Shutdown(owner.discovery);
 #endif
 }

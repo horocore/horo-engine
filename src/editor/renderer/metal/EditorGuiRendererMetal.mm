@@ -90,7 +90,8 @@ namespace Horo::Editor {
                 MakeGuiRendererError("editor.gui.metal.device_objects_failed", "Metal GUI device/font preparation failed."));
         if (impl_->nativeFontIdentity == 0)
             impl_->nativeFontIdentity = static_cast<std::uintptr_t>(ImGui::GetIO().Fonts->TexID);
-        if (impl_->nativeFontIdentity == 0 || static_cast<std::uintptr_t>(ImGui::GetIO().Fonts->TexID) != impl_->nativeFontIdentity)
+        if (const auto activeFont = FontTexture() != 0 ? FontTexture() : impl_->nativeFontIdentity;
+            activeFont == 0 || static_cast<std::uintptr_t>(ImGui::GetIO().Fonts->TexID) != activeFont)
             return Result<void>::Failure(MakeError(RendererErrors::GuiCompositionInvalid));
         ImGui_ImplSDL3_NewFrame();
         return Result<void>::Success();
@@ -190,6 +191,8 @@ namespace Horo::Editor {
 
     /** @copydoc EditorGuiRendererMetal::DestroyTexture */
     void EditorGuiRendererMetal::DestroyTexture(const std::uintptr_t textureId) noexcept {
+        if (textureId == FontTexture())
+            return;
         const auto found = std::ranges::find(impl_->textures, textureId, &Impl::TextureRecord::imageIdentity);
         if (found != impl_->textures.end()) {
             static_cast<void>(impl_->frontend->ReleaseTextureView(found->view));
@@ -204,6 +207,7 @@ namespace Horo::Editor {
         BindViewportTexture({});
         impl_->nativeFontIdentity = 0;
         impl_->graphicsBridge->WaitUntilIdle();
+        AdoptFontTexture(0);
         for (const Impl::TextureRecord &texture : impl_->textures) {
             static_cast<void>(impl_->frontend->ReleaseTextureView(texture.view));
             static_cast<void>(impl_->frontend->ReleaseTexture(texture.texture));

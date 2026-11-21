@@ -45,6 +45,13 @@ namespace Horo::WorldStreaming {
         AlwaysPresent,
     };
 
+    /** @brief Authored world-space pivot and, for a camera, an optional exact world-space look target. */
+    struct WorldObjectAnchor final {
+        Math::WorldCoordinate64 position;
+        std::optional<Math::WorldCoordinate64> cameraTarget;
+        [[nodiscard]] auto operator<=>(const WorldObjectAnchor &) const noexcept = default;
+    };
+
     /** @brief Inert immutable metadata for one exact authored-object revision. */
     struct WorldSpatialObjectDescriptor final {
         WorldSpatialObjectSchemaVersion version{};    /**< Exact descriptor schema version. */

@@ -16,6 +16,9 @@ namespace Horo {
         /** @brief Creates a token with no cancellation owner or parent. */
         CancellationToken() = default;
 
+        /** @brief Compares exact cancellation ownership without reading cancellation status. */
+        bool operator==(const CancellationToken &) const noexcept = default;
+
         [[nodiscard]] bool IsCancellationRequested() const noexcept {
             for (auto state = m_state; state; state = state->parent) {
                 if (state->requested.load())

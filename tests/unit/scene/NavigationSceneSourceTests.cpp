@@ -29,12 +29,14 @@ TEST_CASE("Source-capable Scenes reject legacy envelopes and preserve absent leg
     auto object = SourceTest::Object();
     const std::array objects{object};
     auto json = nlohmann::json::parse(EncodeSceneSource({objects, {}}));
-    for (const unsigned schema : {1, 2, 5}) {
+    for (const unsigned schema : {1, 2, 6}) {
         json["schemaVersion"] = schema;
         CHECK(DecodeSceneSource(json.dump()).HasError());
     }
-    json["schemaVersion"] = 4;
-    CHECK(DecodeSceneSource(json.dump()).HasValue());
+    for (const unsigned schema : {4, 5}) {
+        json["schemaVersion"] = schema;
+        CHECK(DecodeSceneSource(json.dump()).HasValue());
+    }
     object.components.navigationSources.clear();
     const std::array legacyObjects{object};
     const auto legacy = EncodeSceneSource({legacyObjects, {}});

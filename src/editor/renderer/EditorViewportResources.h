@@ -4,6 +4,7 @@
 #include "editor/renderer/EditorRenderMemoryScopes.h"
 #include "editor/renderer/EditorViewportRenderer.h"
 
+#include <cstdint>
 #include <optional>
 #include <unordered_map>
 
@@ -55,6 +56,12 @@ namespace Horo::Editor {
         /** @brief Requests one validated quality profile; publication waits for a complete replacement atlas. */
         [[nodiscard]] Result<void> RequestDirectionalShadowProfile(const Render::DirectionalShadowProfile &profile);
         [[nodiscard]] const Render::DirectionalShadowProfile &ActiveDirectionalShadowProfile() const noexcept;
+
+        /** @brief Returns the explicitly requested profile before the first atlas has been allocated. */
+        [[nodiscard]] const Render::DirectionalShadowProfile &RequestedDirectionalShadowProfile() const noexcept {
+            return requestedShadowProfile_;
+        }
+
         [[nodiscard]] EditorViewportExtent ShadowExtent() const noexcept;
         [[nodiscard]] std::uint64_t ShadowGeneration() const noexcept;
         [[nodiscard]] Render::RenderTextureHandle ShadowDepthTexture() const noexcept;
@@ -68,8 +75,41 @@ namespace Horo::Editor {
         /** @brief Exact existing color storage, borrowed to compile a clear recipe at its resource boundary. */
         [[nodiscard]] Render::RenderTextureHandle ColorTexture() const noexcept;
         /** @brief Enables canonical scene/display/presentation separation before allocating the first viewport target.
+         * @param spatial Whether to include the exact same-extent native spatial output in that generation.
          * @return Typed invalid lifecycle failure if resources already exist. */
-        [[nodiscard]] Result<void> EnableColorPipeline();
+        [[nodiscard]] Result<void> EnableColorPipeline(bool spatial = false);
+        /** @brief Output access used by the selected compositor. */
+        enum class CameraCrossFadeOutput : std::uint8_t {
+            Sampled,
+            CopySource
+        };
+
+        /** @brief Reserves the paired viewport policy before allocating attachments.
+         * @param output Whether the composed output also needs explicit copy access.
+         * @return Success or typed failure if viewport resources already exist. */
+        [[nodiscard]] Result<void> EnableCameraCrossFade(CameraCrossFadeOutput output = CameraCrossFadeOutput::Sampled);
+
+        /** @brief Returns the exact copied source attachments for portable graph admission. */
+        struct CameraCrossFadeAttachments final {
+            Render::RenderTextureHandle color, depth;
+            Render::RenderTextureViewHandle colorView, depthView;
+            bool operator==(const CameraCrossFadeAttachments &) const noexcept = default;
+        };
+
+        [[nodiscard]] std::optional<CameraCrossFadeAttachments> CameraCrossFadeImages() const noexcept;
+        /** @brief Identifies exact exhaustion of the shared frontend pin budget without exposing its private error domain. */
+        [[nodiscard]] static bool IsSubmissionPinCapacityFailure(const Error &error) noexcept;
+        /** @brief Returns the source attachment from the same ready generation as Target(). */
+        [[nodiscard]] Render::RenderTargetHandle CameraCrossFadeTarget() const noexcept;
+        /** @brief Returns the sampled color view of the Ready cross-fade source target. */
+        [[nodiscard]] Render::RenderTextureViewHandle CameraCrossFadeColorView() const noexcept;
+        /** @brief Returns the exact descriptor used to allocate the resident scene color for this generation. */
+        [[nodiscard]] Render::RenderTextureDescriptor SceneColorDescriptor() const noexcept;
+        /** @brief Borrows the separate same-extent spatial output owned by the viewport generation. */
+        [[nodiscard]] Render::RenderTextureHandle SpatialTexture() const noexcept;
+        [[nodiscard]] Render::RenderTextureViewHandle SpatialTextureView() const noexcept;
+        /** @brief Returns the exact descriptor used to allocate the spatial output generation. */
+        [[nodiscard]] Render::RenderTextureDescriptor SpatialColorDescriptor() const noexcept;
         /** @brief Returns the display-linear post-ACES target. @return Exact owned FP16 storage/view. */
         [[nodiscard]] Render::RenderTextureHandle DisplayTexture() const noexcept;
         [[nodiscard]] Render::RenderTextureViewHandle DisplayTextureView() const noexcept;
@@ -84,6 +124,19 @@ namespace Horo::Editor {
         [[nodiscard]] bool IsReady() const noexcept;
 
     private:
+        struct CameraCrossFadeSource final {
+            Render::RenderTextureHandle color;
+            Render::RenderTextureHandle depth;
+            Render::RenderTextureViewHandle colorView;
+            Render::RenderTextureViewHandle depthView;
+            Render::RenderTargetHandle target;
+            Render::ResourceOperationId colorOperation;
+            Render::ResourceOperationId depthOperation;
+            Render::ResourceOperationId colorViewOperation;
+            Render::ResourceOperationId depthViewOperation;
+            Render::ResourceOperationId targetOperation;
+        };
+
         struct ResidentMesh {
             Render::RenderBufferHandle vertexBuffer;
             Render::RenderBufferHandle indexBuffer;
@@ -99,6 +152,10 @@ namespace Horo::Editor {
         struct ViewportTargetResources {
             Render::RenderTextureHandle colorTexture;
             Render::RenderTextureHandle depthTexture;
+            Render::RenderTextureHandle spatialTexture;
+            Render::RenderTextureViewHandle spatialView;
+            Render::ResourceOperationId spatialOperation;
+            Render::ResourceOperationId spatialViewOperation;
             Render::RenderTextureHandle displayTexture;
             Render::RenderTextureHandle presentationTexture;
             Render::RenderTextureViewHandle displayView;
@@ -117,6 +174,8 @@ namespace Horo::Editor {
             Render::ResourceOperationId targetOperation;
             EditorViewportExtent extent;
             std::uintptr_t imageIdentity{0};
+            CameraCrossFadeSource crossFade;
+            bool crossFadeDeclined{};
         };
 
         [[nodiscard]] Result<void> SynchronizeMeshes(std::span<const EditorViewportMeshResourceView> resources);
@@ -131,6 +190,11 @@ namespace Horo::Editor {
         void RetireMissingMeshes(std::span<const EditorViewportMeshResourceView> resources) noexcept;
         [[nodiscard]] Result<void> SynchronizeTarget(EditorViewportExtent extent);
         [[nodiscard]] Result<bool> AdvanceViewportTarget(ViewportTargetResources &resources);
+        [[nodiscard]] Result<bool> AdvanceCameraCrossFadeSource(CameraCrossFadeSource &source, Render::FramebufferExtent extent);
+        [[nodiscard]] bool PrepareCameraCrossFadeSource(EditorViewportExtent extent);
+        void ReleaseCameraCrossFadeSource(CameraCrossFadeSource &source) noexcept;
+        [[nodiscard]] Render::RenderTextureDescriptor SceneColorDescriptor(Render::FramebufferExtent extent) const noexcept;
+        [[nodiscard]] static Render::RenderTextureDescriptor SpatialColorDescriptor(Render::FramebufferExtent extent) noexcept;
         [[nodiscard]] Result<bool> AdvanceViewportTextures(ViewportTargetResources &resources);
         [[nodiscard]] Result<bool> AdvanceViewportViews(ViewportTargetResources &resources);
         [[nodiscard]] Result<bool> AdvanceColorPipelineTargets(ViewportTargetResources &resources);
@@ -164,7 +228,10 @@ namespace Horo::Editor {
         Render::DirectionalShadowProfile requestedShadowProfile_;
         std::uint64_t shadowGeneration_{};
         EditorViewportExtent allocatedExtent_;
+        EditorViewportExtent declinedCameraCrossFadeExtent_;
         bool meshesReady_{false};
         bool colorPipeline_{};
+        bool spatialColor_{};
+        std::optional<CameraCrossFadeOutput> cameraCrossFade_;
     };
 }  // namespace Horo::Editor

@@ -20,6 +20,12 @@ def workflow_job(name: str) -> str:
     return match.group(1)
 
 
+def workflow_step(job: str, name: str) -> str:
+    match = re.search(rf"^      - name: {re.escape(name)}\n.*?(?=^      - name:|\Z)", job, re.M | re.S)
+    assert match, f"Missing workflow step: {name}"
+    return match.group()
+
+
 def shader_qualification_steps(shader_job: str) -> str:
     publisher = re.search(r"      - name: Publish main shader compiler checkpoint\n.*?(?=\n      - name:)",
                           shader_job, re.S)
@@ -56,6 +62,11 @@ def cmake_conditions_at(source: str, offset: int) -> list[str]:
 
 
 WINDOWS_NON_AUDIO_TARGETS = frozenset({
+    "HoroRuntimeUiDocumentTests", "HoroRuntimeUiBindingTests", "HoroRuntimeUiLayoutTests",
+    "HoroRuntimeUiAccessibilityTests", "HoroUiTemplateGraphTests",
+    "HoroFoundationConfigurationTests", "HoroFoundationModuleDescriptorTests",
+    "HoroFoundationModuleHostCompositionTests", "HoroSecurityBaselineTests", "HoroEditorSettingsStoreTests",
+    "HoroFoundationPublicHeaderConsumer", "HoroSecurityPublicHeaderConsumer", "HoroPlatformPublicHeaderConsumer",
     # Reduced Windows builds own these allocation and native-image regressions.
     "HoroDynamicLibraryTests",
     "HoroFoundationResultTests",
@@ -64,12 +75,15 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroRuntimeSaveOperationTests",
     "HoroRuntimeSaveParticipantRegistryTests",
     "HoroRuntimeSavedSceneBootstrapTests",
+    "HoroPlatformCloudProviderChecks", "HoroPlatformServicesCompositionTests",
+    "HoroPlatformServicesPublicHeaderConsumer", "HoroRuntimeSaveCloudRevisionMetadataTests",
     "HoroAnimationGraphValueAllocationTests",
     "HoroAnimationDocumentTests",
     "HoroUiStyleWorkspaceTests",
     "HoroFoundationJobSystemTests", "HoroRuntimeSceneAssetDiscoveryTests", "HoroAssetLoadResultAllocationTests",
     "HoroFoundationJsonTests", "HoroAssetIdAllocationTests", "HoroOperationIdentityAllocationTests",
     "HoroSceneSourceTests", "HoroColorPipelineTests", "HoroColorCreativeLookPackageTests", "HoroPrefabMetricsTests",
+    "HoroVisualAccessibilityTests", "HoroVisualAccessibilityContractConsumer", "HoroContrastContractConsumer",
     "HoroWorkspaceLayoutPersistenceTests", "HoroWorkspaceRecoveryPublicHeaderConsumer",
     "HoroNavigationProjectSettingsTests", "HoroNavigationProjectSettingsPublicConsumer",
     "HoroPrefabSceneCookHostTests",
@@ -97,7 +111,8 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroGameplayAiIntegrationPublicHeaderConsumer", "HoroGameplayAiScriptBridgePublicHeaderConsumer",
     "HoroGameplayApiPublicHeaderConsumer", "HoroGameplayModuleHostPublicHeaderConsumer",
     "HoroAITests", "HoroAISightTests", "HoroAIPublicHeaderConsumer",
-    "HoroAISceneIntegrationPublicHeaderConsumer", "HoroAISightIntegrationPublicHeaderConsumer",
+    "HoroAINavigationTests", "HoroAINavigationIntegrationPublicHeaderConsumer",
+    "HoroAISaveIntegrationPublicHeaderConsumer", "HoroAISceneIntegrationPublicHeaderConsumer", "HoroAISightIntegrationPublicHeaderConsumer",
     "HoroGameplayPerceptionIntegrationPublicHeaderConsumer",
     "HoroAnimationApiTests", "HoroAnimationGraphPublicHeaderConsumer",
     "HoroD3D12InitializationTests", "HoroD3D12ResourceTests",
@@ -117,6 +132,9 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroInspectorBehaviorBindingTests", "HoroInspectorBehaviorPublicHeaderConsumer",
     "HoroPCGPublicHeaderConsumer", "HoroPCGTerrainAdapterPublicHeaderConsumer",
     "HoroCliCommandRegistryTests", "HoroPlatformTests", "HoroUpdateZipPackageProducerTests",
+    "HoroPlatformRequestTests", "HoroPlatformProviderAdmissionTests", "HoroPlatformServicesCompositionTests",
+    "HoroPlatformFriendsPublicConsumer", "HoroPlatformServicesPublicHeaderConsumer",
+    "HoroPlatformServicesExtensionPublicHeaderConsumer",
     "HoroCliOutputPublicHeaderConsumer", "HoroCliProductionOutputContract",
     "HoroCliMcpServeTests", "HoroImmutableFileStorageTests",
     "HoroVfxApiTests", "HoroVfxRenderExtractionTests",
@@ -134,6 +152,11 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroSceneRuntimeConversionPublicHeaderConsumer", "HoroSceneRuntimeConversionTests", "HoroSceneDocumentTests",
     "HoroAssetCookServiceTests", "HoroAssetsPublicHeaderConsumer",
     "HoroAssetRegistryTests", "HoroInputTests", "HoroAndroidInputTests", "HoroAndroidInputIntegrationPublicHeaderConsumer",
+    "HoroRuntimeConsoleTests", "HoroRuntimeConsolePublicHeaderConsumer",
+    "HoroRuntimeConsoleStartupPublicHeaderConsumer",
+    "HoroRuntimeConsoleUiPublicHeaderConsumer",
+    "HoroRuntimeConsoleDefaultsPublicHeaderConsumer", "HoroRuntimeConsoleProductTests",
+    "HoroRuntimeConsoleScenePublicHeaderConsumer", "HoroRuntimeConsoleSceneTests",
     "HoroInputSdlTests", "HoroRuntimeUiInputTests",
     "HoroRuntimeUiInputDebuggerTests", "HoroRuntimeUiInputDebuggerContractConsumer",
     "HoroRuntimeUiAnimationIntegrationTests", "HoroRuntimeUiAnimationIntegrationPublicHeaderConsumer",
@@ -150,6 +173,9 @@ WINDOWS_NON_AUDIO_TARGETS = frozenset({
     "HoroPublicationLockFoundationConsumer",
     "HoroProjectCollisionSettingsPublicHeaderConsumer",
     "HoroPackageLifecycleTests", "HoroPackageLifecyclePublicHeaderConsumer",
+    "HoroPlatformProviderPackageTests", "HoroPackageHostSurfacePublicHeaderConsumer",
+    "HoroFoundationPublicHeaderConsumer", "HoroPlatformPublicHeaderConsumer",
+    "HoroPlatformServicesExtensionPublicHeaderConsumer",
     "HoroPackageApplicationTests", "HoroPackageApplicationPublicHeaderConsumer",
     "HoroCliPackageAdaptersPublicHeaderConsumer", "HoroMcpPackageAdaptersPublicHeaderConsumer",
     "HoroEditorPackageAdaptersPublicHeaderConsumer",
@@ -209,6 +235,22 @@ def test_windows_group_preserves_every_previously_built_target() -> None:
         assert not (ROOT / f".github/workflows/{workflow}.yml").exists()
     assert preset("buildPresets", "ci-windows-debug")["targets"] == ["HoroCiWindowsChecks"]
     assert preset("testPresets", "ci-windows-debug")["filter"]["include"]["label"] == "^ci-windows$"
+
+
+def test_platform_identity_windows_build_and_test_membership_match() -> None:
+    required = {"HoroPlatformRequestTests", "HoroPlatformProviderAdmissionTests", "HoroPlatformServicesCompositionTests",
+                "HoroPlatformFriendsPublicConsumer", "HoroPlatformServicesPublicHeaderConsumer",
+                "HoroPlatformServicesExtensionPublicHeaderConsumer"}
+    assert required <= targets("HORO_CI_WINDOWS_TARGETS")
+    direct = re.search(r"set_property\(TEST\s+(.+?)\s+APPEND PROPERTY LABELS ci-windows\)", SUITES, re.S)
+    assert direct is not None
+    assert {"HoroPlatformProviderAdmissionTests", "HoroPlatformServicesCompositionTests",
+            "HoroPlatformFriendsPublicConsumer"} <= set(direct.group(1).split())
+    tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
+    discovered = re.search(r"set\(HORO_CATCH_TEST_TARGETS\s+(.*?)\n\)", tests_cmake, re.S)
+    assert discovered is not None
+    assert "HoroPlatformRequestTests" in discovered.group(1).split()
+    assert "unit/platform_services/PlatformProviderSessionLifecycleTests.cpp" in tests_cmake
 
 
 def test_windows_checked_stl_regressions_have_headless_build_and_discovery_closure() -> None:
@@ -307,7 +349,7 @@ def test_ai_scheduler_qualification_has_build_discovery_and_single_source_owners
     tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
     for target in ("HoroAITaskSchedulerTests", "HoroAITaskSchedulerPublicConsumer"):
         assert target in targets("HORO_CI_WINDOWS_TARGETS")
-        assert f"add_executable({target} " in tests_cmake
+        assert re.search(rf"(?m)^\s*add_executable\(\s*{re.escape(target)}\s+", tests_cmake)
         assert f"target_link_libraries({target} PRIVATE HoroEngine::AISceneIntegration)" in tests_cmake
     assert tests_cmake.count("unit/runtime/ai/AITaskSchedulerTests.cpp") == 1
     assert 'horo_register_catch_test(HoroAITaskSchedulerTests LABELS "unit;ai;headless")' in tests_cmake
@@ -522,18 +564,33 @@ def test_shader_job_keeps_vulkan_native_commands_in_the_same_build() -> None:
     assert "VK_DRIVER_FILES=%s" in native_job
     assert "lvp_icd.x86_64.json" not in native_job
     assert "--output-junit" in native_job
-    selection = re.search(r"-R '([^']+)'", native_job)
+    regression = workflow_step(native_job, "Run Vulkan native-call and lifecycle regressions")
+    selection = re.search(r"-R '([^']+)'", regression)
     assert selection is not None
     selected = re.compile(selection.group(1))
     for target in ("HoroRenderVulkanTests", "HoroRenderGraphTests", "HoroRenderFrontendTests",
                    "HoroRenderBackendRegistryTests", "HoroXROpenXRTests"):
         assert selected.search(f"{target}::representative case [tag]")
         assert not selected.search(f"{target}Unrelated::case")
-    assert "-R '^HoroVulkanCommandExecutionSmoke$'" in native_job
+    smoke_selection = re.search(r"--timeout 90 -R '([^']+)'", native_job)
+    assert smoke_selection is not None
+    smoke_selected = re.compile(smoke_selection.group(1))
+    assert smoke_selected.fullmatch("HoroVulkanCommandExecutionSmoke")
+    assert smoke_selected.fullmatch("HoroVulkanVfxGpuParity")
+    assert not smoke_selected.fullmatch("HoroVulkanVfxGpuBudget")
     assert not selected.search("UnrelatedTests::case")
+    canvas = workflow_step(native_job, "Verify packaged Vulkan canvas interfaces and scale rollback")
+    assert "HORO_VULKAN_UI_PAINT_ASSET_ROOT" in canvas
+    assert "--no-tests=error" in canvas
+    assert "Packaged Vulkan sampled canvas binds|Application Vulkan UI package binds" in canvas
+    assert "A rejected Camera canvas scale preserves" in canvas
+    editor = workflow_step(native_job, "Qualify the real Vulkan GUI and WSI pair")
+    assert 'HORO_VULKAN_UI_PAINT_ASSET_ROOT="$HORO_EDITOR_VULKAN_ASSET_ROOT"' in editor
+    assert "HoroEditorVulkanPresentationSmoke::" in editor
     assert "continue-on-error" not in shader_qualification_steps(native_job)
     tests_cmake = (ROOT / "tests/CMakeLists.txt").read_text(encoding="utf-8")
     assert "add_test(NAME HoroVulkanCommandExecutionSmoke COMMAND HoroVulkanCommandExecutionSmoke)" in tests_cmake
+    assert 'add_test(NAME HoroVulkanVfxGpuParity COMMAND HoroVulkanCommandExecutionSmoke "[vfx-parity]")' in tests_cmake
     assert 'FAIL_REGULAR_EXPRESSION "Validation Error;VUID-"' in tests_cmake
 
 
@@ -735,7 +792,8 @@ def test_vulkan_shader_qualification_keeps_material_packing_and_native_transform
     expected_targets |= {"HoroRenderGraphTests", "HoroRenderFrontendTests", "HoroRenderBackendRegistryTests",
                          "HoroXROpenXRHostInterfaceConsumer"}
     assert set(build_targets.group(1).split()) == expected_targets
-    test_selection = re.search(r"ctest --test-dir build/ci .*?\s+-R '([^']+)'", shader_workflow, re.S)
+    regression = workflow_step(shader_workflow, "Run Vulkan native-call and lifecycle regressions")
+    test_selection = re.search(r"ctest --test-dir build/ci .*?\s+-R '([^']+)'", regression, re.S)
     assert test_selection is not None
     selected = re.compile(test_selection.group(1))
     for target in expected_targets - flat_targets - {"HoroXROpenXRHostInterfaceConsumer"}:
@@ -822,7 +880,7 @@ def test_windows_parallel_tests_require_native_fixture_isolation_qualification()
     assert "pytest==9.0.3" in qualification
     assert "tests/python/test_ci_case_isolation.py" in qualification
     assert "-k 'test_generated_suite_properties_preserve_contracts_and_control_concurrency or test_case_' -q" in qualification
-    assert "timeout-minutes: 2" in qualification
+    assert "timeout-minutes: 5" in qualification
     assert "continue-on-error" not in qualification
     assert native.index(marker) < native.index("- name: Configure Debug") < native.index("- name: Test Debug")
 
@@ -832,7 +890,7 @@ def test_pr_bursts_bound_matrix_width_without_dropping_platforms() -> None:
     assert "max-parallel: 1" in workflow_job("shaders")
     android = (ROOT / ".github/workflows/android-package.yml").read_text(encoding="utf-8")
     assert "max-parallel: 1" in android
-    assert "profile: [qualification-debug, qualification-release, qualification-vulkan-development]" in android
+    assert "profile: [qualification-debug, qualification-release, qualification-vulkan-development, qualification-openxr-development]" in android
     assert preset("buildPresets", "ci-audio-release")["jobs"] == 2
     assert preset("testPresets", "ci-audio-release")["execution"]["jobs"] == 1
 

@@ -46,6 +46,29 @@ namespace Horo::Animation::Test {
         CHECK(instance.QueryAction(request.handle).observation.sampleTime.ticks == 30);
     }
 
+    TEST_CASE("Action root motion includes the terminal interval exactly once and respects the root mask",
+              "[animation][actions][root-motion]") {
+        auto data = Data();
+        float multiplier = 1.0F;
+        SECTION("root excluded by mask") {
+            data.actions[0].mask.defaultWeight = 0.0F;
+            multiplier = 0.0F;
+        }
+        Prepared prepared(data, 6, true);
+        auto instance = prepared.Create();
+        REQUIRE(instance.QueueAction(Request()).HasValue());
+        AnimationRootMotionDelta motion;
+        Tick playing(instance, 1, 10);
+        REQUIRE(instance.CopyRootMotion(playing.outcome.publication.currentPose, motion).HasValue());
+        CHECK(motion.translation.x == multiplier * 20.0F);
+        Tick completed(instance, 2, 50);
+        REQUIRE(instance.CopyRootMotion(completed.outcome.publication.currentPose, motion).HasValue());
+        CHECK(motion.translation.x == multiplier * 100.0F);
+        Tick later(instance, 3, 10);
+        REQUIRE(instance.CopyRootMotion(later.outcome.publication.currentPose, motion).HasValue());
+        CHECK(motion.translation.x == 0.0F);
+    }
+
     TEST_CASE("Animation action masks preserve the advancing base pose", "[animation][actions]") {
         auto data = Data();
         data.actions[0].mask.defaultWeight = 0;

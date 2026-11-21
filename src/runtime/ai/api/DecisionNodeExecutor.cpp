@@ -116,14 +116,17 @@ namespace Horo::AI {
             for (const auto &node : plan.Nodes()) {
                 if (node.intrinsic != DecisionControlKind::Unspecified)
                     continue;
-                if (auto bound = BindNode(plan, node, capabilities, configuration); bound.HasError())
+                const auto resolved = Resolve(node, capabilities);
+                if (resolved.HasError())
+                    return Result<void>::Failure(resolved.ErrorValue());
+                if (auto bound = BindNode(plan, node, resolved.Value(), configuration, nullptr, nullptr); bound.HasError())
                     return bound;
             }
             return Result<void>::Success();
         }
 
         Result<void> BindExecutable(const BehaviorTreeExecutionPlan &execution, AiCapabilitySet capabilities,
-                                    std::span<const DecisionNodeConfiguration> configuration) {
+                                    std::span<const DecisionNodeConfiguration> configuration, IDecisionQueryTaskBinder *queryTasks) {
             const auto &plan = execution.Bindings();
             if (auto valid = ValidateConfiguration(plan, configuration); valid.HasError())
                 return valid;
@@ -139,7 +142,7 @@ namespace Horo::AI {
                     return Result<void>::Failure(resolved.ErrorValue());
                 if (generation_->contracts_[resolved.Value()].role != required.role)
                     return Failure<void>(AIErrors::DecisionAssetSchemaInvalid);
-                if (auto bound = BindNode(plan, *node, capabilities, configuration); bound.HasError())
+                if (auto bound = BindNode(plan, *node, resolved.Value(), configuration, &execution, queryTasks); bound.HasError())
                     return bound;
             }
             return Result<void>::Success();
@@ -255,12 +258,30 @@ namespace Horo::AI {
             return Result<std::size_t>::Success(index);
         }
 
-        Result<void> BindNode(const DecisionAssetPlan &plan, const DecisionPlanNode &node, AiCapabilitySet capabilities,
-                              std::span<const DecisionNodeConfiguration> configuration) {
-            auto resolved = Resolve(node, capabilities);
-            if (resolved.HasError())
-                return Result<void>::Failure(resolved.ErrorValue());
-            const auto index = resolved.Value();
+        /** @brief Owns a compiled query task using the same operation and teardown routing as native nodes. */
+        Result<void> BindQueryTask(const BehaviorTreeExecutionPlan *execution, IDecisionQueryTaskBinder *binder,
+                                   const DecisionNodeConfiguration *configuration) {
+            if (!execution || !binder)
+                return Failure<void>(AIErrors::CapabilityUnavailable);
+            if (!configuration)
+                return Failure<void>(AIErrors::DecisionAssetSchemaInvalid);
+            auto bound = binder->BindQueryTask(*execution, *configuration);
+            if (bound.HasError())
+                return Result<void>::Failure(bound.ErrorValue());
+            auto task = std::move(bound).Value();
+            if (!task)
+                return Failure<void>(AIErrors::RuntimeUnavailable);
+            static constexpr DecisionNodeFactoryBinding owner{.destroy = [](void *, IBehaviorTreeExecutor *instance) noexcept {
+                delete instance;
+            }};
+            nodes_.push_back({.node = configuration->node, .role = DecisionNodeRole::Task, .factory = owner, .instance = task.get()});
+            static_cast<void>(task.release());
+            return Result<void>::Success();
+        }
+
+        Result<void> BindNode(const DecisionAssetPlan &plan, const DecisionPlanNode &node, std::size_t index,
+                              std::span<const DecisionNodeConfiguration> configuration, const BehaviorTreeExecutionPlan *execution,
+                              IDecisionQueryTaskBinder *queryTasks) {
             const auto &contract = generation_->contracts_[index];
             if (auto matched = ValidateBoundRequirements(plan, node, contract.descriptor); matched.HasError())
                 return matched;
@@ -270,6 +291,12 @@ namespace Horo::AI {
             auto properties = Detail::BindDecisionProperties(contract, values);
             if (properties.HasError())
                 return Result<void>::Failure(properties.ErrorValue());
+            const auto &bound = properties.Value();
+            if (std::ranges::find(bound, BehaviorTreePropertyKind::QueryOutput, &BehaviorTreeProperty::kind) != bound.end()) {
+                if (contract.role != DecisionNodeRole::Task)
+                    return Failure<void>(AIErrors::DecisionAssetSchemaInvalid);
+                return BindQueryTask(execution, queryTasks, found == configuration.end() ? nullptr : std::to_address(found));
+            }
             const auto factory = generation_->factories_[index];
             auto *instance = factory.create(factory.userData, properties.Value());
             if (!instance)
@@ -347,12 +374,20 @@ namespace Horo::AI {
     Result<std::unique_ptr<IBehaviorTreeExecutor>> DecisionNodeGeneration::CreateExecutor(
         std::shared_ptr<const DecisionNodeGeneration> self, const BehaviorTreeExecutionPlan &plan, AiCapabilitySet capabilities,
         std::span<const DecisionNodeConfiguration> configuration) const {
+        return CreateExecutor(std::move(self), plan, capabilities, configuration, nullptr);
+    }
+
+    /** @copydoc DecisionNodeGeneration::CreateExecutor(std::shared_ptr<const DecisionNodeGeneration>,const BehaviorTreeExecutionPlan
+     * &,AiCapabilitySet,std::span<const DecisionNodeConfiguration>,IDecisionQueryTaskBinder *) */
+    Result<std::unique_ptr<IBehaviorTreeExecutor>> DecisionNodeGeneration::CreateExecutor(
+        std::shared_ptr<const DecisionNodeGeneration> self, const BehaviorTreeExecutionPlan &plan, AiCapabilitySet capabilities,
+        std::span<const DecisionNodeConfiguration> configuration, IDecisionQueryTaskBinder *queryTasks) const {
         using Output = Result<std::unique_ptr<IBehaviorTreeExecutor>>;
         if (self.get() != this || !CanAdmit() || !capabilities.IsValid())
             return Output::Failure(MakeError(AIErrors::RuntimeUnavailable));
         try {
             auto result = std::make_unique<RegisteredDecisionNodeExecutor>(std::move(self));
-            if (auto bound = result->BindExecutable(plan, capabilities, configuration); bound.HasError())
+            if (auto bound = result->BindExecutable(plan, capabilities, configuration, queryTasks); bound.HasError())
                 return Output::Failure(bound.ErrorValue());
             if (!CanAdmit())
                 return Output::Failure(MakeError(AIErrors::RuntimeUnavailable));

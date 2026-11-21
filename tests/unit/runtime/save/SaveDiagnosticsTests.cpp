@@ -323,6 +323,41 @@ namespace Horo::Runtime {
             RequireFailure(Record(unknownCause), SaveErrors::DiagnosticInvalid);
         }
 
+        TEST_CASE("Published Save errors use only canonical descriptors across nested provider failures", "[save][diagnostics]") {
+            auto provider = MakeError(SaveErrors::StorageTransientIo, "provider token");
+            provider.domain = ErrorDomainId{"native.filesystem"};
+            provider.code = ErrorCode{"private.operation"};
+            auto nested = WithCause(std::move(provider), MakeError(SaveErrors::ArchiveChunkHashMismatch, "private payload"));
+            const auto original = WrapError(SaveErrors::CaptureIncomplete, std::move(nested), "private title and path");
+            const auto projected = RedactSaveDiagnosticError(original);
+
+            const std::array expected{&SaveErrors::CaptureIncomplete, &SaveErrors::DiagnosticUnsupported,
+                                      &SaveErrors::ArchiveChunkHashMismatch};
+            const Error *node = &projected;
+            for (const auto *descriptor : expected) {
+                REQUIRE(node != nullptr);
+                CHECK(node->code.Value() == descriptor->code.Value());
+                CHECK(node->domain.Value() == descriptor->domain.Value());
+                CHECK(node->message == descriptor->summary);
+                CHECK(node->diagnostics.empty());
+                node = node->cause.Get();
+            }
+            CHECK(node == nullptr);
+            CHECK(original.message == "private title and path");
+
+            auto deep = original;
+            for (std::size_t index = 0; index < MaximumSaveDiagnosticCauseDepth + 1; ++index)
+                deep = WrapError(SaveErrors::CaptureIncomplete, std::move(deep), "private title");
+            const auto bounded = RedactSaveDiagnosticError(deep);
+            node = &bounded;
+            for (std::size_t index = 0; index < MaximumSaveDiagnosticCauseDepth + 1; ++index) {
+                REQUIRE(node != nullptr);
+                CHECK(node->message == SaveErrors::CaptureIncomplete.summary);
+                node = node->cause.Get();
+            }
+            CHECK(node == nullptr);
+        }
+
         TEST_CASE("Runtime Save private evidence is discarded with bounded UTF-8-safe facts", "[save][diagnostics]") {
             const std::string exact(MaximumPrivateSaveEvidenceBytes, 'x');
             auto record =

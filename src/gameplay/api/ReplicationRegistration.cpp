@@ -13,11 +13,18 @@ namespace Horo::Gameplay {
     /** @copydoc GameplayReplicationAdmissionPolicy::RequireAdmission */
     Result<void> GameplayReplicationAdmissionPolicy::RequireAdmission(const Network::ReplicationDescriptorSnapshotPtr &registered,
                                                                       const std::span<const ModuleId> modules) const {
+        auto assessment = Assess(registered, modules);
+        return assessment.HasError() ? Result<void>::Failure(assessment.ErrorValue()) : assessment.Value().RequireAdmission();
+    }
+
+    /** @copydoc GameplayReplicationAdmissionPolicy::Assess */
+    Result<Network::ReplicationDeclarationAssessment> GameplayReplicationAdmissionPolicy::Assess(
+        const Network::ReplicationDescriptorSnapshotPtr &registered, const std::span<const ModuleId> modules) const {
         if (inventory.completeness != Network::NetworkReplicationInventoryCompleteness::Complete ||
             (use != Network::ReplicationDeclarationUse::ServerActivation && use != Network::ReplicationDeclarationUse::ClientActivation))
-            return Result<void>::Failure(MakeError(Network::NetworkErrors::ReplicationDescriptorIncompatible));
-        auto assessment = Network::AssessReplicationDeclarations(inventory.declarations, registered, modules, use, limits);
-        return assessment.HasError() ? Result<void>::Failure(assessment.ErrorValue()) : assessment.Value().RequireAdmission();
+            return Result<Network::ReplicationDeclarationAssessment>::Failure(
+                MakeError(Network::NetworkErrors::ReplicationDescriptorIncompatible));
+        return Network::AssessReplicationDeclarations(inventory.declarations, registered, modules, use, limits);
     }
 
     struct GameplayReplicationLease::State final {

@@ -2,6 +2,7 @@
 
 #include "editor/input/EditorInputActions.h"
 
+#include <algorithm>
 #include <array>
 #include <utility>
 
@@ -53,6 +54,62 @@ namespace Horo::Editor {
     void RouteWorkspaceInputAction(Input::InputRouter &router, const Input::InputContextToken &context,
                                    const EditorWorkspaceViewModel &model, EditorWorkspaceViewCommandData &command,
                                    const bool activePCGDocument, const WorkspaceInputCapture capture) {
+        const auto blackboard = std::ranges::find_if(model.blackboardDocuments, [&](const auto &entry) {
+            return entry.snapshot.document.instance == model.workspacePanelHost.ActiveDocument();
+        });
+        if (blackboard != model.blackboardDocuments.end()) {
+            const auto &snapshot = blackboard->snapshot;
+            const auto route = [&](BlackboardDocumentOperation operation) {
+                command.command = EditorWorkspaceViewCommand::BlackboardDocument;
+                command.blackboard =
+                    BlackboardWorkspaceRequest{.fence = {snapshot.document.instance, snapshot.revision}, .operation = operation};
+            };
+            if (router.ReadAction(context, Input::ActionId{kActionSave}).pressed)
+                route(BlackboardDocumentOperation::Save);
+            else if (!command.sourceTextInputOwned && !capture.textInputRequested && !capture.popupOpen) {
+                if (router.ReadAction(context, Input::ActionId{kActionRedo}).pressed)
+                    route(BlackboardDocumentOperation::Redo);
+                else if (router.ReadAction(context, Input::ActionId{kActionUndo}).pressed)
+                    route(BlackboardDocumentOperation::Undo);
+            }
+            return;
+        }
+        const auto query = std::ranges::find_if(model.environmentQueryDocuments, [&](const auto &entry) {
+            return entry.identity.instance == model.workspacePanelHost.ActiveDocument();
+        });
+        if (query != model.environmentQueryDocuments.end()) {
+            using enum EnvironmentQueryEditAction;
+            if (!query->settings && !query->perception)
+                return;
+            if (router.ReadAction(context, Input::ActionId{kActionSave}).pressed)
+                command = MakeEnvironmentQueryEditCommand(*query, Save);
+            else if (!command.sourceTextInputOwned && !capture.textInputRequested && !capture.popupOpen) {
+                if (router.ReadAction(context, Input::ActionId{kActionRedo}).pressed)
+                    command = MakeEnvironmentQueryEditCommand(*query, Redo);
+                else if (router.ReadAction(context, Input::ActionId{kActionUndo}).pressed)
+                    command = MakeEnvironmentQueryEditCommand(*query, Undo);
+            }
+            return;
+        }
+        const auto decision = std::ranges::find_if(model.decisionGraphDocuments, [&](const auto &entry) {
+            return entry.identity.instance == model.workspacePanelHost.ActiveDocument();
+        });
+        if (decision != model.decisionGraphDocuments.end()) {
+            const auto route = [&](const DecisionHistoryAction operation) {
+                command = MakeDecisionHistoryCommand(*decision, operation);
+            };
+            if (!decision->editable)
+                return;
+            if (router.ReadAction(context, Input::ActionId{kActionSave}).pressed)
+                route(DecisionHistoryAction::Save);
+            else if (!command.sourceTextInputOwned && !capture.textInputRequested && !capture.popupOpen) {
+                if (router.ReadAction(context, Input::ActionId{kActionRedo}).pressed)
+                    route(DecisionHistoryAction::Redo);
+                else if (router.ReadAction(context, Input::ActionId{kActionUndo}).pressed)
+                    route(DecisionHistoryAction::Undo);
+            }
+            return;
+        }
         if (router.ReadAction(context, Input::ActionId{kActionSave}).pressed) {
             command.command = EditorWorkspaceViewCommand::SaveScene;
             for (const auto &source : model.sourceDocuments) {

@@ -110,14 +110,14 @@ namespace Horo::XR::OpenXRInternal {
     }
 
     /** @copydoc OpenXRSessionEvents::StateChanged */
-    Result<void> OpenXRSessionEvents::StateChanged(const XrEventDataSessionStateChanged &event) {
-        auto current = Current();
-        if (current.HasError())
-            return Result<void>::Failure(current.ErrorValue());
-        if (event.session != current.Value().session)
+    Result<void> OpenXRSessionEvents::StateChanged(const XrEventDataSessionStateChanged &event, const XrSession_T *session) {
+        if (event.session != session)
             return Result<void>::Success();
         if (event.state <= XR_SESSION_STATE_UNKNOWN || event.state > XR_SESSION_STATE_EXITING)
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
+        if ((sessions_->Snapshot().state == XRSessionState::Focused && event.state != XR_SESSION_STATE_FOCUSED) ||
+            event.state == XR_SESSION_STATE_STOPPING || event.state == XR_SESSION_STATE_EXITING)
+            native_->RevokePassthrough();
         observed_ = event.state;
         switch (event.state) {
             using enum Horo::XR::XRSessionEvent;
@@ -134,48 +134,108 @@ namespace Horo::XR::OpenXRInternal {
             case XR_SESSION_STATE_STOPPING:
                 return sessions_->ApplyEvent(session_, Stopping);
             case XR_SESSION_STATE_LOSS_PENDING:
-                return sessions_->ApplyEvent(session_, SessionLost);
+                return RecordLoss(NativeSessionEventLoss::Session);
+            case XR_SESSION_STATE_EXITING:
+                return running_ ? RecordLoss(NativeSessionEventLoss::EventHistory) : Result<void>::Success();
             default:
                 return Result<void>::Success();
         }
     }
 
+    /** @copydoc OpenXRSessionEvents::RecordLoss */
+    Result<void> OpenXRSessionEvents::RecordLoss(const NativeSessionEventLoss reason) {
+        native_->RevokePassthrough();
+        const auto event = reason == NativeSessionEventLoss::Instance ? XRSessionEvent::InstanceLost : XRSessionEvent::SessionLost;
+        if (auto applied = sessions_->ApplyEvent(session_, event); applied.HasError())
+            return applied;
+        loss_ = reason;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRSessionEvents::CheckCall */
+    Result<void> OpenXRSessionEvents::CheckCall(const char *operation, const XrResult result) {
+        if (auto fence = Current(); fence.HasError())
+            return Result<void>::Failure(fence.ErrorValue());
+        switch (result) {
+            case XR_SUCCESS:
+                return Result<void>::Success();
+            case XR_SESSION_LOSS_PENDING:
+            case XR_ERROR_SESSION_LOST:
+                return RecordLoss(NativeSessionEventLoss::Session);
+            case XR_ERROR_INSTANCE_LOST:
+                return RecordLoss(NativeSessionEventLoss::Instance);
+            default:
+                return Result<void>::Failure(Failure(operation, result));
+        }
+    }
+
     /** @copydoc OpenXRSessionEvents::Progress */
     Result<void> OpenXRSessionEvents::Progress(const bool wantsPlay) {
+        const bool begin =
+            !running_ && wantsPlay && observed_ == XR_SESSION_STATE_READY && sessions_->Snapshot().state == XRSessionState::Ready;
+        const bool exit = running_ && !wantsPlay && !exitRequested_ && observed_ != XR_SESSION_STATE_STOPPING;
+        const bool end = running_ && observed_ == XR_SESSION_STATE_STOPPING && ImagesRetired();
+        if (!begin && !exit && !end)
+            return Result<void>::Success();
         auto current = Current();
         if (current.HasError())
             return Result<void>::Failure(current.ErrorValue());
-        if (!running_ && wantsPlay && observed_ == XR_SESSION_STATE_READY && sessions_->Snapshot().state == XRSessionState::Ready) {
-            const XrSessionBeginInfo begin{XR_TYPE_SESSION_BEGIN_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO};
-            const auto result = dispatch_.begin(current.Value().session, &begin);
-            if (XR_FAILED(result))
-                return Result<void>::Failure(Failure("xrBeginSession", result));
-            running_ = true;
+        if (begin) {
+            const XrSessionBeginInfo info{XR_TYPE_SESSION_BEGIN_INFO, nullptr, XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO};
+            const auto result = dispatch_.begin(current.Value().session, &info);
+            // A native success still creates cleanup debt if a foreign call revoked the publication during begin.
+            running_ = result == XR_SUCCESS;
+            if (auto checked = CheckCall("xrBeginSession", result); checked.HasError() || loss_ != NativeSessionEventLoss::None)
+                return checked;
             exitRequested_ = false;
-            if (auto fence = Current(); fence.HasError())
-                return Result<void>::Failure(fence.ErrorValue());
-            return sessions_->ApplyEvent(session_,
-                                         result == XR_SESSION_LOSS_PENDING ? XRSessionEvent::SessionLost : XRSessionEvent::Started);
+            return sessions_->ApplyEvent(session_, XRSessionEvent::Started);
         }
-        if (running_ && !wantsPlay && !exitRequested_ && observed_ != XR_SESSION_STATE_STOPPING) {
+        if (exit) {
             const auto result = dispatch_.requestExit(current.Value().session);
-            if (XR_FAILED(result))
-                return Result<void>::Failure(Failure("xrRequestExitSession", result));
-            exitRequested_ = true;
-            if (auto fence = Current(); fence.HasError())
-                return Result<void>::Failure(fence.ErrorValue());
+            exitRequested_ = result == XR_SUCCESS;
+            if (auto checked = CheckCall("xrRequestExitSession", result); checked.HasError() || loss_ != NativeSessionEventLoss::None)
+                return checked;
         }
-        if (running_ && observed_ == XR_SESSION_STATE_STOPPING && ImagesRetired()) {
+        if (end) {
             const auto result = dispatch_.end(current.Value().session);
-            if (XR_FAILED(result))
-                return Result<void>::Failure(Failure("xrEndSession", result));
-            running_ = false;
+            if (result == XR_SUCCESS)
+                running_ = false;
+            if (auto checked = CheckCall("xrEndSession", result); checked.HasError() || loss_ != NativeSessionEventLoss::None)
+                return checked;
             exitRequested_ = false;
-            if (auto fence = Current(); fence.HasError())
-                return Result<void>::Failure(fence.ErrorValue());
-            return sessions_->ApplyEvent(session_, result == XR_SESSION_LOSS_PENDING ? XRSessionEvent::SessionLost : XRSessionEvent::Idle);
+            return sessions_->ApplyEvent(session_, XRSessionEvent::Idle);
         }
         return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRSessionEvents::ReadReferenceChange */
+    Result<std::optional<XRReferenceSpaceChange>> OpenXRSessionEvents::ReadReferenceChange(
+        const XrEventDataReferenceSpaceChangePending &event) const {
+        using Outcome = Result<std::optional<XRReferenceSpaceChange>>;
+        XRSpaceKind kind;
+        switch (event.referenceSpaceType) {
+            case XR_REFERENCE_SPACE_TYPE_VIEW:
+                kind = XRSpaceKind::View;
+                break;
+            case XR_REFERENCE_SPACE_TYPE_LOCAL:
+                kind = XRSpaceKind::Local;
+                break;
+            case XR_REFERENCE_SPACE_TYPE_STAGE:
+                kind = XRSpaceKind::Stage;
+                break;
+            default:
+                return Outcome::Success(std::nullopt);
+        }
+        const auto time = XRRuntimeTime::Create(event.changeTime);
+        if (time.HasError() || (event.poseValid != XR_TRUE && event.poseValid != XR_FALSE))
+            return Outcome::Failure(MakeError(XRErrors::OperationInvalid, "Malformed OpenXR reference change evidence."));
+        if (event.poseValid == XR_TRUE) {
+            const auto &p = event.poseInPreviousSpace.position;
+            const auto &q = event.poseInPreviousSpace.orientation;
+            if (!Math::IsFinite(Math::Vec3{p.x, p.y, p.z}) || Math::Quaternion{q.x, q.y, q.z, q.w}.TryNormalized().HasError())
+                return Outcome::Failure(MakeError(XRErrors::OperationInvalid, "Malformed OpenXR recenter pose."));
+        }
+        return Outcome::Success(XRReferenceSpaceChange{session_, kind, time.Value(), event.poseValid == XR_TRUE});
     }
 
     /** @copydoc OpenXRSessionEvents::ProcessEvent */
@@ -184,18 +244,17 @@ namespace Horo::XR::OpenXRInternal {
         if (buffer.type == XR_TYPE_EVENT_DATA_SESSION_STATE_CHANGED) {
             XrEventDataSessionStateChanged state;
             std::memcpy(&state, &buffer, sizeof(state));
-            if (auto changed = StateChanged(state); changed.HasError())
+            const bool admitted = sessions_->Snapshot().admitsActions;
+            if (auto changed = StateChanged(state, session); changed.HasError())
                 return Result<void>::Failure(changed.ErrorValue());
+            observation.actionsInterrupted |= admitted && !sessions_->Snapshot().admitsActions;
             observation.exitRequested |= state.session == session && state.state == XR_SESSION_STATE_EXITING;
         } else if (buffer.type == XR_TYPE_EVENT_DATA_INSTANCE_LOSS_PENDING) {
-            if (auto lost = sessions_->ApplyEvent(session_, XRSessionEvent::InstanceLost); lost.HasError())
-                return Result<void>::Failure(lost.ErrorValue());
+            return RecordLoss(NativeSessionEventLoss::Instance);
         } else if (buffer.type == XR_TYPE_EVENT_DATA_EVENTS_LOST) {
             // Missing state transitions cannot authorize continued frames or a later Ready restart.
             // Logical loss retains native frame/image debt; it does not manufacture end/release success.
-            if (auto lost = sessions_->ApplyEvent(session_, XRSessionEvent::SessionLost); lost.HasError())
-                return Result<void>::Failure(lost.ErrorValue());
-            return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable, "OpenXR event loss revoked session admission"));
+            return RecordLoss(NativeSessionEventLoss::EventHistory);
         } else if (buffer.type == XR_TYPE_EVENT_DATA_INTERACTION_PROFILE_CHANGED) {
             XrEventDataInteractionProfileChanged event;
             std::memcpy(&event, &buffer, sizeof(event));
@@ -203,7 +262,16 @@ namespace Horo::XR::OpenXRInternal {
         } else if (buffer.type == XR_TYPE_EVENT_DATA_REFERENCE_SPACE_CHANGE_PENDING) {
             XrEventDataReferenceSpaceChangePending event;
             std::memcpy(&event, &buffer, sizeof(event));
-            observation.originChanged |= event.session == session;
+            if (event.session == session) {
+                native_->RevokePassthrough();
+                auto evidence = ReadReferenceChange(event);
+                if (evidence.HasError())
+                    return Result<void>::Failure(evidence.ErrorValue());
+                if (evidence.Value())
+                    observation.referenceChange = evidence.Value();
+            }
+        } else {
+            native_->ObservePassthroughEvent(buffer);
         }
         return Result<void>::Success();
     }
@@ -213,30 +281,37 @@ namespace Horo::XR::OpenXRInternal {
         using Outcome = Result<NativeSessionEventObservation>;
         if (std::this_thread::get_id() != lane_ || dispatching_)
             return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
+        if (loss_ != NativeSessionEventLoss::None)
+            return Outcome::Success({.loss = loss_});
         DispatchScope scope{dispatching_};
+        if (!wantsPlay)
+            native_->RevokePassthrough();
         auto current = Current();
         if (current.HasError())
             return Outcome::Failure(current.ErrorValue());
         NativeSessionEventObservation observation;
-        for (std::uint32_t index = 0; index < 64; ++index) {
+        for (std::uint32_t index = 0; index < MaximumEventsPerPoll; ++index) {
             XrEventDataBuffer buffer{XR_TYPE_EVENT_DATA_BUFFER};
             const auto result = dispatch_.poll(current.Value().instance, &buffer);
-            if (XR_FAILED(result))
-                return Outcome::Failure(Failure("xrPollEvent", result));
-            if (auto fence = Current(); fence.HasError())
-                return Outcome::Failure(fence.ErrorValue());
-            if (result != XR_SUCCESS && result != XR_EVENT_UNAVAILABLE)
-                return Outcome::Failure(Failure("xrPollEvent", result));
-            if (result == XR_EVENT_UNAVAILABLE) {
-                if (auto progressed = Progress(wantsPlay); progressed.HasError())
-                    return Outcome::Failure(progressed.ErrorValue());
+            if (auto checked = CheckCall("xrPollEvent", result == XR_EVENT_UNAVAILABLE ? XR_SUCCESS : result); checked.HasError())
+                return Outcome::Failure(checked.ErrorValue());
+            if (result == XR_SUCCESS) {
+                if (auto applied = ProcessEvent(buffer, current.Value().session, observation); applied.HasError())
+                    return Outcome::Failure(applied.ErrorValue());
+            }
+            if (observation.referenceChange) {
+                // Return one typed notice at a time and force another poll to prove the event queue drained.
+                observation.morePending = true;
                 return Outcome::Success(observation);
             }
-            if (auto applied = ProcessEvent(buffer, current.Value().session, observation); applied.HasError())
-                return Outcome::Failure(applied.ErrorValue());
-            // Begin promptly after the actual READY event before consuming later native running-state events.
-            if (auto progressed = Progress(wantsPlay); progressed.HasError())
-                return Outcome::Failure(progressed.ErrorValue());
+            if (loss_ == NativeSessionEventLoss::None && !observation.exitRequested) {
+                // Begin promptly after the actual READY event before consuming later native running-state events.
+                if (auto progressed = Progress(wantsPlay); progressed.HasError())
+                    return Outcome::Failure(progressed.ErrorValue());
+            }
+            observation.loss = loss_;
+            if (result == XR_EVENT_UNAVAILABLE || loss_ != NativeSessionEventLoss::None || observation.exitRequested)
+                return Outcome::Success(observation);
         }
         observation.morePending = true;
         return Outcome::Success(observation);

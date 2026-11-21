@@ -614,6 +614,13 @@ provenance. Static-only prefab content appears only in the cooked scene. A
 dynamic-spawn root. Developer source profiles may include sources explicitly, but
 they never become runtime parsing authority.
 
+The release Package stage uses `PreparePrefabReleaseContent` with the exact Cook
+receipt and the frozen chunk plan. It verifies the expanded Scene and runtime
+template envelopes against that generation, then writes their digests into the
+bounded `horo.prefab.content` manifest extension alongside the archive digest.
+The release publisher verifies and promotes the staged bytes using the final
+manifest.
+
 Source `.prefab` files share `ProjectVersion` and its migration pipeline. Cooked blobs do **not**.
 The header carries a distinct `cookedFormatVersion`. Runtime never migrates cooked bytes.
 Prefab cooking preserves the Asset Pipeline's complete canonical versioned cache-key inputs:
@@ -820,9 +827,28 @@ fail or roll back the successful structural spawn. Faulted behaviors do not star
 every constructed behavior receives `OnDestroy` exactly once during normal teardown.
 Created-disabled behaviors still run `OnCreate` but defer `OnEnable` / `OnStart` until enabled.
 
+A committed `PrefabInstance` maps each full `PrefabObjectAddress` to its issued
+entity and immutable cooked source provenance. Each nested placement keeps its
+own full address. The spawn owner reserves this map before queueing and binds
+the exact deferred tokens from the Scene receipt. `ResolveMember` requires a
+current view of the same Scene incarnation and validates both the root and the
+requested entity generation.
+
+`IPrefabPersistenceOwner::Lookup` carries the same evidence across durable
+reconstruction. Host adapters supply verified recipe provenance parallel to the
+live members in cooked order, with the live root first. Omit tombstones from
+both vectors. Reacquisition validates complete, unique evidence against the
+current Scene before returning a new `PrefabInstance`. Host adapters rebuild
+against the revised lookup value layout and populate one provenance entry per
+returned member. Save storage and transport remain outside this interface.
+
 Commit and cancellation are serialized by the coordinator/owner-thread protocol: cancellation
 accepted before publication leaves no entities; cancellation after publication does not undo
 commit or change the successful spawn into a cancelled operation.
+Terminal retirement releases the operation's unpublished template, token and
+inventory reservations, even while a caller retains the terminal result. Scene
+drains cancelled submissions at its structural safe point. The host closes
+asset loaders before the shared job owner drains accepted work.
 
 ### Runtime spawn recursion
 
@@ -950,7 +976,7 @@ enum class PrefabError : std::uint32_t {
 | **Lifecycle** | Cancel/unload/replace scene while asset loads | No late publication into destroyed or replacement scene |
 | **Lifecycle** | Parent destroyed/reused while asset loads | `InvalidParent`; no attachment to replacement entity |
 | **Lifecycle** | Created-disabled behavior | `OnCreate` runs; `OnEnable`/`OnStart` wait for first enable |
-| **Lifecycle** | Post-commit behavior construction or hook fault | Structural spawn remains committed; fault reported; normal teardown |
+| **Lifecycle** | Post-commit behavior construction or hook fault | Structural spawn remains committed and reports the fault. New behavior instances roll back and their queued events are discarded, preserving earlier events. |
 | **Cook** | Nested dependency, target, settings, or version changes | Full canonical cache key changes; no stale artifact reuse |
 | **Identity** | Built-in/project component and property renamed or reordered | Stable IDs retain target; labels/offsets/order are irrelevant |
 | **Identity** | Same component type appears twice on one object | Persisted `ComponentInstanceId` selects the exact occurrence |
@@ -1288,6 +1314,63 @@ providers and borrowed providers obey the same exact Scene identity fences.
 Public-header consumers and real multi-owner rollback/lifecycle tests qualify
 the two narrow headers and the application composition.
 
+The AI owner resolves controller, decision and blackboard bindings before the
+structural transaction publishes. Strict gameplay hosts reject a missing
+controller descriptor with the whole candidate still detached. Editor preview
+and prefab authoring can explicitly select
+`AiMissingControllerPolicy::PreserveInactive`. A well-formed unresolved
+controller then publishes as a degraded AI record with its authored fields
+preserved. The degraded record has no blackboard, task admission or execution
+capability. Malformed and incompatible bindings still reject the transaction.
+
+Despawn revokes the actor's AI lifetime and dependent decision reservations at
+the aggregate fence. After publication the AI owner unregisters its scheduler
+entry, cancels owned work and tears down blackboard reads and observers. Resident
+agents outside the destroyed group retain their generations and state.
+Host-owned optional work captures the exact agent lifetime through
+`AiRuntimeCapability::CaptureAgentLifetime`. Captured Perception endpoints
+exclude revoked listeners and sources even before the next spatial publication.
+EQS observes revocation before another provider poll. A configured Navigation
+agent lifecycle removes its registration and retires its query at the next
+Navigation owner reconciliation. These scopes retain no Scene or provider
+borrow. A host still supplies the actual Perception and Navigation descriptors
+and owners.
+
+In a configured authoritative headless world, controller endpoint declarations
+are validated against the host's immutable Perception registry before the Scene
+commits. The AI owner stages the complete endpoint population with AI records
+and preserves authored source data. The host may publish these registrations
+through the existing spatial owner using explicit global position evidence.
+Absent required controller endpoint metadata or an unavailable host position
+authority stops activation. A missing position in a later capture preserves the
+previous spatial publication, with exact agent lifetime revocation still
+excluding retired endpoints.
+
+The authoritative Scene host also supplies absolute positions for prospective
+prefab endpoints during structural preparation. The AI participant combines
+those positions with the retained resident sample, then validates and prepares
+the entire spatial snapshot before the Scene publishes. Missing prospective
+authority or a later owner rejection preserves the prior Scene, AI and spatial
+publications. Despawn can retire the endpoints without another position capture.
+
+An application that already owns an authoritative Navigation world can install
+the Navigation Scene activation participant and its structural agent participant
+on the same Scene service. Enabled prefab agent components require the exact
+active grounded-query world and host admission of their authored profile and
+filter. The registry prepares additions and retirements privately, then publishes
+them at the structural fence with the Scene. Despawn invalidates the exact logical
+Navigation handle even when its world is paused or unloaded. The same fence
+abandons path reservations associated with the retiring registration. Provider
+jobs retain their leases until terminal, and movement owners reconcile through
+the normal Navigation owner phase.
+Prefab topology changes still require a separate topology transaction and are
+rejected before Scene publication.
+
+Host implementations should rebuild against `SceneStructuralParticipantContractVersion`
+5 and account for the new `SceneStructuralOwner::Navigation` category in owner
+dispatch. The application supplies the Navigation world, coordinator and catalog
+admission.
+
 ### Selection Physics endpoint codec domain
 
 Selection creation rewrites internal collider and constraint body endpoints into
@@ -1340,7 +1423,10 @@ series bounds, integration and focused validation.
 package, policy and provider publication fences through generation publication.
 Cache reuse is a separate decision: each scene or explicit runtime template commits
 its own canonical source closure, including nested placements, variant parents,
-declared resource dependencies and only the component/behavior descriptors it uses.
+declared resource dependencies and the component/behavior descriptors used by
+direct members and layer-added components. The selected prefab override schema
+revision contributes to branches that carry typed property or topology intent.
+The full override schema revision remains part of the host freshness fence.
 The scene definition revision derives from that same local closure. Source paths,
 registry publication counters and unrelated selected template roots do not alter
 semantic keys. Target, format, selected producer/tool settings and project-wide

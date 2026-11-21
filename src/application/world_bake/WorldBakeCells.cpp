@@ -19,13 +19,16 @@ namespace Horo::Application {
 
         /** @brief Builds one complete owned cell scene, retaining local references for canonical Scene validation. */
         Result<S::RuntimeSceneDefinition> CellScene(const WorldBakeDetail::PreparedWorld &prepared, const W::StreamingCellId cell,
-                                                    const S::SceneCellPayloadIdentity &identity) {
+                                                    const S::SceneCellPayloadIdentity &identity,
+                                                    std::vector<S::SceneCellWorldAnchor> &anchors) {
             S::SceneDefinitionBuilder builder{identity.scene, identity.revision};
             std::set<std::size_t> includedPages;
             for (const auto &object : prepared.objects) {
                 if (std::ranges::find(object.cells, cell) == object.cells.end())
                     continue;
                 builder.Add(object.entity);
+                if (object.anchor)
+                    anchors.push_back(*object.anchor);
                 if (includedPages.insert(object.sceneIndex).second) {
                     if (auto added = RequirePageAssets(builder, prepared.output.sourceScenes[object.sceneIndex]); added.HasError())
                         return Result<S::RuntimeSceneDefinition>::Failure(added.ErrorValue());
@@ -61,13 +64,14 @@ namespace Horo::Application {
                     return Result<std::shared_ptr<const S::RuntimeSceneCellPayload>>::Failure(MakeError(WorldBakeErrors::Capacity));
                 sourceBytes += (*origin)->absolutePath.size();
             }
-            auto sceneResult = CellScene(prepared, identity.cell, identity);
+            std::vector<S::SceneCellWorldAnchor> anchors;
+            auto sceneResult = CellScene(prepared, identity.cell, identity, anchors);
             if (sceneResult.HasError())
                 return Result<std::shared_ptr<const S::RuntimeSceneCellPayload>>::Failure(
                     WorldBakeDetail::AtSource(sceneResult.ErrorValue(), origin ? *origin : std::nullopt));
             auto scene = std::move(sceneResult).Value();
             const S::SceneCellCookInput input{{identity, scene.Entities(), scene.AssetDependencies(), request.project.components,
-                                               request.project.behaviors, scene.TriggerVolumeEvidence()},
+                                               request.project.behaviors, scene.TriggerVolumeEvidence(), anchors},
                                               identity};
             std::vector<S::SceneCellCookDependency> dependencies;
             for (const auto &dependency : request.project.dependencies)

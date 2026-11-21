@@ -84,6 +84,7 @@ namespace Horo::Runtime {
                                          .committedAttempt = committedFixedStep_.attemptNumber,
                                          .committedFrame = committedFixedStep_.frameNumber,
                                          .committedDuration = committedFixedStep_.duration,
+                                         .presentationAdmittedDuration = presentationAdmittedDuration_,
                                          .simulationPolicy = simulationControl_.Policy()};
         if (auto admitted = DispatchAdmissionResult(dispatchSource_.Begin(RuntimePhase::FixedUpdate, facts)); admitted.HasError())
             return admitted;

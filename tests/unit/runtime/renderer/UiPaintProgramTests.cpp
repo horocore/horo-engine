@@ -152,6 +152,36 @@ TEST_CASE("UI prepared program ordinary mutation reuses residents and cancellati
     REQUIRE(program->Submit(frame, accepted, fixture.Submission(*program, original, bindings)).HasError());
 }
 
+TEST_CASE("UI paint reuses admitted roles when a control indicator appears and disappears",
+          "[renderer][ui-paint][program][accessibility]") {
+    ProgramFixture fixture;
+    fixture.commands[0].payload = UiVisualIndicatorDraw{};
+    const auto dormant = fixture.Extract();
+    auto program = fixture.Create(dormant);
+    std::array<UiRenderImageBinding, 1> bindings;
+    const auto buffers = lifecycleState.createBufferCount;
+    const auto present = [&](const UiRenderGeometryPlan &geometry) {
+        fixture.Encode(*program, geometry, UiRequire(program->Prepare(0, fixture.Submission(*program, geometry, bindings))));
+    };
+    present(dormant);
+    fixture.commands[0].payload = UiVisualIndicatorDraw{UiVisualStateMask{UiVisualState::Checked}};
+    const auto checked = fixture.Extract();
+    CHECK(checked.Batches()[0].key == dormant.Batches()[0].key);
+    CHECK(dormant.Batches()[0].indexCount == 0);
+    CHECK(checked.Batches()[0].indexCount == 24);
+    present(checked);
+    const auto &draws = lifecycleState.uiPaint.passes[3].draws;
+    REQUIRE_FALSE(draws.empty());
+    CHECK(draws.front().indexCount == 24);
+    CHECK(draws.front().sampling == UiPaintSampling::Solid);
+    fixture.commands[0].opacity = 0.0F;
+    const auto hidden = fixture.Extract();
+    CHECK(hidden.Batches()[0].indexCount == 0);
+    present(hidden);
+    CHECK(lifecycleState.createBufferCount == buffers);
+    REQUIRE(program->Shutdown().HasValue());
+}
+
 TEST_CASE("UI prepared program sibling masks retain independent paint order and complete ancestor multiplication",
           "[renderer][ui-paint][program]") {
     ProgramFixture fixture;

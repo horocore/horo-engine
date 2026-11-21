@@ -12,6 +12,7 @@
 #include <algorithm>
 #include <functional>
 #include <limits>
+#include <set>
 #include <thread>
 
 namespace Horo::Prefab::Detail {
@@ -20,8 +21,28 @@ namespace Horo::Prefab::Detail {
     struct PrefabInstanceState final {
         std::shared_ptr<const std::byte> identity;
         std::uint64_t scope{};
-        std::vector<Runtime::EntityRef> entities;
+        Runtime::RuntimeSceneView ownerScene;     /**< Weak incarnation evidence; its captured storage revision may age. */
+        std::vector<Runtime::EntityRef> entities; /**< Exact cooked entity order for root, persistence and despawn. */
+
+        /** @brief Stable authored lookup entry sorted by full expanded source address. */
+        struct SourceMember final {
+            CookedPrefabProvenance provenance;
+            std::size_t entitySlot{};
+
+            /** @brief Returns the full source address used for immutable lookup. */
+            [[nodiscard]] const PrefabObjectAddress &Address() const noexcept {
+                return provenance.sourceObject;
+            }
+        };
+
+        /** @brief Canonicalizes the lookup table independently of cooked group order. */
+        void SortMembers() {
+            std::ranges::sort(members, {}, &SourceMember::Address);
+        }
+
+        std::vector<SourceMember> members;
         std::shared_ptr<IPrefabPersistencePublication> persistence;
+        std::shared_ptr<const Runtime::SceneGroupPublication> publication;
     };
 
     /** @brief Bounded owned request, cancellation and Scene receipt; observation
@@ -42,19 +63,26 @@ namespace Horo::Prefab::Detail {
         std::optional<PreparedPrefabSpawn> preparedTemplate;
         PrefabInstance instance;
         std::shared_ptr<PrefabInstanceState> prepared;
+        std::optional<std::vector<Runtime::DeferredEntity>> creations; /**< Exact issued tokens in the same order as cooked entities. */
         std::shared_ptr<const Runtime::SceneStructuralReceipt> receipt;
         std::optional<Error> error;
         const Error cancelledFailure{MakeError(PrefabErrors::Cancelled)}; /**< Prepared before admission; noexcept
                                                                              shutdown only borrows it. */
         std::vector<Assets::AssetId> lineage;
         std::string creator;
+        std::shared_ptr<const Runtime::SceneGroupPublication> replicaPublication;
 
         /** @brief Adopts exactly the real receipt's complete group using capacity reserved before queue admission. */
         void PublishCreatedGroup() noexcept {
             if (!prepared)
                 return;
-            for (const auto &entry : receipt->ResultValue()->created)
-                prepared->entities.push_back(entry.entity);
+            const auto &issued = *creations;
+            for (const auto &entry : receipt->ResultValue()->created) {
+                const auto token = std::ranges::lower_bound(issued, entry.deferred);
+                if (token != issued.end() && *token == entry.deferred)
+                    prepared->entities[static_cast<std::size_t>(token - issued.begin())] = entry.entity;
+            }
+            creations.reset();
             if (prepared->persistence)
                 prepared->persistence->PublishSpawn(prepared->entities);
             instance.state_ = std::move(prepared);
@@ -82,6 +110,29 @@ namespace Horo::Prefab::Detail {
             preparedTemplate.reset();
         }
 
+        /** @brief Drops all unpublished operation-owned evidence. Scene owns any submitted command until its safe point. */
+        void ReleaseUnpublished() noexcept {
+            if (receipt && !receipt->Complete()) {
+                cancellation.RequestCancellation();
+                receipt.reset();
+            }
+            load.reset();
+            lease.reset();
+            preparedTemplate.reset();
+            creations.reset();
+            if (prepared && prepared->persistence)
+                prepared->persistence->Cancel();
+            prepared.reset();
+        }
+
+        /** @brief Retires unpublished work with the cancellation error reserved at admission. */
+        void CancelUnpublished() noexcept {
+            cancellation.RequestCancellation();
+            measurement.Complete(PrefabMetricOutcome::Cancelled);
+            status = Prefab::PrefabSpawnState::Cancelled;
+            ReleaseUnpublished();
+        }
+
         /** @brief Preserves the original failure while retiring only unpublished
          * preparation. */
         void Fail(Error failure) {
@@ -93,12 +144,7 @@ namespace Horo::Prefab::Detail {
                 measurement.Complete(PrefabMetricOutcome::Cancelled);
             else
                 measurement.Fail(*error);
-            load.reset();
-            lease.reset();
-            preparedTemplate.reset();
-            if (prepared && prepared->persistence)
-                prepared->persistence->Cancel();
-            prepared.reset();
+            ReleaseUnpublished();
         }
     };
 
@@ -164,12 +210,12 @@ namespace Horo::Prefab::Detail {
         /** @brief Checks finite request/observation capacities and overflow-safe
          * scheduling before allocation. */
         [[nodiscard]] Result<void> Admit(const std::uint64_t due, const CancellationToken &scope, const CancellationToken &cancellation,
-                                         bool *overflow = nullptr) {
+                                         bool *overflow = nullptr, bool replica = false) {
             if (auto valid = Check(); valid.HasError())
                 return valid;
             if (scope.IsCancellationRequested() || cancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(PrefabErrors::Cancelled));
-            if (!ValidDue(due))
+            if (!ValidDue(due) && !(replica && due == 0 && tick == 0))
                 return Result<void>::Failure(MakeError(PrefabErrors::AdmissionRejected, "Invalid bounded prefab safe-point tick."));
             std::erase_if(retained, [](const auto &entry) {
                 return entry.expired();
@@ -255,27 +301,67 @@ namespace Horo::Prefab::Detail {
                                       std::string_view creator) const {
             if (auto valid = Check(); valid.HasError())
                 return Result<PrefabInstance>::Failure(valid.ErrorValue());
-            if (revocation.IsCancellationRequested() || !persistence)
+            const auto inventory = persistence;
+            if (revocation.IsCancellationRequested() || !inventory)
                 return Result<PrefabInstance>::Failure(MakeError(PrefabErrors::AdmissionRejected));
-            auto found = persistence->Lookup(instance, creator);
+            auto found = inventory->Lookup(instance, creator);
             if (found.HasError())
                 return Result<PrefabInstance>::Failure(found.ErrorValue());
-            auto state = std::make_shared<PrefabInstanceState>();
-            state->identity = identity;
-            state->scope = scope;
-            state->entities = found.Value().entities;
-            state->persistence = found.Value().publication;
-            PrefabInstance handle;
-            handle.state_ = std::move(state);
-            return Result<PrefabInstance>::Success(std::move(handle));
+            if (auto valid = Check(); valid.HasError())
+                return Result<PrefabInstance>::Failure(valid.ErrorValue());
+            if (revocation.IsCancellationRequested())
+                return Result<PrefabInstance>::Failure(MakeError(PrefabErrors::Cancelled));
+            return RebindPersistent(std::move(found).Value(), instance, scope);
+        }
+
+        /** @brief Validates exact live entity and provenance evidence before exposing a reacquired group. */
+        Result<PrefabInstance> RebindPersistent(PrefabPersistentLookup lookup, const Runtime::SavePrefabInstanceId instance,
+                                                const std::uint64_t scope) const {
+            using Return = Result<PrefabInstance>;
+            const auto count = lookup.entities.size();
+            if (count == 0 || count != lookup.provenance.size() || count > provider->LimitProfile().Policy().maximumObjectCount ||
+                !lookup.publication || lookup.publication->InstanceIdentity() != instance)
+                return Return::Failure(MakeError(PrefabErrors::AdmissionRejected));
+            const auto view = scenes->ActiveScene();
+            if (!view || view->RuntimeId() != scene)
+                return Return::Failure(MakeError(PrefabErrors::SceneUnavailable));
+            try {
+                auto state = std::make_shared<PrefabInstanceState>();
+                state->identity = identity;
+                state->scope = scope;
+                state->ownerScene = *view;
+                state->entities = std::move(lookup.entities);
+                state->persistence = std::move(lookup.publication);
+                state->members.reserve(count);
+                std::set<Runtime::EntityRef> seen;
+                for (std::size_t slot = 0; slot < count; ++slot) {
+                    const auto &provenance = lookup.provenance[slot];
+                    const auto entity = state->entities[slot];
+                    if (!provenance.sourceAsset.IsValid() || provenance.sourceDigest == Sha256Digest{} || !seen.insert(entity).second)
+                        return Return::Failure(MakeError(PrefabErrors::CookArtifactInvalid));
+                    if (auto member = view->Get(entity); member.HasError())
+                        return Return::Failure(std::move(member).ErrorValue());
+                    state->members.push_back({provenance, slot});
+                }
+                state->SortMembers();
+                if (std::ranges::adjacent_find(state->members, {}, &PrefabInstanceState::SourceMember::Address) != state->members.end())
+                    return Return::Failure(MakeError(PrefabErrors::CookArtifactInvalid));
+                PrefabInstance handle;
+                handle.state_ = std::move(state);
+                return Return::Success(std::move(handle));
+            } catch (const std::bad_alloc &) {
+                return Return::Failure(MakeError(PrefabErrors::ExpansionCacheAllocationFailed));
+            }
         }
 
         /** @brief Retains the admitted request only after its real asynchronous load is accepted. */
         Result<PrefabOperation> QueueSpawn(const PrefabSpawnRequest &request, const std::uint64_t scopeId, const CancellationToken &scope,
                                            const CancellationToken &cancellation, const std::span<const Assets::AssetId> lineage,
-                                           std::string_view creator, PrefabMetricOperation &attempt) {
+                                           std::string_view creator, PrefabMetricOperation &attempt,
+                                           std::shared_ptr<const Runtime::SceneGroupPublication> replica) {
             auto operation = std::make_shared<PrefabSpawnOperation>(cancellation);
             operation->creator = creator;
+            operation->replicaPublication = std::move(replica);
             operation->scope = scopeId;
             operation->scopeCancellation = scope;
             operation->due = request.notBeforeTick;
@@ -298,11 +384,12 @@ namespace Horo::Prefab::Detail {
          * data or queuing structural work. */
         [[nodiscard]] Result<PrefabOperation> Spawn(const PrefabSpawnRequest &request, const std::uint64_t scopeId,
                                                     const CancellationToken &scope, const CancellationToken &cancellation,
-                                                    const std::span<const Assets::AssetId> lineage, std::string_view creator) {
+                                                    const std::span<const Assets::AssetId> lineage, std::string_view creator,
+                                                    std::shared_ptr<const Runtime::SceneGroupPublication> replica = {}) {
             PrefabMetricOperation attempt{metrics, PrefabMetricPhase::Spawn};
             bool overflow{};
             auto result = [&]() {
-                if (auto valid = Admit(request.notBeforeTick, scope, cancellation, &overflow); valid.HasError())
+                if (auto valid = Admit(request.notBeforeTick, scope, cancellation, &overflow, replica != nullptr); valid.HasError())
                     return Result<PrefabOperation>::Failure(valid.ErrorValue());
                 if (auto valid = ValidateSpawnLineage(request, lineage); valid.HasError())
                     return Result<PrefabOperation>::Failure(valid.ErrorValue());
@@ -310,7 +397,7 @@ namespace Horo::Prefab::Detail {
                     return Result<PrefabOperation>::Failure(valid.ErrorValue());
                 if (auto valid = ValidateSpawnInputs(request); valid.HasError())
                     return Result<PrefabOperation>::Failure(valid.ErrorValue());
-                return QueueSpawn(request, scopeId, scope, cancellation, lineage, creator, attempt);
+                return QueueSpawn(request, scopeId, scope, cancellation, lineage, creator, attempt, std::move(replica));
             }();
             if (result.HasError()) {
                 if (overflow)
@@ -325,7 +412,7 @@ namespace Horo::Prefab::Detail {
          * module scope. */
         [[nodiscard]] Result<PrefabOperation> Despawn(const PrefabInstance &instance, const std::uint64_t due, const std::uint64_t scopeId,
                                                       const CancellationToken &scope, const CancellationToken &cancellation) {
-            if (auto valid = Admit(due, scope, cancellation); valid.HasError())
+            if (auto valid = Admit(due, scope, cancellation, nullptr, scopeId == 0); valid.HasError())
                 return Result<PrefabOperation>::Failure(valid.ErrorValue());
             if (!instance.state_ || instance.state_->identity != identity || instance.state_->scope != scopeId ||
                 instance.state_->entities.empty() || instance.Root().runtime != scene)
@@ -357,16 +444,31 @@ namespace Horo::Prefab::Detail {
         /** @brief Reserves exact durable identity/lease metadata before the canonical
          * structural queue accepts a group. */
         Result<void> StagePersistence(PrefabSpawnOperation &operation, std::span<const Runtime::RuntimeComponentSet> projected) const {
-            if (!persistence)
+            if (!persistence || operation.replicaPublication)
                 return Result<void>::Success();
             auto prepared =
                 persistence->PrepareSpawn(*operation.preparedTemplate, operation.request, projected, operation.lineage, operation.creator);
             if (prepared.HasError())
                 return Result<void>::Failure(prepared.ErrorValue());
-            if (!prepared.Value() || !prepared.Value()->InstanceIdentity().IsValid())
-                return Result<void>::Failure(
-                    MakeError(PrefabErrors::AdmissionRejected, "Prefab persistence owner returned no metadata transaction."));
             operation.prepared->persistence = std::move(prepared).Value();
+            if (!operation.prepared->persistence || !operation.prepared->persistence->InstanceIdentity().IsValid())
+                return Result<void>::Failure(
+                    MakeError(PrefabErrors::AdmissionRejected, "Prefab persistence owner returned an invalid metadata transaction."));
+            return Result<void>::Success();
+        }
+
+        /** @brief Binds the exact cooked occurrence before handing off to the Scene transaction. */
+        Result<void> BindGroupPublication(PrefabSpawnOperation &operation, std::span<const Runtime::RuntimeComponentSet> projected) const {
+            if (operation.replicaPublication) {
+                operation.prepared->publication = std::move(operation.replicaPublication);
+                return Result<void>::Success();
+            }
+            if (!groupPublicationOwner)
+                return Result<void>::Success();
+            auto bound = groupPublicationOwner->Bind(*operation.preparedTemplate, operation.request, projected, operation.creator);
+            if (bound.HasError())
+                return Result<void>::Failure(bound.ErrorValue());
+            operation.prepared->publication = std::move(bound).Value();
             return Result<void>::Success();
         }
 
@@ -381,6 +483,10 @@ namespace Horo::Prefab::Detail {
                                                          retirement.Token(), operation.scopeCancellation});
                     queued.HasError())
                     return queued;
+                if (const auto &publication = operation.instance.state_->publication) {
+                    if (auto bound = commands.BindGroupPublication(publication); bound.HasError())
+                        return bound;
+                }
                 auto receipt = scenes->QueueTrackedStructuralCommands(std::move(commands));
                 if (receipt.HasError())
                     return Result<void>::Failure(receipt.ErrorValue());
@@ -389,12 +495,24 @@ namespace Horo::Prefab::Detail {
                 auto projected = Project(operation);
                 if (projected.HasError())
                     return Result<void>::Failure(projected.ErrorValue());
+                const auto ownerScene = scenes->ActiveScene();
+                if (!ownerScene)
+                    return Result<void>::Failure(MakeError(PrefabErrors::SceneUnavailable));
                 operation.prepared = std::make_shared<PrefabInstanceState>();
                 operation.prepared->identity = identity;
                 operation.prepared->scope = operation.scope;
-                operation.prepared->entities.reserve(projected.Value().components.size());
+                operation.prepared->ownerScene = *ownerScene;
+                const auto &entities = operation.preparedTemplate->Data().entities;
+                operation.prepared->entities.resize(entities.size());
+                auto &sourceMembers = operation.prepared->members;
+                sourceMembers.reserve(entities.size());
+                for (std::size_t slot = 0; slot < entities.size(); ++slot)
+                    sourceMembers.push_back({entities[slot].provenance, slot});
+                operation.prepared->SortMembers();
                 if (auto staged = StagePersistence(operation, projected.Value().components); staged.HasError())
                     return staged;
+                if (auto bound = BindGroupPublication(operation, projected.Value().components); bound.HasError())
+                    return bound;
                 auto projection = std::move(projected).Value();
                 auto queued = provider->QueuePreparedGroup(*operation.preparedTemplate, std::move(projection.components),
                                                            operation.cancellation.Token(),
@@ -406,9 +524,11 @@ namespace Horo::Prefab::Detail {
                                                             .members = std::move(projection.members),
                                                             .references = std::move(projection.references),
                                                             .spawnLineage = operation.lineage,
-                                                            .primitiveMeshes = std::move(projection.primitiveMeshes)});
+                                                            .primitiveMeshes = std::move(projection.primitiveMeshes),
+                                                            .publication = operation.prepared->publication});
                 if (queued.HasError())
                     return Result<void>::Failure(queued.ErrorValue());
+                operation.creations.emplace(std::move(queued).Value());
             }
             hasQueuedStructure = true;
             return Result<void>::Success();
@@ -494,6 +614,7 @@ namespace Horo::Prefab::Detail {
         std::uint64_t lastBehaviorId{};
         std::uint64_t nextScope{1};
         std::shared_ptr<IPrefabPersistenceOwner> persistence;
+        std::shared_ptr<const IPrefabGroupPublicationOwner> groupPublicationOwner;
         std::shared_ptr<const PrefabValueSchemaSnapshot> schemas;
         bool hasQueuedStructure{};
         bool closed{};

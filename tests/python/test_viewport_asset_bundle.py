@@ -149,12 +149,11 @@ def bundle(tmp_path):
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     root = tmp_path / 'assets'
-    (root / 'shaders/editor').mkdir(parents=True)
     # Deliberately synthetic protocol fixtures, not claimed as native cooked assets.
-    (root / module.PAYLOAD).write_bytes(b'protocol fixture payload')
-    (root / module.REFLECTION).write_text('{}')
-    (root / module.SHADOW_PAYLOAD).write_bytes(b'protocol fixture shadow payload')
-    (root / module.SHADOW_REFLECTION).write_text('{}')
+    for name in (*module.PAYLOADS, *module.REFLECTIONS):
+        output = root / name
+        output.parent.mkdir(parents=True, exist_ok=True)
+        output.write_text('{}' if name in module.REFLECTIONS else f'protocol fixture {name}')
     (root / 'catalog.tsv').write_text(module.canonical_catalog(ROOT))
     expected = {'sha': 'a' * 40, 'tree': 'b' * 40, 'run_id': '123', 'run_attempt': '1', 'repository': 'fixture/repo'}
     module.create(root, ROOT, expected)
@@ -177,7 +176,13 @@ def test_bundle_rejects_stale_source_or_other_run(bundle, field):
 @pytest.mark.parametrize('name', ['shaders/editor/viewport-vulkan.horoshdr',
                                   'shaders/editor/viewport-vulkan.reflection.json',
                                   'shaders/editor/viewport-shadow-vulkan.horoshdr',
-                                  'shaders/editor/viewport-shadow-vulkan.reflection.json', 'catalog.tsv'])
+                                  'shaders/editor/viewport-shadow-vulkan.reflection.json',
+                                  'shaders/editor/viewport-world-canvas-vulkan.horoshdr',
+                                  'shaders/editor/viewport-world-canvas-vulkan.reflection.json',
+                                  'shaders/runtime/ui-paint-vulkan.horoshdr',
+                                  'shaders/runtime/ui-paint-vulkan.reflection.json',
+                                  'shaders/runtime/xr-comfort-vulkan.horoshdr',
+                                  'shaders/runtime/xr-comfort-vulkan.reflection.json', 'catalog.tsv'])
 def test_bundle_rejects_missing_required_data(bundle, name):
     module, root, expected = bundle
     (root / name).unlink()
@@ -211,6 +216,21 @@ def test_offline_action_cooks_the_canonical_shadow_pair_before_provenance():
     shadow = action.index('assets/shaders/editor/viewport_shadow.hlsl')
     assert '"$asset_root/shaders/editor/viewport-shadow-vulkan"' in action[shadow:]
     mode = action.index('--shadow', shadow)
+    assert mode < action.index('viewport_asset_bundle.py create')
+
+
+def test_offline_action_cooks_the_canvas_pair_in_the_staged_editor_root():
+    action = (ROOT / '.github/actions/cook-vulkan-viewport/action.yml').read_text()
+    qualification = action.index('if [[ -n "$COOK_QUALIFICATION_ROOT" ]]')
+    assert action.index('"$asset_root/shaders/editor/viewport-world-canvas-vulkan"') < qualification
+    assert action.index('"$asset_root/shaders/runtime/ui-paint-vulkan"') < qualification
+
+
+def test_offline_action_cooks_xr_comfort_before_bundle_provenance():
+    action = (ROOT / '.github/actions/cook-vulkan-viewport/action.yml').read_text()
+    cook = action.index('assets/shaders/runtime/xr_comfort_vignette.hlsl')
+    target = action.index('"$asset_root/shaders/runtime/xr-comfort-vulkan"', cook)
+    mode = action.index('--xr-comfort', target)
     assert mode < action.index('viewport_asset_bundle.py create')
 
 

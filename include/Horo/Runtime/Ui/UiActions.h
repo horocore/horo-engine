@@ -16,6 +16,7 @@
 #include <span>
 #include <string_view>
 #include <variant>
+#include <vector>
 
 namespace Horo::Runtime::Ui {
     class UiAsyncActionStore;
@@ -272,6 +273,12 @@ namespace Horo::Runtime::Ui {
      */
     [[nodiscard]] UiActionOrigin UiActionOriginOf(const UiActionCommand &command) noexcept;
 
+    /** @brief Reads the authored identity without inspecting action arguments.
+     * @param command Typed command to inspect.
+     * @return Authored command identity, or empty for default navigation.
+     */
+    [[nodiscard]] std::optional<UiActionId> UiActionIdOf(const UiActionCommand &command) noexcept;
+
     /**
      * @brief Validates one typed command before it enters an owner queue.
      * @param command Command and bounded payload to validate.
@@ -366,6 +373,22 @@ namespace Horo::Runtime::Ui {
         Stopped,
     };
 
+    /** @brief Metadata-only diagnostic row for queued or pending work; payloads and errors are always withheld. */
+    struct UiActionInspectionRow final {
+        UiActionSource source;
+        UiActionRequestId request;
+        UiActionOrigin origin{UiActionOrigin::Count};
+        std::optional<UiActionId> action;
+        std::optional<UiActionOperationId> operation; /**< Empty while queued; set while async work is pending. */
+    };
+
+    /** @brief Owned router diagnostic frame with current queue and pending operation evidence. */
+    struct UiActionInspectionSnapshot final {
+        UiActionOwnerContext owner;
+        UiActionRouterState state{UiActionRouterState::Stopped};
+        std::vector<UiActionInspectionRow> actions; /**< Queued FIFO records followed by pending operation records. */
+    };
+
     /** @brief Exact owner evidence and finite queue capacity for one router generation. */
     struct UiActionRouterDescriptor final {
         UiActionOwnerContext owner;
@@ -433,6 +456,14 @@ namespace Horo::Runtime::Ui {
 
         /** @brief Returns the exact owner/revision evidence. @return Borrowed immutable context. */
         [[nodiscard]] const UiActionOwnerContext &Owner() const noexcept;
+        /**
+         * @brief Captures metadata-only queued and pending actions without consuming or dispatching them.
+         * @param owner Exact current presentation and canvas evidence.
+         * @param maximumRows Unified caller budget for queued and pending rows.
+         * @return Owned snapshot or typed stale, lifecycle or capacity failure.
+         * @note Runtime UI owner thread only, at an explicit diagnostic safe point outside frame work.
+         */
+        [[nodiscard]] Result<UiActionInspectionSnapshot> Inspect(const UiActionOwnerContext &owner, std::size_t maximumRows) const;
         /** @brief Returns current queued request count. @return Bounded count. */
         [[nodiscard]] std::size_t QueuedCount() const noexcept;
         /** @brief Returns the owner high-water mark for replacement. @return Last issued or injected sequence; invalid before any issue. */

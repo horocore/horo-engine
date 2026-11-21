@@ -1,4 +1,5 @@
 #include "EditorPlaySaveHostInternal.h"
+#include "Horo/Runtime/Save/SaveDiagnostics.h"
 
 #include <array>
 #include <limits>
@@ -13,7 +14,8 @@ namespace Horo::Application::Internal {
         auto publication = std::make_shared<Editor::PlaySaveSnapshot>();
         publication->revision = ++revision;
         publication->availability = Availability();
-        publication->error = error;
+        if (error)
+            publication->error = Runtime::RedactSaveDiagnosticError(*error);
         publication->operationPending = request.has_value() || static_cast<bool>(storageWork);
         publication->loading = loading;
         if (storage && catalog) {

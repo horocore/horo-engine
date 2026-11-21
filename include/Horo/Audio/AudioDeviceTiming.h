@@ -11,6 +11,24 @@
 #include <optional>
 
 namespace Horo::Audio {
+    /** @brief Requested buffering priority; explicit period bounds authorize negotiation. */
+    enum class AudioLatencyProfile : std::uint8_t {
+        Interactive,
+        Balanced,
+        PowerSaving
+    };
+
+    /** @brief Checks a requested buffering profile. @param profile Candidate. @return True for a defined profile. */
+    [[nodiscard]] constexpr bool IsAudioLatencyProfile(const AudioLatencyProfile profile) noexcept {
+        return profile <= AudioLatencyProfile::PowerSaving;
+    }
+
+    /** @brief A frame amount in its explicit source-rate domain. Zero frames can be a known value. */
+    struct AudioTimingFrames final {
+        std::uint32_t frames{};
+        std::uint32_t sampleRate{};
+    };
+
     /** @brief Complete ADR-062 callback identity; runtime generation is carried by device.owner. */
     struct AudioDeviceEpoch final {
         AudioDeviceId device;

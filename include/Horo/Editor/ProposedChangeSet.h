@@ -4,6 +4,7 @@
 #include "Horo/Foundation/Sha256.h"
 
 #include <array>
+#include <deque>
 #include <span>
 #include <variant>
 
@@ -124,6 +125,13 @@ namespace Horo::Editor::Proposals {
         std::string request;
     };
 
+    /** @brief Identity assigned by the host for one model answer, independently of its content. */
+    struct ProposalIdentity final {
+        std::string id;
+        std::uint64_t revision{};
+        Provenance provenance;
+    };
+
     /** @brief Untrusted ingress values; only ChangeSet::Capture produces an admitted immutable proposal. */
     struct Draft final {
         std::string id;
@@ -185,6 +193,82 @@ namespace Horo::Editor::Proposals {
      * @return Success or stale/invalid failure; no buffer, history, save-base or disk mutation. */
     Result<void> ValidateAgainstSnapshot(const FileBase &base, std::span<const TextHunk> hunks, const SourceDocumentSnapshot &current);
 
+    /** @brief Workspace-owned evidence for a path without a readable source snapshot. */
+    enum class SourcePathState : std::uint8_t {
+        Absent,   /**< The workspace inspected this exact spelling and found no entry. */
+        Occupied, /**< The path is in use, including by a directory or an unreadable source. */
+        Moved     /**< The workspace observed that the original file moved away. */
+    };
+
+    /** @brief One exact workspace observation. Omitted paths have unknown availability. */
+    struct SourcePathObservation final {
+        SourceDocumentId path;
+        std::variant<SourcePathState, SourceDocumentSnapshot> evidence;
+    };
+
+    /** @brief The first conflicting prerequisite of one file operation. */
+    enum class PlanConflictReason : std::uint8_t {
+        Unobserved,
+        SourceMissing,
+        SourceMoved,
+        SourceUnavailable,
+        SourceStale,
+        SourceChangedOnDisk,
+        DestinationOccupied,
+        OverlappingPaths
+    };
+
+    /** @brief Conflict reason and affected path for one operation in the proposal. */
+    struct PlanConflict final {
+        SourceDocumentId path;
+        PlanConflictReason reason;
+    };
+
+    /** @brief Selects the evidence a detached review preview uses to match its original source. */
+    enum class ReviewSourceMatch : std::uint8_t {
+        CurrentRevision,
+        RecoveredContent
+    };
+
+    /** @brief Detached preview. The original immutable lease is empty for creates and the result is absent for deletes. */
+    struct FilePreview final {
+        SourceDocumentSnapshot before;
+        std::optional<std::string> after;
+        ReviewSourceMatch sourceMatch{ReviewSourceMatch::CurrentRevision};
+
+        /** @brief Checks source identity, freshness, both content digests and exact hunk text.
+         * @param base Original proposal evidence. @param hunks Ranges against the original source.
+         * @return Success or a typed validation failure.
+         * @details A recovered review can match byte-identical source across editor sessions with different revision counters.
+         * This evidence only supports preview and review.
+         */
+        [[nodiscard]] Result<void> ValidateSource(const FileBase &base, std::span<const TextHunk> hunks) const;
+    };
+
+    /** @brief A read-only projection bound to the exact proposal digest. Entries follow ChangeSet::Files() order. */
+    struct WorkspaceEditPlan final {
+        Sha256Digest proposal;
+        std::vector<std::variant<FilePreview, PlanConflict>> entries;
+    };
+
+    /** @brief Projects an admitted proposal onto an explicitly observed workspace without performing I/O.
+     * @param proposal Immutable proposal being reviewed. @param policy Current captured policy for the workspace.
+     * @param observations Current workspace observations for source and destination paths. The host supplies absence and disk evidence.
+     * @param limits Finite per-file, aggregate text and operation limits.
+     * @return A deterministic preview or conflict for each operation, or a typed policy, invalid-input or budget failure.
+     * @details Retained previews can become stale. Application must revalidate permissions, paths and revisions against the owner.
+     */
+    Result<WorkspaceEditPlan> PlanWorkspaceEdits(const ChangeSet &proposal, const ProjectPolicy &policy,
+                                                 std::span<const SourcePathObservation> observations, const Limits &limits = {});
+
+    /** @brief Projects an exact restored proposal against current source content and saved-base evidence.
+     * @param proposal Exact decoded proposal. @param policy Policy matching the persisted proposal digest.
+     * @param observations Current workspace evidence. @param limits Finite per-file and aggregate limits.
+     * @return Read-only review previews or conflicts, with no application or save authority.
+     */
+    Result<WorkspaceEditPlan> PlanRecoveredWorkspaceEdits(const ChangeSet &proposal, const ProjectPolicy &policy,
+                                                          std::span<const SourcePathObservation> observations, const Limits &limits = {});
+
     enum class ReviewChoice : std::uint8_t {
         Accept,
         Reject
@@ -203,6 +287,68 @@ namespace Horo::Editor::Proposals {
      * @param proposal Immutable reviewed proposal. @param choice Visible decision. @param reviewer Host-supplied stable identity.
      * @return Review data or invalid decision/identity error. */
     Result<ReviewRecord> Review(const ChangeSet &proposal, ReviewChoice choice, std::string reviewer);
+
+    /** @brief One review decision or the aggregate of several units. Mixed is aggregate-only. */
+    enum class ReviewState : std::uint8_t {
+        Pending,
+        Accepted,
+        Rejected,
+        Mixed
+    };
+
+    /** @brief Canonical proposal coordinates. An empty target selects the whole proposal. */
+    struct ReviewTarget final {
+        std::optional<std::size_t> file;
+        std::optional<std::size_t> hunk;
+    };
+
+    /** @brief Inert decisions on one exact proposal. Edits have per-hunk decisions and structural operations are indivisible. */
+    class ReviewDecisions final {
+    public:
+        /** @brief Creates pending decisions in canonical proposal order. */
+        explicit ReviewDecisions(ChangeSet proposal);
+        /** @brief Reads the exact selected unit or its aggregate. @return Invalid for unknown units. */
+        [[nodiscard]] Result<ReviewState> State(ReviewTarget target = {}) const;
+        /** @brief Records one atomic decision. Acceptance requires a current, conflict-free plan for every selected operation.
+         * @param plan The latest defensive workspace plan. @param target Whole proposal, file or edit hunk.
+         * @param choice Explicit review-only choice. @return Success or typed failure, with no partial decisions or source writes.
+         */
+        Result<void> Decide(const WorkspaceEditPlan &plan, ReviewTarget target, ReviewChoice choice);
+
+        /** @brief Reports whether this session has a decision to undo. */
+        [[nodiscard]] bool CanUndo() const noexcept {
+            return !undo_.empty();
+        }
+
+        /** @brief Restores the previous decision batch against the current plan. @return True if a decision was undone. */
+        Result<bool> Undo(const WorkspaceEditPlan &plan);
+        /** @brief Applies only accepted text hunks through the current source owner.
+         * @param documents Owner of the live source snapshots. @param policy Active captured policy for this proposal.
+         * @param plan Exact proposal preview with current source evidence. @param cancellation Cooperative observer.
+         * @return Atomic buffer receipt or a typed refusal. Applying never writes disk.
+         */
+        [[nodiscard]] Result<SourceEditBatch> ApplyAccepted(SourceDocumentService &documents, const ProjectPolicy &policy,
+                                                            const WorkspaceEditPlan &plan, CancellationToken cancellation = {}) const;
+        /** @brief Encodes the proposal digest and canonical unit states without source bytes or approval authority. */
+        [[nodiscard]] std::string Encode() const;
+        /** @brief Reconstructs decisions bound to the exact proposal and current plan.
+         * @param proposal Exact admitted proposal. @param plan Current workspace plan. @param text Bounded review bytes.
+         * @return Detached decisions or a typed parse, identity or freshness failure.
+         */
+        [[nodiscard]] static Result<ReviewDecisions> Decode(ChangeSet proposal, const WorkspaceEditPlan &plan, std::string_view text);
+
+    private:
+        using Units = std::vector<std::vector<ReviewState>>;
+        [[nodiscard]] bool Contains(ReviewTarget target) const noexcept;
+        [[nodiscard]] bool Matches(const WorkspaceEditPlan &plan) const noexcept;
+        [[nodiscard]] bool CanAccept(const WorkspaceEditPlan &plan, std::size_t file) const;
+        [[nodiscard]] bool AcceptancesCurrent(const WorkspaceEditPlan &plan, const Units &units) const;
+        void Publish(Units units);
+        ChangeSet proposal_;
+        Units units_;
+        std::deque<Units> undo_;
+    };
+
     enum class ApplicationState : std::uint8_t {
         NotApplied,
         AppliedToWorkspace,
@@ -266,6 +412,27 @@ namespace Horo::Editor::Proposals {
      * @param text Bounded wire bytes. @param policy Current host policy. @param limits Finite ceilings.
      * @return Newly admitted inert proposal or malformed/version/policy/bounds failure. */
     Result<ChangeSet> DecodeRecovery(std::string_view text, const ProjectPolicy &policy, const Limits &limits = {});
+
+    /** @brief Parses the versioned structured model patch into one inert, fully checked proposal.
+     * @param text Untrusted JSON with a version and files array. @param policy Current project path policy.
+     * @param identity Host-owned attribution. @param sources Exact already-captured bases offered for this answer.
+     * @param limits Finite host ceilings. @return Complete proposal or typed denial with no partial publication.
+     * @details Existing operations resolve only against provided live snapshots. The parser never opens or edits
+     * documents, reads files, accepts provider-supplied base authority, or retains the raw reply.
+     */
+    Result<ChangeSet> DecodeStructuredPatch(std::string_view text, const ProjectPolicy &policy, ProposalIdentity identity,
+                                            std::span<const SourceDocumentSnapshot> sources, const Limits &limits = {});
+
+    /** @brief Converts unified text diff records into inert operations against exact offered bases.
+     * @param text Diff with paired a/ and b/ paths and original/new line ranges.
+     * @param policy Current project path policy. @param identity Host-issued proposal attribution.
+     * @param sources Immutable offered source snapshots. @param limits Finite patch limits.
+     * @return Fully validated create, edit or delete proposal, or a typed rejection.
+     * @details Plain unified diff has no rename identity. Explicit rename is admitted by the structured parser.
+     * The decoder keeps exact source bytes, checks both hunk coordinates, and performs no filesystem I/O.
+     */
+    Result<ChangeSet> DecodeUnifiedPatch(std::string_view text, const ProjectPolicy &policy, ProposalIdentity identity,
+                                         std::span<const SourceDocumentSnapshot> sources, const Limits &limits = {});
     /** @brief Serializes bounded redacted audit data, independently from recovery text. @param record Audit data.
      * @return Canonical versioned envelope or invalid record error. */
     Result<std::string> EncodeAudit(const AuditRecord &record);

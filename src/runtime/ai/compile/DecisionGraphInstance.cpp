@@ -5,6 +5,37 @@
 #include <new>
 
 namespace Horo::AI {
+    /** @copydoc DecisionGraphInstance::CopyActiveTasks */
+    std::size_t DecisionGraphInstance::CopyActiveTasks(const std::span<DecisionActiveTask> output) const noexcept {
+        if (owner_ != std::this_thread::get_id() || evaluating_ || shutdown_)
+            return 0;
+        std::size_t count{};
+        for (std::size_t index = 0; index < occurrences_.size(); ++index) {
+            const auto &state = *occurrences_[index];
+            if (!state.active)
+                continue;
+            const auto occurrence = TraceOccurrence(index);
+            const auto treeTasks = [&](const BehaviorTreeInstance &tree) {
+                count += tree.CopyActiveTasks(occurrence, output.subspan(std::min(count, output.size())));
+            };
+            if (state.tree)
+                treeTasks(*state.tree);
+            if (state.utility && state.utility->selected)
+                treeTasks(*state.utility->actions[*state.utility->selected]);
+            if (!state.actions)
+                continue;
+            for (const auto &action : state.actions->actions) {
+                if (action->lifecycle.State() != AiTaskState::Running || !action->lifecycle.Context())
+                    continue;
+                const auto &context = *action->lifecycle.Context();
+                if (count < output.size())
+                    output[count] = {occurrence, action->node, context.taskDefinition, context.task};
+                ++count;
+            }
+        }
+        return count;
+    }
+
     namespace {
         template <typename T> Result<T> Invalid(const ErrorCodeDescriptor &code = AIErrors::TaskContextInvalid) {
             return Result<T>::Failure(MakeError(code));
@@ -14,6 +45,12 @@ namespace Horo::AI {
             using enum Horo::AI::AiTaskState;
             return state == Succeeded || state == Failed || state == Cancelled;
         }
+
+        /** @brief Retains the query host with the exact executable generation without changing the cooked instance layout. */
+        struct QueryProviderLease final {
+            std::shared_ptr<const DecisionNodeGeneration> providers;
+            std::shared_ptr<IDecisionQueryTaskBinder> queryTasks;
+        };
 
         bool ValidRange(const DecisionGraphInstanceBinding &binding, const CookedDecisionPlan &plan) noexcept {
             const auto count = plan.Storage().taskSlots;
@@ -35,42 +72,61 @@ namespace Horo::AI {
                                const std::shared_ptr<const BlackboardSchema> &schema) noexcept {
             return input.current == binding && input.blackboard.Binding() == input.current && schema && input.blackboard.Schema() == schema;
         }
-
-        struct StepScope final {
-            bool &evaluating;
-            const DecisionGraphStepInput *&current;
-
-            StepScope(bool &flag, const DecisionGraphStepInput *&slot, const DecisionGraphStepInput &input)
-                : evaluating(flag), current(slot) {
-                evaluating = true;
-                current = &input;
-            }
-
-            StepScope(const StepScope &) = delete;
-            StepScope &operator=(const StepScope &) = delete;
-
-            ~StepScope() {
-                current = nullptr;
-                evaluating = false;
-            }
-        };
     }  // namespace
+
+    /** @brief Scopes the graph's borrowed evaluation inputs and evidence to one invocation. */
+    struct DecisionGraphInstance::StepScope final {
+        DecisionGraphInstance &owner;
+        StepObservation observation;
+
+        StepScope(DecisionGraphInstance &instance, StepObservation input, DecisionStepTrace *evidence)
+            : owner(instance), observation(input) {
+            owner.evaluating_ = true;
+            owner.input_ = &observation;
+            owner.trace_ = evidence;
+        }
+
+        StepScope(const StepScope &) = delete;
+        StepScope &operator=(const StepScope &) = delete;
+
+        ~StepScope() {
+            owner.input_ = nullptr;
+            owner.trace_ = nullptr;
+            owner.evaluating_ = false;
+        }
+    };
 
     Result<std::unique_ptr<DecisionGraphInstance>> DecisionGraphInstance::Create(std::shared_ptr<const CookedDecisionPlan> plan,
                                                                                  std::shared_ptr<const DecisionNodeGeneration> providers,
                                                                                  DecisionGraphInstanceBinding binding) {
+        return CreateBound(std::move(plan), std::move(providers), std::move(binding), {});
+    }
+
+    /** @copydoc DecisionGraphInstance::CreateBound */
+    Result<std::unique_ptr<DecisionGraphInstance>> DecisionGraphInstance::CreateBound(
+        std::shared_ptr<const CookedDecisionPlan> plan, std::shared_ptr<const DecisionNodeGeneration> providers,
+        DecisionGraphInstanceBinding binding, std::shared_ptr<IDecisionQueryTaskBinder> queryTasks) {
         if (auto admitted = Admit(plan, providers, binding); admitted.HasError())
             return Result<std::unique_ptr<DecisionGraphInstance>>::Failure(admitted.ErrorValue());
         try {
             auto result = std::make_unique<DecisionGraphInstance>();
             result->owner_ = std::this_thread::get_id();
             result->plan_ = std::move(plan);
-            result->providers_ = std::move(providers);
+            auto *binder = queryTasks.get();
+            if (binder) {
+                const auto *generation = providers.get();
+                auto lease = std::make_shared<QueryProviderLease>(std::move(providers), std::move(queryTasks));
+                result->providers_ = std::shared_ptr<const DecisionNodeGeneration>{std::move(lease), generation};
+            } else
+                result->providers_ = std::move(providers);
             result->binding_ = std::move(binding);
+            result->usesUtility_ = std::ranges::any_of(result->plan_->Graphs(), [](const auto &graph) {
+                return std::holds_alternative<std::shared_ptr<const CookedUtilityPlan>>(graph.execution);
+            });
             result->occurrences_.reserve(result->plan_->Occurrences().size());
             for (std::size_t index = 0; index < result->plan_->Occurrences().size(); ++index) {
                 result->occurrences_.push_back(std::make_unique<OccurrenceState>());
-                if (auto built = result->BuildOccurrence(index); built.HasError())
+                if (auto built = result->BuildOccurrence(index, binder); built.HasError())
                     return Result<std::unique_ptr<DecisionGraphInstance>>::Failure(built.ErrorValue());
             }
             result->occurrences_[0]->active = true;
@@ -98,12 +154,12 @@ namespace Horo::AI {
         return operation;
     }
 
-    Result<void> DecisionGraphInstance::BuildOccurrence(std::size_t index) {
+    Result<void> DecisionGraphInstance::BuildOccurrence(std::size_t index, IDecisionQueryTaskBinder *queryTasks) {
         auto &state = *occurrences_[index];
         const auto &graph = plan_->Graphs()[plan_->Occurrences()[index].plan];
         state.generation = binding_.firstTaskGeneration;
         if (const auto *tree = std::get_if<std::shared_ptr<const BehaviorTreeExecutionPlan>>(&graph.execution)) {
-            auto callbacks = providers_->CreateExecutor(providers_, **tree, plan_->Capabilities(), graph.providerProperties);
+            auto callbacks = providers_->CreateExecutor(providers_, **tree, plan_->Capabilities(), graph.providerProperties, queryTasks);
             if (callbacks.HasError())
                 return Result<void>::Failure(callbacks.ErrorValue());
             BehaviorTreeInstanceBinding binding{binding_.operation.agent, binding_.operation.cancellation,
@@ -112,11 +168,15 @@ namespace Horo::AI {
                                                 binding_.firstTaskGeneration, binding_.blackboard};
             binding.capabilityCancellation = binding_.operation.capabilityCancellation;
             binding.diagnostics = binding_.operation.diagnostics;
+            binding.ownerCancellation = binding_.operation.ownerCancellation;
             auto instance =
                 BehaviorTreeInstance::Create(*tree, binding, std::make_unique<CallAdapter>(*this, index, std::move(callbacks).Value()));
             if (instance.HasError())
                 return Result<void>::Failure(instance.ErrorValue());
             state.tree = std::move(instance).Value();
+        } else if (std::holds_alternative<std::shared_ptr<const CookedUtilityPlan>>(graph.execution)) {
+            if (auto built = BuildUtility(index); built.HasError())
+                return built;
         } else {
             auto callbacks = providers_->CreateExecutor(providers_, *graph.bindings, plan_->Capabilities(), graph.providerProperties);
             if (callbacks.HasError())
@@ -138,34 +198,149 @@ namespace Horo::AI {
                !binding_.operation.IsCancellationRequested();
     }
 
+    /** @copydoc DecisionGraphInstance::HasPendingTaskWake */
+    bool DecisionGraphInstance::HasPendingTaskWake() const noexcept {
+        if (!Available() || evaluating_ || occurrences_.size() != 1)
+            return false;
+        const auto &root = *occurrences_.front();
+        return root.active && root.tree && root.tree->HasPendingTaskWake();
+    }
+
+    /** @copydoc DecisionGraphInstance::NextFixedWakeTick */
+    std::optional<std::uint64_t> DecisionGraphInstance::NextFixedWakeTick() const noexcept {
+        if (!Available() || evaluating_ || occurrences_.size() != 1)
+            return std::nullopt;
+        const auto &root = *occurrences_.front();
+        return root.active && root.tree ? root.tree->NextFixedWakeTick() : std::nullopt;
+    }
+
+    /** @copydoc DecisionGraphInstance::TryRetainCompatibleFlatPlan */
+    Result<bool> DecisionGraphInstance::TryRetainCompatibleFlatPlan(const std::shared_ptr<const CookedDecisionPlan> &candidate) {
+        using Retained = Result<bool>;
+        if (!candidate || std::this_thread::get_id() != owner_ || evaluating_)
+            return Invalid<bool>(AIErrors::DecisionAssetActivationInvalid);
+        if (!Available() || plan_->Occurrences().size() != 1 || candidate->Occurrences().size() != 1 ||
+            candidate->Root() != plan_->Root() || candidate->providers_ != plan_->providers_ ||
+            candidate->providers_.owner_before(plan_->providers_) || plan_->providers_.owner_before(candidate->providers_) ||
+            candidate->Capabilities() != plan_->Capabilities())
+            return Retained::Success(false);
+
+        const auto &existing = plan_->Graphs()[plan_->Occurrences().front().plan];
+        const auto &next = candidate->Graphs()[candidate->Occurrences().front().plan];
+        auto &state = *occurrences_.front();
+        const auto *tree = std::get_if<std::shared_ptr<const BehaviorTreeExecutionPlan>>(&next.execution);
+        if (!state.tree || !tree || plan_->Storage().taskSlots != candidate->Storage().taskSlots ||
+            next.schemaVersion != existing.schemaVersion || next.executionTask != existing.executionTask ||
+            plan_->Occurrences().front().firstTaskSlot != candidate->Occurrences().front().firstTaskSlot)
+            return Retained::Success(false);
+        const auto sameProperties =
+            std::ranges::equal(existing.providerProperties, next.providerProperties, [](const auto &left, const auto &right) {
+            return left.node == right.node && left.properties == right.properties;
+        });
+        if (!sameProperties)
+            return Retained::Success(false);
+
+        const auto replaced = state.tree->TryRetainCompatiblePlan(*tree);
+        if (replaced.HasValue() && replaced.Value())
+            plan_ = candidate;
+        return replaced;
+    }
+
+    /** @copydoc DecisionGraphInstance::TraceOccurrence */
+    DecisionTraceOccurrence DecisionGraphInstance::TraceOccurrence(const std::size_t index) const noexcept {
+        const auto &occurrence = plan_->Occurrences()[index];
+        return {plan_->Graphs()[occurrence.plan].asset, occurrence.callNode, static_cast<std::uint32_t>(index),
+                static_cast<std::uint32_t>(occurrence.parent)};
+    }
+
+    /** @copydoc DecisionGraphInstance::TraceMachine */
+    void DecisionGraphInstance::TraceMachine(const std::size_t index, const StateMachineStepResult &step) const noexcept {
+        const auto &state = *occurrences_[index];
+        const auto &occurrence = plan_->Occurrences()[index];
+        const auto task = plan_->Graphs()[occurrence.plan].executionTask;
+        const auto slot = binding_.firstTaskSlot + static_cast<std::uint32_t>(occurrence.firstTaskSlot);
+        trace_->Append({.kind = DecisionStepRecordKind::StateMachineStep,
+                        .occurrence = TraceOccurrence(index),
+                        .node = step.activeState,
+                        .task = task,
+                        .handle = {binding_.operation.agent.incarnation, {slot, state.generation}},
+                        .state = state.outcome,
+                        .lastTransition = step.lastTransition,
+                        .transitionCount = static_cast<std::uint32_t>(step.transitions)});
+    }
+
+    /** @copydoc DecisionGraphInstance::TraceMachineTransitions */
+    void DecisionGraphInstance::TraceMachineTransitions(const std::size_t index) const noexcept {
+        const auto &state = *occurrences_[index];
+        const auto &occurrence = plan_->Occurrences()[index];
+        const auto slot = binding_.firstTaskSlot + static_cast<std::uint32_t>(occurrence.firstTaskSlot);
+        std::uint32_t ordinal = 0;
+        for (const auto transition : state.machine->CommittedTransitions()) {
+            trace_->Append({.kind = DecisionStepRecordKind::StateMachineTransition,
+                            .occurrence = TraceOccurrence(index),
+                            .node = transition,
+                            .task = plan_->Graphs()[occurrence.plan].executionTask,
+                            .handle = {binding_.operation.agent.incarnation, {slot, state.generation}},
+                            .transitionCount = ++ordinal});
+        }
+    }
+
     Result<AiTaskState> DecisionGraphInstance::Advance(std::size_t index) {
         auto &state = *occurrences_[index];
         if (!Available() || !state.active || !input_)
             return Invalid<AiTaskState>(AIErrors::RuntimeUnavailable);
-        if (Terminal(state.outcome) || state.lastTick == input_->tick)
+        const auto &input = input_->values;
+        if (Terminal(state.outcome) || state.lastTick == input.tick)
             return Result<AiTaskState>::Success(state.outcome);
-        state.lastTick = input_->tick;
-        if (state.tree) {
-            auto stepped = state.tree->Evaluate(input_->tick, input_->blackboard, input_->current.agent);
-            if (stepped.HasError())
-                return stepped;
-            state.outcome = stepped.Value();
-        } else {
-            if (auto stepped = state.machine->Step(input_->tick, input_->current, input_->blackboard, input_->events, state.actions.get());
-                stepped.HasError())
-                return Result<AiTaskState>::Failure(stepped.ErrorValue());
-            const auto *terminal = state.machine->TerminalResult();
-            state.outcome = terminal ? terminal->state : AiTaskState::Running;
-        }
+        state.lastTick = input.tick;
+        if (state.utility)
+            return AdvanceUtility(index);
+        if (!state.tree)
+            return AdvanceMachine(index);
+        auto stepped = state.tree->Evaluate(input.tick, input.blackboard, input.current.agent, input.treeResumeReason);
+        if (trace_)
+            state.tree->AppendTrace(TraceOccurrence(index), *trace_);
+        if (stepped.HasError())
+            return stepped;
+        state.outcome = stepped.Value();
+        return stepped;
+    }
+
+    /** @copydoc DecisionGraphInstance::AdvanceMachine */
+    Result<AiTaskState> DecisionGraphInstance::AdvanceMachine(const std::size_t index) {
+        auto &state = *occurrences_[index];
+        const auto &input = input_->values;
+        auto stepped = state.machine->Step(input.tick, input.current, input.blackboard, input.events, state.actions.get());
+        if (trace_)
+            TraceMachineTransitions(index);
+        if (stepped.HasError())
+            return Result<AiTaskState>::Failure(stepped.ErrorValue());
+        const auto *terminal = state.machine->TerminalResult();
+        state.outcome = terminal ? terminal->state : AiTaskState::Running;
+        if (trace_)
+            TraceMachine(index, stepped.Value());
         return Result<AiTaskState>::Success(state.outcome);
     }
 
+    /** @copydoc DecisionGraphInstance::UtilityBudgetsAvailable */
+    bool DecisionGraphInstance::UtilityBudgetsAvailable(const DecisionGraphStepInput &input) const noexcept {
+        return !usesUtility_ || (input.utilityAgentBudget && input.utilityGlobalBudget);
+    }
+
     Result<void> DecisionGraphInstance::ValidateStep(const DecisionGraphStepInput &input) const {
-        if (std::this_thread::get_id() != owner_ || evaluating_ || shutdown_ || input.tick == 0 || input.tick <= lastTick_)
+        if (std::this_thread::get_id() != owner_ || evaluating_ || shutdown_ || input.tick == 0 || input.tick <= lastTick_ ||
+            input.treeResumeReason >= AiTaskResumeReason::Count)
             return Invalid<void>(AIErrors::TaskTransitionInvalid);
         const auto schema = plan_->Graphs()[plan_->Occurrences()[0].plan].bindings->BlackboardSchema();
         if (!MatchesBlackboard(input, binding_.blackboard, schema))
             return Invalid<void>(AIErrors::BlackboardInstanceStale);
+        // Metadata still identifies this owner when revocation has expired the observation's read lease.
+        if (binding_.operation.IsCancellationRequested())
+            return Result<void>::Success();
+        if (input.blackboard.Revision().HasError())
+            return Invalid<void>(AIErrors::BlackboardInstanceStale);
+        if (!UtilityBudgetsAvailable(input))
+            return Invalid<void>(AIErrors::TaskContextInvalid);
         if (input.events.size() > StateMachineLimits::EventsPerStep)
             return Invalid<void>();
         if (!std::ranges::all_of(input.events, [](auto event) {
@@ -176,14 +351,95 @@ namespace Horo::AI {
     }
 
     Result<AiTaskState> DecisionGraphInstance::Step(const DecisionGraphStepInput &input) {
+        return StepImpl(input, nullptr);
+    }
+
+    /** @copydoc DecisionGraphInstance::StepBudgeted */
+    Result<std::optional<AiTaskState>> DecisionGraphInstance::StepBudgeted(const DecisionGraphStepInput &input, AiWorkBudget &budget) {
+        return StepBudgeted(input, budget, nullptr);
+    }
+
+    /** @copydoc DecisionGraphInstance::StepBudgeted */
+    Result<std::optional<AiTaskState>> DecisionGraphInstance::StepBudgeted(const DecisionGraphStepInput &input, AiWorkBudget &budget,
+                                                                           std::optional<DecisionProviderFailure> *providerFailure) {
+        return StepBudgetedImpl(input, budget, nullptr, providerFailure);
+    }
+
+    /** @copydoc DecisionGraphInstance::StepBudgetedWithTrace */
+    Result<std::optional<AiTaskState>> DecisionGraphInstance::StepBudgetedWithTrace(
+        const DecisionGraphStepInput &input, AiWorkBudget &budget, DecisionStepTrace &trace,
+        std::optional<DecisionProviderFailure> *providerFailure) {
+        return StepBudgetedImpl(input, budget, &trace, providerFailure);
+    }
+
+    /** @copydoc DecisionGraphInstance::StepBudgetedImpl */
+    Result<std::optional<AiTaskState>> DecisionGraphInstance::StepBudgetedImpl(const DecisionGraphStepInput &input, AiWorkBudget &budget,
+                                                                               DecisionStepTrace *trace,
+                                                                               std::optional<DecisionProviderFailure> *providerFailure) {
+        using Outcome = Result<std::optional<AiTaskState>>;
+        const auto work = plan_->MaximumDecisionWorkUnits();
+        if (!work)
+            return Outcome::Failure(MakeError(AIErrors::CapabilityUnavailable, "Cooked decision shape does not support scheduler slices."));
+        if (auto valid = ValidateStep(input); valid.HasError())
+            return Outcome::Failure(valid.ErrorValue());
+        if (providerFailure)
+            providerFailure->reset();
+        if (Available() && !budget.Consume(*work))
+            return Outcome::Success(std::nullopt);
+        auto evaluated = StepRecorded(input, trace, providerFailure);
+        if (providerFailure && (binding_.operation.IsCancellationRequested() || !providers_->CanAdmit()))
+            providerFailure->reset();
+        if (evaluated.HasError())
+            return Outcome::Failure(evaluated.ErrorValue());
+        return Outcome::Success(evaluated.Value());
+    }
+
+    /** @copydoc DecisionGraphInstance::StepWithTrace */
+    Result<AiTaskState> DecisionGraphInstance::StepWithTrace(const DecisionGraphStepInput &input, DecisionStepTrace &trace) {
+        return StepImpl(input, &trace);
+    }
+
+    /** @copydoc DecisionTraceHeader::MatchesObservation */
+    bool DecisionTraceHeader::MatchesObservation(const Sha256Digest &digest, const std::uint64_t expectedTick,
+                                                 const BlackboardInstanceBinding &binding, const std::uint64_t revision) const noexcept {
+        return version == CurrentVersion && tick != 0 && tick == expectedTick && planDigest == digest && blackboard == binding &&
+               blackboardRevision == revision;
+    }
+
+    /** @copydoc DecisionGraphInstance::StepImpl */
+    Result<AiTaskState> DecisionGraphInstance::StepImpl(const DecisionGraphStepInput &input, DecisionStepTrace *trace) {
         if (auto valid = ValidateStep(input); valid.HasError())
             return Result<AiTaskState>::Failure(valid.ErrorValue());
+        return StepRecorded(input, trace);
+    }
+
+    /** @copydoc DecisionGraphInstance::StepRecorded */
+    Result<AiTaskState> DecisionGraphInstance::StepRecorded(const DecisionGraphStepInput &input, DecisionStepTrace *trace,
+                                                            std::optional<DecisionProviderFailure> *providerFailure) {
+        if (trace) {
+            trace->header_ = {.root = plan_->Root(),
+                              .planDigest = plan_->Digest(),
+                              .blackboard = input.blackboard.Binding(),
+                              .tick = input.tick,
+                              .blackboardRevision = input.blackboard.CapturedRevision()};
+            trace->count_ = 0;
+            trace->dropped_ = 0;
+        }
+        auto result = StepValidated(input, trace, providerFailure);
+        if (trace)
+            trace->header_.outcome = result.HasValue() ? result.Value() : AiTaskState::Failed;
+        return result;
+    }
+
+    /** @copydoc DecisionGraphInstance::StepValidated */
+    Result<AiTaskState> DecisionGraphInstance::StepValidated(const DecisionGraphStepInput &input, DecisionStepTrace *trace,
+                                                             std::optional<DecisionProviderFailure> *providerFailure) {
         if (!Available()) {
             const auto previous = occurrences_[0]->outcome;
             static_cast<void>(Cancel(AiTaskCancellationReason::ContextCancelled));
             return Result<AiTaskState>::Success(Terminal(previous) ? previous : AiTaskState::Cancelled);
         }
-        StepScope scope(evaluating_, input_, input);
+        StepScope scope(*this, {input, providerFailure}, trace);
         lastTick_ = input.tick;
         auto result = Advance(0);
         if (result.HasError() || !Available()) {
@@ -212,6 +468,12 @@ namespace Horo::AI {
             if (state.tree) {
                 if (auto restarted = state.tree->Restart(); restarted.HasError())
                     return restarted;
+            } else if (state.utility) {
+                for (auto &action : state.utility->actions) {
+                    if (auto restarted = action->Restart(); restarted.HasError())
+                        return restarted;
+                }
+                state.utility->selected.reset();
             } else {
                 if (state.generation == std::numeric_limits<std::uint32_t>::max())
                     return Invalid<void>(AIErrors::GenerationExhausted);
@@ -262,6 +524,12 @@ namespace Horo::AI {
         }
         if (state.machine)
             static_cast<void>(state.machine->Cancel(reason, state.actions.get()));
+        if (state.utility) {
+            const auto &utility =
+                *std::get<std::shared_ptr<const CookedUtilityPlan>>(plan_->Graphs()[plan_->Occurrences()[index].plan].execution);
+            for (std::size_t action = 0; action < state.utility->actions.size(); ++action)
+                static_cast<void>(state.utility->actions[action]->AbortSubtree(utility.Actions()[action]->Nodes()[0].execution.id, reason));
+        }
         state.active = false;
         if (!Terminal(state.outcome))
             state.outcome = AiTaskState::Cancelled;
@@ -295,6 +563,8 @@ namespace Horo::AI {
         auto bytes = sizeof(OccurrenceState) + sizeof(std::unique_ptr<OccurrenceState>);
         if (std::holds_alternative<std::shared_ptr<const BehaviorTreeExecutionPlan>>(graph.execution))
             return bytes + sizeof(CallAdapter);
+        if (const auto *utility = std::get_if<std::shared_ptr<const CookedUtilityPlan>>(&graph.execution))
+            return bytes + sizeof(UtilityAdapter) + (*utility)->Actions().size() * sizeof(std::unique_ptr<BehaviorTreeInstance>);
         bytes += sizeof(ActionAdapter);
         for (const auto &node : graph.bindings->Nodes())
             if (node.intrinsic == DecisionControlKind::Unspecified)

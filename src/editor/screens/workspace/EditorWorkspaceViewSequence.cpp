@@ -39,7 +39,8 @@ namespace Horo::Editor {
         if (area == WorkspaceDockArea::Document &&
             (m_uiCanvasView.Draw(viewModel, outCommand) || DrawPrefabDocument(viewModel, outCommand) ||
              DrawSourceDocument(viewModel, outCommand) || DrawNavigationDocument(viewModel) || DrawPCGDocument(viewModel, outCommand) ||
-             DrawSequenceDocument(viewModel, outCommand))) {
+             DrawSequenceDocument(viewModel, outCommand) || DrawBlackboardDocument(viewModel, outCommand) ||
+             DrawEnvironmentQueryDocument(viewModel, outCommand) || DrawDecisionGraphDocument(viewModel, outCommand))) {
             if (panel)
                 panel->OnPresentationHidden(outCommand);
             return;
@@ -183,12 +184,18 @@ namespace Horo::Editor {
                 outCommand.prefabAction = intent;
                 if (intent == PrefabDocumentAction::Recover || intent == PrefabDocumentAction::DiscardRecovery)
                     outCommand.prefabRecovery = viewModel.prefabRecovery;
+                if (intent == PrefabDocumentAction::Reload || intent == PrefabDocumentAction::DiscardAndReload)
+                    outCommand.prefabExternalComparison = source.externalComparison;
             }
         };
         action("workspace.documents.save", PrefabDocumentAction::Save, source.dirty && !source.externalConflict);
+        action("workspace.prefab_document.save_as", PrefabDocumentAction::SaveAs, source.dirty);
         action("workspace.prefab_document.undo", PrefabDocumentAction::Undo, source.canUndo && !source.externalConflict);
         action("workspace.prefab_document.redo", PrefabDocumentAction::Redo, source.canRedo && !source.externalConflict);
         action("workspace.prefab_document.reload", PrefabDocumentAction::Reload, !source.dirty);
+        if (source.externalConflict)
+            action("workspace.prefab_document.compare", PrefabDocumentAction::CompareExternal,
+                   static_cast<bool>(source.externalComparison));
         action("workspace.prefab_document.recover", PrefabDocumentAction::Recover,
                viewModel.prefabRecovery && !source.dirty && viewModel.prefabRecovery->acceptedSource == source.acceptedSource);
         action("workspace.prefab_document.discard_recovery", PrefabDocumentAction::DiscardRecovery, viewModel.prefabRecoveryAvailable);
@@ -196,8 +203,12 @@ namespace Horo::Editor {
         action("workspace.prefab_document.discard_close", PrefabDocumentAction::DiscardAndClose, source.dirty);
         if (viewModel.prefabDocumentError)
             Ui::ErrorText(viewModel.prefabDocumentError->message.c_str(), m_context.theme.fonts);
+        if (viewModel.prefabPostCommitError)
+            Ui::ErrorText(m_context.localization.Get("editor", "workspace.prefab_document.save_as_refresh").c_str(), m_context.theme.fonts);
         if (source.externalConflict)
-            Ui::WrappedText(ImGui::GetContentRegionAvail().x, m_context.localization.Get("editor", "workspace.prefab_document.conflict"),
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x,
+                            m_context.localization.Get("editor", source.keepExternalDraft ? "workspace.prefab_document.kept"
+                                                                                          : "workspace.prefab_document.conflict"),
                             Theme::ConsoleWarning(), m_context.theme.fonts);
         DrawPrefabSourceFields(source, outCommand);
         const auto &panels = m_panelRegistry.GetAllPanels();
@@ -233,7 +244,7 @@ namespace Horo::Editor {
         const bool focus = m_sourceSession.NeedsFocus(instance) || (!toolIntent && presentation->tools.TakeFocusRequest());
         const auto available = ImGui::GetContentRegionAvail();
         auto intent = widget.Draw({available.x, available.y, Theme::GetActiveTokens().sizes.uiScale, focus, !toolIntent,
-                                   &m_context.settings.settings.keymap.profile,
+                                   m_context.inputRouter ? &m_context.inputRouter->Profile() : &m_context.settings.settings.keymap.profile,
                                    static_cast<float>(m_context.settings.settings.codeFontSizePx), presentation->tools.HandledShortcut(),
                                    &m_context.settings.settings.codeEditor, m_context.settings.settings.codeFontFamily},
                                   &m_context.theme.fonts);

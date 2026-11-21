@@ -252,21 +252,8 @@ elseif(WIN32)
 endif()
 
 set(_HORO_BUILD_TESTING "${BUILD_TESTING}")
-set(HORO_MINIZ_REVISION "174573d60290f447c13a2b1b3405de2b96e27d6c")
-set(BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
-FetchContent_Declare(
-    miniz
-    GIT_REPOSITORY https://github.com/richgel999/miniz.git
-    GIT_TAG "${HORO_MINIZ_REVISION}"
-    GIT_SHALLOW TRUE
-)
-FetchContent_MakeAvailable(miniz)
-
-# miniz hard-codes /Zi in its MSVC flags. With /Z7 selected for cached builds,
-# sccache otherwise expects a PDB that the compiler intentionally does not emit.
-if(MSVC AND CMAKE_C_COMPILER_LAUNCHER MATCHES "sccache")
-    set_property(TARGET miniz PROPERTY C_COMPILER_LAUNCHER "")
-endif()
+include(HoroMinizDependency)
+horo_add_miniz_dependency()
 
 # Portable package paths need Unicode normalization and full case folding.
 set(HORO_UTF8PROC_REVISION "d7bf128df773c2a1a7242eb80e51e91a769fc985")
@@ -358,6 +345,20 @@ target_include_directories(HoroThirdPartyUfbx
     PUBLIC
         ${ufbx_SOURCE_DIR}
 )
+
+if(HORO_BUILD_EDITOR_GUI OR BUILD_TESTING)
+    FetchContent_Declare(horo_sqlite
+        URL https://sqlite.org/2026/sqlite-amalgamation-3540100.zip
+        URL_HASH SHA256=0a9c8e34352dad46006aa82836d5383bff9dc6bc9ce5a60553c05aa30e6ad1f9
+    )
+    FetchContent_MakeAvailable(horo_sqlite)
+    find_package(Threads REQUIRED)
+    add_library(HoroThirdPartySQLite STATIC "${horo_sqlite_SOURCE_DIR}/sqlite3.c")
+    add_library(HoroThirdParty::SQLite ALIAS HoroThirdPartySQLite)
+    target_include_directories(HoroThirdPartySQLite SYSTEM INTERFACE "${horo_sqlite_SOURCE_DIR}")
+    target_compile_definitions(HoroThirdPartySQLite PRIVATE SQLITE_OMIT_LOAD_EXTENSION SQLITE_DQS=0 SQLITE_TEMP_STORE=3)
+    target_link_libraries(HoroThirdPartySQLite PRIVATE Threads::Threads)
+endif()
 
 if(BUILD_TESTING)
     set(HORO_CATCH2_REVISION "6ee0826dcae55ed1e06b2c5701981221e979e1e6")
@@ -486,6 +487,7 @@ if(HORO_BUILD_EDITOR_GUI)
         )
     endif()
     add_library(HoroThirdParty::ImGui ALIAS HoroThirdPartyImGui)
+    include(${CMAKE_CURRENT_LIST_DIR}/DecisionNodeEditorDependency.cmake)
 
     target_compile_features(HoroThirdPartyImGui PUBLIC cxx_std_20)
     # Committed IME input must retain Unicode scalars above U+FFFF in every ImGui consumer.

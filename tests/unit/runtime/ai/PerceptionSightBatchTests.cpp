@@ -1,6 +1,9 @@
 #include "Horo/AI/AIScenePerceptionSource.h"
 #include "PerceptionSightTestSupport.h"
 
+#include <algorithm>
+#include <array>
+
 namespace Horo::AI {
     namespace {
         using namespace SightTest;
@@ -119,6 +122,56 @@ namespace Horo::AI {
             CHECK(capacity.Value().observations[0].evidence == PerceptionSightEvidence::BudgetExhausted);
         }
 
+        TEST_CASE("Sight candidate and ray ceilings produce bounded deterministic diagnostics",
+                  "[unit][ai][sight][canonical][qualification]") {
+            SightScene scene;
+            constexpr auto CandidateLimit = PerceptionSpatialLimits::CandidatesPerQuery;
+            constexpr std::size_t RayBudget = 8;
+            Runtime::SceneCommandBuffer add;
+            std::array<PerceptionSpatialSource, CandidateLimit + 1> sources{};
+            for (std::size_t index = 0; index < sources.size(); ++index)
+                REQUIRE(add.Create({}).IsValid());
+            const auto created = scene.scene->Commit(add);
+            REQUIRE(created.HasValue());
+            REQUIRE(created.Value().created.size() == sources.size());
+            const auto point = Math::WorldCoordinate64::FromMillimeters(0, 0, -10'000);
+            for (std::size_t index = 0; index < sources.size(); ++index) {
+                sources[index] = {.entity = created.Value().created[index].entity,
+                                  .position = point,
+                                  .layers = 1,
+                                  .senses = {SenseTypeIds::Sight},
+                                  .senseCount = 1};
+            }
+            const PerceptionSpatialListener listener{.entity = scene.listener, .senses = {SenseTypeIds::Sight}, .senseCount = 1};
+            const auto spatial = scene.broadphase.Publish(scene.scene->View(), ++scene.revision, std::span{&listener, 1}, sources);
+            REQUIRE(spatial.HasValue());
+
+            SightWorld physics;
+            (void)physics.Box(-5);
+            physics.Advance();
+            PerceptionSight sight;
+            const auto frame = physics.CurrentFrame(scene.listener);
+            PerceptionSightBudget budget{.simulationTick = physics.tick, .remainingRaycasts = RayBudget};
+            const auto queued = sight.Begin(scene.scene->View(), *spatial.Value(), physics.capability, frame, {}, budget);
+            REQUIRE(queued.HasValue());
+            REQUIRE(queued.Value().count == CandidateLimit);
+            CHECK(queued.Value().candidatesTruncated);
+            CHECK(budget.remainingRaycasts == 0);
+            REQUIRE(physics.world->ProcessQueryBatch().HasValue());
+            CHECK(PerceptionSightTestAccess::Completion(sight).entries.size() == RayBudget);
+
+            const auto completed = sight.Poll(scene.scene->View(), scene.revision, Publication(physics.capability, frame));
+            REQUIRE(completed.HasValue());
+            REQUIRE(completed.Value().count == CandidateLimit);
+            CHECK_FALSE(completed.Value().pending);
+            CHECK(completed.Value().candidatesTruncated);
+            const auto observations = std::span{completed.Value().observations}.first(completed.Value().count);
+            CHECK(std::ranges::count(observations, PerceptionSightEvidence::Occluded, &PerceptionSightObservation::evidence) == RayBudget);
+            CHECK(std::ranges::count(observations, PerceptionSightEvidence::BudgetExhausted, &PerceptionSightObservation::evidence) ==
+                  CandidateLimit - RayBudget);
+            CHECK(std::ranges::none_of(observations, &PerceptionSightObservation::visible));
+        }
+
         TEST_CASE("Sight stale target completions cannot reveal a replacement entity", "[unit][ai][sight][canonical]") {
             SightScene scene;
             SightWorld physics;
@@ -143,6 +196,52 @@ namespace Horo::AI {
             const auto replacement = physics.Sample(sight, scene);
             CHECK(replacement.observations[0].source == scene.target);
             CHECK(replacement.observations[0].visible);
+        }
+
+        TEST_CASE("Sight cancels pending rays on endpoint retirement and reacquires a fresh generation", "[unit][ai][sight][canonical]") {
+            SightScene scene;
+            scene.Publish(Math::WorldCoordinate64::FromMillimeters(0, 0, -10'000), {}, true);
+            SightWorld physics;
+            PerceptionSight sight;
+            const PerceptionSightPolicy policy{.gainSamples = 2};
+            const auto frame = physics.Queue(sight, scene, policy);
+            REQUIRE(PerceptionSightTestAccess::Pending(sight));
+            const auto retained = scene.spatial;
+            const auto oldTarget = scene.target;
+            Runtime::SceneCommandBuffer unload;
+            unload.Destroy(oldTarget);
+            REQUIRE(scene.scene->Commit(unload).HasValue());
+            const auto cancelled = sight.Poll(scene.scene->View(), scene.revision, Publication(physics.capability, frame));
+            REQUIRE(cancelled.HasValue());
+            CHECK_FALSE(PerceptionSightTestAccess::Pending(sight));
+            REQUIRE(cancelled.Value().count == 2);
+            for (std::size_t index = 0; index < cancelled.Value().count; ++index) {
+                CHECK(cancelled.Value().observations[index].evidence == PerceptionSightEvidence::Stale);
+                CHECK_FALSE(cancelled.Value().observations[index].visible);
+            }
+
+            const auto unloaded = scene.broadphase.Publish(scene.scene->View(), ++scene.revision, {}, {});
+            REQUIRE(unloaded.HasValue());
+            CHECK(unloaded.Value()->ListenerCount() == 0);
+            CHECK(unloaded.Value()->SourceCount() == 0);
+            CHECK_FALSE(retained->ReadAuthorization()->IsCurrent());
+            REQUIRE(physics.world->ProcessQueryBatch().HasValue());
+
+            Runtime::SceneCommandBuffer reload;
+            REQUIRE(reload.Create({}).IsValid());
+            const auto replacement = scene.scene->Commit(reload);
+            REQUIRE(replacement.HasValue());
+            REQUIRE(replacement.Value().created.size() == 1);
+            scene.target = replacement.Value().created[0].entity;
+            CHECK(scene.target != oldTarget);
+            scene.Publish();
+            physics.Advance();
+            const auto first = physics.Sample(sight, scene, policy);
+            REQUIRE(first.count == 1);
+            CHECK(first.observations[0].source == scene.target);
+            CHECK_FALSE(first.observations[0].visible);
+            physics.Advance();
+            CHECK(physics.Sample(sight, scene, policy).observations[0].visible);
         }
 
         TEST_CASE("Sight completion requires current spatial Physics and capability generations", "[unit][ai][sight][canonical]") {

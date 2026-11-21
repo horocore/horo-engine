@@ -268,6 +268,10 @@ struct VisualAccessibilitySettings {
   selected using the snapshot-backed `IColorAccessibilityQuery`.
 - Motion and flash suppression settings provide explicit hooks in camera and particle
   systems to clamp or skip strobe effects.
+- The Camera owner samples a cosmetic world-space translation at frame commit.
+  The host projects the scale from its committed visual-safety snapshot. Translation
+  affects only the copied render camera and look target, including both cross-fade
+  views, while preserving scene transforms, the chosen camera and the cut timeline.
 
 ---
 
@@ -615,6 +619,19 @@ migrates them once before validation (an explicitly supplied new key wins).
 2. Updates commit a new monotonic `ConfigurationSnapshot`.
 3. Subsystems capture snapshots at frame boundaries (`BeginFrame` / tick start), ensuring
    atomic, tear-free application.
+
+The desktop editor applies high contrast and reduced motion before beginning its
+GUI frame. The editor theme derives both its native ImGui colours and its design
+tokens from one contrast palette. Applying or reloading a theme retains the user
+preferences. Turning contrast off restores the selected theme's authored colours.
+The extension theme frame carries the same contrast, effective motion and
+flash-suppression preferences as the host.
+
+The Runtime UI owner captures the same flash preference before frame work.
+An explicitly tagged visual-flash timeline keeps its clock, semantic marker
+order and completion. With suppression active, its style tracks are omitted
+and the ordinary cascade supplies the display values. Flash tracks must use
+paint-only properties, so suppression leaves layout and targeting intact.
 
 ---
 

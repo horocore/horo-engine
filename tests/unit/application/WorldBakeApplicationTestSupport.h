@@ -14,8 +14,11 @@ namespace Horo::Application::WorldBakeTestSupport {
 
     /** @brief Captures two actual page documents with equal local IDs and distinct immutable page identities. */
     inline WorldBakeRequest Request(Editor::PartitionedWorldWorkspace &workspace, const std::optional<Assets::AssetId> mesh = {},
-                                    const std::optional<Assets::AssetId> navigation = {}) {
-        REQUIRE(workspace.Open(T::Document()).HasValue());
+                                    const std::optional<Assets::AssetId> navigation = {},
+                                    const std::optional<WorldStreaming::WorldObjectAnchor> anchor = {}) {
+        auto document = T::Document();
+        document.pages.front().objects.front().anchor = anchor;
+        REQUIRE(workspace.Open(document).HasValue());
         auto source = T::Source();
         if (mesh)
             source.insert(source.find("\"primitiveMesh\""), "\"meshAsset\":\"" + mesh->ToString() + "\",");

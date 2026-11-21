@@ -1,9 +1,11 @@
 #include "Horo/Runtime/Render/MultiviewExtractionErrors.h"
-#include "Horo/Runtime/Render/MultiviewSceneExtraction.h"
+#include "Horo/Runtime/Render/MultiviewMotionHistory.h"
 #include "support/AllocationProbe.h"
+#include "support/renderer/MultiviewTestSupport.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <cstring>
 #include <limits>
 #include <optional>
 
@@ -28,6 +30,123 @@ namespace Horo::Render {
             REQUIRE(result.HasError());
             CHECK(result.ErrorValue().domain.Value() == expected.domain.Value());
             CHECK(result.ErrorValue().code.Value() == expected.code.Value());
+        }
+
+        TEST_CASE("Multiview motion pairs actual completed eyes and stable object identities", "[renderer][multiview][motion]") {
+            MultiviewMotionHistory history;
+            const std::array firstViews{View(0, 0.1F), View(1, -0.2F)};
+            std::array firstObjects{Instance(), Instance()};
+            firstObjects[0].localToWorld.values[12] = 0.2F;
+            firstObjects[1].localToWorld.values[12] = -0.3F;
+            const std::array keys{RenderMotionObjectId{31}, RenderMotionObjectId{22}};
+            const auto first = MultiviewSceneSnapshot::Extract(Publication, Publication, firstViews, firstObjects, Capabilities,
+                                                               MultiviewExecutionPolicy::Multipass);
+            REQUIRE(first.HasValue());
+            const MultiviewMotionFrame initial{Publication, 10, 1000};
+            REQUIRE(history.Stage(initial, first.Value(), keys));
+            CHECK_FALSE(history.Previous(initial, keys[0], 0));
+
+            auto latest = Publication;
+            latest.frame += 3;  // Desktop host can run independently of adjacent native projections.
+            const std::array currentViews{View(0, -0.2F), View(1, 0.2F)};
+            std::swap(firstObjects[0], firstObjects[1]);
+            firstObjects[1].localToWorld.values[12] = 0.4F;
+            const std::array reordered{keys[1], keys[0]};
+            const auto current = MultiviewSceneSnapshot::Extract(latest, latest, currentViews, firstObjects, Capabilities,
+                                                                 MultiviewExecutionPolicy::Multipass);
+            REQUIRE(current.HasValue());
+            const MultiviewMotionFrame next{latest, 11, 2000};
+            CHECK_FALSE(history.Publish(next));
+            REQUIRE(history.Publish(initial));
+            CHECK_FALSE(history.Publish(initial));
+            const auto start = Horo::Tests::AllocationProbe::Count();
+            const auto staged = history.Stage(next, current.Value(), reordered);
+            const auto left = history.Previous(next, keys[0], 0);
+            const auto right = history.Previous(next, keys[0], 1);
+            const auto end = Horo::Tests::AllocationProbe::Count();
+            CHECK(start == end);
+            REQUIRE(staged);
+            REQUIRE(left);
+            REQUIRE(right);
+            CHECK(left->localToWorld.values[12] == 0.2F);
+            CHECK(left->worldToClip == firstViews[0].worldToClip);
+            CHECK(right->worldToClip == firstViews[1].worldToClip);
+            CHECK_FALSE(history.Previous(initial, keys[0], 0));
+            CHECK_FALSE(history.Previous(next, keys[0], 2));
+
+            using namespace MultiviewShaderParameterIds;
+            auto layout = MultiviewTest::Layout();
+            layout.parameters = {{CurrentLocalToClip, Buffer, ShaderValueType::Float32, 4, 4, 2, 0, 64, 16, true, true},
+                                 {PreviousLocalToClip, Buffer, ShaderValueType::Float32, 4, 4, 2, 128, 64, 16, true, true}};
+            std::array<std::byte, 256> bytes{};
+            const auto before = Horo::Tests::AllocationProbe::Count();
+            const auto packed = PackMultiviewMotionShaderParameters(layout, history, next, 1, bytes);
+            const auto after = Horo::Tests::AllocationProbe::Count();
+            REQUIRE(packed.HasValue());
+            CHECK(packed.Value() == bytes.size());
+            CHECK(after == before);
+            std::array<float, 64> values{};
+            std::memcpy(values.data(), bytes.data(), bytes.size());
+            CHECK(values[12] == 0.2F);
+            CHECK(values[28] == 0.4F + 0.2F);
+            CHECK(values[44] == 0.2F + 0.1F);
+            CHECK(values[60] == 0.0F);
+            const auto packedBytes = bytes;
+            CHECK(PackMultiviewMotionShaderParameters(layout, history, initial, 1, bytes).HasError());
+            CHECK(PackMultiviewMotionShaderParameters(layout, history, next, 2, bytes).HasError());
+            CHECK(PackMultiviewMotionShaderParameters(layout, history, next, 1, std::span{bytes}.first(64)).HasError());
+            CHECK(bytes == packedBytes);
+        }
+
+        TEST_CASE("Multiview motion omits culled replaced and discontinuous predecessors", "[renderer][multiview][motion]") {
+            MultiviewMotionHistory history;
+            const std::array firstViews{View(0), View(1, 4.0F)};
+            const std::array objects{Instance(), Instance()};
+            const std::array keys{RenderMotionObjectId{31}, RenderMotionObjectId{22}};
+            const auto initialScene = MultiviewSceneSnapshot::Extract(Publication, Publication, firstViews, objects, Capabilities,
+                                                                      MultiviewExecutionPolicy::Multipass);
+            REQUIRE(initialScene.HasValue());
+            const MultiviewMotionFrame initial{Publication, 1, 1000};
+            REQUIRE(history.Stage(initial, initialScene.Value(), keys));
+            REQUIRE(history.Publish(initial));
+            auto publication = Publication;
+            ++publication.frame;
+            std::uint64_t sequence = 2;
+            std::int64_t time = 2000;
+            auto nextObjects = objects;
+            bool ready = true;
+            SECTION("new mesh on an existing source ID") {
+                ++nextObjects[0].mesh.generation;
+                ready = false;
+            }
+            SECTION("origin changed") {
+                ++publication.originRevision;
+                ready = false;
+            }
+            SECTION("projection skipped") {
+                ++sequence;
+                ready = false;
+            }
+            SECTION("nonmonotonic prediction") {
+                time = 1000;
+                ready = false;
+            }
+            SECTION("previous eye culled this object") {}
+            const std::array presentViews{View(0), View(1)};
+            const auto extracted = MultiviewSceneSnapshot::Extract(publication, publication, presentViews, nextObjects, Capabilities,
+                                                                   MultiviewExecutionPolicy::Multipass);
+            REQUIRE(extracted.HasValue());
+            const MultiviewMotionFrame now{publication, sequence, time};
+            const std::array duplicate{keys[0], keys[0]};
+            CHECK_FALSE(history.Stage(now, extracted.Value(), duplicate));
+            CHECK_FALSE(history.Publish(now));
+            REQUIRE(history.Stage(now, extracted.Value(), keys));
+            CHECK(history.Previous(now, keys[0], 0).has_value() == ready);
+            CHECK_FALSE(history.Previous(now, keys[0], 1));
+            CHECK_FALSE(history.ReadDraw(now, 0));
+            history.Reset();
+            CHECK_FALSE(history.Publish(now));
+            CHECK_FALSE(history.Previous(now, keys[0], 0));
         }
 
         TEST_CASE("Multiview extraction copies scene authority once and preserves runtime order", "[unit][renderer][multiview]") {

@@ -259,6 +259,47 @@ namespace Horo::WorldStreaming {
         Commit(queue, proposal);
     }
 
+    TEST_CASE("Permuted admission rows preserve first-error precedence and exact queue identity", "[unit][world_streaming][fair_queue]") {
+        auto queue = Queue();
+        const auto first = Entry(3);
+        const auto second = Entry(2);
+        const auto third = Entry(1);
+        for (const auto &entry : {first, second, third})
+            REQUIRE(queue.Enqueue(Context(queue), entry).HasValue());
+
+        const std::array valid{StreamingFairQueueAdmission{third.operation, Deferred},
+                               StreamingFairQueueAdmission{first.operation, Deferred},
+                               StreamingFairQueueAdmission{second.operation, Admissible}};
+        const auto proposal = Select(queue, valid);
+        REQUIRE(proposal.operation == second.operation);
+        const auto revision = queue.Revision();
+
+        auto malformed = valid;
+        constexpr auto unsupported = static_cast<StreamingFairQueueEligibility>(255);
+        SECTION("a repeated deferred row beats an invalid later row") {
+            malformed[1] = malformed[0];
+            malformed[2].operation.operation = {};
+            RequireError(queue.Select(Context(queue), malformed), FairQueueIdentityConflict);
+        }
+        SECTION("matching operation ID with a stale generation beats unsupported later eligibility") {
+            malformed[0].operation.fence.generation = IdentityFrom<StreamingGeneration>(2);
+            malformed[1].eligibility = unsupported;
+            RequireError(queue.Select(Context(queue), malformed), FairQueueStale);
+        }
+        SECTION("unsupported eligibility beats the duplicate identity on that row") {
+            malformed[1] = malformed[0];
+            malformed[1].eligibility = unsupported;
+            RequireError(queue.Select(Context(queue), malformed), FairQueueUnsupported);
+        }
+
+        CHECK(queue.Revision() == revision);
+        REQUIRE(queue.Size() == valid.size());
+        Commit(queue, proposal);
+        const std::array next{StreamingFairQueueAdmission{first.operation, Admissible},
+                              StreamingFairQueueAdmission{third.operation, Deferred}};
+        CHECK(Select(queue, next).operation == first.operation);
+    }
+
     TEST_CASE("Fair queue rejects malformed conflicting and overcapacity enqueue without mutation", "[unit][world_streaming][fair_queue]") {
         auto queue = Queue(1);
         auto entry = Entry(1);

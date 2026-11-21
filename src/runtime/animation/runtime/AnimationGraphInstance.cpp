@@ -200,7 +200,7 @@ namespace Horo::Animation {
                 !charge(memory.poseTransforms + 2ULL * assets.program->SkeletonBinding().joints, sizeof(Math::Transform)) ||
                 !charge(memory.poseTransforms, sizeof(std::uint8_t)) ||
                 !charge(memory.clipPlayers, 2ULL * sizeof(Detail::GraphPlayerState)) ||
-                !charge(memory.parameters, 4ULL * sizeof(GraphParameterValue) + sizeof(std::uint8_t)) ||
+                !charge(memory.parameters, 4ULL * sizeof(GraphParameterValue) + sizeof(std::optional<GraphParameterValue>)) ||
                 !charge(assets.clips.size(), sizeof(std::shared_ptr<const AnimationClipAsset>)) ||
                 !charge(assets.curves.size(), sizeof(std::shared_ptr<const AnimationParameterCurve>) + sizeof(std::size_t)))
                 return false;
@@ -210,7 +210,8 @@ namespace Horo::Animation {
         /** @brief Charges notify values and the existing base workspace as one checked admission category. */
         bool AdmitPreparedStorage(const GraphInstanceAssets &assets, const GraphInstanceCreateContext &context,
                                   StorageBudget &charge) noexcept {
-            return charge(Detail::ClipNotifyStorageBytes(assets, context), 1) && AdmitBaseStorage(assets, charge, context.actions);
+            return charge(Detail::ClipNotifyStorageBytes(assets, context), 1) &&
+                   charge(Detail::RootMotionStorageBytes(*assets.program, context), 1) && AdmitBaseStorage(assets, charge, context.actions);
         }
 
         /** @brief Resolves one immutable state declaration for both storage and
@@ -287,7 +288,7 @@ namespace Horo::Animation {
             using enum GraphInstanceFailure;
             if (context.maximumControlOperations > 64ULL * 1024ULL * 1024ULL)
                 return LimitExceeded;
-            std::uint64_t control = Detail::ClipNotifyOperations(assets, context) +
+            std::uint64_t control = Detail::ClipNotifyOperations(assets, context) + Detail::RootMotionOperations(*assets.program, context) +
                                     assets.program->Occurrences().size() * (4ULL * assets.program->Memory().callDepth + 4ULL);
             control += 2048ULL * assets.program->Memory().blendMembers;
             control += Detail::ActionControlOperations(*assets.program, context.actions);
@@ -321,6 +322,8 @@ namespace Horo::Animation {
                 return failure;
             if (const auto failure = AdmitClipBindings(assets, context.clipLimits); failure != None)
                 return failure;
+            if (const auto failure = Detail::AdmitRootMotion(assets, context); failure != None)
+                return failure;
             if (const auto failure = AdmitCurves(assets, context); failure != None)
                 return failure;
             if (const auto failure = AdmitControlWork(assets, context); failure != None)
@@ -351,7 +354,7 @@ namespace Horo::Animation {
                 return failure;
             state.parameters.resize(memory.parameters);
             state.candidate.parameters.resize(memory.parameters);
-            state.queuedTriggers.resize(memory.parameters);
+            state.queuedParameters.resize(memory.parameters);
             for (auto &parameters : state.published.parameters)
                 parameters.resize(memory.parameters);
             state.curves.publications.assign(assets.curves.begin(), assets.curves.end());
@@ -401,6 +404,28 @@ namespace Horo::Animation {
                 return {GraphInstanceFailure::HandleStale};
             return {};
         }
+
+        /** @brief Resolves one model transform through the validated parent chain of a resident pose. */
+        Result<Math::Mat4> ReadJointModel(const SkeletonAsset &skeleton, const std::span<const Math::Transform> locals,
+                                          const JointId joint) {
+            auto index = skeleton.FindJointIndex(joint);
+            if (!index.has_value())
+                return Result<Math::Mat4>::Failure(MakeError(AnimationErrors::PoseJointMissing));
+
+            auto model = Math::Mat4::Identity();
+            do {
+                const auto local = locals[*index].TryToMatrix();
+                if (local.HasError())
+                    return Result<Math::Mat4>::Failure(MakeError(AnimationErrors::PoseTransformInvalid));
+                model = Math::Multiply(local.Value(), model);
+                const auto &parent = skeleton.Data().joints[*index].parent;
+                index = parent ? skeleton.FindJointIndex(*parent) : std::nullopt;
+            } while (index.has_value());
+
+            if (!Math::IsFinite(model))
+                return Result<Math::Mat4>::Failure(MakeError(AnimationErrors::PoseTransformInvalid));
+            return Result<Math::Mat4>::Success(model);
+        }
     }  // namespace
 
     /** @copydoc DescribeGraphInstanceFailure */
@@ -431,6 +456,7 @@ namespace Horo::Animation {
             }
             if (const auto failure = PrepareWorkspace(*state, assets, context.actions); failure != GraphInstanceFailure::None)
                 return Result<AnimationGraphInstance>::Failure(DescribeGraphInstanceFailure({failure}));
+            Detail::PrepareRootMotion(*state, context);
             if (const auto failure = Detail::PrepareClipNotifies(*state, context); failure != GraphInstanceFailure::None)
                 return Result<AnimationGraphInstance>::Failure(DescribeGraphInstanceFailure({failure}));
             if (context.cancellation.IsCancellationRequested())
@@ -470,6 +496,12 @@ namespace Horo::Animation {
     GraphInstanceOutcome AnimationGraphInstance::Evaluate(const GraphEvaluationInput &input) {
         if (const auto owner = Owner(state_.get()); owner.HasError())
             return owner;
+        return EvaluateExclusive(input, input.cancellation);
+    }
+
+    /** @copydoc AnimationGraphInstance::EvaluateExclusive */
+    GraphInstanceOutcome AnimationGraphInstance::EvaluateExclusive(const GraphEvaluationInput &input,
+                                                                   const CancellationToken &publicationCancellation) {
         if (state_->closed)
             return {GraphInstanceFailure::AdmissionRejected};
         if (state_->ownerCancellation.IsCancellationRequested() || input.cancellation.IsCancellationRequested())
@@ -482,7 +514,7 @@ namespace Horo::Animation {
             return {GraphInstanceFailure::LimitExceeded};
         if (const auto executed = Detail::ExecuteGraph(*state_, input); executed.HasError())
             return executed;
-        state_->candidate.cancellation = input.cancellation;
+        state_->candidate.cancellation = publicationCancellation;
         state_->candidate.tick = input.tick;
         return {};
     }
@@ -526,8 +558,10 @@ namespace Horo::Animation {
                                 {slot, static_cast<std::uint32_t>(generation)},
                                 PoseGeneration::Create(generation).Value()};
         std::ranges::copy(state_->Pose(state_->program->OutputSlot()), state_->published.poses[slot].begin());
+        if (!state_->rootMotion.poses.empty())
+            state_->published.rootMotion[slot] = state_->rootMotion.poses[state_->program->OutputSlot().index];
         std::ranges::copy(state_->candidate.parameters, state_->published.parameters[slot].begin());
-        std::ranges::fill(state_->queuedTriggers, 0);
+        std::ranges::fill(state_->queuedParameters, std::nullopt);
         PublishBlendMembers(*state_, slot);
         state_->published.handles[slot] = handle;
         state_->players.swap(state_->candidate.players);
@@ -560,6 +594,20 @@ namespace Horo::Animation {
         return instance.PrepareCommit(tick);
     }
 
+    /** @copydoc Detail::GraphSceneCommitAccess::ReadRootMotion */
+    GraphInstanceOutcome Detail::GraphSceneCommitAccess::ReadRootMotion(const AnimationGraphInstance &instance, const AnimationTickId tick,
+                                                                        AnimationRootMotionDelta &output) {
+        const auto *state = instance.state_.get();
+        if (const auto owner = Owner(state); owner.HasError())
+            return owner;
+        if (state->rootMotion.poses.empty())
+            return {GraphInstanceFailure::AdmissionRejected};
+        if (!tick.IsValid() || state->candidate.tick != tick || state->candidate.commitArmed)
+            return {GraphInstanceFailure::TickStale};
+        output = state->rootMotion.poses[state->program->OutputSlot().index];
+        return {};
+    }
+
     /** @copydoc Detail::GraphSceneCommitAccess::Publish */
     GraphInstancePublication Detail::GraphSceneCommitAccess::Publish(AnimationGraphInstance &instance) noexcept {
         return instance.PublishPrepared();
@@ -578,6 +626,16 @@ namespace Horo::Animation {
 
     /** @copydoc AnimationGraphInstance::QueueTrigger */
     GraphInstanceOutcome AnimationGraphInstance::QueueTrigger(const GraphParameterId parameter) {
+        return QueueParameterInput({parameter, true}, true);
+    }
+
+    /** @copydoc AnimationGraphInstance::QueueParameter */
+    GraphInstanceOutcome AnimationGraphInstance::QueueParameter(const GraphParameterInput &parameter) {
+        return QueueParameterInput(parameter, false);
+    }
+
+    /** @copydoc AnimationGraphInstance::QueueParameterInput */
+    GraphInstanceOutcome AnimationGraphInstance::QueueParameterInput(const GraphParameterInput &parameter, const bool trigger) {
         if (const auto owner = Owner(state_.get()); owner.HasError())
             return owner;
         if (state_->closed)
@@ -587,12 +645,14 @@ namespace Horo::Animation {
         if (state_->ownerCancellation.IsCancellationRequested())
             return {GraphInstanceFailure::Cancelled};
         const auto declarations = state_->program->Parameters();
-        const auto found = std::ranges::lower_bound(declarations, parameter, {}, &GraphParameter::id);
-        if (!parameter.IsValid() || found == declarations.end() || found->id != parameter)
+        const auto found = std::ranges::lower_bound(declarations, parameter.id, {}, &GraphParameter::id);
+        if (found == declarations.end() || found->id != parameter.id)
             return {GraphInstanceFailure::BindingMismatch};
-        if (found->type != GraphValueType::Trigger)
+        if ((found->type == GraphValueType::Trigger) != trigger)
             return {GraphInstanceFailure::TypeMismatch};
-        state_->queuedTriggers[static_cast<std::size_t>(found - declarations.begin())] = 1;
+        if (const auto failure = Detail::ValidateParameterValue(*found, parameter); failure != GraphInstanceFailure::None)
+            return {failure};
+        state_->queuedParameters[static_cast<std::size_t>(found - declarations.begin())] = parameter.value;
         return {};
     }
 
@@ -606,6 +666,16 @@ namespace Horo::Animation {
             return {GraphInstanceFailure::LimitExceeded};
         for (std::size_t index = 0; index < output.size(); ++index)
             output[index] = {declarations[index].id, state_->published.parameters[publication.slot.index][index]};
+        return {};
+    }
+
+    /** @copydoc AnimationGraphInstance::CopyRootMotion */
+    GraphInstanceOutcome AnimationGraphInstance::CopyRootMotion(const PoseHandle &publication, AnimationRootMotionDelta &output) const {
+        if (const auto resident = ResidentPublication(state_.get(), publication); resident.HasError())
+            return resident;
+        if (state_->rootMotion.poses.empty())
+            return {GraphInstanceFailure::AdmissionRejected};
+        output = state_->published.rootMotion[publication.slot.index];
         return {};
     }
 
@@ -701,6 +771,33 @@ namespace Horo::Animation {
         return {};
     }
 
+    /** @copydoc AnimationGraphInstance::JointModelTransform */
+    Result<Math::Mat4> AnimationGraphInstance::JointModelTransform(const PoseHandle &pose, const JointId joint) const {
+        if (const auto resident = ResidentPublication(state_.get(), pose); resident.HasError())
+            return Result<Math::Mat4>::Failure(DescribeGraphInstanceFailure(resident));
+        return ReadJointModel(*state_->skeleton, state_->published.poses[pose.slot.index], joint);
+    }
+
+    /** @copydoc AnimationGraphInstance::SocketModelTransform */
+    Result<Math::Mat4> AnimationGraphInstance::SocketModelTransform(const PoseHandle &pose, const SkeletonSocketId socket) const {
+        if (const auto resident = ResidentPublication(state_.get(), pose); resident.HasError())
+            return Result<Math::Mat4>::Failure(DescribeGraphInstanceFailure(resident));
+        const auto *metadata = state_->skeleton->FindSocket(socket);
+        if (!metadata)
+            return Result<Math::Mat4>::Failure(MakeError(AnimationErrors::PoseSocketMissing));
+
+        const auto joint = ReadJointModel(*state_->skeleton, state_->published.poses[pose.slot.index], metadata->joint);
+        if (joint.HasError())
+            return joint;
+        const auto offset = metadata->localTransform.TryToMatrix();
+        if (offset.HasError())
+            return Result<Math::Mat4>::Failure(MakeError(AnimationErrors::PoseTransformInvalid));
+        const auto model = Math::Multiply(joint.Value(), offset.Value());
+        if (!Math::IsFinite(model))
+            return Result<Math::Mat4>::Failure(MakeError(AnimationErrors::PoseTransformInvalid));
+        return Result<Math::Mat4>::Success(model);
+    }
+
     /** @copydoc AnimationGraphInstance::Publication */
     GraphInstancePublication AnimationGraphInstance::Publication() const noexcept {
         if (!state_ || state_->ownerThread != std::this_thread::get_id())
@@ -714,7 +811,7 @@ namespace Horo::Animation {
             return owner;
         state_->closed = true;
         Detail::ShutdownActions(*state_);
-        std::ranges::fill(state_->queuedTriggers, 0);
+        std::ranges::fill(state_->queuedParameters, std::nullopt);
         state_->candidate.tick = {};
         state_->candidate.cancellation = {};
         state_->candidate.eventCount = 0;

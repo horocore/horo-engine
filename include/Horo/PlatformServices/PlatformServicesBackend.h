@@ -169,6 +169,12 @@ namespace Horo::PlatformServices {
         [[nodiscard]] Result<PlatformRequestHandle<void>> WriteStat(StatWriteRequest request) override;
         /** @copydoc ICloudService::ReadCloudObject */
         [[nodiscard]] Result<PlatformRequestHandle<CloudReadResult>> ReadCloudObject(CloudReadRequest request) override;
+        /** @copydoc ICloudService::ListCloudObjects */
+        [[nodiscard]] Result<PlatformRequestHandle<CloudObjectPage>> ListCloudObjects(CloudListRequest request) override;
+        /** @copydoc ICloudService::ReadCloudObject */
+        [[nodiscard]] Result<PlatformRequestHandle<CloudBlobReadResult>> ReadCloudObject(CloudBlobReadRequest request) override;
+        /** @copydoc ICloudService::QueryCloudQuota */
+        [[nodiscard]] Result<PlatformRequestHandle<CloudQuotaObservation>> QueryCloudQuota(PlatformSubjectHandle subject) override;
         /** @copydoc ICloudService::WriteCloudObject */
         [[nodiscard]] Result<PlatformRequestHandle<CloudMutationResult>> WriteCloudObject(CloudBlobWriteRequest &&request) override;
         /** @copydoc ICloudService::DeleteCloudObject */

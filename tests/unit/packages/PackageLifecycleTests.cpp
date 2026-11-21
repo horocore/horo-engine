@@ -246,9 +246,12 @@ TEST_CASE("Package lifecycle shutdown during native preparation cannot publish o
 TEST_CASE("Package lifecycle storage failure keeps prior activated graph and typed failure evidence", "[packages][activation]") {
     Fixture fixture;
     fixture.Install();
+    // Keep the same fixture code loaded outside the staging root so Windows can move that root.
+    fixture.fixtureLibraryPath = HORO_PACKAGE_NATIVE_FIXTURE;
     REQUIRE(fixture.Activate().HasValue());
     const auto previous = fixture.service->Active();
-    const auto unavailable = fixture.temporary.Path().string() + "-unavailable";
+    auto unavailable = fixture.temporary.Path();
+    unavailable += "-unavailable";
     std::filesystem::rename(fixture.temporary.Path(), unavailable);
     const auto result = fixture.Activate();
     std::filesystem::rename(unavailable, fixture.temporary.Path());

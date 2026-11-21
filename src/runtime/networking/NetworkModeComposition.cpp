@@ -121,8 +121,32 @@ namespace Horo::Network {
     }
 
     NetworkModeServiceRequest NetworkModeComposition::Request(const NetworkModePlan &plan, const NetworkModeServiceKind service,
-                                                              const NetworkModeWorld *world) noexcept {
-        return Horo::Network::Request(plan, service, world);
+                                                              const NetworkModeWorld *world) const noexcept {
+        auto request = Horo::Network::Request(plan, service, world);
+        if (binding_ && request.world == NetworkModeWorldKind::AuthorityServer && service == NetworkModeServiceKind::Physics)
+            request.authorityObjects = NetworkAuthorityObjectPublication{binding_, request.scene};
+        if (binding_ && request.world == NetworkModeWorldKind::Client && service == NetworkModeServiceKind::Scene &&
+            binding_->HasPrefabLifecycle())
+            request.prefabInbox = NetworkClientPrefabInbox{binding_, request.scene};
+        return request;
+    }
+
+    /** @copydoc NetworkClientPrefabInbox::Take */
+    Result<std::vector<NetworkPrefabLifecycleRecord>> NetworkClientPrefabInbox::Take(Runtime::RuntimePhase phase) const {
+        if (const auto binding = binding_.lock())
+            return binding->TakePrefab(scene_, phase);
+        return Result<std::vector<NetworkPrefabLifecycleRecord>>::Failure(MakeError(NetworkErrors::NetworkModeUnavailable));
+    }
+
+    /** @copydoc NetworkAuthorityObjectPublication::Prepare */
+    Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> NetworkAuthorityObjectPublication::Prepare(
+        std::span<const ReplicationDynamicSceneObject> added, std::span<const Runtime::EntityRef> retired,
+        const CancellationToken &cancellation) const {
+        const auto binding = binding_.lock();
+        if (!binding)
+            return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
+                MakeError(NetworkErrors::ReplicationWorldUnavailable));
+        return binding->PrepareAuthorityObjects(scene_, added, retired, cancellation);
     }
 
     NetworkModeComposition::NetworkModeComposition(NetworkModePlan plan, NetworkModeFactories factories,
@@ -246,10 +270,6 @@ namespace Horo::Network {
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkModeShuttingDown, "Mode composition has stopped."));
         if (started_)
             return Invalid("Mode composition has already started.");
-        if (binding_) {
-            if (auto staged = binding_->Prepare(); staged.HasError())
-                return staged;
-        }
         if (auto built = BuildEntries(); built.HasError()) {
             Shutdown();
             return built;
@@ -268,12 +288,42 @@ namespace Horo::Network {
                 return activated;
             }
         }
+        if (binding_) {
+            auto staged = StageBoundWorlds({entries_.data(), entryCount_});
+            if (staged.HasError()) {
+                Shutdown();
+                return staged;
+            }
+        }
         started_ = true;
         return Result<void>::Success();
     }
 
+    /** @copydoc NetworkModeComposition::CaptureAuthoredScene */
+    Result<NetworkAuthoredSceneProjection> NetworkModeComposition::CaptureAuthoredScene(std::span<const Entry> entries,
+                                                                                        NetworkModeWorldKind kind) {
+        const auto scene = std::ranges::find_if(entries, [kind](const Entry &entry) {
+            return entry.request.service == NetworkModeServiceKind::Scene && entry.request.world == kind;
+        });
+        return scene != entries.end() ? scene->service->CaptureAuthoredScene() : Result<NetworkAuthoredSceneProjection>::Success({});
+    }
+
+    /** @copydoc NetworkModeComposition::StageBoundWorlds */
+    Result<void> NetworkModeComposition::StageBoundWorlds(std::span<const Entry> entries, std::span<const NetworkModeWorld> replacements) {
+        const auto authority = CaptureAuthoredScene(entries, NetworkModeWorldKind::AuthorityServer);
+        if (authority.HasError())
+            return Result<void>::Failure(authority.ErrorValue());
+        auto client = binding_->HasAuthoredScene() ? CaptureAuthoredScene(entries, NetworkModeWorldKind::Client)
+                                                   : Result<NetworkAuthoredSceneProjection>::Success({});
+        if (client.HasError())
+            return Result<void>::Failure(client.ErrorValue());
+        return replacements.empty() ? binding_->Prepare(authority.Value(), std::move(client).Value())
+                                    : binding_->PrepareTravel(replacements, authority.Value(), std::move(client).Value());
+    }
+
     /** @copydoc NetworkModeComposition::RunPhase */
-    Result<void> NetworkModeComposition::RunPhase(const Runtime::RuntimePhase phase) {
+    Result<void> NetworkModeComposition::RunPhase(const Runtime::RuntimePhase phase, std::uint64_t completedSimulationTick,
+                                                  const CancellationToken &cancellation) {
         if (!started_ || stopped_)
             return Unavailable("Mode worlds are not published.");
         if (phase > Runtime::RuntimePhase::EndFrame || phase == Runtime::RuntimePhase::FixedUpdate)
@@ -284,7 +334,9 @@ namespace Horo::Network {
                 return advanced;
         }
         if (binding_ && phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges) {
-            auto advanced = travelPending_ ? AdvanceTravel(phase) : binding_->Commit(phase);
+            const auto localSimulationTick = completedSimulationTick + 1;
+            auto advanced = travelPending_ ? AdvanceTravel(phase, localSimulationTick, cancellation)
+                                           : binding_->Commit(phase, localSimulationTick, cancellation);
             if (advanced.HasError() && travelPending_) {
                 travelFailure_ = advanced.ErrorValue();
                 (void)binding_->CancelTravel();
@@ -393,6 +445,15 @@ namespace Horo::Network {
     /** @copydoc NetworkModeHostAccess::Binding */
     std::weak_ptr<NetworkWorldBindingController> NetworkModeHostAccess::Binding(const NetworkModeComposition &mode) noexcept {
         return mode.binding_;
+    }
+
+    /** @copydoc NetworkModeComposition::InitialClientOwnership */
+    Result<ReplicationInitialOwnership> NetworkModeComposition::InitialClientOwnership(Runtime::SceneRuntimeId scene,
+                                                                                       NetworkSessionGeneration session,
+                                                                                       NetworkObjectId object) const {
+        if (!binding_)
+            return Result<ReplicationInitialOwnership>::Failure(MakeError(NetworkErrors::NetworkModeUnavailable));
+        return binding_->InitialClientOwnership(scene, session, object);
     }
 
     /** @copydoc NetworkModeComposition::AcquireReplication */

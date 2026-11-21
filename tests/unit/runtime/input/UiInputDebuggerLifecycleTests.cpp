@@ -2,6 +2,15 @@
 
 namespace Horo::Runtime::Ui::InputDebugTest {
     namespace {
+        /** @brief Publishes the shared exact world placement after the fixture's initial screen receipt. */
+        void PresentWorld(Fixture &fixture) {
+            constexpr UiWorldCanvasProjection plane{{0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F}, {0.0F, -2.0F, 0.0F}};
+            REQUIRE(fixture.presented
+                        .Apply({fixture.view, Owner().canvas, Owner().interaction, Rev<UiRenderSnapshotRevision>(2),
+                                UiPresentationOutcome::Presented, UiPresentationReason::None, plane})
+                        .HasValue());
+        }
+
         TEST_CASE("UI debugger follows actual structural reload and retains old route evidence", "[runtime_ui][input_debug][reload]") {
             Fixture f;
             Handler handler;
@@ -37,6 +46,7 @@ namespace Horo::Runtime::Ui::InputDebugTest {
 
         TEST_CASE("UI debugger world projection exposes real ray geometry and target decisions", "[runtime_ui][input_debug][world]") {
             Fixture f;
+            PresentWorld(f);
             auto store =
                 UiHitTestStore::Create({Owner().instance, Owner().canvas, Owner().document, UiRenderMode::WorldSpace, {200, 200}, 4, 2})
                     .Value();
@@ -46,10 +56,7 @@ namespace Horo::Runtime::Ui::InputDebugTest {
                 projection[i].zOrder = static_cast<std::int32_t>(i);
             }
             auto hit = store.Publish(f.layout, projection).Value();
-            const UiWorldRayQuery query{f.view,
-                                        Owner().canvas,
-                                        {{0.5F, -0.5F, 1.0F}, {0.0F, 0.0F, -1.0F}, 0.0F, 2.0F},
-                                        {{0.0F, 0.0F, 0.0F}, {2.0F, 0.0F, 0.0F}, {0.0F, -2.0F, 0.0F}}};
+            const UiWorldRayQuery query{f.view, Owner().canvas, {{0.5F, -0.5F, 1.0F}, {0.0F, 0.0F, -1.0F}, 0.0F, 2.0F}};
             auto ordinary = hit.HitTestWorld(query, f.presented);
             auto observed = f.debugger->HitTestWorld(hit, query, f.presented);
             REQUIRE(ordinary.HasValue());
@@ -63,6 +70,70 @@ namespace Horo::Runtime::Ui::InputDebugTest {
             CHECK(snapshot.Record().kind == UiInputDebugRecordKind::WorldHitTest);
             CHECK(snapshot.Candidates().size() == 4);
             CHECK(snapshot.Candidates()[0].decision == UiHitTestDecision::Selected);
+        }
+
+        TEST_CASE("World hit routing admits clipped modal targets only against current presentation",
+                  "[runtime_ui][input_debug][world][qualification]") {
+            Fixture f;
+            PresentWorld(f);
+            auto store =
+                UiHitTestStore::Create({Owner().instance, Owner().canvas, Owner().document, UiRenderMode::WorldSpace, {200, 200}, 4, 2})
+                    .Value();
+            std::array<UiHitTestElement, 4> projection{};
+            for (std::size_t index = 0; index < projection.size(); ++index) {
+                projection[index].element = f.layout.Records()[index].element;
+                projection[index].zOrder = static_cast<std::int32_t>(index);
+            }
+            projection.back().hasClip = true;
+            projection.back().clip = {{150, 150}, {10, 10}};
+            auto hit = store.Publish(f.layout, projection).Value();
+            const UiWorldRayQuery query{f.view, Owner().canvas, {{0.5F, -0.5F, 1.0F}, {0.0F, 0.0F, -1.0F}, 0.0F, 2.0F}};
+            const auto selected = f.debugger->HitTestWorld(hit, query, f.presented);
+            REQUIRE(selected.HasValue());
+            REQUIRE(selected.Value());
+            const auto targeting = f.debugger->Recent().Value();
+            REQUIRE(targeting.Candidates().size() == 4);
+            CHECK(targeting.Candidates()[0].decision == UiHitTestDecision::OutsideClip);
+            CHECK(selected.Value()->element == f.tree.Find(Id<UiElementId>(3)).Value());
+            CHECK(selected.Value()->logicalPosition == UiLogicalPoint{50, 50});
+
+            const auto modalRoot = f.tree.Find(Id<UiElementId>(2)).Value();
+            const auto opened = f.focus.PushModal({modalRoot, Id<UiElementId>(2), Id<UiElementId>(3)});
+            REQUIRE(opened.HasValue());
+            const auto focused = f.focus.Snapshot();
+            REQUIRE(focused.HasValue());
+            REQUIRE(focused.Value().modalRoot);
+            REQUIRE(focused.Value().focused);
+            CHECK(focused.Value().focused->element == selected.Value()->element);
+            auto route = f.Route();
+            route.target = selected.Value()->element;
+            route.modalRoot = focused.Value().modalRoot->element;
+            const UiRoutedEvent event{UiEventKind::Gesture, 1, selected.Value()->logicalPosition, true,
+                                      UiGestureEvent{UiGestureKind::Tap, 1, route.target}};
+            Handler handler;
+            handler.response.preventDefault = true;
+            auto dispatched = f.debugger->Dispatch(f.dispatcher, f.tree, route, event, handler);
+            REQUIRE(dispatched.HasValue());
+            CHECK(dispatched.Value().phasesVisited == 3);
+            CHECK(dispatched.Value().defaultPrevented);
+            CHECK(handler.defaults == 0);
+            const auto observed = f.debugger->Recent().Value();
+            REQUIRE(observed.Phases().size() == 3);
+            CHECK(observed.Phases()[0].element == *route.modalRoot);
+            CHECK(observed.Phases()[1].element == route.target);
+            CHECK(observed.Phases()[2].element == *route.modalRoot);
+
+            REQUIRE(f.presented
+                        .Apply({f.view, Owner().canvas, Rev<UiInteractionRevision>(2), Rev<UiRenderSnapshotRevision>(3),
+                                UiPresentationOutcome::Presented, UiPresentationReason::None})
+                        .HasValue());
+            const auto stale = f.debugger->HitTestWorld(hit, query, f.presented);
+            REQUIRE(stale.HasError());
+            CHECK(stale.ErrorValue().code.Value() == UiErrors::HitTestNotPresented.code.Value());
+            CHECK(handler.defaults == 0);
+            CHECK(targeting.Candidates()[0].decision == UiHitTestDecision::OutsideClip);
+            REQUIRE(f.focus.PopModal(opened.Value().modal).HasValue());
+            CHECK(f.focus.CurrentFocus().Value()->element == modalRoot);
         }
 
         TEST_CASE("UI observer reports clipping and geometric rejection in actual paint order", "[runtime_ui][input_debug][edge]") {

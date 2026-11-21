@@ -233,6 +233,7 @@ namespace Horo::Editor {
                                     std::pair{"light", Light},
                                     std::pair{"audioSource", AudioSource},
                                     std::pair{"audioListener", AudioListener},
+                                    std::pair{"uiCanvas", UiCanvas},
                                     std::pair{"navigationSurface", NavigationSurface},
                                     std::pair{"navigationRegion", NavigationRegion},
                                     std::pair{"navigationModifier", NavigationModifier},
@@ -333,6 +334,10 @@ namespace Horo::Editor {
             const auto &components = object.components;
             if (components.audioSource)
                 if (auto added = AppendAudioAsset(*components.audioSource, registry, references); added.HasError())
+                    return added;
+            if (components.uiCanvas)
+                if (auto added = AppendAsset(components.uiCanvas->canvas.asset, registry, references, Runtime::Ui::UiDocumentAssetTypeName);
+                    added.HasError())
                     return added;
             if (components.navigationSurface)
                 if (auto added = AppendAsset(components.navigationSurface->definition, registry, references, "core.navmesh");

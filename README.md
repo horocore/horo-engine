@@ -40,7 +40,8 @@ horo-engine/
 ```
 
 See [Desired Project Tree](./docs/architecture/desired-project-tree.md) for the
-full target structure.
+full target structure. The [runtime module index](./src/runtime/README.md)
+maps current implementation folders to their public contracts, tests and architecture.
 
 ## Build Status
 

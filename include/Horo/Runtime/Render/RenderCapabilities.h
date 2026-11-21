@@ -42,6 +42,7 @@ namespace Horo::Render {
         VfxGpuDraw,           /**< Direct vertex consumption of the admitted GPU particle storage ABI. */
         VfxGpuReadback,       /**< Declared normalized observations with actual asynchronous copy/completion ownership. */
         ExposureGpu,          /**< Closed native histogram/adaptation family; no CPU meter or generic compute implied. */
+        NativeReconstruction, /**< Closed native spatial/temporal graph dispatch; provider selection remains separate. */
         Count,                /**< Number of defined capabilities; not itself a capability bit. */
     };
 

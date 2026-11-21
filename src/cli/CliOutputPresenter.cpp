@@ -78,6 +78,9 @@ namespace Horo::Cli {
                 metadata["jobId"] = correlation.job->value;
             if (correlation.project)
                 metadata["projectId"] = correlation.project->identity;
+            if (correlation.assetSource)
+                metadata["assetSource"] = {{"assetId", correlation.assetSource->assetId},
+                                           {"projectPath", correlation.assetSource->projectPath.String()}};
             return {{"schemaVersion", 1},
                     {"command", CommandName(descriptor.path)},
                     {"invocationId", std::format("cli-{}", correlation.invocation.value)},
@@ -94,6 +97,7 @@ namespace Horo::Cli {
         bool ValidCorrelation(const CliExecutionCorrelation &correlation, const CliInvocationId invocation) {
             return correlation.invocation == invocation && invocation.IsValid() &&
                    (!correlation.operation || correlation.operation->IsValid()) && (!correlation.job || correlation.job->IsValid()) &&
+                   (!correlation.assetSource || (correlation.operation && correlation.assetSource->IsValid())) &&
                    (!correlation.project ||
                     (correlation.project->identity.size() <= 256 && IsValidUtf8ScalarSequence(correlation.project->identity)));
         }
@@ -146,6 +150,19 @@ namespace Horo::Cli {
             return !output || !diagnostics;
         }
 
+        /** @brief Selects the terminal failure while retaining an application cause after a stream failure. */
+        std::optional<Error> TerminalFailure(const CliTerminalResult &terminal, const bool validContext, const bool failedOutput) {
+            if (!validContext)
+                return MakeError(CliErrors::ExecutionContextInvalid);
+            if (failedOutput) {
+                auto failure = MakeError(CliErrors::HostFailure);
+                if (terminal.Outcome().HasError())
+                    failure = WithCause(std::move(failure), terminal.Outcome().ErrorValue());
+                return failure;
+            }
+            return terminal.Outcome().HasError() ? std::optional<Error>{terminal.Outcome().ErrorValue()} : std::nullopt;
+        }
+
         /** @brief Writes human presentation without letting control text decorate result streams. */
         void WriteHuman(const Json &envelope, std::ostream &output, std::ostream &diagnostics) {
             if (envelope["status"] == "failed") {
@@ -193,12 +210,16 @@ namespace Horo::Cli {
                              {"message", event.message}}
                             .dump()
                      << '\n';
+            output_->flush();
         } else {
             if (terminal_)
                 *diagnostics_ << '\r';
             *diagnostics_ << HumanText(event.phase) << ' ' << static_cast<int>(event.completion * 100) << "% " << HumanText(event.message)
                           << '\n';
+            diagnostics_->flush();
         }
+        if (OutputFailed(*output_, *diagnostics_))
+            return Result<void>::Failure(MakeError(CliErrors::HostFailure));
         return Result<void>::Success();
     }
 
@@ -218,16 +239,13 @@ namespace Horo::Cli {
             return outcome_;
         const auto &correlation = terminal.Correlation();
         const bool validCorrelation = ValidCorrelation(correlation, invocation_);
+        const bool failedOutput = OutputFailed(*output_, *diagnostics_);
         Json envelope = Envelope(descriptor_, validCorrelation ? correlation : CliExecutionCorrelation{.invocation = invocation_});
-        std::optional<Error> failure;
-        if (const bool invalidContext = !validCorrelation || progressRejected_; invalidContext)
-            failure = MakeError(CliErrors::ExecutionContextInvalid);
-        else if (terminal.Outcome().HasError())
-            failure = terminal.Outcome().ErrorValue();
-        else
+        auto failure = TerminalFailure(terminal, validCorrelation && !progressRejected_, failedOutput);
+        if (!failure)
             failure = ProjectResult(envelope, terminal.Outcome().Value(), translator_, outcome_);
         if (failure)
-            ProjectFailure(envelope, *failure, translator_, hostFailure, outcome_);
+            ProjectFailure(envelope, *failure, translator_, hostFailure || failedOutput, outcome_);
         envelope["exitCode"] = outcome_.exitCode;
         if (mode_ == CliProgressOutputMode::JsonLines) {
             envelope["type"] = "result";

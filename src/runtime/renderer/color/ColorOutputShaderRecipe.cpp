@@ -45,7 +45,9 @@ namespace Horo::Render {
     /** @copydoc MakeColorOutputShaderManifest */
     Result<ShaderManifest> MakeColorOutputShaderManifest(ColorOutputShaderStage stage, const ShaderTargetRequirement &target) {
         using Return = Result<ShaderManifest>;
-        if (target.backend != ShaderTargetBackend::Metal || target.payloadFormat != ShaderPayloadFormat::MetalLibrary24)
+        const bool metal = target.backend == ShaderTargetBackend::Metal && target.payloadFormat == ShaderPayloadFormat::MetalLibrary24;
+        const bool manualVulkan = target.backend == ShaderTargetBackend::Vulkan && target.payloadFormat == ShaderPayloadFormat::SpirV16;
+        if ((!metal && !manualVulkan) || (manualVulkan && stage == ColorOutputShaderStage::SceneToDisplayLinearWithLook))
             return Return::Failure(MakeError(ShaderManifestErrors::UnsupportedTarget));
         ShaderManifest manifest{.schemaVersion = 1,
                                 .sourceRevision = 1,
@@ -55,6 +57,11 @@ namespace Horo::Render {
             using enum Horo::Render::ColorOutputShaderStage;
             case SceneToDisplayLinear:
                 DescribeScene(manifest);
+                if (manualVulkan) {
+                    manifest.bindings.pop_back();  // Omit GPU exposure history.
+                    manifest.parameters.resize(2);
+                    manifest.sourceRevision = 2;
+                }
                 break;
             case SceneToDisplayLinearWithLook:
                 DescribeLook(manifest);
@@ -71,17 +78,28 @@ namespace Horo::Render {
     }
 
     /** @copydoc ColorOutputShaderReflectionNames */
-    std::vector<ShaderReflectionBindingName> ColorOutputShaderReflectionNames(ColorOutputShaderStage stage) {
+    std::vector<ShaderReflectionBindingName> ColorOutputShaderReflectionNames(ColorOutputShaderStage stage, ShaderTargetBackend backend) {
+        if (backend != ShaderTargetBackend::Metal && backend != ShaderTargetBackend::Vulkan)
+            return {};
+        if (backend == ShaderTargetBackend::Vulkan && stage == ColorOutputShaderStage::SceneToDisplayLinearWithLook)
+            return {};
         switch (stage) {
             using enum Horo::Render::ColorOutputShaderStage;
-            case SceneToDisplayLinear:
-                return {{{1}, "type.ColorOutputParameters", {{{1}, "SourceSize"}, {{2}, "ExposureSelection"}, {{3}, "ExposureIdentity"}}},
-                        {{2}, "SceneColor", {}},
-                        {{3}, "horo_color_reach_m_table_0", {}},
-                        {{4}, "horo_color_gamut_cusp_table_0", {}},
-                        {{5}, "horo_color_reach_m_table_0Sampler", {}},
-                        {{6}, "horo_color_gamut_cusp_table_0Sampler", {}},
-                        {{7}, "ExposureWords", {{{100}, "_m0"}}}};
+            case SceneToDisplayLinear: {
+                std::vector<ShaderReflectionBindingName> names{{{1},
+                                                                "type.ColorOutputParameters",
+                                                                {{{1}, "SourceSize"}, {{2}, "ExposureSelection"}}},
+                                                               {{2}, "SceneColor", {}},
+                                                               {{3}, "horo_color_reach_m_table_0", {}},
+                                                               {{4}, "horo_color_gamut_cusp_table_0", {}},
+                                                               {{5}, "horo_color_reach_m_table_0Sampler", {}},
+                                                               {{6}, "horo_color_gamut_cusp_table_0Sampler", {}}};
+                if (backend == ShaderTargetBackend::Metal) {
+                    names[0].parameters.push_back({{3}, "ExposureIdentity"});
+                    names.push_back({{7}, "ExposureWords", {{{100}, "_m0"}}});
+                }
+                return names;
+            }
             case SceneToDisplayLinearWithLook: {
                 auto names = ColorOutputShaderReflectionNames(SceneToDisplayLinear);
                 names[0].parameters.insert(names[0].parameters.end(),

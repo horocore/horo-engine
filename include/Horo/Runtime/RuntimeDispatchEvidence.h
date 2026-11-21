@@ -13,6 +13,8 @@
 namespace Horo::Runtime {
     class FrameScheduler;
     class RuntimeDispatchEvidence;
+    class UiAnimationRuntimeParticipant;
+    struct CommittedFixedStepEvidence;
     enum class RuntimePhase : std::uint8_t;
 
     /** @brief Allocation-free dispatch admission/read rejection, with no exception or error-string construction. */
@@ -70,7 +72,15 @@ namespace Horo::Runtime {
     private:
         friend class FrameScheduler;
         friend class RuntimeDispatchEvidence;
+        friend class UiAnimationRuntimeParticipant;
         struct Storage;
+
+        /** @brief Copies the producer's history cutoff for a newly bound UI clock while the scheduler is idle.
+         * @param fixed Last committed fixed step, replaced only on success.
+         * @param presentation Cumulative admitted presentation duration, replaced only on success.
+         * @return Binding status. The cutoff grants no callback authority.
+         */
+        [[nodiscard]] RuntimeDispatchStatus ReadClockBaseline(CommittedFixedStepEvidence &fixed, Duration &presentation) const noexcept;
 
         /** @brief Const-propagating issuer ownership; mutable publication pin exists only on a nonconst producer. */
         class OwnedIssuer final {

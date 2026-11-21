@@ -9,6 +9,7 @@
 #include "editor/renderer/EditorViewportRenderer.h"
 
 #include <span>
+#include <utility>
 
 namespace Horo::Editor {
     /** @brief Borrowed RGBA8 source pixels for one immutable editor UI texture upload. */
@@ -55,6 +56,17 @@ namespace Horo::Editor {
         /** @brief Uploads one immutable tightly packed RGBA8 UI texture. */
         [[nodiscard]] virtual Result<std::uintptr_t> CreateTexture(const EditorRgba8ImageView &image) = 0;
 
+        /** @brief Reserves the replacement font image before retiring the previous canonical font image.
+         * @param image Complete candidate RGBA pixels. @return Image identity or failure preserving the active image.
+         * @pre The owner has prepared the GUI backend outside an active ImGui frame.
+         */
+        [[nodiscard]] Result<std::uintptr_t> ReplaceFontTexture(const EditorRgba8ImageView &image) {
+            auto replacement = CreateTexture(image);
+            if (replacement.HasValue())
+                AdoptFontTexture(replacement.Value());
+            return replacement;
+        }
+
         /** @brief Releases one texture previously created by this renderer. */
         virtual void DestroyTexture(std::uintptr_t textureId) noexcept = 0;
 
@@ -62,6 +74,17 @@ namespace Horo::Editor {
         virtual void Shutdown() noexcept = 0;
 
     protected:
+        /** @brief Current canonical font image. @return Zero while the backend uses its own startup font. */
+        [[nodiscard]] std::uintptr_t FontTexture() const noexcept {
+            return fontTexture_;
+        }
+
+        /** @brief Selects a new canonical image and releases the old one through the backend's resource owner. */
+        void AdoptFontTexture(const std::uintptr_t identity) noexcept {
+            if (const auto previous = std::exchange(fontTexture_, identity); previous != 0)
+                DestroyTexture(previous);
+        }
+
         /** @brief Generation-bound borrowed viewport registration; never a second resource owner. */
         [[nodiscard]] const EditorViewportTextureView &ViewportBinding() const noexcept {
             return viewportBinding_;
@@ -69,5 +92,6 @@ namespace Horo::Editor {
 
     private:
         EditorViewportTextureView viewportBinding_;
+        std::uintptr_t fontTexture_{};
     };
 }  // namespace Horo::Editor

@@ -72,6 +72,26 @@ TEST_CASE("Real host navigation gates stack publication on its privately scoped 
     CHECK(participant.CancelNavigation(operation, UiAnimationCancellation::Explicit).HasError());
 }
 
+TEST_CASE("Reduced decorative route presentation commits without advancing the route clock",
+          "[runtime_ui][animation][integration][routes][accessibility]") {
+    HostFixture fixture{{.routeMotion = true, .decorativeMotion = true}};
+    auto &participant = *fixture.participant;
+    REQUIRE(participant.SetVisualAccessibility({1, false, true}).HasValue());
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    const auto operation = participant.Navigate(UiRouteOperationRequest::Push(Stable<UiRouteId>(9)));
+    REQUIRE(operation.HasValue());
+    REQUIRE(fixture.host->RunFrame().HasValue());
+    auto entered = Frame(participant);
+    REQUIRE(entered.RouteOperation());
+    REQUIRE(entered.RouteOperation()->terminal);
+    CHECK(entered.RouteOperation()->terminal->outcome == UiRouteOperationOutcome::Committed);
+    REQUIRE(entered.Routes().size() == 1);
+    CHECK(entered.Routes().front().id.IsValid());
+    CHECK_FALSE(participant.InputEligible(Receipt(entered, 1).view));
+    REQUIRE(participant.ApplyPresentation(Receipt(entered, 1)).HasValue());
+    CHECK(participant.InputEligible(Receipt(entered, 1).view));
+}
+
 TEST_CASE("Actual route cancellation keeps the prior stack and rejects late or foreign operation identities",
           "[runtime_ui][animation][integration][routes][cancel]") {
     HostFixture fixture{{.routeMotion = true}};

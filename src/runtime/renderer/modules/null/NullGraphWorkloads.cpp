@@ -67,6 +67,12 @@ namespace Horo::Render::Detail {
             return Result<void>::Failure(MakeError(ExposureGpuErrors::Unsupported));
         }
 
+        /** @brief Rejects native reconstruction when this backend has no corresponding encoder. */
+        [[nodiscard]] Result<void> ValidateWorkload(const NullGraphResources &, const RenderGraphExecutionRequest &,
+                                                    const RenderGraphNativeReconstruction &) {
+            return Result<void>::Failure(MakeError(NativeReconstructionErrors::Unsupported));
+        }
+
         /** @brief Validates one workload against resolved native resources before submission. */
         template <typename Workload>
         [[nodiscard]] Result<void> ValidateWorkload(const NullGraphResources &resources, const RenderGraphExecutionRequest &request,

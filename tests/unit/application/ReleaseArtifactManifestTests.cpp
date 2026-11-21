@@ -113,6 +113,18 @@ TEST_CASE("Final release manifest rejects traversal, duplicate identities, and i
     CHECK(ReleaseArtifactManifest::Create(std::move(invalidSigning)).HasError());
 }
 
+TEST_CASE("Root release metadata names are reserved outside artifact inventories", "[release][manifest]") {
+    for (const auto path : {"manifest.json", "MANIFEST.SIGNATURE.JSON", "manifest.signature.json/proof"}) {
+        auto data = Fixture();
+        data.artifacts.front().path = path;
+        CHECK(ReleasePreSignInventory::Create(data.candidate, data.artifacts).HasError());
+        CHECK(ReleaseArtifactManifest::Create(std::move(data)).HasError());
+    }
+    auto nested = Fixture();
+    nested.artifacts.front().path = "other-product/manifest.signature.json";
+    CHECK(ReleaseArtifactManifest::Create(std::move(nested)).HasValue());
+}
+
 TEST_CASE("Final release tree verification accounts for every published byte", "[release][manifest]") {
     TemporaryDirectory directory;
     auto data = Fixture();

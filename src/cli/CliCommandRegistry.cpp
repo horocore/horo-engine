@@ -433,8 +433,7 @@ namespace Horo::Cli {
         }
 
         [[nodiscard]] Result<void> ValidateTimeoutPolicy(const CliTimeoutPolicy &timeout) {
-            if ((timeout.defaultMilliseconds == 0) != (timeout.maximumMilliseconds == 0) ||
-                timeout.defaultMilliseconds > timeout.maximumMilliseconds)
+            if (timeout.defaultMilliseconds > timeout.maximumMilliseconds)
                 return Result<void>::Failure(MakeError(CliErrors::DescriptorInvalid, "CLI timeout policy is invalid."));
             return Result<void>::Success();
         }
@@ -491,6 +490,8 @@ namespace Horo::Cli {
         [[nodiscard]] Result<void> ValidateInteractiveOption(const CliCommandDescriptor &descriptor) {
             if (!descriptor.interactiveAlternativeOption)
                 return Result<void>::Success();
+            if (*descriptor.interactiveAlternativeOption == "non-interactive")
+                return Result<void>::Failure(MakeError(CliErrors::DescriptorInvalid));
             const auto namedAlternative = [&descriptor](const CliOptionDescriptor &option) {
                 return option.name == *descriptor.interactiveAlternativeOption;
             };

@@ -8,6 +8,7 @@
 #include "Horo/Assets/AssetId.h"
 #include "Horo/Runtime/Ui/UiImageResource.h"
 #include "Horo/Runtime/Ui/UiLayout.h"
+#include "Horo/Runtime/Ui/UiStyle.h"
 
 #include <array>
 #include <compare>
@@ -165,8 +166,14 @@ namespace Horo::Runtime::Ui {
         std::uint32_t run{}; /**< Text run table index. */
     };
 
+    /** @brief Stable paint slot carrying same-frame control/focus state for geometric realization. */
+    struct UiVisualIndicatorDraw final {
+        UiVisualStateMask state; /**< UI-owned style evidence. Unsupported visual states produce no geometry. */
+    };
+
     /** @brief Closed backend-neutral draw payload vocabulary. */
-    using UiDrawPayload = std::variant<UiSolidDraw, UiBorderDraw, UiImageDraw, UiSpriteDraw, UiTextDraw, UiNineSliceDraw>;
+    using UiDrawPayload =
+        std::variant<UiSolidDraw, UiBorderDraw, UiImageDraw, UiSpriteDraw, UiTextDraw, UiNineSliceDraw, UiVisualIndicatorDraw>;
 
     /** @brief One ordered logical draw emitted for an exact retained element. */
     struct UiDrawCommand final {
@@ -224,6 +231,7 @@ namespace Horo::Runtime::Ui {
         UiRenderViewId view;                 /**< Exact Horo view incarnation owned by this extractor. */
         UiRenderSnapshotLimits limits;       /**< Maximum capacity reserved in every storage slot. */
         std::uint32_t concurrentSnapshots{}; /**< Simultaneously leased snapshot slots. */
+        bool measureCpuWork{};               /**< Samples projection extraction attempts on the owner thread. */
 
         /** @brief Validates view identity, table limits, and the bounded slot count. @return Whether this store can be created. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -352,6 +360,8 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsDrained() const noexcept;
         /** @brief Returns the current admission lifecycle. @return Active or Closed. */
         [[nodiscard]] UiRenderExtractorState State() const noexcept;
+        /** @brief Reads lifetime extraction timing on the owner thread. @return Disabled evidence after move. */
+        [[nodiscard]] UiCpuWorkStatistics CpuWorkStatistics() const noexcept;
 
     private:
         struct Storage;

@@ -6,12 +6,22 @@
 #include "OpenXRSwapchain.h"
 
 namespace Horo::XR::OpenXRInternal {
+    /** @brief Exact reason the native event lane stopped admitting work. */
+    enum class NativeSessionEventLoss : std::uint8_t {
+        None,
+        Session,
+        Instance,
+        EventHistory
+    };
+
     /** @brief Actual runtime notifications which require an explicit host lifecycle boundary before more sampling. */
     struct NativeSessionEventObservation final {
         bool morePending{};
         bool bindingsChanged{};
-        bool originChanged{};
+        std::optional<XRReferenceSpaceChange> referenceChange;
         bool exitRequested{};
+        NativeSessionEventLoss loss{NativeSessionEventLoss::None};
+        bool actionsInterrupted{}; /**< Focused action admission ended at least once in this exact batch. */
     };
 
     /** @brief Single-control-lane native protocol adapter; never issues a Horo session or frame identity.
@@ -23,6 +33,9 @@ namespace Horo::XR::OpenXRInternal {
      */
     class OpenXRSessionEvents final {
     public:
+        /** @brief Strict event dispatch budget for one owner poll, excluding exact native progress calls. */
+        static constexpr std::uint32_t MaximumEventsPerPoll = 64;
+
         /** @brief Borrows existing authorities; construction does not resolve or call native functions. */
         OpenXRSessionEvents(OpenXRNativeSession &native, XRSessionLifecycle &sessions, XRFrameLifecycle &frames) noexcept;
         /** @brief Resolves exact official dispatch and copies bounded borrowed swapchain owners outside frame work.
@@ -36,8 +49,9 @@ namespace Horo::XR::OpenXRInternal {
          * @param wantsPlay Existing typed Play owner reduced only to whether it requests an active native session.
          * @return Observed notifications or original failure; no event is synthesized to make a session available.
          * @post Profile/origin notifications require host invalidation before Input/rendering can continue.
-         * Lost-event evidence immediately revokes canonical session admission without destroying retained native
-         * frame/image obligations or reporting successful native end. Recovery remains an explicit host boundary.
+         * Lost-event evidence returns a terminal observation and revokes canonical session admission without
+         * destroying retained native frame/image obligations or claiming successful native end. Subsequent polls
+         * copy that observation without native calls. Recovery remains an explicit host boundary.
          */
         [[nodiscard]] Result<NativeSessionEventObservation> Poll(bool wantsPlay);
         /** @brief Borrows no state and performs no native work. @return Whether successful native begin still requires end/retirement. */
@@ -45,8 +59,12 @@ namespace Horo::XR::OpenXRInternal {
 
     private:
         [[nodiscard]] Result<NativeSessionBorrow> Current() const;
-        [[nodiscard]] Result<void> StateChanged(const XrEventDataSessionStateChanged &event);
+        [[nodiscard]] Result<void> StateChanged(const XrEventDataSessionStateChanged &event, const XrSession_T *session);
         [[nodiscard]] Result<void> Progress(bool wantsPlay);
+        /** @brief Revalidates the exact owner and translates completed native calls or known runtime loss. */
+        [[nodiscard]] Result<void> CheckCall(const char *operation, XrResult result);
+        /** @brief Publishes the known loss once, retaining every native frame and cleanup obligation. */
+        [[nodiscard]] Result<void> RecordLoss(NativeSessionEventLoss reason);
         /** @brief Applies one fenced native event through the same canonical lifecycle and accumulates value-only notices.
          * @param buffer Actual native event. @param session Same current opaque native session, compared only; never dereferenced or passed
          * to native dispatch. @param observation Bounded poll result.
@@ -54,6 +72,13 @@ namespace Horo::XR::OpenXRInternal {
          */
         [[nodiscard]] Result<void> ProcessEvent(const XrEventDataBuffer &buffer, const XrSession_T *session,
                                                 NativeSessionEventObservation &observation);
+
+        /** @brief Validates same-session native recenter/bounds evidence without exposing native poses.
+         * @param event Runtime reference notification already fenced to the current native session.
+         * @return A supported typed notification, no observation for an unadmitted extension reference, or malformed error.
+         */
+        [[nodiscard]] Result<std::optional<XRReferenceSpaceChange>> ReadReferenceChange(
+            const XrEventDataReferenceSpaceChangePending &event) const;
 
         [[nodiscard]] bool ImagesRetired() const noexcept;
         [[nodiscard]] static Error Failure(const char *operation, XrResult result);
@@ -76,6 +101,7 @@ namespace Horo::XR::OpenXRInternal {
         std::array<OpenXRSwapchain *, XRFrameHardLimits::MaximumImages> swapchains_{};
         std::size_t swapchainCount_{};
         XrSessionState observed_{XR_SESSION_STATE_UNKNOWN};
+        NativeSessionEventLoss loss_{NativeSessionEventLoss::None};
         bool running_{};
         bool exitRequested_{};
         bool dispatching_{}; /**< Owner-lane reentry guard, including official resolver/native callbacks. */

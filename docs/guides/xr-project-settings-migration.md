@@ -18,14 +18,22 @@ The portable schema is:
 | `xr.limits.spaces` | `1..256`; default `2` |
 | `xr.limits.actions` | `1..512`; default `8` |
 | `xr.limits.devices` | `1..64` for projection, `2..64` for interaction; default `2` |
+| `xr.world_canvas.minimum_span_pixels` | `1..65535`; default `1`. Both eyes must meet this projected span before the world canvas is drawn. |
+
+When launching the editor with a signed OpenXR host, use
+`--xr-host-world-canvas-minimum-span-pixels=48` to set the floor for that invocation.
 
 Extra-feature keys are `xr.features.stage_space`, `depth_composition`,
 `fixed_foveation`, `refresh_rate`, `visibility_mask`, `controller_presentation`
-and `android_standalone` (each uses the `xr.features.` prefix). Their integer
+`android_standalone`, `hand_tracking` and `space_warp` (each uses the
+`xr.features.` prefix). Their integer
 policy values are `0` unrequested, `1` required, `2` optional with explicit disable,
 `3` optional with explicit baseline projection, and `4` disabled. Baseline
 projection is legal only for depth composition, foveation, refresh rate and
-visibility mask. Controller presentation requires the tracked-interaction profile.
+visibility mask, and space warp. Space warp accepts only unrequested, optional
+with baseline projection, or disabled. The current OpenXR Play path resolves
+requesting space warp to ordinary projection. Controller presentation requires
+the tracked-interaction profile.
 These profiles are independent requirement sets, not renderer quality tiers.
 
 Project, packaged-profile, invocation and session inputs are admitted. Environment

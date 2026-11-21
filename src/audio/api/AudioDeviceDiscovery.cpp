@@ -37,7 +37,7 @@ namespace Horo::Audio {
             using enum AudioDeviceClass;
             if (backend == NullAudio)
                 return deviceClass == Headless;
-            return deviceClass == Physical || deviceClass == Virtual;
+            return deviceClass == Physical || deviceClass == Virtual || (backend == PipeWire && deviceClass == Unknown);
         }
 
         /** @brief Resolves a role without inventing cross-role or enumeration-order fallback. */

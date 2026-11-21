@@ -17,8 +17,9 @@ namespace Horo::Runtime::Ui::PresentationCodec {
         using Out = nlohmann::ordered_json;
 
         /** @brief Rejects missing, unknown or wrongly shaped members before typed extraction. */
-        void Fields(const Json &value, const std::initializer_list<std::string_view> keys) {
-            if (!Horo::Foundation::HasAllowedFields(value, keys))
+        void Fields(const Json &value, const std::initializer_list<std::string_view> required,
+                    const std::initializer_list<std::string_view> optional = {}) {
+            if (!Horo::Foundation::HasAllowedFields(value, required, optional))
                 throw std::invalid_argument("presentation object shape");
         }
 
@@ -146,7 +147,7 @@ namespace Horo::Runtime::Ui::PresentationCodec {
         /** @brief Encodes the existing declarative layout contract without introducing alternate semantics. */
         Out Layout(const UiLayoutStyle &style) {
             const auto &container = style.container;
-            return Out{{"lengths", Out::array({Length(style.width), Length(style.height), Length(style.minimumWidth),
+            Out layout{{"lengths", Out::array({Length(style.width), Length(style.height), Length(style.minimumWidth),
                                                Length(style.minimumHeight), Length(style.maximumWidth), Length(style.maximumHeight)})},
                        {"aspect", Out::array({style.aspectRatio.width, style.aspectRatio.height})},
                        {"margin", Edges(style.margin)},
@@ -170,6 +171,9 @@ namespace Horo::Runtime::Ui::PresentationCodec {
                                          {"rowCount", container.rowCount}}},
                        {"flex", Out::array({style.flex.grow, style.flex.shrink})},
                        {"grid", Out::array({style.grid.column, style.grid.row, style.grid.columnSpan, style.grid.rowSpan})}};
+            if (style.horizontalPlacement != UiLayoutHorizontalPlacement::FollowDirection)
+                layout["horizontalPlacement"] = static_cast<std::uint8_t>(style.horizontalPlacement);
+            return layout;
         }
 
         /** @brief Decodes the canonical direct-child layout policy independently of element geometry. */
@@ -191,8 +195,10 @@ namespace Horo::Runtime::Ui::PresentationCodec {
 
         /** @brief Decodes typed fields with exact shape and integer-width validation. */
         UiLayoutStyle Layout(const Json &value) {
-            Fields(value, {"lengths", "aspect", "margin", "padding", "border", "offsets", "anchors", "pivot", "alignment", "positioning",
-                           "container", "flex", "grid"});
+            Fields(value,
+                   {"lengths", "aspect", "margin", "padding", "border", "offsets", "anchors", "pivot", "alignment", "positioning",
+                    "container", "flex", "grid"},
+                   {"horizontalPlacement"});
             UiLayoutStyle style;
             const auto &lengths = value.at("lengths");
             Array(lengths, 6);
@@ -228,6 +234,9 @@ namespace Horo::Runtime::Ui::PresentationCodec {
             Array(grid, 4);
             style.grid = {Integer<std::uint16_t>(grid[0]), Integer<std::uint16_t>(grid[1]), Integer<std::uint16_t>(grid[2]),
                           Integer<std::uint16_t>(grid[3])};
+            if (value.contains("horizontalPlacement"))
+                style.horizontalPlacement =
+                    static_cast<UiLayoutHorizontalPlacement>(Integer<std::uint8_t>(value.at("horizontalPlacement")));
             return style;
         }
 

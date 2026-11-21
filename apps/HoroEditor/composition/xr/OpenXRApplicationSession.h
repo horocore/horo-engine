@@ -2,13 +2,32 @@
 /** @file OpenXRApplicationSession.h
  * @brief Non-installed application owner of the verified selected runtime and same-device startup transaction.
  */
+#include "Horo/Runtime/Save/SaveParticipantRegistry.h"
+#include "Horo/Runtime/Save/SaveRestoreTransaction.h"
 #include "Horo/XR/XRInputProjection.h"
+#include "Horo/XR/XRInteraction.h"
 #include "Horo/XR/XRProjectSettings.h"
 #include "OpenXRApplicationBindings.h"
+#include "OpenXRHandTracking.h"
 #include "OpenXRInstalledProductSelection.h"
+#include "OpenXRPlaneCapture.h"
 #include "OpenXRSelectedVulkanBinding.h"
+#include "OpenXRSwapchain.h"
 
 #include <functional>
+
+namespace Horo::Security {
+    class SecureRandomSource;
+}
+
+namespace Horo::XR {
+    struct XRAnchorStoreScope;
+    class XRAnchorPersistence;
+}  // namespace Horo::XR
+
+namespace Horo::XR::OpenXRInternal {
+    class OpenXRProtectedAnchorStore;
+}
 
 namespace Horo::XR::RuntimeInternal {
     class XRTrackingPublication;
@@ -36,6 +55,7 @@ namespace Horo::Application::Internal {
         std::filesystem::path projectRoot;
         std::uint64_t packageGeneration{};
         std::function<Result<void>()> hostAdmission; /**< Same retained executable signature/expiry owner; success allocates no storage. */
+        const XR::IXRHandGesturePolicy *handGestures{}; /**< Optional immutable override with lifetime owned by composition. */
     };
 
     /** @brief Same-owner synchronous preparation facts, never a public session or capability authority.
@@ -52,6 +72,29 @@ namespace Horo::Application::Internal {
         PFN_xrGetInstanceProcAddr getProc;
     };
 
+    /** @brief Synchronous borrow of the actual prepared native session and its selected graphics binding. */
+    struct OpenXRApplicationPreparedGraphics final {
+        XR::OpenXRInternal::NativeSessionPreparation session;
+        XR::OpenXRInternal::OpenXRSelectedVulkanBinding &graphics;
+        const XrGraphicsBindingVulkanKHR &binding;
+    };
+
+    /** @brief Exact selected runtime offer and signed Editor writer allocation, without compositor admission. */
+    struct OpenXRProjectionWriter final {
+        XR::OpenXRInternal::NativeReprojectionAllocation selection;
+        Render::RenderTextureDescriptor motion;
+        Render::RenderTextureDescriptor depth;
+    };
+
+    /** @brief Private projection facts awaiting the selected renderer and auxiliary allocation transaction. */
+    struct OpenXRProjectionDraft final {
+        XR::XRCapabilityDescriptor capabilities;
+        Render::RenderTextureDescriptor color;
+        std::array<Render::FramebufferExtent, 2> recommended;
+        std::array<Render::FramebufferExtent, 2> maximum;
+        std::optional<OpenXRProjectionWriter> writer;
+    };
+
     /** @brief Actual same-owner projection admission, captured before the lifecycle issues its candidate.
      * @details Contains observed capability facts and admitted native allocation intent, never Ready/frame evidence.
      * The selected resource stages still create the native swapchain and cold graph before Scene publication.
@@ -62,6 +105,88 @@ namespace Horo::Application::Internal {
         Render::RenderTextureDescriptor color;
         std::array<Render::FramebufferExtent, 2> recommended;
         std::array<Render::FramebufferExtent, 2> maximum;
+        std::optional<OpenXRProjectionWriter> writer;
+        std::uint32_t worldCanvasMinimumSpanPixels; /**< Per-eye minimum from the admitted immutable project settings. */
+    };
+
+    /** @brief Vendor implementation version observed through the official loader. Independently versioned from the wire API. */
+    struct OpenXRRuntimeVersion final {
+        std::uint16_t major{};
+        std::uint16_t minor{};
+        std::uint32_t patch{};
+        constexpr auto operator<=>(const OpenXRRuntimeVersion &) const noexcept = default;
+    };
+
+    /** @brief Finite installed application runtime requirements; no vendor names, native paths or handles. */
+    enum class OpenXRPackagedRoute : std::uint8_t {
+        Graphics,
+        PlatformTime,
+        HandTracking,
+        EyeGazeObservation,
+        Count
+    };
+
+    /** @brief Owns one bounded row of runtime compatibility evidence from the real reversible session probe. */
+    struct OpenXRPackagedCompatibility final {
+        XR::XRLoaderPreflightSnapshot loader;
+        XR::XRLoaderApiVersionRange admittedLoaderApis;
+        OpenXRRuntimeVersion runtimeVersion;
+        XR::XRSystemId system;
+        Packages::PackagePlatform platform;
+        OpenXRComponentIdentity component;
+        XR::XRFeatureProfile profile;
+        Sha256Digest installDigest;
+        Sha256Digest loaderDigest;
+        Sha256Digest signedDeploymentDigest;
+        Sha256Digest declaredLicensesDigest;
+        Render::VulkanApiVersion graphicsApi;
+        XR::XRCapabilityState handTracking;
+        std::array<XR::OpenXRInternal::NativeExtensionAdmission, static_cast<std::size_t>(OpenXRPackagedRoute::Count)> extensionRoutes;
+        std::uint32_t referenceSpaceCount{};
+        std::uint32_t runtimeSwapchainFormatCount{}; /**< Total native format inventory, including non-color formats. */
+        std::uint8_t externallySuppliedOsAbiCount{}; /**< Signed OS dependencies, never bundled vendor runtime paths. */
+        XR::XRCapabilityState eyeGaze{XR::XRCapabilityState::Unsupported}; /**< Policy-gated diagnostic state without gaze samples. */
+    };
+
+    /** @brief Runtime-reported HMD selection admitted by the local Desktop probe. */
+    struct OpenXRDesktopProbeTarget final {
+        std::string_view operatingSystem; /**< Exact native host identity from the packaged component. */
+        std::string_view runtimeName;     /**< Exact expected official loader runtime name; never emitted in the receipt. */
+        std::string_view systemName;      /**< Exact expected HMD system name; never emitted in the receipt. */
+        Sha256Digest installDigest;       /**< Exact operator-supplied installed component digest. */
+    };
+
+    /** @brief Sealed runtime preflight offered as input to device qualification.
+     * @details Holds no native handles or owning loader references. Results say nothing about physical-device test success.
+     */
+    class OpenXRPackagedPreflight final {
+    public:
+        /** @brief Returns immutable owned normalized compatibility facts. */
+        [[nodiscard]] const OpenXRPackagedCompatibility &Compatibility() const noexcept {
+            return compatibility_;
+        }
+
+    private:
+        friend class OpenXRApplicationSession;
+
+        OpenXRPackagedPreflight(OpenXRPackagedCompatibility compatibility, std::weak_ptr<const OpenXRLoaderLease> lease,
+                                std::uint64_t revision)
+            : compatibility_(std::move(compatibility)), lease_(std::move(lease)), revision_(revision) {}
+
+        OpenXRPackagedCompatibility compatibility_;
+        std::weak_ptr<const OpenXRLoaderLease> lease_;
+        std::uint64_t revision_;
+    };
+
+    /** @brief The durable Save participant and the cold native operations tied to one store connection. */
+    struct OpenXRApplicationAnchorSave final {
+        std::shared_ptr<XR::XRAnchorPersistence> participant;
+        std::shared_ptr<XR::OpenXRInternal::OpenXRProtectedAnchorStore> store;
+    };
+
+    struct OpenXRApplicationAnchorRestore final {
+        std::unique_ptr<Runtime::IStagedRestoreParticipant> participant;
+        Runtime::IStagedRestoreFinalPublicationCheck *check{};
     };
 
     /** @brief Application-owned native preparation, retained beside its selected renderer through explicit retirement.
@@ -83,6 +208,13 @@ namespace Horo::Application::Internal {
          * @post No native session, capability availability, Ready state or frame authority is published.
          */
         [[nodiscard]] Result<void> PrepareDiscovery();
+
+        /** @brief Indicates whether the immutable project settings request the eye overlay. */
+        [[nodiscard]] bool WantsComfortOverlay() const noexcept {
+            const auto &comfort = settings_.LocomotionComfort();
+            return !comfort.reducedMotion && comfort.maximumVignetteOpacity > 0.0F;
+        }
+
         /** @brief Attaches the application's sole selected SDL loader/graphics bridge before backend creation. */
         [[nodiscard]] Result<void> AttachGraphics(Render::IVulkanLoaderPort &platform,
                                                   Render::Detail::VulkanEditorGraphicsBridge &graphics);
@@ -95,14 +227,42 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<XR::OpenXRInternal::OpenXRSelectedVulkanBinding *> BorrowGraphics(const XR::XRSessionId &candidate);
         /** @brief Creates the same unpublished native session and captures actual session-dependent census.
+         * @param scope Whether failed acquisition belongs to full startup or a session-only probe.
          * @return Real spaces/formats or original typed failure; no Horo session identity is issued.
          */
-        [[nodiscard]] Result<XR::OpenXRInternal::NativeSessionCensus> PrepareSession();
+        [[nodiscard]] Result<XR::OpenXRInternal::NativeSessionCensus> PrepareSession(
+            XR::OpenXRInternal::NativeSessionPreparationScope scope = XR::OpenXRInternal::NativeSessionPreparationScope::Owner);
+        /** @brief Performs one cold test using the selected native owner, graphics binding and configuration.
+         * @param bindings Same installed declaration used by Play to check requested action and space limits.
+         * @return Actual creation/census and retirement result, or typed failure with any cleanup cause.
+         * @pre Owner lane with no Scene, input, image, frame or issued session. The caller serializes Play admission.
+         * @post No native session is retained after success. Failure retains cleanup with this owner for an explicit
+         * retry. Discovery and the selected device remain usable for subsequent Play preparation.
+         */
+        [[nodiscard]] Result<OpenXRPackagedPreflight> RunPackagedPreflight(const OpenXRApplicationBindings &bindings);
+        /** @brief Runs an explicit Desktop target probe in the selected packaged process.
+         * @param bindings Same installed declarations used by Play and XR Setup.
+         * @param target Explicit host, runtime-reported HMD and package identity. The desktop connection uses
+         * the OS system-default OpenXR loader, and this target requires the selected runtime to match exactly.
+         * @return Sealed compatibility after actual cold session retirement or preserved typed failure.
+         * @post No physical-device/render-frame result, runtime names or tracking coordinates are published.
+         */
+        [[nodiscard]] Result<OpenXRPackagedPreflight> ProbeDesktopTarget(const OpenXRApplicationBindings &bindings,
+                                                                         const OpenXRDesktopProbeTarget &target);
+        /** @brief Rechecks a sealed preflight against the current release installation, runtime and graphics device.
+         * @param evidence Previously collected row; safe to retain after shutdown but unavailable for qualification.
+         * @return Exact admission or typed stale/trust/device failure. Performs no native OpenXR operation.
+         */
+        [[nodiscard]] Result<void> ValidateDeviceQualification(const OpenXRPackagedPreflight &evidence) const;
+        /** @brief Revokes retained compatibility after the selected native instance becomes unusable. */
+        void RevokePackagedPreflight() noexcept;
         /** @brief Borrows actual complete native census and immutable policy from the SAME retained preparation.
          * @return Synchronous owner/attempt-fenced facts or original typed failure; no IDs, limits or flags are synthesized.
          * @pre PrepareSession succeeded; no borrow survives another owner operation.
          */
         [[nodiscard]] Result<OpenXRApplicationPreparation> BorrowPreparation() const;
+        /** @brief Borrows the selected prepared binding before the canonical XR session has been assigned. */
+        [[nodiscard]] Result<OpenXRApplicationPreparedGraphics> BorrowPreparedGraphics();
         /** @brief Produces the real bounded Projection1_0 plan from prepared native/Input and selected renderer evidence.
          * @param frontend SAME actual selected frontend. @param viewport SAME cold-admitted multiview shader owner.
          * @param bindings SAME installed declaration whose native sets/spaces and Input reservation were prepared.
@@ -112,9 +272,16 @@ namespace Horo::Application::Internal {
          * a native format, another camera/device or a default-valid tracking sample. Each successful publication
          * receives a monotonic private capability revision; no per-frame discovery or allocation is introduced.
          */
-        [[nodiscard]] Result<OpenXRApplicationProjection> PrepareProjection(const Render::RenderFrontend &frontend,
-                                                                            const Editor::EditorViewportRendererVulkan &viewport,
-                                                                            const OpenXRApplicationBindings &bindings);
+        [[nodiscard]] Result<OpenXRProjectionDraft> PrepareProjection(const Render::RenderFrontend &frontend,
+                                                                      Editor::EditorViewportRendererVulkan &viewport,
+                                                                      const OpenXRApplicationBindings &bindings);
+        /** @brief Freezes the exact next capability revision only after private projection resources settle.
+         * @param draft Same prepared native/graphics facts.
+         * @param provider Sealed exact auxiliary route when the selected renderer and native pair are ready.
+         * @return Immutable canonical candidate with the admitted provider or ordinary projection.
+         */
+        [[nodiscard]] Result<OpenXRApplicationProjection> FinalizeProjection(
+            OpenXRProjectionDraft draft, const XR::OpenXRInternal::NativePreparedReprojectionProvider *provider);
         /** @brief Activates the SAME prepared session during canonical lifecycle resource preparation.
          * @param candidate Exact identity issued by that lifecycle, never an App-predicted ordinal.
          * @param capabilities Actual observed capability publication used to negotiate the plan.
@@ -128,12 +295,61 @@ namespace Horo::Application::Internal {
          * @param router SAME application router whose live Actions are the sole semantic schema authority.
          * @param bindings Explicit installer-owned immutable physical catalog retained through Play retirement.
          * @param tracking Current canonical origin and native base; snapshotted before foreign admission/loader callbacks.
+         * @param gazeConsent Explicit single-use operator consent for this Play preparation only.
          * @return Resolved declaration/profile/Input outcome; failures retain native debt for explicit Close.
          * @post No Horo session or binding revision is predicted and no snapshot/Input value can be published.
          */
         [[nodiscard]] Result<void> PrepareInput(const Input::InputActionCollection &port, const Input::InputRouter &router,
                                                 const OpenXRApplicationBindings &bindings,
-                                                const XR::OpenXRInternal::NativeTrackingSpaceRequest &tracking);
+                                                const XR::OpenXRInternal::NativeTrackingSpaceRequest &tracking, bool gazeConsent = false);
+        /** @return Whether policy and exact native evidence permit requesting plane consent. */
+        [[nodiscard]] bool MayArmPlaneCapture() const noexcept;
+        [[nodiscard]] bool MayArmSpatialAnchor() const;
+        [[nodiscard]] bool MayArmSpatialAnchorStorage() const;
+        [[nodiscard]] bool HasSpatialAnchorStorageConsent() const noexcept;
+        [[nodiscard]] Result<void> SetSpatialAnchorConsent(bool preview, bool storage,
+                                                           const std::shared_ptr<const XR::XRSessionLifecycle> &lifecycle);
+        void RevokeSpatialAnchorPreview() noexcept;
+        void RevokeSpatialAnchorStorage() noexcept;
+        void RevokeSpatialAnchor() noexcept;
+        [[nodiscard]] Result<void> ProgressSpatialAnchorRetirement(bool retiring = false);
+        [[nodiscard]] XR::XRCapabilityState ReadSpatialAnchorState() const noexcept;
+        /** @brief Binds optional canonical Save on the owner lane after a distinct, revocable store grant. */
+        [[nodiscard]] Result<OpenXRApplicationAnchorSave> BindSpatialAnchorSave(const XR::XRAnchorStoreScope &storeScope,
+                                                                                std::uint64_t (*unixSeconds)() noexcept);
+        [[nodiscard]] static Runtime::CanonicalStateParticipantDescriptor SpatialAnchorSaveDescriptor();
+        /** @brief Prepares one protected reference for the current sandbox on an admitted Save request. */
+        [[nodiscard]] Result<std::shared_ptr<const Runtime::ICanonicalStateAdapter>> PrepareSpatialAnchorCapture(
+            Runtime::SaveWorldId world, Security::SecureRandomSource &entropy, const Runtime::SaveOperationHandle &operation);
+        [[nodiscard]] Result<OpenXRApplicationAnchorRestore> StageSpatialAnchorRestore(Runtime::SaveWorldId world,
+                                                                                       std::span<const std::byte> record);
+        void RelocalizeRestoredAnchor() noexcept;
+        [[nodiscard]] Result<void> SettleSpatialAnchorCapture(const Runtime::SaveOperationSnapshot &operation);
+        /** @brief Reports whether the installed platform and negotiated extension support the next-Play request. */
+        [[nodiscard]] bool MayArmPassthrough() const;
+        /** @brief Checks the installed platform's current permission for the exact Play scope, without native I/O. */
+        [[nodiscard]] bool AllowsPassthrough(const XR::XRPassthroughScope &scope) const noexcept;
+        /** @brief Checks cached platform support and clearance for this scope without native I/O. */
+        [[nodiscard]] bool AllowsNativeLighting(const XR::XRLightEstimateScope &scope) const noexcept;
+        /** @brief Transfers the one-use Setup grant to the prepared Play owner. @param allowed Granted by Setup. */
+        void SetPlaneCaptureConsent(bool allowed) noexcept;
+        /** @brief Immediately withdraws geometry before beginning native retirement. */
+        void RevokePlaneCapture() noexcept;
+        /** @return Successful update or native debt that must be retried by the control lane. */
+        [[nodiscard]] Result<void> ProgressPlaneRetirement();
+        /** @return Redacted evidence for the current Play scope. */
+        [[nodiscard]] XR::XRCapabilityState PlaneCaptureAvailability() const noexcept;
+        /** @brief Copies current geometry only for exact focused tracking evidence. @param tracking Current Input publication.
+         * @return Immutable plane batch or typed privacy/identity/age failure. */
+        [[nodiscard]] Result<XR::XRPlaneSnapshot> ReadPlaneObservations(const XR::XRTrackingSnapshot &tracking) const;
+        /** @return Whether both signed host policy and observed hardware permit arming the optional gaze preview. */
+        [[nodiscard]] bool MayArmEyeGaze() const noexcept;
+        /** @return Current supported/denied gaze availability, without exposing any pose. */
+        [[nodiscard]] XR::XRCapabilityState EyeGazeAvailability() const noexcept;
+        /** @brief Clears the current purpose grant and sample without invoking the native runtime. */
+        void RevokeEyeGaze() noexcept;
+        /** @return Current consented gaze for the exact immutable cutoff, or empty after loss or replacement. */
+        [[nodiscard]] std::optional<XR::XRPoseSample> ReadEyeGaze(const XR::XRTrackingSnapshot &snapshot) const noexcept;
         /** @brief Binds the same prepared native children/Input reservation during canonical resource preparation.
          * @param candidate Actual candidate issued by XRSessionLifecycle and already activated on the SAME native session.
          * @param coordinator Candidate's sole canonical binding publication/revision owner.
@@ -143,6 +359,31 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<void> BindInput(const XR::XRSessionId &candidate, XR::XRActionBindingCoordinator &coordinator,
                                              const Input::InputRouter &router, const OpenXRApplicationBindings &bindings);
+        /** @brief Revalidates the exact attached input plan after a runtime profile notification.
+         * @param session Current owner-issued session from the event's canonical lifecycle.
+         * @return Success for unchanged evidence or confirmation of the selected startup fallback. A profile replacement or loss
+         * returns an actionable failure for host-owned retirement and neutralization.
+         */
+        [[nodiscard]] Result<void> RefreshInputProfiles(const XR::XRSessionId &session);
+        /** @brief Closes current native vibration admission without dispatching to the runtime.
+         * @param role Exact affected role, or no role to revoke the same Play owner's outputs.
+         * @pre Owner lane. Can be requested while a foreign runtime call is still on the stack.
+         */
+        void RequestHapticCancellation(std::optional<XR::XRTrackedDeviceRole> role = std::nullopt) noexcept;
+        /** @brief Progresses exact retained vibration stops from the existing Play event or Input phase.
+         * @param session Current canonical identity. @return Original native stop error or success (including no work).
+         */
+        [[nodiscard]] Result<void> ProgressHapticCancellation(const XR::XRSessionId &session);
+        /**
+         * @brief Submits the app-admitted finite preview through the exact native action owner.
+         * @param session Exact admitted Play session.
+         * @param role Exact admitted controller role.
+         * @param amplitude Finite normalized vibration amplitude.
+         * @param duration Positive bounded duration.
+         * @return Runtime submission evidence or the original typed failure.
+         */
+        [[nodiscard]] Result<void> SubmitHapticPreview(const XR::XRSessionId &session, XR::XRTrackedDeviceRole role, float amplitude,
+                                                       Duration duration);
         /** @brief Samples and appends the SAME prepared native source at the actual App collection cutoff.
          * @param sessions Sole canonical session authority, whose current focus gates scalar sampling.
          * @param coordinator SAME issued candidate's actual binding revision/plan owner.
@@ -160,13 +401,38 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> AppendInput(const XR::XRSessionLifecycle &sessions, const XR::XRActionBindingCoordinator &coordinator,
                                                XR::RuntimeInternal::XRTrackingPublication &publication, const OpenXRInputClock &clock,
                                                const Runtime::FrameContext &context, XR::XRWorldOriginRevision origin,
-                                               const Input::InputCollectionFrame &frame);
+                                               const Input::InputCollectionFrame &frame, const Math::Transform *worldPlacement = nullptr);
+        /** @brief Copies candidates derived at the exact active tracking revision, or empty on revocation.
+         * @param snapshot Current immutable tracking publication, borrowed on the owner lane.
+         * @return Bounded hand gesture candidates with source ownership.
+         */
+        [[nodiscard]] XR::XRHandGestureCandidates ReadHandGestures(const XR::XRTrackingSnapshot &snapshot) const noexcept;
+        /** @brief Reads redacted hand availability from the exact committed cutoff.
+         * @param snapshot Current immutable tracking publication, borrowed on the owner lane.
+         * @return Current observed availability or absence after revocation.
+         */
+        [[nodiscard]] std::optional<XR::XRCapabilityState> ReadHandAvailability(const XR::XRTrackingSnapshot &snapshot) const noexcept;
+
+        /** @brief Reports only the advisory category for the exact current owner publication. */
+        [[nodiscard]] std::optional<XR::XRStageBoundaryProximity> ReadStageBoundary(const XR::XRTrackingSnapshot &snapshot) const noexcept;
         /** @brief Borrows the exact resolved preparation until input retirement; no native identity or sampling authority. */
         [[nodiscard]] const XR::XRResolvedActionBindings *PreparedBindings() const noexcept;
         /** @brief Returns the exact native-created calibrated World identity for the bound candidate.
          * @param candidate Current lifecycle-issued session. @return Owned typed identity or original stale/unavailable error.
          */
         [[nodiscard]] Result<XR::XRCoordinateSpace> WorldSpace(const XR::XRSessionId &candidate) const;
+        /** @brief Samples the exact retained Local-to-World spaces for cold mounted startup calibration.
+         * @param reference Bound native Local identity. @param world Bound native-created World identity.
+         * @param now Same retained instance's admitted runtime clock sample.
+         * @return Native relation or the original ownership, time, tracking or provider failure.
+         */
+        [[nodiscard]] Result<XR::OpenXRInternal::NativeReferenceCalibrationObservation> ObserveReferenceCalibration(
+            XR::XRCoordinateSpace reference, XR::XRCoordinateSpace world, XR::XRRuntimeTime now) const;
+        /** @brief Copies the current native reference snapshot.
+         * @param candidate Exact active XR session.
+         * @return Bounded value evidence or a currentness/availability error.
+         */
+        [[nodiscard]] Result<XR::XRReferenceSpaceSnapshot> References(const XR::XRSessionId &candidate) const;
         /** @brief Borrows only this owner's current calibrated native World space for synchronous compositor dispatch.
          * @param space Exact typed World/session/origin identity, not a caller-selected native handle.
          * @return Fenced native borrow; no borrow survives another owner operation or retirement.
@@ -187,6 +453,21 @@ namespace Horo::Application::Internal {
          * @pre Owner lane; the next canonical App cutoff commits neutralization before replacement.
          */
         void RevokeInput() noexcept;
+        /** @brief Retires the semantic source and effects while retaining the signed native binding plan. */
+        void RetireInputProjection() noexcept;
+        /** @brief Rebinds the still-current signed plan to the refreshed Input port after a neutral commit.
+         * @param port Refreshed context and player authority.
+         * @param coordinator Exact active session binding publication.
+         * @param bindings Immutable signed product declaration used for initial admission.
+         * @param registeredActions Current canonical Input registry.
+         * @return Success or a typed mismatch with the new action map.
+         */
+        [[nodiscard]] Result<void> RebuildInputProjection(const Input::InputActionCollection &port,
+                                                          const XR::XRActionBindingCoordinator &coordinator,
+                                                          const OpenXRApplicationBindings &bindings,
+                                                          std::span<const Input::ActionDescriptor> registeredActions);
+        /** @brief Checks whether the current map admitted a semantic projection. */
+        [[nodiscard]] bool HasInputProjection() const noexcept;
         /** @brief Abandons only the SAME unbound native attempt after failed pre-candidate Scene preparation.
          * @return Original cleanup failure, retaining native actions/session and loader for retry.
          * @pre Owner lane; no issued session owner, frame, image or renderer child can exist.
@@ -220,6 +501,51 @@ namespace Horo::Application::Internal {
     private:
         [[nodiscard]] Result<void> Current() const;
         [[nodiscard]] Result<void> DiscoverRuntime();
+        [[nodiscard]] bool WantsHands() const noexcept;
+        /** @brief Collects only bounded normalized facts while the exact private native test session exists. */
+        [[nodiscard]] Result<OpenXRPackagedCompatibility> CollectPackagedCompatibility(
+            const XR::OpenXRInternal::NativeSessionCensus &session);
+        /** @return Retired plane children or native error retaining exact cleanup debt. */
+        [[nodiscard]] Result<void> RetirePlaneCapture();
+        /** @brief Advances one async operation after canonical tracking publication. @param tracking Current Input evidence. */
+        void AdvancePlaneCapture(const XR::XRTrackingSnapshot &tracking);
+        void AdvanceSpatialAnchor(const XR::XRTrackingSnapshot &tracking);
+        [[nodiscard]] Result<OpenXRApplicationAnchorSave> AcquireSpatialAnchorSave(Runtime::SaveWorldId world);
+        [[nodiscard]] Result<bool> SettleAnchorWrite();
+        void ProgressRestoredAnchor(XrSpace world, XR::XRRuntimeTime now);
+        [[nodiscard]] Result<void> RetireRestoredAnchor();
+        [[nodiscard]] Result<void> StartSpatialAnchor(const XR::XRCoordinateSpace &space, XrSpace world, XR::XRRuntimeTime now);
+        /** @brief Starts the one authorized native capture in the current calibrated space.
+         * @param session Current XR session identity.
+         * @param space The portable identity of the calibrated World space.
+         * @param world The native space borrowed from that exact portable identity.
+         * @param now Current tracking cutoff.
+         * @return True after the same consent grant authorizes the queued context. */
+        [[nodiscard]] bool StartPlaneCapture(const XR::XRSessionId &session, const XR::XRCoordinateSpace &space, XrSpace world,
+                                             XR::XRRuntimeTime now);
+
+        /** @brief Verifies the required projection protocol through the one selected native instance. */
+        [[nodiscard]] Result<void> ValidateProjectionDispatch(XrInstance instance) const;
+        [[nodiscard]] Result<void> PrepareHands();
+        [[nodiscard]] Result<void> RetireHands();
+        /** @brief Validates the exact native baseline stereo target shared with live Play without allocating swapchains.
+         * @param system Current selected instance/system census. @param session Current reversible session census.
+         * @return Success only when the native runtime offers the selected stereo target and color format.
+         */
+        [[nodiscard]] static Result<void> ValidatePackagedProjectionTargets(const XR::OpenXRInternal::NativeSystemCensus &system,
+                                                                            const XR::OpenXRInternal::NativeSessionCensus &session);
+        /** @brief Validates the same selected profile and static capacity required by Play. */
+        [[nodiscard]] Result<void> ValidateProjectionPolicy(const OpenXRApplicationBindings &bindings) const;
+
+        /** @brief An optional hand sample and its independently observed state for this cutoff. */
+        struct HandInputSample final {
+            std::optional<XR::OpenXRInternal::NativeHandSamples> hands;
+            XR::XRCapabilityState availability;
+        };
+
+        /** @brief Samples the configured hand provider or withdraws its optional contribution before controller projection. */
+        [[nodiscard]] Result<HandInputSample> SampleHands(const XR::XRSessionId &session, const XR::XRSessionLifecycle &sessions,
+                                                          const XR::XRTimeEvidence &time);
 
         /** @brief Borrowed normalized packet from one already-fenced native Input cutoff. No borrow survives this call. */
         struct PreparedInputSample final {
@@ -229,6 +555,8 @@ namespace Horo::Application::Internal {
             const XR::XRTimeEvidence &time;
             XR::XRWorldOriginRevision origin;
             std::uint64_t bindingRevision;
+            const HandInputSample &hands;
+            const Math::Transform *worldPlacement;
         };
 
         /** @brief Publishes the same bounded cutoff through the sole tracking owner and appends without committing.
@@ -261,7 +589,7 @@ namespace Horo::Application::Internal {
         const std::thread::id lane_{std::this_thread::get_id()};
         XR::OpenXRInternal::OpenXRSelectedVulkanBinding graphics_;
         std::shared_ptr<const OpenXRLoaderLease> loader_;
-        std::unique_ptr<XR::OpenXRInternal::OpenXRNativeSession> native_;
+        std::shared_ptr<XR::OpenXRInternal::OpenXRNativeSession> native_;
         std::optional<XR::XRLoaderPreflightSnapshot> preflight_;
         std::optional<XR::OpenXRInternal::NativeSystemCensus> system_;
         PFN_xrGetInstanceProcAddr getProc_{}; /**< Same successful installed-instance resolver, retained through session retirement. */
@@ -270,15 +598,76 @@ namespace Horo::Application::Internal {
         XR::XRLoaderPreflightRequest selection_;
         std::uint32_t lastAttempt_{};
         std::uint64_t lastCapabilityRevision_{};
+        std::uint64_t packagedPreflightRevision_{};
+        bool packagedPreflightCurrent_{};
+
+        struct HandCutoffObservation final {
+            XR::XRTrackingSnapshotRevision revision;
+            XR::XRCapabilityState availability;
+            XR::XRHandGestureCandidates gestures;
+        };
+
+        /** @brief Reads the last derived hand record only while the caller's exact tracking snapshot is current. */
+        [[nodiscard]] const HandCutoffObservation *CurrentHandCutoff(const XR::XRTrackingSnapshot &snapshot) const noexcept;
+
+        struct StageBoundaryObservation final {
+            XR::XRInteractionCutoff cutoff;
+            XR::XRStageBoundaryProximity proximity;
+        };
 
         struct InputPreparation final {
             std::unique_ptr<XR::OpenXRInternal::OpenXRActionBindings> native;
             std::optional<XR::XRInputProjection> projection;
             std::optional<XR::XRResolvedActionBindings> bindings;
+            std::optional<XR::OpenXRInternal::OpenXRHandTracking> hands;
+            std::optional<HandCutoffObservation> handCutoff;
+            std::optional<XR::XRCapabilityState>
+                handSamplingBlocked; /**< A denied or unsupported route stays withdrawn for this session. */
+            std::optional<XR::XRPoseSample> gaze;
+            XR::XRTrackingSnapshotRevision gazeRevision;
+            std::optional<StageBoundaryObservation> stageBoundary;
+            bool gazeAllowed{};
+            XR::XRCapabilityState handAvailability{XR::XRCapabilityState::Unsupported};
+            XR::XRCapabilityState stageAvailability{XR::XRCapabilityState::Unsupported};
             std::array<XR::XRActiveInteractionProfile, 2> profiles{}; /**< Actual post-attachment preparation census. */
         };
 
+        struct PlaneCaptureStateStorage final {
+            std::optional<XR::OpenXRInternal::OpenXRPlaneCapture> native;
+            std::optional<XR::XRPlaneScope> scope;
+            XR::XRRuntimeTime latestCutoff;
+            XR::XRRuntimeTime publishedAt;
+            std::uint64_t lastGrant{};
+            bool allowed{};
+        } planes_;
+
+        struct PendingAnchorWrite final {
+            Runtime::SaveOperationHandle operation;
+            std::shared_ptr<XR::OpenXRInternal::OpenXRProtectedAnchorStore> store;
+            XR::XRSpatialAnchorId anchor;
+        };
+
+        struct SpatialAnchorPreview final {
+            std::shared_ptr<XR::XRSpatialAnchors> publication;
+            std::optional<XR::XRAnchorScope> scope;
+            XR::XRSpatialAnchorId id;
+            XR::XRRuntimeTime sampled;
+            XR::XRRuntimeTime cutoff;
+            std::uint64_t grant{};
+            bool allowed{};
+            bool localized{};
+            bool preview{};
+            bool storeOpen{};
+            std::optional<CancellationSource> storeGrant;
+            std::optional<OpenXRApplicationAnchorSave> save;
+            std::optional<Runtime::SaveWorldId> saveWorld;
+            bool recorded{};
+            std::optional<PendingAnchorWrite> pendingWrite;
+            std::optional<XR::XRSpatialAnchorId> restored;
+        } spatialAnchor_;
+
         InputPreparation input_;
+        XR::XRContactPinchGesturePolicy pinchPolicy_;
 
         bool closing_{};
         bool retiringSession_{};

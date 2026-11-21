@@ -178,6 +178,13 @@ namespace Horo::WorldStreaming {
         /** @brief Expires retained generation leases before releasing owner state. */
         ~OriginFrameOwner() noexcept;
 
+        /** @brief Compares exact active authority without creating a lease, allocating or invoking callbacks.
+         * @param frame Full immutable binding and global origin to compare. @return True on the owner lane only for that publication.
+         */
+        [[nodiscard]] bool Publishes(const OriginFrame &frame) const noexcept {
+            return active_ && activeFrame_ == frame;
+        }
+
         /** @brief Checks lifecycle state. @return Whether the owner can stage and publish. */
         [[nodiscard]] bool IsActive() const noexcept {
             return active_;

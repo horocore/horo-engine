@@ -26,11 +26,7 @@ namespace Horo::Audio::Backend {
         Exclusive
     };
     /** @brief Preserved host policy hint; explicit format/period bounds remain the admission authority. */
-    enum class LatencyClass : std::uint8_t {
-        Interactive,
-        Balanced,
-        PowerSaving
-    };
+    using LatencyClass = AudioLatencyProfile;
     /** @brief Control-published intent for the currently retained render epoch. */
     enum class RenderPhase : std::uint8_t {
         Priming,
@@ -95,7 +91,7 @@ namespace Horo::Audio::Backend {
         RenderPort render;
     };
 
-    /** @brief Publishes Quiescing intent; completion requires the matching render-core acknowledgement. */
+    /** @brief Publishes Quiescing for an attached epoch in Priming or Rendering; requires the matching acknowledgement. */
     struct Quiesce final {
         AudioDeviceEpoch epoch;
     };
@@ -124,6 +120,12 @@ namespace Horo::Audio::Backend {
         AudioNegotiatedDeviceFormat format;
         AudioDeviceTimingReport timing;
         AccessMode access{AccessMode::Shared};
+    };
+
+    /** @brief Backend estimate for a newly submitted sample at one exact output epoch. */
+    struct PlaybackLatencyEstimate final {
+        AudioDeviceEpoch epoch;
+        AudioDurationObservation latency;
     };
 
     /** @brief Native start succeeded, not Runtime Active. */
@@ -186,9 +188,9 @@ namespace Horo::Audio::Backend {
         BackendFailure
     };
 
-    /** @brief Loss fact for the exact device generation, never an instruction to choose a replacement. */
+    /** @brief Loss fact for the exact opened output epoch, never an instruction to choose a replacement. */
     struct DeviceLost final {
-        AudioDeviceId device;
+        AudioDeviceEpoch epoch;
         DeviceLossCause cause{DeviceLossCause::BackendFailure};
     };
     /** @brief Native interruption edge; an end does not authorize automatic resume. */
@@ -199,7 +201,7 @@ namespace Horo::Audio::Backend {
 
     /** @brief Interruption fact reconciled against control-owned suspend/recovery policy. */
     struct DeviceInterruption final {
-        AudioDeviceId device;
+        AudioDeviceEpoch epoch;
         InterruptionState state{InterruptionState::Began};
     };
 
@@ -263,6 +265,16 @@ namespace Horo::Audio::Backend {
          * @return Success or stale/invalid-transition error; never activates the parent runtime itself.
          */
         [[nodiscard]] virtual Result<void> CommitRendering(const AudioDeviceEpoch &epoch) = 0;
+
+        /** @brief Queries the current output's submission-to-playback estimate on the control owner.
+         * @param epoch Exact committed output epoch.
+         * @return Estimated BackendApi evidence, or empty while unsupported, unready, lost or foreign.
+         * @post Does not change native admission, wait for a render callback, or promise hardware latency.
+         */
+        [[nodiscard]] virtual std::optional<PlaybackLatencyEstimate> ReadPlaybackLatency(const AudioDeviceEpoch &epoch) noexcept {
+            (void)epoch;
+            return std::nullopt;
+        }
 
         /**
          * @brief Requests cancellation of Probe, Enumerate, Open or Start without blocking.

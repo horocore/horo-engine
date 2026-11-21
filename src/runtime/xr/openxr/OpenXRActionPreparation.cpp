@@ -83,8 +83,7 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         if (current.Value().maximumActions < preparation_->maximumActions)
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
-        if (tracking_.request &&
-            current.Value().maximumSpaces < tracking_.actions.size() + 2 + (tracking_.request->worldFromBase.has_value() ? 1U : 0U))
+        if (tracking_.request && current.Value().maximumSpaces < tracking_.SpaceCount())
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
         if (auto spaces = tracking_.BindSpaces(session); spaces.HasError())
             return spaces;
@@ -111,7 +110,13 @@ namespace Horo::XR::OpenXRInternal {
         };
         Result<void> prepared = Result<void>::Success();
         try {
-            prepared = tracking_.ValidatePosePaths(request, maximumActions);
+            const auto gazeCount = request.tracking && request.tracking->consentedGazeSet ? 1U : 0U;
+            if (gazeCount != 0 && request.schema.actions.size() >= maximumActions)
+                return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
+            const auto actionBudget = maximumActions - gazeCount;
+            const auto haptics = ValidateHapticPaths(request, actionBudget);
+            prepared = haptics.HasError() ? Result<void>::Failure(haptics.ErrorValue())
+                                          : tracking_.ValidatePosePaths(request, actionBudget - haptics.Value());
             if (prepared.HasValue()) {
                 tracking_.request = request.tracking;
                 prepared = dispatch_.Resolve(request, native_.instance);

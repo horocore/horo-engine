@@ -14,6 +14,7 @@
 #include <nlohmann/json.hpp>
 #include <optional>
 #include <stdexcept>
+#include <system_error>
 
 namespace Horo::Assets {
     namespace {
@@ -191,6 +192,9 @@ namespace Horo::Assets {
         if (id.HasError() || type.HasError())
             return Result<AssetImportMetadata>::Failure(MetadataError("Asset import metadata identity is invalid."));
 
+        const auto sourcePath = stringValue("absoluteSourcePath");
+        if (sourcePath.find('\0') != std::string::npos)
+            return Result<AssetImportMetadata>::Failure(MetadataError("Asset import source path contains a null character."));
         AssetImportMetadata metadata{
             .assetId = id.Value(),
             .assetType = type.Value(),
@@ -199,7 +203,7 @@ namespace Horo::Assets {
             .importerPackageId = stringValue("importerPackageId"),
             .importerModuleId = stringValue("importerModuleId"),
             .importerModuleVersion = stringValue("importerModuleVersion"),
-            .absoluteSourcePath = stringValue("absoluteSourcePath"),
+            .absoluteSourcePath = std::filesystem::path{std::u8string(sourcePath.begin(), sourcePath.end())},
             .sourceExtension = stringValue("sourceExtension"),
             .sourceHash = stringValue("sourceHash"),
             .importedAtUtc = stringValue("importedAtUtc"),
@@ -219,6 +223,15 @@ namespace Horo::Assets {
             return Result<std::string>::Failure(MetadataError("Asset import provenance is incomplete."));
         }
 
+        std::u8string sourcePath;
+        try {
+            sourcePath = metadata.absoluteSourcePath.lexically_normal().u8string();
+        } catch (const std::system_error &) {
+            return Result<std::string>::Failure(MetadataError("Asset import source path cannot be represented as UTF-8."));
+        }
+
+        if (sourcePath.find(u8'\0') != std::u8string::npos)
+            return Result<std::string>::Failure(MetadataError("Asset import source path contains a null character."));
         nlohmann::json settings = nlohmann::json::object();
         for (const auto &[key, value] : metadata.importSettings)
             settings[key] = value;
@@ -238,7 +251,7 @@ namespace Horo::Assets {
                                                 {"importerPackageId", metadata.importerPackageId},
                                                 {"importerModuleId", metadata.importerModuleId},
                                                 {"importerModuleVersion", metadata.importerModuleVersion},
-                                                {"absoluteSourcePath", metadata.absoluteSourcePath.lexically_normal().string()},
+                                                {"absoluteSourcePath", std::string(sourcePath.begin(), sourcePath.end())},
                                                 {"sourceExtension", metadata.sourceExtension},
                                                 {"sourceHash", metadata.sourceHash},
                                                 {"sourceByteSize", metadata.sourceByteSize},

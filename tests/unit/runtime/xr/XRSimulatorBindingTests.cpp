@@ -3,6 +3,8 @@
 #include "support/AllocationProbe.h"
 #include "support/xr/XRSimulatorTestSupport.h"
 
+#include <catch2/generators/catch_generators.hpp>
+
 namespace {
     using namespace Horo;
     using namespace Horo::XR;
@@ -146,6 +148,35 @@ namespace {
             REQUIRE(other.Fingerprint() != fingerprint);
             REQUIRE(other.runtime->LoadScenario(artifact).HasError());
         }
+    }
+
+    TEST_CASE("Simulator rejects forged binding ordinals before replacing a published session", "[xr][simulator][bindings]") {
+        BoundHost host;
+        REQUIRE(host.runtime->SetControls(host.Controls()).HasValue());
+        REQUIRE(host.runtime->Step(Cutoff(1)).HasValue());
+        const auto before = host.runtime->Snapshot();
+        const auto *tracking = host.runtime->Tracking();
+        REQUIRE(tracking);
+        REQUIRE(host.runtime->ArmCapture().HasValue());
+        const auto bindingError = GENERATE(false, true);
+        auto invalid = host.Controls();
+        if (bindingError) {
+            invalid.actions[0].kind = XRTrackedActionKind::Scalar;
+            invalid.actions[0].y = 0;
+        } else
+            invalid.actions[0].bindingIndex = 1;
+        const std::array steps{host.Controls(), invalid};
+        const auto scenario = XRSimulatorScenario::Create({.steps = steps, .bindings = host.Fingerprint()});
+        REQUIRE(scenario.HasValue());
+        const auto rejected = host.runtime->LoadScenario(scenario.Value());
+        REQUIRE(rejected.HasError());
+        const auto &expected = bindingError ? XRErrors::OperationIncompatible : XRErrors::OperationUnsupported;
+        CHECK(ErrorChainContains(rejected.ErrorValue(), expected.domain, expected.code));
+        CHECK(host.runtime->Snapshot().session.session == before.session.session);
+        CHECK(host.runtime->Snapshot().cursor == before.cursor);
+        CHECK(host.runtime->Tracking() == tracking);
+        CHECK(host.runtime->Snapshot().capture.state == XRSimulatorCaptureState::Armed);
+        REQUIRE(host.runtime->Step(Cutoff(2)).Value().consumed);
     }
 
     TEST_CASE("Simulator changed binding revision and throwing authority revoke stale tracking", "[xr][simulator][bindings]") {

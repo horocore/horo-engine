@@ -125,22 +125,35 @@ localized tooltips.
 command registry. Runtime Input owns the binding representation, validation and
 canonical physical keys (including Equal and Minus). Settings > Input projects
 registered digital actions, records a complete chord, supports per-action reset,
-and commits only a valid profile through the existing atomic settings workflow.
-The committed profile is serialized with Input's versioned serializer under
-`input.bindingProfile` in `editor_settings.json`; the GUI never maintains a
-second live keymap. Startup imports a legacy `.horo/input/editor.json` only when
-that canonical field is absent. The legacy file is retained, and subsequent
-settings commits establish canonical ownership. Both workspace action routing
-and focused source interaction use the committed effective bindings. Modals and
-unfocused source views cannot dispatch source shortcuts.
+and commits only a valid profile through Input's atomic profile persistence.
+The editor-user authority is `.horo/input/editor.json` under the platform user
+configuration home, following the Input architecture's project/global/project-user
+topology. Settings retains a typed draft and committed global snapshot. The active
+router supplies effective bindings to workspace and focused source interaction.
+Input Mapping commits project-user overrides through `CommitBindingProfileChange`.
+Settings changes reload the active project's layers before router activation.
+Modals and unfocused source views cannot dispatch source shortcuts.
+
+INP-001.6 migrates the former `input.bindingProfile` field in
+`editor_settings.json`. When the canonical user file is absent, loading imports
+that field. The next successful save establishes the prior valid profile in the
+canonical file before retiring the embedded field, then atomically publishes the
+candidate profile. Subsequent loads use the canonical file. Corruption there is
+reported instead of reviving an older embedded value. New Settings writes omit
+the embedded profile. Existing project files and action identities retain their
+formats.
 
 `EditorSettings` and its modal draft now carry the typed keymap value. Editor
 Services, GUI, executable hosts and Settings consumers must be rebuilt together;
 an already-running host cannot hot-reload this layout change. Equal and Minus
 are appended physical-key identities, preserving earlier numeric IDs, while
 Input snapshot consumers must rebuild for the larger key-state array. Existing
-valid Settings JSON without the new field remains supported; no project or
-source-file format changes.
+valid Settings JSON with or without the old embedded field remains readable.
+The appended borrowed router in `EditorGuiContext` requires GUI/host/public-header
+consumers to rebuild together. Aggregate initializers may omit it and retain the
+Settings snapshot path used by isolated UI tests. Production composition supplies
+the live host router. Extension shortcut caches observe that router's binding
+revision, including project-user edits.
 
 Cmd/Ctrl + Equal (with or without Shift), Minus and 0 adjust/reset view-local
 font zoom. The persisted Settings code font size remains the base. Zoom and
@@ -202,6 +215,14 @@ reservation including preparation overlap; requested limits cannot exceed those 
 Detached historical snapshots are charged and bounded by their consuming service, not
 silently attributed to the source owner after release. Reader handoff is synchronized
 by the host; readers touch only immutable roots and need no source-owner lock.
+
+An explicit buffer batch accepts one patch per exact live document publication.
+The owner stages every result and its history entry, then checks the current
+disk bytes against the saved bases before publishing any new buffer. It returns
+each document's outcome in request order. Group undo checks the receipt against
+the same live publications and stages every reversal before publishing. Save,
+external changes, and subsequent edits can retire that undo receipt. Batch edit
+and undo leave disk files untouched.
 
 Every service call and move stays on its creating thread. File loading/inspection/reload
 are explicit bounded use cases, not draw-loop polling. Reads check cancellation every
@@ -441,6 +462,24 @@ The session header is a non-installed exact-header internal contract, staged by
 inherit the stage host capability. No public ownership or repository-wide include
 root is added.
 
+## UI Canvas Persistence
+
+The UI Canvas document owner keeps its typed Runtime UI snapshot and history.
+Canonical save holds the project writer and source publication lease, uses the
+accepted byte fingerprint, and marks the document saved only after a durable
+replacement. The workspace shares Save All and the revision-fenced
+Save/Discard/Cancel close modal with other source documents.
+
+Canvas checkpoints use the shared recovery store and the same authored codec.
+The editor submits one detached periodic checkpoint at a time to the shared I/O
+lane and polls results without waiting. Explicit saving, close and workspace
+shutdown settle accepted work before changing persistence authority.
+Opening a document offers the cached candidate for explicit restoration or
+discard. Restoration verifies both the accepted canonical bytes and the exact
+recovery record and opens the result as a dirty edit. Graceful workspace
+shutdown checkpoints dirty canvases before retiring their owners. Recovery
+storage limits and source conflicts leave the canonical document untouched.
+
 ## Preview Edits
 
 Continuous tools may maintain preview state during an interaction. Preview state
@@ -612,6 +651,58 @@ When the canonical file changes externally:
 - dirty document: offer compare, keep local, reload external, or save local as
 - active save: detect conflict before replacement
 
+For a conflicted Decision graph, **Discard Draft and Reload from Disk** stages
+the registered source and its layout before replacing the open document. A
+failed read or decode leaves the draft and its history intact. An accepted
+replacement starts a new revision with an empty undo and redo history.
+
+**Merge Disk Changes into Draft** compares the accepted revision, the draft
+and the current disk files. It combines independent graph and layout edits and
+reconciles placements by node ID. Divergent graph edits or incompatible
+placements leave the draft and both disk files available. A successful merge
+adopts the disk revision as the new save base and starts a new undo history.
+
+**Keep Local Draft for Next Save** accepts the current disk identities as the
+save base and keeps the local graph and layout in memory. A later explicit save
+still checks each file it replaces against that base.
+
+Environment Query drafts use the same explicit reload action. The editor
+keeps the draft and its history until the registered external query and its
+metadata stage successfully as an editable replacement.
+Query merge combines independent display, result-contract and stage changes.
+The staged result must pass the Query descriptor registry and authoring
+validation. Keeping the local draft accepts the current registered source and
+metadata as the next save's base.
+
+Query autosave captures the authored Query into the shared AI document recovery
+queue. Each checkpoint records the accepted source bytes and metadata digest.
+Restoring requires both identities to match current disk state and starts a
+dirty draft with an empty history. Explicit discard removes only the reviewed
+checkpoint, and a durable save clears only the checkpoint owned by or accepted
+by the draft.
+
+Blackboard autosave uses the same queue. The checkpoint contains the authored
+source and the highest issued key ID. Restore checks the accepted source bytes
+and preserves every durable key descriptor and the key allocator boundary.
+A restored draft establishes a new history boundary. An explicit reload can
+discard the open draft after the registered external schema is validated.
+Blackboard merge reconciles independent rows by stable key and resolves a
+presentation-order change when it comes from one version. Merging or keeping
+the draft preserves every durable key in the accepted disk schema. Both
+actions advance the save base and clear the undo and redo history. They leave
+source and identity metadata on disk until an explicit save.
+
+Decision graph autosave sends immutable graph and layout snapshots to the
+shared background recovery writer. The checkpoint records both accepted
+disk identities and never writes the registered source or layout. A
+successful save or an explicit discard removes only the workspace's own
+matching checkpoint.
+
+Reopening a registered Decision graph offers to restore or discard its
+checkpoint. Restore validates the current graph and layout identities and
+loads a dirty draft only when they match the accepted base. A newer disk
+revision leaves both the canonical files and the recovery copy available.
+
 By default, external reload starts a new history branch, clears redo history, and prevents undo across the reload boundary. It is never injected as a hidden command. Rebase is allowed only through an explicit policy that rebuilds valid semantic history entries.
 
 ## Navigation Definition And Scene Intent
@@ -644,9 +735,165 @@ revision, semantic history, dirty/save/recovery/conflict state and subsystem
 validator. Shared graph widgets emit commands but own no semantic storage.
 
 Cross-schema/reference edits use the staged multi-document transaction contract.
+The task palette projects roles, capabilities and source origin from the
+admitted provider catalog. Family-specific authoring restrictions disable the
+affected rows with a reason. The catalog supplies inert data for the inspector,
+while shared editor controls and validated document commands own any edit.
 Compilation is revision-correlated derived work and does not clear dirty state.
 Live PIE blackboards, nodes, tasks and query results never enter document history;
 importing reviewed runtime data requires a separate typed editor command.
+
+The `BlackboardSchemaDocument` authoring model pairs ordered source rows with the
+immutable schema validated by `BlackboardSchema::Capture`. Display edits retain
+the same runtime projection and stable key IDs. A command creates an exact
+semantic history entry only after the candidate validates. Changing or deleting
+a key from the opened durable source requires a reference-resolution transaction.
+The model opens the registered `core.blackboard_schema` source and encodes its
+validated revision for the shared source writer. The authoring envelope retains
+labels and row order. Legacy semantic-only assets open with unlabeled rows in
+stable key order. Cooking publishes the same semantic schema bytes. Durable
+source publication belongs to the application document host.
+
+The intrinsic State Machine document route admits typed state and transition
+edits against the unique compatible saved Blackboard schema. The canonical
+Decision compiler runs before the workspace publishes an edit or history
+replay. Adding a state from a running source commits the new state and its
+incoming transition as one edit. Removing a non-initial leaf includes its
+incident transitions and must leave the remaining graph reachable. The
+workspace uses bounded history and compares canonical source
+digests for dirtiness. Save rechecks the registered source and sidecar under the
+owning Project and source leases before replacing the source. The shared close
+modal fences Save and Discard to the presented document revision. Gameplay
+provider actions and calls remain inspectable until their editing and
+validation authority is available.
+
+The Behavior Tree document route edits the supported Root, Sequence, Selector
+and installed Task topology. Wrapping, unwrapping, attaching a Task, sibling
+reordering and leaf removal publish a complete captured candidate. The same
+history and source lifecycle revalidate each candidate against the current
+project provider generation and saved Blackboard schema. Provider factories
+remain inactive. Other Behavior Tree shapes keep their inspectable source
+without entering this authoring path.
+
+The Utility document route edits options, option policy, and ordered scalar
+considerations. New options bind one exact installed Task. New and changed
+scores use a typed key from the exact saved Blackboard displayed by the
+editor. The workspace derives the root scoring bindings from those scores
+without modifying option provider bindings or stronger authored root
+contracts. Compiler admission validates the whole candidate before history or
+publication. The source cannot lose its final option or its final score per
+option through these commands.
+
+Decision document tabs project canonical graph nodes, pins and edges into a
+shared visual snapshot. The private imgui-node-editor adapter owns canvas
+navigation and selection for each open revision. Selected authored nodes and
+links drive their family controls. State Machine link gestures submit normal
+revision-fenced document commands. A released drag or explicitly accepted
+automatic layout records bounded logical placement by stable node identity in
+the same document history. The canonical .meta sidecar binds placement to
+both the Asset Registry and graph identities. It has its own accepted file
+identity and publication receipt under the Project mutation lease. Saving
+placement alone leaves runtime source bytes untouched. Each durable receipt
+advances its own saved baseline, so a failed second write keeps its changes
+pending. Canvas pan and zoom are session presentation state. Locate Selected
+Node routes the current authored selection and document revision to the native
+viewport, so operators can reach distant nodes at a usable zoom.
+
+The canvas inherits the supported source ceilings of 1,024 Behavior Tree
+nodes, 4,096 authored pins, 256 State Machine states, 512 transitions and 64
+Utility options. Placement adds at most 1,024 finite logical coordinates. The
+viewport regression uses a connected 1,024-node tree with 4,096 pins and
+1,023 edges, and checks that selections can reach widely separated canvas
+positions at narrow and wide sizes.
+
+A supported Behavior Tree subtree is a typed call on an intrinsic Subplan
+leaf. The selected composite can append that leaf, and the selected leaf can
+replace its target. A separately reviewed saved tree binds the exact source,
+document revision, registry publication and native provider catalog. The
+workspace captures the registered reachable tree closure through the canonical
+source decoder. The same Decision compiler checks cycles, dependency bounds,
+Blackboard compatibility and providers before authoring, replay and save
+publication. The source retains the reviewed graph identity and exact graph
+schema version. Cross-family and legacy calls remain inspectable.
+
+The workspace usage review submits one bounded Project-owned read of the exact
+durable schema bytes and registered Decision and Environment Query sources. The
+application holds the project mutation lease through source verification, uses
+the same typed source decode and lowering as cooking, and records registry,
+canonical source and observed provider evidence. The owner thread detaches the
+loaded native gameplay image's declared Decision requirements through its
+existing metadata admission. The usage scan relies on copied declarations and
+never starts a provider. A closed opening, newer document revision, replaced
+registry or different native declaration owner cannot publish an older worker
+result. Revalidating the captured bytes for publication requires a live mutation
+lease for the exact canonical project root. The review also
+reports direct saved Scene and concrete Prefab controller bindings through the
+existing typed codecs and exact source registrations. These rows identify
+schema associations. Decision requirements and authored query result bindings
+identify individual keys. The review resolves each query result binding by its
+query identity and result contract against the saved sources in the same
+capture. Malformed sources and missing, ambiguous or incompatible bindings
+leave explicit gaps. Unsupported component owners, unresolved placements,
+variants and overrides also limit coverage. Workspace confirmation explicitly
+covers the registered project sources. External SDK Perception bindings remain
+outside that scope and require their owner's review. The workspace can validate
+a proposed typed change or removal against the current schema and display its
+candidate together with the reference review.
+For a proposed key removal, the workspace lists compatible destinations from the
+current schema. An explicit choice stages bounded Decision source candidates for
+authored requirements, query outputs, state guards and Utility considerations.
+Each candidate retains the original source and sidecar digests. Provider declarations
+and opaque properties require their owning provider to resolve the reference.
+The explicit replacement review also overlays the proposed schema and prepared
+sources in memory, then runs the cooker checks for affected roots, callers and
+their query targets. The review records successful admission and a weak provider
+generation stamp, or a typed validation gap. The workspace owner retains the
+revocable generation while the matching review or transaction is current.
+
+Applying the reviewed change requires each affected Decision source to have a
+clean, editable workspace opening. The controller rechecks the source witnesses
+and project mutation lease, reserves every participant's typed root and history,
+then publishes them together on the owner lane. Undo and redo coordinate the
+exact group before durable saving begins. The schema tab's explicit **Save
+reviewed changes** action writes Decision sources first. They already accept
+the replacement under the old schema, so a write prefix leaves a valid project
+and can be retried. The schema is published only after a fresh review proves that
+the removed key is unused or a retained key remains compatible. It revalidates
+that evidence with the save lease held.
+Successful save retires the coordinated history boundary. Independent Save,
+reload and close cannot split an applied group.
+
+### Decision diagnostics during Play
+
+The Editor admits cooked Decision execution for an explicitly selected project
+Scene. Start the Editor with the committed cook target and the registered asset
+identities for that Scene and its initial controllers:
+
+```text
+HoroEditor --project <root> --cooked-root <committed-target-root> --cook-target <target>
+           --play-ai-scene <scene-asset-id> --play-ai-decision <controller-id> <decision-asset-id>
+```
+
+Repeat `--play-ai-decision` for each controller used by that Scene. Play verifies
+the authored projection against the selected committed Scene and pins the current
+project's Decision provider generation. This path supports flat Behavior Trees
+in the initial Scene. Mounted Worlds, child Scenes, Prefab grants, and query tasks
+require additional owners. Preview keeps its own Scene and does not execute the
+selected Play plan.
+
+Decision evaluation and intent dispatch precede Gameplay in each verified fixed
+attempt. Paused frames do not advance the Play-local sequence. Stop retires the
+Scene and its provider pins. An aborted attempt that already advanced Decision
+execution also retires Play, since the provider callbacks cannot be replayed as
+the same tick.
+
+The Game panel shows the latest committed scheduler diagnostic for its current
+Play Scene. It uses the typed error code, phase, and tick. Task provider errors
+carry the cooked graph and node identities and preserve the tree's normal
+failure and fallback behavior. Selecting the original
+object requires the same Scene and entity generations and the unchanged authored
+document. If any of those identities is stale or unavailable, the diagnostic
+remains readable and explains why selection is unavailable.
 
 ## Cinematic Sequence Asset Documents
 

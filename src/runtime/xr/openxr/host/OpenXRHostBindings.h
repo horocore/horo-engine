@@ -10,6 +10,10 @@
 
 #include <openxr/openxr.h>
 
+#if defined(__ANDROID__)
+#include "OpenXRAndroidDiscovery.h"
+#endif
+
 namespace Horo::XR::OpenXRInternal {
     /** @brief Synchronous official-ABI resolver borrowed from the same retained native loader/instance.
      * @details This value owns no native object or authority. The existing loader/session owner outlives

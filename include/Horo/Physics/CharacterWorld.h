@@ -19,8 +19,9 @@
 
 namespace Horo::Character {
     namespace Detail {
+        class CharacterSceneFixedAccess;
         class CharacterScenePlacement;
-    }
+    }  // namespace Detail
 
     /** @brief Immutable external generations required to prepare one detached Character-world candidate. */
     struct CharacterWorldPreparationDescriptor final {
@@ -226,6 +227,7 @@ namespace Horo::Character {
 
     private:
         friend class CharacterCapability;
+        friend class Detail::CharacterSceneFixedAccess;
         friend class Detail::CharacterScenePlacement;
         /** @brief Shares the ordinary guarded spawn implementation with the non-installed Scene composition boundary. */
         [[nodiscard]] Result<CharacterPlacementResult> SpawnControllerWithHeading(const CharacterControllerHandle &handle,

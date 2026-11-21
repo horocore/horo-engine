@@ -1,4 +1,5 @@
 #include "AnimationGraphInstanceInternal.h"
+#include "AnimationPoseComposition.h"
 
 #include <algorithm>
 
@@ -185,6 +186,24 @@ namespace Horo::Animation::Detail {
             return {};
         }
 
+        /** @brief Appends the section's root contribution at the admitted end-of-segment weight. */
+        bool StageActionRootMotion(GraphInstanceState &state, std::uint32_t slotIndex, const PreparedActionSection &section,
+                                   AnimationRootMotionDelta delta) noexcept {
+            if (state.rootMotion.actions.empty())
+                return true;
+            const auto &slot = state.actions.candidateSlots[slotIndex];
+            const auto actionIndex = state.actions.candidateRecords[slot.active].action;
+            const auto &action = state.program->Actions()[actionIndex];
+            const auto &prepared = state.actions.definitions[actionIndex];
+            const auto coverage = action.missingJoint == GraphMissingJointPolicy::PreserveBase
+                                      ? std::span<const std::uint8_t>{section.coverage}
+                                      : std::span<const std::uint8_t>{};
+            auto &motion = state.rootMotion.actions[slotIndex];
+            motion.lastWeight =
+                RootLayerWeight(state.rootMotion.joint, {.mask = prepared.mask, .coverage = coverage, .weight = slot.weight});
+            return AppendRootMotionDelta(motion.delta, BlendRootMotion({}, delta, motion.lastWeight));
+        }
+
         /** @brief Traverses only the consumed regional segment through the same
          * canonical clip kernel. */
         GraphInstanceOutcome Segment(GraphInstanceState &state, const std::uint32_t slotIndex, std::int64_t &remaining) {
@@ -197,11 +216,11 @@ namespace Horo::Animation::Detail {
                                                 : section.region.end.ticks - section.region.begin.ticks - player.cursor.phase.ticks;
             const auto amount = static_cast<std::int64_t>(std::min(Magnitude(remaining), static_cast<std::uint64_t>(distance)));
             const auto delta = remaining < 0 ? -amount : amount;
-            const auto traversed =
-                state.clips[section.clip]->TraverseRegionPrepared(player.cursor, {delta}, section.region, state.clipLimits);
+            const auto traversed = TraverseRootMotion(state, *state.clips[section.clip], player.cursor, {delta}, section.region);
             if (traversed.HasError())
                 return {GraphInstanceFailure::ClipFailure, traversed.ErrorValue()};
-            work.boundaryCrossings += traversed.Value().boundaryCrossings;
+            const auto &outcome = traversed.Value().traversal;
+            work.boundaryCrossings += outcome.boundaryCrossings;
             if (work.boundaryCrossings > state.clipLimits.maximumBoundaryCrossings)
                 return {GraphInstanceFailure::ClipFailure,
                         {AnimationClipFailure::LimitExceeded, "The complete action interval exceeds its boundary budget."}};
@@ -209,9 +228,11 @@ namespace Horo::Animation::Detail {
                                                         section.region, true, record.observation.handle);
                 notified.HasError())
                 return notified;
-            player.cursor = traversed.Value().cursor;
-            slot.sampleTime = traversed.Value().sampleTime;
+            player.cursor = outcome.cursor;
+            slot.sampleTime = outcome.sampleTime;
             BlendIn(state, slot, state.program->Actions()[record.action], amount);
+            if (!StageActionRootMotion(state, slotIndex, section, traversed.Value().delta))
+                return {GraphInstanceFailure::Malformed};
             record.observation.sampleTime = slot.sampleTime;
             record.observation.weight = slot.weight;
             remaining -= delta;

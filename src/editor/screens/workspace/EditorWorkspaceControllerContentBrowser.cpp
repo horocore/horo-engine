@@ -1,3 +1,6 @@
+#include "Horo/AI/DecisionPlanCodec.h"
+#include "Horo/AI/EnvironmentQuerySourceCodec.h"
+#include "Horo/Assets/AssetCook.h"
 #include "Horo/Assets/AssetReimport.h"
 #include "Horo/Editor/ProjectIntegrityValidatorService.h"
 #include "Horo/Foundation/Logging/Logger.h"
@@ -30,7 +33,44 @@ namespace Horo::Editor {
     void EditorWorkspaceController::RebuildContentBrowserProjection(const std::filesystem::path &projectRoot,
                                                                     const std::filesystem::path &requestedDirectory) {
         RefreshPhysicsMaterials();
+        RefreshRecentAiAssets();
         m_viewModel.contentBrowser = BuildContentBrowserDirectory(projectRoot, requestedDirectory, m_assetRegistry, m_importerCatalog);
+        auto &schemas = m_viewModel.decisionSchemaChoices;
+        schemas.clear();
+        for (const auto &record : m_assetRegistry.Records()) {
+            if (record.type.Value() != AI::BlackboardSchemaAssetType)
+                continue;
+            if (schemas.size() == AI::DecisionAssetValidationHardLimits::Schemas) {
+                schemas.clear();
+                break;
+            }
+            schemas.push_back({record.id, std::string{record.sourcePath.String()}});
+        }
+        std::ranges::sort(schemas, {}, &DecisionSchemaChoice::path);
+        auto &subtrees = m_viewModel.behaviorTreeSubtreeChoices;
+        subtrees.clear();
+        for (const auto &record : m_assetRegistry.Records()) {
+            if (record.type.Value() != AI::DecisionAssetType(AI::DecisionPlanKind::BehaviorTree))
+                continue;
+            if (subtrees.size() == Assets::AssetCookLimits{}.maximumAssets) {
+                subtrees.clear();
+                break;
+            }
+            subtrees.push_back({record.id, std::string{record.sourcePath.String()}});
+        }
+        std::ranges::sort(subtrees, {}, &DecisionSchemaChoice::path);
+        auto &queries = m_viewModel.behaviorTreeQueryChoices;
+        queries.clear();
+        for (const auto &record : m_assetRegistry.Records()) {
+            if (record.type.Value() != AI::EnvironmentQuerySourceAssetType)
+                continue;
+            if (queries.size() == Assets::AssetCookLimits{}.maximumAssets) {
+                queries.clear();
+                break;
+            }
+            queries.push_back({record.id, std::string{record.sourcePath.String()}});
+        }
+        std::ranges::sort(queries, {}, &DecisionSchemaChoice::path);
         ScheduleContentBrowserPreviews();
     }
 
@@ -175,7 +215,7 @@ namespace Horo::Editor {
         ReconcileContentBrowserNavigation();
         RefreshPrefabHierarchy(m_document.Snapshot());
         for (const auto &entry : m_prefabDocuments) {
-            if (const auto inspected = entry->InspectExternal(); inspected.HasError())
+            if (const auto inspected = PrefabApplyTransaction::InspectSource(*entry); inspected.HasError())
                 m_viewModel.prefabDocumentError = inspected.ErrorValue();
             entry->ReleaseStage();
         }

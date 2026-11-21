@@ -2,6 +2,7 @@
 
 #include "Horo/Editor/SourceDocumentService.h"
 
+#include <atomic>
 #include <string>
 #include <thread>
 #include <vector>
@@ -14,6 +15,10 @@ namespace Horo::Editor::Detail {
 
     struct SourceDocumentRoot final {
         DocumentIdentity identity;
+        /** @brief Shared per-incarnation witness. The owner writes the exact revision before publication and zero before retirement.
+         * Worker snapshots only read it. It outlives the owner until the last immutable root is released.
+         */
+        std::shared_ptr<std::atomic<std::uint64_t>> currentRevision;
         std::uint64_t revision{1};
         std::uint64_t baseRevision{1};
         std::shared_ptr<const SourceText> text;
@@ -66,8 +71,37 @@ namespace Horo::Editor {
             float autosaveElapsed{};
             float autosaveRetry{};
             bool autosaveDirty{};
+
+            /** @brief Changes the current publication and invalidates the previous worker witness before exposing the new root. */
+            void Publish(std::shared_ptr<const Detail::SourceDocumentRoot> next) noexcept {
+                next->currentRevision->store(next->revision);
+                root = std::move(next);
+            }
+
+            /** @brief Revokes worker admission before the owner removes this record. */
+            void Revoke() const noexcept {
+                root->currentRevision->store(0);
+            }
+
             /** @brief Borrows one available replay delta without changing history. */
             [[nodiscard]] std::optional<HistoryStep> Step(bool redo) const;
+        };
+
+        struct StagedBatchEdit final {
+            Record *record;
+            std::shared_ptr<const Detail::SourceDocumentRoot> next;
+            std::optional<HistoryEntry> history;
+        };
+
+        struct StagedBatch final {
+            std::vector<StagedBatchEdit> items;
+            std::size_t bytes{};
+        };
+
+        struct StagedBatchUndo final {
+            Record *record;
+            std::shared_ptr<const Detail::SourceDocumentRoot> next;
+            std::size_t position;
         };
 
         std::filesystem::path projectRoot;
@@ -76,6 +110,17 @@ namespace Horo::Editor {
         bool closed{};
         bool saving{};
         std::vector<Record> records;
+
+        ~Storage() noexcept {
+            RevokeAll();
+        }
+
+        /** @brief Revokes all extant document witnesses before removing the owner. */
+        void RevokeAll() const noexcept {
+            for (const auto &record : records)
+                record.Revoke();
+        }
+
         /** @brief Copies and validates one history entry and reserves capacity before publication. */
         [[nodiscard]] Result<HistoryEntry> PrepareHistory(Record &record, const SourceTextEdit &edit,
                                                           const Detail::SourceText &after) const;
@@ -95,7 +140,29 @@ namespace Horo::Editor {
                                                                                          CancellationToken cancellation);
         /** @brief Validates/reserves/copies one borrowed patch without changing the current root. */
         [[nodiscard]] Result<std::shared_ptr<const Detail::SourceText>> PrepareEdit(const Record &record, const SourceTextEdit &edit,
-                                                                                    CancellationToken cancellation) const;
+                                                                                    CancellationToken cancellation,
+                                                                                    std::size_t reservedBytes = 0) const;
+        /** @brief Resolves a supplied snapshot to its exact, still-current record. */
+        [[nodiscard]] Record *FindCurrent(const SourceDocumentSnapshot &snapshot);
+        /** @brief Reads only the authorized disk source and rejects any newer external bytes before batch publication. */
+        [[nodiscard]] Result<void> VerifyBatchBase(const Record &record, CancellationToken cancellation) const;
+        /** @brief Prepares a replacement root while accounting for other staged buffers. */
+        [[nodiscard]] Result<std::shared_ptr<const Detail::SourceDocumentRoot>> PrepareBatchRoot(const Record &record,
+                                                                                                 const SourceTextEdit &edit,
+                                                                                                 CancellationToken cancellation,
+                                                                                                 std::size_t reservedBytes) const;
+        /** @brief Stages one batch edit and reserves its history before any publication. */
+        [[nodiscard]] Result<StagedBatchEdit> StageBatchEdit(Record &record, const SourceTextEdit &edit, CancellationToken cancellation,
+                                                             std::size_t reservedBytes) const;
+        /** @brief Prepares every edit without publishing any root or history change. */
+        [[nodiscard]] Result<StagedBatch> StageEdits(std::span<const SourceBatchEdit> edits, CancellationToken cancellation);
+        /** @brief Prepares the immutable result before any root is published. */
+        [[nodiscard]] SourceEditBatch MakeBatchReceipt(std::span<const StagedBatchEdit> edits) const;
+        /** @brief Reserves disk read scratch alongside the staged text, then verifies every original disk base. */
+        [[nodiscard]] Result<void> VerifyBatchBases(const StagedBatch &batch, CancellationToken cancellation) const;
+        /** @brief Prepares the history reversal against the exact publication in the supplied receipt. */
+        [[nodiscard]] Result<StagedBatchUndo> StageBatchUndo(const SourceBatchItem &item, CancellationToken cancellation,
+                                                             std::size_t reservedBytes);
         /** @brief Validates save intent/path and read reservation before filesystem callback admission. */
         [[nodiscard]] Result<std::filesystem::path> PrepareSavePath(const Record &record, const SourceSaveRequest &request,
                                                                     const DocumentIdentity &identity, std::filesystem::path path,

@@ -12,6 +12,11 @@ namespace Horo::XR::OpenXRInternal {
                              std::format("OpenXR {} failed; native result={}", phase, static_cast<std::int32_t>(result)));
         }
 
+        /** @brief Projects explicit platform denial without admitting any gaze payload. */
+        Error GazeFailure(const char *phase, const XrResult result) {
+            return result == XR_ERROR_PERMISSION_INSUFFICIENT ? MakeError(XRErrors::PermissionDenied) : PoseFailure(phase, result);
+        }
+
         /** @brief Maps native validity independently; absent components are never replaced by default transforms. */
         XRPoseComponents Components(const XrSpaceLocation &location, const XrSpaceVelocity &velocity) {
             using enum Horo::XR::XRPoseComponentValidity;
@@ -60,19 +65,44 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Success();
         }
 
-        /** @brief Validates the exact native location/velocity chain and independent known validity bits. */
-        Result<void> ValidateLocation(const XrSpaceLocation &location, const XrSpaceVelocity &velocity) {
+        /** @brief Validates the exact native location and independent known validity bits. */
+        Result<void> ValidateLocation(const XrSpaceLocation &location, const void *chain) {
             constexpr XrSpaceLocationFlags known = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
                                                    XR_SPACE_LOCATION_POSITION_TRACKED_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
-            if (constexpr XrSpaceVelocityFlags knownVelocity = XR_SPACE_VELOCITY_LINEAR_VALID_BIT | XR_SPACE_VELOCITY_ANGULAR_VALID_BIT;
-                location.type != XR_TYPE_SPACE_LOCATION || location.next != &velocity || velocity.type != XR_TYPE_SPACE_VELOCITY ||
-                velocity.next != nullptr || (location.locationFlags & ~known) != 0 || (velocity.velocityFlags & ~knownVelocity) != 0 ||
+            if (location.type != XR_TYPE_SPACE_LOCATION || location.next != chain || (location.locationFlags & ~known) != 0 ||
                 ((location.locationFlags & XR_SPACE_LOCATION_POSITION_TRACKED_BIT) != 0 &&
                  (location.locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) == 0) ||
                 ((location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT) != 0 &&
                  (location.locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) == 0))
                 return Result<void>::Failure(MakeError(XRErrors::PoseInvalid));
             return Result<void>::Success();
+        }
+
+        /** @brief Validates the native velocity chain only for consumers that requested it. */
+        Result<void> ValidateLocation(const XrSpaceLocation &location, const XrSpaceVelocity &velocity) {
+            constexpr XrSpaceVelocityFlags known = XR_SPACE_VELOCITY_LINEAR_VALID_BIT | XR_SPACE_VELOCITY_ANGULAR_VALID_BIT;
+            if (velocity.type != XR_TYPE_SPACE_VELOCITY || velocity.next || (velocity.velocityFlags & ~known) != 0)
+                return Result<void>::Failure(MakeError(XRErrors::PoseInvalid));
+            return ValidateLocation(location, &velocity);
+        }
+
+        /** @brief Decodes a fully tracked rigid calibration pose without normalizing invalid native data. */
+        Result<Math::Transform> DecodeCalibrationPose(const XrSpaceLocation &location, const XrSpaceVelocity &velocity) {
+            using Pose = Result<Math::Transform>;
+            if (const auto valid = ValidateLocation(location, velocity); valid.HasError())
+                return Pose::Failure(valid.ErrorValue());
+            constexpr XrSpaceLocationFlags complete = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
+                                                      XR_SPACE_LOCATION_POSITION_TRACKED_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
+            if (location.locationFlags != complete)
+                return Pose::Failure(MakeError(XRErrors::OperationUnavailable, "OpenXR calibration requires a fully tracked relation."));
+            const auto &native = location.pose;
+            const Math::Vec3 position{native.position.x, native.position.y, native.position.z};
+            const Math::Quaternion orientation{native.orientation.x, native.orientation.y, native.orientation.z, native.orientation.w};
+            const auto lengthSquared = Math::LengthSquared(Math::Vec4{orientation.x, orientation.y, orientation.z, orientation.w});
+            constexpr float UnitTolerance = 1.0e-4F;
+            if (!Math::IsFinite(position) || !std::isfinite(lengthSquared) || std::abs(lengthSquared - 1.0F) > UnitTolerance)
+                return Pose::Failure(MakeError(XRErrors::PoseInvalid));
+            return Pose::Success({position, orientation});
         }
 
         /** @brief Validates complete stereo ABI, independent component flags and asymmetric view ranges before any publication. */
@@ -109,17 +139,18 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRActionBindings::Tracking::Locate */
     Result<XRPoseDescriptor> OpenXRActionBindings::Tracking::Locate(const TrackingContext &context, const XrSpace source,
-                                                                    const XRCoordinateSpace &identity, const XRTimeEvidence &time) const {
+                                                                    const XRCoordinateSpace &identity, const LocationTarget &target,
+                                                                    const XRTimeEvidence &time) const {
         XrSpaceVelocity velocity{XR_TYPE_SPACE_VELOCITY};
         XrSpaceLocation location{XR_TYPE_SPACE_LOCATION, &velocity};
-        if (const auto result = context.DispatchTable().locate(source, base, time.runtimeSample.Nanoseconds(), &location);
+        if (const auto result = context.DispatchTable().locate(source, target.space, time.runtimeSample.Nanoseconds(), &location);
             result != XR_SUCCESS)
             return Result<XRPoseDescriptor>::Failure(PoseFailure("locate tracking space", result));
         if (auto valid = ValidateLocation(location, velocity); valid.HasError())
             return Result<XRPoseDescriptor>::Failure(valid.ErrorValue());
         const XRPoseDescriptor descriptor{context.Session(),
                                           identity,
-                                          baseIdentity,
+                                          target.identity,
                                           XRPosePurpose::SimulationInput,
                                           time,
                                           Components(location, velocity)};
@@ -128,8 +159,80 @@ namespace Horo::XR::OpenXRInternal {
                                     : Result<XRPoseDescriptor>::Success(descriptor);
     }
 
+    /** @copydoc OpenXRActionBindings::SampleConsentedGaze */
+    Result<std::optional<XRPoseSample>> OpenXRActionBindings::SampleConsentedGaze(const XRSessionId &session, const XRTimeEvidence &cutoff,
+                                                                                  const Duration ageLimit, const bool &consent) const {
+        using Outcome = Result<std::optional<XRPoseSample>>;
+        if (auto lane = ControlLane(); lane.HasError())
+            return Outcome::Failure(lane.ErrorValue());
+        if (sampling_ || syncSequence_ == 0 || tracking_.gazeSequence == syncSequence_)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
+        const Operation operation{sampling_};
+        if (const auto current = Current(session); current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        if (!tracking_.request || tracking_.gazeSpace == XR_NULL_HANDLE)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnsupported));
+        if (!consent)
+            return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
+        if (!cutoff.runtimeSample.IsValid() || !cutoff.simulation || !cutoff.simulation->IsValid() || cutoff.renderPrediction ||
+            ageLimit <= Duration{})
+            return Outcome::Failure(MakeError(XRErrors::TimeDomainIncompatible));
+        tracking_.gazeSequence = syncSequence_;
+        const XrActionStateGetInfo info{XR_TYPE_ACTION_STATE_GET_INFO, nullptr, tracking_.gazeAction, XR_NULL_PATH};
+        XrActionStatePose state{XR_TYPE_ACTION_STATE_POSE};
+        const auto queried = dispatch_.poseState(native_.session, &info, &state);
+        if (!consent)
+            return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
+        if (queried != XR_SUCCESS)
+            return Outcome::Failure(GazeFailure("query gaze activity", queried));
+        if (state.type != XR_TYPE_ACTION_STATE_POSE || state.next || state.isActive > XR_TRUE)
+            return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotInvalid));
+        if (state.isActive == XR_FALSE)
+            return Outcome::Success(std::nullopt);
+        if (const auto current = ValidateOwner(); current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+
+        XrEyeGazeSampleTimeEXT sampleTime{XR_TYPE_EYE_GAZE_SAMPLE_TIME_EXT};
+        XrSpaceLocation location{XR_TYPE_SPACE_LOCATION, &sampleTime};
+        const auto located = dispatch_.locate(tracking_.gazeSpace, tracking_.base, cutoff.runtimeSample.Nanoseconds(), &location);
+        if (!consent)
+            return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
+        if (located != XR_SUCCESS)
+            return Outcome::Failure(GazeFailure("locate gaze space", located));
+        if (sampleTime.type != XR_TYPE_EYE_GAZE_SAMPLE_TIME_EXT || sampleTime.next)
+            return Outcome::Failure(MakeError(XRErrors::PoseInvalid));
+        if (auto valid = ValidateLocation(location, &sampleTime); valid.HasError())
+            return Outcome::Failure(valid.ErrorValue());
+        constexpr auto position = XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
+        constexpr auto orientation = XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
+        const auto tracked = location.locationFlags & (position | orientation);
+        if (tracked == 0)
+            return Outcome::Success(std::nullopt);
+        if (tracked != (position | orientation))
+            return Outcome::Failure(MakeError(XRErrors::PoseInvalid));
+        const auto when = XRRuntimeTime::Create(sampleTime.time);
+        if (when.HasError() || when.Value() > cutoff.runtimeSample ||
+            cutoff.runtimeSample.Nanoseconds() - when.Value().Nanoseconds() > ageLimit.ToNanoseconds())
+            return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotStale));
+        if (const auto current = ValidateOwner(); current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        // Gaze velocity is not part of the granted pointing purpose.
+        const auto components = Components(location, XrSpaceVelocity{XR_TYPE_SPACE_VELOCITY});
+        auto sample = XRPoseSample::Create({session,
+                                            tracking_.gazeIdentity,
+                                            tracking_.baseIdentity,
+                                            XRPosePurpose::SimulationInput,
+                                            {when.Value(), cutoff.simulation, {}},
+                                            components},
+                                           session, tracking_.request->origin);
+        if (sample.HasError())
+            return Outcome::Failure(sample.ErrorValue());
+        return Outcome::Success(std::move(sample).Value());
+    }
+
     /** @copydoc OpenXRActionBindings::Tracking::LocateAction */
     Result<NativePoseObservation> OpenXRActionBindings::Tracking::LocateAction(const TrackingContext &context, const PoseAction &action,
+                                                                               const LocationTarget &target,
                                                                                const XRTimeEvidence &time) const {
         using Outcome = Result<NativePoseObservation>;
         const std::size_t role = action.role == XRTrackedDeviceRole::LeftController ? 0 : 1;
@@ -139,10 +242,10 @@ namespace Horo::XR::OpenXRInternal {
             return Outcome::Failure(PoseFailure("query pose action", result));
         if (state.type != XR_TYPE_ACTION_STATE_POSE || state.next != nullptr || (state.isActive != XR_TRUE && state.isActive != XR_FALSE))
             return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotInvalid));
-        XRPoseDescriptor descriptor{context.Session(), action.identity, baseIdentity, XRPosePurpose::SimulationInput, time, {}};
+        XRPoseDescriptor descriptor{context.Session(), action.identity, target.identity, XRPosePurpose::SimulationInput, time, {}};
         const bool active = state.isActive == XR_TRUE;
         if (active) {
-            auto pose = Locate(context, action.space, action.identity, time);
+            auto pose = Locate(context, action.space, action.identity, target, time);
             if (pose.HasError())
                 return Outcome::Failure(pose.ErrorValue());
             descriptor = pose.Value();
@@ -150,10 +253,32 @@ namespace Horo::XR::OpenXRInternal {
         return Outcome::Success({action.role, action.kind, active, descriptor});
     }
 
+    /** @copydoc OpenXRActionBindings::Tracking::ObserveStageBoundary */
+    std::optional<XRStageBoundaryProximity> OpenXRActionBindings::Tracking::ObserveStageBoundary(const TrackingContext &context,
+                                                                                                 const XRTimeEvidence &time) const {
+        if (!request->stageBoundaryWarningMeters || !stageBounds)
+            return std::nullopt;
+        const bool baseIsStage = request->base == XRSpaceKind::Stage;
+        const auto stage = baseIsStage ? LocationTarget{base, baseIdentity} : LocationTarget{alternate, alternateIdentity};
+        if (!stage.identity.id.IsValid() || stage.space == XR_NULL_HANDLE)
+            return std::nullopt;
+        const auto location = Locate(context, view, viewIdentity, stage, time);
+        if (location.HasError())
+            return std::nullopt;
+        const auto sample = XRPoseSample::Create(location.Value(), context.Session(), request->origin);
+        if (sample.HasError())
+            return std::nullopt;
+        const XRReferenceSpaceSnapshot references{context.Session(), viewIdentity, baseIsStage ? alternateIdentity : baseIdentity,
+                                                  stage.identity, stageBounds};
+        const auto proximity =
+            ClassifyXRStageBoundary(sample.Value(), references, time.runtimeSample, *request->stageBoundaryWarningMeters);
+        return proximity.HasValue() ? std::optional{proximity.Value()} : std::nullopt;
+    }
+
     /** @copydoc OpenXRActionBindings::Tracking::AppendHeadObservation */
-    Result<void> OpenXRActionBindings::Tracking::AppendHeadObservation(const TrackingContext &context, const XRTimeEvidence &time,
-                                                                       NativePoseObservations &samples) const {
-        auto pose = Locate(context, view, viewIdentity, time);
+    Result<void> OpenXRActionBindings::Tracking::AppendHeadObservation(const TrackingContext &context, const LocationTarget &target,
+                                                                       const XRTimeEvidence &time, NativePoseObservations &samples) const {
+        auto pose = Locate(context, view, viewIdentity, target, time);
         if (pose.HasError())
             return Result<void>::Failure(pose.ErrorValue());
         const auto &components = pose.Value().components;
@@ -177,7 +302,7 @@ namespace Horo::XR::OpenXRInternal {
     /** @copydoc OpenXRActionBindings::CollectPoseObservations */
     Result<NativePoseObservations> OpenXRActionBindings::CollectPoseObservations(
         const XRSessionId &session, const XRTimeEvidence &time, const XRWorldOriginRevision origin,
-        const std::optional<std::span<const XRTrackedDeviceRecord>> devices) const {
+        const std::optional<std::span<const XRTrackedDeviceRecord>> devices, const PoseReference reference) const {
         using Outcome = Result<NativePoseObservations>;
         if (auto lane = ControlLane(); lane.HasError())
             return Outcome::Failure(lane.ErrorValue());
@@ -199,17 +324,23 @@ namespace Horo::XR::OpenXRInternal {
         const Operation operation{sampling_};
         if (const auto current = Current(session); current.HasError())
             return Outcome::Failure(current.ErrorValue());
+        const auto target = reference == PoseReference::CalibratedWorld ? Tracking::LocationTarget{tracking_.world, tracking_.worldIdentity}
+                                                                        : Tracking::LocationTarget{tracking_.base, tracking_.baseIdentity};
+        if (target.space == XR_NULL_HANDLE || !target.identity.id.IsValid())
+            return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
         NativePoseObservations samples;
         if (AdmitsTrackingSource(currentDevices, devices.has_value(), XRTrackedDeviceRole::Head, XRTrackedDeviceCapability::HeadPose)) {
-            if (auto observed = tracking_.AppendHeadObservation(TrackingContext{*this}, time, samples); observed.HasError())
+            if (auto observed = tracking_.AppendHeadObservation(TrackingContext{*this}, target, time, samples); observed.HasError())
                 return Outcome::Failure(observed.ErrorValue());
+            if (reference == PoseReference::CalibratedWorld)
+                samples.stageBoundary_ = tracking_.ObserveStageBoundary(TrackingContext{*this}, time);
         }
         for (const auto &action : tracking_.actions) {
             if (const auto capability =
                     action.kind == XRTrackedPoseKind::Grip ? XRTrackedDeviceCapability::GripPose : XRTrackedDeviceCapability::AimPose;
                 !AdmitsTrackingSource(currentDevices, devices.has_value(), action.role, capability))
                 continue;
-            auto pose = tracking_.LocateAction(TrackingContext{*this}, action, time);
+            auto pose = tracking_.LocateAction(TrackingContext{*this}, action, target, time);
             if (pose.HasError())
                 return Outcome::Failure(pose.ErrorValue());
             samples.records_[samples.count_++] = pose.Value();
@@ -222,7 +353,13 @@ namespace Horo::XR::OpenXRInternal {
     /** @copydoc OpenXRActionBindings::ObservePoses */
     Result<NativePoseObservations> OpenXRActionBindings::ObservePoses(const XRSessionId &session, const XRTimeEvidence &time,
                                                                       const XRWorldOriginRevision origin) const {
-        return CollectPoseObservations(session, time, origin, std::nullopt);
+        return CollectPoseObservations(session, time, origin, std::nullopt, PoseReference::Natural);
+    }
+
+    /** @copydoc OpenXRActionBindings::ObserveWorldPoses */
+    Result<NativePoseObservations> OpenXRActionBindings::ObserveWorldPoses(const XRSessionId &session, const XRTimeEvidence &time,
+                                                                           const XRWorldOriginRevision origin) const {
+        return CollectPoseObservations(session, time, origin, std::nullopt, PoseReference::CalibratedWorld);
     }
 
     /** @copydoc OpenXRActionBindings::SamplePoses */
@@ -235,7 +372,7 @@ namespace Horo::XR::OpenXRInternal {
         std::array<XRTrackedDeviceRecord, XRTrackingSnapshotHardLimits::MaximumDevices> retained{};
         if (devices.size() <= retained.size())
             std::ranges::copy(devices, retained.begin());
-        const auto observed = CollectPoseObservations(session, time, origin, devices);
+        const auto observed = CollectPoseObservations(session, time, origin, devices, PoseReference::Natural);
         if (observed.HasError())
             return Result<NativePoseSamples>::Failure(observed.ErrorValue());
         const auto currentDevices = std::span{retained}.first(devices.size());
@@ -261,6 +398,51 @@ namespace Horo::XR::OpenXRInternal {
             return Result<XRPoseDescriptor>::Failure(valid.ErrorValue());
         return Result<XRPoseDescriptor>::Success(
             {context.Session(), baseIdentity, worldIdentity, XRPosePurpose::PresentationPrediction, time, Components(reference, velocity)});
+    }
+
+    /** @copydoc OpenXRActionBindings::Tracking::ValidateCalibrationBinding */
+    Result<void> OpenXRActionBindings::Tracking::ValidateCalibrationBinding(const XRCoordinateSpace &reference,
+                                                                            const XRCoordinateSpace &target) const {
+        if (!request || base == XR_NULL_HANDLE || world == XR_NULL_HANDLE)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
+        if (reference != baseIdentity || target != worldIdentity || reference.worldOriginRevision != request->origin ||
+            target.worldOriginRevision != request->origin)
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRActionBindings::ObserveReferenceCalibration */
+    Result<NativeReferenceCalibrationObservation> OpenXRActionBindings::ObserveReferenceCalibration(const XRCoordinateSpace reference,
+                                                                                                    const XRCoordinateSpace world,
+                                                                                                    const XRRuntimeTime now) const {
+        using Outcome = Result<NativeReferenceCalibrationObservation>;
+        if (const auto lane = ControlLane(); lane.HasError())
+            return Outcome::Failure(lane.ErrorValue());
+        if (!now.IsValid())
+            return Outcome::Failure(MakeError(XRErrors::TimeDomainIncompatible));
+        if (sampling_ || !active_ || !dispatch_.locate)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
+        if (const auto binding = tracking_.ValidateCalibrationBinding(reference, world); binding.HasError())
+            return Outcome::Failure(binding.ErrorValue());
+
+        const Operation operation{sampling_};
+        const auto current = Current(reference.id.session);
+        if (current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        XrSpaceVelocity velocity{XR_TYPE_SPACE_VELOCITY};
+        XrSpaceLocation location{XR_TYPE_SPACE_LOCATION, &velocity};
+        const auto sampled = dispatch_.locate(tracking_.base, tracking_.world, now.Nanoseconds(), &location);
+        if (sampled != XR_SUCCESS)
+            return Outcome::Failure(PoseFailure("observe calibration reference in World", sampled));
+        const auto fenced = Current(reference.id.session);
+        if (fenced.HasError())
+            return Outcome::Failure(fenced.ErrorValue());
+        if (fenced.Value().incarnation != current.Value().incarnation)
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        if (const auto binding = tracking_.ValidateCalibrationBinding(reference, world); binding.HasError())
+            return Outcome::Failure(binding.ErrorValue());
+        const auto pose = DecodeCalibrationPose(location, velocity);
+        return pose.HasError() ? Outcome::Failure(pose.ErrorValue()) : Outcome::Success({reference, world, now, pose.Value()});
     }
 
     /** @copydoc OpenXRActionBindings::LocatePresentation */

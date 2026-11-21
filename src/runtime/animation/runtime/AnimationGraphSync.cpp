@@ -161,8 +161,8 @@ namespace Horo::Animation::Detail {
             return Advance(state, member, delta);
         }
 
-        /** @brief Alignment relocates the cursor but is never notify travel; only the real follower advance is traversed. */
-        GraphInstanceOutcome NotifyMember(GraphInstanceState &state, const GraphBlendMemberWork &member) noexcept {
+        /** @brief Stages events and motion for actual travel after removing synchronization alignment. */
+        GraphInstanceOutcome StageMemberTravel(GraphInstanceState &state, GraphBlendMemberWork &member) {
             const auto &binding = Binding(state, member);
             const auto &clip = *state.clips[binding.clip];
             const auto aligned = clip.TraversePrepared(member.before, member.observation.alignment, state.clipLimits);
@@ -170,11 +170,20 @@ namespace Horo::Animation::Detail {
                 return {GraphInstanceFailure::ClipFailure, aligned.ErrorValue()};
             const auto &descriptor = clip.Data().descriptor;
             const auto &occurrence = state.program->Occurrences()[state.blends.trees[member.tree].occurrence];
+            const AnimationTimeDelta delta{member.delta.ticks - member.observation.alignment.ticks};
+            const AnimationClipRegion region{{0}, {descriptor.duration.ticks}, descriptor.wrapMode};
+            const bool contributing = member.observation.weight > 0.0F && !state.blends.trees[member.tree].frozenSource;
+            member.rootMotion = {};
+            if (contributing && !state.rootMotion.trace.empty() && descriptor.hasRootMotion) {
+                const auto travel =
+                    clip.ExtractRootMotionPrepared(aligned.Value().cursor, delta, region, state.rootMotion.trace, state.clipLimits);
+                if (travel.HasError())
+                    return {GraphInstanceFailure::ClipFailure, travel.ErrorValue()};
+                member.rootMotion = travel.Value().delta;
+            }
             const bool allowed =
                 member.observation.eventsEligible && member.observation.weight > 0.0F && ClipNotifyEligible(state, occurrence);
-            return StageClipNotifies(state, binding.player, binding.clip, aligned.Value().cursor,
-                                     {member.delta.ticks - member.observation.alignment.ticks},
-                                     {{0}, {descriptor.duration.ticks}, descriptor.wrapMode}, allowed);
+            return StageClipNotifies(state, binding.player, binding.clip, aligned.Value().cursor, delta, region, allowed);
         }
 
         /** @brief Computes the explicit event filter without consuming or creating any clip event. */
@@ -219,11 +228,11 @@ namespace Horo::Animation::Detail {
             if (const auto result = Synchronize(state, group); result.HasError())
                 return result;
         }
-        for (const auto &member : state.blends.members) {
+        for (auto &member : state.blends.members) {
             if (!state.blends.trees[member.tree].active)
                 continue;
-            if (const auto notified = NotifyMember(state, member); notified.HasError())
-                return notified;
+            if (const auto staged = StageMemberTravel(state, member); staged.HasError())
+                return staged;
         }
         return {};
     }

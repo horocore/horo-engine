@@ -239,6 +239,11 @@ namespace Horo::Character {
             impl_->fastPath.ResetAll();
             impl_->pendingCommands.store(0);
         }
+        if (impl_->stagedSceneTick) {
+            impl_->stagedSceneTick.reset();
+            impl_->frozenSceneTick.store(0);
+            impl_->ticking.store(false);
+        }
         if (impl_->placementActive || impl_->ticking.load()) {
             impl_->shutdownRequested = true;
             impl_->state.store(CharacterWorldState::Destroyed);

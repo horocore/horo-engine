@@ -68,7 +68,7 @@ namespace Horo::Editor {
                   std::bit_cast<float>(static_cast<std::uint32_t>(prior.generation >> 32)),
                   std::bit_cast<float>(static_cast<std::uint32_t>(prior.sourceSubmission)),
                   std::bit_cast<float>(static_cast<std::uint32_t>(prior.sourceSubmission >> 32))}}};
-            for (std::uint32_t i = 0; i < values.size(); ++i)
+            for (std::uint32_t i = 0; i < values.size() - (manualOnly_ ? 1 : 0); ++i)
                 if (const auto packed = Parameter(size, programs_[role].layout, i + 1, values[i]); packed.HasError())
                     return packed;
         }
@@ -94,14 +94,15 @@ namespace Horo::Editor {
         if (role == 1)
             descriptor.resources.push_back({{2}, 0, display});
         else {
-            const auto exposure = previous == SlotCount ? slot.seed : slots_[previous].output;
-            descriptor.resources.insert(descriptor.resources.end(),
-                                        {{{2}, 0, scene},
-                                         {{3}, 0, tableViews_[0]},
-                                         {{4}, 0, tableViews_[1]},
-                                         {{5}, 0, samplers_[0]},
-                                         {{6}, 0, samplers_[1]},
-                                         {{7}, 0, MaterialBufferBinding{exposure, 0, sizeof(ExposureGpuState)}}});
+            descriptor.resources.insert(descriptor.resources.end(), {{{2}, 0, scene},
+                                                                     {{3}, 0, tableViews_[0]},
+                                                                     {{4}, 0, tableViews_[1]},
+                                                                     {{5}, 0, samplers_[0]},
+                                                                     {{6}, 0, samplers_[1]}});
+            if (!manualOnly_) {
+                const auto exposure = previous == SlotCount ? slot.seed : slots_[previous].output;
+                descriptor.resources.push_back({{7}, 0, MaterialBufferBinding{exposure, 0, sizeof(ExposureGpuState)}});
+            }
         }
         if (role == 0 && selection_->Mode() == ColorLookMode::Enabled)
             descriptor.resources.push_back({{8}, 0, lookView_});
@@ -132,7 +133,7 @@ namespace Horo::Editor {
     /** @copydoc EditorViewportColorPipeline::PrepareAllBindings */
     Result<void> EditorViewportColorPipeline::PrepareAllBindings(RenderTextureViewHandle scene, RenderTextureViewHandle display) {
         for (std::size_t slot = 0; slot < activeSlots_; ++slot)
-            for (std::size_t previous = 0; previous <= SlotCount; ++previous)
+            for (std::size_t previous = manualOnly_ ? SlotCount : 0; previous <= SlotCount; ++previous)
                 for (std::size_t role = 0; role < 2; ++role)
                     if (const auto bound = Bind(role, scene, display, slot, previous); bound.HasError())
                         return bound;

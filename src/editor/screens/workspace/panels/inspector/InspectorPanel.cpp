@@ -62,6 +62,11 @@ namespace Horo::Editor {
         m_workspaceInputContext = nullptr;
     }
 
+    /** @copydoc InspectorPanel::OnPresentationHidden */
+    void InspectorPanel::OnPresentationHidden(EditorWorkspaceViewCommandData &) {
+        m_nameInputContext.Reset();
+    }
+
     void InspectorPanel::DrawIcon(ImDrawList *dl, const ImVec2 &pos, const ImVec2 &size, const ImU32 color) {
         const float ox = pos.x + (size.x - 14.0f) * 0.5f;
         const float oy = pos.y + (size.y - 14.0f) * 0.5f;

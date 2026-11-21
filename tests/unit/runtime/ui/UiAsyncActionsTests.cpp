@@ -4,6 +4,37 @@ namespace Horo::Runtime::Ui {
     namespace {
         using namespace AsyncActionTests;
 
+        TEST_CASE("Action inspection captures FIFO and async metadata without dispatch or consumption",
+                  "[runtime_ui][async_actions][inspection]") {
+            auto router = Router();
+            RetainingHandler handler;
+            const auto pending = Dispatch(router, handler);
+            UiActionPayload payload;
+            REQUIRE(payload.Add(std::uint64_t{42}).HasValue());
+            const auto queued = router.Enqueue(Source(), UiGameplayActionCommand{AuthoredId<UiActionId>(2), payload});
+            REQUIRE(queued.HasValue());
+            REQUIRE(handler.producer->PublishProgress({1, 250, true}).HasValue());
+            ExpectError(router.Inspect(Context(), 1), UiErrors::ActionQueueCapacityExceeded);
+            ExpectError(router.Inspect(Context(2), 2), UiErrors::ActionSourceStale);
+            const auto capture = router.Inspect(Context(), 2);
+            REQUIRE(capture.HasValue());
+            REQUIRE(capture.Value().actions.size() == 2);
+            CHECK(capture.Value().actions[0].request == queued.Value());
+            CHECK(capture.Value().actions[0].origin == UiActionOrigin::Gameplay);
+            CHECK(capture.Value().actions[0].action == AuthoredId<UiActionId>(2));
+            CHECK_FALSE(capture.Value().actions[0].operation);
+            CHECK(capture.Value().actions[1].request == pending.request);
+            CHECK(capture.Value().actions[1].action == AuthoredId<UiActionId>());
+            CHECK(capture.Value().actions[1].operation == pending.operation);
+            CHECK(handler.calls == 1);
+            CHECK(router.QueuedCount() == 1);
+            REQUIRE(handler.producer->Complete(payload).HasValue());
+            CHECK(router.Inspect(Context(), 1).Value().actions.size() == 1);
+            router.Shutdown();
+            ExpectError(router.Inspect(Context(), 2), UiErrors::ActionLifecycleUnavailable);
+            CHECK(capture.Value().actions[1].operation == pending.operation);
+        }
+
         TEST_CASE("Async actions project progress busy state and terminal payload through the production control",
                   "[runtime_ui][async_actions]") {
             auto router = Router();

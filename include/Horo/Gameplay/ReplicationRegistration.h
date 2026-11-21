@@ -38,6 +38,14 @@ namespace Horo::Gameplay {
          */
         [[nodiscard]] Result<void> RequireAdmission(const Network::ReplicationDescriptorSnapshotPtr &registered,
                                                     std::span<const ModuleId> modules) const;
+
+        /** @brief Evaluates the role-specific project declaration against an installed generation.
+         * @param registered Exact frozen registry snapshot, or null for a frozen empty generation.
+         * @param modules Actual loaded module identities.
+         * @return Assessment with the admitted schema subset and diagnostics, or a typed invalid policy failure.
+         */
+        [[nodiscard]] Result<Network::ReplicationDeclarationAssessment> Assess(const Network::ReplicationDescriptorSnapshotPtr &registered,
+                                                                               std::span<const ModuleId> modules) const;
     };
 
     /** @brief Existing gameplay identity that owns one replication schema and its safe points. */

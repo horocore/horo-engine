@@ -1,8 +1,9 @@
 #include "DecisionCookState.h"
 
 #include <algorithm>
+#include <array>
 
-namespace Horo::Application::DecisionCookDetail {
+namespace Horo::Application {
     namespace {
         void RebaseRequirements(std::vector<AI::DecisionBlackboardRequirement> &requirements, const SourceLocation &location) {
             for (auto &requirement : requirements)
@@ -43,27 +44,47 @@ namespace Horo::Application::DecisionCookDetail {
             }
         }
 
-        Result<AI::DecisionGraphSource> Decode(const Assets::AssetCookPinnedSource &file, const State &state) {
-            AI::DecisionGraphAssetId root;
-            auto decoded = AI::DecisionPlanCodec::DecodeSource(file.bytes, root, {.compilation = state.limits});
-            if (decoded.HasError())
-                return Result<AI::DecisionGraphSource>::Failure(decoded.ErrorValue());
-            if (decoded.Value().size() != 1)
-                return Result<AI::DecisionGraphSource>::Failure(MakeError(DecisionCookErrors::Invalid));
-            auto graphs = std::move(decoded).Value();
-            auto source = std::move(graphs.front());
-            const bool tree = std::holds_alternative<std::shared_ptr<const AI::BehaviorTreeAsset>>(source.body);
-            if (tree != (file.record.type.Value() == DecisionBehaviorTreeSourceType))
-                return Result<AI::DecisionGraphSource>::Failure(MakeError(DecisionCookErrors::Invalid));
-            source.location = {std::string{file.record.sourcePath.String()}, 0, 0};
-            if (tree) {
-                if (auto rebased = RebaseTree(source, source.location); rebased.HasError())
-                    return Result<AI::DecisionGraphSource>::Failure(rebased.ErrorValue());
-            } else
-                RebaseMachine(std::get<AI::StateMachineAssetDescriptor>(source.body), source.location);
-            return Result<AI::DecisionGraphSource>::Success(std::move(source));
+        /** @brief Rebase the typed Utility root and provider diagnostics to the authoritative source path. */
+        void RebaseUtility(AI::UtilityDecisionSource &utility, const SourceLocation &location) {
+            RebaseRequirements(utility.requirements, location);
+            for (auto &option : utility.options) {
+                option.provider.source = location;
+                RebaseRequirements(option.provider.requirements, location);
+            }
         }
 
+    }  // namespace
+
+    /** @copydoc DecodeRegisteredDecisionGraphSource */
+    Result<AI::DecisionGraphSource> DecodeRegisteredDecisionGraphSource(const Assets::AssetCookPinnedSource &file,
+                                                                        AI::DecisionCompilationLimits limits) {
+        AI::DecisionGraphAssetId root;
+        auto decoded = AI::DecisionPlanCodec::DecodeSource(file.bytes, root, {.compilation = limits});
+        if (decoded.HasError())
+            return Result<AI::DecisionGraphSource>::Failure(decoded.ErrorValue());
+        if (decoded.Value().size() != 1 || decoded.Value().front().asset != root)
+            return Result<AI::DecisionGraphSource>::Failure(MakeError(DecisionCookErrors::Invalid));
+        auto graphs = std::move(decoded).Value();
+        auto source = std::move(graphs.front());
+        constexpr std::array types{DecisionBehaviorTreeSourceType, DecisionStateMachineSourceType, DecisionUtilitySourceType};
+        const bool tree = source.body.index() == 0;
+        if (file.record.type.Value() != types[source.body.index()])
+            return Result<AI::DecisionGraphSource>::Failure(MakeError(DecisionCookErrors::Invalid));
+        source.location = {std::string{file.record.sourcePath.String()}, 0, 0};
+        if (tree) {
+            if (auto rebased = RebaseTree(source, source.location); rebased.HasError())
+                return Result<AI::DecisionGraphSource>::Failure(rebased.ErrorValue());
+        } else if (auto *machine = std::get_if<AI::StateMachineAssetDescriptor>(&source.body))
+            RebaseMachine(*machine, source.location);
+        else
+            RebaseUtility(std::get<AI::UtilityDecisionSource>(source.body), source.location);
+        return Result<AI::DecisionGraphSource>::Success(std::move(source));
+    }
+
+}  // namespace Horo::Application
+
+namespace Horo::Application::DecisionCookDetail {
+    namespace {
         bool SameRecord(const Assets::AssetRecord &left, const Assets::AssetRecord &right) {
             return left.id == right.id && left.type == right.type && left.sourcePath.String() == right.sourcePath.String() &&
                    left.metadataPath.String() == right.metadataPath.String();
@@ -77,18 +98,78 @@ namespace Horo::Application::DecisionCookDetail {
             const auto *file = state.files->Find(record.id);
             if (!file || !SameRecord(record, file->record))
                 return Result<void>::Failure(MakeError(DecisionCookErrors::Stale));
-            auto source = Decode(*file, state);
+            auto source = DecodeRegisteredDecisionGraphSource(*file, state.limits);
             if (source.HasError())
                 return Result<void>::Failure(source.ErrorValue());
             state.inputs.emplace_back(record.id, record.type, file->sourceDigest, std::move(source).Value());
             return Result<void>::Success();
         }
+
+        /** @brief Captures a real registry-backed schema and stages its canonical immutable cooked payload. */
+        Result<void> CaptureSchema(State &state, const Assets::AssetRecord &record, const CancellationToken &cancellation) {
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(DecisionCookErrors::Cancelled));
+            if (state.environment.schemas.size() >= AI::DecisionAssetValidationHardLimits::Schemas)
+                return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetLimitExceeded));
+            const auto *file = state.files->Find(record.id);
+            if (!file || !SameRecord(record, file->record))
+                return Result<void>::Failure(MakeError(DecisionCookErrors::Stale));
+            auto decoded = AI::BlackboardSchemaSourceCodec::Decode(file->bytes);
+            if (decoded.HasError())
+                return Result<void>::Failure(decoded.ErrorValue());
+            auto schema = std::make_shared<const AI::BlackboardSchema>(std::move(decoded).Value().schema);
+            if (std::ranges::any_of(state.environment.schemas, [&schema](const auto &existing) {
+                return existing && existing->Identity() == schema->Identity() && existing->Version() == schema->Version();
+            }))
+                return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetSchemaAmbiguous));
+            auto payload = AI::BlackboardSchemaCodec::Encode(*schema);
+            if (payload.HasError())
+                return Result<void>::Failure(payload.ErrorValue());
+            if (payload.Value().size() > state.maximumPreparedBytes - state.preparedDependencyBytes)
+                return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetLimitExceeded));
+            state.preparedDependencyBytes += payload.Value().size();
+            state.schemas.push_back({schema->Identity(), schema->Version(), record.id});
+            state.environment.schemas.push_back(std::move(schema));
+            state.prepared.push_back({record.id, record.type, file->sourceDigest, std::move(payload).Value(), {}});
+            return Result<void>::Success();
+        }
+
+        /** @brief Compiles one registered query and stages an immutable compatible artifact. */
+        Result<void> CaptureQuery(State &state, const Assets::AssetRecord &record) {
+            const auto *file = state.files->Find(record.id);
+            if (!file || !SameRecord(record, file->record))
+                return Result<void>::Failure(MakeError(DecisionCookErrors::Stale));
+            auto decoded = AI::EnvironmentQuerySourceCodec::Decode(file->bytes);
+            if (decoded.HasError())
+                return Result<void>::Failure(decoded.ErrorValue());
+            const auto &query = decoded.Value();
+            if (state.authoringValidation) {
+                const auto result = query.ResultSchema();
+                const auto *item = state.querySchema->Find(result.itemType);
+                auto source = std::make_shared<const AI::EnvironmentQueryAsset>(std::move(decoded).Value());
+                state.queries.emplace_back(source->Id(), result, item ? item->kind : AI::QueryItemKind::Count, record.id, source);
+                return Result<void>::Success();
+            }
+            auto payload = AI::EnvironmentQueryCookedCodec::Encode(query, *state.querySchema);
+            if (payload.HasError())
+                return Result<void>::Failure(payload.ErrorValue());
+            if (payload.Value().size() > state.maximumPreparedBytes - state.preparedDependencyBytes)
+                return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetLimitExceeded));
+            state.preparedDependencyBytes += payload.Value().size();
+            const auto &result = query.ResultSchema();
+            const auto kind = state.querySchema->Find(result.itemType)->kind;
+            state.queries.emplace_back(query.Id(), result, kind, record.id);
+            state.prepared.emplace_back(record.id, record.type, file->sourceDigest, std::move(payload).Value(),
+                                        std::vector<Assets::AssetId>{});
+            return Result<void>::Success();
+        }
+
     }  // namespace
 
     Result<void> Verify(const State &state, const CancellationToken &cancellation) {
         if (cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(DecisionCookErrors::Cancelled));
-        if (!state.environment.nodes || !state.environment.nodes->CanUse())
+        if (!state.inputs.empty() && (!state.environment.nodes || !state.environment.nodes->CanUse()))
             return Result<void>::Failure(MakeError(DecisionCookErrors::Stale));
         return state.files->VerifyUnchanged(cancellation);
     }
@@ -97,12 +178,25 @@ namespace Horo::Application::DecisionCookDetail {
         if (registry.Records().size() > 16384)
             return Result<void>::Failure(MakeError(DecisionCookErrors::Invalid));
         for (const auto &record : registry.Records()) {
-            if (record.type.Value() != DecisionBehaviorTreeSourceType && record.type.Value() != DecisionStateMachineSourceType)
+            if (cancellation.IsCancellationRequested())
+                return Result<void>::Failure(MakeError(DecisionCookErrors::Cancelled));
+            if (state.querySchema && record.type.Value() == AI::EnvironmentQuerySourceAssetType) {
+                if (auto captured = CaptureQuery(state, record); captured.HasError())
+                    return captured;
+                continue;
+            }
+            if (record.type.Value() == AI::BlackboardSchemaAssetType) {
+                if (auto captured = CaptureSchema(state, record, cancellation); captured.HasError())
+                    return captured;
+                continue;
+            }
+            if (record.type.Value() != DecisionBehaviorTreeSourceType && record.type.Value() != DecisionStateMachineSourceType &&
+                record.type.Value() != DecisionUtilitySourceType)
                 continue;
             if (auto captured = CaptureRecord(state, record, cancellation); captured.HasError())
                 return captured;
         }
-        if (state.inputs.empty())
+        if (state.inputs.empty() && state.schemas.empty() && state.queries.empty())
             return Result<void>::Failure(MakeError(DecisionCookErrors::Invalid));
         std::ranges::sort(state.inputs, {}, [](const auto &input) {
             return input.graph.asset;
@@ -111,6 +205,9 @@ namespace Horo::Application::DecisionCookDetail {
             return input.graph.asset;
         }) != state.inputs.end())
             return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetSubtreeAmbiguous));
-        return Verify(state, cancellation);
+        std::ranges::sort(state.queries, {}, &QueryArtifact::query);
+        if (std::ranges::adjacent_find(state.queries, {}, &QueryArtifact::query) != state.queries.end())
+            return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryIdentityConflict));
+        return state.authoringValidation ? state.files->VerifyUnchanged(cancellation) : Verify(state, cancellation);
     }
 }  // namespace Horo::Application::DecisionCookDetail

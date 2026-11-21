@@ -1,4 +1,49 @@
+# Image provider inventory is a cold, app-owned data admission boundary.
+set(HORO_EDITOR_IMAGE_PROVIDER_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_image_provider_headers")
+file(MAKE_DIRECTORY "${HORO_EDITOR_IMAGE_PROVIDER_HEADERS}")
+configure_file("HoroEditor/app/EditorImageProviderHost.h" "${HORO_EDITOR_IMAGE_PROVIDER_HEADERS}/EditorImageProviderHost.h" COPYONLY)
+# Only the non-installed layout is shared by the offline tool and installed editor.
+set(HORO_EDITOR_RECONSTRUCTION_RELEASE_LAYOUT_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_reconstruction_release_layout_headers")
+file(MAKE_DIRECTORY "${HORO_EDITOR_RECONSTRUCTION_RELEASE_LAYOUT_HEADERS}")
+configure_file("HoroEditor/app/EditorNativeReconstructionReleaseLayout.h"
+    "${HORO_EDITOR_RECONSTRUCTION_RELEASE_LAYOUT_HEADERS}/EditorNativeReconstructionReleaseLayout.h" COPYONLY)
+add_library(HoroEditorNativeReconstructionReleaseLayoutInternal INTERFACE)
+target_include_directories(HoroEditorNativeReconstructionReleaseLayoutInternal
+    INTERFACE "${HORO_EDITOR_RECONSTRUCTION_RELEASE_LAYOUT_HEADERS}")
+target_link_libraries(HoroEditorNativeReconstructionReleaseLayoutInternal INTERFACE HoroEngine::RenderApi)
+add_library(HoroEditorImageProviderHostInternal STATIC HoroEditor/app/EditorImageProviderHost.cpp)
+target_compile_features(HoroEditorImageProviderHostInternal PUBLIC cxx_std_20)
+target_include_directories(HoroEditorImageProviderHostInternal PUBLIC "${HORO_EDITOR_IMAGE_PROVIDER_HEADERS}")
+target_link_libraries(HoroEditorImageProviderHostInternal
+    PUBLIC HoroEngine::Application HoroEngine::RenderFrontend HoroEngine::Security
+    PRIVATE HoroEngine::Platform HoroHostSignatureDocuments HoroEditorNativeReconstructionReleaseLayoutInternal
+        HoroReleaseManifestSignatureHostInternal)
+
 # Included from apps/CMakeLists.txt; source and binary directories remain scoped to apps/.
+# One non-installed host token boundary; headless tests use the same parser as the real graphical root.
+set(HORO_NETWORK_CONSOLE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/network_console_headers")
+file(MAKE_DIRECTORY "${HORO_NETWORK_CONSOLE_HEADERS}")
+configure_file(shared/console/NetworkConsoleInspection.h "${HORO_NETWORK_CONSOLE_HEADERS}/NetworkConsoleInspection.h" COPYONLY)
+configure_file(shared/console/NetworkConsoleOverlay.h "${HORO_NETWORK_CONSOLE_HEADERS}/NetworkConsoleOverlay.h" COPYONLY)
+add_library(HoroNetworkConsoleInspectionInternal STATIC EXCLUDE_FROM_ALL shared/console/NetworkConsoleInspection.cpp
+    shared/console/NetworkConsoleOverlay.cpp)
+target_compile_features(HoroNetworkConsoleInspectionInternal PUBLIC cxx_std_20)
+target_include_directories(HoroNetworkConsoleInspectionInternal PUBLIC "${HORO_NETWORK_CONSOLE_HEADERS}")
+target_link_libraries(HoroNetworkConsoleInspectionInternal PUBLIC HoroEngine::RuntimeConsole HoroEngine::NetworkDebuggerApplication)
+
+set(HORO_EDITOR_CONSOLE_LAUNCH_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_console_launch_headers")
+file(MAKE_DIRECTORY "${HORO_EDITOR_CONSOLE_LAUNCH_HEADERS}")
+configure_file(HoroEditor/composition/console/EditorConsoleLaunch.h
+    "${HORO_EDITOR_CONSOLE_LAUNCH_HEADERS}/EditorConsoleLaunch.h" COPYONLY)
+configure_file(HoroEditor/composition/console/EditorConsoleExecution.h
+    "${HORO_EDITOR_CONSOLE_LAUNCH_HEADERS}/EditorConsoleExecution.h" COPYONLY)
+add_library(HoroEditorConsoleLaunchInternal STATIC EXCLUDE_FROM_ALL HoroEditor/composition/console/EditorConsoleLaunch.cpp
+    HoroEditor/composition/console/EditorConsoleExecution.cpp)
+target_compile_features(HoroEditorConsoleLaunchInternal PUBLIC cxx_std_20)
+target_include_directories(HoroEditorConsoleLaunchInternal PUBLIC "${HORO_EDITOR_CONSOLE_LAUNCH_HEADERS}")
+target_link_libraries(HoroEditorConsoleLaunchInternal PUBLIC HoroEngine::RuntimeConsoleStartup)
+target_link_libraries(HoroEditorConsoleLaunchInternal PRIVATE HoroRuntimeConsoleTelemetryInternal HoroRuntimeConsoleSceneInternal HoroNetworkConsoleInspectionInternal)
+
 if(HORO_BUILD_XR_OPENXR)
     # First-party installed-component admission belongs to the application root,
     # not XRRuntime, ExtensionHost or a concrete renderer. Only this staged
@@ -15,10 +60,13 @@ if(HORO_BUILD_XR_OPENXR)
         "${HORO_OPENXR_PRODUCT_HOST_HEADERS}/OpenXRInstalledProductSelection.h" COPYONLY)
     configure_file(HoroEditor/composition/xr/OpenXRInstalledHostCatalog.h
         "${HORO_OPENXR_PRODUCT_HOST_HEADERS}/OpenXRInstalledHostCatalog.h" COPYONLY)
+    configure_file(HoroEditor/composition/xr/OpenXRWindowsLoaderImage.h
+        "${HORO_OPENXR_PRODUCT_HOST_HEADERS}/OpenXRWindowsLoaderImage.h" COPYONLY)
     add_library(HoroOpenXRProductHost STATIC
         HoroEditor/composition/xr/OpenXRComponentManifest.cpp
         HoroEditor/composition/xr/OpenXRComponentVerification.cpp
         HoroEditor/composition/xr/OpenXRProductDeployment.cpp
+        HoroEditor/composition/xr/OpenXRWindowsLoaderImage.cpp
         HoroEditor/composition/xr/OpenXRLoaderLease.cpp
         HoroEditor/composition/xr/OpenXRInstalledProductSelection.cpp
         HoroEditor/composition/xr/OpenXRInstalledHostCatalog.cpp)
@@ -63,12 +111,15 @@ if(HORO_BUILD_XR_OPENXR AND HORO_BUILD_RENDER_VULKAN AND TARGET HoroEditorVulkan
     configure_file(HoroEditor/composition/xr/OpenXRPlayHost.h "${HORO_OPENXR_APPLICATION_HEADERS}/OpenXRPlayHost.h" COPYONLY)
     add_library(HoroOpenXRApplicationHost STATIC HoroEditor/composition/xr/OpenXRApplicationSession.cpp
         HoroEditor/composition/xr/OpenXRApplicationInput.cpp HoroEditor/composition/xr/OpenXRApplicationProjection.cpp
-        HoroEditor/composition/xr/OpenXRPlayHost.cpp HoroEditor/composition/xr/OpenXRPlayFrames.cpp HoroEditor/composition/xr/OpenXRPlayScene.cpp)
+        HoroEditor/composition/xr/OpenXRApplicationSpatialAnchor.cpp
+        HoroEditor/composition/xr/OpenXRPlayHost.cpp HoroEditor/composition/xr/OpenXRPlayFrames.cpp HoroEditor/composition/xr/OpenXRPlayScene.cpp
+        HoroEditor/composition/xr/OpenXRPlaySetup.cpp)
     target_compile_features(HoroOpenXRApplicationHost PUBLIC cxx_std_20)
     target_include_directories(HoroOpenXRApplicationHost PUBLIC "${HORO_OPENXR_APPLICATION_HEADERS}")
     target_link_libraries(HoroOpenXRApplicationHost
         PUBLIC HoroOpenXRApplicationClock HoroEditorPlayXrHostInterface HoroEditorXrSceneInternal HoroXRRuntimeHostInterface HoroEngine::RuntimeScene HoroOpenXRProductHost HoroOpenXRApplicationBindings HoroXROpenXRHostInterface HoroXROpenXRVulkanHostInterface HoroRenderVulkanHostInterface HoroEngine::XRRuntime HoroEngine::Runtime
-        PRIVATE HoroEngine::XROpenXR HoroXROpenXRVulkan HoroEngine::RenderFrontend HoroEditorVulkanXrHostInterface)
+            HoroEditorVulkanXrHostInterface HoroEngine::XRCharacterLocomotion HoroEngine::GameplayApi
+        PRIVATE HoroEngine::XROpenXR HoroXROpenXRVulkan HoroXROpenXRAnchorSaveHost HoroEngine::RenderFrontend HoroEngine::SceneRenderExtraction)
 endif()
 
 # Pure App-owned package admission is shared by runtime loading and offline production.
@@ -144,11 +195,12 @@ target_link_libraries(HoroAnimationSceneHostInternal INTERFACE HoroAnimationHost
 set(HORO_EDITOR_PLAY_SAVE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_play_save_headers")
 file(MAKE_DIRECTORY "${HORO_EDITOR_PLAY_SAVE_HEADERS}")
 foreach(header EditorPlaySaveHostCapture.h EditorPlaySaveHostArchive.h
-        EditorPlaySaveHostStorage.h EditorPlaySaveHostRestore.h EditorPlaySaveHost.h)
+        EditorPlaySaveHostStorage.h EditorPlaySaveHostRestore.h EditorPlaySaveHost.h EditorPlaySaveAi.h)
     file(GENERATE OUTPUT "${HORO_EDITOR_PLAY_SAVE_HEADERS}/${header}"
         CONTENT "#pragma once\n#include \"${CMAKE_CURRENT_SOURCE_DIR}/HoroEditor/composition/play/save/${header}\"\n")
 endforeach()
 add_library(HoroEditorPlaySaveHostInternal STATIC
+    HoroEditor/composition/play/save/EditorPlaySaveAi.cpp
     HoroEditor/composition/play/save/EditorPlaySaveHostCapture.cpp
     HoroEditor/composition/play/save/EditorPlaySaveHostCodec.cpp
     HoroEditor/composition/play/save/EditorPlaySaveHostArchive.cpp
@@ -178,18 +230,27 @@ target_link_libraries(HoroEditorPlaySaveHostInternal PUBLIC HoroEngine::PrefabRu
 target_include_directories(HoroEditorPlaySaveHostInternal PUBLIC "${HORO_EDITOR_PLAY_SAVE_HEADERS}")
 target_link_libraries(HoroEditorPlaySaveHostInternal PUBLIC
     HoroEditorPlaySceneHostInternal HoroEngine::Runtime HoroEngine::RuntimeScene
-    HoroEngine::SceneCook HoroEngine::GameplayRuntime HoroEngine::GameplayModuleHost HoroEngine::Security)
+    HoroEngine::SceneCook HoroEngine::GameplayRuntime HoroEngine::GameplayModuleHost HoroEngine::Security HoroEngine::AISaveIntegration)
 target_link_libraries(HoroEditorPlaySaveHostInternal PRIVATE HoroEngine::Application HoroEngine::Platform)
 
 set(HORO_EDITOR_PROJECT_SCENE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_project_scene_headers")
 file(MAKE_DIRECTORY "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")
 configure_file(HoroEditor/composition/scene/EditorProjectSceneHost.h "${HORO_EDITOR_PROJECT_SCENE_HEADERS}/EditorProjectSceneHost.h" COPYONLY)
+configure_file(HoroEditor/composition/scene/EditorMountedWorldViewport.h
+    "${HORO_EDITOR_PROJECT_SCENE_HEADERS}/EditorMountedWorldViewport.h" COPYONLY)
 add_library(HoroEditorSceneProductHost STATIC
+    HoroEditor/composition/scene/EditorMountedWorldViewport.cpp
+    HoroEditor/composition/scene/EditorPlayDecisionComposition.cpp
+    HoroEditor/composition/scene/EditorPlayNavigationComposition.cpp
     HoroEditor/composition/scene/EditorProjectSceneHost.cpp
-    HoroEditor/composition/scene/EditorProjectSceneHostResources.cpp)
-target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlaySaveHostInternal)
-target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroAnimationSceneHostInternal)
-target_link_libraries(HoroEditorSceneProductHost PRIVATE HoroEngine::PrefabProjectSettings HoroEngine::ProjectSurfaceSettings)
+    HoroEditor/composition/scene/EditorProjectSceneHostResources.cpp
+    HoroEditor/composition/scene/EditorPlayPerceptionComposition.cpp)
+target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlaySaveHostInternal HoroCookedDecisionSceneAdmissionInternal)
+target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroAnimationSceneHostInternal HoroMountedWorldHostInternal)
+target_link_libraries(HoroEditorSceneProductHost PRIVATE HoroEngine::EditorServices HoroEngine::PrefabProjectSettings
+        HoroEngine::ProjectSurfaceSettings)
+target_link_libraries(HoroEditorSceneProductHost PRIVATE HoroProjectSceneNavigationHostInternal HoroEngine::GameplayAnimationScene)
+target_link_libraries(HoroEditorSceneProductHost PRIVATE HoroProjectScenePerceptionInternal HoroEngine::ProjectSettings)
 target_compile_features(HoroEditorSceneProductHost PUBLIC cxx_std_20)
 target_include_directories(HoroEditorSceneProductHost PUBLIC "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")
 target_link_libraries(HoroEditorSceneProductHost PUBLIC HoroEditorPlayXrHostInterface HoroEditorPlaySceneHostInternal HoroScenePhysicsHost

@@ -6,8 +6,10 @@
 #include "Horo/AI/DecisionControl.h"
 #include "Horo/AI/DecisionNodeRegistration.h"
 #include "Horo/AI/StateMachine.h"
+#include "Horo/AI/UtilityDecision.h"
 #include "Horo/Foundation/Sha256.h"
 
+#include <optional>
 #include <variant>
 
 namespace Horo::AI {
@@ -21,8 +23,8 @@ namespace Horo::AI {
         BlackboardSchemaId blackboard;
         DecisionVersionRange blackboardVersion;
         SourceLocation location;
-        TaskId executionTask; /**< Persistent HSM runner task definition; BT leaves own their authored task definitions. */
-        std::variant<std::shared_ptr<const BehaviorTreeAsset>, StateMachineAssetDescriptor> body;
+        TaskId executionTask; /**< Persistent runner task definition; required for HSM and for Scene-scheduled flat BT roots. */
+        std::variant<std::shared_ptr<const BehaviorTreeAsset>, StateMachineAssetDescriptor, UtilityDecisionSource> body;
     };
 
     struct DecisionCompilationLimits final {
@@ -80,7 +82,9 @@ namespace Horo::AI {
         std::uint32_t schemaVersion{};
         TaskId executionTask;
         std::shared_ptr<const DecisionAssetPlan> bindings;
-        std::variant<std::shared_ptr<const BehaviorTreeExecutionPlan>, std::shared_ptr<const CookedStateMachinePlan>> execution;
+        std::variant<std::shared_ptr<const BehaviorTreeExecutionPlan>, std::shared_ptr<const CookedStateMachinePlan>,
+                     std::shared_ptr<const CookedUtilityPlan>>
+            execution;
         std::vector<DecisionNodeConfiguration> providerProperties;
         std::vector<DecisionCallSite> calls;
         DecisionStorageRequirements localStorage;
@@ -96,6 +100,10 @@ namespace Horo::AI {
         [[nodiscard]] DecisionGraphAssetId Root() const noexcept;
         [[nodiscard]] AiCapabilitySet Capabilities() const noexcept;
         [[nodiscard]] bool IsCurrent() const noexcept;
+        /** @brief Checks support for one all-or-nothing scheduler slice before creating any provider callbacks.
+         * @return Maximum units for a single-occurrence Behavior Tree, otherwise empty until that shape supports bounded slices.
+         */
+        [[nodiscard]] std::optional<std::size_t> MaximumDecisionWorkUnits() const noexcept;
 
     private:
         CookedDecisionPlan() = default;

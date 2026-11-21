@@ -26,6 +26,8 @@ namespace Horo::AI::Detail {
         [[nodiscard]] Result<AiTaskContinuation> Bind(std::size_t slot, const AiTaskOperationContext &operation);
         /** @brief Takes one pending candidate and wake without waiting for a producer. */
         [[nodiscard]] Pending Take(std::size_t slot, TaskHandle task);
+        /** @brief Checks whether the owner can attempt to take a current event or terminal result. */
+        [[nodiscard]] bool HasPending() noexcept;
         /** @brief Revokes a slot immediately without entering its payload lock. */
         void Retire(std::size_t slot) noexcept;
         /** @brief Checks the nonwrapping execution generation through its atomic admission fence. */
@@ -37,11 +39,13 @@ namespace Horo::AI::Detail {
         struct Slot final {
             std::mutex mutex;
             std::atomic<std::uint32_t> generation{};
+            std::atomic<std::uint32_t> pendingGeneration{};
             TaskHandle task;
             Pending pending;
             bool published{};
         };
 
         std::vector<Slot> slots_;
+        std::atomic<bool> pendingHint_{};
     };
 }  // namespace Horo::AI::Detail

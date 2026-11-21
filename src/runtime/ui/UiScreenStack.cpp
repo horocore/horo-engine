@@ -601,6 +601,15 @@ namespace Horo::Runtime::Ui {
         return found == storage_->actions.end() ? nullptr : &found->router;
     }
 
+    /** @copydoc UiScreenStack::Actions */
+    const UiActionRouter *UiScreenStack::Actions(const UiRouteInstanceId route) const noexcept {
+        if (!storage_ || storage_->state != UiScreenStackState::Active)
+            return nullptr;
+        const auto &actions = storage_->actions;
+        const auto found = std::ranges::find(actions, route, &Storage::RouteActions::route);
+        return found == actions.end() ? nullptr : &found->router;
+    }
+
     /** @copydoc UiScreenStack::BeginRetirement */
     Result<void> UiScreenStack::BeginRetirement() {
         if (!storage_ || storage_->state != UiScreenStackState::Active)

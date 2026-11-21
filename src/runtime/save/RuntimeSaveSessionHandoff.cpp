@@ -1,3 +1,4 @@
+#include "Horo/Foundation/Logging/LogContext.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 #include "RuntimeSaveSessionInternal.h"
 
@@ -53,6 +54,7 @@ namespace Horo::Runtime::RuntimeSaveSessionDetail {
             auto allocationFailure = MakeError(SaveErrors::OperationAllocationFailed);
             auto callbackFailure = MakeError(SaveErrors::LifecycleCallbackFailed);
             try {
+                const Log::ScopedDiagnosticSuppression suppressHandoffDiagnostics;
                 return work.handoff->Accept(*work.preparedRestore);
             } catch (const std::bad_alloc &) {
                 return Result<void>::Failure(std::move(allocationFailure));

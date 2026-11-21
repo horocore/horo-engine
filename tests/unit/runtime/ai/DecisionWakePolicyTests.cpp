@@ -203,18 +203,32 @@ namespace Horo::AI {
 
         TEST_CASE("Task wake bindings reject retired and duplicate execution generations", "[unit][ai][wake]") {
             WakeFixture fixture;
-            auto policy = fixture.Policy();
+            auto policy = fixture.Policy({}, {}, {.maximumEvaluationsPerTick = 1});
             fixture.Activate(*policy);
             const TaskHandle oldTask{fixture.agent.incarnation, {600, 1}};
             const TaskHandle currentTask{fixture.agent.incarnation, {600, 2}};
+            REQUIRE(policy->BindTask(Id(1), oldTask).HasValue());
+            REQUIRE(policy->NotifyTask(fixture.agent, Id(1), oldTask).Value());
             REQUIRE(policy->BindTask(Id(1), currentTask).HasValue());
             CHECK_FALSE(policy->NotifyTask(fixture.agent, Id(1), oldTask).Value());
             ExpectError(policy->BindTask(Id(2), currentTask), AIErrors::TaskContextInvalid);
             CHECK(fixture.Begin(*policy, 2).empty());
+
             REQUIRE(policy->NotifyTask(fixture.agent, Id(1), currentTask).Value());
-            REQUIRE(fixture.Begin(*policy, 3).size() == 1);
+            REQUIRE(policy->BindTask(Id(1), currentTask).HasValue());
+            const auto current = fixture.Begin(*policy, 2);
+            REQUIRE(current.size() == 1);
+            CHECK(current.front().reasons.task);
             REQUIRE(policy->FinishUpdate().HasValue());
+
+            REQUIRE(policy->NotifyTask(fixture.agent, Id(1), currentTask).Value());
+            REQUIRE(policy->Request(Id(1)).HasValue());
             REQUIRE(policy->BindTask(Id(1), {}).HasValue());
+            const auto explicitWake = fixture.Begin(*policy, 3);
+            REQUIRE(explicitWake.size() == 1);
+            CHECK(explicitWake.front().reasons.explicitRequest);
+            CHECK_FALSE(explicitWake.front().reasons.task);
+            REQUIRE(policy->FinishUpdate().HasValue());
             CHECK_FALSE(policy->NotifyTask(fixture.agent, Id(1), currentTask).Value());
             ExpectError(policy->BindTask(Id(1), TaskHandle{}), AIErrors::TaskContextInvalid);
             ExpectError(policy->NotifyTask(fixture.agent, Id(99), currentTask), AIErrors::TaskContextInvalid);

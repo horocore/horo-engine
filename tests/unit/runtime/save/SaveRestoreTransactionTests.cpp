@@ -1,4 +1,6 @@
 #include "AllocationProbe.h"
+#include "Horo/Foundation/Logging/LogContext.h"
+#include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Runtime/Save/SaveCaptureSnapshot.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 #include "Horo/Runtime/Save/SaveRestoreTransaction.h"
@@ -92,6 +94,7 @@ namespace Horo::Runtime {
             std::vector<std::string> published;
             std::vector<std::string> rolledBack;
             std::vector<std::string> dependencies;
+            bool probeDiagnostics{};
         };
 
         class PreparedState final : public ICanonicalRestorePreparedState {};
@@ -125,6 +128,7 @@ namespace Horo::Runtime {
             }
 
             const ICanonicalRestorePreparedState *PreparedState() const noexcept override {
+                ProbeDiagnostics();
                 return prepared_ ? &state_ : nullptr;
             }
 
@@ -151,7 +155,13 @@ namespace Horo::Runtime {
             }
 
         private:
+            void ProbeDiagnostics() const noexcept {
+                if (log_.probeDiagnostics)
+                    Log::Logger::WriteEmergency("save.test.restore", Log::Level::Error, "private prepared scene data");
+            }
+
             void Finalize(const bool publish) noexcept {
+                ProbeDiagnostics();
                 if (publish) {
                     log_.published.push_back(requirement_.participant.Value());
                     published_ = true;
@@ -162,6 +172,7 @@ namespace Horo::Runtime {
             }
 
             Result<void> Run(const std::string_view phase, const InjectedFailure phaseFailure) {
+                ProbeDiagnostics();
                 if (failure_ == InjectedFailure::ThrowAllocation && phase == "decode")
                     throw std::bad_alloc{};
                 log_.phases.push_back(requirement_.participant.Value() + ":" + std::string{phase});
@@ -295,6 +306,32 @@ namespace Horo::Runtime {
                 CHECK(final.reentryRejected);
         }
 
+        TEST_CASE("Restore callback privacy covers preparation, publication and rollback", "[unit][save][restore][privacy]") {
+            bool reject = false;
+            SECTION("publish") {}
+            SECTION("rollback") {
+                reject = true;
+            }
+            const auto registry = Registry({Descriptor("h.p", 1)});
+            ParticipantLog log;
+            log.probeDiagnostics = true;
+            std::vector<std::unique_ptr<IStagedRestoreParticipant>> staged;
+            staged.push_back(Candidate("h.p", log, reject ? InjectedFailure::Apply : InjectedFailure::None));
+            auto transaction = StagedRestoreTransaction::Create(Context(registry), Operation(), registry, std::move(staged)).Value();
+            const auto before = Log::Logger::Statistics().emergencyRecords;
+            const auto prepared = transaction.Prepare();
+            if (reject) {
+                RequireError(prepared, SaveErrors::CompositionInjectedFailure);
+                CHECK(log.rolledBack.size() == 1);
+            } else {
+                REQUIRE(prepared.HasValue());
+                REQUIRE(transaction.Activate(Activation(registry)).HasValue());
+                CHECK(log.published.size() == 1);
+            }
+            CHECK(Log::Logger::Statistics().emergencyRecords == before);
+            CHECK_FALSE(Log::DiagnosticsSuppressed());
+        }
+
         TEST_CASE("Final owner claim rejects before any existing restore publication", "[unit][save][restore][final-gate]") {
             CheckFinalClaim(FinalClaimMode::Reject, &SaveErrors::CompositionInjectedFailure);
         }
@@ -322,6 +359,7 @@ namespace Horo::Runtime {
                 Result<SaveRestoreReferenceContext> Resolve(const StagedRestoreContext &,
                                                             const std::span<const StagedRestorePreparedParticipant> participants) override {
                     REQUIRE(participants.size() == 2);
+                    CHECK(Log::DiagnosticsSuppressed());
                     if (fault_ == 1)
                         throw std::bad_alloc{};
                     if (fault_ == 2)

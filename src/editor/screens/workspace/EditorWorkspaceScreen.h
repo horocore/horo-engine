@@ -36,6 +36,8 @@
 #include <vector>
 
 namespace Horo::Editor::WorkspaceScreenDetail {
+    class PlatformProjectSettingsOwner;
+
     struct WorkspacePanelServices {
         XRSimulatorModel *xrSimulator{};
         IEditorGuiRenderer *guiRenderer{nullptr};
@@ -47,6 +49,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         IOperationControl *operationControl{nullptr};
         const Application::INetworkDebuggerQuery *networkDebuggerQuery{};
         Application::INetworkDebuggerControl *networkDebuggerControl{};
+        PlatformServices::IPlatformDiagnostics *platformDiagnostics{};
     };
 
     struct WorkspaceProjectServices {
@@ -69,6 +72,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
     /** @brief Borrowed explicit XR host connection; observes the existing Play projection, never owns its state. */
     struct WorkspaceXrPlayConnection final {
         IEditorPlayXrHost *host{};
+        const EditorXrInputPlayerSelection *playerSelection{};
         std::optional<EditorPlayState> observed;
         bool attached{};
     };
@@ -83,6 +87,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         Input::InputContextToken context;
         Input::GameplayInputFrameBuilder gameplayFrames{Input::ActionId{kGameplayMoveAction}, {}, {}, {}};
         std::optional<Input::InputBindingProfile> previousProfile;
+        std::optional<Input::BindingProfilePaths> profilePaths;
     };
 
     /** @brief Borrowed contribution catalogs; application-owned panel/status registrations outlive the screen. */
@@ -106,6 +111,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         Result<void> ValidateLeavePCGDocuments(EditorWorkspaceController &controller) const;
 
         std::vector<SourceDocumentSnapshot> sourceDocuments;
+        std::vector<UiCanvasDocumentStateId> uiCanvasStates;
         std::vector<PCGDocumentSnapshot> pcgDocuments;
         std::vector<PrefabDocumentSnapshot> prefabDocuments;
         std::weak_ptr<CollisionProjectSettingsSession> collisionOwner;
@@ -113,6 +119,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         std::optional<WorldDocumentFence> worldFence;
         std::uint64_t prefabSettingsRevision{};
         std::vector<std::pair<DocumentInstanceId, std::uint64_t>> terrainRevisions;
+        std::vector<std::pair<DocumentInstanceId, std::uint64_t>> decisionGraphRevisions;
+        std::vector<EnvironmentQueryDocumentFence> environmentQueryRevisions;
     };
 
     /** @brief Routes source document commands while fencing delayed close decisions to the workspace session. */
@@ -156,6 +164,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         /** @brief Returns navigation settings from the current controller. */
         Result<NavigationProjectSettingsSession *> NavigationSettings() override;
         Result<std::shared_ptr<PrefabProjectSettingsSession>> PrefabSettings() override;
+        /** @brief Opens the existing shared draft with this workspace's exact portable policy publication operations. */
+        Result<std::shared_ptr<ConfigurationSettingsSession>> ProjectConfiguration() override;
         /** @brief Updates canonical owners and derived presentation for the current frame. */
         void OnUpdate(float dt) override;
         /** @brief Captures gameplay input only while Play owns simulation. */
@@ -192,7 +202,13 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         /** @brief Validates captured leave consent against each independently owned document group. */
         Result<void> ValidateLeaveCapture() const;
         /** @brief Attaches built-in panels before session publication. */
-        void AttachWorkspacePanels();
+        void AttachWorkspacePanels(std::string_view projectIdentity);
+        /** @brief Captures bounded Problems rows for the one active Decision Graph document. */
+        [[nodiscard]] std::optional<AgentEditorDiagnosticsSnapshot> CaptureEditorDiagnostics();
+        /** @brief Cancels a held preview when the active document, its revision or validation changes. */
+        void ReconcileEditorDiagnostics();
+        /** @brief Revokes this workspace's captured Problems evidence before teardown. */
+        void RevokeEditorDiagnostics() noexcept;
         /** @brief Owns the project path and application closure across asynchronous Play preparation. */
         EditorPlaySceneFactory BindPlayFactory(const std::filesystem::path &projectRoot) const;
         /** @brief Binds the explicit authoring stage capability to this authorized project. */
@@ -225,6 +241,12 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         [[nodiscard]] bool HandleDocumentHistoryMenu(EditorMenuAction action);
         /** @brief Captures the external scene before opening its comparison modal. */
         void OpenSceneComparison();
+        /** @brief Shows the exact current prefab conflict as a read-only comparison. */
+        void OpenPrefabExternalComparison(const PrefabDocumentFence &fence);
+        /** @brief Presents the exact restart recovery candidate and accepts only explicit confirmation from the modal. */
+        void OpenPrefabApplyRecovery(const std::shared_ptr<const PrefabApplyRecoveryCandidate> &candidate);
+        /** @brief Captures an explicit native path for an exclusive registered prefab Save As fork. */
+        void SavePrefabAs(const PrefabDocumentFence &fence);
         /** @brief Opens layer creation over the canonical world document owner. */
         void OpenWorldLayerCreation(const WorldDocumentFence &expected);
         /** @brief Opens the transient captured-subtree workflow under the workspace lifetime fence. */
@@ -250,6 +272,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         void DetachXrInput();
 
         PackageWorkspaceAccess packages_;
+        std::optional<PackageWorkspaceDecisionCatalog> packageDecisionCatalog_;
         GuiScreenHost &host_;
         const EditorServiceRegistry &services_;
         EditorModalHost &modalHost_;
@@ -264,7 +287,21 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         Runtime::RuntimeSceneService &runtimeScene_;
         EditorSettingsService &settings_;
         ProjectOpenService &projectOpenService_;
+        std::shared_ptr<const Application::PlatformServicesProjectSourceSnapshot> platformSources_;
+        std::shared_ptr<PlatformProjectSettingsOwner> platformSettings_;
         std::shared_ptr<IXRSimulatorArtifacts> simulatorArtifacts_;
+        std::shared_ptr<const Platform::IProjectReadFiles> agentProjectFiles_;
+        std::string agentProjectReadIdentity_;
+
+        struct EditorDiagnosticsReview final {
+            DocumentInstanceId document;
+            std::uint64_t revision{};
+            std::shared_ptr<const AI::DecisionAssetValidationReport> validation;
+            CancellationSource lifetime;
+        };
+
+        std::optional<EditorDiagnosticsReview> editorDiagnosticsReview_;
+        std::uint64_t editorDiagnosticsSequence_{};
         WorkspacePanelServices panelServices_{};
         WorkspaceProjectServices projectServices_{};
         WorkspacePublishedRevisions publishedRevisions_{};

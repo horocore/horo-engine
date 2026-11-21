@@ -37,8 +37,8 @@ namespace {
             return std::move(packed).Value();
         }
 
-        void PrepareDraw(const bool layered = false) {
-            const std::array<MeshVertex, 3> vertexData{{{{-1, -1, 0}}, {{1, -1, 0}}, {{0, 1, 0}}}};
+        void PrepareDraw(const bool layered = false, const Math::Vec3 normal = {}) {
+            const std::array<MeshVertex, 3> vertexData{{{{-1, -1, 0}, normal}, {{1, -1, 0}, normal}, {{0, 1, 0}, normal}}};
             const std::array<std::uint32_t, 3> indexData{0, 1, 2};
             vertices = Buffer(std::as_bytes(std::span{vertexData}), RenderBufferUsage::Vertex);
             indices = Buffer(std::as_bytes(std::span{indexData}), RenderBufferUsage::Index);

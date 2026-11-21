@@ -9,6 +9,7 @@
 
 #include <cstdint>
 #include <filesystem>
+#include <optional>
 #include <string>
 #include <string_view>
 
@@ -27,6 +28,13 @@ namespace Horo::Release {
         std::string name;
         std::uint64_t size{};
         Sha256Digest digest;
+    };
+
+    /** @brief Exact final metadata checked immediately before the transport commits a channel. */
+    struct GitHubReleaseFinalMetadata final {
+        std::uint64_t manifestSize{};
+        Sha256Digest manifestDigest;
+        std::optional<ReleaseManifestSignatureIdentity> manifestSignature;
     };
 
     /** @brief GitHub transport authority; credentials and HTTP details stay inside its implementation. */
@@ -70,6 +78,15 @@ namespace Horo::Release {
          */
         [[nodiscard]] virtual Result<void> Commit(const GitHubReleaseIdentity &release, const ReleaseChannel &channel,
                                                   const Sha256Digest &manifestDigest) = 0;
+
+        /** @brief Commits after checking exact final metadata immediately before changing the channel.
+         * @param release Existing authorized release identity.
+         * @param channel Selected publication channel.
+         * @param expected Measured canonical manifest and optional authenticated envelope identities.
+         * @return Success only after required metadata and channel are verified. Existing clients support manifest-only publication.
+         */
+        [[nodiscard]] virtual Result<void> CommitVerified(const GitHubReleaseIdentity &release, const ReleaseChannel &channel,
+                                                          const GitHubReleaseFinalMetadata &expected);
     };
 
     /** @brief Provider adapter that never builds, repackages, or invents a source tag. */

@@ -392,6 +392,7 @@ namespace Horo::Runtime::Ui {
         UiTextFontRevision font;         /**< Immutable font-registry revision. */
         UiFontFallbackChain fonts;       /**< Ordered immutable fallback chain. */
         UiTextShaperLimits limits;       /**< Preallocated result and input bounds. */
+        bool measureCpuWork{};           /**< Samples Shape attempts on the owner thread. */
 
         /** @brief Checks owner, font generation, fallback chain, and limits. @return True when construction is allowed. */
         [[nodiscard]] bool IsValid() const noexcept;
@@ -434,6 +435,8 @@ namespace Horo::Runtime::Ui {
         [[nodiscard]] bool IsDrained() const noexcept;
         /** @brief Returns current shaping admission lifecycle. @return Active or Closed. */
         [[nodiscard]] UiTextShaperState State() const noexcept;
+        /** @brief Reads lifetime shaping timing on the owner thread. @return Disabled evidence after move. */
+        [[nodiscard]] UiCpuWorkStatistics CpuWorkStatistics() const noexcept;
 
     private:
         struct Storage;

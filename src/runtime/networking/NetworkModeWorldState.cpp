@@ -5,11 +5,13 @@
 #include <algorithm>
 #include <limits>
 #include <new>
+#include <utility>
 
 namespace Horo::Network::Detail {
     NetworkModeWorldState::NetworkModeWorldState(NetworkModePlan plan, NetworkWorldBindingPolicy policy,
-                                                 const std::uint64_t schemaFingerprint)
-        : plan_(std::move(plan)), policy_(std::move(policy)), schemaFingerprint_(schemaFingerprint) {}
+                                                 const std::uint64_t schemaFingerprint, const std::uint64_t maximumPendingTicks)
+        : plan_(std::move(plan)), policy_(std::move(policy)), schemaFingerprint_(schemaFingerprint),
+          maximumPendingTicks_(maximumPendingTicks) {}
 
     NetworkModeWorldState::~NetworkModeWorldState() noexcept {
         Shutdown();
@@ -28,43 +30,58 @@ namespace Horo::Network::Detail {
         return plan_.worldCount;
     }
 
-    Result<std::unique_ptr<NetworkModeWorldState::World>> NetworkModeWorldState::Stage(const Runtime::SceneRuntimeId scene,
-                                                                                       const ReplicationExecutionRole role,
-                                                                                       const NetworkWorldBindingRecord &record) const {
+    Result<std::unique_ptr<NetworkModeWorldState::World>> NetworkModeWorldState::Stage(
+        const Runtime::SceneRuntimeId scene, const ReplicationExecutionRole role, const NetworkWorldBindingRecord &record,
+        const NetworkAuthoredSceneProjection &authored) const {
         auto created = ReplicationWorldLifecycle::Create();
         if (created.HasError())
             return Result<std::unique_ptr<World>>::Failure(created.ErrorValue());
         auto lifecycle = std::move(created).Value();
-        if (auto staged = lifecycle.Stage({scene, record.worldSession, record.remoteEpoch, role}); staged.HasError())
+        if (auto staged = lifecycle.StageAuthoredScene({scene, record.worldSession, record.remoteEpoch, role}, authored.objects,
+                                                       authored.cancellation);
+            staged.HasError())
             return Result<std::unique_ptr<World>>::Failure(staged.ErrorValue());
         try {
-            return Result<std::unique_ptr<World>>::Success(std::make_unique<World>(std::move(lifecycle), record));
+            auto world = std::make_unique<World>(std::move(lifecycle), record);
+            if (policy_.authoredScene && role == ReplicationExecutionRole::AuthorityServer) {
+                auto authoredInventory = world->lifecycle.CaptureStagedAuthoredScene();
+                if (authoredInventory.HasError())
+                    return Result<std::unique_ptr<World>>::Failure(authoredInventory.ErrorValue());
+                world->authored = std::move(authoredInventory).Value();
+            }
+            return Result<std::unique_ptr<World>>::Success(std::move(world));
         } catch (const std::bad_alloc &) {
             return Result<std::unique_ptr<World>>::Failure(MakeError(NetworkErrors::ReplicationWorldCapacityExceeded));
         }
     }
 
-    Result<void> NetworkModeWorldState::Prepare() {
+    Result<void> NetworkModeWorldState::Prepare(const NetworkAuthoredSceneProjection &authored, NetworkAuthoredSceneProjection client) {
         if (auto owner = CheckOwner(); owner.HasError())
             return owner;
         const auto server = Index(NetworkModeWorldKind::AuthorityServer);
-        if (server == plan_.worldCount)
+        if (server == plan_.worldCount) {
+            clientAuthored_ = std::move(client);
             return Result<void>::Success();
+        }
         if (current_[server] || candidate_[server])
             return Result<void>::Failure(MakeError(NetworkErrors::NetworkModeInvalid));
         auto issued = issuer_.Issue(plan_.worlds[server].scene);
         if (issued.HasError())
             return Result<void>::Failure(issued.ErrorValue());
-        auto staged = Stage(issued.Value().scene, issued.Value().role,
-                            {NetworkWorldBindingKind::Initial, issued.Value().session, issued.Value().authority, schemaFingerprint_, {}});
+        auto staged =
+            Stage(issued.Value().scene, issued.Value().role,
+                  {NetworkWorldBindingKind::Initial, issued.Value().session, issued.Value().authority, schemaFingerprint_, {}}, authored);
         if (staged.HasError())
             return Result<void>::Failure(staged.ErrorValue());
         candidate_[server] = std::move(staged).Value();
+        clientAuthored_ = std::move(client);
         return Result<void>::Success();
     }
 
     Result<void> NetworkModeWorldState::PrepareTravel(const std::span<const NetworkModeWorld> worlds, const std::uint64_t nowTick,
-                                                      const std::uint64_t maximumPendingTicks) {
+                                                      const std::uint64_t maximumPendingTicks,
+                                                      const NetworkAuthoredSceneProjection &authored,
+                                                      NetworkAuthoredSceneProjection client) {
         if (auto owner = CheckOwner(); owner.HasError())
             return owner;
         if (travelPending_ || worlds.size() != plan_.worldCount || nowTick < nowTick_ || maximumPendingTicks == 0 ||
@@ -84,12 +101,14 @@ namespace Horo::Network::Detail {
                 return Result<void>::Failure(prior.ErrorValue());
             auto staged = Stage(worlds[server].scene, ReplicationExecutionRole::AuthorityServer,
                                 {NetworkWorldBindingKind::PrepareTravel, issued.Value().session, issued.Value().authority,
-                                 schemaFingerprint_, prior.Value()});
+                                 schemaFingerprint_, prior.Value()},
+                                authored);
             if (staged.HasError())
                 return Result<void>::Failure(staged.ErrorValue());
             candidate_[server] = std::move(staged).Value();
         }
         std::ranges::copy(worlds, travelWorlds_.begin());
+        travelClientAuthored_ = std::move(client);
         travelDeadline_ = nowTick + maximumPendingTicks;
         travelFailure_ = nullptr;
         travelPending_ = true;
@@ -101,7 +120,7 @@ namespace Horo::Network::Detail {
         if (!travelPending_ || (plan_.mode == NetworkProjectRole::Client && !remoteCommit_))
             return false;
         for (std::size_t index = 0; index < plan_.worldCount; ++index)
-            if (!candidate_[index])
+            if (!candidate_[index] || !candidate_[index]->lifecycle.HasStagedCandidate())
                 return false;
         return true;
     }
@@ -118,10 +137,11 @@ namespace Horo::Network::Detail {
             travelFailure_ = reason ? reason : &NetworkErrors::SessionCancelled;
         for (auto &candidate : candidate_) {
             if (candidate)
-                candidate->lifecycle.BeginShutdown();
+                candidate->BeginShutdown();
             candidate.reset();
         }
         travelPending_ = false;
+        travelClientAuthored_ = {};
         remoteCommit_ = false;
         travelDeadline_ = 0;
     }
@@ -152,7 +172,7 @@ namespace Horo::Network::Detail {
         if (client_ && client_ != peer) {
             const auto index = Index(NetworkModeWorldKind::Client);
             if (current_[index])
-                current_[index]->lifecycle.BeginShutdown();
+                current_[index]->BeginShutdown();
             current_[index].reset();
             candidate_[index].reset();
             CancelTravel();
@@ -173,7 +193,7 @@ namespace Horo::Network::Detail {
             return Result<void>::Success();  // The same terminal was reconciled before the host projection.
         const auto index = Index(NetworkModeWorldKind::Client);
         if (current_[index])
-            current_[index]->lifecycle.BeginShutdown();
+            current_[index]->BeginShutdown();
         current_[index].reset();
         candidate_[index].reset();
         const auto *terminal = client_->Terminal();
@@ -227,6 +247,93 @@ namespace Horo::Network::Detail {
         return StageClient(record, index, context.ownerTick);
     }
 
+    /** @copydoc NetworkModeWorldState::AcceptPrefab */
+    Result<void> NetworkModeWorldState::AcceptPrefab(std::span<const std::byte> payload, const InboundMessageContext &context) {
+        if (auto owner = CheckOwner(); owner.HasError())
+            return owner;
+        if (auto authorized = AuthorizeClient(context); authorized.HasError())
+            return authorized;
+        const auto features = client_->Negotiation()->features.Values();
+        if (!policy_.prefabLifecycle || std::ranges::find(features, policy_.prefabLifecycle->feature) == features.end())
+            return Result<void>::Failure(MakeError(NetworkErrors::GameplayDispatchRejected));
+        auto decoded = DecodeNetworkPrefabLifecycle(payload);
+        if (decoded.HasError())
+            return Result<void>::Failure(decoded.ErrorValue());
+        auto *world = PrefabReceiver(decoded.Value());
+        if (!world)
+            return Result<void>::Failure(MakeError(NetworkErrors::ReplicationWorldStale));
+        constexpr std::size_t maximumPending = 16;
+        if (world->prefabInbox.size() == maximumPending)
+            return Result<void>::Failure(MakeError(NetworkErrors::TransportReliableBackpressure));
+        try {
+            world->prefabInbox.push_back({std::move(decoded).Value(), context.cancellation});
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(NetworkErrors::ReplicationWorldCapacityExceeded));
+        }
+    }
+
+    /** @copydoc NetworkModeWorldState::PrefabReceiver */
+    NetworkModeWorldState::World *NetworkModeWorldState::PrefabReceiver(const NetworkPrefabLifecycleRecord &record) {
+        constexpr auto client = NetworkModeWorldKind::Client;
+        const auto index = Index(client);
+        if (index == plan_.worldCount)
+            return nullptr;
+        const auto matches = [&record](const std::unique_ptr<World> &world) {
+            return world && record.session == world->binding.worldSession && record.occurrence.Epoch() == world->binding.remoteEpoch;
+        };
+        if (matches(current_[index]) && Ready(client, plan_.worlds[index].scene))
+            return current_[index].get();
+        if (matches(candidate_[index]) && (!travelPending_ || remoteCommit_))
+            return candidate_[index].get();
+        return nullptr;
+    }
+
+    /** @copydoc NetworkModeWorldState::TakePrefab */
+    Result<std::vector<NetworkPrefabLifecycleRecord>> NetworkModeWorldState::TakePrefab(Runtime::SceneRuntimeId scene,
+                                                                                        Runtime::RuntimePhase phase) {
+        using Outcome = Result<std::vector<NetworkPrefabLifecycleRecord>>;
+        if (phase != Runtime::RuntimePhase::CommitDeferredLifecycleChanges)
+            return Outcome::Failure(MakeError(NetworkErrors::ReplicationWorldPhaseInvalid));
+        constexpr auto client = NetworkModeWorldKind::Client;
+        if (!Ready(client, scene))
+            return Outcome::Failure(MakeError(NetworkErrors::NetworkModeUnavailable));
+        if (auto admitted = client_->AdmitGameplay(connection_, peerGeneration_, nowTick_); admitted.HasError())
+            return Outcome::Failure(admitted.ErrorValue());
+        auto &pending = current_[Index(client)]->prefabInbox;
+        try {
+            std::vector<NetworkPrefabLifecycleRecord> records;
+            records.reserve(pending.size());
+            for (auto &entry : pending)
+                if (!entry.cancellation.IsCancellationRequested())
+                    records.push_back(std::move(entry.record));
+            pending.clear();
+            return Outcome::Success(std::move(records));
+        } catch (const std::bad_alloc &) {
+            return Outcome::Failure(MakeError(NetworkErrors::ReplicationWorldCapacityExceeded));
+        }
+    }
+
+    /** @copydoc NetworkModeWorldState::PrepareClientPrefab */
+    Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> NetworkModeWorldState::PrepareClientPrefab(
+        Runtime::SceneRuntimeId scene, const NetworkPrefabLifecycleRecord &spawn, std::span<const Runtime::EntityRef> members,
+        bool creating, const CancellationToken &cancellation) const {
+        using Outcome = Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>;
+        constexpr auto kind = NetworkModeWorldKind::Client;
+        if (!Ready(kind, scene))
+            return Outcome::Failure(MakeError(NetworkErrors::ReplicationWorldUnavailable));
+        if (auto admitted = client_->AdmitGameplay(connection_, peerGeneration_, nowTick_); admitted.HasError())
+            return Outcome::Failure(admitted.ErrorValue());
+        const auto &world = *current_[Index(kind)];
+        if (world.binding.worldSession != spawn.session || world.binding.remoteEpoch != spawn.occurrence.Epoch())
+            return Outcome::Failure(MakeError(NetworkErrors::ReplicationWorldStale));
+        const ReplicationWorldWorkRequest work{.scene = scene,
+                                               .session = spawn.session,
+                                               .phase = Runtime::RuntimePhase::CommitDeferredLifecycleChanges,
+                                               .cancellation = cancellation};
+        return world.lifecycle.PrepareReplicaPrefab(work, spawn, members, creating);
+    }
+
     /** @copydoc NetworkModeWorldState::AcceptTravel */
     Result<void> NetworkModeWorldState::AcceptTravel(const NetworkWorldBindingRecord &record, const InboundMessageContext &context,
                                                      const std::size_t index) {
@@ -268,7 +375,7 @@ namespace Horo::Network::Detail {
                 return Result<void>::Failure(MakeError(NetworkErrors::NetworkModeStale));
         }
         const auto scene = travelPending_ ? travelWorlds_[index].scene : plan_.worlds[index].scene;
-        auto staged = Stage(scene, ReplicationExecutionRole::AutonomousClient, record);
+        auto staged = PrepareClientWorld(scene, record, nowTick);
         if (staged.HasError())
             return Result<void>::Failure(staged.ErrorValue());
         candidate_[index] = std::move(staged).Value();
@@ -284,23 +391,14 @@ namespace Horo::Network::Detail {
         if (travelPending_ && !TravelReady())
             return Result<void>::Success();
         // These lifecycles are detached: every fallible commit completes before any role can see a replacement.
-        for (std::size_t index = 0; index < plan_.worldCount; ++index) {
-            if (!candidate_[index])
-                continue;
-            if (candidate_[index]->lifecycle.State() == ReplicationWorldLifecycleState::Active)
-                continue;
-            const auto &record = candidate_[index]->binding;
-            if (auto committed =
-                    candidate_[index]->lifecycle.CommitAtSafePoint(travelPending_ ? travelWorlds_[index].scene : plan_.worlds[index].scene,
-                                                                   record.worldSession, phase);
-                committed.HasError())
+        for (std::size_t index = 0; index < plan_.worldCount; ++index)
+            if (auto committed = CommitCandidate(index, phase); committed.HasError())
                 return committed;
-        }
         for (std::size_t index = 0; index < plan_.worldCount; ++index) {
-            if (!candidate_[index])
+            if (!candidate_[index] || candidate_[index]->lifecycle.State() != ReplicationWorldLifecycleState::Active)
                 continue;
             if (current_[index])
-                current_[index]->lifecycle.BeginShutdown();
+                current_[index]->BeginShutdown();
             current_[index] = std::move(candidate_[index]);
         }
         bool complete = true;
@@ -309,6 +407,7 @@ namespace Horo::Network::Detail {
         everPublished_ = everPublished_ || complete;
         if (travelPending_) {
             plan_.worlds = travelWorlds_;
+            clientAuthored_ = std::move(travelClientAuthored_);
             for (std::size_t index = 0; index < plan_.worldCount; ++index)
                 current_[index]->binding.kind = NetworkWorldBindingKind::CommitTravel;
             travelPending_ = false;
@@ -317,18 +416,32 @@ namespace Horo::Network::Detail {
         return Result<void>::Success();
     }
 
+    /** @copydoc NetworkModeWorldState::CommitCandidate */
+    Result<void> NetworkModeWorldState::CommitCandidate(std::size_t index, Runtime::RuntimePhase phase) {
+        auto &candidate = candidate_[index];
+        if (!candidate || !candidate->lifecycle.HasStagedCandidate())
+            return Result<void>::Success();
+        if (candidate->authoredDelivery.IsCancellationRequested()) {
+            candidate.reset();
+            return Result<void>::Failure(MakeError(NetworkErrors::ReplicationWorldCancelled));
+        }
+        const auto scene = travelPending_ ? travelWorlds_[index].scene : plan_.worlds[index].scene;
+        return candidate->lifecycle.CommitAtSafePoint(scene, candidate->binding.worldSession, phase);
+    }
+
     void NetworkModeWorldState::Reconcile(const std::uint64_t nowTick) noexcept {
         if (travelPending_ && (nowTick < nowTick_ || nowTick >= travelDeadline_))
             CancelTravel(nowTick < nowTick_ ? &NetworkErrors::NetworkModeStale : &NetworkErrors::SessionTimedOut);
         if (!client_)
             return;
+        DiscardExpiredAuthored(nowTick);
         if (nowTick >= nowTick_ && client_->State() == PeerSessionState::Active) {
             nowTick_ = nowTick;
             return;
         }
         if (const auto index = Index(NetworkModeWorldKind::Client); index != plan_.worldCount) {
             if (current_[index])
-                current_[index]->lifecycle.BeginShutdown();
+                current_[index]->BeginShutdown();
             current_[index].reset();
             candidate_[index].reset();
         }
@@ -395,6 +508,65 @@ namespace Horo::Network::Detail {
         return current_[index]->lifecycle.AcquireFor(request, capability);
     }
 
+    /** @copydoc NetworkModeWorldState::PrepareAuthorityObjects */
+    Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> NetworkModeWorldState::PrepareAuthorityObjects(
+        Runtime::SceneRuntimeId scene, std::span<const ReplicationDynamicSceneObject> added, std::span<const Runtime::EntityRef> retired,
+        const CancellationToken &cancellation) const {
+        constexpr auto kind = NetworkModeWorldKind::AuthorityServer;
+        const auto role = Role(kind, scene);
+        if (role.HasError())
+            return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(role.ErrorValue());
+        const ReplicationWorldWorkRequest work{.scene = scene,
+                                               .session = *role.Value().worldSession,
+                                               .phase = Runtime::RuntimePhase::CommitDeferredLifecycleChanges,
+                                               .cancellation = cancellation};
+        return current_[Index(kind)]->lifecycle.PrepareDynamicObjectBatch(work, added, retired);
+    }
+
+    /** @copydoc NetworkModeWorldState::FindAuthorityObject */
+    Result<NetworkObjectId> NetworkModeWorldState::FindAuthorityObject(Runtime::EntityRef entity) const {
+        constexpr auto kind = NetworkModeWorldKind::AuthorityServer;
+        if (!Ready(kind, entity.runtime))
+            return Result<NetworkObjectId>::Failure(MakeError(NetworkErrors::ReplicationWorldUnavailable));
+        const auto &world = *current_[Index(kind)];
+        return world.lifecycle.FindAuthorityObject(entity, world.binding.worldSession);
+    }
+
+    /** @copydoc NetworkModeWorldState::ResolveClientObject */
+    Result<Runtime::EntityRef> NetworkModeWorldState::ResolveClientObject(Runtime::SceneRuntimeId scene, NetworkSessionGeneration session,
+                                                                          NetworkObjectId object) const {
+        constexpr auto kind = NetworkModeWorldKind::Client;
+        if (!Ready(kind, scene))
+            return Result<Runtime::EntityRef>::Failure(MakeError(NetworkErrors::ReplicationWorldUnavailable));
+        return current_[Index(kind)]->lifecycle.ResolveReplicaObject(scene, session, object);
+    }
+
+    /** @copydoc NetworkModeWorldState::CaptureAuthorityPrefabs */
+    Result<AuthorityPrefabView> NetworkModeWorldState::CaptureAuthorityPrefabs() {
+        using Outcome = Result<AuthorityPrefabView>;
+        const auto index = Index(NetworkModeWorldKind::AuthorityServer);
+        if (stopped_ || index == plan_.worldCount || !current_[index])
+            return Outcome::Failure(MakeError(NetworkErrors::ReplicationWorldUnavailable));
+        auto &world = *current_[index];
+        const auto revision = world.lifecycle.ObjectMappingRevision();
+        if (revision == 0)
+            return Outcome::Failure(MakeError(NetworkErrors::ReplicationWorldUnavailable));
+        if (world.prefabRevision == revision)
+            return Outcome::Success({revision, world.authorityPrefabs});
+        const ReplicationWorldWorkRequest request{.scene = plan_.worlds[index].scene,
+                                                  .session = world.binding.worldSession,
+                                                  .phase = Runtime::RuntimePhase::NetworkFlush};
+        auto lease = world.lifecycle.AcquireFor(request, ReplicationWorldCapability::PublishAuthority);
+        if (lease.HasError())
+            return Outcome::Failure(lease.ErrorValue());
+        auto records = CaptureNetworkPrefabSpawns(lease.Value());
+        if (records.HasError())
+            return Outcome::Failure(records.ErrorValue());
+        world.authorityPrefabs = std::move(records).Value();
+        world.prefabRevision = revision;
+        return Outcome::Success({revision, world.authorityPrefabs});
+    }
+
     const NetworkWorldBindingRecord *NetworkModeWorldState::ServerBinding() const noexcept {
         const auto index = Index(NetworkModeWorldKind::AuthorityServer);
         return !stopped_ && index != plan_.worldCount && current_[index] ? &current_[index]->binding : nullptr;
@@ -406,10 +578,10 @@ namespace Horo::Network::Detail {
         stopped_ = true;
         for (const auto &world : current_)
             if (world)
-                world->lifecycle.BeginShutdown();
+                world->BeginShutdown();
         for (const auto &world : candidate_)
             if (world)
-                world->lifecycle.BeginShutdown();
+                world->BeginShutdown();
         client_.reset();
     }
 }  // namespace Horo::Network::Detail

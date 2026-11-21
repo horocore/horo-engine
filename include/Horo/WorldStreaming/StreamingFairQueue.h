@@ -132,7 +132,7 @@ namespace Horo::WorldStreaming {
         [[nodiscard]] Result<void> ValidateContext(const StreamingFairQueueContext &context, bool allowClosed = false) const;
         [[nodiscard]] Result<void> ValidateEntry(const StreamingFairQueueEntry &entry, std::uint64_t time) const;
         [[nodiscard]] std::size_t Find(const StreamingCellOperationHandle &operation) const noexcept;
-        [[nodiscard]] Result<void> ValidateAdmission(std::span<const StreamingFairQueueAdmission> admission) const;
+        [[nodiscard]] Result<void> ProjectAdmission(std::span<const StreamingFairQueueAdmission> admission);
         [[nodiscard]] std::size_t SelectIndex(bool fair) const noexcept;
         void Publish(std::uint64_t time) noexcept;
         StreamingFairQueueRequest request_;
@@ -144,7 +144,8 @@ namespace Horo::WorldStreaming {
         std::vector<StreamingFairQueueEntry> entries_;
         std::vector<StreamingCellPriorityCandidate> candidates_;
         std::vector<StreamingRankedCellPriority> ranked_;
-        std::vector<std::uint8_t> eligible_;
+        std::vector<std::optional<StreamingFairQueueEligibility>> eligibility_;
+        std::vector<std::size_t> admissionIndex_;
         std::optional<StreamingFairQueueSelection> pending_;
     };
 }  // namespace Horo::WorldStreaming

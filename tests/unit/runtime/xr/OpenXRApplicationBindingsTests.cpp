@@ -108,4 +108,39 @@ namespace Horo::Tests::OpenXRAction {
         CHECK(fixture.session.script.calls.size() == calls);
         CHECK(fixture.script.attaches == 0);
     }
+
+    TEST_CASE("Application XR prepares signed-catalog vibration in the same native action budget and attachment",
+              "[xr][host][input][haptics]") {
+        ActionFixture fixture{false};
+        Input::InputRouter router;
+        REQUIRE(router.SetActionMap(CanonicalActions(fixture)).HasValue());
+        auto product = ProductBindings(fixture);
+        constexpr auto role = XRTrackedDeviceRole::LeftController;
+        product.haptics.push_back({{1}, {1}, role, "/user/hand/left/output/haptic", "Vibration"});
+        product.haptics.push_back({{2}, {1}, role, "/user/hand/left/output/haptic", "Vibration"});
+        CHECK(product.PreparedActionCount() == 2);
+        SECTION("two profiles share one physical output action") {
+            auto plan =
+                product.Prepare(fixture.owner, {fixture.session.preflight, fixture.session.preflight.Attempt()}, {&ActionScript::GetProc},
+                                router.Actions(), {IdentityValue<XRWorldOriginRevision>(1), XRSpaceKind::Local});
+            REQUIRE(plan.HasValue());
+            CHECK(plan.Value().bindings.size() == 1);
+            CHECK(fixture.script.liveActions == product.PreparedActionCount());
+            CHECK(fixture.script.attaches == 1);
+            CHECK(fixture.script.haptic.source == fixture.script.Find("/user/hand/left/output/haptic"));
+            CHECK_FALSE(fixture.session.owner.Session().IsValid());
+        }
+        SECTION("an unregistered role path does not partly attach") {
+            product.haptics.back().path = "/user/hand/right/output/haptic";
+            const auto prepared =
+                product.Prepare(fixture.owner, {fixture.session.preflight, fixture.session.preflight.Attempt()}, {&ActionScript::GetProc},
+                                router.Actions(), {IdentityValue<XRWorldOriginRevision>(1), XRSpaceKind::Local});
+            REQUIRE(prepared.HasError());
+            CHECK(prepared.ErrorValue().code.Value() == XRErrors::OperationInvalid.code.Value());
+            CHECK(fixture.script.liveActions == 0);
+            CHECK(fixture.script.attaches == 0);
+        }
+        REQUIRE(fixture.owner.Close().HasValue());
+        CHECK(fixture.script.liveActions == 0);
+    }
 }  // namespace Horo::Tests::OpenXRAction

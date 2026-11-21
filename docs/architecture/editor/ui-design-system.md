@@ -395,9 +395,24 @@ Custom themes discovered under `~/.horo/themes/` may override them with:
 }
 ```
 
-Global display scaling is temporarily disabled. The persisted setting remains
-in the settings document for compatibility, but the editor renders at 100%
-until font, layout, native DPI, and viewport scaling share one coherent policy.
+The desktop editor applies the persisted appearance scale before drawing each
+frame. Logical layout uses the user percentage times the display content scale
+divided by framebuffer pixel density. SDL and the renderer retain ownership of
+framebuffer conversion. The theme starts from its unscaled metrics on each
+change, projects the same scale into native controls and design tokens, and
+keeps visible text at or above 16 logical pixels. Existing glyph resources stay
+valid while the logical scale changes. When the owning display reports a new
+rasterizer density, the editor prepares a separate atlas before its next GUI
+frame. The selected OpenGL, Metal or Vulkan owner stages the same RGBA source
+through its canonical image registry. The editor publishes the atlas and font roles
+together. The previous CPU atlas is retained until Dear ImGui begins the
+new frame. Canonical frame retirement owns superseded managed textures.
+OpenGL and Metal retain the native startup texture until backend shutdown.
+Failed preparation preserves the active atlas and roles.
+
+Shared text scopes still take resolved logical sizes. Desktop editor and native
+GUI consumers must rebuild with the updated theme header because font scopes
+now store the enclosing window's multiplier for restoration.
 
 Not every primitive exposes every option. A control only exposes properties
 that have a defined behavior and token mapping. Feature code composes or wraps a

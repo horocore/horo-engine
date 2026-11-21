@@ -69,4 +69,8 @@ namespace Horo::PlatformServices {
 
     /** @brief Inert registry contribution for the Platform Services error domain. */
     [[nodiscard]] ModuleErrorDomainDescriptor PlatformServiceErrorDomain();
+
+    /** @brief Returns one inert domain contribution for canonical offline policy and storage failures.
+     * @return Bounded descriptors without service registration, provider calls or lifecycle side effects. */
+    [[nodiscard]] ModuleErrorDomainDescriptor PlatformOfflineErrorDomain();
 }  // namespace Horo::PlatformServices

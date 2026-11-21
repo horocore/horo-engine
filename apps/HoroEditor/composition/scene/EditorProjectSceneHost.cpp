@@ -5,6 +5,7 @@
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Application/ProjectSurfaceSettings.h"
+#include "Horo/Gameplay/GameplayAnimationScene.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Prefab/PrefabSpawnService.h"
 #include "Horo/Scene/PrefabComponentProjection.h"
@@ -18,6 +19,34 @@
 #include <utility>
 
 namespace Horo::Application::Internal {
+    /** @copydoc EditorProjectSceneDetail::ProjectPlaySceneHost::GameplayServices */
+    Result<Gameplay::BehaviorRuntimeServiceBindings> EditorProjectSceneDetail::ProjectPlaySceneHost::GameplayServices(
+        const Gameplay::BehaviorRegistry &registry) {
+        using Return = Result<Gameplay::BehaviorRuntimeServiceBindings>;
+        const auto registrations = registry.Registrations();
+        if (!animation_ || registrations.empty())
+            return Return::Success({});
+        const auto scene = scenes_->ActiveScene();
+        if (!registry.IsFrozen() || !scene || sceneClosed_)
+            return Return::Failure(MakeError(InvalidProjectScene));
+        try {
+            Gameplay::BehaviorRuntimeServiceBindings bindings;
+            bindings.animationLifetime.emplace(animationLifetime_.Token());
+            bindings.animationBehaviors.reserve(registrations.size());
+            for (const auto &registration : registrations) {
+                const auto &type = registration.descriptor.typeId;
+                auto grant = Gameplay::CreateGameplayAnimationContext(animation_, scene->RuntimeId(), std::string{type.Value()},
+                                                                      bindings.animationLifetime->Token());
+                if (grant.HasError())
+                    return Return::Failure(grant.ErrorValue());
+                bindings.animationBehaviors.push_back({type, std::move(grant).Value()});
+            }
+            return Return::Success(std::move(bindings));
+        } catch (const std::bad_alloc &) {
+            return Return::Failure(MakeError(InvalidProjectScene, "Animation grant capacity exhausted while activating Play."));
+        }
+    }
+
     namespace {
         using EditorProjectSceneDetail::InvalidProjectScene;
         using EditorProjectSceneDetail::ProjectPlaySceneHost;
@@ -61,6 +90,12 @@ namespace Horo::Application::Internal {
         return Result<void>::Success();
     }
 
+    /** @copydoc ObserveEditorPlayMountedWorld */
+    std::optional<WorldStreaming::OriginFrameLease> ObserveEditorPlayMountedWorld(const Editor::EditorPlaySceneHost &host) {
+        const auto *selected = dynamic_cast<const ProjectPlaySceneHost *>(&host);
+        return selected ? selected->WorldOrigin() : std::nullopt;
+    }
+
     /** @copydoc MakeEditorProjectSceneFactory */
     Editor::EditorProjectPlaySceneFactory MakeEditorProjectSceneFactory(JobSystem &jobs, EditorProjectScenePolicy policy) {
         return ProjectFactory(jobs, std::move(policy), {Editor::EditorFirstPlayScene, {std::numeric_limits<std::uint64_t>::max()}});
@@ -68,12 +103,14 @@ namespace Horo::Application::Internal {
 
     /** @copydoc MakeEditorProjectPrefabStageFactory */
     Editor::EditorProjectPrefabStageFactory MakeEditorProjectPrefabStageFactory(JobSystem &jobs, EditorProjectScenePolicy policy) {
+        policy.world.reset();
+        policy.decisions.reset();
         return {ProjectFactory(jobs, std::move(policy), {Editor::EditorFirstPrefabStage, Editor::EditorLastPrefabStage})};
     }
 
     /** @copydoc ConfigureEditorPlaySavePolicy */
     void ConfigureEditorPlaySavePolicy(EditorProjectScenePolicy &policy, JobSystem &jobs, OperationStore &operations, Clock &clock,
-                                       WallClock &wallClock) {
+                                       WallClock &wallClock, std::optional<EditorPlaySaveSupplement> supplement) {
         if (policy.physicsMode == Physics::PhysicsRuntimeMode::Canonical && !policy.physicsSettings) {
             auto settings = ProductPhysicsSaveWorldSettings();
             if (settings.HasError()) {
@@ -82,7 +119,7 @@ namespace Horo::Application::Internal {
             }
             policy.physicsSettings.emplace(std::move(settings).Value());
         }
-        auto factory = MakeNativeEditorPlaySaveFactory(jobs, operations, clock, wallClock);
+        auto factory = MakeNativeEditorPlaySaveFactory(jobs, operations, clock, wallClock, std::move(supplement));
         if (factory.HasError()) {
             policy.saveError = factory.ErrorValue();
             return;

@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Ui/UiDocumentSerialization.h"
 #include "SceneSourceInternal.h"
 
 #include <algorithm>
@@ -536,6 +537,13 @@ namespace Horo::SceneSource::Detail {
         }
         if (components.animation)
             AppendAnimationComponent(value, *components.animation);
+        if (components.uiCanvas) {
+            const auto &canvas = components.uiCanvas->canvas;
+            value["uiCanvas"] = {{"asset", canvas.asset.ToString()},
+                                 {"document", Runtime::Ui::FormatUiStableId(canvas.document.Bytes())},
+                                 {"canvas", Runtime::Ui::FormatUiStableId(canvas.canvas.Bytes())},
+                                 {"minimumRevision", canvas.minimumRevision.Value()}};
+        }
         AppendNavigationComponents(value, components);
         AppendAiComponents(value, components);
         AppendPhysicsComponents(value, components);

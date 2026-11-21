@@ -12,11 +12,11 @@ SCRIPTS = Path(__file__).resolve().parents[2] / "scripts"
 
 
 def test_scripts_tree_has_only_declared_clis_and_offline_renderer_producers():
-    assert sorted(p.relative_to(SCRIPTS).as_posix() for p in SCRIPTS.rglob("*.py")) == [
-        "analyze.py", "dev.py", "project.py",
-        "renderer/color_look_cook.py", "renderer/color_pipeline_cook.py"]
-    for name in ("analyze", "dev", "project", "renderer/color_look_cook", "renderer/color_pipeline_cook"):
-        tree = ast.parse((SCRIPTS / f"{name}.py").read_text(encoding="utf-8"))
+    declared = ["analyze.py", "dev.py", "project.py", "qualify_console_artifact.py",
+                "renderer/color_look_cook.py", "renderer/color_pipeline_cook.py"]
+    assert sorted(p.relative_to(SCRIPTS).as_posix() for p in SCRIPTS.rglob("*.py")) == declared
+    for name in declared:
+        tree = ast.parse((SCRIPTS / name).read_text(encoding="utf-8"))
         assert sum(isinstance(n, (ast.FunctionDef, ast.ClassDef)) for n in tree.body) >= 5
         assert not any(isinstance(n, ast.Call) and isinstance(n.func, ast.Name)
                        and n.func.id == "exec" for n in ast.walk(tree))

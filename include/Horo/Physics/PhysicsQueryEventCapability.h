@@ -104,6 +104,11 @@ namespace Horo::Physics {
         PhysicsQueryEventCapability() noexcept = default;
         /** @brief Returns the issued world and capability generation. @return Inert exact identity, or invalid when moved from. */
         [[nodiscard]] PhysicsQueryEventIdentity Identity() const noexcept;
+        /** @brief Checks live query authority and an exact completed Scene publication without submitting work.
+         * @pre Physics owner thread outside a fixed tick.
+         */
+        [[nodiscard]] Result<void> ValidateQueryPublication(std::uint64_t sceneGeneration, std::uint64_t completedTick,
+                                                            std::uint64_t publicationRevision) const;
         /** @brief Executes one immediate query after access, world, revision and descriptor validation.
          * @param command Exact issued access and completed publication plus owned query intent.
          * @param hits Caller-owned bounded result storage; no borrowed native storage escapes.

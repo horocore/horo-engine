@@ -1,4 +1,5 @@
 #pragma once
+#include "AndroidGameActivityJni.h"
 #include "Horo/Platform/AndroidInput.h"
 
 #include <android/sensor.h>
@@ -43,8 +44,7 @@ namespace Horo::Platform::Android {
         bool BindJava() noexcept;
         android_app &app_;
         AndroidInputSession session_;
-        JNIEnv *env_{};
-        bool attached_{};
+        GameActivityJniAttachment jni_;
         jmethodID detach_{};
         jmethodID request_{};
         std::array<Message, 64> messages_{};

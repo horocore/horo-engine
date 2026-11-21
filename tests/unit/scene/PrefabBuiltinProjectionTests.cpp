@@ -61,6 +61,14 @@ TEST_CASE("Canonical prefab projection preserves disabled camera light and audio
                     Runtime::AudioSourceComponent{.enabled = false});
 }
 
+TEST_CASE("Canonical prefab projection retains the exact Runtime UI canvas reference", "[prefab][codec][ui-canvas]") {
+    namespace Ui = Runtime::Ui;
+    const auto asset = Assets::AssetId::Parse("00112233-4455-6677-8899-aabbccddeeff").Value();
+    const Runtime::UiCanvasComponent component{
+        {asset, Ui::UiDocumentId::Create({7}).Value(), Ui::UiCanvasId::Create({4}).Value(), Ui::UiDocumentRevision::Create(2).Value()}};
+    RequireOptional(Kind::UiCanvas, "uiCanvas", &SceneObjectComponentSet::uiCanvas, &Runtime::RuntimeComponentSet::uiCanvas, component);
+}
+
 TEST_CASE("Canonical prefab AI projection preserves identity policy and unavailable descriptor references", "[prefab][codec][ai]") {
     const AI::AiAgentComponent agent{.agent = AI::AgentId::Create(17).Value(),
                                      .startupPolicy = AI::AiStartupPolicy::Manual,
@@ -169,7 +177,7 @@ TEST_CASE("Canonical prefab projection rejects malformed duplicate and unsupport
         type = Type(Kind::AudioListener);
         json = "{}";
     }
-    SECTION("unsupported runtime canvas codec") {
+    SECTION("incomplete runtime canvas reference") {
         type = Type(Kind::UiCanvas);
         json = "{}";
     }

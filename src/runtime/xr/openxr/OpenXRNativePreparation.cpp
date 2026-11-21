@@ -2,6 +2,7 @@
 
 #include <exception>
 #include <limits>
+#include <utility>
 
 namespace Horo::XR::OpenXRInternal {
     namespace {
@@ -59,7 +60,7 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRNativeSession::PrepareDiscoveryTransaction */
     Result<void> OpenXRNativeSession::PrepareDiscoveryTransaction(const NativeDiscoveryRequest &request) {
-        auto prepared = ResolveGlobal();
+        auto prepared = ResolveGlobal(request);
         if (prepared.HasValue())
             prepared = DiscoverAndNegotiate(request);
         if (prepared.HasValue())
@@ -106,6 +107,7 @@ namespace Horo::XR::OpenXRInternal {
         if (request.activeAttempt != selection.attempt || request.preflight.ContractVersion() != selection.contractVersion ||
             request.preflight.LoaderApiVersion() != discovery_->acceptedApi || request.preflight.LoaderSource() != selection.loaderSource ||
             request.preflight.RuntimeSelection() != selection.runtimeSelection ||
+            request.preflight.ProductMode() != selection.productMode ||
             (retainedPreflight_ && request.preflight.RuntimeGeneration() != retainedPreflight_->RuntimeGeneration()) ||
             (preparing_.IsValid() && preparing_.system.runtime != request.preflight.RuntimeGeneration()))
             return Result<void>::Failure(MakeError(XRErrors::LoaderPreflightStale));
@@ -114,19 +116,29 @@ namespace Horo::XR::OpenXRInternal {
     }
 
     /** @copydoc OpenXRNativeSession::PrepareSession */
-    Result<void> OpenXRNativeSession::PrepareSession(const NativeSessionPreparation &request) {
+    Result<void> OpenXRNativeSession::PrepareSession(const NativeSessionPreparation &request, const NativeSessionPreparationScope scope) {
         if (controlThread_ != std::this_thread::get_id())
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible, "XR preparation requires its control thread"));
+        if (scope != NativeSessionPreparationScope::Owner && scope != NativeSessionPreparationScope::Session)
+            return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
         if (!discovery_ || discovery_->phase != DiscoveryPhase::Prepared)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         if (const auto current = CheckPreparation(request); current.HasError())
             return current;
         discovery_->phase = DiscoveryPhase::PreparingSession;
-        if (const auto prepared = CapturePreparation([this, &request] {
+        if (auto prepared = CapturePreparation([this, &request] {
             return CreateSession(request);
         });
-            prepared.HasError())
-            return Fail(prepared.ErrorValue());
+            prepared.HasError()) {
+            if (scope == NativeSessionPreparationScope::Owner)
+                return Fail(std::move(prepared).ErrorValue());
+            // A reversible probe borrows the selected instance/system. Only its private session prefix rolls back.
+            discovery_->phase = DiscoveryPhase::RetiringSession;
+            auto retired = RetireSession();
+            auto error = std::move(prepared).ErrorValue();
+            return Result<void>::Failure(retired.HasError() ? WithCause(std::move(error), std::move(retired).ErrorValue())
+                                                            : std::move(error));
+        }
         retainedPreflight_ = request.preflight;
         discovery_->phase = DiscoveryPhase::SessionPrepared;
         return Result<void>::Success();

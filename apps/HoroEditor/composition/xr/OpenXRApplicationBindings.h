@@ -4,6 +4,8 @@
  */
 #include "OpenXRActionBindings.h"
 
+#include <variant>
+
 namespace Horo::Application::Internal {
     /** @brief Product declarations own their schema; registeredActions is supplied only by the application's real InputRouter. */
     struct OpenXRApplicationActionSchema final {
@@ -49,9 +51,69 @@ namespace Horo::Application::Internal {
         std::string label;
     };
 
+    /** @brief Installer-owned profile-specific baseline vibration output; grants no Input, device or player authority. */
+    struct OpenXRApplicationHaptic final {
+        XR::XRInteractionProfileId profile;
+        XR::XRActionSetId set;
+        XR::XRTrackedDeviceRole role;
+        std::string path;
+        std::string label;
+    };
+
     /** @brief Official native dispatch borrowed from the same admitted instance; no callable allocation or ABI conversion. */
     struct OpenXRApplicationActionDispatch final {
         PFN_xrGetInstanceProcAddr getProc{};
+    };
+
+    /** @brief Signed product selection of an existing digital action for one aimed World UI pointer. */
+    struct OpenXRWorldUiPointerBinding final {
+        Input::ActionId action;
+        XR::XRTrackedDeviceRole role;
+        float maximumDistanceMeters;
+    };
+
+    /** @brief Signed action selection and authored settings for discrete yaw control. */
+    struct OpenXRSnapTurnBinding final {
+        Input::ActionId action;
+        float angleRadians{};
+        float engage{};
+        float release{};
+    };
+
+    /** @brief Signed movement action and radial dead zone for stick locomotion. */
+    struct OpenXRStickMoveBinding final {
+        Input::ActionId action;
+        float deadZone{};
+    };
+
+    /** @brief Signed tracking freshness and movement gain for paired grip motion. */
+    struct OpenXRArmSwingBinding final {
+        float gain{};
+        std::int64_t maximumTrackingGapNanoseconds{};
+    };
+
+    /** @brief Signed tracking freshness and discontinuity limit for headset-driven Character correction. */
+    struct OpenXRRoomScaleBinding final {
+        float maximumSampleDistanceMeters{};
+        std::int64_t maximumTrackingGapNanoseconds{};
+    };
+
+    /** @brief Signed digital action and the controller that selects a bounded teleport ray. */
+    struct OpenXRTeleportBinding final {
+        Input::ActionId action;
+        XR::XRTrackedDeviceRole role;
+        float maximumDistanceMeters{};
+    };
+
+    using OpenXRTranslationBinding =
+        std::variant<OpenXRStickMoveBinding, OpenXRArmSwingBinding, OpenXRRoomScaleBinding, OpenXRTeleportBinding>;
+
+    /** @brief Exact authored actor and translation mode. Live Input still owns player assignment. */
+    struct OpenXRLocomotionBinding final {
+        std::uint64_t actor{};
+        float speedMetersPerSecond{};
+        OpenXRTranslationBinding translation;
+        std::optional<OpenXRSnapTurnBinding> turn;
     };
 
     /** @brief Installer-owned immutable bindings, distinct from signature/native-code admission and dynamic Input policy.
@@ -66,6 +128,17 @@ namespace Horo::Application::Internal {
         std::vector<OpenXRApplicationActionLabel> actionLabels;
         std::vector<OpenXRApplicationSetLabel> setLabels;
         std::vector<OpenXRApplicationPose> poses;
+        std::vector<OpenXRApplicationHaptic> haptics;
+        std::optional<OpenXRWorldUiPointerBinding> worldUiPointer;
+        std::optional<OpenXRLocomotionBinding> locomotion;
+
+        /** @brief Counts reserved scalar, pose and unique baseline vibration actions. @return Cold native preparation budget. */
+        [[nodiscard]] std::size_t PreparedActionCount() const noexcept;
+        /** @brief Revalidates the unchanged signed requirements against a replacement canonical Input map.
+         * @param registeredActions Current host-owned Input registry.
+         * @return Original bounded declaration or compatibility error, without native calls or changing a binding revision.
+         */
+        [[nodiscard]] Result<void> ValidateRegisteredActions(std::span<const Input::ActionDescriptor> registeredActions) const;
 
         /** @brief Prepares real native actions on the exact unpublished session then resolves actual profile evidence.
          * @param native Same native action owner retained by the application across failure and cleanup debt.

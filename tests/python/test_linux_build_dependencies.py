@@ -58,6 +58,7 @@ options = [arg for arg in args if arg.startswith("Dir::")]
 source = Path(next(arg.split("=", 1)[1] for arg in options if "sourcelist=" in arg))
 sources = source.read_text()
 primary = "https://archive.ubuntu.com/ubuntu" in sources
+mit = "https://mirrors.mit.edu/ubuntu" in sources
 phase = "policy" if name == "apt-cache" else "update" if "update" in args else "download" if "--download-only" in args else "install"
 preferences = next((arg.split("=", 1)[1] for arg in options if "::preferences=" in arg), None)
 isolated = (preferences is not None and Path(preferences).read_text() == ""
@@ -77,6 +78,8 @@ if name == "timeout":
     assert phase != "install"
     if primary and phase == "download" and scenario in {"timeout", "cancel"}:
         sys.exit(124 if scenario == "timeout" else 143)
+    if scenario == "first_two_unreachable" and phase == "update" and not mit:
+        sys.exit(124)
     os.execvp(args[3], args[3:])
 if name == "apt-cache":
     print("libssl-dev: Installed: 3.5.5-1ubuntu3.7 Candidate: 3.5.5-1ubuntu3.7")
@@ -85,7 +88,7 @@ assert name == "apt-get"
 if scenario == "unmet_dependencies" and phase == "download":
     print("E: Unmet dependencies. A required version is not available.")
     sys.exit(100)
-if scenario == "both_fail" and phase == "download":
+if scenario == "all_fail" and phase == "download":
     sys.exit(100)
 if scenario == "index_failure" and primary and phase == "update":
     sys.exit(100)
@@ -146,17 +149,33 @@ def test_failed_acquisition_switches_mirror_before_installing(tmp_path: Path, sc
     apt = [call for call in calls if call["name"] == "apt-get"]
     installs = [call for call in apt if call["phase"] == "install"]
     assert len(installs) == 1 and not installs[0]["primary"]
-    assert "http://azure.archive.ubuntu.com/ubuntu" in installs[0]["sources"]
+    assert "URIs: https://mirrors.edge.kernel.org/ubuntu" in installs[0]["sources"]
     assert [call["phase"] for call in apt if not call["primary"]] == ["update", "download", "install"]
     if scenario == "index_failure":
         assert [call["phase"] for call in apt if call["primary"]] == ["update"]
 
 
 def test_unavailable_mirrors_fail_without_installing_any_package(tmp_path: Path) -> None:
-    result, calls = run_installer(tmp_path, "both_fail")
+    result, calls = run_installer(tmp_path, "all_fail")
     assert result.returncode != 0
     assert not any(call["phase"] == "install" for call in calls)
-    assert "Neither Ubuntu mirror" in result.stdout
+    assert "No configured Ubuntu mirror" in result.stdout
+
+
+def test_third_mirror_recovers_after_both_index_requests_time_out(tmp_path: Path) -> None:
+    result, calls = run_installer(tmp_path, "first_two_unreachable")
+    assert result.returncode == 0, result.stderr
+    attempts = [call for call in calls if call["name"] == "timeout" and call["phase"] == "update"]
+    assert [next(line for line in call["sources"].splitlines() if line.startswith("URIs:")) for call in attempts] == [
+        "URIs: https://archive.ubuntu.com/ubuntu",
+        "URIs: https://mirrors.edge.kernel.org/ubuntu",
+        "URIs: https://mirrors.mit.edu/ubuntu",
+    ]
+    apt = [call for call in calls if call["name"] == "apt-get"]
+    assert [call["phase"] for call in apt] == ["update", "download", "install"]
+    assert all("URIs: https://mirrors.mit.edu/ubuntu" in call["sources"] for call in apt)
+    assert all("Signed-By: /usr/share/keyrings/ubuntu-archive-keyring.gpg" in call["sources"] for call in apt)
+    assert "--no-download" in apt[-1]["args"]
 
 
 def test_install_failure_propagates_without_retrying_dpkg(tmp_path: Path) -> None:

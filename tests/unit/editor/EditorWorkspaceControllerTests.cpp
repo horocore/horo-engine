@@ -1,6 +1,9 @@
 #include "EditorWorkspaceControllerFilesystemTestSupport.h"
 #include "EditorWorkspaceControllerPolicyTestSupport.h"
 #include "Horo/Assets/MeshEditorPayload.h"
+#include "Horo/Gameplay/GameplayErrors.h"
+#include "OwnedTestDirectory.h"
+#include "ProjectReplicationTestSupport.h"
 #include "editor/document/SceneDocumentPersistence.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/GameplayBehaviorRequestValidation.h"
@@ -28,6 +31,42 @@ namespace {
     namespace Math = Math;
     using TestWorkspaceController = HoroEditorWorkspaceControllerPolicyTests::FocusedWorkspaceController;
     using namespace HoroEditorWorkspaceControllerFilesystemTests;
+
+    /** @brief Reports a typed failure for a live clone entity through the workspace's normal Play host port. */
+    class DecisionNavigationTestHost final : public EditorPlaySceneHost {
+    public:
+        DecisionNavigationTestHost(Runtime::SceneRuntimeId scene, SceneObjectId object, AI::AgentId agent)
+            : scenes_(scene), object_(object), agent_(agent) {}
+
+        Runtime::RuntimeSceneService &Scenes() noexcept override {
+            return scenes_;
+        }
+
+        Result<void> FixedUpdate(Gameplay::FixedDeltaTime) override {
+            return Result<void>::Success();
+        }
+
+        void Shutdown() noexcept override {
+            scenes_.Shutdown();
+        }
+
+        std::optional<EditorPlayDecisionProblem> ReadDecisionProblem() const override {
+            const auto scene = scenes_.ActiveScene();
+            if (!scene)
+                return std::nullopt;
+            return EditorPlayDecisionProblem{scene->RuntimeId(),
+                                             2,
+                                             agent_,
+                                             EditorPlayDecisionPhase::Evaluate,
+                                             MakeError(Gameplay::GameplayErrors::PhysicsUnavailable),
+                                             scene->Find(Runtime::SceneObjectId{object_.value})};
+        }
+
+    private:
+        Runtime::RuntimeSceneService scenes_;
+        SceneObjectId object_;
+        AI::AgentId agent_;
+    };
 
     /** @brief Verify Partial Delete Undo Redo. */
     void VerifyPartialDeleteUndoRedo(TestWorkspaceController &controller, const std::vector<SceneObject> &before,
@@ -169,6 +208,11 @@ namespace {
         REQUIRE((controller.ViewModel().primarySelection == object));
         REQUIRE((controller.ViewportScene().instances.front().presentation.tintStrength > 0.0F));
         REQUIRE((events.size() == 1 && events.back().kind == SelectionChangeKind::ObjectsChanged));
+        const auto evidence = controller.Controller().CaptureAgentSceneSelection();
+        REQUIRE(evidence);
+        REQUIRE(evidence->objectCount == 1);
+        CHECK(evidence->objects.front() == object.value);
+        CHECK_FALSE(evidence->lifetime.IsCancellationRequested());
 
         EditorWorkspaceViewCommandData remove;
         remove.command = EditorWorkspaceViewCommand::DeleteObject;
@@ -177,6 +221,8 @@ namespace {
         REQUIRE((controller.ViewModel().objects.empty()));
         REQUIRE((!controller.ViewModel().primarySelection.has_value()));
         REQUIRE((events.size() == 2 && events.back().kind == SelectionChangeKind::Cleared));
+        CHECK(evidence->lifetime.IsCancellationRequested());
+        CHECK_FALSE(controller.Controller().CaptureAgentSceneSelection());
 
         auto undo = SceneCommand(EditorWorkspaceViewCommand::UndoScene);
         controller.ProcessCommand(undo);
@@ -355,6 +401,80 @@ namespace {
         REQUIRE((controller.ViewportScene().camera.target == before.target));
         REQUIRE(events.empty());
         static_cast<void>(subscription);
+    }
+
+    TEST_CASE("Play Decision navigation honors the exact Scene and report identities", "[unit][editor][play][ai]") {
+        Tests::OwnedTestDirectory project{"workspace-decision-navigation"};
+        const auto scenePath = project.Path() / "assets/scenes/main.horo";
+        PrepareEmptyDefaultScene(project.Path(), scenePath);
+        Tests::WriteReplicationProject(project.Path());
+        const auto metadataPath = project.Path() / ".horo/project.json";
+        {
+            std::ifstream input{metadataPath, std::ios::binary};
+            auto metadata = nlohmann::json::parse(input);
+            input.close();
+            metadata.at("settings")["defaultScene"] = "assets/scenes/main.horo";
+            std::ofstream output{metadataPath, std::ios::binary | std::ios::trunc};
+            output << metadata.dump();
+            REQUIRE(output.good());
+        }
+        NativeDurableFileSystem files;
+        ProjectMutationCoordinator mutations{files};
+        const auto agent = AI::AgentId::Create(41).Value();
+        constexpr auto original = SceneObjectId{2};
+        const SceneDocumentSnapshot
+            document{.revision = DocumentRevision{1},
+                     .state = DocumentStateId{1},
+                     .objects = {{.id = SceneObjectId{1}, .name = "Other object", .components = {.camera = Runtime::CameraComponent{}}},
+                                 {.id = original, .name = "AI agent", .components = {.aiAgent = AI::AiAgentComponent{.agent = agent}}}}};
+        const auto fingerprint = InspectProjectSceneFingerprint(project.Path(), scenePath);
+        REQUIRE(fingerprint.HasValue());
+        REQUIRE(SaveProjectScene(project.Path(), scenePath, document, fingerprint.Value(), false, mutations, files).HasValue());
+
+        CancellationSource cancellation;
+        Runtime::RuntimeSceneService preview;
+        REQUIRE(preview.Startup(cancellation.Token()).HasValue());
+        EditorWorkspaceDependencies dependencies;
+        dependencies.gameplay.sceneFactory = [=](Runtime::SceneRuntimeId scene, const Runtime::RuntimeSceneDefinition &) {
+            return Result<std::unique_ptr<EditorPlaySceneHost>>::Success(
+                std::make_unique<DecisionNavigationTestHost>(scene, original, agent));
+        };
+        EditorWorkspaceController workspace{project.Path(), preview, {}, dependencies};
+        REQUIRE_FALSE(workspace.InitializationError());
+
+        const auto play = [&] {
+            workspace.ProcessCommand(SceneCommand(EditorWorkspaceViewCommand::StartPlay));
+            workspace.UpdatePlayPresentation(0.0F);
+            INFO(workspace.ViewModel().playError);
+            REQUIRE(workspace.ViewModel().playState == EditorPlayState::Playing);
+            REQUIRE(workspace.ViewModel().playDecisionProblem);
+            REQUIRE(workspace.ViewModel().playDecisionObjectAvailable);
+            return *workspace.ViewModel().playDecisionProblem;
+        };
+        const auto first = play();
+        REQUIRE(first.entity);
+        const auto previousSelection = workspace.ViewModel().primarySelection;
+        EditorWorkspaceViewCommandData navigate{.command = EditorWorkspaceViewCommand::NavigatePlayDecisionProblem,
+                                                .playDecisionNavigation =
+                                                    PlayDecisionNavigationRequest{first.tick + 1, first.agent, *first.entity}};
+        workspace.ProcessCommand(navigate);
+        CHECK(workspace.ViewModel().primarySelection == previousSelection);
+        navigate.playDecisionNavigation->tick = first.tick;
+        workspace.ProcessCommand(navigate);
+        CHECK(workspace.ViewModel().primarySelection == original);
+        CHECK(workspace.ViewModel().hierarchyRevealObject == original);
+
+        workspace.ProcessCommand(SceneCommand(EditorWorkspaceViewCommand::StopPlay));
+        CHECK_FALSE(workspace.ViewModel().playDecisionProblem);
+        const auto second = play();
+        CHECK(second.scene != first.scene);
+        workspace.ProcessCommand({.command = EditorWorkspaceViewCommand::SelectObject,
+                                  .objectSelection = ObjectSelectionRequest{.objects = {SceneObjectId{1}}, .primary = SceneObjectId{1}}});
+        const auto beforeStaleNavigation = workspace.ViewModel().primarySelection;
+        REQUIRE(beforeStaleNavigation != original);
+        workspace.ProcessCommand(navigate);
+        CHECK(workspace.ViewModel().primarySelection == beforeStaleNavigation);
+        workspace.ProcessCommand(SceneCommand(EditorWorkspaceViewCommand::StopPlay));
     }
 
 }  // namespace

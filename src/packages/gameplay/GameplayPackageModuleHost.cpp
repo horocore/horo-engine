@@ -1,9 +1,11 @@
 #include "Horo/Packages/GameplayPackageModuleHost.h"
 
+#include "Horo/Packages/PackageLifecycle.h"
 #include "Horo/Packages/PackageLifecycleErrors.h"
 #include "PackageContentStaging.h"
 
 #include <algorithm>
+#include <new>
 #include <thread>
 
 namespace Horo::Packages {
@@ -279,6 +281,59 @@ namespace Horo::Packages {
             {package, locked.version, locked.artifactDigest, generation, std::move(nodes).Value()});
     }
 
+    /** @copydoc GameplayPackageModuleHost::AcquireActiveDecisionNodes */
+    Result<std::vector<PackageDecisionNodeGeneration>> GameplayPackageModuleHost::AcquireActiveDecisionNodes(
+        const PackageLifecycleService &lifecycle) const {
+        using Contributions = Result<std::vector<PackageDecisionNodeGeneration>>;
+        if (std::this_thread::get_id() != impl_->owner)
+            return Contributions::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+        const auto active = lifecycle.Active();
+        std::vector<PackageDecisionNodeGeneration> contributions;
+        if (!active)
+            return Contributions::Success(std::move(contributions));
+        try {
+            for (const auto &report : active->modules) {
+                if (report.role != Extensions::ExtensionModuleRole::RuntimeParticipant || report.outcome != PackageModuleOutcome::Active ||
+                    report.host != Identity() || report.generation != active->generation)
+                    continue;
+                const auto state = FindRole(impl_->roles, impl_->owner, report.package, report.module, report.generation);
+                if (!state || state->verified.Install() != active->install)
+                    return Contributions::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+                const auto &proof = state->verified.Activation().Activation();
+                if (!std::ranges::any_of(active->activations, [&proof](const auto &lease) {
+                    return lease.IsUsable() && &lease.Activation() == &proof;
+                }))
+                    return Contributions::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+                auto nodes = state->selectedModule->AcquireDecisionNodes();
+                if (nodes.HasError())
+                    return Contributions::Failure(nodes.ErrorValue());
+                if (!nodes.Value()->Contracts().empty()) {
+                    const auto &locked = state->verified.Package().lock;
+                    contributions.emplace_back(report.package, locked.version, locked.artifactDigest, report.generation,
+                                               std::move(nodes).Value());
+                }
+            }
+            return Contributions::Success(std::move(contributions));
+        } catch (const std::bad_alloc &) {
+            return Contributions::Failure(MakeError(PackageLifecycleErrors::StorageFailed));
+        }
+    }
+
+    /** @copydoc GameplayPackageModuleHost::AcquirePerceptionSenses */
+    Result<PackagePerceptionSenseGeneration> GameplayPackageModuleHost::AcquirePerceptionSenses(const HoroPackageId &package,
+                                                                                                const std::string_view module,
+                                                                                                const std::uint64_t generation) const {
+        auto state = FindRole(impl_->roles, impl_->owner, package, module, generation);
+        if (!state)
+            return Result<PackagePerceptionSenseGeneration>::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+        auto senses = state->selectedModule->AcquirePerceptionSenses();
+        if (senses.HasError())
+            return Result<PackagePerceptionSenseGeneration>::Failure(senses.ErrorValue());
+        const auto &locked = state->verified.Package().lock;
+        return Result<PackagePerceptionSenseGeneration>::Success(
+            {package, locked.version, locked.artifactDigest, generation, std::move(senses).Value()});
+    }
+
     Result<std::unique_ptr<Gameplay::LuaDecisionNodeProgram>> GameplayPackageModuleHost::CompileDecisionNode(
         const HoroPackageId &package, std::string_view moduleId, std::uint64_t generation, const PackagePath &source,
         AI::DecisionNodeTypeId type, AI::DecisionProviderId provider, std::uint32_t descriptorVersion,
@@ -301,5 +356,29 @@ namespace Horo::Packages {
             return Output::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
         return Gameplay::LuaDecisionNodeProgram::Compile(std::move(code), type, provider, descriptorVersion, {source.Value(), 0, 0}, limits,
                                                          std::move(parent).Value());
+    }
+
+    /** @copydoc GameplayPackageModuleHost::CompilePerceptionSense */
+    Result<std::unique_ptr<Gameplay::LuaPerceptionSenseProgram>> GameplayPackageModuleHost::CompilePerceptionSense(
+        const HoroPackageId &package, std::string_view module, const std::uint64_t generation, const PackagePath &source,
+        AI::PerceptionSenseContract contract, const Gameplay::LuaBehaviorLimits limits) const {
+        using Output = Result<std::unique_ptr<Gameplay::LuaPerceptionSenseProgram>>;
+        auto state = FindRole(impl_->roles, impl_->owner, package, module, generation);
+        if (!state)
+            return Output::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+        if (!source.Value().ends_with(".horo_script"))
+            return Output::Failure(MakeError(PackageLifecycleErrors::InvalidCandidate));
+        auto parent = state->selectedModule->AcquirePerceptionSenses();
+        if (parent.HasError())
+            return Output::Failure(parent.ErrorValue());
+        auto bytes = state->verified.ReadDeclaredFile(source, 256U * 1024U);
+        if (bytes.HasError())
+            return Output::Failure(bytes.ErrorValue());
+        const auto &owned = bytes.Value();
+        std::string code(reinterpret_cast<const char *>(owned.data()), owned.size());
+        if (!LiveRole(*state))
+            return Output::Failure(MakeError(PackageLifecycleErrors::InvalidLifecycle));
+        contract.source = {source.Value(), 1, 1};
+        return Gameplay::LuaPerceptionSenseProgram::Compile(code, contract, std::move(parent).Value(), limits);
     }
 }  // namespace Horo::Packages

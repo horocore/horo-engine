@@ -117,6 +117,207 @@ namespace {
         Pump(host);
     }
 
+    TEST_CASE("Explicit inspector restart retires its exact source and waits for replacement callback application",
+              "[audio][editor][preview][headless][switch]") {
+        using enum AudioComponentPreviewSwitchStatus;
+        ClipProject project;
+        const auto first = std::make_shared<OutputEvidence>();
+        const auto next = std::make_shared<OutputEvidence>();
+        std::size_t peers{};
+        EditorAudioPreviewHost host{[&](auto owner) {
+            if (peers++ == 0)
+                return ObservedOutput(first)(owner);
+            CHECK(first->closedAtDestruction);
+            return ObservedOutput(next)(owner);
+        }};
+        const auto request = project.Request();
+        REQUIRE(host.Start(request).HasValue());
+        Pump(host);
+        REQUIRE(first->peak > 0.01F);
+        const auto source = *host.Snapshot().output;
+        auto change = request;
+        change.outputSwitch = {source.device, Audio::AudioDefaultDeviceRole::Communications, AudioComponentPreviewSwitchPolicy::Restart};
+        REQUIRE(std::filesystem::remove(project.Source()));
+        REQUIRE(host.Start(change).HasValue());
+        auto pending = *host.Snapshot().outputSwitch;
+        CHECK(pending.id != 0);
+        CHECK(pending.status == Pending);
+        CHECK(pending.intent.source == source.device);
+        CHECK_FALSE(pending.target);
+        REQUIRE(host.Start(change).HasError());
+        host.Stop(project.clip);
+        for (std::size_t i = 0; i < 20 && !host.Snapshot().outputSwitch->target; ++i)
+            Pump(host, 1);
+        const auto awaitingCallback = host.Snapshot();
+        REQUIRE(awaitingCallback.outputSwitch->target);
+        CHECK(awaitingCallback.outputSwitch->id == pending.id);
+        CHECK(awaitingCallback.outputSwitch->status == Pending);
+        CHECK(awaitingCallback.output->pendingOperations == 1);
+        CHECK(next->peak == 0.0F);
+        Pump(host);
+        const auto applied = host.Snapshot();
+        CHECK(applied.outputSwitch->id == pending.id);
+        CHECK(applied.outputSwitch->status == Applied);
+        CHECK(applied.outputSwitch->target == applied.output->device);
+        CHECK(applied.output->device != source.device);
+        CHECK(applied.output->voice.owner != source.voice.owner);
+        CHECK(next->peak > 0.01F);
+        CHECK(peers == 2);
+        const auto stale = host.Start(change);
+        REQUIRE(stale.HasError());
+        CHECK(stale.ErrorValue().code.Value() == AudioComponentPreviewErrors::Stale.code.Value());
+        CHECK(host.Snapshot().outputSwitch->id == pending.id);
+        host.Stop(project.workspace);
+        Pump(host);
+        CHECK(next->closedAtDestruction);
+    }
+
+    TEST_CASE("Output loss during inspector restart honors the admitted policy and exact retirement",
+              "[audio][editor][preview][headless][switch]") {
+        using enum AudioComponentPreviewSwitchStatus;
+        ClipProject project;
+        const auto sourceEvidence = std::make_shared<OutputEvidence>();
+        const auto targetEvidence = std::make_shared<OutputEvidence>();
+        Audio::Backend::NullAudioBackend *sourceBackend{};
+        std::size_t peers{};
+        EditorAudioPreviewHost host{[&](const auto owner) {
+            if (peers++ == 0) {
+                auto prepared = ObservedOutput(sourceEvidence)(owner);
+                sourceBackend = static_cast<ObservedNull *>(prepared.Value().output.get())->output.get();
+                return prepared;
+            }
+            CHECK(sourceEvidence->closedAtDestruction);
+            return ObservedOutput(targetEvidence)(owner);
+        }};
+        const auto request = project.Request();
+        REQUIRE(host.Start(request).HasValue());
+        Pump(host);
+        const auto source = *host.Snapshot().output;
+        REQUIRE(source.phase == Audio::AudioFrontendPhase::Active);
+        auto intent = request;
+        intent.outputSwitch = {source.device, Audio::AudioDefaultDeviceRole::Communications, AudioComponentPreviewSwitchPolicy::Restart};
+
+        enum class Scenario {
+            Restart,
+            Unapproved,
+            Revoked,
+            Interrupted
+        };
+        auto scenario = Scenario::Restart;
+        SECTION("already admitted restart survives old output loss") {}
+        SECTION("unapproved loss retires without reopening") {
+            scenario = Scenario::Unapproved;
+        }
+        SECTION("revoked restart retires without reopening") {
+            scenario = Scenario::Revoked;
+        }
+        SECTION("an independent interruption in the same drain still fails the switch") {
+            scenario = Scenario::Interrupted;
+        }
+        if (scenario != Scenario::Unapproved)
+            REQUIRE(host.Start(intent).HasValue());
+        if (scenario == Scenario::Revoked)
+            host.Stop(project.workspace);
+        REQUIRE(sourceBackend->InjectDeviceLoss(Audio::Backend::DeviceLossCause::Disconnected).HasValue());
+        if (scenario == Scenario::Interrupted)
+            REQUIRE(sourceBackend->InjectInterruption(Audio::Backend::InterruptionState::Began).HasValue());
+
+        if (scenario == Scenario::Restart) {
+            const auto id = host.Snapshot().outputSwitch->id;
+            Pump(host);
+            const auto applied = host.Snapshot();
+            REQUIRE(applied.outputSwitch);
+            CHECK(applied.outputSwitch->id == id);
+            CHECK(applied.outputSwitch->status == Applied);
+            CHECK(applied.outputSwitch->target == applied.output->device);
+            CHECK(applied.output->device != source.device);
+            CHECK_FALSE(applied.failure);
+            CHECK(peers == 2);
+            CHECK(targetEvidence->peak > 0.01F);
+            host.Stop(project.workspace);
+            Pump(host);
+            return;
+        }
+        const auto expected =
+            MakeError(scenario == Scenario::Interrupted ? Audio::AudioErrors::DeviceUnavailable : Audio::AudioErrors::DeviceLost);
+        const auto observed = host.Pump();
+        REQUIRE(observed.HasError());
+        RequireOriginalError(observed.ErrorValue(), expected);
+        for (std::size_t i = 0; i < 20; ++i)
+            static_cast<void>(host.Pump());
+        const auto retired = host.Snapshot();
+        REQUIRE(retired.output);
+        CHECK(retired.output->phase == Audio::AudioFrontendPhase::Closed);
+        REQUIRE(retired.failure);
+        RequireOriginalError(*retired.failure, expected);
+        CHECK(peers == 1);
+        CHECK(sourceEvidence->closedAtDestruction);
+        if (scenario != Scenario::Unapproved) {
+            REQUIRE(retired.outputSwitch);
+            CHECK(retired.outputSwitch->status == (scenario == Scenario::Revoked ? Cancelled : Failed));
+            CHECK_FALSE(retired.outputSwitch->target);
+        } else {
+            CHECK_FALSE(retired.outputSwitch);
+        }
+    }
+
+    TEST_CASE("Inspector output switch preserves live playback on rejected intent and publishes one cancellation or failure",
+              "[audio][editor][preview][headless][switch]") {
+        using enum AudioComponentPreviewSwitchStatus;
+        ClipProject project;
+        const auto evidence = std::make_shared<OutputEvidence>();
+        const auto unavailable = MakeError(Audio::AudioErrors::BackendFailed, "replacement output unavailable");
+        std::size_t peers{};
+        EditorAudioPreviewHost host{[&](auto owner) {
+            if (peers++ == 0)
+                return ObservedOutput(evidence)(owner);
+            CHECK(evidence->closedAtDestruction);
+            return Result<EditorAudioPreviewBackend>::Failure(unavailable);
+        }};
+        const auto request = project.Request();
+        REQUIRE(host.Start(request).HasValue());
+        Pump(host);
+        const auto original = *host.Snapshot().output;
+        auto change = request;
+        change.outputSwitch = {original.device, Audio::AudioDefaultDeviceRole::Console, AudioComponentPreviewSwitchPolicy::Preserve};
+        RequireRejectedStartPreservesCapture(host, change, AudioComponentPreviewErrors::UnsupportedSwitch);
+        change.outputSwitch->policy = AudioComponentPreviewSwitchPolicy::Restart;
+        ++change.outputSwitch->source.callbackEpoch;
+        RequireRejectedStartPreservesCapture(host, change, AudioComponentPreviewErrors::Stale);
+        change.outputSwitch->source = original.device;
+        ++change.revision;
+        RequireRejectedStartPreservesCapture(host, change, AudioComponentPreviewErrors::Stale);
+        change.revision = request.revision;
+        CHECK_FALSE(host.Snapshot().outputSwitch);
+        REQUIRE(host.Start(change).HasValue());
+        const auto id = host.Snapshot().outputSwitch->id;
+        SECTION("matching workspace stops before the replacement owns any output") {
+            host.Stop(project.workspace);
+            Pump(host);
+            CHECK(host.Snapshot().outputSwitch->status == Cancelled);
+            CHECK(peers == 1);
+        }
+        SECTION("replacement discovery failure is original and terminal without fallback") {
+            std::size_t failures{};
+            for (std::size_t i = 0; i < 20; ++i) {
+                const auto pumped = host.Pump();
+                if (pumped.HasError()) {
+                    ++failures;
+                    RequireOriginalError(pumped.ErrorValue(), unavailable);
+                }
+            }
+            REQUIRE(host.Snapshot().outputSwitch->failure);
+            RequireOriginalError(*host.Snapshot().outputSwitch->failure, unavailable);
+            CHECK(host.Snapshot().outputSwitch->status == Failed);
+            CHECK(failures == 1);
+            CHECK(peers == 2);
+        }
+        CHECK(host.Snapshot().outputSwitch->id == id);
+        CHECK_FALSE(host.Snapshot().outputSwitch->target);
+        CHECK(host.Snapshot().output->phase == Audio::AudioFrontendPhase::Closed);
+        CHECK(evidence->closedAtDestruction);
+    }
+
     TEST_CASE("Inspector preview reports missing assets listeners providers and buses explicitly", "[audio][editor][preview][headless]") {
         ClipProject project;
         EditorAudioPreviewHost host{MakeNullAudioPreviewOutput};

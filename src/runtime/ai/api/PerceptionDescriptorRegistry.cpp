@@ -5,15 +5,15 @@
 #include <algorithm>
 #include <new>
 #include <utility>
+#include <vector>
 
 namespace Horo::AI {
     struct PerceptionDescriptorRegistry::Storage final {
-        std::array<SenseTypeDescriptor, PerceptionDescriptorRegistryHardLimits::SenseTypes> senses{};
-        std::array<StimulusTypeDescriptor, PerceptionDescriptorRegistryHardLimits::StimulusTypes> stimuli{};
-        std::array<PerceptionListenerResolution, PerceptionDescriptorRegistryHardLimits::ListenerTypes> listeners{};
-        std::size_t senseCount{};
-        std::size_t stimulusCount{};
-        std::size_t listenerCount{};
+        Storage() : senses(std::size_t{0}), stimuli(std::size_t{0}), listeners(std::size_t{0}) {}
+
+        std::vector<SenseTypeDescriptor> senses;
+        std::vector<StimulusTypeDescriptor> stimuli;
+        std::vector<PerceptionListenerResolution> listeners;
     };
 
     namespace {
@@ -50,12 +50,6 @@ namespace Horo::AI {
             return std::ranges::lower_bound(descriptors, identity, {}, [](const Descriptor &descriptor) {
                 return descriptor.identity;
             });
-        }
-
-        template <typename Descriptor> [[nodiscard]] bool HasDuplicateIdentity(const std::span<const Descriptor> descriptors) noexcept {
-            return std::ranges::adjacent_find(descriptors, {}, [](const Descriptor &descriptor) {
-                return descriptor.identity;
-            }) != descriptors.end();
         }
 
         [[nodiscard]] bool ValidSense(const SenseTypeDescriptor &descriptor, const PerceptionDescriptorRegistryLimits &limits) noexcept {
@@ -117,48 +111,35 @@ namespace Horo::AI {
             return Available;
         }
 
-        /** @brief Validates, sorts, and rejects collisions in the two type descriptor domains. */
-        [[nodiscard]] Result<void> ValidateTypeDescriptors(const std::span<SenseTypeDescriptor> senses,
-                                                           const std::span<StimulusTypeDescriptor> stimuli,
-                                                           const PerceptionDescriptorRegistryLimits &limits) {
-            if (!std::ranges::all_of(senses,
-                                     [&limits](const SenseTypeDescriptor &descriptor) {
-                return ValidSense(descriptor, limits);
-            }) ||
-                !std::ranges::all_of(stimuli, [&limits](const StimulusTypeDescriptor &descriptor) {
-                return ValidStimulus(descriptor, limits);
-            }))
-                return Failure<void>(AIErrors::PerceptionDescriptorInvalid);
-            std::ranges::sort(senses, {}, [](const SenseTypeDescriptor &descriptor) {
-                return descriptor.identity;
-            });
-            std::ranges::sort(stimuli, {}, [](const StimulusTypeDescriptor &descriptor) {
-                return descriptor.identity;
-            });
-            if (HasDuplicateIdentity<SenseTypeDescriptor>(senses) || HasDuplicateIdentity<StimulusTypeDescriptor>(stimuli))
+        /** @brief Validates bounded declarations and owns them in identity order without moving checked-library strings. */
+        template <std::size_t Capacity, typename Descriptor, typename Entry>
+        Result<void> CaptureDescriptors(const std::span<const Descriptor> source, const PerceptionDescriptorRegistryLimits &limits,
+                                        bool (*valid)(const Descriptor &, const PerceptionDescriptorRegistryLimits &) noexcept,
+                                        std::vector<Entry> &destination) {
+            std::array<const Descriptor *, Capacity> ordered{};
+            auto active = std::span{ordered}.first(source.size());
+            for (std::size_t index = 0; index < source.size(); ++index) {
+                if (!valid(source[index], limits))
+                    return Failure<void>(AIErrors::PerceptionDescriptorInvalid);
+                active[index] = &source[index];
+            }
+            const auto identity = [](const Descriptor *descriptor) {
+                return descriptor->identity;
+            };
+            std::ranges::sort(active, {}, identity);
+            if (std::ranges::adjacent_find(active, {}, identity) != active.end())
                 return Failure<void>(AIErrors::PerceptionDescriptorConflict);
+            destination.reserve(source.size());
+            for (const auto *descriptor : active)
+                destination.emplace_back(*descriptor);
             return Result<void>::Success();
         }
 
-        /** @brief Copies, canonicalizes, and resolves listener descriptors against frozen type metadata. */
+        /** @brief Canonicalizes and resolves captured listener descriptors against frozen type metadata. */
         [[nodiscard]] Result<void> ResolveListeners(const std::span<PerceptionListenerResolution> listeners,
-                                                    const std::span<const PerceptionListenerDescriptor> contributions,
                                                     const std::span<const SenseTypeDescriptor> senses,
                                                     const std::span<const StimulusTypeDescriptor> stimuli,
-                                                    const PerceptionCapabilitySet availableCapabilities,
-                                                    const PerceptionDescriptorRegistryLimits &limits) {
-            for (std::size_t index = 0; index < contributions.size(); ++index) {
-                if (!ValidListener(contributions[index], limits))
-                    return Failure<void>(AIErrors::PerceptionDescriptorInvalid);
-                listeners[index].descriptor = contributions[index];
-            }
-            std::ranges::sort(listeners, {}, [](const PerceptionListenerResolution &resolution) {
-                return resolution.descriptor.identity;
-            });
-            if (std::ranges::adjacent_find(listeners, {}, [](const PerceptionListenerResolution &resolution) {
-                return resolution.descriptor.identity;
-            }) != listeners.end())
-                return Failure<void>(AIErrors::PerceptionDescriptorConflict);
+                                                    const PerceptionCapabilitySet availableCapabilities) {
             for (PerceptionListenerResolution &listener : listeners) {
                 auto activeStimuli = std::span{listener.descriptor.stimuli}.first(listener.descriptor.stimulusCount);
                 std::ranges::sort(activeStimuli, {}, [](const PerceptionStimulusRequirement &requirement) {
@@ -194,42 +175,44 @@ namespace Horo::AI {
             contributions.listeners.size() > limits.maximumListenerTypes)
             return Failure<PerceptionDescriptorRegistry>(AIErrors::PerceptionDescriptorLimitExceeded);
 
-        auto storage = std::unique_ptr<Storage>{new (std::nothrow) Storage{}};
-        if (storage == nullptr)
+        using Output = Result<PerceptionDescriptorRegistry>;
+        using Bounds = PerceptionDescriptorRegistryHardLimits;
+        try {
+            auto storage = std::make_unique<Storage>();
+            if (const auto captured = CaptureDescriptors<Bounds::SenseTypes>(contributions.senses, limits, ValidSense, storage->senses);
+                captured.HasError())
+                return Output::Failure(captured.ErrorValue());
+            if (const auto captured =
+                    CaptureDescriptors<Bounds::StimulusTypes>(contributions.stimuli, limits, ValidStimulus, storage->stimuli);
+                captured.HasError())
+                return Output::Failure(captured.ErrorValue());
+            if (const auto captured =
+                    CaptureDescriptors<Bounds::ListenerTypes>(contributions.listeners, limits, ValidListener, storage->listeners);
+                captured.HasError())
+                return Output::Failure(captured.ErrorValue());
+            if (const auto resolved = ResolveListeners(storage->listeners, storage->senses, storage->stimuli, availableCapabilities);
+                resolved.HasError())
+                return Output::Failure(resolved.ErrorValue());
+            return Output::Success(PerceptionDescriptorRegistry{std::move(storage)});
+        } catch (const std::bad_alloc &) {
             return Failure<PerceptionDescriptorRegistry>(AIErrors::PerceptionRegistryStorageUnavailable);
-        storage->senseCount = contributions.senses.size();
-        storage->stimulusCount = contributions.stimuli.size();
-        storage->listenerCount = contributions.listeners.size();
-        std::ranges::copy(contributions.senses, storage->senses.begin());
-        std::ranges::copy(contributions.stimuli, storage->stimuli.begin());
-
-        const auto senses = std::span{storage->senses}.first(storage->senseCount);
-        const auto stimuli = std::span{storage->stimuli}.first(storage->stimulusCount);
-        if (const auto types = ValidateTypeDescriptors(senses, stimuli, limits); types.HasError())
-            return Result<PerceptionDescriptorRegistry>::Failure(types.ErrorValue());
-        const auto listeners = std::span{storage->listeners}.first(storage->listenerCount);
-        if (const auto resolved = ResolveListeners(listeners, contributions.listeners, senses, stimuli, availableCapabilities, limits);
-            resolved.HasError())
-            return Result<PerceptionDescriptorRegistry>::Failure(resolved.ErrorValue());
-        return Result<PerceptionDescriptorRegistry>::Success(PerceptionDescriptorRegistry{std::move(storage)});
+        }
     }
 
     /** @copydoc PerceptionDescriptorRegistry::Senses */
     std::span<const SenseTypeDescriptor> PerceptionDescriptorRegistry::Senses() const noexcept {
-        return storage_ == nullptr ? std::span<const SenseTypeDescriptor>{}
-                                   : std::span<const SenseTypeDescriptor>{storage_->senses}.first(storage_->senseCount);
+        return storage_ == nullptr ? std::span<const SenseTypeDescriptor>{} : std::span<const SenseTypeDescriptor>{storage_->senses};
     }
 
     /** @copydoc PerceptionDescriptorRegistry::Stimuli */
     std::span<const StimulusTypeDescriptor> PerceptionDescriptorRegistry::Stimuli() const noexcept {
-        return storage_ == nullptr ? std::span<const StimulusTypeDescriptor>{}
-                                   : std::span<const StimulusTypeDescriptor>{storage_->stimuli}.first(storage_->stimulusCount);
+        return storage_ == nullptr ? std::span<const StimulusTypeDescriptor>{} : std::span<const StimulusTypeDescriptor>{storage_->stimuli};
     }
 
     /** @copydoc PerceptionDescriptorRegistry::Listeners */
     std::span<const PerceptionListenerResolution> PerceptionDescriptorRegistry::Listeners() const noexcept {
         return storage_ == nullptr ? std::span<const PerceptionListenerResolution>{}
-                                   : std::span<const PerceptionListenerResolution>{storage_->listeners}.first(storage_->listenerCount);
+                                   : std::span<const PerceptionListenerResolution>{storage_->listeners};
     }
 
     /** @copydoc PerceptionDescriptorRegistry::FindSense */

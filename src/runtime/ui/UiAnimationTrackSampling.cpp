@@ -9,7 +9,8 @@
 namespace Horo::Runtime::Ui::AnimationInternal {
     /** @copydoc ValidatePropertyTrack */
     Result<UiElementHandle> ValidatePropertyTrack(const UiAnimationPropertyTrack &track, const UiElementTree &tree,
-                                                  const RuntimeStyleRegistry &registry, const std::uint32_t maximumKeyframes) {
+                                                  const RuntimeStyleRegistry &registry, const std::uint32_t maximumKeyframes,
+                                                  const bool paintOnly) {
         if (tree.State() != UiElementTreeState::Active || registry.State() != RuntimeStyleRegistryState::Active)
             return Result<UiElementHandle>::Failure(MakeError(UiErrors::AnimationLifecycleUnavailable));
         const auto target = tree.Find(track.target);
@@ -19,7 +20,8 @@ namespace Horo::Runtime::Ui::AnimationInternal {
         const auto property = std::ranges::lower_bound(properties, track.property, {}, &UiStylePropertyDescriptor::id);
         if (property == properties.end() || property->id != track.property || track.keyframes.size() < 2 ||
             track.keyframes.size() > maximumKeyframes || track.keyframes.front().position != 0 ||
-            track.keyframes.back().position != std::numeric_limits<std::uint32_t>::max())
+            track.keyframes.back().position != std::numeric_limits<std::uint32_t>::max() ||
+            (paintOnly && property->effects != UiStylePropertyEffects{.paint = true}))
             return Result<UiElementHandle>::Failure(MakeError(UiErrors::AnimationPolicyInvalid));
         std::uint32_t previous{};
         bool first = true;

@@ -9,6 +9,32 @@ namespace Horo::Animation {
     using Test::Id;
     using Test::Instance::Prepared;
 
+    TEST_CASE("Committed joint and socket queries compose the canonical pose without allocation", "[animation][graph][sockets]") {
+        const Prepared fixture(Test::Graph::Simple(), 6, false, Test::Instance::SocketSkeleton());
+        auto instance = fixture.Create();
+        const auto tick = Id<AnimationTickId>(1);
+        REQUIRE(instance.Evaluate({tick, {10}}).HasValue());
+        REQUIRE(instance.Commit(tick).HasValue());
+        const auto pose = instance.Publication().currentPose;
+
+        const auto allocations = HoroAnimationTestAllocationCount();
+        const auto joint = instance.JointModelTransform(pose, Id<JointId>(2));
+        const auto socket = instance.SocketModelTransform(pose, Id<SkeletonSocketId>(21));
+        CHECK(HoroAnimationTestAllocationCount() == allocations);
+        REQUIRE(joint.HasValue());
+        REQUIRE(socket.HasValue());
+        CHECK(joint.Value().At(0, 3) == 10.0F);
+        CHECK(socket.Value().At(0, 3) == 18.0F);
+        CHECK(socket.Value().At(1, 3) == 3.0F);
+
+        const auto missing = instance.SocketModelTransform(pose, Id<SkeletonSocketId>(22));
+        REQUIRE(missing.HasError());
+        CHECK(missing.ErrorValue().code.Value() == AnimationErrors::PoseSocketMissing.code.Value());
+        const auto missingJoint = instance.JointModelTransform(pose, Id<JointId>(77));
+        REQUIRE(missingJoint.HasError());
+        CHECK(missingJoint.ErrorValue().code.Value() == AnimationErrors::PoseJointMissing.code.Value());
+    }
+
     TEST_CASE("Animation graph instance stages cursors and fractional rate until atomic commit", "[animation][graph][instance]") {
         Prepared fixture;
         auto instance = fixture.Create();
@@ -61,6 +87,60 @@ namespace Horo::Animation {
         CHECK(copied.HasValue());
         CHECK(pose[0].translation.x == 50.0F);
         CHECK(pose[0].rotation == Math::Quaternion::Identity());
+    }
+
+    TEST_CASE("Graph root motion blends displacement and publishes only at successful commit", "[animation][graph][root-motion]") {
+        Prepared fixture(Test::Instance::Blended(), 6, true);
+        auto instance = fixture.Create();
+        const std::array<GraphParameterInput, 1> parameters{{{Id<GraphParameterId>(1), 0.25F}}};
+        const auto tick1 = Id<AnimationTickId>(1);
+        const auto tick2 = Id<AnimationTickId>(2);
+        AnimationRootMotionDelta motion;
+        const auto before = HoroAnimationTestAllocationCount();
+        const auto evaluated = instance.Evaluate({tick1, {20}, {}, parameters});
+        const auto committed = instance.Commit(tick1);
+        const auto copied = instance.CopyRootMotion(committed.publication.currentPose, motion);
+        const auto pending = instance.Evaluate({tick2, {90}, {}, parameters});
+        const auto aborted = instance.Abort();
+        const auto after = HoroAnimationTestAllocationCount();
+        CHECK(after == before);
+        REQUIRE(evaluated.HasValue());
+        REQUIRE(committed.HasValue());
+        REQUIRE(copied.HasValue());
+        CHECK(motion.translation.x == 25.0F);
+        CHECK(pending.HasValue());
+        CHECK(aborted.HasValue());
+        CHECK(instance.Publication().tick == tick1);
+        CancellationSource cancellation;
+        REQUIRE(instance.Evaluate({tick2, {70}, {}, parameters, cancellation.Token()}).HasValue());
+        cancellation.RequestCancellation();
+        CHECK(instance.Commit(tick2).failure == GraphInstanceFailure::Cancelled);
+        CHECK(instance.Publication().currentPose == committed.publication.currentPose);
+        REQUIRE(instance.Evaluate({tick2, {16}, {}, parameters}).HasValue());
+        const auto retry = instance.Commit(tick2);
+        REQUIRE(retry.HasValue());
+        REQUIRE(instance.CopyRootMotion(retry.publication.currentPose, motion).HasValue());
+        CHECK(motion.translation.x == 20.0F);
+        REQUIRE(instance.CopyRootMotion(committed.publication.currentPose, motion).HasValue());
+        CHECK(motion.translation.x == 25.0F);
+    }
+
+    TEST_CASE("Graph root motion requires explicit authority and preserves output on rejected reads", "[animation][graph][root-motion]") {
+        Prepared fixture(Test::Graph::Simple(), 6, true);
+        auto context = fixture.context;
+        context.evaluationDomain = AnimationEvaluationDomain::Presentation;
+        CHECK(AnimationGraphInstance::Create(fixture.Assets(), context).HasError());
+        context.extractRootMotion = false;
+        auto created = AnimationGraphInstance::Create(fixture.Assets(), context);
+        REQUIRE(created.HasValue());
+        auto instance = std::move(created).Value();
+        const auto tick = Id<AnimationTickId>(1);
+        REQUIRE(instance.Evaluate({tick, {20}}).HasValue());
+        const auto committed = instance.Commit(tick);
+        REQUIRE(committed.HasValue());
+        AnimationRootMotionDelta output{{5.0F, 0.0F, 0.0F}, {}};
+        CHECK(instance.CopyRootMotion(committed.publication.currentPose, output).failure == GraphInstanceFailure::AdmissionRejected);
+        CHECK(output.translation.x == 5.0F);
     }
 
     TEST_CASE("Animation graph instance failure cancellation and shutdown preserve published poses without allocation",
@@ -196,8 +276,8 @@ namespace Horo::Animation {
     }
 
     TEST_CASE("Animation graph instance executes compiler call aliases and repeated independent players", "[animation][graph][instance]") {
-        for (auto graph : {Test::Graph::Subgraphs(), Test::Graph::RepeatedCalls()}) {
-            Prepared fixture(std::move(graph));
+        for (const auto &graph : {Test::Graph::Subgraphs(), Test::Graph::RepeatedCalls()}) {
+            Prepared fixture(graph);
             auto instance = fixture.Create();
             const auto tick = Id<AnimationTickId>(1);
             std::array<Math::Transform, 1> pose;

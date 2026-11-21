@@ -59,9 +59,10 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRFrameCompositor::Bind */
     Result<void> OpenXRFrameCompositor::Bind(NativeOpenXRDispatch dispatch, const NativeFramePacingPolicy &pacing,
-                                             NativeCompositorColorSpace colorSpace) {
+                                             NativeCompositorColorSpace colorSpace, const NativeFrameMetricHandles &metrics) {
         // Snapshot before foreign loader callbacks can mutate the caller-owned policy.
         const NativeFramePacingPolicy admittedPacing = pacing;
+        const NativeFrameMetricHandles admittedMetrics = metrics;
         if (thread_ != std::this_thread::get_id() || nativeFrame_.IsValid() || frames_->Snapshot().phase != XRFramePhase::Idle ||
             owner_.IsValid() || closing_)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
@@ -103,7 +104,14 @@ namespace Horo::XR::OpenXRInternal {
         wait_ = wait.Value();
         begin_ = begin.Value();
         end_ = end.Value();
+        metrics_ = admittedMetrics;
+        metrics_.frameDepth.Observe(0);
         return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRFrameCompositor::RecordOutcome */
+    void OpenXRFrameCompositor::RecordOutcome(const NativeFrameMetricOutcome outcome) const noexcept {
+        metrics_.outcomes[static_cast<std::size_t>(outcome)].Add();
     }
 
     /** @copydoc OpenXRFrameCompositor::Wait */
@@ -122,16 +130,22 @@ namespace Horo::XR::OpenXRInternal {
         const XrFrameWaitInfo info{XR_TYPE_FRAME_WAIT_INFO};
         const XrResult result = wait_(native.Value().session, &info, &state);
         if (XR_FAILED(result)) {
+            RecordOutcome(NativeFrameMetricOutcome::WaitFailed);
             static_cast<void>(frames_->CancelWait());
             return Outcome::Failure(NativeError("wait frame", result));
         }
         nativeFrame_ = reservation.frame;
+        RecordOutcome(NativeFrameMetricOutcome::WaitCompleted);
+        metrics_.frameDepth.Observe(1);
+        if (state.predictedDisplayPeriod > 0)
+            metrics_.predictedPeriod.Observe(static_cast<double>(state.predictedDisplayPeriod) / 1'000'000'000.0);
         period_ = state.predictedDisplayPeriod;
         nativeDisplayTime_ = state.predictedDisplayTime;
         const auto prediction = XRRenderPredictionTime::Create(state.predictedDisplayTime);
         // SYNC: a completed native wait always creates begin/end debt, even with unusable prediction evidence.
         const auto recorded =
-            frames_->RecordWait(prediction.HasValue() ? prediction.Value() : XRRenderPredictionTime{}, state.shouldRender == XR_TRUE);
+            frames_->RecordWaitWithNativePeriod(prediction.HasValue() ? prediction.Value() : XRRenderPredictionTime{},
+                                                state.shouldRender == XR_TRUE, Duration::FromNanoseconds(state.predictedDisplayPeriod));
         return Outcome::Success(recorded);
     }
 
@@ -160,10 +174,12 @@ namespace Horo::XR::OpenXRInternal {
         const XrFrameBeginInfo info{XR_TYPE_FRAME_BEGIN_INFO};
         const XrResult result = begin_(native.Value().session, &info);
         if (XR_FAILED(result)) {
+            RecordOutcome(NativeFrameMetricOutcome::BeginFailed);
             fault_ = NativeError("begin frame", result);
             return Result<void>::Failure(*fault_);
         }
         begun_ = true;
+        RecordOutcome(result == XR_FRAME_DISCARDED ? NativeFrameMetricOutcome::BeginDiscarded : NativeFrameMetricOutcome::BeginCompleted);
         if (frames_->Begin(frame) != XRFrameStatus::Ok) {
             fault_ = MakeError(XRErrors::IdentityStale);
             return Result<void>::Failure(*fault_);
@@ -240,10 +256,7 @@ namespace Horo::XR::OpenXRInternal {
             return valid;
         const auto &plan = encoding.plan;
         const auto targets = encoding.targets;
-        if (const auto snapshot = frames_->Snapshot();
-            !begun_ || frames_->ValidateEnd(frame, 1) != XRFrameStatus::Ok || plan.Configuration().id != frame.configuration ||
-            plan.Configuration().session != frame.session || plan.PredictedDisplayTime() != snapshot.predictedDisplayTime ||
-            plan.Views().size() != snapshot.locatedViews || targets.empty() || targets.size() != snapshot.acquiredImages ||
+        if (!begun_ || frames_->ValidateProjectionEnd(frame, plan) != XRFrameStatus::Ok || targets.empty() ||
             targets.size() > XRFrameHardLimits::MaximumImages)
             return Result<void>::Failure(MakeError(XRErrors::ViewPlanInvalid));
         // First production profile admits complete primary opaque stereo; no silent truncation or blend fallback.
@@ -260,6 +273,10 @@ namespace Horo::XR::OpenXRInternal {
             if (!target.owner || !target.image.IsValid() || !known || duplicate)
                 return Result<void>::Failure(MakeError(XRErrors::ExternalTargetInvalid));
         }
+        if (!std::ranges::all_of(plan.Targets(), [&](const auto &target) {
+            return std::ranges::find(targets, target.image, &NativeProjectionTarget::image) != targets.end();
+        }))
+            return Result<void>::Failure(MakeError(XRErrors::ExternalTargetInvalid));
         return ValidateDepthPlan(encoding);
     }
 
@@ -326,12 +343,176 @@ namespace Horo::XR::OpenXRInternal {
         return Outcome::Success(space.Value());
     }
 
+    namespace {
+        /** @brief Exposes only the latest released image on this provider, with its exact per-eye bounds. */
+        std::optional<XrSwapchainSubImage> ReprojectionSubImage(const OpenXRSwapchain &owner, const XRReprojectionSubImage &image,
+                                                                const NativeReprojectionProviderBorrow &provider,
+                                                                const NativeSwapchainRole expected, const std::size_t eye) {
+            const auto released = owner.BorrowReleased(image.image);
+            if (released.HasError())
+                return std::nullopt;
+            const auto &allocation = released.Value().allocation;
+            const auto &rect = image.rectangle;
+            const auto &extent = provider.offer.extents[eye];
+            constexpr auto maximum = static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max());
+            if (allocation.role != expected || !allocation.reprojection || allocation.reprojection->attempt != provider.attempt ||
+                allocation.reprojection->route != provider.offer.route || allocation.reprojection->eyeExtents != provider.offer.extents ||
+                image.arrayLayer >= allocation.texture.layerCount || rect.width != extent.width || rect.height != extent.height ||
+                !rect.FitsWithin(allocation.texture.extent) || allocation.texture.extent.width > maximum ||
+                allocation.texture.extent.height > maximum)
+                return std::nullopt;
+            return XrSwapchainSubImage{released.Value().swapchain,
+                                       {{static_cast<std::int32_t>(rect.x), static_cast<std::int32_t>(rect.y)},
+                                        {static_cast<std::int32_t>(rect.width), static_cast<std::int32_t>(rect.height)}},
+                                       image.arrayLayer};
+        }
+    }  // namespace
+
+    /** @copydoc OpenXRFrameCompositor::EncodeReprojection */
+    std::optional<OpenXRFrameCompositor::ReprojectionEncoding> OpenXRFrameCompositor::EncodeReprojection(
+        const NativeReprojectionSubmission &synthesis) const {
+        if (synthesis.motion.session_ != session_ || synthesis.depth.session_ != session_)
+            return std::nullopt;
+        const auto borrowed = session_->BorrowReprojectionProvider(synthesis.provider);
+        if (borrowed.HasError())
+            return std::nullopt;
+        const auto &provider = borrowed.Value();
+        const auto &inputs = synthesis.inputs;
+        if (inputs.views.size() != provider.offer.extents.size() || !inputs.applicationDelta)
+            return std::nullopt;
+        const auto &delta = *inputs.applicationDelta;
+        const auto &p = delta.translationMeters;
+        const auto &q = delta.rotation;
+        const XrPosef pose{{q.x, q.y, q.z, q.w}, {p.x, p.y, p.z}};
+        ReprojectionEncoding encoded{.route = provider.offer.route};
+        for (std::size_t eye = 0; eye < inputs.views.size(); ++eye) {
+            const auto &input = inputs.views[eye];
+            const auto motion = ReprojectionSubImage(synthesis.motion, input.motion, provider, NativeSwapchainRole::Motion, eye);
+            const auto depth = ReprojectionSubImage(synthesis.depth, input.depth, provider, NativeSwapchainRole::ReprojectionDepth, eye);
+            if (!motion || !depth)
+                return std::nullopt;
+            if (encoded.route == NativeReprojectionRoute::FrameSynthesisExt) {
+                encoded.ext[eye] = {XR_TYPE_FRAME_SYNTHESIS_INFO_EXT,
+                                    nullptr,
+                                    0,
+                                    *motion,
+                                    {1, 1, 1, 0},
+                                    {},
+                                    pose,
+                                    *depth,
+                                    input.minimumDepth,
+                                    input.maximumDepth,
+                                    input.nearMeters,
+                                    input.farMeters};
+            } else if (encoded.route == NativeReprojectionRoute::SpaceWarpFb) {
+                encoded.fb[eye] = {XR_TYPE_COMPOSITION_LAYER_SPACE_WARP_INFO_FB,
+                                   nullptr,
+                                   0,
+                                   *motion,
+                                   pose,
+                                   *depth,
+                                   input.minimumDepth,
+                                   input.maximumDepth,
+                                   input.nearMeters,
+                                   input.farMeters};
+            } else {
+                return std::nullopt;
+            }
+        }
+        const auto current = session_->BorrowReprojectionProvider(synthesis.provider);
+        if (current.HasError())
+            return std::nullopt;
+        encoded.session = current.Value().session;
+        encoded.end = current.Value().end;
+        return encoded;
+    }
+
+    /** @copydoc OpenXRFrameCompositor::EndReprojectedProjection */
+    Result<XRReprojectionStatus> OpenXRFrameCompositor::EndReprojectedProjection(const XRFrameId &frame, const XRViewRenderPlan &plan,
+                                                                                 const std::span<const NativeProjectionTarget> targets,
+                                                                                 const NativeReprojectionSubmission &synthesis) {
+        using Outcome = Result<XRReprojectionStatus>;
+        const ProjectionEncoding encoding{plan, targets, nullptr};
+        if (const auto baseline = ValidateProjection(frame, encoding); baseline.HasError())
+            return Outcome::Failure(baseline.ErrorValue());
+        const auto status = frames_->ValidateReprojection(frame, plan, synthesis.inputs);
+        const bool ready = status == XRReprojectionStatus::Ready;
+        const auto ended = EndEncodedProjection(frame, encoding, ready ? &synthesis : nullptr);
+        if (ended.HasError())
+            return Outcome::Failure(ended.ErrorValue());
+        return Outcome::Success(ready && !ended.Value() ? XRReprojectionStatus::InputsInvalid : status);
+    }
+
     /** @copydoc OpenXRFrameCompositor::EndProjection */
     Result<void> OpenXRFrameCompositor::EndProjection(const XRFrameId &frame, const XRViewRenderPlan &plan,
                                                       std::span<const NativeProjectionTarget> targets, const NativeProjectionDepth *depth) {
         const ProjectionEncoding encoding{plan, targets, depth};
         if (const auto valid = ValidateProjection(frame, encoding); valid.HasError())
             return valid;
+        const auto ended = EndEncodedProjection(frame, encoding, nullptr);
+        return ended.HasError() ? Result<void>::Failure(ended.ErrorValue()) : Result<void>::Success();
+    }
+
+    namespace {
+        /** @brief Admits only formats with an actual alpha channel on the selected projection target. */
+        bool HasProjectionAlpha(const XRExternalRenderTargetDescriptor &target) noexcept {
+            if (target.role != XRExternalRenderTargetRole::ProjectionColor)
+                return true;
+            using enum Render::RenderTextureFormat;
+            switch (target.format) {
+                case Rgba8Unorm:
+                case Rgba8UnormSrgb:
+                case Bgra8Unorm:
+                case Bgra8UnormSrgb:
+                case Rgba16Float:
+                case Rgba32Float:
+                    return true;
+                default:
+                    return false;
+            }
+        }
+    }  // namespace
+
+    /** @copydoc OpenXRFrameCompositor::EndPassthroughProjection */
+    Result<void> OpenXRFrameCompositor::EndPassthroughProjection(const XRFrameId &frame, const XRViewRenderPlan &plan,
+                                                                 std::span<const NativeProjectionTarget> targets,
+                                                                 const NativePassthroughProjection &passthrough,
+                                                                 const NativeProjectionDepth *depth) {
+        const ProjectionEncoding encoding{plan, targets, depth};
+        if (const auto valid = ValidateProjection(frame, encoding); valid.HasError())
+            return valid;
+        const auto &scope = passthrough.scope;
+        if (passthrough.frame != frame || scope.session != frame.session)
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        auto expectedSpace = scope.world;
+        if (const auto &calibration = passthrough.referenceToWorld) {
+            const auto reference = calibration->Source().kind;
+            if ((reference != XRSpaceKind::Local && reference != XRSpaceKind::Stage) || calibration->Session() != frame.session ||
+                calibration->Target() != scope.world || calibration->Purpose() != XRPosePurpose::PresentationPrediction ||
+                calibration->Time().renderPrediction != plan.PredictedDisplayTime() || !calibration->Components().positionMeters.value ||
+                !calibration->Components().orientation.value)
+                return Result<void>::Failure(MakeError(XRErrors::IdentityStale, "Passthrough World calibration is stale"));
+            expectedSpace = calibration->Source();
+        }
+        if (std::ranges::any_of(plan.Views(), [&](const auto &view) {
+            return view.pose.target != expectedSpace;
+        }))
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        if (!std::ranges::all_of(plan.Targets(), HasProjectionAlpha))
+            return Result<void>::Failure(MakeError(XRErrors::ExternalTargetInvalid, "Passthrough needs projection alpha"));
+        const auto capacity = frames_->ValidateEnd(frame, 2);
+        if (capacity != XRFrameStatus::Ok)
+            return Result<void>::Failure(
+                MakeError(capacity == XRFrameStatus::CapacityExceeded ? XRErrors::CapacityExceeded : XRErrors::OperationIncompatible));
+        const auto ended = EndEncodedProjection(frame, encoding, nullptr, &passthrough.scope);
+        return ended.HasError() ? Result<void>::Failure(ended.ErrorValue()) : Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRFrameCompositor::EndEncodedProjection */
+    Result<bool> OpenXRFrameCompositor::EndEncodedProjection(const XRFrameId &frame, const ProjectionEncoding &encoding,
+                                                             const NativeReprojectionSubmission *synthesis,
+                                                             const XRPassthroughScope *passthrough) {
+        const auto &plan = encoding.plan;
         // PERF: fixed bounded native encoding storage; no frame allocation or native discovery.
         std::array<XrCompositionLayerProjectionView, XRHardLimits::MaximumViews> views{};
         std::array<XrCompositionLayerDepthInfoKHR, XRHardLimits::MaximumViews> depths{};
@@ -339,36 +520,61 @@ namespace Horo::XR::OpenXRInternal {
         for (std::size_t index = 0; index < plan.Views().size(); ++index) {
             const auto space = EncodeView(encoding, plan.Views()[index], views[index], depths[index]);
             if (space.HasError())
-                return Result<void>::Failure(space.ErrorValue());
+                return Result<bool>::Failure(space.ErrorValue());
             if (reference != XR_NULL_HANDLE && reference != space.Value())
-                return Result<void>::Failure(MakeError(XRErrors::CoordinateSpaceIncompatible));
+                return Result<bool>::Failure(MakeError(XRErrors::CoordinateSpaceIncompatible));
             reference = space.Value();
         }
+        const auto optional = synthesis ? EncodeReprojection(*synthesis) : std::nullopt;
+        XrSession session{XR_NULL_HANDLE};
+        if (optional) {
+            session = optional->session;
+        } else {
+            const auto native = Current();
+            if (native.HasError())
+                return Result<bool>::Failure(native.ErrorValue());
+            session = native.Value().session;
+        }
+        if (optional)
+            for (std::size_t eye = 0; eye < plan.Views().size(); ++eye)
+                views[eye].next = optional->route == NativeReprojectionRoute::FrameSynthesisExt
+                                      ? static_cast<const void *>(&optional->ext[eye])
+                                      : static_cast<const void *>(&optional->fb[eye]);
         const XrCompositionLayerProjection layer{XR_TYPE_COMPOSITION_LAYER_PROJECTION,
                                                  nullptr,
-                                                 0,
+                                                 passthrough ? XR_COMPOSITION_LAYER_BLEND_TEXTURE_SOURCE_ALPHA_BIT : 0,
                                                  reference,
                                                  static_cast<std::uint32_t>(plan.Views().size()),
                                                  views.data()};
         // OpenXR defines this native base-header view for projection layer dispatch.
         static_assert(sizeof(const XrCompositionLayerBaseHeader *) == sizeof(&layer));
-        return EndNative(frame, XR_ENVIRONMENT_BLEND_MODE_OPAQUE, std::bit_cast<const XrCompositionLayerBaseHeader *>(&layer));
+        const auto ended =
+            EndNative(frame, session, XR_ENVIRONMENT_BLEND_MODE_OPAQUE, std::bit_cast<const XrCompositionLayerBaseHeader *>(&layer), &plan,
+                      optional ? optional->end : end_, passthrough);
+        return ended.HasError() ? Result<bool>::Failure(ended.ErrorValue()) : Result<bool>::Success(optional.has_value());
     }
 
     /** @copydoc OpenXRFrameCompositor::EndNative */
-    Result<void> OpenXRFrameCompositor::EndNative(const XRFrameId &frame, XrEnvironmentBlendMode blend,
-                                                  const XrCompositionLayerBaseHeader *layer) {
-        const auto native = Current();
-        if (native.HasError())
-            return Result<void>::Failure(native.ErrorValue());
+    Result<void> OpenXRFrameCompositor::EndNative(const XRFrameId &frame, XrSession session, XrEnvironmentBlendMode blend,
+                                                  const XrCompositionLayerBaseHeader *layer, const XRViewRenderPlan *projection,
+                                                  PFN_xrEndFrame dispatch, const XRPassthroughScope *passthrough) {
         // SYNC: cleanup must echo the completed native wait even when its prediction could not enter Horo's time contract.
         const XrFrameEndInfo info{XR_TYPE_FRAME_END_INFO, nullptr, nativeDisplayTime_, blend, layer ? 1U : 0U, layer ? &layer : nullptr};
-        const XrResult result = end_(native.Value().session, &info);
+        const auto dispatched = passthrough ? session_->EndPassthroughFrame(*passthrough, session, info, dispatch)
+                                            : Result<XrResult>::Success(dispatch(session, &info));
+        if (dispatched.HasError())
+            return Result<void>::Failure(dispatched.ErrorValue());
+        const auto result = dispatched.Value();
         if (XR_FAILED(result)) {
-            fault_ = NativeError("end frame", result);
+            RecordOutcome(NativeFrameMetricOutcome::EndFailed);
+            fault_ = passthrough && (result == XR_ERROR_NOT_PERMITTED_PASSTHROUGH_FB || result == XR_ERROR_PERMISSION_INSUFFICIENT)
+                         ? MakeError(XRErrors::PermissionDenied, "end frame")
+                         : NativeError("end frame", result);
             return Result<void>::Failure(*fault_);
         }
-        const auto ended = frames_->End(frame, layer ? 1U : 0U);
+        RecordOutcome(projection ? NativeFrameMetricOutcome::ProjectionAccepted : NativeFrameMetricOutcome::EmptyAccepted);
+        metrics_.frameDepth.Observe(0);
+        const auto ended = projection ? frames_->EndProjection(frame, *projection) : frames_->End(frame, 0);
         nativeFrame_ = {};
         begun_ = false;
         period_ = 0;
@@ -382,7 +588,9 @@ namespace Horo::XR::OpenXRInternal {
             return valid;
         if (!begun_ || frames_->ValidateEnd(frame, 0) != XRFrameStatus::Ok)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
-        return EndNative(frame, XR_ENVIRONMENT_BLEND_MODE_OPAQUE, nullptr);
+        const auto native = Current();
+        return native.HasError() ? Result<void>::Failure(native.ErrorValue())
+                                 : EndNative(frame, native.Value().session, XR_ENVIRONMENT_BLEND_MODE_OPAQUE, nullptr, nullptr, end_);
     }
 
     /** @copydoc OpenXRFrameCompositor::RetainedFault */
@@ -402,6 +610,9 @@ namespace Horo::XR::OpenXRInternal {
     Result<void> OpenXRFrameCompositor::ResetAfterQuiescence() {
         if (thread_ != std::this_thread::get_id())
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible, "XR recovery requires its control thread."));
+        if (nativeFrame_.IsValid())
+            metrics_.frameDepth.Observe(0);
+        metrics_ = {};
         owner_ = {};
         nativeFrame_ = {};
         wait_ = nullptr;
@@ -412,5 +623,153 @@ namespace Horo::XR::OpenXRInternal {
         period_ = 0;
         nativeDisplayTime_ = 0;
         return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRReprojectionFrameImages::OpenXRReprojectionFrameImages */
+    OpenXRReprojectionFrameImages::OpenXRReprojectionFrameImages(XRFrameLifecycle &frames, OpenXRSwapchain &motion,
+                                                                 OpenXRSwapchain &depth) noexcept
+        : frames_(&frames), owners_{&motion, &depth} {}
+
+    /** @copydoc OpenXRReprojectionFrameImages::ValidateOwners */
+    Result<void> OpenXRReprojectionFrameImages::ValidateOwners(const XRFrameId &frame) const {
+        for (const auto *owner : owners_) {
+            if (const auto valid = owner->CheckCurrent(); valid.HasError())
+                return valid;
+        }
+        const auto &motion = owners_.front()->request_;
+        const auto &depth = owners_.back()->request_;
+        if (owners_.front()->session_ != owners_.back()->session_ || motion.role != NativeSwapchainRole::Motion ||
+            depth.role != NativeSwapchainRole::ReprojectionDepth || motion.target.slot.index == depth.target.slot.index ||
+            motion.target.session != frame.session || depth.target.session != frame.session)
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        const auto &a = *motion.reprojection;
+        const auto &b = *depth.reprojection;
+        if (a.attempt != b.attempt || a.route != b.route || a.eyeExtents != b.eyeExtents)
+            return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRReprojectionFrameImages::Prepare */
+    Result<std::optional<NativeReprojectionFramePair>> OpenXRReprojectionFrameImages::Prepare(
+        const XRFrameId &frame, const std::span<const XRSwapchainImageId> projection) {
+        using Outcome = Result<std::optional<NativeReprojectionFramePair>>;
+        if (const auto thread = owners_.front()->CheckThread(); thread.HasError())
+            return Outcome::Failure(thread.ErrorValue());
+        if (frames_->ValidateCurrent(frame) != XRFrameStatus::Ok || frames_->Snapshot().phase != XRFramePhase::ImagesAcquired)
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        if (phase_ != Phase::Idle || attempted_ == frame)
+            return Outcome::Success(std::nullopt);
+        if (const auto valid = ValidateOwners(frame); valid.HasError())
+            return Outcome::Failure(valid.ErrorValue());
+        if (std::ranges::any_of(owners_, [](const auto *owner) {
+            return owner->Phase() != NativeSwapchainPhase::Available;
+        }))
+            return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
+
+        attempted_ = frame;
+        phase_ = Phase::Omitted;  // Every acquired prefix remains cleanup-only until both imports pass canonical preflight.
+        released_.fill(false);
+        std::array<NativeReprojectionAcquisition, 2> acquired;
+        for (std::size_t index = 0; index < owners_.size(); ++index) {
+            auto &owner = *owners_[index];
+            if (auto native = owner.Acquire(); native.HasError())
+                return Outcome::Failure(native.ErrorValue());
+            const auto ready = owner.Wait(0);
+            if (ready.HasError())
+                return Outcome::Failure(ready.ErrorValue());
+            if (!ready.Value())
+                return Outcome::Success(std::nullopt);
+            if (const auto imported = owner.Import(); imported.HasError())
+                return Outcome::Failure(imported.ErrorValue());
+            const auto auxiliary = owner.CurrentReprojection();
+            if (auxiliary.HasError())
+                return Outcome::Failure(auxiliary.ErrorValue());
+            acquired[index] = auxiliary.Value();
+        }
+        if (acquired.front().texture == acquired.back().texture ||
+            frames_->ValidateReprojectionSubmission(frame, projection, acquired.front().evidence, acquired.back().evidence) !=
+                XRFrameStatus::Ok)
+            return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
+        pair_.emplace(NativeReprojectionFramePair{frame, acquired.front(), acquired.back()});
+        phase_ = Phase::Prepared;
+        return Outcome::Success(pair_);
+    }
+
+    /** @copydoc OpenXRReprojectionFrameImages::Submit */
+    Result<void> OpenXRReprojectionFrameImages::Submit(const XRFrameId &frame, const std::span<const XRSwapchainImageId> projection) {
+        if (const auto valid = ValidateOwners(frame); valid.HasError())
+            return valid;
+        if (phase_ != Phase::Prepared || !pair_ || frame != pair_->frame)
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        if (auto motion = owners_.front()->ValidateAcquisition(pair_->motion.evidence.image); motion.HasError())
+            return motion;
+        if (auto depth = owners_.back()->ValidateAcquisition(pair_->depth.evidence.image); depth.HasError())
+            return depth;
+        if (frames_->SubmitReprojection(frame, projection, pair_->motion.evidence, pair_->depth.evidence) != XRFrameStatus::Ok)
+            return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
+        phase_ = Phase::Submitted;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRReprojectionFrameImages::Omit */
+    Result<void> OpenXRReprojectionFrameImages::Omit(const XRFrameId &frame) {
+        if (const auto thread = owners_.front()->CheckThread(); thread.HasError())
+            return thread;
+        if (phase_ != Phase::Prepared || !pair_ || frame != pair_->frame)
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        pair_.reset();
+        phase_ = Phase::Omitted;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRReprojectionFrameImages::Release */
+    Result<bool> OpenXRReprojectionFrameImages::Release(OpenXRSwapchain &owner, const XRSwapchainImageId *registered) {
+        if (owner.Phase() == NativeSwapchainPhase::Acquired) {
+            const auto ready = owner.Wait(0);
+            if (ready.HasError() || !ready.Value())
+                return ready;
+        }
+        if (owner.Phase() != NativeSwapchainPhase::Available) {
+            const auto released = owner.PollRelease();
+            if (released.HasError() || !released.Value())
+                return released;
+        }
+        if (registered) {
+            if (const auto released = owner.BorrowReleased(*registered); released.HasError())
+                return Result<bool>::Failure(released.ErrorValue());
+            if (frames_->Release(attempted_, *registered) != XRFrameStatus::Ok)
+                return Result<bool>::Failure(MakeError(XRErrors::OperationIncompatible));
+        }
+        return Result<bool>::Success(true);
+    }
+
+    /** @copydoc OpenXRReprojectionFrameImages::PollRetirement */
+    Result<bool> OpenXRReprojectionFrameImages::PollRetirement() {
+        if (const auto thread = owners_.front()->CheckThread(); thread.HasError())
+            return Result<bool>::Failure(thread.ErrorValue());
+        if (phase_ == Phase::Idle)
+            return Result<bool>::Success(true);
+        if (phase_ == Phase::Prepared || (phase_ == Phase::Submitted && frames_->ValidateCurrent(attempted_) != XRFrameStatus::Ok))
+            return Result<bool>::Failure(MakeError(XRErrors::OperationIncompatible));
+        std::optional<Error> failure;
+        const std::array registered{pair_ ? &pair_->motion.evidence.image : nullptr, pair_ ? &pair_->depth.evidence.image : nullptr};
+        for (std::size_t index = 0; index < owners_.size(); ++index) {
+            if (released_[index])
+                continue;
+            const auto released = Release(*owners_[index], registered[index]);
+            if (released.HasError()) {
+                if (!failure)
+                    failure = released.ErrorValue();
+                continue;
+            }
+            released_[index] = released.Value();
+        }
+        if (failure)
+            return Result<bool>::Failure(std::move(*failure));
+        if (!released_.front() || !released_.back())
+            return Result<bool>::Success(false);
+        pair_.reset();
+        phase_ = Phase::Idle;
+        return Result<bool>::Success(true);
     }
 }  // namespace Horo::XR::OpenXRInternal

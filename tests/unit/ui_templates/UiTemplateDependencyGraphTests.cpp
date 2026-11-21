@@ -159,6 +159,44 @@ namespace Horo::UiTemplates {
         ExpectError(UiTemplateDependencyGraph::Create(packageCatalog, {}, limits), UiErrors::TemplateGraphBudgetExceeded);
     }
 
+    TEST_CASE("Generated template DAGs resolve canonically and reject mutated dependency evidence",
+              "[runtime_ui][template][dependency][fuzz]") {
+        std::uint32_t state = 0x9f3786d1;
+        for (std::uint8_t count = 3; count <= 24; ++count) {
+            CAPTURE(count);
+            std::vector<UiTemplateDependencyDescriptor> descriptors;
+            for (std::uint8_t node = 1; node <= count; ++node) {
+                state = state * 1664525U + 1013904223U;
+                std::vector<UiTemplateReference> edges;
+                if (node < count)
+                    edges.push_back(Ref(static_cast<std::uint8_t>(node + 1)));
+                if (node + 2 <= count && (state & 0x100U) != 0)
+                    edges.push_back(Ref(static_cast<std::uint8_t>(node + 2)));
+                descriptors.push_back(Node(node, std::move(edges)));
+            }
+            auto base = UiTemplateDependencyGraph::Create(descriptors, {});
+            REQUIRE(base.HasValue());
+            const auto baseline = base.Value().Resolve(Ref(1));
+            REQUIRE(baseline.HasValue());
+            REQUIRE(baseline.Value().templates.size() == count);
+            CHECK(baseline.Value().templates.front() == Asset(count));
+            CHECK(baseline.Value().templates.back() == Asset(1));
+
+            auto cyclic = descriptors;
+            cyclic.back().nested.push_back(Ref(1));
+            auto cycle = UiTemplateDependencyGraph::Create(cyclic, {});
+            REQUIRE(cycle.HasValue());
+            ExpectError(cycle.Value().Resolve(Ref(1)), UiErrors::TemplateDependencyCycle);
+
+            auto stale = descriptors;
+            stale[count - 2].nested.front().revision = Digest(250);
+            auto staleGraph = UiTemplateDependencyGraph::Create(stale, {});
+            REQUIRE(staleGraph.HasValue());
+            ExpectError(staleGraph.Value().Resolve(Ref(1)), UiErrors::TemplateRevisionUnavailable);
+            CHECK(base.Value().Resolve(Ref(1)).Value().templates == baseline.Value().templates);
+        }
+    }
+
     TEST_CASE("Template graph depth limit includes descendants of a previously resolved shared node",
               "[runtime_ui][template][dependency][budget]") {
         const std::vector diamond{Node(1, {Ref(2), Ref(3)}), Node(2, {Ref(4)}), Node(3, {Ref(5)}),

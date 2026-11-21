@@ -30,7 +30,15 @@ namespace Horo::Runtime {
     class RuntimeSceneView;
     class SceneRestoreCandidateCommands;
     class SceneCommandBuffer;
+    class SceneStructuralCandidate;
+    class SceneGroupPublication;
     class IStagedRestoreAggregatePublication;
+
+    namespace Detail {
+        class ActivatedSceneInstances;
+        class StreamedSceneInstanceAccess;
+        struct InitialActivatedSceneChildren;
+    }  // namespace Detail
 
     /** @brief Exact durable member inventory for one private structural partition; entity is a dense command index. */
     struct SceneRestorePartitionMember final {
@@ -326,6 +334,7 @@ namespace Horo::Runtime {
 
     private:
         friend class RuntimeSceneService;
+        friend class Detail::ActivatedSceneInstances;
 
         explicit ScenePublicationReceipt(std::shared_ptr<ScenePublicationDetail::State> state) noexcept : state_(std::move(state)) {}
 
@@ -575,7 +584,8 @@ namespace Horo::Runtime {
     };
 
     /** @brief Immutable observation of one Scene-owned transaction, retained safely through Scene/service retirement.
-     * Observers use the Scene owner lane. Pending means unpublished; success remains success after entity retirement.
+     * Observers use the Scene owner lane. Pending means unpublished. A committed receipt is visible to post-publication
+     * callbacks and remains successful after entity retirement.
      */
     class SceneStructuralReceipt final {
     public:
@@ -622,6 +632,13 @@ namespace Horo::Runtime {
          * @return Success or rejection without queued work. Missing/reused entities and foreign children fail atomically.
          */
         [[nodiscard]] Result<void> DestroyGroup(std::vector<EntityRef> entities, const SceneStructuralAdmission &admission);
+        /**
+         * @brief Associates an external owner with one exact ordinary group creation or destruction.
+         * @param publication Owner retained through commit or rollback.
+         * @return Success for a buffer containing exactly one group, or a typed rejection.
+         * @pre A bound buffer must remain a single ordinary group until it is committed.
+         */
+        [[nodiscard]] Result<void> BindGroupPublication(std::shared_ptr<const SceneGroupPublication> publication);
         /** @brief Queues an independent baseline or an exact revision replacement in the receiving scene.
          * @param definition Owned validated flattened input; authored IDs must be unique in the final scene.
          * @param resources Complete exact named dependency closure, already prepared by the asset owner.
@@ -738,8 +755,10 @@ namespace Horo::Runtime {
         using Command = std::variant<CreateCommand, DestroyCommand, SetLocalTransformCommand, CreateGroupCommand, DestroyGroupCommand,
                                      AttachBaselineCommand, DetachBaselineCommand>;
         [[nodiscard]] Result<void> ValidateAdmission(SceneRuntimeId scene, Assets::AssetRegistryRevision registry) const;
+        [[nodiscard]] bool HasSingleOrdinaryGroup() const noexcept;
         [[nodiscard]] Result<void> ValidateBaselineResources(const Assets::AssetRegistry *registry) const;
         std::vector<Command> commands_;
+        std::shared_ptr<const SceneGroupPublication> groupPublication_;
         std::uint64_t nextDeferred_{1};
     };
 
@@ -755,6 +774,13 @@ namespace Horo::Runtime {
         std::span<const RuntimeGroupAssetLease> groupAssets;            /**< Exact named envelope pins, borrowed for this entity view. */
         std::span<const RuntimeResolvedGroupReference> groupReferences; /**< Borrowed immutable post-publication reference interfaces. */
         std::span<const Assets::AssetId> groupSpawnLineage; /**< Borrowed inherited creation evidence for host capability scoping. */
+        const Math::Transform
+            *replicaPresentationTransform{}; /**< Optional committed replica pose, separate from the simulation transform. */
+
+        /** @brief Returns the effective local pose for presentation, with the ordinary Scene pose as its baseline. */
+        [[nodiscard]] const Math::Transform *PresentationLocalTransform() const noexcept {
+            return replicaPresentationTransform ? replicaPresentationTransform : localTransform;
+        }
     };
 
     /** @brief Explicit subsystem ownership for staged structural changes; never backend discovery. */
@@ -762,7 +788,8 @@ namespace Horo::Runtime {
         Physics,
         Gameplay,
         AI,
-        Animation
+        Animation,
+        Navigation
     };
 
     /** @brief Explicit structural preparation order, independent of host registration order. */
@@ -800,6 +827,23 @@ namespace Horo::Runtime {
         [[nodiscard]] virtual Result<void> AfterPublication() = 0;
     };
 
+    /** @brief Optional command-scoped owner of state published with one complete Scene group. */
+    class SceneGroupPublication {
+    public:
+        virtual ~SceneGroupPublication() = default;
+        /**
+         * @brief Prepares additional owner state using the complete group in its original member order.
+         * @param active Existing committed Scene, borrowed only for this call.
+         * @param members Exact reserved identities for creation or the exact live identities for retirement.
+         * @param creating True for creation and false for retirement.
+         * @return Unpublished owner state, or a typed error rolling back the complete group.
+         * @details Runs after reference fixups and ordinary owner preparation. It cannot mutate live Scene or other owners.
+         */
+        [[nodiscard]] virtual Result<std::unique_ptr<SceneStructuralCandidate>> Prepare(const RuntimeSceneView &active,
+                                                                                        std::span<const EntityRef> members,
+                                                                                        bool creating) const = 0;
+    };
+
     /** @brief Borrowed exact baseline inputs retained by one structural command batch; never stored by a participant. */
     struct SceneBaselinePreparationView final {
         const RuntimeSceneDefinition &definition;
@@ -807,7 +851,7 @@ namespace Horo::Runtime {
     };
 
     /** @brief Host structural-participant virtual contract revision; external host implementations must rebuild. */
-    inline constexpr std::uint32_t SceneStructuralParticipantContractVersion = 4;
+    inline constexpr std::uint32_t SceneStructuralParticipantContractVersion = 5;
 
     /** @brief Application-composed subsystem participant for bounded Scene group transactions. */
     class SceneStructuralParticipant {
@@ -851,6 +895,11 @@ namespace Horo::Runtime {
          * @return False for empty, retired, structurally stale or foreign-thread views, without dereferencing a retired owner.
          */
         [[nodiscard]] bool IsCurrent() const noexcept;
+        /** @brief Compares the captured non-owning Scene incarnation evidence.
+         * @param other Another view, possibly captured at a different structural revision.
+         * @return True only for two views of the same actual owner. Call IsCurrent separately before reading storage.
+         */
+        [[nodiscard]] bool SameIncarnation(const RuntimeSceneView &other) const noexcept;
         /** @brief Returns the exact committed structural revision captured by this current view.
          * @return Non-zero revision when current, or zero for an empty, expired, foreign-thread or structurally stale view.
          */
@@ -922,9 +971,11 @@ namespace Horo::Runtime {
         }
 
         /** @brief Captures the sole live-effect render channel on the owning extraction phase.
-         * @param frame One-based host frame. @return Retained immutable values and complete overload report.
+         * @param frame One-based host frame. @param flashes Host-projected policy for tagged effects.
+         * @return Retained immutable values and complete overload report.
          */
-        [[nodiscard]] Vfx::VfxExtractionOutcome CaptureVfx(std::uint64_t frame) noexcept;
+        [[nodiscard]] Vfx::VfxExtractionOutcome CaptureVfx(std::uint64_t frame,
+                                                           Vfx::VfxFlashPolicy flashes = Vfx::VfxFlashPolicy::Present) noexcept;
 
         struct ResolvedAsset {
             SceneAssetDependency dependency;
@@ -961,17 +1012,34 @@ namespace Horo::Runtime {
         /** @brief Only the Scene service friend selects private materialization; ordinary public commits cannot defer native owners. */
         enum class CommitPurpose : std::uint8_t {
             Ordinary,
-            RestoreMaterialization
+            RestoreMaterialization,
+            ReplicaTransforms
         };
+        [[nodiscard]] Result<void> PrepareGroupPublication(const SceneCommandBuffer &commands, const StructuralCommitResult &result,
+                                                           std::vector<std::unique_ptr<SceneStructuralCandidate>> &owners) const;
+        /** @brief Publishes the structural aggregate and makes any tracked result visible before notifying owners.
+         * @param commands Structural intent to prepare and validate.
+         * @param registry Optional current registry owner used by resource admission.
+         * @param participants Other owners that prepare and publish with the Scene.
+         * @param notificationError Optional destination for post-publication diagnostics.
+         * @param purpose Selects ordinary commit or the Scene service's private restore and replica operations.
+         * @param trackedResult Optional destination for the committed result before notifications run.
+         * @return Failure before publication, or success with the committed result when it was not transferred to tracked storage.
+         */
         [[nodiscard]] Result<StructuralCommitResult> CommitWithRegistry(
             const SceneCommandBuffer &commands, const Assets::AssetRegistry *registry,
             std::span<const std::unique_ptr<SceneStructuralParticipant>> participants = {},
-            std::optional<Error> *notificationError = nullptr, CommitPurpose purpose = CommitPurpose::Ordinary);
+            std::optional<Error> *notificationError = nullptr, CommitPurpose purpose = CommitPurpose::Ordinary,
+            std::optional<StructuralCommitResult> *trackedResult = nullptr);
 
-        [[nodiscard]] static Result<std::unique_ptr<RuntimeScene>> CreateResolved(const RuntimeSceneDefinition &definition,
-                                                                                  SceneRuntimeId runtimeId, RuntimeSceneConfig config,
-                                                                                  Assets::AssetRegistryRevision assetRevision,
-                                                                                  std::vector<ResolvedAsset> &&assets);
+        enum class ChildActivationAdmission : std::uint8_t {
+            Unsupported,
+            ExplicitHost
+        };
+        [[nodiscard]] static Result<std::unique_ptr<RuntimeScene>> CreateResolved(
+            const RuntimeSceneDefinition &definition, SceneRuntimeId runtimeId, RuntimeSceneConfig config,
+            Assets::AssetRegistryRevision assetRevision, std::vector<ResolvedAsset> &&assets,
+            ChildActivationAdmission children = ChildActivationAdmission::Unsupported);
 
         struct Slot {
             std::uint32_t generation{1};
@@ -980,6 +1048,7 @@ namespace Horo::Runtime {
             std::optional<SceneObjectId> authoredObject;
             std::optional<EntityId> parent;
             Math::Transform localTransform;
+            std::optional<Math::Transform> replicaPresentationTransform;
             std::optional<PrimitiveMeshDescriptor> primitiveMesh;
             RuntimeComponentSet components;
             std::optional<SceneDefinitionId> baselineOwner;
@@ -1066,6 +1135,23 @@ namespace Horo::Runtime {
         RuntimeSceneService(Assets::AssetRegistry &registry, Assets::AssetLoadService &loads, RuntimeSceneAssetLimits limits,
                             SceneRuntimeId initialRuntimeId);
         ~RuntimeSceneService() override;
+        /** @brief Binds one replica transform writer to the application's actual Runtime scheduler before startup.
+         * @param source Exact live scheduler issuer retained by the Scene owner.
+         * @return Success or typed invalid, duplicate, or late binding failure.
+         * @details This binding grants no receipt or object authority. Only a live dispatch from this issuer can open
+         * the transform safe point, and the caller still supplies the exact active Scene view and per-command admissions.
+         * A replacement Scene may bind on the same owner lane during its live travel callback. */
+        [[nodiscard]] Result<void> BindReplicaTransformDispatch(RuntimeDispatchSource source);
+        /** @brief Atomically publishes one admitted replica transform batch during the bound Scene safe point.
+         * @param expected Exact currently published incarnation and structural revision, borrowed on the owner lane.
+         * @param commands Nonempty local transform batch with each command's Scene and cancellation admission. Other mutation kinds are
+         * refused.
+         * @param evidence Live callback evidence from the bound issuer's CommitDeferredLifecycleChanges dispatch.
+         * @return Success only after the complete Scene transaction is published. Failure preserves the prior Scene.
+         * @details Enabled Character actors receive a presentation pose. Their simulation transform remains owned
+         * by Character. The batch does not consume a pending work queue, invoke lifecycle phases, or expose mutable storage. */
+        [[nodiscard]] Result<void> CommitReplicaTransformBatch(const RuntimeSceneView &expected, const SceneCommandBuffer &commands,
+                                                               const RuntimeDispatchEvidence &evidence);
         /** @brief Adds one owned activation participant before startup. @param participant Non-null unique owner.
          * @return Success or a typed invalid-input/lifecycle error. */
         [[nodiscard]] Result<void> AddActivationParticipant(std::unique_ptr<SceneActivationParticipant> participant);
@@ -1085,6 +1171,17 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<ScenePublicationReceipt> QueuePreparationWithPublicationCheck(
             const RuntimeSceneDefinition &definition, std::unique_ptr<ScenePublicationCheck> publicationCheck,
             RuntimeSceneConfig config = {});
+        /** @brief Stages a parent and its exact direct children as one cold activation.
+         * @param definition Parent definition with fully resolved cooked child references.
+         * @param children Verified child definitions in the exact parent occurrence order.
+         * @param cancellation Parent operation lifetime. Cancellation before publication rejects the complete aggregate.
+         * @return Success or typed failure. Deferred rejection preserves the current published parent and child set.
+         * @pre The host verifies each child payload digest and supported owner composition before admission.
+         * This installed route initially supports only assetless direct Core ECS leaf Scenes.
+         */
+        [[nodiscard]] Result<void> QueuePreparationWithActivatedChildren(const RuntimeSceneDefinition &definition,
+                                                                         std::vector<RuntimeSceneDefinition> children,
+                                                                         const CancellationToken &cancellation);
         /** @brief Queues a composite save restore through the existing exclusive Scene admission path.
          * @param definition Borrowed validated compatible immutable authored defaults; pending preparation retains an independent copy.
          * @param restore Non-null owned restore composition, retained through pending preparation/rollback.
@@ -1134,8 +1231,19 @@ namespace Horo::Runtime {
          * @details Pure composition evidence; grants no mutation, retention or publication authority.
          */
         [[nodiscard]] bool IsRestoreCandidate(const RuntimeScene &candidate) const noexcept;
+        /** @brief Observes the exact private Scene undergoing initial Streamed activation on the owner lane.
+         * @param candidate Current view supplied to an activation participant.
+         * @return True for this service's still-private startup aggregate and exact structural revision.
+         * @details Pure identity check for composed data owners; grants no mutation or publication authority.
+         */
+        [[nodiscard]] bool IsInitialStreamedCandidate(const RuntimeSceneView &candidate) const noexcept;
         /** @brief Returns the current immutable active scene view. */
         [[nodiscard]] std::optional<RuntimeSceneView> ActiveScene() const noexcept;
+        /** @brief Borrows a ready direct child of the currently published parent, by authored occurrence.
+         * @param parent Exact published parent runtime. @param occurrence Stable authored child ID.
+         * @return Current child view or absence while pending, replaced, cancelled or on another lane.
+         */
+        [[nodiscard]] std::optional<RuntimeSceneView> ActiveChildScene(SceneRuntimeId parent, SceneInstanceId occurrence) const noexcept;
         /**
          * @brief Clones the active prepared scene into a separate runtime domain.
          * @param runtimeId Unique identity for the clone; must not match the active domain.
@@ -1155,6 +1263,12 @@ namespace Horo::Runtime {
 
         [[nodiscard]] Result<void> Startup(const CancellationToken &cancellation) override;
 
+        /** @brief Stages the host's committed preference for the next extraction.
+         * @param policy Visibility of tagged VFX output. Published frames and live simulation retain their state.
+         * @pre Called on the Scene owner thread before RenderExtraction.
+         */
+        void StageVfxFlashPolicy(Vfx::VfxFlashPolicy policy) noexcept;
+
         /** @brief Returns the current extraction phase's retained VFX frame and typed overload evidence.
          * @return Scene-owner-thread borrowed result; renderer consumers copy its immutable snapshot lease.
          * @details A failed/blocked extraction publishes an empty snapshot, never a stale prior frame.
@@ -1168,6 +1282,8 @@ namespace Horo::Runtime {
         void Shutdown() noexcept override;
 
     private:
+        friend class Detail::ActivatedSceneInstances;
+        friend class Detail::StreamedSceneInstanceAccess;
         enum class TransitionKind : std::uint8_t {
             None,
             Activate,
@@ -1202,6 +1318,13 @@ namespace Horo::Runtime {
         };
 
         [[nodiscard]] Result<void> BeginPreparation(const RuntimeSceneDefinition &definition, RuntimeSceneConfig config);
+        /** @brief Admits ordinary root preparation or one sealed startup baseline from the Streamed integration. */
+        [[nodiscard]] Result<ScenePublicationReceipt> QueuePreparationInternal(const RuntimeSceneDefinition &definition,
+                                                                               std::unique_ptr<ScenePublicationCheck> publicationCheck,
+                                                                               RuntimeSceneConfig config,
+                                                                               std::optional<SceneCommandBuffer> initialStreamed);
+        /** @brief Rechecks startup cell admission before asynchronous work or the final aggregate transfer. */
+        [[nodiscard]] Result<void> ValidateInitialStreamedAdmission(SceneRuntimeId runtime, const CancellationToken &cancellation) const;
         /** @brief Stages the validated runtime scene and its detached participant candidates without publication. */
         [[nodiscard]] Result<void> StageCandidate(const RuntimeSceneDefinition &definition, RuntimeSceneConfig config,
                                                   Assets::AssetRegistryRevision revision,
@@ -1222,12 +1345,12 @@ namespace Horo::Runtime {
         [[nodiscard]] Result<void> SubmitPreparationLoads();
         [[nodiscard]] Result<void> PrepareParticipants(const RuntimeSceneDefinition &definition);
         [[nodiscard]] Result<void> PrepareParticipantPhase(const RuntimeSceneDefinition &definition, SceneActivationPhase phase);
-        [[nodiscard]] Result<void> CommitDeferredChanges(const CancellationToken &cancellation);
+        [[nodiscard]] Result<void> CommitDeferredChanges(const FrameContext &context);
         /** @brief Prepares and validates all unload owners before the existing no-fail lifecycle publication boundary. */
         [[nodiscard]] Result<void> RetireActiveScene(const CancellationToken &cancellation);
         /** @brief Waits for owners and validates every candidate before any ownership transfer.
          * @return Ready, pending, or the original typed preparation/validation failure. */
-        [[nodiscard]] Result<bool> PreparePendingPublication();
+        [[nodiscard]] Result<bool> PreparePendingPublication(const FrameContext &context);
         /** @brief Transfers all prepared roots and retains the retired aggregate through completion observers.
          * @return Success or the original pre-transfer gate failure. */
         [[nodiscard]] Result<void> PublishPendingAggregate();
@@ -1235,6 +1358,12 @@ namespace Horo::Runtime {
         void RejectPendingPublication(Error error);
         /** @brief Retires only an unpublished queue receipt; already published identities remain immutable. */
         void RetirePublicationReceipt(ScenePublicationStatus status) noexcept;
+        /** @brief Advances pending Activated children only on this service's canonical lifecycle cutoff. */
+        void ProgressActivatedInstances(const FrameContext &context);
+        /** @brief Checks the exact owning parent again at the child aggregate transfer boundary. */
+        [[nodiscard]] Result<void> ValidateActivatedParentPublication() const;
+        /** @brief Closes every child of the retiring aggregate before its subsystem owners are released. */
+        void RetireActivatedInstances() noexcept;
 
         [[nodiscard]] Result<bool> RetirePublishedRestorePreparationInternal();
         static std::optional<Error> MakeRestoreRetirementFallback();
@@ -1242,6 +1371,10 @@ namespace Horo::Runtime {
         std::thread::id restoreRetirementOwner_{std::this_thread::get_id()};
         SceneAggregate active_;
         Vfx::VfxExtractionOutcome vfxFrame_;
+        Vfx::VfxFlashPolicy vfxFlashPolicy_{Vfx::VfxFlashPolicy::Present};
+        std::unique_ptr<Detail::ActivatedSceneInstances> activatedInstances_;
+        std::unique_ptr<Detail::InitialActivatedSceneChildren> initialActivatedChildren_;
+        const RuntimeSceneService *activationParent_{}; /**< Private one-use Activated child publication fence. */
         SceneAggregate pending_;
         std::vector<std::unique_ptr<SceneActivationParticipant>> participants_;
         std::vector<std::unique_ptr<SceneStructuralParticipant>> structuralParticipants_;
@@ -1249,12 +1382,14 @@ namespace Horo::Runtime {
         std::unique_ptr<ScenePublicationCheck> publicationCheck_;
         std::shared_ptr<ScenePublicationDetail::State> publicationReceipt_;
         std::unique_ptr<SceneAggregateRestore> aggregateRestore_;
+        std::optional<SceneCommandBuffer> initialStreamedCommands_; /**< One sealed attachment retained through root publication. */
         std::optional<SceneCommandBuffer> structuralCommands_;
         std::shared_ptr<SceneStructuralReceipt> structuralReceipt_;
         std::optional<StructuralCommitResult> structuralResult_;
         std::optional<Error> operationError_;
         std::uint64_t nextRuntimeId_{1};
         BorrowedAssetPreparationServices assetPreparationServices_{};
+        RuntimeDispatchSource replicaTransformDispatch_; /**< Bound once before startup, read by the exact owner callback. */
         TransitionKind transition_{TransitionKind::None};
         bool started_{};
         bool shutdown_{};

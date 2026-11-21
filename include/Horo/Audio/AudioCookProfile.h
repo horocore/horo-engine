@@ -17,7 +17,7 @@
 
 namespace Horo::Audio {
     /** @brief Current audio-domain cook schema; changing encoded semantics changes this version. */
-    inline constexpr std::uint32_t AudioCookSchemaVersion = 2;
+    inline constexpr std::uint32_t AudioCookSchemaVersion = 3;
 
     /** @brief Maximum streamed chunk size admitted by both profile planning and artifact inspection. */
     inline constexpr std::uint32_t MaximumAudioStreamChunkFrames = 65'536;
@@ -52,6 +52,8 @@ namespace Horo::Audio {
         std::uint32_t streamChunkFrames{4'096};       /**< Bounded seekable PCM chunk size when streamed. */
         std::uint32_t encoderDelayFrames{};           /**< PCM output admits zero only. */
         std::uint32_t encoderPaddingFrames{};         /**< PCM output admits zero only. */
+        std::uint32_t preRollFrames{};                /**< Independent PCM anchors require zero preroll. */
+        std::uint32_t loopCrossfadeFrames{};          /**< Exact half-open wrap only; nonzero crossfade is unsupported. */
         bool operator==(const AudioCookSettings &) const = default;
     };
 

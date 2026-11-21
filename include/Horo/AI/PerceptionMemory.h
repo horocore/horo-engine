@@ -15,6 +15,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <optional>
+#include <span>
 
 namespace Horo::AI {
     struct PerceptionEventDelivery;
@@ -101,7 +102,8 @@ namespace Horo::AI {
 
     /**
      * @brief One agent's scene-owned, allocation-free memory of typed listener/source stimuli.
-     * @details Owner-thread mutation occurs at PerceptionSensePoll. Queries revalidate weak sources and return value copies;
+     * @details Owner-thread mutation occurs at PerceptionSensePoll and committed structural retirement.
+     * Queries revalidate weak sources and return value copies;
      * blackboard publication is a separate safe-point concern. No wall clock is read here.
      */
     class AIPerceptionMemory final {
@@ -123,7 +125,7 @@ namespace Horo::AI {
          * @param observation Typed weak source and last-known spatial facts.
          * @param simulationTick Current committed fixed simulation tick, not a frame or wall clock.
          * @return Success or a typed invalid observation/time failure. At a listener or profile cap the weakest, then oldest
-         * record within the exhausted scope is evicted. Team sense/stimulus observations require Gameplay event admission.
+         * record within the exhausted scope is evicted. Team and hearing observations require Gameplay event admission.
          */
         [[nodiscard]] Result<void> Observe(const PerceptionObservation &observation, std::uint64_t simulationTick);
 
@@ -145,14 +147,20 @@ namespace Horo::AI {
         [[nodiscard]] Result<void> AdvanceTo(std::uint64_t simulationTick);
 
         /**
-         * @brief Eagerly removes every record for an entity destroyed or recycled by its scene owner.
-         * @param source Exact weak source identity.
+         * @brief Eagerly removes records whose subject or provenance was destroyed or recycled by the Scene owner.
+         * @param source Exact weak subject or emitter identity.
          * @return Success or a typed foreign/invalid source failure.
          */
         [[nodiscard]] Result<void> ForgetSource(PerceptionSourceRef source);
 
+        /** @brief Removes every observation of a retired subject or emitter in one owner-thread pass.
+         * @param retired Generation-qualified retirements sorted by full weak reference. A different generation is independent.
+         * @pre The caller has admitted the exact Scene retirements and is publishing the same structural transaction.
+         */
+        void ForgetRetiredSources(std::span<const PerceptionSourceRef> retired) noexcept;
+
         /**
-         * @brief Returns an exact stimulus only after aging and checking source residency.
+         * @brief Returns an exact stimulus only after aging and checking subject and provenance residency.
          * @param key Stimulus to find.
          * @param simulationTick Current monotonic committed simulation tick.
          * @param liveness Synchronous exact-generation scene residency adapter.
@@ -162,7 +170,7 @@ namespace Horo::AI {
                                                                     PerceptionSourceLiveness liveness);
 
         /**
-         * @brief Returns bounded value copies after aging and removing destroyed sources.
+         * @brief Returns bounded value copies after aging and removing records with retired subjects or emitters.
          * @param simulationTick Current monotonic committed simulation tick.
          * @param liveness Synchronous exact-generation scene residency adapter.
          * @return Valid records in deterministic storage order or a typed failure.
@@ -186,6 +194,8 @@ namespace Horo::AI {
         [[nodiscard]] std::uint64_t SceneIncarnation() const noexcept;
         /** @brief Returns currently stored record count, before a new time/liveness query. @return At most Capacity(). */
         [[nodiscard]] std::size_t StoredCount() const noexcept;
+        /** @brief Compares a listener's decision facts, excluding clock-only refresh and confidence decay. */
+        [[nodiscard]] bool DecisionFactsChanged(const AIPerceptionMemory &previous, PerceptionListenerTypeId listener) const noexcept;
 
     private:
         friend Result<void> RouteGameplayPerceptionEvent(const PerceptionEventDelivery &, const PerceptionDescriptorRegistry &,

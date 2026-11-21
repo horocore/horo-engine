@@ -24,6 +24,21 @@ namespace Horo::Runtime {
         Count
     };
 
+    /** @brief Host-admitted one-view transition policy for this camera owner. */
+    enum class CameraTransitionSupport : std::uint8_t {
+        HardCutOnly,
+        SingleViewBlend,
+        Count
+    };
+
+    /** @brief Owner-visible outcome of the producer's admitted camera transition. */
+    enum class CameraTransitionResolution : std::uint8_t {
+        Requested,
+        HardCutFallback,
+        LinearFallback, /**< The producer selected the admitted single-view linear fallback. */
+        Count
+    };
+
     /** @brief Host-issued complete context fence, immutable for the owner's lifetime. */
     struct CameraViewContext final {
         CameraViewContextId view;
@@ -32,11 +47,22 @@ namespace Horo::Runtime {
         constexpr auto operator<=>(const CameraViewContext &) const noexcept = default;
     };
 
+    /** @brief Frontend-owned render-view capacity granted for one exact camera context. */
+    struct CameraCrossFadeAdmission final {
+        CameraViewContext context;     /**< Context whose frontend retains the composition capacity. */
+        std::uint64_t generation{};    /**< Non-zero frontend reservation generation. */
+        std::uint8_t availableViews{}; /**< Concurrent views admitted by that reservation. */
+        constexpr bool operator==(const CameraCrossFadeAdmission &) const noexcept = default;
+    };
+
     /** @brief Copied camera values with no mutable scene or backend pointer. */
     struct CameraProposal final {
         EntityRef camera; /**< Scene camera identity; empty only for an editor authoring camera. */
         Render::RenderCameraView values;
         std::uint64_t discontinuityRevision{}; /**< Producer-owned cut/seek revision; zero denotes ordinary continuous motion. */
+        CameraTransitionResolution transitionResolution{
+            CameraTransitionResolution::Requested}; /**< Copied admission outcome for history invalidation. */
+        std::uint64_t sceneRevision{};              /**< Exact committed RuntimeSceneView structural revision sampled by this proposal. */
     };
 
     /** @brief Owner-issued generation fence for one bounded cinematic override slot. */
@@ -55,6 +81,20 @@ namespace Horo::Runtime {
         std::int32_t priority{};
     };
 
+    /** @brief The source view and finite destination weight of a committed two-view transition. */
+    struct CameraCrossFadeView final {
+        EntityRef sourceCamera;
+        Render::RenderCameraView source;
+        float destinationWeight{};
+        std::uint64_t admissionGeneration{}; /**< Frontend reservation generation to validate at extraction. */
+    };
+
+    /** @brief A cosmetic view translation sampled by the host for one rendered frame. */
+    struct CameraShakeSample final {
+        Math::Vec3 worldOffset{};   /**< Unscaled world-space displacement supplied by the effect owner. */
+        float amplitudeScale{1.0F}; /**< Captured accessibility multiplier in [0, 1]. */
+    };
+
     /** @brief One owned decision shared unchanged by every pass of a rendered frame. */
     struct CameraSelectionSnapshot final {
         CameraViewContext context;
@@ -63,21 +103,32 @@ namespace Horo::Runtime {
         CameraProposal selected;
         std::optional<CameraClaimId> overrideOwner;
         bool discontinuity{};
+        std::optional<CameraCrossFadeView> crossFade; /**< When present, compose this source with the selected destination. */
     };
 
     /**
      * @brief Final camera selector owned by a runtime/PIE session or editor viewport controller.
      * @details Single owner thread only. No jobs, scene borrows or source references are retained.
      * Commit is the cutoff after VariableUpdate and before RenderExtraction. Repeated commits of
-     * the same frame return its immutable decision; later submissions affect the next frame.
+     * the same frame and Scene revision return its immutable decision. Later submissions affect the next frame.
+     * A Scene mutation rejects re-extraction of an already committed frame with StaleFrame.
      * The owner must outlive every adapter holding a lease and must not move while leases exist.
      */
     class CameraService final {
     public:
         static constexpr std::size_t MaximumOverrides = 32;
         /** @brief Creates one generation-scoped final owner. @param context Complete host fence.
+         * @param transitions Host-admitted one-view capability.
          * @return Owner or typed invalid/unsupported context failure. */
-        [[nodiscard]] static Result<CameraService> Create(const CameraViewContext &context);
+        [[nodiscard]] static Result<CameraService> Create(const CameraViewContext &context,
+                                                          CameraTransitionSupport transitions = CameraTransitionSupport::SingleViewBlend);
+        /** @brief Creates a generation-scoped owner with explicit frontend cross-fade capacity.
+         * @param context Complete host fence. @param transitions Host-admitted one-view capability.
+         * @param crossFade Capacity from the exact consuming frontend; absent if it cannot execute two-view composition.
+         * The host retains resources for already submitted frames and refreshes the reservation before new camera publication.
+         * @return Owner or typed invalid/unsupported context failure. */
+        [[nodiscard]] static Result<CameraService> Create(const CameraViewContext &context, CameraTransitionSupport transitions,
+                                                          std::optional<CameraCrossFadeAdmission> crossFade);
         CameraService(const CameraService &) = delete;
         CameraService &operator=(const CameraService &) = delete;
         /** @brief Transfers a prepared owner and closes the moved-from owner.
@@ -94,17 +145,52 @@ namespace Horo::Runtime {
          * @pre Scene facts were resolved against the current owner-safe-point scene, normally with ResolveSceneCamera.
          * @return Success or typed stale/target/lifecycle failure, with no partial replacement. */
         [[nodiscard]] Result<void> Submit(const CameraOverrideLease &lease, const CameraProposal &proposal);
+        /** @brief Interpolates compatible camera pose and lens in the final camera owner.
+         * @param lease Exact live override lease. @param from Current source in the same scene epoch.
+         * @param to Current destination in the same scene epoch, including its discontinuity revision.
+         * @param weight Finite destination weight in [0,1].
+         * @return Success or typed invalid lease/target, stale scene revision, unsupported or incompatible transition,
+         * without partial replacement. */
+        [[nodiscard]] Result<void> SubmitBlend(const CameraOverrideLease &lease, const CameraProposal &from, const CameraProposal &to,
+                                               float weight);
+        /** @brief Refreshes the selected frontend reservation before publishing new camera proposals.
+         * @param admission Exact owning context and non-zero generation, or absence if the frontend reservation was retired.
+         * A live generation may gain or lose capacity. A retired or older generation cannot be reattached.
+         * @return Success or typed context, stale-generation or lifecycle failure. Committed frames remain immutable.
+         * @details An unpublished dual-view proposal must be resubmitted after any reservation change. */
+        [[nodiscard]] Result<void> RefreshCrossFadeAdmission(std::optional<CameraCrossFadeAdmission> admission);
+        /** @brief Checks current two-view capability before activating a required transition.
+         * @return Success, typed missing support or insufficient concurrent view capacity. */
+        [[nodiscard]] Result<void> CheckCrossFadeAdmission() const;
+        /** @brief Copies two independently renderable cameras for one frame and scene revision.
+         * @param lease Exact live owner lease. @param from Source camera. @param to Selected destination camera.
+         * @param weight Finite destination composition weight in [0,1].
+         * @return Success or typed refusal without replacing the prior proposal. */
+        [[nodiscard]] Result<void> SubmitCrossFade(const CameraOverrideLease &lease, const CameraProposal &from, const CameraProposal &to,
+                                                   float weight);
         /** @brief Retains a live lease while removing its current proposal before first-key/end-policy handoff.
          * @param lease Exact live lease. @return Success or typed stale/lifecycle failure. */
         [[nodiscard]] Result<void> Withdraw(const CameraOverrideLease &lease);
         /** @brief Removes an override at the owner safe point; committed snapshots remain intact.
          * @param lease Exact live lease. @return Success or typed stale lease failure. */
         [[nodiscard]] Result<void> Release(const CameraOverrideLease &lease);
-        /** @brief Re-resolves current proposals and publishes exactly one camera for this frame.
+        /** @brief Validates the Scene fence and publishes one camera selection for this frame.
          * @param renderedFrame Non-zero monotonically increasing extraction frame.
+         * @param scene Current scene at the extraction safe point; no scene borrow is retained.
          * @param base Current gameplay or editor authoring proposal; never a saved pre-playback pointer.
-         * @return Immutable owned selection or typed suspended/revision failure when no valid proposal exists. */
-        [[nodiscard]] Result<CameraSelectionSnapshot> Commit(std::uint64_t renderedFrame, const std::optional<CameraProposal> &base);
+         * @return Immutable owned selection or typed lifecycle, context or frame failure. */
+        [[nodiscard]] Result<CameraSelectionSnapshot> Commit(std::uint64_t renderedFrame, RuntimeSceneView scene,
+                                                             const std::optional<CameraProposal> &base);
+        /** @brief Commits the same camera selection with one host-sampled cosmetic translation.
+         * @param renderedFrame Non-zero monotonically increasing extraction frame.
+         * @param scene Current scene at the extraction safe point; no scene borrow is retained.
+         * @param base Current gameplay or editor authoring proposal.
+         * @param shake Cosmetic sample and committed accessibility multiplier. A zero multiplier leaves the view unchanged.
+         * The translation affects the copied render views only, including both cross-fade views when present.
+         * @return Immutable owned selection or typed failure, including an unrepresentable shake. A Scene change after this frame's
+         * first commit rejects re-extraction for that frame, preserving its immutable decision. */
+        [[nodiscard]] Result<CameraSelectionSnapshot> CommitWithShake(std::uint64_t renderedFrame, RuntimeSceneView scene,
+                                                                      const std::optional<CameraProposal> &base, CameraShakeSample shake);
         /** @brief Closes admission and releases all overrides; already copied frames remain readable. */
         void Shutdown() noexcept;
 
@@ -113,24 +199,56 @@ namespace Horo::Runtime {
             return context_;
         }
 
+        /** @brief Returns host-admitted transition support. @return Immutable one-view capability. */
+        [[nodiscard]] CameraTransitionSupport TransitionSupport() const noexcept {
+            return transitions_;
+        }
+
     private:
+        struct OverrideProposal final {
+            CameraProposal selected;
+            std::optional<CameraCrossFadeView> crossFade;
+            bool staleCrossFade{};
+        };
+
         struct Slot final {
             std::uint32_t generation{1};
             std::optional<CameraOverrideRequest> request;
-            std::optional<CameraProposal> proposal;
+            std::optional<OverrideProposal> proposal;
         };
 
-        explicit CameraService(const CameraViewContext &context) noexcept : context_(context) {}
+        explicit CameraService(const CameraViewContext &context, CameraTransitionSupport transitions,
+                               std::optional<CameraCrossFadeAdmission> crossFade) noexcept
+            : context_(context), transitions_(transitions), crossFade_(crossFade),
+              crossFadeGeneration_(crossFade ? crossFade->generation : 0) {}
 
         [[nodiscard]] Result<std::size_t> Resolve(const CameraOverrideLease &lease) const;
         [[nodiscard]] bool ValidProposal(const CameraProposal &proposal, bool isOverride) const noexcept;
+        /** @brief Checks both published endpoints and the weight before either transition changes the owner.
+         * @param from Current source. @param to Destination from the same Scene revision.
+         * @param weight Finite destination composition weight in [0,1].
+         * @return Success or typed malformed target or stale revision failure. */
+        [[nodiscard]] Result<void> ValidateTransitionInputs(const CameraProposal &from, const CameraProposal &to, float weight) const;
+        /** @brief Validates interpolation inputs before replacing any owner state.
+         * @param from Current source camera. @param to Destination from the same scene revision.
+         * @param weight Finite destination weight in [0,1].
+         * @return Success or typed capability, target, scene-revision or projection failure. */
+        [[nodiscard]] Result<void> ValidateBlend(const CameraProposal &from, const CameraProposal &to, float weight) const;
         [[nodiscard]] const Slot *WinningProposal() const noexcept;
         [[nodiscard]] Result<void> ValidateFrame(std::uint64_t renderedFrame) const;
-        [[nodiscard]] bool ChangesSelection(const CameraProposal &proposal, const std::optional<CameraClaimId> &claim) const noexcept;
+        /** @brief Validates frame ordering and the current extraction Scene fence.
+         * @param renderedFrame Requested non-zero frame. @param scene Current context-matching scene.
+         * @return Success or typed lifecycle, context or stale-frame failure. */
+        [[nodiscard]] Result<void> ValidateSceneFrame(std::uint64_t renderedFrame, RuntimeSceneView scene) const;
+        [[nodiscard]] bool ChangesSelection(const CameraProposal &proposal, const std::optional<CameraClaimId> &claim,
+                                            const std::optional<CameraCrossFadeView> &crossFade) const noexcept;
         [[nodiscard]] bool CanAdvanceEpoch(bool changed) const noexcept;
         [[nodiscard]] bool HasCommittedFrame(std::uint64_t renderedFrame) const noexcept;
         [[nodiscard]] bool EligibleBase(const std::optional<CameraProposal> &base) const noexcept;
         CameraViewContext context_;
+        CameraTransitionSupport transitions_;
+        std::optional<CameraCrossFadeAdmission> crossFade_;
+        std::uint64_t crossFadeGeneration_{};
         std::array<Slot, MaximumOverrides> slots_{};
         std::optional<CameraSelectionSnapshot> committed_;
         bool admissionOpen_{true};
@@ -138,6 +256,7 @@ namespace Horo::Runtime {
 
     /** @brief Copies one enabled scene camera's current hierarchy pose and lens.
      * @param scene Current scene borrow, used only during this call. @param camera Exact generation-checked target.
-     * @return Complete camera proposal or typed target/stale/hierarchy failure. No source pointers are retained. */
+     * @return Complete camera proposal carrying the current structural revision, or typed target/stale/hierarchy failure.
+     * No source pointers are retained. */
     [[nodiscard]] Result<CameraProposal> ResolveSceneCamera(RuntimeSceneView scene, EntityRef camera);
 }  // namespace Horo::Runtime

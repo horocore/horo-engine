@@ -36,6 +36,22 @@ namespace Horo::Editor {
             case EditorWorkspaceViewCommand::CancelContentBrowserClipboard:
                 ClearContentBrowserClipboard();
                 break;
+            case EditorWorkspaceViewCommand::CreateTaskDecision:
+                if (cmd.newTaskDecision)
+                    CreateContentBrowserTaskDecision(*cmd.newTaskDecision);
+                break;
+            case EditorWorkspaceViewCommand::CreateStateMachine:
+                if (cmd.newStateMachine)
+                    CreateContentBrowserStateMachine(*cmd.newStateMachine);
+                break;
+            case EditorWorkspaceViewCommand::CreateBlackboardSchema:
+                if (cmd.newBlackboard)
+                    CreateContentBrowserBlackboard(*cmd.newBlackboard);
+                break;
+            case EditorWorkspaceViewCommand::CreateEnvironmentQuery:
+                if (cmd.newEnvironmentQuery)
+                    CreateContentBrowserEnvironmentQuery(*cmd.newEnvironmentQuery);
+                break;
             case EditorWorkspaceViewCommand::CreateContentBrowserFolder:
                 if (cmd.stringPayload.has_value() && cmd.secondaryStringPayload.has_value())
                     CreateContentBrowserFolder(WorkspaceNativePath(*cmd.stringPayload), *cmd.secondaryStringPayload);
@@ -83,6 +99,10 @@ namespace Horo::Editor {
             case EditorWorkspaceViewCommand::OpenSourceFile:
                 if (cmd.sourceOpenRequest.has_value())
                     OpenSourceFile(*cmd.sourceOpenRequest);
+                break;
+            case EditorWorkspaceViewCommand::OpenRecentAiAsset:
+                if (cmd.recentAiAsset.has_value())
+                    OpenRecentAiAsset(*cmd.recentAiAsset);
                 break;
             case EditorWorkspaceViewCommand::OpenDiagnosticSource:
                 if (cmd.diagnosticSource.has_value())

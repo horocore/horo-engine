@@ -1,5 +1,6 @@
 #include "GameModuleHostDetail.h"
 #include "Horo/Foundation/PathUtils.h"
+#include "Horo/Foundation/Platform.h"
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 
@@ -69,6 +70,33 @@ namespace Horo::Gameplay {
                 return Result<void>::Success();
             return Result<void>::Failure(ShadowCopyError(error ? error.message() : "candidate could not be copied."));
         }
+
+        /** @brief Removes only the private sibling created by this attempt until it transfers to the image owner. */
+        struct RecordedShadow final {
+            std::filesystem::path path;
+            bool created{};
+
+            ~RecordedShadow() {
+                if (created) {
+                    std::error_code ignored;
+                    std::filesystem::remove(NativeApiPath(path), ignored);
+                }
+            }
+        };
+
+        /** @brief Writes the exact same bounded bytes that contribute to the replay identity. */
+        Result<Sha256Digest> WriteRecordedShadow(const std::filesystem::path &source, RecordedShadow &copy,
+                                                 const CancellationToken &cancellation) {
+            NativeDurableFileSystem files;
+            const auto bytes = files.ReadFileBounded(source, Detail::MaximumRecordedNativeArtifactBytes, cancellation);
+            if (bytes.HasError())
+                return Result<Sha256Digest>::Failure(bytes.ErrorValue());
+            const auto data = std::as_bytes(std::span{bytes.Value()});
+            const auto written = files.WritePrivateDurable(copy.path, data, copy.created);
+            if (written.HasError())
+                return Result<Sha256Digest>::Failure(written.ErrorValue());
+            return Result<Sha256Digest>::Success(ComputeSha256(data));
+        }
     }  // namespace
 
     /** @copydoc GameModuleHost::LoadShadowCopy */
@@ -89,5 +117,31 @@ namespace Horo::Gameplay {
             return Result<GameModuleLoadCandidate>::Failure(copied.ErrorValue());
 
         return LoadArtifact(shadowPath.Value(), expectation, true);
+    }
+
+    /** @copydoc GameModuleHost::PrepareRecordedImage */
+    Result<std::unique_ptr<PreparedGameModuleImage>> GameModuleHost::PrepareRecordedImage(const std::filesystem::path &libraryPath,
+                                                                                          const GameModuleLoadExpectation &expectation,
+                                                                                          const CancellationToken &cancellation) {
+        using Output = Result<std::unique_ptr<PreparedGameModuleImage>>;
+        if (!IsSafeAbsolutePath(libraryPath) ||
+            libraryPath.native().find(std::filesystem::path::value_type{}) != std::filesystem::path::string_type::npos)
+            return Output::Failure(ShadowCopyError("recorded source must be an absolute artifact path."));
+        std::error_code error;
+        const auto source = std::filesystem::canonical(libraryPath, error);
+        if (error || !IsSafeAbsolutePath(source))
+            return Output::Failure(ShadowCopyError("recorded source must resolve to an absolute artifact."));
+        auto target = MakeShadowPath(source, source.parent_path());
+        if (target.HasError())
+            return Output::Failure(target.ErrorValue());
+        RecordedShadow copy{std::move(target).Value()};
+        const auto digest = WriteRecordedShadow(source, copy, cancellation);
+        if (digest.HasError())
+            return Output::Failure(digest.ErrorValue());
+        auto owner = PrepareArtifactImage(copy.path, expectation, true, cancellation, digest.Value());
+        if (owner.HasError())
+            return Output::Failure(owner.ErrorValue());
+        copy.created = false;
+        return Output::Success(std::unique_ptr<PreparedGameModuleImage>(new PreparedGameModuleImage(std::move(owner).Value())));
     }
 }  // namespace Horo::Gameplay

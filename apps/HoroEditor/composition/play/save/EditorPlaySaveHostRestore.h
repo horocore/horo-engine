@@ -3,7 +3,7 @@
 /** @file EditorPlaySaveHostRestore.h
  * @brief Actual detached slot read and same-producer Scene restore handoff.
  */
-#include "EditorPlaySaveHostStorage.h"
+#include "EditorPlaySaveHost.h"
 #include "Horo/Gameplay/BehaviorRuntimeRestore.h"
 #include "Horo/Runtime/Save/RuntimeSaveSession.h"
 #include "Horo/Runtime/Scene/SceneRestoreBundle.h"
@@ -11,9 +11,26 @@
 #include <mutex>
 
 namespace Horo::Application::Internal {
+    class PlaySaveAiServices;
     class PlaySavePrefabServices;
     class PlaySavePhysicsServices;
     class PlaySavePhysicsRestoreFence;
+
+    class PlaySaveFinalCheck final : public Runtime::IStagedRestoreFinalPublicationCheck {
+    public:
+        explicit PlaySaveFinalCheck(std::shared_ptr<Runtime::IStagedRestoreFinalPublicationCheck> physics) noexcept
+            : physics_(std::move(physics)) {}
+
+        [[nodiscard]] Result<void> ValidateAndArm() override;
+
+        void AddSupplement(Runtime::IStagedRestoreFinalPublicationCheck &check) noexcept {
+            supplement_ = &check;
+        }
+
+    private:
+        std::shared_ptr<Runtime::IStagedRestoreFinalPublicationCheck> physics_;
+        Runtime::IStagedRestoreFinalPublicationCheck *supplement_{}; /**< Borrowed from the receipt owned by the same transaction. */
+    };
 
     /** @brief One exact load's worker-owned slot/codec/module inputs; publishes no mutable world state. */
     class PlaySaveRestoreSource final : public Runtime::IRuntimeSaveRestoreSource {
@@ -24,7 +41,8 @@ namespace Horo::Application::Internal {
                               std::shared_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> liveBindings,
                               std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner,
                               std::shared_ptr<Gameplay::BehaviorLifecyclePersistenceAdapter> lifecycle,
-                              std::shared_ptr<PlaySavePhysicsServices> physics = {});
+                              std::shared_ptr<PlaySavePhysicsServices> physics = {},
+                              std::optional<EditorPlaySaveSupplement> supplement = {}, Runtime::SaveWorldId world = {});
         /** @copydoc Runtime::IRuntimeSaveRestoreSource::Stage */
         [[nodiscard]] Result<Runtime::RuntimeSaveRestoreStaging> Stage(const Runtime::StagedRestoreContext &context,
                                                                        const Runtime::SaveParticipantRegistrySnapshot &participants,
@@ -36,7 +54,13 @@ namespace Horo::Application::Internal {
             std::shared_ptr<Gameplay::BehaviorRuntimeRestoreCandidate> candidate, const Runtime::PersistentEntityIdentityMap &identities,
             Runtime::RuntimeSceneView candidateScene) const;
         /** @brief Same exact load fence, invoked only by the canonical transaction last fallible point. */
-        [[nodiscard]] std::shared_ptr<Runtime::IStagedRestoreFinalPublicationCheck> PhysicsFinalCheck() const noexcept;
+        [[nodiscard]] std::shared_ptr<Runtime::IStagedRestoreFinalPublicationCheck> FinalCheck() const noexcept;
+        void SupplementPublished() noexcept;
+
+        [[nodiscard]] bool HasSupplement() const noexcept {
+            return supplement_.has_value();
+        }
+
         /** @brief Borrows only the canonical Scene-owned runtime binding for this
          * exact accepted operation. */
         [[nodiscard]] std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> BehaviorOwner() const noexcept;
@@ -53,6 +77,10 @@ namespace Horo::Application::Internal {
         std::shared_ptr<Gameplay::BehaviorLifecyclePersistenceAdapter> lifecycle_;
         std::shared_ptr<PlaySavePhysicsServices> physics_;
         std::shared_ptr<PlaySavePhysicsRestoreFence> physicsFence_;
+        std::shared_ptr<PlaySaveFinalCheck> finalCheck_;
+        std::optional<EditorPlaySaveSupplement> supplement_;
+        Runtime::SaveWorldId world_;
+        mutable bool stagedSupplement_{};
         std::optional<Runtime::StagedRestoreContext> context_;
         CancellationToken cancellation_;
         [[nodiscard]] Result<void> StageLifecycle(Runtime::RuntimeSaveRestoreStaging &, const Runtime::ValidatedSaveArchive &,
@@ -62,6 +90,7 @@ namespace Horo::Application::Internal {
                                                 const std::shared_ptr<const Runtime::ValidatedSaveArchive> &,
                                                 const Runtime::SaveParticipantRegistrySnapshot &, Runtime::RuntimeSceneView,
                                                 const Runtime::PersistentEntityIdentityMap &) const;
+        [[nodiscard]] Result<void> StageSupplement(Runtime::RuntimeSaveRestoreStaging &, const Runtime::ValidatedSaveArchive &) const;
         std::shared_ptr<const Runtime::ValidatedSaveArchive> archive_;
         mutable std::mutex publication_; /**< Worker publishes one complete immutable result; owner only reads after job settlement. */
         std::shared_ptr<const PlaySaveSceneState> decoded_;
@@ -89,7 +118,7 @@ namespace Horo::Application::Internal {
         PlaySaveSceneHandoff(Runtime::RuntimeSceneService &scenes, std::shared_ptr<PlaySaveRestoreSource> source,
                              std::shared_ptr<const Runtime::ISceneRestoreGenerationAuthority> authority,
                              std::shared_ptr<PlaySaveSceneHandoffState> state, Runtime::SaveWorldId world,
-                             std::shared_ptr<PlaySavePrefabServices> prefabs = {});
+                             std::shared_ptr<PlaySavePrefabServices> prefabs = {}, std::shared_ptr<PlaySaveAiServices> ai = {});
         ~PlaySaveSceneHandoff() override;
         /** @brief Advances bounded actual prefab loads and queues the sole original packet only when its inputs are ready.
          * Called only by the existing safe-point pump, never by Snapshot or a worker.
@@ -109,6 +138,7 @@ namespace Horo::Application::Internal {
         std::shared_ptr<PlaySaveSceneHandoffState> state_;
         Runtime::SaveWorldId world_;
         std::shared_ptr<PlaySavePrefabServices> prefabs_;
+        std::shared_ptr<PlaySaveAiServices> ai_;
         std::unique_ptr<Pending> pending_;
         /** @brief Retains the original failure while cooperatively draining actual accepted loads. */
         void RejectPending(Error error);

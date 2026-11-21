@@ -634,6 +634,16 @@ owner and run Stop/destroy/unload on the worker releasing its final callback.
 This host C++ source migration changes no GameRuntimeContext or generated module
 export layout, so it does not change the module SDK ABI epoch or fingerprint.
 
+Scene hosts that need generated decision metadata before world preparation may
+use the prepared image owner. It pins the exact validated image and metadata
+without constructing the module, binding platform scopes or opening executable
+decision admission. Activation consumes that owner after the paired Scene
+scopes exist. It binds the same image, registers and starts once, and opens the
+existing decision generation to factories only after successful startup.
+Abandonment, cancellation and startup failure revoke that generation before
+publication. Ordinary Load and LoadShadowCopy retain their portable one-call
+entry points and share these implementation stages.
+
 Package roles use their package retirement authority. Application/editor callers
 instead inject an application-owned `GameModuleRetirementQueue`, reserving bounded
 storage before factories. Every successful or failed owner transfers exactly once.

@@ -7,6 +7,7 @@
 #include "Horo/Foundation/Result.h"
 #include "Horo/Scene/SceneSourceModel.h"
 
+#include <functional>
 #include <memory>
 #include <thread>
 
@@ -45,6 +46,7 @@ namespace Horo::Editor {
         bool dirty{};
         std::vector<SceneSource::SceneObjectSnapshot> objects;
         std::vector<SceneSource::ScenePrefabInstance> prefabInstances;
+        std::vector<SceneSource::SceneChildReference> childScenes{};
     };
 
     /** @brief Explicit owner-phase permission and revision fence; default admission is denied. */
@@ -199,6 +201,7 @@ namespace Horo::Editor {
         friend class NavigationSettingsWorkflow;
         friend class NavigationSettingsReview;
         friend class NavigationProjectSettingsSession;
+        friend class PrefabApplyTransaction;
 
         struct Lifetime final {
             SceneDocumentTransactions *owner{};
@@ -211,6 +214,19 @@ namespace Horo::Editor {
                                                                 SceneTransactionLimits limits = {}, bool coordinated = false) const;
         /** @brief Stages canonical replay for an exclusively admitted multi-document coordinator. */
         [[nodiscard]] Result<std::shared_ptr<Prepared>> PrepareReplay(const SceneTransactionContext &context, bool redo);
+        /** @brief Reserves one coordinated history transition for exact value replacements of existing placements. */
+        [[nodiscard]] Result<std::shared_ptr<Prepared>> PreparePrefabValues(const SceneTransactionContext &context,
+                                                                            std::span<const SceneSource::ScenePrefabInstance> placements,
+                                                                            std::uint64_t expectedReplacementEpoch,
+                                                                            SceneTransactionLimits limits = {}) const;
+        /** @brief Identifies only an exact next coordinated prefab value history entry. */
+        [[nodiscard]] Result<std::optional<std::uint64_t>> NextPrefabValueState(const SceneTransactionContext &context, bool redo) const;
+        /** @brief Checks whether an exact coordinated value transition remains within the indicated direction. */
+        [[nodiscard]] bool HasPrefabValueHistory(std::uint64_t state, bool redo) const noexcept;
+        /** @brief Retires unreachable Prefab transitions and history beyond those boundaries without changing authored state. */
+        bool RetirePrefabValueHistory(const std::function<bool(std::uint64_t, bool)> &unavailable) noexcept;
+        /** @brief Encodes the already reserved canonical root without rereading live state. */
+        [[nodiscard]] std::string EncodePreparedScene(const Prepared &prepared) const;
         /** @brief Computes the post-publication fence from prepared owner state without copying a root. */
         [[nodiscard]] SceneTransactionContext PreparedContext(const Prepared &prepared) const noexcept;
         /** @brief Rechecks the exact prepared owner fence without mutation or callbacks. */

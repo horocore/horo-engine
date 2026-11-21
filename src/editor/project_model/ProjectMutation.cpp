@@ -14,6 +14,7 @@ namespace Horo::Editor {
                                          .remediationHint = "Wait for the active save, migration, or package operation to finish.",
                                          .retryable = true,
                                          .userActionable = true};
+        constexpr auto MutationLockPath = ".horo/local/project-mutation.lock";
 
         std::string OwnerName(const ProjectMutationOwner owner) {
             using enum ProjectMutationOwner;
@@ -36,6 +37,11 @@ namespace Horo::Editor {
             return "unknown";
         }
     }  // namespace
+
+    /** @copydoc ProjectMutationErrorDomain */
+    ModuleErrorDomainDescriptor ProjectMutationErrorDomain() {
+        return {.id = Domain, .descriptors = {&Locked}};
+    }
 
     struct ProjectMutationCoordinator::State {
         explicit State(DurableFileSystem &value) : files(value) {}
@@ -88,6 +94,11 @@ namespace Horo::Editor {
     ProjectMutationLease::ProjectMutationLease(ProjectMutationLease &&) noexcept = default;
     ProjectMutationLease &ProjectMutationLease::operator=(ProjectMutationLease &&) noexcept = default;
 
+    /** @copydoc ProjectMutationLease::ProtectsProject */
+    bool ProjectMutationLease::ProtectsProject(const std::filesystem::path &canonicalRoot) const {
+        return state_ && state_->rootKey == canonicalRoot && state_->native.ProtectsPath(canonicalRoot / MutationLockPath);
+    }
+
     /** @copydoc ProjectMutationCoordinator::ProjectMutationCoordinator */
     ProjectMutationCoordinator::ProjectMutationCoordinator(DurableFileSystem &files) : state_(std::make_shared<State>(files)) {}
 
@@ -107,8 +118,8 @@ namespace Horo::Editor {
                 return Result<ProjectMutationLease>::Failure(MakeError(Locked));
             admission.armed = true;
         }
-        auto native = admission.owner->files.TryAcquireExclusive(root / ".horo/local/project-mutation.lock",
-                                                                 OwnerName(request.owner) + ":" + request.operationId);
+        auto native =
+            admission.owner->files.TryAcquireExclusive(root / MutationLockPath, OwnerName(request.owner) + ":" + request.operationId);
         if (native.HasError())
             return Result<ProjectMutationLease>::Failure(MakeError(Locked, native.ErrorValue().message));
         auto lease = std::make_unique<ProjectMutationLease::State>(admission.owner, key, std::move(native).Value());

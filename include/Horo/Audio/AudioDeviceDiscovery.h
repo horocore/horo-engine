@@ -33,7 +33,8 @@ namespace Horo::Audio {
     enum class AudioDeviceClass : std::uint8_t {
         Physical,
         Virtual,
-        Headless
+        Headless,
+        Unknown /**< The native discovery protocol does not substantiate an endpoint class. */
     };
 
     /** @brief Maximum number of output endpoints in one complete discovery snapshot. */

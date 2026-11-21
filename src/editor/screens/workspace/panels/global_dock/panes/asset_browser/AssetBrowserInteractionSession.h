@@ -1,5 +1,6 @@
 #pragma once
 
+#include "editor/screens/workspace/DecisionTaskPalette.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 
 #include <array>
@@ -13,6 +14,28 @@ namespace Horo::Editor {
     enum class AssetBrowserViewMode : std::uint8_t {
         Grid,
         List,
+    };
+
+    /** @brief Unsaved first Blackboard source and its user-authored initial key. */
+    struct BlackboardCreationDraft final {
+        BlackboardCreationRequest request;
+        std::string numericDefault;
+    };
+
+    /** @brief Draft of the typed point-lattice creation dialog. Signed controls preserve invalid draft values. */
+    struct EnvironmentQueryCreationDraft final {
+        std::string directory;
+        std::array<char, AI::EnvironmentQuerySchemaLimits::DisplayNameBytes + 1> name{};
+        int stepMillimeters{1000};
+        int outerSteps{1};
+        int innerSteps{};
+        int maximumResults{9};
+        bool perceivedActors{};
+        bool currentlySensed{true};
+        bool annulus{};
+        bool distance{};
+        int radiusMillimeters{1500};
+        bool preferNearer{true};
     };
 
     /** @brief Cross-frame presentation state for one Content Browser panel. */
@@ -30,6 +53,17 @@ namespace Horo::Editor {
         bool openRename{false};
         bool openDeleteConfirmation{false};
         bool openCreateFolder{false};
+        EnvironmentQueryCreationDraft createQuery;
+        bool openCreateQuery{};
+        BlackboardCreationDraft createBlackboard;
+        bool openCreateBlackboard{};
+        StateMachineCreationRequest createStateMachine;
+        bool openCreateStateMachine{};
+        TaskDecisionCreationRequest createTaskDecision;
+        DecisionTaskPaletteDraft initialTaskPalette;
+        float utilityMinimum{};
+        float utilityMaximum{1};
+        bool openCreateTaskDecision{};
     };
 
     /**
@@ -63,6 +97,39 @@ namespace Horo::Editor {
 
         /** @brief Prepares the create-folder workflow. */
         void OpenCreateFolder();
+
+        /** @brief Captures the selected folder and exact task catalog publication for first source creation. */
+        void OpenCreateTaskDecision(std::string_view directory, AI::DecisionPlanKind family, std::uint64_t catalogRevision);
+        /** @brief Checks the explicit native task, schema and Utility score input. */
+        [[nodiscard]] static bool CanConfirmTaskDecision(const TaskDecisionCreationRequest &draft) noexcept;
+        /** @brief Reduces a valid task-based Decision draft to a normal Project command. */
+        [[nodiscard]] static std::optional<EditorWorkspaceViewCommandData> ConfirmTaskDecision(const TaskDecisionCreationRequest &draft);
+
+        /** @brief Captures the selected folder for the initial State Machine modal. */
+        void OpenCreateStateMachine(std::string_view directory);
+
+        /** @brief Checks that a registered schema and terminal outcome are explicitly selected. */
+        [[nodiscard]] static bool CanConfirmStateMachine(const StateMachineCreationRequest &draft) noexcept;
+        /** @brief Reduces a complete State Machine request to the normal Project command. */
+        [[nodiscard]] static std::optional<EditorWorkspaceViewCommandData> ConfirmStateMachine(const StateMachineCreationRequest &draft);
+
+        /** @brief Captures the selected Assets directory for the first schema modal. */
+        void OpenCreateBlackboard(std::string_view directory);
+
+        /** @brief Checks that required values and initial display labels are authored. */
+        [[nodiscard]] static bool CanConfirmCreateBlackboard(const BlackboardCreationDraft &draft) noexcept;
+
+        /** @brief Reduces a complete Blackboard draft to the normal project command. */
+        [[nodiscard]] static std::optional<EditorWorkspaceViewCommandData> ConfirmCreateBlackboard(const BlackboardCreationDraft &draft);
+
+        /** @brief Captures the active asset folder for the independent query creation modal. */
+        void OpenCreateQuery(std::string_view directory);
+
+        /** @brief Checks signed draft input and native lattice bounds without allocating. */
+        [[nodiscard]] static bool CanConfirmCreateQuery(const EnvironmentQueryCreationDraft &draft) noexcept;
+
+        /** @brief Creates a typed workspace confirmation only for representable, bounded authoring inputs. */
+        [[nodiscard]] static std::optional<EditorWorkspaceViewCommandData> ConfirmCreateQuery(const EnvironmentQueryCreationDraft &draft);
 
         /** @brief Creates an absolute directory-navigation command. */
         [[nodiscard]] static EditorWorkspaceViewCommandData Navigate(std::string_view absolutePath);

@@ -137,6 +137,15 @@ namespace Horo::Runtime::Ui {
          */
         [[nodiscard]] Result<bool> ObserveControlTransition(const UiControlInput &input, UiControlTransitionKind transition);
 
+        /** @brief Advances the same source to a newer presented interaction using its reserved storage.
+         * @param interaction Actual current interaction revision. @return Success or typed stale/lifecycle failure.
+         * @post An advance discards the prior presentation's undelivered cues. Equal revisions preserve the FIFO.
+         */
+        [[nodiscard]] Result<void> AdvancePresentation(UiInteractionRevision interaction);
+
+        /** @brief Discards pending cues after input admission is withdrawn without retiring the source. */
+        void DiscardPending() noexcept;
+
         /**
          * @brief Removes at most one pending intent without invoking audio or haptics.
          * @return Empty when no intent remains, otherwise an owned value; shutdown rejects delivery.

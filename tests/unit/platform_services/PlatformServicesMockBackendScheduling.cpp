@@ -41,10 +41,18 @@ namespace Horo::PlatformServices::TestSupport {
 
     template <typename T>
     std::function<Result<PlatformRequestMutation>()> MockPlatformServicesBackend::Impl::ProviderCompletion(
-        const PlatformRequestId id, const PlatformRequestGeneration generation, std::shared_ptr<const ScriptedResponse> response) {
-        return [this, id, generation, response = std::move(response)]() {
+        const PlatformRequestId id, const PlatformRequestGeneration generation, std::shared_ptr<const ScriptedResponse> response,
+        CompletionValidation validate) {
+        return [this, id, generation, response = std::move(response), validate = std::move(validate)]() {
+            if (validate) {
+                if (const auto valid = validate(*response); valid.HasError())
+                    return requests.CompleteFailure<T>(id, generation, valid.ErrorValue());
+            }
             if (response->error)
                 return requests.CompleteFailure<T>(id, generation, *response->error);
+            if (response->providerFailure)
+                return requests.CompleteFailure<T>(id, generation,
+                                                   MakePlatformProviderError(*response->providerFailure, id.value, generation.value));
             if constexpr (std::is_void_v<T>)
                 return requests.CompleteSuccess(id, generation);
             else
@@ -101,7 +109,7 @@ namespace Horo::PlatformServices::TestSupport {
     template <typename T>
     void MockPlatformServicesBackend::Impl::RegisterRequest(const MockPlatformServicesOperation operation,
                                                             std::shared_ptr<const ScriptedResponse> response,
-                                                            const PlatformRequestHandle<T> &handle) {
+                                                            const PlatformRequestHandle<T> &handle, CompletionValidation validate) {
         const auto id = handle.Id();
         const auto generation = handle.Generation();
         requestsInFlight.push_back(RequestRecord{.id = id,
@@ -115,20 +123,31 @@ namespace Horo::PlatformServices::TestSupport {
         },
                                                  .completeCancellation = CancellationCompletion<T>(id, generation)});
         ScheduleEvent(id, generation, operation, MockCompletionKind::Provider, response->delayMilliseconds,
-                      ProviderCompletion<T>(id, generation, response));
+                      ProviderCompletion<T>(id, generation, response, validate));
         if (response->timeoutAfterMilliseconds)
             ScheduleEvent(id, generation, operation, MockCompletionKind::Timeout, *response->timeoutAfterMilliseconds,
                           TimeoutCompletion<T>(id, generation));
         if (response->duplicateDelayMilliseconds) {
             const auto duplicateDelay = response->delayMilliseconds + *response->duplicateDelayMilliseconds;
             ScheduleEvent(id, generation, operation, MockCompletionKind::Provider, duplicateDelay,
-                          ProviderCompletion<T>(id, generation, response));
+                          ProviderCompletion<T>(id, generation, response, std::move(validate)));
         }
     }
 
     template <typename T>
     Result<PlatformRequestHandle<T>> MockPlatformServicesBackend::Impl::Submit(const MockPlatformServicesOperation operation,
-                                                                               const bool requestIsValid) {
+                                                                               const bool requestIsValid, CompletionValidation validate) {
+        if (detail::IsCloudOperation(operation)) {
+            if (!active_ || closed_)
+                return Result<PlatformRequestHandle<T>>::Failure(MakeError(RequestErrors::FrontendUnavailable));
+            if (!requestIsValid)
+                return Result<PlatformRequestHandle<T>>::Failure(MakeError(CloudObjectErrors::StaleSession));
+            const auto occupied = std::ranges::count_if(requestsInFlight, [](const RequestRecord &record) {
+                return detail::IsCloudOperation(record.operation);
+            });
+            if (std::cmp_greater_equal(occupied, MockPlatformServicesBackend::MaximumCloudTransfers))
+                return Result<PlatformRequestHandle<T>>::Failure(MakeError(RequestErrors::CapacityExceeded));
+        }
         const auto call = RecordCall(operation);
         if (call.HasError() || !active_ || closed_ || !requestIsValid) {
             if (call.HasValue())
@@ -157,7 +176,7 @@ namespace Horo::PlatformServices::TestSupport {
             return Result<PlatformRequestHandle<T>>::Failure(admitted.ErrorValue());
         }
         auto handle = std::move(admitted).Value();
-        RegisterRequest<T>(operation, std::move(response), handle);
+        RegisterRequest<T>(operation, std::move(response), handle, std::move(validate));
         return Result<PlatformRequestHandle<T>>::Success(std::move(handle));
     }
 
@@ -303,8 +322,78 @@ namespace Horo::PlatformServices::TestSupport {
     }
 
     Result<PlatformRequestHandle<CloudMutationResult>> MockPlatformServicesBackend::WriteCloudObject(CloudBlobWriteRequest &&request) {
-        return impl_->Submit<CloudMutationResult>(MockPlatformServicesOperation::WriteCloudObject,
-                                                  request.bytes.Bytes().size() <= MaximumPayloadBytes);
+        if (const auto valid = ValidateCloudBlobWriteRequest(request, Impl::CloudCapability(), Impl::CloudLimits()); valid.HasError())
+            return Result<PlatformRequestHandle<CloudMutationResult>>::Failure(valid.ErrorValue());
+        const bool current = impl_->cloudSubject && *impl_->cloudSubject == request.subject;
+        return impl_->Submit<CloudMutationResult>(MockPlatformServicesOperation::WriteCloudObject, current,
+                                                  [owner = impl_.get(),
+                                                   request = std::move(request)](const Impl::ScriptedResponse &response) {
+            if (!owner->cloudSubject || *owner->cloudSubject != request.subject)
+                return Result<void>::Failure(MakeError(CloudObjectErrors::StaleSession));
+            return (response.error || response.providerFailure)
+                       ? Result<void>::Success()
+                       : ValidateCloudWriteCompletion(std::get<CloudMutationResult>(response.payload), request, *owner->cloudSubject,
+                                                      Impl::CloudLimits());
+        });
+    }
+
+    Result<PlatformRequestHandle<CloudObjectPage>> MockPlatformServicesBackend::ListCloudObjects(CloudListRequest request) {
+        if (const auto valid = ValidateCloudListRequest(request, Impl::CloudLimits()); valid.HasError())
+            return Result<PlatformRequestHandle<CloudObjectPage>>::Failure(valid.ErrorValue());
+        const bool current = impl_->cloudSubject && *impl_->cloudSubject == request.subject;
+        return impl_->Submit<CloudObjectPage>(MockPlatformServicesOperation::ListCloudObjects, current,
+                                              [owner = impl_.get(), request = std::move(request)](const Impl::ScriptedResponse &response) {
+            if (!owner->cloudSubject || *owner->cloudSubject != request.subject)
+                return Result<void>::Failure(MakeError(CloudObjectErrors::StaleSession));
+            return (response.error || response.providerFailure)
+                       ? Result<void>::Success()
+                       : ValidateCloudObjectPage(std::get<CloudObjectPage>(response.payload), request, *owner->cloudSubject,
+                                                 Impl::CloudLimits());
+        });
+    }
+
+    Result<PlatformRequestHandle<CloudBlobReadResult>> MockPlatformServicesBackend::ReadCloudObject(CloudBlobReadRequest request) {
+        if (const auto valid = ValidateCloudBlobReadRequest(request, Impl::CloudLimits()); valid.HasError())
+            return Result<PlatformRequestHandle<CloudBlobReadResult>>::Failure(valid.ErrorValue());
+        const bool current = impl_->cloudSubject && *impl_->cloudSubject == request.subject;
+        return impl_->Submit<CloudBlobReadResult>(MockPlatformServicesOperation::ReadCloudBlob, current,
+                                                  [owner = impl_.get(),
+                                                   request = std::move(request)](const Impl::ScriptedResponse &response) {
+            if (!owner->cloudSubject || *owner->cloudSubject != request.subject)
+                return Result<void>::Failure(MakeError(CloudObjectErrors::StaleSession));
+            return (response.error || response.providerFailure)
+                       ? Result<void>::Success()
+                       : ValidateCloudBlobReadCompletion(std::get<CloudBlobReadResult>(response.payload), request, *owner->cloudSubject,
+                                                         Impl::CloudLimits());
+        });
+    }
+
+    Result<PlatformRequestHandle<CloudMutationResult>> MockPlatformServicesBackend::DeleteCloudObject(CloudBlobDeleteRequest &&request) {
+        if (const auto valid = ValidateCloudBlobDeleteRequest(request, Impl::CloudCapability(), Impl::CloudLimits()); valid.HasError())
+            return Result<PlatformRequestHandle<CloudMutationResult>>::Failure(valid.ErrorValue());
+        const bool current = impl_->cloudSubject && *impl_->cloudSubject == request.subject;
+        return impl_->Submit<CloudMutationResult>(MockPlatformServicesOperation::DeleteCloudObject, current,
+                                                  [owner = impl_.get(),
+                                                   request = std::move(request)](const Impl::ScriptedResponse &response) {
+            if (!owner->cloudSubject || *owner->cloudSubject != request.subject)
+                return Result<void>::Failure(MakeError(CloudObjectErrors::StaleSession));
+            return (response.error || response.providerFailure)
+                       ? Result<void>::Success()
+                       : ValidateCloudDeleteCompletion(std::get<CloudMutationResult>(response.payload), request, *owner->cloudSubject);
+        });
+    }
+
+    Result<PlatformRequestHandle<CloudQuotaObservation>> MockPlatformServicesBackend::QueryCloudQuota(PlatformSubjectHandle subject) {
+        return impl_->Submit<CloudQuotaObservation>(MockPlatformServicesOperation::QueryCloudQuota,
+                                                    impl_->cloudSubject && *impl_->cloudSubject == subject,
+                                                    [owner = impl_.get(), subject](const Impl::ScriptedResponse &response) {
+            if (!owner->cloudSubject || *owner->cloudSubject != subject)
+                return Result<void>::Failure(MakeError(CloudObjectErrors::StaleSession));
+            return (response.error || response.providerFailure)
+                       ? Result<void>::Success()
+                       : ValidateCloudQuotaObservation(std::get<CloudQuotaObservation>(response.payload), Impl::CloudCapability(),
+                                                       *owner->cloudSubject);
+        });
     }
 
     Result<PlatformRequestHandle<void>> MockPlatformServicesBackend::SetPresence(PresenceUpdateRequest request) {
@@ -316,7 +405,8 @@ namespace Horo::PlatformServices::TestSupport {
     }
 
     Result<PlatformRequestHandle<FriendsPage>> MockPlatformServicesBackend::QueryFriends(FriendsQuery query) {
-        const bool validPageSize = query.pageSize > 0 && query.pageSize <= MaximumPageEntries;
+        const bool validPageSize = query.pageSize > 0 && query.pageSize <= MaximumPageEntries &&
+                                   query.startIndex <= std::numeric_limits<std::uint32_t>::max() - query.pageSize;
         return impl_->Submit<FriendsPage>(MockPlatformServicesOperation::QueryFriends, validPageSize);
     }
 

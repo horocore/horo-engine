@@ -17,6 +17,7 @@ namespace Horo::Navigation {
             return input.caller.owner.IsValid() && input.caller.generation.IsValid() && ValidateNavigationOutcomeProvenance(input.source) &&
                    input.source.world == request.world && input.source.topology == request.topology && Math::IsFinite(request.start) &&
                    Math::IsFinite(request.destination) && request.filter.IsValid() &&
+                   (input.agent == CrowdAgentHandle{} || (input.agent.IsValid() && input.agent.world == request.world)) &&
                    request.coveragePolicy < NavigationPathCoveragePolicy::Count && request.requirement.query == NavigationQueryKind::Path &&
                    input.priority <= JobPriority::Background && input.targetTick >= tick && input.deadlineTick >= input.targetTick &&
                    input.deadlineTick > tick && std::isfinite(request.clearanceMeters) && request.clearanceMeters >= 0.0F;
@@ -50,14 +51,54 @@ namespace Horo::Navigation {
         }
     }
 
-    NavigationCoordinator::NavigationCoordinator(std::shared_ptr<State> state) noexcept : state_(std::move(state)) {}
+    NavigationCoordinator::NavigationCoordinator(std::shared_ptr<State> state) noexcept : state_(std::move(state)) {
+        state_->owner = this;
+    }
 
     /** @copydoc NavigationCoordinator::NavigationCoordinator(NavigationCoordinator&&) */
-    NavigationCoordinator::NavigationCoordinator(NavigationCoordinator &&other) noexcept = default;
+    NavigationCoordinator::NavigationCoordinator(NavigationCoordinator &&other) noexcept : state_(std::move(other.state_)) {
+        if (state_)
+            state_->owner = this;
+    }
 
     /** @copydoc NavigationCoordinator::~NavigationCoordinator */
     NavigationCoordinator::~NavigationCoordinator() {
+        if (state_)
+            state_->owner = nullptr;
         BeginShutdown();
+    }
+
+    NavigationCoordinator::PathRequests NavigationCoordinator::ObservePathRequests() const noexcept {
+        return PathRequests{state_};
+    }
+
+    NavigationCoordinator::PathRequests::PathRequests(const std::shared_ptr<State> &state) noexcept
+        : state_(state), lane_(std::this_thread::get_id()) {}
+
+    std::shared_ptr<NavigationCoordinator::State> NavigationCoordinator::PathRequests::Resolve() const noexcept {
+        return lane_ == std::this_thread::get_id() ? state_.lock() : nullptr;
+    }
+
+    Result<NavRequestHandle> NavigationCoordinator::PathRequests::Submit(const NavigationWorldLifecycle &world,
+                                                                         NavigationPathSubmission submission,
+                                                                         const std::uint64_t tick) const {
+        const auto state = Resolve();
+        if (!state || !state->owner || state->closed)
+            return Failure<NavRequestHandle>(NavigationErrors::StaleSnapshot);
+        return state->owner->Submit(world, std::move(submission), tick);
+    }
+
+    Result<std::optional<NavigationPathCompletion>> NavigationCoordinator::PathRequests::Take(const NavRequestHandle handle) const {
+        const auto state = Resolve();
+        using Completion = std::optional<NavigationPathCompletion>;
+        if (!state || !state->owner || state->closed)
+            return Failure<Completion>(NavigationErrors::StaleSnapshot);
+        return Result<Completion>::Success(state->owner->Take(handle));
+    }
+
+    void NavigationCoordinator::PathRequests::Abandon(const NavRequestHandle handle) const noexcept {
+        if (const auto state = Resolve(); state && state->owner)
+            (void)state->owner->Abandon(handle);
     }
 
     /** @copydoc NavigationCoordinator::Submit */
@@ -148,7 +189,7 @@ namespace Horo::Navigation {
     }
 
     /** @copydoc NavigationCoordinator::Commit */
-    std::uint32_t NavigationCoordinator::Commit(const NavigationPathPublication &current) {
+    std::uint32_t NavigationCoordinator::Commit(const NavigationPathPublication &current, const NavigationPathCommitObserver observer) {
         const auto &state = MutableState();
         if (!state || !state->ValidPublication(current))
             return 0;
@@ -172,6 +213,8 @@ namespace Horo::Navigation {
             if (!failure.has_value() && !entry.candidate)
                 break;  // Worker arrival cannot bypass an earlier eligible admitted request.
             State::Publish(entry, std::move(failure), current.tick);
+            if (observer.observe)
+                observer.observe(observer.context, *entry.terminal);
             ++published;
         }
         return published;
@@ -207,6 +250,16 @@ namespace Horo::Navigation {
         entry->terminal.reset();
         State::Retire(state->slots[handle.slot.index]);
         return true;
+    }
+
+    /** @copydoc NavigationCoordinator::RetireAgentQueriesAtSafePoint */
+    void NavigationCoordinator::RetireAgentQueriesAtSafePoint(const std::span<const CrowdAgentHandle> retired) noexcept {
+        const auto &state = MutableState();
+        if (!state || retired.empty())
+            return;
+        for (const auto &slot : state->slots)
+            if (slot.entry && std::ranges::binary_search(retired, slot.entry->submission.agent))
+                static_cast<void>(Abandon(slot.entry->query.handle));
     }
 
     /** @copydoc NavigationCoordinator::CollectRetiredAtSafePoint */

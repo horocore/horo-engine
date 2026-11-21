@@ -24,6 +24,8 @@ namespace Horo::PlatformServices {
         PlatformOfflineOperationState state{PlatformOfflineOperationState::Pending};
         std::vector<Receipt> receipts;
         std::optional<TimePoint> terminalAt;
+        std::uint32_t attempts{};
+        std::optional<TimePoint> nextEligibleAt;
     };
 
     namespace detail {

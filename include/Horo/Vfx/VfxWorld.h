@@ -18,6 +18,12 @@ namespace Horo::Vfx {
         struct VfxSpawnInstance;
     }  // namespace Detail
 
+    /** @brief Host-projected preference for tagged particle output at the immutable extraction cutoff. */
+    enum class VfxFlashPolicy : std::uint8_t {
+        Present,
+        Suppress
+    };
+
     /** @brief Fixed cooked emitter binding realized before scene activation. */
     struct VfxEmitterPreparation final {
         EffectSystemId effect{};
@@ -31,6 +37,7 @@ namespace Horo::Vfx {
         Render::VfxPrimitiveTopology topology{Render::VfxPrimitiveTopology::CameraFacingBillboard};
         bool deferredCompatible{};
         bool shadowCaster{};
+        bool photosensitiveFlash{}; /**< Host-prepared classification from the authored emitter. */
     };
 
     /** @brief Cold ownership binding. Prepare moves the simulator only after all world admission and allocation succeeds.
@@ -109,16 +116,17 @@ namespace Horo::Vfx {
         /** @brief Packs the current live prefix on the scene owner without allocation.
          * @param world Scene owner; borrowed only during copying. @param frame Increasing one-based frame ordinal.
          * @param origin Captured render origin, borrowed only for this synchronous copy. @param originRevision Non-zero captured revision.
-         * @return Immutable lease and exact admission/overrun status. Retained frames are never overwritten.
+         * @param flashes Captured policy for tagged output. @return Immutable lease and exact admission/overrun status.
+         * Retained frames are never overwritten.
          */
         [[nodiscard]] VfxExtractionOutcome Extract(const VfxWorld &world, std::uint64_t frame, const Math::WorldCoordinate64 &origin,
-                                                   std::uint64_t originRevision) noexcept;
+                                                   std::uint64_t originRevision, VfxFlashPolicy flashes) noexcept;
 
         [[nodiscard]] bool AppendGpuEmitter(EffectSystemId, EmitterId, const GpuParticleSimulator &, std::uint32_t,
-                                            Render::RenderWorldFrameData &, const Math::WorldCoordinate64 &,
-                                            VfxExtractionReport &) const noexcept;
+                                            Render::RenderWorldFrameData &, const Math::WorldCoordinate64 &, VfxExtractionReport &,
+                                            VfxFlashPolicy) const noexcept;
         [[nodiscard]] bool AppendGpuEmitters(const VfxWorld &, Render::RenderWorldFrameData &, const Math::WorldCoordinate64 &,
-                                             VfxExtractionReport &) const noexcept;
+                                             VfxExtractionReport &, VfxFlashPolicy) const noexcept;
 
         /** @brief Copies validated particle values into admitted frame storage; never publishes a partial frame.
          * @param binding Prepared emitter coordinates. @param particles Exact live identity source.
@@ -244,10 +252,11 @@ namespace Horo::Vfx {
         [[nodiscard]] VfxSpawnStatus InspectSpawnAsset(Assets::AssetId asset, VfxSpawnAssetInfo &output) const noexcept;
         /** @brief Captures all live effects into the sole immutable channel.
          * @param frame Increasing frame ordinal. @param origin Captured render origin. @param originRevision Captured revision.
+         * @param flashes Preference to hide tagged particle output. Simulation, lifetime and events continue unchanged.
          * @return Immutable values and typed bounds/backpressure evidence.
          */
-        [[nodiscard]] VfxExtractionOutcome Extract(std::uint64_t frame, const Math::WorldCoordinate64 &origin,
-                                                   std::uint64_t originRevision) noexcept;
+        [[nodiscard]] VfxExtractionOutcome Extract(std::uint64_t frame, const Math::WorldCoordinate64 &origin, std::uint64_t originRevision,
+                                                   VfxFlashPolicy flashes = VfxFlashPolicy::Present) noexcept;
 
         /** @brief Returns the exact scene incarnation. */
         [[nodiscard]] VfxIdentityScope Scene() const noexcept {
@@ -287,10 +296,10 @@ namespace Horo::Vfx {
         [[nodiscard]] bool HasLiveGpu(EffectSystemId) const noexcept;
         void StopGpu(EffectSystemId, EffectSystemId, bool) noexcept;
         void ShutdownGpu() noexcept;
-        [[nodiscard]] bool AppendCpuEmitters(Render::RenderWorldFrameData &, const Math::WorldCoordinate64 &,
-                                             VfxExtractionReport &) const noexcept;
-        [[nodiscard]] bool AppendSpawnEmitters(Render::RenderWorldFrameData &, const Math::WorldCoordinate64 &,
-                                               VfxExtractionReport &) const noexcept;
+        [[nodiscard]] bool AppendCpuEmitters(Render::RenderWorldFrameData &, const Math::WorldCoordinate64 &, VfxExtractionReport &,
+                                             VfxFlashPolicy) const noexcept;
+        [[nodiscard]] bool AppendSpawnEmitters(Render::RenderWorldFrameData &, const Math::WorldCoordinate64 &, VfxExtractionReport &,
+                                               VfxFlashPolicy) const noexcept;
         /** @brief Prepares only the unpublished atomic factory candidate. */
         [[nodiscard]] Result<void> PrepareSpawnPalette(std::span<const VfxSpawnAssetPreparation>, VfxSpawnBudget);
         void ShutdownSpawns() noexcept;

@@ -43,8 +43,14 @@ namespace Horo::Mcp::Test {
         return admission;
     }
 
-    inline McpRequestContext Context(McpSessionAdmission admission = {.clientIdentity = "test-client"}) {
-        admission = Authenticate(std::move(admission));
+    /** @brief Authenticates test context against the same policy retained by its registry.
+     * @param admission Exact test principal, capabilities and authority revisions.
+     * @param policy Explicit registry policy or the existing shared test default.
+     * @return Context retaining that authenticated policy and principal.
+     */
+    inline McpRequestContext Context(McpSessionAdmission admission = {.clientIdentity = "test-client"},
+                                     const std::shared_ptr<McpAuthorization> &policy = Authorization()) {
+        admission = Authenticate(std::move(admission), policy);
         McpRequestContext context;
         context.session = {1, 1};
         context.clientIdentity = admission.clientIdentity;
@@ -54,7 +60,7 @@ namespace Horo::Mcp::Test {
         context.registryRevision = admission.registryRevision;
         context.deadline = std::chrono::steady_clock::now() + std::chrono::hours{1};
         context.authority = admission.authority;
-        context.authorization = Authorization();
+        context.authorization = policy;
         context.requestIdentity = 1;
         return context;
     }

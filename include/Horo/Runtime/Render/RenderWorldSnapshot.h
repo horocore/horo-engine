@@ -76,6 +76,7 @@ namespace Horo::Render {
         std::optional<GpuVfxSimulationWork> pending;
         CancellationToken lifetimeCancellation;
         Math::Vec3 originDelta;
+        bool suppressDraw{}; /**< Retain pending simulation but omit this batch's graphics pass. */
     };
 
     /** @brief Preallocated storage; only extraction may populate an unleased slot. */

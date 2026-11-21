@@ -1,11 +1,13 @@
 #include "Horo/Runtime/Ui/UiLayout.h"
 
 #include "Horo/Runtime/Ui/UiErrors.h"
+#include "UiCpuWorkProbe.h"
 
 #include <algorithm>
 #include <atomic>
 #include <limits>
 #include <new>
+#include <ranges>
 #include <utility>
 #include <vector>
 
@@ -15,6 +17,14 @@ namespace Horo::Runtime::Ui {
 
         template <typename T = void> [[nodiscard]] Result<T> Failure(const ErrorCodeDescriptor &descriptor) {
             return Result<T>::Failure(MakeError(descriptor));
+        }
+
+        /** @brief Reports the element under evaluation without changing the canonical failure. */
+        template <typename T = void>
+        [[nodiscard]] Result<T> ElementLayoutFailure(const UiLayoutUpdateRequest &request, const UiElementHandle element, Error error) {
+            if (request.failedElement)
+                *request.failedElement = element;
+            return Result<T>::Failure(std::move(error));
         }
 
         /** @brief Accumulates inert candidate evidence without changing layout admission or dirty state. */
@@ -112,9 +122,11 @@ namespace Horo::Runtime::Ui {
             UiLogicalRect rootContent;
             UiCanvasScaleFactor fontScale;
             UiInteractionRevision interaction;
+            UiLayoutInlineDirection inlineDirection{};
         };
 
         UiLayoutEngineDescriptor descriptor;
+        UiCpuWorkStatistics cpuWork{descriptor.measureCpuWork};
         UiLayoutEngineState lifecycle{UiLayoutEngineState::Active};
         std::vector<Node> activeNodes;
 
@@ -220,6 +232,8 @@ namespace Horo::Runtime::Ui {
                 return candidateTree.nodes[index].element;
             });
 
+            // Children writes only its returned prefix. Size the writable scratch once for the whole traversal.
+            childHandleScratch.resize(traversalScratch.size());
             for (std::uint32_t index = 0; index < candidateTree.nodes.size(); ++index) {
                 const auto record = tree.Get(candidateTree.nodes[index].element);
                 if (record.HasError())
@@ -231,14 +245,12 @@ namespace Horo::Runtime::Ui {
                     candidateTree.nodes[index].parent = parent;
                 }
 
-                childHandleScratch.resize(descriptor.elementCapacity);
                 const auto children = tree.Children(candidateTree.nodes[index].element, childHandleScratch);
                 if (children.HasError())
                     return Result<void>::Failure(children.ErrorValue());
-                childHandleScratch.resize(children.Value());
                 candidateTree.nodes[index].firstChild = static_cast<std::uint32_t>(candidateTree.children.size());
                 candidateTree.nodes[index].childCount = static_cast<std::uint32_t>(children.Value());
-                for (const auto child : childHandleScratch) {
+                for (const auto child : std::span<const UiElementHandle>{childHandleScratch}.first(children.Value())) {
                     const auto childIndex = FindCandidate(child);
                     if (childIndex == NoParent)
                         return Failure(UiErrors::ElementTreeInvalid);
@@ -264,6 +276,23 @@ namespace Horo::Runtime::Ui {
                 index = candidateTree.nodes[index].parent;
                 if (index != NoParent)
                     AddCause(candidateTree.nodes[index].work, UiLayoutWorkCause::AncestorMeasure);
+            }
+        }
+
+        /** @brief Marks direct consumers and their ancestors in one reverse-preorder pass. */
+        void MarkFontScaleChanges() noexcept {
+            for (auto &node : candidateTree.nodes | std::views::reverse) {
+                if (node.measurement.dependsOnFontScale)
+                    AddCause(node.work, UiLayoutWorkCause::FontScale);
+                if (!node.work.HasCause(UiLayoutWorkCause::FontScale))
+                    continue;
+                node.measureDirty = true;
+                node.arrangeDirty = true;
+                if (node.parent != NoParent) {
+                    auto &parent = candidateTree.nodes[node.parent];
+                    AddCause(parent.work, UiLayoutWorkCause::FontScale);
+                    AddCause(parent.work, UiLayoutWorkCause::AncestorMeasure);
+                }
             }
         }
 
@@ -320,11 +349,11 @@ namespace Horo::Runtime::Ui {
                 ++node.work.constraintResolutions;
                 const UiLayoutChildConstraintRequest childRequest{node.element, node.constraints, ChildHandles(node)};
                 if (const auto resolved = request.evaluator->ResolveChildConstraints(childRequest, constraintScratch); resolved.HasError())
-                    return Result<void>::Failure(resolved.ErrorValue());
+                    return ElementLayoutFailure(request, node.element, resolved.ErrorValue());
                 for (std::uint32_t offset = 0; offset < node.childCount; ++offset) {
-                    if (!constraintScratch[offset].IsValid())
-                        return Failure(UiErrors::LayoutInvalid);
                     auto &child = candidateTree.nodes[candidateTree.children[node.firstChild + offset]];
+                    if (!constraintScratch[offset].IsValid())
+                        return ElementLayoutFailure(request, child.element, MakeError(UiErrors::LayoutInvalid));
                     if (child.constraints != constraintScratch[offset]) {
                         child.constraints = constraintScratch[offset];
                         AddCause(child.work, UiLayoutWorkCause::InheritedConstraints);
@@ -348,9 +377,9 @@ namespace Horo::Runtime::Ui {
                                                             request.fontScale};
                 const auto measured = request.evaluator->Measure(measureRequest);
                 if (measured.HasError())
-                    return Result<void>::Failure(measured.ErrorValue());
+                    return ElementLayoutFailure(request, node.element, measured.ErrorValue());
                 if (!measured.Value().IsValid(node.constraints))
-                    return Failure(UiErrors::LayoutInvalid);
+                    return ElementLayoutFailure(request, node.element, MakeError(UiErrors::LayoutInvalid));
                 if (node.measurement != measured.Value()) {
                     node.arrangeDirty = true;
                     AddCause(node.work, UiLayoutWorkCause::MeasurementChanged);
@@ -370,18 +399,20 @@ namespace Horo::Runtime::Ui {
                 placementScratch.resize(node.childCount);
                 lineScratch.resize(node.childCount);
                 ++node.work.arrangements;
-                const UiLayoutArrangeRequest arrangeRequest{node.element,
-                                                            node.assignedContent,
-                                                            node.measurement,
-                                                            ChildMeasurements(node),
-                                                            remeasure,
-                                                            std::span{placementScratch},
-                                                            std::span{lineScratch}};
+                const UiLayoutArrangeRequest
+                    arrangeRequest{node.element, node.assignedContent,        node.measurement,       ChildMeasurements(node),
+                                   remeasure,    std::span{placementScratch}, std::span{lineScratch}, request.inlineDirection};
                 const auto arranged = request.evaluator->Arrange(arrangeRequest, rectangleScratch);
                 if (arranged.HasError())
-                    return Result<bool>::Failure(arranged.ErrorValue());
-                if (!arranged.Value().IsValid() || !std::ranges::all_of(rectangleScratch, &UiLogicalRect::IsValid))
-                    return Failure<bool>(UiErrors::LayoutInvalid);
+                    return ElementLayoutFailure<bool>(request, node.element, arranged.ErrorValue());
+                if (!arranged.Value().IsValid())
+                    return ElementLayoutFailure<bool>(request, node.element, MakeError(UiErrors::LayoutInvalid));
+                const auto invalid = std::ranges::find_if_not(rectangleScratch, &UiLogicalRect::IsValid);
+                if (invalid != rectangleScratch.end()) {
+                    const auto offset = static_cast<std::size_t>(invalid - rectangleScratch.begin());
+                    const auto &child = candidateTree.nodes[candidateTree.children[node.firstChild + offset]];
+                    return ElementLayoutFailure<bool>(request, child.element, MakeError(UiErrors::LayoutInvalid));
+                }
                 node.arrangement = arranged.Value();
                 node.arrangeDirty = false;
                 for (std::uint32_t offset = 0; offset < node.childCount; ++offset) {
@@ -429,6 +460,8 @@ namespace Horo::Runtime::Ui {
             }
             if (rootChanged)
                 MarkAll(UiLayoutWorkCause::RootInputs);
+            else if (!topologyChanged && current && published.fontScale != request.fontScale)
+                MarkFontScaleChanges();
             if (sourcesChanged && invalidations.empty() && (!current || published.sources != request.sources))
                 MarkAll(UiLayoutWorkCause::SourceRevision);
             return ApplyInvalidations(request.sources.tree);
@@ -463,7 +496,8 @@ namespace Horo::Runtime::Ui {
         /** @brief Validates the complete actual request before preparing any candidate state. */
         [[nodiscard]] Result<void> ValidateRequest(const UiElementTree &tree, const UiLayoutUpdateRequest &request) const {
             if (!request.sources.IsValid() || !request.rootConstraints.IsValid() || !request.rootContent.IsValid() ||
-                !request.fontScale.IsValid() || request.evaluator == nullptr)
+                !request.fontScale.IsValid() || request.inlineDirection > UiLayoutInlineDirection::RightToLeft ||
+                request.evaluator == nullptr)
                 return Failure<void>(UiErrors::LayoutInvalid);
             if (tree.State() != UiElementTreeState::Active || tree.Instance() != descriptor.instance ||
                 tree.Canvas() != descriptor.canvas || tree.SourceDocument() != descriptor.document ||
@@ -478,6 +512,7 @@ namespace Horo::Runtime::Ui {
                                             const UiInteractionRevision exactInteraction) const noexcept {
             return !current || published.sources != request.sources || published.rootConstraints != request.rootConstraints ||
                    published.rootContent != request.rootContent || published.fontScale != request.fontScale ||
+                   published.inlineDirection != request.inlineDirection ||
                    (exactInteraction.IsValid() && exactInteraction != published.interaction);
         }
 
@@ -499,8 +534,8 @@ namespace Horo::Runtime::Ui {
                 return Failure<std::shared_ptr<UiLayoutSnapshot::Storage>>(UiErrors::LayoutSnapshotStorageExhausted);
             lastIssued = publication;
             reservedInteraction = publication;
-            slot->descriptor = {descriptor.instance, descriptor.canvas, descriptor.document,
-                                request.sources,     publication,       request.fontScale};
+            slot->descriptor = {descriptor.instance, descriptor.canvas, descriptor.document,    request.sources,
+                                publication,         request.fontScale, request.inlineDirection};
             slot->records.resize(candidateTree.nodes.size());
             slot->recordLookup.resize(candidateTree.nodes.size());
             for (std::uint32_t index = 0; index < candidateTree.nodes.size(); ++index) {
@@ -689,16 +724,24 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiLayoutEngine::PrepareDerived */
     Result<UiLayoutEngine::PreparedUpdate> UiLayoutEngine::PrepareDerived(const UiElementTree &tree, const UiLayoutUpdateRequest &request,
                                                                           const PreparedUpdate &primary) const {
-        if (primary.owner_ == storage_ || primary.CanPublish(tree).HasError())
+        if (primary.owner_ == storage_ || primary.CanPublish(tree).HasError()) {
+            if (request.failedElement)
+                *request.failedElement = {};
             return Failure<PreparedUpdate>(UiErrors::LayoutSourceStale);
+        }
         return PrepareInternal(tree, request, &primary);
     }
 
     /** @copydoc UiLayoutEngine::PrepareInternal */
     Result<UiLayoutEngine::PreparedUpdate> UiLayoutEngine::PrepareInternal(const UiElementTree &tree, const UiLayoutUpdateRequest &request,
                                                                            const PreparedUpdate *primary) const {
+        if (request.failedElement)
+            *request.failedElement = {};
         const auto owner = storage_;
-        if (!owner || owner->lifecycle != UiLayoutEngineState::Active)
+        if (!owner)
+            return Failure<PreparedUpdate>(UiErrors::LayoutLifecycleUnavailable);
+        UiCpuWorkProbe work{owner->cpuWork};
+        if (owner->lifecycle != UiLayoutEngineState::Active)
             return Failure<PreparedUpdate>(UiErrors::LayoutLifecycleUnavailable);
         if (owner->prepared)
             return Failure<PreparedUpdate>(UiErrors::LayoutCandidateBusy);
@@ -715,14 +758,15 @@ namespace Horo::Runtime::Ui {
         if (admittedRoot.HasError())
             return Failure<PreparedUpdate>(UiErrors::LayoutSourceStale);
         const bool topologyChanged = owner->activeNodes.empty() || owner->published.sources.tree != request.sources.tree;
-        const bool rootChanged =
-            owner->current && (owner->published.rootConstraints != request.rootConstraints ||
-                               owner->published.rootContent != request.rootContent || owner->published.fontScale != request.fontScale);
+        const bool rootChanged = owner->current && (owner->published.rootConstraints != request.rootConstraints ||
+                                                    owner->published.rootContent != request.rootContent ||
+                                                    owner->published.inlineDirection != request.inlineDirection);
         const bool sourcesChanged = owner->HasSourceChanges(request, exactInteraction);
         if (!sourcesChanged && owner->invalidations.empty()) {
             owner->current->leases.fetch_add(1);
             owner->reservedInteraction = owner->published.interaction;
             reservation.retained = true;
+            work.Succeed();
             return Result<PreparedUpdate>::Success(PreparedUpdate{owner, UiLayoutSnapshot{owner->current}, false, tree, request,
                                                                   primary ? primary->owner_ : nullptr,
                                                                   primary ? primary->owner_->reservationSequence : 0});
@@ -743,6 +787,7 @@ namespace Horo::Runtime::Ui {
         if (published.HasError())
             return Result<PreparedUpdate>::Failure(published.ErrorValue());
         reservation.retained = true;
+        work.Succeed();
         return Result<PreparedUpdate>::Success(PreparedUpdate{owner, UiLayoutSnapshot{std::move(published).Value()}, true, tree, request,
                                                               primary ? primary->owner_ : nullptr,
                                                               primary ? primary->owner_->reservationSequence : 0});
@@ -827,8 +872,8 @@ namespace Horo::Runtime::Ui {
             storage_->activeNodes.swap(storage_->candidateTree.nodes);
             storage_->activeChildren.swap(storage_->candidateTree.children);
             const auto &descriptor = candidate.snapshot_->Descriptor();
-            storage_->published = {descriptor.sources, candidate.rootConstraints_, candidate.rootContent_, candidate.fontScale_,
-                                   descriptor.interaction};
+            storage_->published = {descriptor.sources,   candidate.rootConstraints_, candidate.rootContent_,
+                                   candidate.fontScale_, descriptor.interaction,     descriptor.inlineDirection};
             storage_->invalidations.clear();
         }
         auto published = std::move(*candidate.snapshot_);
@@ -881,6 +926,11 @@ namespace Horo::Runtime::Ui {
     /** @copydoc UiLayoutEngine::State */
     UiLayoutEngineState UiLayoutEngine::State() const noexcept {
         return storage_ ? storage_->lifecycle : UiLayoutEngineState::Stopped;
+    }
+
+    /** @copydoc UiLayoutEngine::CpuWorkStatistics */
+    UiCpuWorkStatistics UiLayoutEngine::CpuWorkStatistics() const noexcept {
+        return storage_ ? storage_->cpuWork : UiCpuWorkStatistics{};
     }
 
     /** @copydoc UiLayoutEngine::PublishedInteraction */

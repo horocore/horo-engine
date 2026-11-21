@@ -1,5 +1,7 @@
 #include "Horo/XR/XRCapabilities.h"
 #include "Horo/XR/XRErrors.h"
+#include "Horo/XR/XRPlaneTracking.h"
+#include "Horo/XR/XRSpatialHitTest.h"
 #include "support/TypedIdentityTestSupport.h"
 
 #include <array>
@@ -104,6 +106,165 @@ namespace Horo::XR {
             REQUIRE_FALSE(XRSessionId{system, {1, 0}}.IsValid());
             REQUIRE_FALSE(XRViewId{session, {Horo::Handle<XRViewSlotTag>::InvalidIndex, 1}}.IsValid());
             REQUIRE_FALSE(XRViewId{session, {1, 0}}.IsValid());
+        }
+
+        TEST_CASE("XR plane snapshot enforces cadence age and exact World scope", "[unit][xr][planes]") {
+            const auto session = MakeSession(MakeSystem());
+            const XRPlaneScope scope{session,
+                                     {{session, {2, 1}}, XRSpaceKind::World, MakeGeneration<XRWorldOriginRevision>(1)},
+                                     MakeGeneration<XRPlaneGrant>(1)};
+            const auto sampledAt = XRRuntimeTime::Create(100).Value();
+            const auto beforeDue = XRRuntimeTime::Create(109).Value();
+            const auto due = XRRuntimeTime::Create(110).Value();
+            const auto lastFresh = XRRuntimeTime::Create(130).Value();
+            const auto stale = XRRuntimeTime::Create(131).Value();
+            XRPlanePublication publication;
+            RequireFailureIdentity(publication.IsDue(scope, sampledAt), XRErrors::OperationUnavailable);
+            REQUIRE(publication.Activate(scope, {2, Duration::FromNanoseconds(10), Duration::FromNanoseconds(30)}).HasValue());
+            REQUIRE(publication.IsDue(scope, sampledAt).Value());
+
+            XRPlaneObservation plane{.id = {session, {1, 1}},
+                                     .centerMeters = {1.0F, 2.0F, 3.0F},
+                                     .extentMeters = {2.0F, 3.0F},
+                                     .classification = XRPlaneClassification::Floor,
+                                     .confidence = XRTrackingConfidence::High};
+            REQUIRE(publication.Publish(scope, sampledAt, std::span{&plane, 1}).HasValue());
+            plane.centerMeters = {};
+
+            REQUIRE_FALSE(publication.IsDue(scope, beforeDue).Value());
+            REQUIRE(publication.IsDue(scope, due).Value());
+            RequireFailureIdentity(publication.Publish(scope, beforeDue, {}), XRErrors::OperationUnavailable);
+            RequireFailureIdentity(publication.Read(scope, XRRuntimeTime::Create(99).Value()), XRErrors::TimeDomainIncompatible);
+            RequireFailureIdentity(publication.Read(scope, stale), XRErrors::TrackingSnapshotStale);
+            auto recentered = scope;
+            recentered.space.worldOriginRevision = MakeGeneration<XRWorldOriginRevision>(2);
+            RequireFailureIdentity(publication.Read(recentered, lastFresh), XRErrors::IdentityStale);
+
+            const auto snapshot = publication.Read(scope, lastFresh);
+            REQUIRE(snapshot.HasValue());
+            REQUIRE(snapshot.Value().Scope() == scope);
+            REQUIRE(snapshot.Value().SampledAt() == sampledAt);
+            REQUIRE(snapshot.Value().Planes().size() == 1);
+            const auto center = snapshot.Value().Planes().front().centerMeters;
+            REQUIRE(center.x == 1.0F);
+            REQUIRE(center.y == 2.0F);
+            REQUIRE(center.z == 3.0F);
+            REQUIRE(snapshot.Value().Planes().front().classification == XRPlaneClassification::Floor);
+            REQUIRE(publication.Publish(scope, stale, {}).HasValue());
+            REQUIRE(publication.Read(scope, stale).Value().Planes().empty());
+        }
+
+        TEST_CASE("XR plane publication rejects entire invalid batches and revoked grants", "[unit][xr][planes]") {
+            const auto session = MakeSession(MakeSystem());
+            const XRPlaneScope scope{session,
+                                     {{session, {2, 1}}, XRSpaceKind::World, MakeGeneration<XRWorldOriginRevision>(1)},
+                                     MakeGeneration<XRPlaneGrant>(7)};
+            const XRPlaneLimits limits{2, Duration::FromNanoseconds(10), Duration::FromNanoseconds(30)};
+            const auto first = XRRuntimeTime::Create(200).Value();
+            const auto next = XRRuntimeTime::Create(210).Value();
+            auto invalidScope = scope;
+            invalidScope.space.kind = XRSpaceKind::Local;
+            XRPlanePublication publication;
+            RequireFailureIdentity(publication.Activate(invalidScope, limits), XRErrors::OperationInvalid);
+            auto excessiveLimits = limits;
+            excessiveLimits.maximumPlanes = XRPlaneSnapshot::MaximumPlanes + 1;
+            RequireFailureIdentity(publication.Activate(scope, excessiveLimits), XRErrors::CapacityExceeded);
+            REQUIRE(publication.Activate(scope, limits).HasValue());
+            RequireFailureIdentity(publication.Activate(scope, limits), XRErrors::OperationIncompatible);
+
+            const XRPlaneObservation plane{.id = {session, {1, 1}}, .extentMeters = {1.0F, 1.0F}, .confidence = XRTrackingConfidence::Low};
+            REQUIRE(publication.Publish(scope, first, std::span{&plane, 1}).HasValue());
+            std::array batch{plane, plane, plane};
+            RequireFailureIdentity(publication.Publish(scope, next, batch), XRErrors::CapacityExceeded);
+            RequireFailureIdentity(publication.Publish(scope, next, std::span{batch}.first(2)), XRErrors::TrackingSnapshotInvalid);
+            batch[1].id = {session, {2, 1}};
+            batch[1].extentMeters.x = -1.0F;
+            RequireFailureIdentity(publication.Publish(scope, next, std::span{batch}.first(2)), XRErrors::TrackingSnapshotInvalid);
+            REQUIRE(publication.Read(scope, next).Value().SampledAt() == first);
+            batch[1].extentMeters.x = 1.0F;
+            REQUIRE(publication.Publish(scope, next, std::span{batch}.first(2)).HasValue());
+            REQUIRE(publication.Read(scope, next).Value().Planes().size() == 2);
+
+            publication.Revoke();
+            RequireFailureIdentity(publication.Read(scope, next), XRErrors::OperationUnavailable);
+            RequireFailureIdentity(publication.Publish(scope, next, {}), XRErrors::OperationUnavailable);
+            RequireFailureIdentity(publication.Activate(scope, limits), XRErrors::IdentityStale);
+            auto replacement = scope;
+            replacement.session = MakeSession(session.system, 4, 6);
+            replacement.space.id.session = replacement.session;
+            replacement.grant = MakeGeneration<XRPlaneGrant>(8);
+            REQUIRE(publication.Activate(replacement, limits).HasValue());
+            RequireFailureIdentity(publication.Read(scope, next), XRErrors::IdentityStale);
+            RequireFailureIdentity(publication.Read(replacement, next), XRErrors::OperationUnavailable);
+            publication.Revoke();
+        }
+
+        TEST_CASE("XR environment queries preserve finite plane bounds and deterministic source provenance", "[unit][xr][spatial]") {
+            const auto session = MakeSession(MakeSystem());
+            const XRPlaneScope scope{session,
+                                     {{session, {2, 1}}, XRSpaceKind::World, MakeGeneration<XRWorldOriginRevision>(4)},
+                                     MakeGeneration<XRPlaneGrant>(2)};
+            const auto sampledAt = XRRuntimeTime::Create(100).Value();
+            XRPlanePublication publication;
+            const XRPlaneLimits limits{4, Duration::FromNanoseconds(10), Duration::FromNanoseconds(30)};
+            REQUIRE(publication.Activate(scope, limits).HasValue());
+            const std::array planes{XRPlaneObservation{.id = {session, {1, 1}},
+                                                       .extentMeters = {2.0F, 2.0F},
+                                                       .classification = XRPlaneClassification::Floor,
+                                                       .confidence = XRTrackingConfidence::High},
+                                    XRPlaneObservation{.id = {session, {2, 1}},
+                                                       .centerMeters = {0.0F, 1.0F, 0.0F},
+                                                       .extentMeters = {2.0F, 2.0F},
+                                                       .classification = XRPlaneClassification::Platform,
+                                                       .confidence = XRTrackingConfidence::Low},
+                                    XRPlaneObservation{.id = {session, {3, 1}},
+                                                       .centerMeters = {0.0F, 1.0F, 0.0F},
+                                                       .extentMeters = {3.0F, 3.0F},
+                                                       .confidence = XRTrackingConfidence::High}};
+            REQUIRE(publication.Publish(scope, sampledAt, planes).HasValue());
+            const auto snapshot = publication.Read(scope, sampledAt);
+            REQUIRE(snapshot.HasValue());
+            XRSpatialHitRequest request{scope,
+                                        {{1.0F, 2.0F, 0.0F}, {0.0F, -2.0F, 0.0F}, 0.0F, 2.0F},
+                                        XRRuntimeTime::Create(130).Value(),
+                                        Duration::FromNanoseconds(30),
+                                        3};
+            const auto found = QueryXRPlaneHits(snapshot.Value(), request);
+            REQUIRE(found.HasValue());
+            REQUIRE(found.Value().Hits().size() == 3);
+            CHECK(found.Value().Source() == scope);
+            CHECK(found.Value().SampledAt() == sampledAt);
+            CHECK(found.Value().Hits()[0].plane == planes[1].id);
+            CHECK(found.Value().Hits()[0].confidence == XRTrackingConfidence::Low);
+            CHECK(found.Value().Hits()[1].plane == planes[2].id);
+            CHECK(found.Value().Hits()[2].plane == planes[0].id);
+            CHECK(found.Value().Hits()[2].intersection.distance == 2.0F);
+
+            request.expectedSampledAt = sampledAt;
+            REQUIRE(QueryXRPlaneHits(snapshot.Value(), request).HasValue());
+            const auto later = XRRuntimeTime::Create(110).Value();
+            REQUIRE(publication.Publish(scope, later, planes).HasValue());
+            const auto replacement = publication.Read(scope, later);
+            REQUIRE(replacement.HasValue());
+            RequireFailureIdentity(QueryXRPlaneHits(replacement.Value(), request), XRErrors::TrackingSnapshotStale);
+            request.expectedSampledAt.reset();
+
+            request.ray.origin.x = 1.51F;
+            const auto miss = QueryXRPlaneHits(snapshot.Value(), request);
+            REQUIRE(miss.HasValue());
+            CHECK(miss.Value().Hits().empty());
+            request.ray.origin.x = 1.0F;
+            request.maximumHits = 2;
+            RequireFailureIdentity(QueryXRPlaneHits(snapshot.Value(), request), XRErrors::CapacityExceeded);
+            request.maximumHits = 3;
+            request.ray.direction = {};
+            RequireFailureIdentity(QueryXRPlaneHits(snapshot.Value(), request), XRErrors::OperationInvalid);
+            request.now = XRRuntimeTime::Create(131).Value();
+            RequireFailureIdentity(QueryXRPlaneHits(snapshot.Value(), request), XRErrors::TrackingSnapshotStale);
+            request.scope.space.worldOriginRevision = MakeGeneration<XRWorldOriginRevision>(5);
+            RequireFailureIdentity(QueryXRPlaneHits(snapshot.Value(), request), XRErrors::IdentityStale);
+            publication.Revoke();
+            RequireFailureIdentity(publication.Read(scope, sampledAt), XRErrors::OperationUnavailable);
         }
 
         TEST_CASE("XR capability snapshot owns exact immutable versioned evidence", "[unit][xr][capability]") {
@@ -230,7 +391,7 @@ namespace Horo::XR {
 
         TEST_CASE("XR error registry contribution is complete unique and actionable", "[unit][xr][errors]") {
             const auto descriptors = XRErrors::Descriptors();
-            REQUIRE(descriptors.size() == 31);
+            REQUIRE(descriptors.size() == 33);
             std::set<std::string_view> codes;
             for (const auto *descriptor : descriptors) {
                 REQUIRE(descriptor != nullptr);

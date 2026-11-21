@@ -8,6 +8,7 @@
 #include "Horo/Release/ReleaseCandidateVerification.h"
 
 #include <cstdint>
+#include <optional>
 #include <string>
 
 namespace Horo::Release {
@@ -41,6 +42,8 @@ namespace Horo::Release {
         Sha256Digest manifestDigest;
         std::uint64_t artifactCount{};
         std::string remoteIdentity; /**< Opaque provider ID bound to all later verification and commit calls. */
+        std::optional<ReleaseManifestSignatureIdentity>
+            manifestSignature{}; /**< Exact detached metadata uploaded alongside the manifest. */
     };
 
     /** @brief Host-installed provider adapter with an explicit remote verification boundary. */
@@ -52,14 +55,14 @@ namespace Horo::Release {
         [[nodiscard]] virtual ReleaseDestinationId Destination() const = 0;
 
         /**
-         * @brief Uploads only the manifest-declared files without changing channel state.
+         * @brief Uploads manifest-declared files and the verified final metadata without changing channel state.
          * @param request Final-verified candidate and selected channel.
          * @return Remote receipt or a typed failure; retries must use the same candidate identity.
          */
         [[nodiscard]] virtual Result<ReleasePublicationReceipt> Upload(const ReleasePublicationRequest &request) = 0;
 
         /**
-         * @brief Verifies every uploaded remote artifact against the final manifest.
+         * @brief Verifies remote artifacts against the manifest and detached metadata against final candidate evidence.
          * @param request Exact local candidate and manifest.
          * @param receipt Receipt returned by Upload.
          * @return Success only after remote byte and signature checks pass.

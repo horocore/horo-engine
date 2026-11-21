@@ -20,8 +20,9 @@ namespace Horo::Physics::Detail {
         if (!candidate.published_)
             return Result<PhysicsSceneHostScope>::Failure(
                 MakeError(PhysicsErrors::InvalidState, "Host world access requires the aggregate publication barrier."));
-        return Result<PhysicsSceneHostScope>::Success(
-            {*candidate.physics_, *candidate.character_, Runtime::SceneRuntimeId{candidate.character_->Descriptor().sceneGeneration}});
+        return Result<PhysicsSceneHostScope>::Success({*candidate.physics_, *candidate.character_,
+                                                       Runtime::SceneRuntimeId{candidate.character_->Descriptor().sceneGeneration},
+                                                       candidate.CharacterBindings(), candidate.BodyBindings()});
     }
 }  // namespace Horo::Physics::Detail
 

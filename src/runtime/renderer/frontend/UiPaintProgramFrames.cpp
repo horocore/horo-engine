@@ -27,15 +27,16 @@ namespace Horo::Render {
         }
         frame.indices.assign(geometry.Indices().begin(), geometry.Indices().end());
         const auto &snapshot = geometry.SourceSnapshot();
+        const auto passCount = slot.PaintWorkloads().size();
         const auto buildPass = [&](const std::uint32_t pass) {
             if (pass < source.masks.size())
                 return BuildMask(slot, frame, submission, pass);
-            const auto group = pass == slot.workloads.size() - 1
+            const auto group = pass == passCount - 1
                                    ? Detail::NoPaintRole
                                    : static_cast<std::uint32_t>(source.masks.size() + snapshot.Groups().size() - 1 - pass);
             return BuildGroup(slot, frame, submission, group);
         };
-        for (std::uint32_t pass = 0; pass < slot.workloads.size(); ++pass) {
+        for (std::uint32_t pass = 0; pass < passCount; ++pass) {
             const auto offset = static_cast<std::uint32_t>(frame.draws.size());
             if (const auto built = buildPass(pass); built.HasError())
                 return built;
@@ -59,8 +60,9 @@ namespace Horo::Render {
     /** @copydoc UiPaintProgram::Storage::Publish */
     void UiPaintProgram::Storage::Publish(Detail::UiPaintSlotProgram &slot, Detail::UiPaintCpuFrame &frame,
                                           std::uint64_t revision) const noexcept {
-        for (std::size_t index = 0; index < slot.workloads.size(); ++index) {
-            auto &paint = std::get<RenderGraphUiPaint>(slot.workloads[index].workload);
+        auto workloads = slot.PaintWorkloads();
+        for (std::size_t index = 0; index < workloads.size(); ++index) {
+            auto &paint = std::get<RenderGraphUiPaint>(workloads[index].workload);
             const auto range = frame.ranges[index];
             paint.vertexCount = static_cast<std::uint32_t>(frame.vertices.size());
             paint.indexCount = static_cast<std::uint32_t>(frame.indices.size());

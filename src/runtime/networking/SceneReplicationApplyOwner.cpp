@@ -1,5 +1,7 @@
 #include "Horo/Network/SceneReplicationApplyOwner.h"
 
+#include "SceneReplicationTransformFields.h"
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -18,13 +20,18 @@ namespace Horo::Network {
         /** @brief Owns a detached transform batch; RuntimeScene publishes only after complete command validation. */
         class SceneCandidate final : public IReplicationApplyCandidate {
         public:
-            SceneCandidate(std::shared_ptr<Runtime::RuntimeScene> scene, Runtime::RuntimeSceneView view,
+            SceneCandidate(std::shared_ptr<Runtime::RuntimeScene> scene, std::weak_ptr<Runtime::RuntimeSceneService> service,
+                           Runtime::RuntimeDispatchEvidence evidence, Runtime::RuntimeSceneView view,
                            std::vector<TransformReplacement> replacements)
-                : scene_(std::move(scene)), view_(view), replacements_(std::move(replacements)) {}
+                : scene_(std::move(scene)), service_(std::move(service)), evidence_(std::move(evidence)), view_(view),
+                  replacements_(std::move(replacements)) {}
 
             /** @copydoc IReplicationApplyCandidate::Commit */
             Result<void> Commit(const CancellationToken &cancellation) override {
-                if (thread_ != std::this_thread::get_id() || committed_ || !view_.IsCurrent())
+                if (thread_ != std::this_thread::get_id() || committed_)
+                    return Result<void>::Failure(MakeError(ReplicationStateErrors::Stale));
+                const auto service = service_.lock();
+                if ((!scene_ && !service) || !view_.IsCurrent())
                     return Result<void>::Failure(MakeError(ReplicationStateErrors::Stale));
                 Runtime::SceneCommandBuffer commands;
                 for (const auto &replacement : replacements_) {
@@ -34,14 +41,20 @@ namespace Horo::Network {
                     commands.SetLocalTransform(replacement.entity, replacement.transform,
                                                {view_.RuntimeId(), {}, cancellation, replacement.receipt, replacement.world});
                 }
-                if (auto result = scene_->Commit(commands); result.HasError())
-                    return Result<void>::Failure(result.ErrorValue());
-                committed_ = true;
-                return Result<void>::Success();
+                auto committed = service ? service->CommitReplicaTransformBatch(view_, commands, evidence_) : CommitDirect(commands);
+                committed_ = committed.HasValue();
+                return committed;
             }
 
         private:
+            Result<void> CommitDirect(const Runtime::SceneCommandBuffer &commands) const {
+                const auto result = scene_->Commit(commands);
+                return result.HasValue() ? Result<void>::Success() : Result<void>::Failure(result.ErrorValue());
+            }
+
             std::shared_ptr<Runtime::RuntimeScene> scene_;
+            std::weak_ptr<Runtime::RuntimeSceneService> service_;
+            Runtime::RuntimeDispatchEvidence evidence_;
             Runtime::RuntimeSceneView view_;
             std::vector<TransformReplacement> replacements_;
             std::thread::id thread_{std::this_thread::get_id()};
@@ -50,22 +63,17 @@ namespace Horo::Network {
 
         /** @brief Applies one finite representable network scalar to a declared typed property. */
         Result<void> SetField(Math::Transform &transform, const SceneReplicationProperty property, const ReplicationRuntimeValue &value) {
+            if (property == SceneReplicationProperty::AnimationActionTag) {
+                if (const auto *tag = std::get_if<std::int64_t>(&value);
+                    tag && *tag >= 0 && *tag <= std::numeric_limits<std::int32_t>::max())
+                    return Result<void>::Success();
+                return Result<void>::Failure(MakeError(ReplicationStateErrors::Invalid));
+            }
             const auto *number = std::get_if<double>(&value);
             if (!number || !std::isfinite(*number) || std::abs(*number) > std::numeric_limits<float>::max())
                 return Result<void>::Failure(MakeError(ReplicationStateErrors::Invalid));
-            const auto scalar = static_cast<float>(*number);
-            using enum SceneReplicationProperty;
-            switch (property) {
-                case TranslationX:
-                    transform.translation.x = scalar;
-                    break;
-                case TranslationY:
-                    transform.translation.y = scalar;
-                    break;
-                case TranslationZ:
-                    transform.translation.z = scalar;
-                    break;
-            }
+            if (!Detail::IsVelocityProperty(property))
+                Detail::TransformScalar(transform, property) = static_cast<float>(*number);
             return Result<void>::Success();
         }
 
@@ -81,7 +89,60 @@ namespace Horo::Network {
             auto entity = view.Get(update.mapping.entity);
             if (entity.HasError())
                 return Result<Math::Transform>::Failure(entity.ErrorValue());
-            return Result<Math::Transform>::Success(*entity.Value().localTransform);
+            return Result<Math::Transform>::Success(*entity.Value().PresentationLocalTransform());
+        }
+
+        /** @brief Validates stable sorted field identities before indexing their transform properties. */
+        bool ValidField(const SceneReplicationFieldBinding &field, const FieldId previous) noexcept {
+            return field.field.IsValid() && field.field != previous && field.property <= SceneReplicationProperty::AnimationActionTag;
+        }
+
+        /** @brief Owns exactly one field per transform property for both Scene ownership modes. */
+        Result<std::vector<SceneReplicationFieldBinding>> ValidateBindings(ReplicationSchemaId schema, ReplicationSchemaVersion version,
+                                                                           std::span<const SceneReplicationFieldBinding> fields) {
+            using Bindings = Result<std::vector<SceneReplicationFieldBinding>>;
+            if (!schema.IsValid() || !version.IsValid() || fields.empty() || fields.size() > Detail::SceneTransformPropertyCount)
+                return Bindings::Failure(MakeError(ReplicationStateErrors::Invalid));
+            std::vector<SceneReplicationFieldBinding> bindings{fields.begin(), fields.end()};
+            std::ranges::sort(bindings, {}, &SceneReplicationFieldBinding::field);
+            Detail::SceneTransformProperties properties;
+            FieldId previous;
+            for (const auto &field : bindings) {
+                if (!ValidField(field, previous))
+                    return Bindings::Failure(MakeError(ReplicationStateErrors::Invalid));
+                const auto index = Detail::TransformPropertyIndex(field.property);
+                if (properties.test(index))
+                    return Bindings::Failure(MakeError(ReplicationStateErrors::Invalid));
+                properties.set(index);
+                previous = field.field;
+            }
+            if (!Detail::HasCompleteRotation(Detail::RotationPropertyCount(properties)))
+                return Bindings::Failure(MakeError(ReplicationStateErrors::Invalid));
+            return Bindings::Success(std::move(bindings));
+        }
+
+        /** @brief Applies projected fields and validates any complete rotation before staging a Scene command. */
+        Result<void> ProjectFields(Math::Transform &transform, const ReplicationDecodedState &state,
+                                   std::span<const SceneReplicationFieldBinding> bindings) {
+            Detail::SceneTransformProperties properties;
+            for (const auto &field : state.Fields()) {
+                const auto binding = std::ranges::find(bindings, field.field, &SceneReplicationFieldBinding::field);
+                if (binding == bindings.end())
+                    return Result<void>::Failure(MakeError(ReplicationStateErrors::Invalid));
+                if (const auto set = SetField(transform, binding->property, field.value); set.HasError())
+                    return set;
+                properties.set(Detail::TransformPropertyIndex(binding->property));
+            }
+            const auto rotationCount = Detail::RotationPropertyCount(properties);
+            if (!Detail::HasCompleteRotation(rotationCount))
+                return Result<void>::Failure(MakeError(ReplicationStateErrors::Invalid));
+            if (rotationCount != 0) {
+                const auto rotation = transform.rotation.TryNormalized();
+                if (rotation.HasError())
+                    return Result<void>::Failure(MakeError(ReplicationStateErrors::Invalid));
+                transform.rotation = rotation.Value();
+            }
+            return Result<void>::Success();
         }
     }  // namespace
 
@@ -91,30 +152,50 @@ namespace Horo::Network {
                                                            std::vector<SceneReplicationFieldBinding> fields)
         : scene_(std::move(scene)), schema_(schema), version_(version), fields_(std::move(fields)) {}
 
+    /** @copydoc SceneReplicationApplyOwner::SceneReplicationApplyOwner */
+    SceneReplicationApplyOwner::SceneReplicationApplyOwner(ConstructionKey, std::weak_ptr<Runtime::RuntimeSceneService> service,
+                                                           Runtime::RuntimeSceneView view, Runtime::RuntimeDispatchEvidence evidence,
+                                                           const ReplicationSchemaId schema, const ReplicationSchemaVersion version,
+                                                           std::vector<SceneReplicationFieldBinding> fields)
+        : service_(std::move(service)), serviceView_(std::move(view)), evidence_(std::move(evidence)), schema_(schema), version_(version),
+          fields_(std::move(fields)) {}
+
     /** @copydoc SceneReplicationApplyOwner::Create */
     Result<std::shared_ptr<SceneReplicationApplyOwner>> SceneReplicationApplyOwner::Create(
         std::shared_ptr<Runtime::RuntimeScene> scene, const ReplicationSchemaId schema, const ReplicationSchemaVersion version,
         const std::span<const SceneReplicationFieldBinding> fields) {
-        if (!scene || !schema.IsValid() || !version.IsValid() || fields.empty() || fields.size() > 3)
-            return Result<std::shared_ptr<SceneReplicationApplyOwner>>::Failure(MakeError(ReplicationStateErrors::Invalid));
+        using Owner = Result<std::shared_ptr<SceneReplicationApplyOwner>>;
+        if (!scene)
+            return Owner::Failure(MakeError(ReplicationStateErrors::Invalid));
         try {
-            std::vector<SceneReplicationFieldBinding> bindings{fields.begin(), fields.end()};
-            std::ranges::sort(bindings, {}, &SceneReplicationFieldBinding::field);
-            std::byte properties{};
-            for (std::size_t index{}; index < bindings.size(); ++index) {
-                const auto &field = bindings[index];
-                if (!field.field.IsValid() || field.property > SceneReplicationProperty::TranslationZ ||
-                    (index > 0 && bindings[index - 1].field == field.field))
-                    return Result<std::shared_ptr<SceneReplicationApplyOwner>>::Failure(MakeError(ReplicationStateErrors::Invalid));
-                const auto bit = std::byte{1} << static_cast<unsigned int>(field.property);
-                if ((properties & bit) != std::byte{})
-                    return Result<std::shared_ptr<SceneReplicationApplyOwner>>::Failure(MakeError(ReplicationStateErrors::Invalid));
-                properties |= bit;
-            }
-            return Result<std::shared_ptr<SceneReplicationApplyOwner>>::Success(
-                std::make_shared<SceneReplicationApplyOwner>(ConstructionKey{}, std::move(scene), schema, version, std::move(bindings)));
+            auto bindings = ValidateBindings(schema, version, fields);
+            if (bindings.HasError())
+                return Owner::Failure(std::move(bindings).ErrorValue());
+            return Owner::Success(std::make_shared<SceneReplicationApplyOwner>(ConstructionKey{}, std::move(scene), schema, version,
+                                                                               std::move(bindings).Value()));
         } catch (const std::bad_alloc &) {
-            return Result<std::shared_ptr<SceneReplicationApplyOwner>>::Failure(MakeError(ReplicationStateErrors::Capacity));
+            return Owner::Failure(MakeError(ReplicationStateErrors::Capacity));
+        }
+    }
+
+    /** @copydoc SceneReplicationApplyOwner::CreateForService */
+    Result<std::shared_ptr<SceneReplicationApplyOwner>> SceneReplicationApplyOwner::CreateForService(
+        std::weak_ptr<Runtime::RuntimeSceneService> service, Runtime::RuntimeSceneView view, Runtime::RuntimeDispatchEvidence evidence,
+        const ReplicationSchemaId schema, const ReplicationSchemaVersion version,
+        const std::span<const SceneReplicationFieldBinding> fields) {
+        using Owner = Result<std::shared_ptr<SceneReplicationApplyOwner>>;
+        const auto retained = service.lock();
+        if (!retained || !view.IsCurrent())
+            return Owner::Failure(MakeError(ReplicationStateErrors::Stale));
+        try {
+            auto bindings = ValidateBindings(schema, version, fields);
+            if (bindings.HasError())
+                return Owner::Failure(std::move(bindings).ErrorValue());
+            return Owner::Success(std::make_shared<SceneReplicationApplyOwner>(ConstructionKey{}, std::move(service), std::move(view),
+                                                                               std::move(evidence), schema, version,
+                                                                               std::move(bindings).Value()));
+        } catch (const std::bad_alloc &) {
+            return Owner::Failure(MakeError(ReplicationStateErrors::Capacity));
         }
     }
 
@@ -123,7 +204,12 @@ namespace Horo::Network {
         const std::span<const ReplicationApplyUpdate> updates) {
         if (thread_ != std::this_thread::get_id() || updates.empty() || updates.size() > 4096)
             return Result<std::unique_ptr<IReplicationApplyCandidate>>::Failure(MakeError(ReplicationStateErrors::Invalid));
-        const auto view = scene_->View();
+        const auto service = service_.lock();
+        if (!scene_ && !service)
+            return Result<std::unique_ptr<IReplicationApplyCandidate>>::Failure(MakeError(ReplicationStateErrors::Stale));
+        const auto view = scene_ ? scene_->View() : serviceView_;
+        if (!view.IsCurrent())
+            return Result<std::unique_ptr<IReplicationApplyCandidate>>::Failure(MakeError(ReplicationStateErrors::Stale));
         std::vector<TransformReplacement> replacements;
         replacements.reserve(updates.size());
         for (const auto &update : updates) {
@@ -133,16 +219,11 @@ namespace Horo::Network {
             if (current.HasError())
                 return Result<std::unique_ptr<IReplicationApplyCandidate>>::Failure(current.ErrorValue());
             auto transform = std::move(current).Value();
-            for (const auto &field : update.state.Fields()) {
-                const auto binding = std::ranges::find(fields_, field.field, &SceneReplicationFieldBinding::field);
-                if (binding == fields_.end())
-                    return Result<std::unique_ptr<IReplicationApplyCandidate>>::Failure(MakeError(ReplicationStateErrors::Invalid));
-                if (const auto set = SetField(transform, binding->property, field.value); set.HasError())
-                    return Result<std::unique_ptr<IReplicationApplyCandidate>>::Failure(set.ErrorValue());
-            }
+            if (const auto projected = ProjectFields(transform, update.state, fields_); projected.HasError())
+                return Result<std::unique_ptr<IReplicationApplyCandidate>>::Failure(projected.ErrorValue());
             replacements.emplace_back(update.mapping.entity, transform, update.cancellation, update.worldCancellation);
         }
         return Result<std::unique_ptr<IReplicationApplyCandidate>>::Success(
-            std::make_unique<SceneCandidate>(scene_, view, std::move(replacements)));
+            std::make_unique<SceneCandidate>(scene_, service_, evidence_, view, std::move(replacements)));
     }
 }  // namespace Horo::Network

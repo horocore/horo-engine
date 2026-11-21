@@ -305,6 +305,9 @@ Required evidence includes:
 - Immediate fixed-budget kernels and asynchronous paths share result semantics
   without sharing unsafe execution behavior.
 - World Streaming, Scene lifecycle and Navigation retain their existing authorities.
+- Tactical path consumers use a revocable owner-lane request view. A retired
+  coordinator cannot admit or return results through that view. The worker
+  keeps its immutable provider lease until its terminal fence.
 
 ### Costs
 

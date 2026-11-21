@@ -265,8 +265,14 @@ namespace Horo::Tests::RenderFrontendTesting {
         auto unsupported = CreateTrackingFrontend();
         REQUIRE(unsupported->CreateTexture(descriptor).HasError());
         CHECK(unsupported->UploadSnapshot().pendingRequests == 0);
+        lifecycleState.syntheticCapabilities = RenderCapabilitySnapshot{.capabilityRevision = 1};
         lifecycleState.uiPaint.enabled = true;
+        SECTION("The selected backend supports the stencil role and primary paint") {}
+        SECTION("Exact selected stencil support does not advertise primary paint") {
+            lifecycleState.uiPaint.supportsPrimaryUiPaint = false;
+        }
         auto frontend = CreateTrackingFrontend();
+        REQUIRE(frontend->Capabilities().support.IsValid());
         const auto created = frontend->CreateTexture(descriptor);
         REQUIRE(created.HasValue());
         REQUIRE(frontend->ProcessResourceRequests().HasValue());

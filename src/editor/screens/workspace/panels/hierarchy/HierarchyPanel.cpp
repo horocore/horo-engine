@@ -463,9 +463,22 @@ namespace Horo::Editor {
 
     void HierarchyPanel::OnDetach() {
         editSession_.Close();
-        focusedWidgetContext_.Reset();
+        ResetTransientInput();
         inputRouter_ = nullptr;
         workspaceInputContext_ = nullptr;
+    }
+
+    /** @copydoc HierarchyPanel::OnPresentationHidden */
+    void HierarchyPanel::OnPresentationHidden(EditorWorkspaceViewCommandData &) {
+        ResetTransientInput();
+    }
+
+    /** @copydoc HierarchyPanel::ResetTransientInput */
+    void HierarchyPanel::ResetTransientInput() noexcept {
+        focusedWidgetContext_.Reset();
+        renamingId_.reset();
+        requestRenameFocus_ = false;
+        requestSearchFocus_ = false;
     }
 
     void HierarchyPanel::BeginRename(const HierarchyNodeId id) {

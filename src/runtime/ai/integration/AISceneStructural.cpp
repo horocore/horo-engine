@@ -1,5 +1,6 @@
 #include "AISceneRuntimeDetail.h"
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/AIScenePerceptionSource.h"
 
 #include <algorithm>
 #include <limits>
@@ -8,6 +9,28 @@
 #include <utility>
 
 namespace Horo::AI::Detail {
+    /** @copydoc AiSceneRuntimeState::RetirePerceptionSources */
+    void AiSceneRuntimeState::RetirePerceptionSources(const std::span<const PerceptionSourceRef> sources) noexcept {
+        for (auto &agent : agents) {
+            if (!agent.sensing)
+                continue;
+            auto &memory = agent.sensing->memory;
+            const auto handle = agent.record.handle;
+            const auto watches =
+                scheduler ? scheduler->PerceptionWatches(handle, agent.cookedPlan) : std::span<const PerceptionListenerTypeId>{};
+            if (watches.empty()) {
+                memory.ForgetRetiredSources(sources);
+                continue;
+            }
+            const auto previous = memory;
+            memory.ForgetRetiredSources(sources);
+            if (std::ranges::any_of(watches, [&](const auto listener) {
+                return memory.DecisionFactsChanged(previous, listener);
+            }))
+                static_cast<void>(scheduler->Wake(handle, {.perception = true}));
+        }
+    }
+
     namespace {
         /** @brief Rejects stale publication without changing the active AI population. */
         template <typename T> Result<T> Failure(const char *message) {
@@ -25,6 +48,7 @@ namespace Horo::AI::Detail {
             Runtime::RuntimeSceneView scene;
             std::uint64_t revision{};
             std::uint64_t lastAgentIdentity{};
+            std::uint32_t nextTaskSlot{};
             std::vector<Runtime::SceneAgentIdentityProjection> identities;
             std::vector<AgentRuntimeState> additions;
             std::vector<Horo::Handle<AgentHandleTag>> slots;
@@ -32,6 +56,10 @@ namespace Horo::AI::Detail {
             std::vector<AgentRuntimeState> retired;
             std::vector<AgentRuntimeState> tombstones;
             decltype(AiSceneRuntimeState::agentsByOwner) owners;
+            std::optional<PerceptionGroupPublication> perception;
+            std::vector<PerceptionSourceRef> retiredPerceptionSources;
+            AiTaskScheduler *scheduler{};
+            std::unique_ptr<AiTaskScheduler::PopulationChange> decisions;
             bool published{};
 
             ~StructuralCandidate() override {
@@ -49,7 +77,15 @@ namespace Horo::AI::Detail {
                 if (!state || state->closed || state->revision != revision || !scene.IsCurrent() ||
                     state->binding.scene != scene.RuntimeId())
                     return Failure<void>("The staged AI group lost its exact owner or Scene publication.");
-                return Result<void>::Success();
+                if (state->scheduler.get() != scheduler)
+                    return Failure<void>("The staged AI group lost its decision scheduler.");
+                if (perception && !perception->IsCurrent())
+                    return Result<void>::Failure(MakeError(AIErrors::PerceptionSpatialStale));
+                if (!additions.empty() && state->perceptionExecution && !state->perceptionExecution->generation->CanAdmit())
+                    return Result<void>::Failure(MakeError(AIErrors::RuntimeUnavailable));
+                if (auto current = ValidateCurrentCookedDecisions(additions); current.HasError())
+                    return current;
+                return decisions ? decisions->ValidatePublication() : Result<void>::Success();
             }
 
             void Publish() noexcept override {
@@ -59,6 +95,8 @@ namespace Horo::AI::Detail {
                 for (std::size_t removed = 0; removed < removals.size(); ++removed) {
                     const auto index = removals[removed];
                     retired.push_back(std::move(state->agents[index]));
+                    // Cancellation only signals owned tokens here. Executor callbacks and storage teardown run after publication.
+                    retired.back().cancellation.RequestCancellation();
                     state->agents[index] = std::move(tombstones[removed]);
                 }
                 for (std::size_t index = 0; index < additions.size(); ++index) {
@@ -70,18 +108,24 @@ namespace Horo::AI::Detail {
                 }
                 additions.clear();
                 state->agentsByOwner.swap(owners);
+                if (!retiredPerceptionSources.empty())
+                    state->RetirePerceptionSources(retiredPerceptionSources);
+                if (decisions)
+                    decisions->Publish();
                 state->lastAgentIdentity = lastAgentIdentity;
+                state->nextTaskSlot = nextTaskSlot;
                 ++state->revision;
+                if (perception)
+                    perception->Publish();
                 published = true;
             }
 
             Result<void> AfterPublication() override {
                 // Cancellation/blackboard observer teardown is deferred until every owner and Scene is visible.
-                for (auto &agent : retired) {
-                    if (state->scheduler)
-                        static_cast<void>(state->scheduler->Unregister(agent.record.handle));
+                if (decisions)
+                    decisions->FinishRetirements();
+                for (auto &agent : retired)
                     CancelOwnedWork(agent);
-                }
                 retired.clear();
                 return Result<void>::Success();
             }
@@ -91,8 +135,9 @@ namespace Horo::AI::Detail {
     /** @brief Explicit runtime borrow resolved at preparation, allowing registration before initial Scene activation. */
     class AiSceneStructuralParticipant final : public Runtime::SceneStructuralParticipant {
     public:
-        AiSceneStructuralParticipant(AiSceneRuntime &runtime, const std::span<const AiControllerDescriptor> descriptors)
-            : runtime_(&runtime), descriptors_(descriptors.begin(), descriptors.end()) {}
+        AiSceneStructuralParticipant(AiSceneRuntime &runtime, const std::span<const AiControllerDescriptor> descriptors,
+                                     std::optional<AiScenePerceptionGroupInput> perception)
+            : runtime_(&runtime), descriptors_(descriptors.begin(), descriptors.end()), perception_(std::move(perception)) {}
 
         Runtime::SceneStructuralOwner Owner() const noexcept override {
             return Runtime::SceneStructuralOwner::AI;
@@ -129,6 +174,12 @@ namespace Horo::AI::Detail {
                 return Failure<std::unique_ptr<Runtime::SceneStructuralCandidate>>("AI structural mutation revision is exhausted.");
 
             auto &state = *candidate->state;
+            if (state.perceptionExecution && !destroyed.empty()) {
+                candidate->retiredPerceptionSources.reserve(destroyed.size());
+                for (const auto entity : destroyed)
+                    candidate->retiredPerceptionSources.push_back(ProjectPerceptionSource(entity));
+                std::ranges::sort(candidate->retiredPerceptionSources);
+            }
             for (std::size_t index = 0; index < state.agents.size(); ++index) {
                 const auto &agent = state.agents[index];
                 if (!agent.retired && std::ranges::find(destroyed, agent.record.owner) != destroyed.end())
@@ -158,13 +209,55 @@ namespace Horo::AI::Detail {
                             "AI group conflicts with a resident agent identity.");
                 }
             }
-            auto prepared =
-                PrepareStructuralAgents(state.binding, agents, descriptors_, runtime_->settings_.availableCapabilities, candidate->slots);
+            auto prepared = PrepareStructuralAgents(state.binding, agents, descriptors_, runtime_->settings_, candidate->slots);
             if (prepared.HasError())
                 return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(prepared.ErrorValue());
             candidate->additions = std::move(prepared).Value();
+            if (auto capacity = ValidatePerceptionCapacity(state.agents, candidate->additions, candidate->removals); capacity.HasError())
+                return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(capacity.ErrorValue());
+            if (perception_) {
+                auto preparedPerception =
+                    PerceptionGroupPublication::Prepare(*perception_, scene, created, destroyed, candidate->additions);
+                if (preparedPerception.HasError())
+                    return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(preparedPerception.ErrorValue());
+                candidate->perception = std::move(preparedPerception).Value();
+            }
+            if (state.perceptionExecution && !candidate->additions.empty()) {
+                if (!perception_ || &perception_->spatial != state.perceptionSpatial)
+                    return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
+                        MakeError(AIErrors::PerceptionDependencyMissing));
+                auto senses = PreparePerceptionSenses(*state.perceptionExecution, state.agents, candidate->additions, candidate->removals);
+                if (senses.HasError())
+                    return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(senses.ErrorValue());
+            }
+            if (auto staged = PrepareDecisionPopulation(*candidate); staged.HasError())
+                return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(staged.ErrorValue());
             PreparePublicationStorage(*candidate, agents, appended);
             return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Success(std::move(candidate));
+        }
+
+        /** @brief Stages new executions and exact retirements before the same Scene publication fence. */
+        Result<void> PrepareDecisionPopulation(StructuralCandidate &candidate) const {
+            const auto &state = *candidate.state;
+            candidate.scheduler = state.scheduler.get();
+            candidate.nextTaskSlot = state.nextTaskSlot;
+            auto additions = runtime_->PrepareCookedDecisionRegistrations(candidate.state, candidate.additions, candidate.nextTaskSlot);
+            if (additions.HasError())
+                return Result<void>::Failure(additions.ErrorValue());
+            if (!candidate.scheduler)
+                return additions.Value().empty() ? Result<void>::Success() : Result<void>::Failure(MakeError(AIErrors::RuntimeUnavailable));
+            if (additions.Value().empty() && candidate.removals.empty())
+                return Result<void>::Success();
+
+            std::vector<AgentHandle> removals;
+            removals.reserve(candidate.removals.size());
+            for (const auto index : candidate.removals)
+                removals.push_back(state.agents[index].record.handle);
+            auto staged = candidate.scheduler->PreparePopulationChange(additions.Value(), removals);
+            if (staged.HasError())
+                return Result<void>::Failure(staged.ErrorValue());
+            candidate.decisions = std::move(staged).Value();
+            return Result<void>::Success();
         }
 
         /** @brief Recognizes exact new prefab admission without rewriting ordinary authored Scene identities. */
@@ -239,11 +332,13 @@ namespace Horo::AI::Detail {
 
         AiSceneRuntime *runtime_;
         std::vector<AiControllerDescriptor> descriptors_;
+        std::optional<AiScenePerceptionGroupInput> perception_;
     };
 
     /** @copydoc MakeStructuralParticipant */
     std::unique_ptr<Runtime::SceneStructuralParticipant> MakeStructuralParticipant(
-        AiSceneRuntime &runtime, const std::span<const AiControllerDescriptor> descriptors) {
-        return std::make_unique<AiSceneStructuralParticipant>(runtime, descriptors);
+        AiSceneRuntime &runtime, const std::span<const AiControllerDescriptor> descriptors,
+        std::optional<AiScenePerceptionGroupInput> perception) {
+        return std::make_unique<AiSceneStructuralParticipant>(runtime, descriptors, std::move(perception));
     }
 }  // namespace Horo::AI::Detail

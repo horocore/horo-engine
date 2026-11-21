@@ -8,7 +8,7 @@ extern "C" {
 
 namespace Horo::Gameplay::Detail::DecisionScript {
     /** @brief Keeps C++ owners outside Lua's longjmp region, including allocator and metadata failures. */
-    template <typename Call> bool Protected(lua_State *state, Call call, bool arguments = false) {
+    template <typename Call> int ProtectedStatus(lua_State *state, Call call, bool arguments = false) {
         static_assert(std::is_trivially_destructible_v<Call>);
 
         struct Frame {
@@ -19,8 +19,10 @@ namespace Horo::Gameplay::Detail::DecisionScript {
         Frame frame{call, {}};
 
         const int count = arguments ? lua_gettop(state) : 0;
-        if (count > 12 || !lua_checkstack(state, count + LUA_MINSTACK))
-            return false;
+        if (count > 12)
+            return LUA_ERRRUN;
+        if (!lua_checkstack(state, count + LUA_MINSTACK))
+            return LUA_ERRMEM;
         lua_pushcfunction(state, +[](lua_State *inner) noexcept -> int {
             auto &frame = *static_cast<Frame *>(lua_touserdata(inner, -1));
             lua_pop(inner, 1);
@@ -34,9 +36,14 @@ namespace Horo::Gameplay::Detail::DecisionScript {
         for (int index = 1; index <= count; ++index)
             lua_pushvalue(state, index);
         lua_pushlightuserdata(state, &frame);
-        const bool result = lua_pcall(state, count + 1, LUA_MULTRET, 0) == LUA_OK;
+        const int status = lua_pcall(state, count + 1, LUA_MULTRET, 0);
         if (frame.exception)
             std::rethrow_exception(frame.exception);
-        return result;
+        return status;
+    }
+
+    /** @brief Runs a protected operation whose caller needs only success or failure. */
+    template <typename Call> bool Protected(lua_State *state, Call call, bool arguments = false) {
+        return ProtectedStatus(state, call, arguments) == LUA_OK;
     }
 }  // namespace Horo::Gameplay::Detail::DecisionScript

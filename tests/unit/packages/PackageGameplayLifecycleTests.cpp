@@ -1,16 +1,31 @@
 #include "../runtime/ai/BehaviorTreeRuntimeTestSupport.h"
+#include "ApprovedGameplayPackageHost.h"
 #include "GameplayModuleTestSupport.h"
+#include "Horo/AI/AIScenePerceptionSource.h"
+#include "Horo/AI/PerceptionSenseScene.h"
+#include "Horo/Editor/PackageModalSession.h"
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Gameplay/GameEventRegistry.h"
 #include "Horo/Packages/GameplayPackageModuleHost.h"
+#include "Horo/Packages/PackageCache.h"
+#include "Horo/Packages/PackageRequest.h"
+#include "HostSignatureDocument.h"
+#include "OpenXRProductSigningTestSupport.h"
+#include "PackageApplicationServiceTestSupport.h"
+#include "PackageHostPolicy.h"
 #include "PackageLifecycleTestSupport.h"
+#include "PackageProjectHost.h"
+#include "PerceptionSenseTestSupport.h"
 
+#include <catch2/generators/catch_generators.hpp>
 #include <cstdint>
+#include <fstream>
 #include <thread>
 using namespace Horo::Packages::Tests::Support;
 
 namespace {
-    std::shared_ptr<PackageRestoreGraph> GameplayGraph(const bool withBackend = false) {
+    std::shared_ptr<PackageRestoreGraph> GameplayGraph(const bool withBackend = false,
+                                                       std::optional<std::string> moduleSignature = std::nullopt) {
         const auto entry = "module" + std::filesystem::path{HORO_TEST_GAME_MODULE_PATH}.extension().string();
         nlohmann::json descriptor{{"id", "fixture.gameplay"},
                                   {"version", "1.0.0"},
@@ -23,6 +38,9 @@ namespace {
                                      {"requiredCapabilities", {"runtime.participate"}}}}}};
         std::vector<std::pair<std::string, std::string>> files;
         files.emplace_back("extensions/native/Node.horo_script", "return {role='condition',check=function() return true end}");
+        files.emplace_back("extensions/native/Sense.horo_script", "return function(x,y,z,lx,ly,lz) return x-lx < 500 end");
+        if (moduleSignature)
+            files.emplace_back("extensions/native/" + entry + ".signature.json", std::move(*moduleSignature));
         if (withBackend) {
             const auto backend = "backend" + std::filesystem::path{HORO_PACKAGE_NATIVE_FIXTURE}.extension().string();
             descriptor["modules"].push_back({{"id", "fixture.backend"},
@@ -201,15 +219,22 @@ TEST_CASE("Optional SDK failure preserves an actual native backend in the same v
     });
     REQUIRE(runtime != active->modules.end());
     CHECK(runtime->diagnostic.has_value());
+    const auto decisionNodes = fixture.gameplay->AcquireActiveDecisionNodes(*fixture.base.service);
+    REQUIRE(decisionNodes.HasValue());
+    CHECK(decisionNodes.Value().empty());
 }
 
 TEST_CASE("Verified package decision nodes retain exact locked version and real generated factories", "[packages][decision-node]") {
     GameplayFixture fixture;
+    const auto installed = fixture.gameplay->AcquireActiveDecisionNodes(*fixture.base.service);
+    REQUIRE(installed.HasValue());
+    CHECK(installed.Value().empty());
     REQUIRE(fixture.Activate().HasValue());
     const auto generation = fixture.base.service->Active()->generation;
-    auto acquired = fixture.gameplay->AcquireDecisionNodes(fixture.enabled.package, "game.tests", generation);
+    auto acquired = fixture.gameplay->AcquireActiveDecisionNodes(*fixture.base.service);
     REQUIRE(acquired.HasValue());
-    auto contribution = std::move(acquired).Value();
+    REQUIRE(acquired.Value().size() == 1);
+    auto contribution = std::move(std::move(acquired).Value().front());
     CHECK(contribution.package == fixture.enabled.package);
     CHECK(contribution.version == fixture.base.install.ActiveGraph()->packages[0].lock.version);
     CHECK(contribution.artifact == fixture.base.install.ActiveGraph()->packages[0].lock.artifactDigest);
@@ -217,11 +242,218 @@ TEST_CASE("Verified package decision nodes retain exact locked version and real 
     REQUIRE(contribution.nodes->Contracts().size() == 1);
     CHECK(contribution.nodes->Contracts()[0].descriptor.type.Value() == 201);
     CHECK(contribution.nodes->Contracts()[0].descriptor.origin.kind == AI::DecisionDescriptorSourceKind::Package);
+    CHECK(contribution.nodes->HasImplementation(contribution.nodes->Contracts()[0].descriptor.type));
     CHECK(fixture.gameplay->AcquireDecisionNodes(fixture.enabled.package, "game.tests", generation + 1).HasError());
-    fixture.base.service->Shutdown();
+    GameplayFixture foreign;
+    REQUIRE(foreign.Activate().HasValue());
+    CHECK(foreign.base.service->Active()->generation == generation);
+    CHECK(fixture.gameplay->AcquireActiveDecisionNodes(*foreign.base.service).HasError());
+
+    REQUIRE(fixture.base.service->ActivateModules({}, PackageActivationBoundary::Quiescent, fixture.base.cancellation.Token()).HasValue());
+    const auto withdrawn = fixture.gameplay->AcquireActiveDecisionNodes(*fixture.base.service);
+    REQUIRE(withdrawn.HasValue());
+    CHECK(withdrawn.Value().empty());
     CHECK_FALSE(contribution.nodes->CanAdmit());
     CHECK(fixture.retirement->Close().HasError());
     contribution.nodes.reset();
+    CHECK(fixture.retirement->Close().HasValue());
+}
+
+TEST_CASE("Signed offline Editor package selection publishes only exactly approved Decision nodes", "[packages][decision-node][editor]") {
+    using namespace Horo::Application::Internal;
+    enum class Admission {
+        Approved,
+        ArchiveMismatch,
+        NativeSignatureMismatch
+    };
+    const auto admission = GENERATE(Admission::Approved, Admission::ArchiveMismatch, Admission::NativeSignatureMismatch);
+    GameplayFixture fixture;
+    Horo::Tests::Packages::TemporaryDirectory project{"editor package decisions"};
+    const auto root = std::filesystem::canonical(project.Path());
+    const auto content = std::filesystem::canonical(fixture.base.temporary.Path());
+    const auto relativeMetadata = root / ".horo";
+    REQUIRE(std::filesystem::create_directories(relativeMetadata));
+    Horo::Tests::OpenXRProduct::SigningKey key;
+    const auto moduleBytes = FileBytes(HORO_TEST_GAME_MODULE_PATH);
+    const auto signedModule = key.Sign(std::as_bytes(
+        std::span{admission == Admission::NativeSignatureMismatch ? std::string_view{"different bytes"} : std::string_view{moduleBytes}}));
+    const auto locked = GameplayGraph(false, EncodeDetachedSignatureDocument(signedModule));
+    const auto &entry = locked->packages.front();
+    const auto intent = nlohmann::json{{"sources", {{"fixture.source", {{"kind", "public-registry"}, {"registry", "official"}}}}},
+                                       {"dependencies", {{"fixture.gameplay", {{"source", "fixture.source"}, {"version", "1.0.0"}}}}}}
+                            .dump();
+    const auto request = ValidatedPackageRequest::Parse(intent);
+    REQUIRE(request.HasValue());
+    const PackageResolutionPlan resolution{
+        .packages = {{entry.lock.package, entry.lock.version, entry.lock.source, entry.lock.artifactDigest, {}}}};
+    const PackageLockArtifact artifact{.package = entry.lock.package,
+                                       .version = entry.lock.version,
+                                       .source = entry.lock.source,
+                                       .artifactDigest = entry.lock.artifactDigest,
+                                       .manifestDigest = entry.lock.manifestDigest,
+                                       .fileManifestDigest = entry.lock.fileManifestDigest,
+                                       .packageFormatVersion = 1,
+                                       .contributions = {"native"}};
+    const auto lock = ValidatedPackageLockfileV1::Generate(resolution, std::span{&entry.lock.package, 1}, request.Value().Digest(),
+                                                           std::span{&artifact, 1});
+    REQUIRE(lock.HasValue());
+    const auto write = [](const std::filesystem::path &path, std::string_view bytes) {
+        std::ofstream file{path, std::ios::binary};
+        file << bytes;
+        REQUIRE(file.good());
+    };
+    write(relativeMetadata / "packages.json", intent);
+    write(relativeMetadata / "packages.lock", lock.Value().SerializeCanonical());
+    const auto cacheRoot = content / "decision-host-cache";
+    auto cache = PackageCacheStore::Create(fixture.base.files, cacheRoot);
+    REQUIRE(cache.HasValue());
+    auto cacheStore = std::move(cache).Value();
+    REQUIRE(cacheStore.Publish(*entry.archive, key.Sign(entry.archive->Bytes())).HasValue());
+    const auto trustDocument = content / "approved-publishers.json";
+    constexpr std::string_view digits{"0123456789abcdef"};
+    std::string publicKey;
+    for (const auto byte : key.root.publicKey) {
+        const auto value = std::to_integer<unsigned>(byte);
+        publicKey.push_back(digits[value >> 4U]);
+        publicKey.push_back(digits[value & 15U]);
+    }
+    const auto trustJson = nlohmann::json{{"schemaVersion", 1},
+                                          {"allowUnsigned", false},
+                                          {"publishers",
+                                           {{{"publisherId", key.root.publisherId},
+                                             {"keyId", key.root.keyId},
+                                             {"algorithm", "ecdsa-p256-sha256"},
+                                             {"publicKeyHex", publicKey},
+                                             {"expiresAtUnixMilliseconds", 0},
+                                             {"revoked", false}}}}}
+                               .dump();
+    write(trustDocument, trustJson);
+    const auto projectTrust = root / "unapproved-publishers.json";
+    write(projectTrust, trustJson);
+    JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 8, .ioWorkerCount = 1}};
+    const SteadyClock clock;
+    const SystemWallClock wall;
+    const auto platform = NativePackagePlatform();
+    REQUIRE(platform.HasValue());
+    const PackageProjectPolicy base{.projectRoot = root,
+                                    .cacheRoot = cacheRoot,
+                                    .platform = platform.Value(),
+                                    .lifecycle = {.temporaryRoot = cacheRoot / "native",
+                                                  .profile = Extensions::ExtensionHostProfile::Interactive}};
+    const ApprovedGameplayPackage approved{entry.lock.package,
+                                           "fixture.gameplay",
+                                           fixture.enabled.module,
+                                           admission == Admission::ArchiveMismatch ? ComputeSha256({}) : entry.lock.artifactDigest,
+                                           entry.lock.manifestDigest,
+                                           Horo::Tests::ReadDescriptorRevision(HORO_TEST_GAME_MODULE_REVISION_PATH)};
+    CHECK(PrepareApprovedGameplayPackageHost(fixture.base.files, wall, base, {projectTrust, {approved}}).HasError());
+    auto prepared = PrepareApprovedGameplayPackageHost(fixture.base.files, wall, base, {trustDocument, {approved}});
+    REQUIRE(prepared.HasValue());
+    auto configuration = std::move(prepared).Value();
+    auto created =
+        PackageProjectHost::Create({jobs, fixture.base.files, clock, wall, *configuration.execution}, std::move(configuration.policy),
+                                   Duration::FromMilliseconds(60'000), nullptr, configuration.publishers.get());
+    REQUIRE(created.HasValue());
+    const auto host = std::move(created).Value();
+    CHECK(host->HasGameplayModuleOwner());
+    CHECK(host->Acquire(content).HasError());
+    std::shared_ptr<Horo::Application::PackageApplication> application;
+    for (const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+         !application && std::chrono::steady_clock::now() < deadline;) {
+        auto acquired = host->Acquire(root);
+        if (acquired.HasValue())
+            application = std::move(acquired).Value();
+        else
+            REQUIRE(acquired.ErrorValue().code.Value() == "packages.host.preparing");
+        std::this_thread::yield();
+    }
+    REQUIRE(application);
+    CHECK_FALSE(host->DecisionCatalog(root));
+    Horo::Editor::PackageModalSession modal{application};
+    const auto generation = modal.Open();
+    REQUIRE(generation.HasValue());
+    CHECK(modal.ActivateModules({generation.Value().value + 1}, std::span{&fixture.enabled, 1}).HasError());
+    const auto activated = modal.ActivateModules(generation.Value(), std::span{&fixture.enabled, 1});
+    REQUIRE(activated.HasValue());
+    const auto pump = [&](Horo::Application::PackageOperationId operation) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (std::chrono::steady_clock::now() < deadline) {
+            REQUIRE(host->PumpProject(root, PackageActivationBoundary::Quiescent).HasValue());
+            auto progress = application->Query(operation);
+            REQUIRE(progress.HasValue());
+            if (progress.Value().outcome != Horo::Application::PackageOperationOutcome::Running)
+                return std::move(progress).Value();
+            std::this_thread::yield();
+        }
+        FAIL("Configured project package request did not finish.");
+        return Horo::Application::PackageOperationSnapshot{};
+    };
+    const auto publication = pump(activated.Value());
+    INFO((publication.diagnostic ? publication.diagnostic->message : ""));
+    if (admission != Admission::Approved) {
+        CHECK(publication.outcome == Horo::Application::PackageOperationOutcome::Failed);
+        CHECK_FALSE(host->DecisionCatalog(root));
+        REQUIRE(modal.Close(generation.Value()).HasValue());
+        REQUIRE(host->Close().HasValue());
+        return;
+    }
+    REQUIRE(publication.outcome == Horo::Application::PackageOperationOutcome::Succeeded);
+    const auto stamp = host->DecisionCatalog(root);
+    REQUIRE(stamp);
+    REQUIRE(publication.activeGeneration);
+    CHECK(stamp->activation == *publication.activeGeneration);
+    CHECK_FALSE(host->DecisionCatalog(content));
+    CHECK(host->AcquireDecisionNodes(root, {stamp->project + 1, stamp->activation}).HasError());
+    {
+        const auto leaves = host->AcquireDecisionNodes(root, *stamp);
+        REQUIRE(leaves.HasValue());
+        REQUIRE(leaves.Value().size() == 1);
+        REQUIRE(leaves.Value().front()->Contracts().size() == 1);
+        CHECK(leaves.Value().front()->Contracts().front().descriptor.type.Value() == 201);
+    }
+    const auto disable = modal.Submit(generation.Value(), Horo::Application::PackageOperationKind::Disable);
+    REQUIRE(disable.HasValue());
+    REQUIRE(pump(disable.Value()).outcome == Horo::Application::PackageOperationOutcome::Succeeded);
+    CHECK_FALSE(host->DecisionCatalog(root));
+    CHECK(host->AcquireDecisionNodes(root, *stamp).HasError());
+    REQUIRE(modal.Close(generation.Value()).HasValue());
+    REQUIRE(host->Close().HasValue());
+}
+
+TEST_CASE("Verified package custom senses preserve locked identity and revoke before native cleanup", "[packages][sense-provider]") {
+    GameplayFixture fixture;
+    REQUIRE(fixture.Activate().HasValue());
+    const auto generation = fixture.base.service->Active()->generation;
+    auto acquired = fixture.gameplay->AcquirePerceptionSenses(fixture.enabled.package, "game.tests", generation);
+    REQUIRE(acquired.HasValue());
+    auto contribution = std::move(acquired).Value();
+    CHECK(contribution.package == fixture.enabled.package);
+    CHECK(contribution.version == fixture.base.install.ActiveGraph()->packages[0].lock.version);
+    CHECK(contribution.artifact == fixture.base.install.ActiveGraph()->packages[0].lock.artifactDigest);
+    CHECK(contribution.activationGeneration == generation);
+    REQUIRE(contribution.senses->Contracts().size() == 1);
+    CHECK(contribution.senses->Contracts()[0].sense.identity.Value() == 202);
+    CHECK(contribution.senses->Contracts()[0].sense.origin.kind == AI::PerceptionDescriptorSourceKind::Package);
+    CHECK(fixture.gameplay->AcquirePerceptionSenses(fixture.enabled.package, "game.tests", generation + 1).HasError());
+    bool offOwnerRejected{};
+    std::thread offOwner([&] {
+        offOwnerRejected = fixture.gameplay->AcquirePerceptionSenses(fixture.enabled.package, "game.tests", generation).HasError();
+    });
+    offOwner.join();
+    CHECK(offOwnerRejected);
+    AI::PerceptionSenseTestSupport::InputFixture inputs;
+    auto instance = inputs.Instance(contribution.senses);
+    AI::AiWorkBudget budget{6};
+    REQUIRE(instance->Evaluate(inputs.Input(), budget, budget).HasValue());
+    fixture.base.service->Shutdown();
+    CHECK_FALSE(contribution.senses->CanAdmit());
+    CHECK(fixture.gameplay->AcquirePerceptionSenses(fixture.enabled.package, "game.tests", generation).HasError());
+    AI::AiWorkBudget revoked{6};
+    AI::TestSupport::ExpectError(instance->Evaluate(inputs.Input(2), revoked, revoked), AI::AIErrors::RuntimeUnavailable);
+    CHECK(fixture.retirement->Close().HasError());
+    instance.reset();
+    CHECK(fixture.retirement->Close().HasError());
+    contribution.senses.reset();
     CHECK(fixture.retirement->Close().HasValue());
 }
 
@@ -269,6 +501,113 @@ TEST_CASE("Verified package script nodes use actual declared bytes and inherit n
     executor.reset();
     nodes.reset();
     program.reset();
+    CHECK(fixture.retirement->Close().HasValue());
+}
+
+TEST_CASE("Verified package script senses use declared bytes and retain their actual native parent", "[packages][sense-provider]") {
+    GameplayFixture fixture;
+    REQUIRE(fixture.Activate().HasValue());
+    const auto activation = fixture.base.service->Active()->generation;
+    AI::PerceptionSenseTestSupport::InputFixture inputs;
+    const AI::PerceptionDescriptorOrigin origin{AI::PerceptionDescriptorSourceKind::Script,
+                                                AI::TestSupport::MakeIdentity<AI::PerceptionProviderId>(702), 1};
+    AI::PerceptionSenseContract contract{{AI::TestSupport::MakeIdentity<AI::SenseTypeId>(302), origin, "package script sense",
+                                          inputs.capabilities},
+                                         {AI::TestSupport::MakeIdentity<AI::StimulusTypeId>(303), origin, "package script result", 1, {}},
+                                         0,
+                                         4,
+                                         2};
+    const auto source = Parse<PackagePath>("extensions/native/Sense.horo_script");
+    CHECK(fixture.gameplay->CompilePerceptionSense(fixture.enabled.package, "game.tests", activation + 1, source, contract).HasError());
+    CHECK(fixture.gameplay
+              ->CompilePerceptionSense(fixture.enabled.package, "game.tests", activation,
+                                       Parse<PackagePath>("extensions/native/Missing.horo_script"), contract)
+              .HasError());
+    auto compiled = fixture.gameplay->CompilePerceptionSense(fixture.enabled.package, "game.tests", activation, source, contract);
+    REQUIRE(compiled.HasValue());
+    auto program = std::move(compiled).Value();
+    auto acquired = program->Acquire();
+    REQUIRE(acquired.HasValue());
+    auto senses = std::move(acquired).Value();
+    CHECK(senses->Contracts()[0].source.source == source.Value());
+    auto instance = inputs.Instance(senses);
+    AI::AiWorkBudget budget{6};
+    const auto evaluated = instance->Evaluate(inputs.Input(), budget, budget);
+    REQUIRE(evaluated.HasValue());
+    REQUIRE(evaluated.Value().count == 2);
+    CHECK(evaluated.Value().samples[0].sensed);
+    CHECK_FALSE(evaluated.Value().samples[1].sensed);
+
+    Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
+    for (std::uint64_t index = 1; index <= 3; ++index) {
+        Runtime::RuntimeEntityDefinition entity;
+        entity.object = Runtime::SceneObjectId{index};
+        builder.Add(entity);
+    }
+    const auto definition = std::move(builder).Build();
+    REQUIRE(definition.HasValue());
+    auto created = Runtime::RuntimeScene::Create(definition.Value(), Runtime::SceneRuntimeId{77});
+    REQUIRE(created.HasValue());
+    auto scene = std::move(created).Value();
+    const auto view = scene->View();
+    AI::PerceptionSenseTestSupport::InputFixture sceneInputs;
+    const auto listener = *view.Find(Runtime::SceneObjectId{1});
+    sceneInputs.binding.listener = AI::ProjectPerceptionSource(listener);
+    auto sceneInstance = sceneInputs.Instance(senses);
+    AI::PerceptionSpatialListener spatialListener;
+    spatialListener.entity = listener;
+    spatialListener.position = Math::WorldCoordinate64::FromMillimeters(1000, 0, 0);
+    spatialListener.senses[0] = contract.sense.identity;
+    spatialListener.senseCount = 1;
+    std::array<AI::PerceptionSpatialSource, 2> sources;
+    for (std::size_t index = 0; index < sources.size(); ++index) {
+        auto &candidate = sources[index];
+        candidate.entity = *view.Find(Runtime::SceneObjectId{index + 2});
+        candidate.position = sceneInputs.candidates[index].position;
+        candidate.layers = 1;
+        candidate.senses[0] = contract.sense.identity;
+        candidate.senseCount = 1;
+    }
+    AI::PerceptionSpatialBroadphase spatial;
+    REQUIRE(spatial.Publish(view, 1, std::span{&spatialListener, 1}, sources).HasValue());
+    auto admittedMemory = AI::AIPerceptionMemory::Create(77, sceneInputs.binding.agent);
+    REQUIRE(admittedMemory.HasValue());
+    auto memory = std::move(admittedMemory).Value();
+    const AI::PerceptionSpatialQuery query{.listener = listener,
+                                           .sense = contract.sense.identity,
+                                           .radiusMillimeters = 10'000,
+                                           .visibleLayers = 1,
+                                           .maximumCandidates = 2};
+    AI::AiWorkBudget sceneBudget{100};
+    const auto staged = AI::RunPerceptionSenseAtSensePoll(view, spatial, *sceneInstance, query, 1, memory, sceneBudget, sceneBudget);
+    REQUIRE(staged.HasValue());
+    CHECK(staged.Value().candidates == 2);
+    CHECK(staged.Value().samples == 2);
+    CHECK(sceneBudget.Remaining() == 93);
+    const auto before = memory.Snapshot(1, AI::PerceptionSceneLiveness(*scene));
+    REQUIRE(before.HasValue());
+    REQUIRE(before.Value().count == 1);
+    CHECK(before.Value().entries[0].lastKnownPosition == sources[0].position);
+
+    fixture.base.service->Shutdown();
+    CHECK_FALSE(senses->CanAdmit());
+    CHECK(program->Acquire().HasError());
+    CHECK(fixture.retirement->Close().HasError());
+    AI::AiWorkBudget revoked{6};
+    AI::TestSupport::ExpectError(instance->Evaluate(inputs.Input(2), revoked, revoked), AI::AIErrors::RuntimeUnavailable);
+    AI::TestSupport::ExpectError(AI::RunPerceptionSenseAtSensePoll(view, spatial, *sceneInstance, query, 2, memory, sceneBudget,
+                                                                   sceneBudget),
+                                 AI::AIErrors::RuntimeUnavailable);
+    CHECK(sceneBudget.Remaining() == 93);
+    const auto after = memory.Snapshot(2, AI::PerceptionSceneLiveness(*scene));
+    REQUIRE(after.HasValue());
+    REQUIRE(after.Value().count == 1);
+    CHECK(after.Value().entries[0].lastSensedTick == 1);
+    instance.reset();
+    senses.reset();
+    program.reset();
+    CHECK(fixture.retirement->Close().HasError());
+    sceneInstance.reset();
     CHECK(fixture.retirement->Close().HasValue());
 }
 

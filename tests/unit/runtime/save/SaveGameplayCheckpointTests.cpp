@@ -1,3 +1,4 @@
+#include "Horo/Foundation/Logging/LogContext.h"
 #include "Horo/Runtime/Save/SaveGameplayCheckpoint.h"
 #include "SaveTestUtils.h"
 
@@ -136,6 +137,7 @@ namespace Horo::Runtime {
             Result<GameplayCheckpointRestoreStaging> Stage(const GameplayCheckpoint &checkpoint, const StagedRestoreContext &,
                                                            const SaveParticipantRegistrySnapshot &) override {
                 ++calls;
+                CHECK(Log::DiagnosticsSuppressed());
                 if (clearSelection)
                     REQUIRE(clearSelection->Clear().HasValue());
                 if (throwsNonStandard)

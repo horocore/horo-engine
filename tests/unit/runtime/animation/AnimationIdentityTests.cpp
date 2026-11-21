@@ -159,6 +159,7 @@ namespace Horo::Animation {
             &AnimationErrors::PoseLeaseConflict,
             &AnimationErrors::PoseTransformInvalid,
             &AnimationErrors::PoseJointMissing,
+            &AnimationErrors::PoseSocketMissing,
             &AnimationErrors::PoseNotEvaluated,
             &AnimationErrors::PoseFrameStale,
             &AnimationErrors::PoseThreadViolation,

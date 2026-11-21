@@ -1,5 +1,6 @@
 #include "Horo/WorldStreaming/WorldStreamingRuntimeComposition.h"
 
+#include "Horo/WorldStreaming/WorldPartitionRegistry.h"
 #include "WorldStreamingInternal.h"
 
 #include <algorithm>
@@ -91,7 +92,9 @@ namespace Horo::WorldStreaming {
 
     /** @copydoc WorldStreamingRuntimeComposition::WorldStreamingRuntimeComposition */
     WorldStreamingRuntimeComposition::WorldStreamingRuntimeComposition(WorldStreamingRuntimeComposition &&other) noexcept
-        : config_(other.config_), scheduler_(std::move(other.scheduler_)), services_(std::move(other.services_)), state_(other.state_) {
+        : config_(other.config_), scheduler_(std::move(other.scheduler_)), services_(std::move(other.services_)), state_(other.state_),
+          origin_(std::move(other.origin_)), lastOriginTransaction_(other.lastOriginTransaction_),
+          pendingOrigin_(std::move(other.pendingOrigin_)) {
         other.scheduler_.BeginShutdown();
         other.state_ = WorldStreamingRuntimeCompositionState::Closed;
     }
@@ -111,13 +114,90 @@ namespace Horo::WorldStreaming {
             WorldStreamingRuntimeComposition{config, std::move(scheduler).Value(), std::move(bindings).Value()});
     }
 
+    /** @copydoc WorldStreamingRuntimeComposition::CreateWithOrigin */
+    Result<WorldStreamingRuntimeComposition> WorldStreamingRuntimeComposition::CreateWithOrigin(
+        const WorldStreamingRuntimeCompositionConfig &config, const std::span<const StreamingRuntimeServiceBinding> services,
+        const WorldPartitionRegistry &registry, OriginFrame initial) {
+        if (!config.IsValid())
+            return Failure<WorldStreamingRuntimeComposition>(WorldStreamingErrors::RuntimeCompositionInvalid);
+        const auto mounted = registry.Snapshot();
+        if (mounted.HasError())
+            return Result<WorldStreamingRuntimeComposition>::Failure(mounted.ErrorValue());
+        if (mounted.Value().Binding().owner != config.owner)
+            return Failure<WorldStreamingRuntimeComposition>(WorldStreamingErrors::RuntimeCompositionRevisionStale);
+
+        auto composition = Create(config, services);
+        if (composition.HasError())
+            return composition;
+        auto origin = OriginFrameOwner::Create(std::move(initial));
+        if (origin.HasError())
+            return Result<WorldStreamingRuntimeComposition>::Failure(origin.ErrorValue());
+        auto mountedComposition = std::move(composition).Value();
+        mountedComposition.origin_ = std::move(origin).Value();
+        return Result<WorldStreamingRuntimeComposition>::Success(std::move(mountedComposition));
+    }
+
+    /** @copydoc WorldStreamingRuntimeComposition::Origin */
+    const OriginFrameOwner *WorldStreamingRuntimeComposition::Origin() const noexcept {
+        return state_ == WorldStreamingRuntimeCompositionState::Active ? origin_.get() : nullptr;
+    }
+
+    /** @copydoc WorldStreamingRuntimeComposition::PrepareOriginRebase */
+    Result<void> WorldStreamingRuntimeComposition::PrepareOriginRebase(const StreamingRuntimeOwnerToken &owner,
+                                                                       const StreamingRuntimeCompositionRevision revision,
+                                                                       const OriginRebaseTransactionContext &context,
+                                                                       const std::span<const OriginRebaseParticipantRequirement> required,
+                                                                       const std::span<IOriginRebaseParticipant *const> participants) {
+        if (owner != config_.owner || revision != config_.revision)
+            return Failure<void>(WorldStreamingErrors::RuntimeCompositionRevisionStale);
+        if (!Origin() || pendingOrigin_)
+            return Failure<void>(WorldStreamingErrors::OriginRebaseLifecycleUnavailable);
+        if (!context.transaction.IsValid())
+            return Failure<void>(WorldStreamingErrors::OriginRebaseInvalid);
+        if (context.transaction.Value() <= lastOriginTransaction_.Value() || !origin_->Publishes(context.activeFrame))
+            return Failure<void>(WorldStreamingErrors::OriginRebaseStale);
+        auto prepared = OriginRebaseTransaction::Prepare(context, required, participants);
+        if (prepared.HasError())
+            return Result<void>::Failure(prepared.ErrorValue());
+        pendingOrigin_.emplace(std::move(prepared).Value());
+        lastOriginTransaction_ = context.transaction;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc WorldStreamingRuntimeComposition::CommitOriginRebase */
+    Result<void> WorldStreamingRuntimeComposition::CommitOriginRebase(const StreamingRuntimeOwnerToken &owner,
+                                                                      const StreamingRuntimeCompositionRevision revision,
+                                                                      const OriginRebaseTransactionId transaction,
+                                                                      const OriginRebaseCommitPoint point) {
+        if (owner != config_.owner || revision != config_.revision)
+            return Failure<void>(WorldStreamingErrors::RuntimeCompositionRevisionStale);
+        if (!Origin() || !pendingOrigin_)
+            return Failure<void>(WorldStreamingErrors::OriginRebaseLifecycleUnavailable);
+        if (pendingOrigin_->Id() != transaction)
+            return Failure<void>(WorldStreamingErrors::OriginRebaseStale);
+        auto committed = pendingOrigin_->Commit(*origin_, point, OriginRebaseLifecycle::Active);
+        if (pendingOrigin_->State() != OriginRebaseTransactionState::Prepared)
+            pendingOrigin_.reset();
+        return committed;
+    }
+
+    /** @copydoc WorldStreamingRuntimeComposition::CancelOriginRebase */
+    Result<void> WorldStreamingRuntimeComposition::CancelOriginRebase(const StreamingRuntimeOwnerToken &owner,
+                                                                      const StreamingRuntimeCompositionRevision revision,
+                                                                      const OriginRebaseTransactionId transaction) {
+        if (owner != config_.owner || revision != config_.revision || !pendingOrigin_ || pendingOrigin_->Id() != transaction)
+            return Failure<void>(WorldStreamingErrors::OriginRebaseStale);
+        pendingOrigin_.reset();
+        return Result<void>::Success();
+    }
+
     /** @copydoc WorldStreamingRuntimeComposition::Replace */
     Result<void> WorldStreamingRuntimeComposition::Replace(const StreamingRuntimeOwnerToken &owner,
                                                            const StreamingRuntimeCompositionRevision revision,
                                                            const std::span<const StreamingRuntimeServiceBinding> services) {
         if (owner != config_.owner || !revision.IsValid() || revision.Value() <= config_.revision.Value())
             return Failure<void>(WorldStreamingErrors::RuntimeCompositionRevisionStale);
-        if (State() != WorldStreamingRuntimeCompositionState::Active || scheduler_.ReservedCount() != 0)
+        if (State() != WorldStreamingRuntimeCompositionState::Active || scheduler_.ReservedCount() != 0 || pendingOrigin_)
             return Failure<void>(WorldStreamingErrors::RuntimeCompositionLifecycleUnavailable);
         auto bindings = ValidateAndCopyBindings(services, config_.maximumFeatureAdapters);
         if (bindings.HasError())
@@ -138,6 +218,9 @@ namespace Horo::WorldStreaming {
         if (state_ == Active) {
             scheduler_.BeginShutdown();
             state_ = Cancelling;
+            pendingOrigin_.reset();
+            if (origin_)
+                origin_->Shutdown();
         }
         return Result<void>::Success();
     }
@@ -151,6 +234,9 @@ namespace Horo::WorldStreaming {
         scheduler_.BeginShutdown();
         state_ = scheduler_.State() == StreamingSchedulerAdmissionState::Closed ? WorldStreamingRuntimeCompositionState::Closed
                                                                                 : WorldStreamingRuntimeCompositionState::Draining;
+        pendingOrigin_.reset();
+        if (origin_)
+            origin_->Shutdown();
         return Result<void>::Success();
     }
 

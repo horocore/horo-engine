@@ -58,6 +58,21 @@ namespace Horo::Editor {
     public:
         virtual ~IEditorViewportRenderer() = default;
 
+        /** @brief Opts in to a cross-fade compositor before viewport textures are first allocated. */
+        [[nodiscard]] virtual Result<void> EnableCameraCrossFade() {
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeUnsupported));
+        }
+
+        /** @brief Reports the live reservation and its currently available views. */
+        [[nodiscard]] virtual EditorViewportCrossFadeCapacity CameraCrossFadeCapacity() const noexcept {
+            return {};
+        }
+
+        /** @brief Prepares the optional pair from the same frozen viewport snapshot as the upcoming mesh pass. */
+        [[nodiscard]] virtual Result<void> PrepareCameraCrossFadeFrame(const std::optional<EditorViewportCameraCrossFade> &crossFade) {
+            return crossFade ? Result<void>::Failure(MakeError(RendererErrors::ViewportCrossFadeUnsupported)) : Result<void>::Success();
+        }
+
         /** @brief Activates only explicit genuine cooked color inputs at cold startup. @param inputs Exact decoded generation.
          * @return Typed unsupported on implementations without the actual complete color executor. */
         [[nodiscard]] virtual Result<void> PrepareColorPipeline(const EditorViewportColorInputs &inputs) {
@@ -77,7 +92,8 @@ namespace Horo::Editor {
             static_cast<void>(deltaSeconds);
         }
 
-        /** @brief Finishes a prepared candidate only after actual native Present, or cancels it. @param accepted Actual frame acceptance.
+        /** @brief Resolves prepared color after the host finishes or cancels the frame.
+         * @param accepted The host present result; a viewport with its own exact native submission receipt uses that authority.
          */
         virtual void FinishColorFrame(bool accepted) noexcept {
             static_cast<void>(accepted);

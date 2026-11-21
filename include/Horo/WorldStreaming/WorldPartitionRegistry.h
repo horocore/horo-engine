@@ -165,6 +165,8 @@ namespace Horo::WorldStreaming {
         [[nodiscard]] Result<WorldPartitionSpatialQueryResult> Query(const WorldPartitionSpatialQuery &query,
                                                                      std::span<WorldPartitionCellHandle> output) const;
 
+        /** @brief Borrows canonical topology for provider admission. @return Snapshot-owned descriptor or null when empty. */
+        [[nodiscard]] const WorldPartitionDescriptor *Descriptor() const noexcept;
         /** @brief Returns the immutable grid or null for an empty snapshot. @return Snapshot-owned grid. */
         [[nodiscard]] const WorldCellQuantizationPolicy *Grid() const noexcept;
         /** @brief Returns immutable canonical layer metadata. @return Snapshot-owned layers. */

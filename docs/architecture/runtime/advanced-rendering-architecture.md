@@ -290,8 +290,141 @@ reconstruction-owned history. Histories are scoped to view, provider, mode,
 extent, input, color and device generations and advance only after a successful
 real frame.
 Camera cuts, missing predecessors and incompatible generations reset explicitly.
+Provider adapters admit borrowed scene textures, exposure and graph output through
+`ReconstructionFrameRequest`. The Temporal History store checks the exact
+compatibility and resident resource owner before opening a real-frame attempt.
+An explicit reset survives abandonment until the next successful publication.
+
+The Vulkan native shader cook provides spatial, temporal seed and temporal accumulation entries.
+First/reset frames bind only current inputs and resolved destinations.
+The initial compute ABI uses RGBA32F sampled and storage output, R32F resolved
+depth for the temporal entry, and explicit scalar exposure. The cooked interface
+requires exact shader entry, descriptor bindings, storage image formats, 48 bytes
+of push constants and group size. The Vulkan graph records on the explicitly
+admitted compute queue and retains exact image views and the kernel until
+completion. The graph retains writes through the same journal as other native
+workloads. A scene using native temporal reconstruction provisions two resident
+resolved color/depth pairs per view and stamps its compatibility from the live
+render-origin cache. The view owner stages the exact current/prior/destination
+bindings and preserved import states for the compiled scene graph. Successful
+presentation, native timeline completion, retirement of the graph resource
+lease and matching current scene compatibility are all required to publish the
+new pair. A partial submission failure invalidates state and keeps the
+destinations fenced until retirement. Resize or scene discontinuity supplies an
+explicit reset before reseeding.
+
+The temporal attempt's resident handles are a bounded owning snapshot. Existing
+readers can iterate and query its size without change. A caller that needs
+mutable storage copies the range explicitly. Provider availability requires
+qualified image behavior and product composition as specified by ADR-040.
 
 ## Upscaling
+
+The image-provider registry freezes explicitly contributed category routes.
+Discovery checks the selected backend, API, device and current resource
+requirements. Packaged routes require matching product inventory evidence,
+including binary and license notices, and any required SDK needs its own runtime
+evidence. The renderer reads those host records without probing for a library.
+The linked native reconstruction declarations require an admitted spatial
+artifact or both temporal seed and accumulation artifacts before reporting
+readiness. Discovery reports the exact requested route without selecting a
+replacement or creating a provider.
+
+HoroEditor can inspect an explicit `spatial` or `taau` route against its
+selected renderer with `--inspect-image-provider=<mode>`, an absolute
+`--image-provider-root=<product-root>`, and an independent publisher policy
+passed as `--image-provider-trust=<trust.json>`. The product root supplies
+`manifest.json` and `manifest.signature.json` in the existing release
+inventory and detached envelope formats. The selected cook consists of the
+signed `.horoshdr` and `.reflection.json` records under
+`assets/shaders/runtime/native-reconstruction-vulkan/` named for the canonical
+shader entries. The editor logs readiness and the authenticated inventory
+digest during startup. This command performs inspection before provider
+initialization or scene work.
+
+The Vulkan viewport cook has a separate `--scene-linear` variant of
+`assets/shaders/editor/viewport.hlsl`. The variant shares the canonical mesh,
+light and shadow inputs and outputs unexposed linear ACEScg into an FP16
+scene attachment. The installed pair uses the
+`shaders/editor/viewport-scene-linear-vulkan` prefix and is admitted only
+against the distinct `PSSceneLinear` fragment stage and its bound reflection.
+The normal Vulkan viewport prepares its exact shadow, scene, and overlay
+material graph for the renderer's bounded frame slots before frame admission.
+A stable attachment, mesh and program generation reuses the compiled graph.
+The GUI samples the existing viewport output after that graph records. The
+current scene program still writes display-encoded color. Reconstruction
+requires selecting the new pre-display raster and appending the provider
+before exposure/display mapping and overlays. Temporal reconstruction also requires same-view positive linear
+depth and jitter-free motion producers.
+
+Vulkan pre-frame preparation observes exact resident buffer use through the
+selected renderer's queue timeline and may update a host-visible uniform only
+after retirement. It uses the same completion owner as in-frame buffer writes
+and does not acquire an image, begin a frame, or wait on the GPU. This is the
+resource boundary needed by the viewport exposure and output color owner's
+existing pre-frame ring preparation.
+
+The offline viewport cook accepts `--temporal-linear-depth` and
+`--temporal-motion` with `assets/shaders/editor/viewport_temporal_inputs.hlsl`.
+Each command emits one immutable, reflected program for a single color
+attachment. The depth program writes positive view-space metres and uses zero
+for invalid depth. The motion program writes `previousUv - currentUv` using
+unjittered clip transforms. An invalid predecessor writes a finite offset
+outside the image so reconstruction discards that pixel's history. The host
+must supply the same jittered raster transform and viewport orientation to
+these programs and the scene color pass. Viewport integration must provision the
+attachments and validate producer and consumer on the same native frame.
+
+The same Vulkan offline host can prepare the manual-exposure ColorOutput
+generation with the pinned original analytic processor and SDR encoder:
+
+```bash
+HoroEditorVulkanShaderCook "$source_root" "$new_absolute_stage" \
+  "$existing_scratch" "$dxc" "$spirv_val" "$spirv_cross" \
+  --color-output-manual "$pinned_analytic_root"
+```
+
+The read-only package loader explicitly selects the Vulkan manual target. Its
+scene stage accepts a finite positive scalar exposure and shares the existing
+analytic color mapping, auxiliary tables and exact SDR encode source. This
+cook omits GPU exposure history and creative looks. The Vulkan viewport
+can select same-extent spatial reconstruction explicitly on this ColorOutput
+route.
+
+The release cook uses the locked Ubuntu 26.04 x86-64 shader host. Run
+`HoroEditorVulkanShaderCook --describe-tools` for the approved external tool
+identities and pass the release job's existing candidate ID.
+
+```bash
+HoroEditorVulkanShaderCook assets/shaders/runtime/native_reconstruction.hlsl \
+  "$new_absolute_stage" "$existing_scratch" "$dxc" "$spirv_val" "$spirv_cross" \
+  --native-reconstruction "$release_candidate_id" \
+  --scene-linear-source assets/shaders/editor/viewport.hlsl > "$inventory_outside_stage"
+```
+
+The atomic stage carries eight files. It contains the three canonical
+reconstruction payload/reflection pairs and the scene-linear material pair
+under `assets/shaders/editor/viewport-scene-linear-vulkan`. Without
+`--scene-linear-source` the existing invocation publishes the six kernel files
+for inspection and other native consumers. Each inventory entry records the
+exact file size and SHA-256. The independently cooked `--scene-linear` route
+uses the same compile request as the combined stage.
+
+Release assembly incorporates the returned records into the complete Editor
+product manifest and verifies the assembled bytes before the existing detached
+signing boundary. A spatial startup fixture needs the combined stage, the actual
+platform, architecture and executable version in `manifest.json`, the matching
+`manifest.signature.json`, and an independent trusted-publisher document. Use the
+normal Editor launcher with the Vulkan renderer, `--activate-image-provider=spatial`,
+`--image-provider-root=<absolute installed product>` and
+`--image-provider-trust=<absolute publisher document>`. Supply the explicit
+`--color-pipeline-root` whose `color/` child contains the Vulkan manual ColorOutput
+cook. The signed spatial route reads both shader pairs from the same verified
+inventory. Native SDL qualification `[signed-spatial]` uses the installed product
+and trusted-publisher paths in `HORO_TEST_VULKAN_SPATIAL_PRODUCT_ROOT` and
+`HORO_TEST_VULKAN_SPATIAL_PUBLISHER_TRUST`. It also uses
+`HORO_EDITOR_VULKAN_ASSET_ROOT` for the normal installed raster assets and
+`HORO_TEST_VULKAN_COLOR_OUTPUT_PACKAGE` for the exact Vulkan manual package.
 
 [ADR-040](../../adr/040-reconstruction-frame-generation-and-latency-providers.md)
 replaces the legacy single upscaler interface with four sealed frontend-owned

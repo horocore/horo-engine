@@ -6,6 +6,7 @@
 #include "PackageArchiveTestSupport.h"
 #include "SecurityTestSupport.h"
 
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <exception>
@@ -28,8 +29,44 @@ namespace Horo::Tests::PackageApplicationService {
         return std::move(verified).Value();
     }
 
+    /** @brief Verified declared image bytes for admission tests; denying trust must prevent the loader from reading them. */
+    inline std::vector<std::byte> NativeAdmissionArchiveBytes() {
+        constexpr auto root = "extensions/native";
+#if defined(_WIN32)
+        constexpr auto image = "module.dll";
+#elif defined(__APPLE__)
+        constexpr auto image = "module.dylib";
+#else
+        constexpr auto image = "module.so";
+#endif
+        constexpr auto id = "com.horo.application-fixture";
+        constexpr auto module = "com.horo.application-fixture.native";
+        const nlohmann::json
+            descriptor{{"id", id},
+                       {"version", "1.0.0"},
+                       {"modules",
+                        {{{"id", module}, {"version", "1.0.0"}, {"kind", "native"}, {"roles", {"backend-capability"}}, {"entry", image}}}},
+                       {"contributions", {{{"type", "asset.importer"}, {"id", "fixture.importer"}, {"module", module}}}}};
+        const std::array files{std::pair{std::string{"horo-package.toml"}, std::string{"schemaVersion = 1\n"}},
+                               std::pair{std::string{root} + "/extension.json", descriptor.dump()},
+                               std::pair{std::string{root} + '/' + image, std::string{"unloadable fixture image"}}};
+        mz_zip_archive zip{};
+        REQUIRE(mz_zip_writer_init_heap(&zip, 0, 0));
+        auto inventory = nlohmann::json::array();
+        for (const auto &[path, bytes] : files) {
+            auto entry = Tests::Packages::FileInventoryEntry(path, bytes);
+            if (path.starts_with(root))
+                entry["contributionRoot"] = root;
+            inventory.push_back(std::move(entry));
+            REQUIRE(mz_zip_writer_add_mem(&zip, path.c_str(), bytes.data(), bytes.size(), MZ_BEST_COMPRESSION));
+        }
+        const auto manifest = nlohmann::json{{"schemaVersion", 1}, {"files", inventory}}.dump();
+        REQUIRE(mz_zip_writer_add_mem(&zip, "files.manifest.json", manifest.data(), manifest.size(), MZ_BEST_COMPRESSION));
+        return Tests::Packages::FinalizeArchive(zip);
+    }
+
     struct AssetGraph final {
-        std::vector<std::byte> bytes{Tests::Packages::ValidPackageArchiveBytes()};
+        std::vector<std::byte> bytes;
         ValidatedPackageArchive archive{Verify(bytes)};
         HoroPackageId package{Parse<HoroPackageId>("com.horo.application-fixture")};
         HoroPackageSourceId source{Parse<HoroPackageSourceId>("fixture.source")};
@@ -37,7 +74,8 @@ namespace Horo::Tests::PackageApplicationService {
         Sha256Digest requestHash{ComputeSha256(std::as_bytes(std::span{std::string_view{"application-request"}}))};
         std::optional<ValidatedPackageLockfileV1> lock;
 
-        AssetGraph() {
+        explicit AssetGraph(bool native = false)
+            : bytes(native ? NativeAdmissionArchiveBytes() : Tests::Packages::ValidPackageArchiveBytes()) {
             PackageResolutionPlan plan{.packages = {{package, version, source, archive.Digest(), {}}}};
             PackageLockArtifact artifact{.package = package,
                                          .version = version,
@@ -47,7 +85,7 @@ namespace Horo::Tests::PackageApplicationService {
                                          .fileManifestDigest = archive.Manifest().Digest(),
                                          .packageFormatVersion = 1U,
                                          .platforms = {},
-                                         .contributions = {"assets"}};
+                                         .contributions = {native ? "native" : "assets"}};
             auto generated = ValidatedPackageLockfileV1::Generate(plan, std::span{&package, 1U}, requestHash, std::span{&artifact, 1U});
             REQUIRE(generated.HasValue());
             lock.emplace(std::move(generated).Value());
@@ -127,15 +165,21 @@ namespace Horo::Tests::PackageApplicationService {
         bool admissionAllowed{true};
         std::unique_ptr<PackageApplication> application;
 
-        Fixture()
-            : cache(CreateCache(files, content.Path() / "cache")), jobs({.workerCount = 1, .maxQueuedJobs = 8, .ioWorkerCount = 1}),
-              source(graph.bytes), install(CreateInstall(files, std::filesystem::canonical(project.Path()))) {
+        explicit Fixture(bool native = false, std::shared_ptr<IPackageModuleHost> moduleHost = {},
+                         const IPackageExtensionTrust *executionTrust = nullptr)
+            : graph(native), cache(CreateCache(files, content.Path() / "cache")),
+              jobs({.workerCount = 1, .maxQueuedJobs = 8, .ioWorkerCount = 1}), source(graph.bytes),
+              install(CreateInstall(files, std::filesystem::canonical(project.Path()))) {
             auto restored = PackageRestoreService::Create(jobs, files, cache, &source);
             REQUIRE(restored.HasValue());
             restore.emplace(std::move(restored).Value());
-            auto activated = PackageLifecycleService::Create(install, trust,
-                                                             {.temporaryRoot = std::filesystem::canonical(content.Path()),
-                                                              .artifactGate = Tests::CreateAcceptingArtifactGate()});
+            PackageLifecycleConfiguration lifecyclePolicy{.temporaryRoot = std::filesystem::canonical(content.Path()),
+                                                          .artifactGate = Tests::CreateAcceptingArtifactGate()};
+            if (moduleHost) {
+                lifecyclePolicy.moduleHosts.push_back(std::move(moduleHost));
+                lifecyclePolicy.moduleRetirements = std::make_shared<PackageModuleRetirementQueue>(4);
+            }
+            auto activated = PackageLifecycleService::Create(install, executionTrust ? *executionTrust : trust, std::move(lifecyclePolicy));
             REQUIRE(activated.HasValue());
             lifecycle = std::move(activated).Value();
             auto created = PackageApplication::Create(jobs, *restore, install, *lifecycle, Configuration());

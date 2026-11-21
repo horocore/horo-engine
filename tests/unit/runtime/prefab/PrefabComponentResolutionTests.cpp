@@ -93,6 +93,58 @@ namespace Horo::Prefab {
             CHECK(reverted.Value().effective->Objects().front().object.components == source.Objects().front().object.components);
         }
 
+        TEST_CASE("Promoted component batches validate registered dependencies only on the final candidate",
+                  "[unit][prefab][override][topology]") {
+            const auto source = Source();
+            const auto supportType = Gameplay::ComponentTypeId::Parse("game.override.support").Value();
+            const auto consumerType = Gameplay::ComponentTypeId::Parse("game.override.consumer").Value();
+            const PrefabComponentOverridePolicy original{{Type(), 1, "Values", "Tests", {}, {}}, 1, true, true};
+            const PrefabComponentOverridePolicy support{{supportType, 1, "Support", "Tests", {}, {}}, 1, true, true};
+            const PrefabComponentOverridePolicy consumer{{consumerType, 1, "Consumer", "Tests", {}, {}}, 1, true, true, {supportType}};
+            const auto schema = PrefabValueSchemaSnapshot::Create({}, Limits(), {original, support, consumer}).Value();
+            auto dependency = Added(2, "{}");
+            dependency.component.typeId = supportType;
+            auto dependent = Added(3, "{}");
+            dependent.component.typeId = consumerType;
+            const std::array<PrefabComponentOverrideRecord, 2> selected{PrefabAddComponentOverride{Object(), dependent},
+                                                                        PrefabAddComponentOverride{Object(), dependency}};
+            const auto prepared = PreparePrefabComponentPromotion(source, {}, selected, &schema, Limits());
+            REQUIRE(prepared.HasValue());
+            REQUIRE(prepared.Value().effective);
+            CHECK(prepared.Value().rebased.componentRecords.size() == 2);
+            CHECK(prepared.Value().effective->Objects().front().object.components.size() == 3);
+            CHECK(PreparePrefabComponentPromotion(source, {}, std::span{selected}.first(1), &schema, Limits()).HasError());
+            CHECK(source.Objects().front().object.components.size() == 1);
+
+            const auto singleton = TopologySchema();
+            const auto removed = PreparePrefabComponentEdit(source, {}, PrefabRemoveComponentEdit{Target()}, &singleton, Limits());
+            REQUIRE(removed.HasValue());
+            auto forged = std::get<PrefabRemoveComponentOverride>(removed.Value().rebased.componentRecords.front());
+            forged.expectedSourceComponent.bytes.front() ^= 1U;
+            const std::array<PrefabComponentOverrideRecord, 1> stale{forged};
+            CHECK(PreparePrefabComponentPromotion(source, {}, stale, &singleton, Limits()).HasError());
+            dependency.instance = dependent.instance;
+            const std::array<PrefabComponentOverrideRecord, 2> duplicate{PrefabAddComponentOverride{Object(), dependent},
+                                                                         PrefabAddComponentOverride{Object(), dependency}};
+            CHECK(PreparePrefabComponentPromotion(source, {}, duplicate, &schema, Limits()).HasError());
+
+            CancellationSource cancellation;
+            cancellation.RequestCancellation();
+            const auto cancelled = PreparePrefabComponentPromotion(source, {}, selected, &schema, Limits(), cancellation.Token());
+            REQUIRE(cancelled.HasError());
+            CHECK(cancelled.ErrorValue().code.Value() == PrefabErrors::Cancelled.code.Value());
+
+            auto lower = Limits().Policy();
+            lower.maximumOverrideValueBytes = 256;
+            const auto bounded = PrefabLimitProfile::Create(lower).Value();
+            dependency.component.payload.resize(lower.maximumOverrideValueBytes + 1);
+            const std::array<PrefabComponentOverrideRecord, 1> oversized{PrefabAddComponentOverride{Object(), dependency}};
+            const auto overBudget = PreparePrefabComponentPromotion(source, {}, oversized, &schema, bounded);
+            REQUIRE(overBudget.HasError());
+            CHECK(overBudget.ErrorValue().code.Value() == PrefabErrors::WorkBudgetExceeded.code.Value());
+            CHECK(prepared.Value().effective->Objects().front().object.components.size() == 3);
+        }
+
         TEST_CASE("Topology authoring rejects forbidden duplicate and malformed complete payloads", "[unit][prefab][override][topology]") {
             const auto source = Source();
             auto schema = TopologySchema();

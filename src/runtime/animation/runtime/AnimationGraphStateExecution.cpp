@@ -399,26 +399,30 @@ namespace Horo::Animation::Detail {
         const auto &binding = state.program->StateMachines()[index];
         const auto &candidate = state.candidate.machines[index];
         const auto output = state.Pose(occurrence.output);
-        const auto first = candidate.runtime.frozenSource
-                               ? state.Pose(binding.poses[3])
-                               : state.Pose(binding.branches[candidate.runtime.source.state].output[candidate.sourceLane]);
-        const auto firstCoverage = candidate.runtime.frozenSource
-                                       ? state.Coverage(binding.poses[3])
-                                       : state.Coverage(binding.branches[candidate.runtime.source.state].output[candidate.sourceLane]);
+        const auto source = candidate.runtime.frozenSource ? binding.poses[3]
+                                                           : binding.branches[candidate.runtime.source.state].output[candidate.sourceLane];
+        const auto first = state.Pose(source);
+        const auto firstCoverage = state.Coverage(source);
         const auto coverage = state.Coverage(occurrence.output);
+        auto &rootMotion = state.rootMotion.poses;
         if (candidate.runtime.destination) {
-            const auto second = state.Pose(binding.branches[candidate.runtime.destination->state].output[candidate.destinationLane]);
+            const auto destination = binding.branches[candidate.runtime.destination->state].output[candidate.destinationLane];
+            const auto second = state.Pose(destination);
             if (const auto failure = ComposePose({.base = first, .overlay = second, .weight = candidate.outcome.weight}, output);
                 failure != GraphInstanceFailure::None)
                 return {failure};
-            const auto secondCoverage =
-                state.Coverage(binding.branches[candidate.runtime.destination->state].output[candidate.destinationLane]);
+            const auto secondCoverage = state.Coverage(destination);
             for (std::size_t joint = 0; joint < coverage.size(); ++joint)
                 coverage[joint] = static_cast<std::uint8_t>((candidate.outcome.weight < 1.0F && firstCoverage[joint] != 0) ||
                                                             (candidate.outcome.weight > 0.0F && secondCoverage[joint] != 0));
+            if (!rootMotion.empty())
+                rootMotion[occurrence.output.index] =
+                    BlendRootMotion(rootMotion[source.index], rootMotion[destination.index], candidate.outcome.weight);
         } else {
             std::ranges::copy(first, output.begin());
             std::ranges::copy(firstCoverage, coverage.begin());
+            if (!rootMotion.empty())
+                rootMotion[occurrence.output.index] = rootMotion[source.index];
         }
         std::ranges::copy(output, state.Pose(binding.poses[1]).begin());
         std::ranges::copy(coverage, state.Coverage(binding.poses[1]).begin());

@@ -381,6 +381,11 @@ namespace Horo::WorldStreaming {
         }
     }
 
+    /** @copydoc WorldPartitionRegistrySnapshot::Descriptor */
+    const WorldPartitionDescriptor *WorldPartitionRegistrySnapshot::Descriptor() const noexcept {
+        return state_ ? &state_->descriptor : nullptr;
+    }
+
     /** @copydoc WorldPartitionRegistrySnapshot::Grid */
     const WorldCellQuantizationPolicy *WorldPartitionRegistrySnapshot::Grid() const noexcept {
         return state_ ? &state_->descriptor.Grid() : nullptr;

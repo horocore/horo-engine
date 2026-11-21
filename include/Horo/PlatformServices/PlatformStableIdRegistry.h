@@ -17,6 +17,8 @@
 
 namespace Horo::PlatformServices {
     inline constexpr std::uint32_t PlatformStableIdRegistrySchemaVersion = 1;
+    /** @brief Hard byte limit shared by canonical ledger encoding and untrusted document loading. */
+    inline constexpr std::size_t PlatformStableIdRegistryMaximumDocumentBytes = 4U * 1024U * 1024U;
 
     /** @brief Disjoint authoring identity kinds covered by registry schema version 1. */
     enum class PlatformServiceIdKind : std::uint8_t {
@@ -94,6 +96,8 @@ namespace Horo::PlatformServices {
         extern const ErrorCodeDescriptor Tombstoned;
         extern const ErrorCodeDescriptor UnknownIdentity;
         extern const ErrorCodeDescriptor InvalidProviderMapping;
+        extern const ErrorCodeDescriptor StaleReplacement;
+        extern const ErrorCodeDescriptor InvalidTransition;
     }  // namespace StableIdErrors
 
     /** @brief Immutable sorted registry generation safe to retain across request lifetimes. */
@@ -103,6 +107,13 @@ namespace Horo::PlatformServices {
         [[nodiscard]] std::string_view ProjectId() const noexcept;
         /** @brief Returns canonical ledger fingerprint. @return Borrowed SHA-256 digest. */
         [[nodiscard]] const Sha256Digest &Fingerprint() const noexcept;
+        /** @brief Returns the complete canonical ledger bytes used by the fingerprint.
+         * @return Bounded two-space-indented UTF-8 JSON with one final newline, or invalid-ledger failure for an uninitialized snapshot.
+         * @details Field order is schemaVersion, projectId, algorithm, entries; entries retain kind/ID order and aliases retain ASCII
+         * order. Salt remains solely in root project metadata. Fingerprints use the v2 domain, one zero byte and these exact document
+         * bytes.
+         */
+        [[nodiscard]] Result<std::string> CanonicalDocument() const;
         /** @brief Returns sorted immutable declarations. @return Borrowed complete entry span. */
         [[nodiscard]] std::span<const PlatformStableIdDeclaration> Entries() const noexcept;
         /** @brief Resolves an active primary key or direct alias. @param kind Expected typed kind. @param key Canonical key bytes. @return
@@ -122,7 +133,11 @@ namespace Horo::PlatformServices {
 
     private:
         friend Result<PlatformStableIdRegistry> BuildPlatformStableIdRegistry(const PlatformStableIdRegistryCandidate &);
+        friend Result<PlatformStableIdRegistry> BuildPlatformStableIdRegistryReplacement(const PlatformStableIdRegistry &,
+                                                                                         const Sha256Digest &,
+                                                                                         const PlatformStableIdRegistryCandidate &);
         std::string projectId_;
+        PlatformServicesIdSalt salt_; /**< Captured root authority used only to fence ordinary replacements. */
         std::vector<PlatformStableIdDeclaration> entries_;
         Sha256Digest fingerprint_{};
     };
@@ -135,6 +150,18 @@ namespace Horo::PlatformServices {
     /** @brief Builds and validates one immutable registry. @param candidate Detached complete ledger candidate. @return Sorted registry or
      * typed fail-closed diagnostic. */
     [[nodiscard]] Result<PlatformStableIdRegistry> BuildPlatformStableIdRegistry(const PlatformStableIdRegistryCandidate &candidate);
+    /**
+     * @brief Validates an ordinary ledger edit against its captured immutable generation.
+     * @param previous Current registry at the host's serialized publication boundary.
+     * @param baseFingerprint Exact generation captured when the edit began.
+     * @param candidate Complete detached ledger using the unchanged root project identity and salt.
+     * @return Compatible replacement or typed failure, leaving previous untouched.
+     * @details Every prior primary, alias and tombstone must survive. Active entries may become tombstones;
+     * restoration, salt regeneration and identity forks require a separate explicit migration operation.
+     * The host must serialize this check with publication and durable persistence; validation alone does not write files.
+     */
+    [[nodiscard]] Result<PlatformStableIdRegistry> BuildPlatformStableIdRegistryReplacement(
+        const PlatformStableIdRegistry &previous, const Sha256Digest &baseFingerprint, const PlatformStableIdRegistryCandidate &candidate);
     /** @brief Validates provider mapping evidence against one registry generation. @param registry Captured registry. @param provider
      * Selected Horo provider. @param policy Required-kind policy. @param mappings Bounded opaque mapping evidence. @return Success or typed
      * stale/unknown/tombstoned/duplicate failure. */

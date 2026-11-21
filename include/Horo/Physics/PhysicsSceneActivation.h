@@ -96,6 +96,7 @@ namespace Horo::Physics {
         Runtime::SceneObjectId object;
         Runtime::PhysicsComponentId component;
         Character::CharacterControllerHandle handle;
+        Runtime::EntityRef owner; /**< Exact entity generation used to create the controller. */
     };
 
     /**

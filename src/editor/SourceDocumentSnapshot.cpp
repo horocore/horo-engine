@@ -14,6 +14,11 @@ namespace Horo::Editor {
         return root_ == other.root_;
     }
 
+    /** @copydoc SourceDocumentSnapshot::IsCurrent */
+    bool SourceDocumentSnapshot::IsCurrent() const noexcept {
+        return root_ && root_->currentRevision->load() == root_->revision;
+    }
+
     /** @copydoc SourceDocumentSnapshot::Revision */
     std::uint64_t SourceDocumentSnapshot::Revision() const noexcept {
         return root_ ? root_->revision : 0;
@@ -27,6 +32,13 @@ namespace Horo::Editor {
     /** @copydoc SourceDocumentSnapshot::Text */
     std::string_view SourceDocumentSnapshot::Text() const noexcept {
         return root_ ? root_->text->bytes : std::string_view{};
+    }
+
+    /** @copydoc SourceDocumentSnapshot::TextLease */
+    std::shared_ptr<const std::string> SourceDocumentSnapshot::TextLease() const noexcept {
+        if (!root_)
+            return {};
+        return {root_->text, &root_->text->bytes};
     }
 
     /** @copydoc SourceDocumentSnapshot::DiskBase */

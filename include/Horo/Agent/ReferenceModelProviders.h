@@ -18,6 +18,12 @@ namespace Horo::Agent {
      */
     [[nodiscard]] std::unique_ptr<IModelProvider> CreateOllamaModelProvider(ModelProviderConfig config);
 
+    /** @brief Checks whether an exact installed Ollama model reports tool support before chat dispatch.
+     * @param config Local endpoint and time limit. @param model Exact installed model identifier.
+     * @param cancellation Worker cancellation. @return Success only when the local endpoint confirms tool support. */
+    [[nodiscard]] ModelOutcome ConfirmOllamaModelTools(const ModelProviderConfig &config, std::string_view model,
+                                                       std::stop_token cancellation);
+
     /**
      * @brief Construct the real OpenAI-compatible HTTP adapter.
      * @param config Cloud HTTPS endpoint, opaque credential reference, and timeout.

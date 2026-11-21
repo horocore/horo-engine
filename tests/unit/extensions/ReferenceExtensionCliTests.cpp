@@ -1,3 +1,4 @@
+#include "CliOutputContractFixture.h"
 #include "ExtensionScriptCliInternal.h"
 #include "Horo/Extensions/ExtensionManifest.h"
 #include "Horo/Platform/ExternalProcess.h"
@@ -137,12 +138,16 @@ namespace Horo::Extensions::Tests {
                                              .timeout = std::chrono::seconds{30},
                                              .onOutput =
                                                  [&output](ProcessOutputLine line) {
-                    output += line.text;
-                    output += '\n';
+                    if (line.stream == ProcessOutputStream::StandardOutput) {
+                        output += line.text;
+                        output += '\n';
+                    }
                 },
                                              .maximumOutputBytes = 65536},
                                             {});
                 REQUIRE(result.HasValue());
+                if (result.Value().reason == ProcessTerminationReason::Exited && result.Value().exitCode == 0)
+                    Horo::Tests::CliContract::ValidateEnvelope(nlohmann::json::parse(output));
                 return result.Value();
             }
         };

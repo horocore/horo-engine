@@ -4,6 +4,42 @@
 
 namespace Horo::AI {
     namespace {
+        TEST_CASE("Blackboard schema wire round-trips exact typed defaults and rejects invalid framing", "[unit][ai][codec]") {
+            using DecisionGraphTestSupport::MakeIdentity;
+            BlackboardCollectionValue scores{.elementKind = BlackboardValueKind::SignedInteger, .count = 2};
+            scores.elements[0] = std::int64_t{-17};
+            scores.elements[1] = std::int64_t{91};
+            const std::array keys{BlackboardKeyDescriptor{.key = MakeIdentity<BlackboardKeyId>(7),
+                                                          .kind = BlackboardValueKind::SignedInteger,
+                                                          .cardinality = BlackboardValueCardinality::Collection,
+                                                          .maximumCollectionElements = 3,
+                                                          .access = BlackboardKeyAccess::ReadOnly,
+                                                          .defaultValue = BlackboardValue{scores}},
+                                  BlackboardKeyDescriptor{.key = MakeIdentity<BlackboardKeyId>(3),
+                                                          .kind = BlackboardValueKind::WorldCoordinate,
+                                                          .defaultValue = BlackboardValue{BlackboardScalarValue{
+                                                              Math::WorldCoordinate64::FromMillimeters(-1, 2, 49)}}},
+                                  BlackboardKeyDescriptor{.key = MakeIdentity<BlackboardKeyId>(6),
+                                                          .presence = BlackboardKeyPresence::Optional}};
+            auto schema =
+                BlackboardSchema::Capture({MakeIdentity<BlackboardSchemaId>(501), 9, BlackboardUnknownValuePolicy::PreserveOpaque, keys});
+            REQUIRE(schema.HasValue());
+            const auto encoded = BlackboardSchemaCodec::Encode(schema.Value());
+            REQUIRE(encoded.HasValue());
+            const auto decoded = BlackboardSchemaCodec::Decode(encoded.Value());
+            REQUIRE(decoded.HasValue());
+            CHECK(decoded.Value().Identity() == schema.Value().Identity());
+            CHECK(decoded.Value().Version() == 9);
+            CHECK(decoded.Value().UnknownValuePolicy() == BlackboardUnknownValuePolicy::PreserveOpaque);
+            CHECK(std::ranges::equal(decoded.Value().Keys(), schema.Value().Keys()));
+            CHECK(BlackboardSchemaCodec::Encode(decoded.Value()).Value() == encoded.Value());
+            for (std::size_t n = 0; n < encoded.Value().size(); ++n)
+                CHECK(BlackboardSchemaCodec::Decode(std::span{encoded.Value()}.first(n)).HasError());
+            auto extra = encoded.Value();
+            extra.push_back(0);
+            CHECK(BlackboardSchemaCodec::Decode(extra).HasError());
+        }
+
         using namespace DecisionGraphTestSupport;
 
         TEST_CASE("Decision source and cooked codecs canonicalize actual graph order and reproduce executable identity",
@@ -62,6 +98,84 @@ namespace Horo::AI {
             auto preserved = DecisionPlanCodec::EncodeSource(decoded.Value(), root);
             REQUIRE(preserved.HasValue());
             CHECK(preserved.Value() == encoded.Value());
+        }
+
+        TEST_CASE("Decision source preserves typed EQS output through cook and requires a writable declaration", "[ai][decision-codec]") {
+            Fixture fixture;
+            const auto key = MakeIdentity<BlackboardKeyId>(4);
+            const BehaviorTreeQueryOutput output{MakeIdentity<QueryId>(20),
+                                                 MakeIdentity<QueryResultSchemaId>(21),
+                                                 2,
+                                                 MakeIdentity<QueryItemTypeId>(23),
+                                                 key,
+                                                 90};
+            const BehaviorTreeProperty property{MakeIdentity<BehaviorTreePropertyId>(9), "Query output",
+                                                BehaviorTreePropertyKind::QueryOutput, output};
+            auto task = TreeNode(2, DecisionControlKind::Task);
+            task.properties.push_back(property);
+            bool writable{};
+            bool explicitlyAuthored{true};
+            const auto addWritable = [&] {
+                task.requirements.push_back({.key = key,
+                                             .kind = BlackboardValueKind::WorldCoordinate,
+                                             .access = BlackboardKeyAccess::ReadWrite,
+                                             .source = Location()});
+            };
+            SECTION("the task declares its writable output") {
+                writable = true;
+                addWritable();
+            }
+            SECTION("the task cannot assume an undeclared output") {
+                CHECK(task.requirements.empty());
+            }
+            SECTION("a registered default cannot stand in for the authored binding") {
+                writable = true;
+                explicitlyAuthored = false;
+                task.properties.clear();
+                addWritable();
+            }
+            const auto graph = Tree(1, {TreeNode(1, DecisionControlKind::Root), task}, {Edge(1, 1, 2)});
+            const auto encoded = DecisionPlanCodec::EncodeSource(std::span{&graph, 1}, Graph(1));
+            REQUIRE(encoded.HasValue());
+            DecisionGraphAssetId root;
+            const auto decoded = DecisionPlanCodec::DecodeSource(encoded.Value(), root);
+            REQUIRE(decoded.HasValue());
+            CHECK(DecisionPlanCodec::EncodeSource(decoded.Value(), root).Value() == encoded.Value());
+            const auto &tree = *std::get<std::shared_ptr<const BehaviorTreeAsset>>(decoded.Value().front().body);
+            CHECK(tree.Nodes().back().properties == task.properties);
+
+            auto registration = Registration(fixture.probe);
+            registration.contract.properties.push_back(property);
+            const auto generation = DecisionNodeGeneration::Capture(std::span{&registration, 1}, fixture.admission);
+            REQUIRE(generation.HasValue());
+            const std::array keys{BlackboardKeyDescriptor{.key = key,
+                                                          .kind = BlackboardValueKind::WorldCoordinate,
+                                                          .presence = BlackboardKeyPresence::Optional}};
+            auto schema = BlackboardSchema::Capture({.identity = SchemaId(), .keys = keys});
+            REQUIRE(schema.HasValue());
+            const DecisionCompilationEnvironment environment{generation.Value(),
+                                                             {std::make_shared<const BlackboardSchema>(std::move(schema).Value())}};
+            const auto compiled = DecisionGraphCompiler::Compile(root, decoded.Value(), environment);
+            REQUIRE(compiled.HasValue());
+            if (writable && explicitlyAuthored) {
+                const auto plan = compiled.Value().plan;
+                REQUIRE(plan);
+                const auto graphs = plan->Graphs();
+                REQUIRE(graphs.size() == 1);
+                const auto &configuration = graphs.front().providerProperties;
+                REQUIRE(configuration.size() == 1);
+                CHECK(configuration.front().properties == std::vector{property});
+                auto cooked = DecisionPlanCodec::EncodeCooked(*plan);
+                REQUIRE(cooked.HasValue());
+                const auto reopened = DecisionPlanCodec::DecodeCooked(cooked.Value(), environment);
+                REQUIRE(reopened.HasValue());
+                REQUIRE(reopened.Value().plan);
+                CHECK(reopened.Value().plan->Digest() == plan->Digest());
+            } else {
+                CHECK_FALSE(compiled.Value().plan);
+                CHECK(compiled.Value().validation.HasErrors());
+            }
+            CHECK(fixture.probe.factories == 0);
         }
 
         TEST_CASE("Decision source transport rejects malformed typed property values without altering authored input",

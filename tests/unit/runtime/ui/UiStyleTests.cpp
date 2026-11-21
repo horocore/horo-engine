@@ -370,6 +370,36 @@ namespace Horo::Runtime::Ui {
             REQUIRE(snapshot.Descriptor().publication == Rev<UiStylePublicationRevision>(1));
         }
 
+        TEST_CASE("Style rejection locates only exact resident authored overrides", "[runtime_ui][style][failure]") {
+            auto tree = MakeTree();
+            const auto root = tree.Root().Value().handle;
+            const auto child = tree.Find(Stable<UiElementId>(2)).Value();
+            auto created = RuntimeStyleRegistry::Create(Definition(), Rev<RuntimeStyleGeneration>(1));
+            REQUIRE(created.HasValue());
+            auto registry = std::move(created).Value();
+            auto resolver = MakeResolver();
+            std::array elements{UiStyleElementInput{.element = root}, UiStyleElementInput{.element = child}};
+            UiStyleFailureLocation failure;
+            const auto accepted = resolver.Update(tree, registry, {Sources(), elements, &failure});
+            REQUIRE(accepted.HasValue());
+            const auto before = accepted.Value().Descriptor().publication;
+            const std::array incompatible{Assignment(Property(1), UiStyleValue{UiStyleScalar{1}})};
+            elements[1].inlineProperties = incompatible;
+            REQUIRE(resolver.Update(tree, registry, {Sources(), elements, &failure}).HasError());
+            CHECK(failure.element == child);
+            CHECK(failure.inlineProperty == Property(1));
+
+            elements[1].element = {};
+            REQUIRE(resolver.Update(tree, registry, {Sources(), elements, &failure}).HasError());
+            CHECK_FALSE(failure.element.IsValid());
+            CHECK_FALSE(failure.inlineProperty.IsValid());
+
+            elements[1] = {.element = child};
+            const auto unchanged = resolver.Update(tree, registry, {Sources(), elements, &failure});
+            REQUIRE(unchanged.HasValue());
+            CHECK(unchanged.Value().Descriptor().publication == before);
+        }
+
         TEST_CASE("Prepared styles reserve scratch and abandon without exposing target values", "[runtime_ui][style][prepare]") {
             auto tree = MakeTree();
             const auto root = tree.Root().Value().handle;

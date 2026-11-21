@@ -1,3 +1,5 @@
+#include "Horo/Runtime/Scene/SceneCellPayloadCodec.h"
+#include "Horo/WorldStreaming/StreamingCellInspection.h"
 #include "WorldBakeApplicationTestSupport.h"
 #include "assets/AssetCookOutputFixture.h"
 
@@ -79,6 +81,26 @@ namespace Horo::Application {
         auto repeated = CookWorldPages(request);
         REQUIRE(repeated.HasValue());
         CHECK(repeated.Value().artifacts.front().bytes == output.artifacts.front().bytes);
+    }
+
+    TEST_CASE("World bake carries authored global authority only on its page-derived cooked object", "[world_bake][world_anchor]") {
+        namespace W = WorldStreaming;
+        namespace S = Runtime;
+        Editor::PartitionedWorldWorkspace workspace{T::Asset(9)};
+        const W::WorldObjectAnchor anchor{Math::WorldCoordinate64::FromMillimeters(9'007'199'254'740'993, -41, 7), {}};
+        const auto request = Request(workspace, {}, {}, anchor);
+        const auto cooked = CookWorldPages(request);
+        REQUIRE(cooked.HasValue());
+        REQUIRE(cooked.Value().cells.size() == 1);
+        const auto &cell = *cooked.Value().cells.front();
+        REQUIRE(cell.Definition().Entities().size() == 2);
+        REQUIRE(cell.WorldAnchors().size() == 1);
+        CHECK(cell.WorldAnchors().front().object == cell.Definition().Entities().front().object);
+        CHECK(cell.WorldAnchors().front().positionMillimeters == anchor.position.Millimeters());
+        const auto &artifact = cooked.Value().artifacts.front();
+        const auto inspected = W::InspectStreamingCellArtifact(artifact.bytes, artifact.integrity.artifactHash, {1, 65536, 65536});
+        REQUIRE(inspected.HasValue());
+        CHECK(inspected.Value().Header().payloads.front().version == S::SceneCellWorldAnchorsCodecVersion);
     }
 
     TEST_CASE("World bake consumes actual selected committed resource bytes and rejects generation drift", "[world_bake][native]") {

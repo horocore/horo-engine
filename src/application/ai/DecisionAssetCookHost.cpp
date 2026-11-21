@@ -51,6 +51,7 @@ namespace Horo::Application {
             state->limits = request.limits;
             state->target = request.assets.target;
             state->maximumPreparedBytes = request.maximumPreparedBytes;
+            state->querySchema = request.querySchema;
             if (auto capture = DecisionCookDetail::Capture(*state, request.assets.registry, cancellation); capture.HasError())
                 return Result<std::shared_ptr<const DecisionCookDetail::State>>::Failure(capture.ErrorValue());
             if (auto prepared = DecisionCookDetail::PrepareRoots(*state, cancellation); prepared.HasError())

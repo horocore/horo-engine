@@ -24,6 +24,21 @@ namespace Horo::Editor::Tests {
         CHECK_FALSE(created.Value());
     }
 
+    TEST_CASE("XR world canvas invocation requires a signed host and one positive pixel count", "[xr][host][bootstrap][canvas]") {
+        for (const auto *value : {"", "0", "65536", "48px", "-1"}) {
+            const auto invalid = Bootstrap({"HoroEditor", std::string{"--xr-host-world-canvas-minimum-span-pixels="} + value});
+            REQUIRE(invalid.HasError());
+            CHECK(invalid.ErrorValue().message == "XR world canvas span requires one integer from 1 to 65535.");
+        }
+        const auto withoutHost = Bootstrap({"HoroEditor", "--xr-host-world-canvas-minimum-span-pixels=48"});
+        REQUIRE(withoutHost.HasError());
+        CHECK(withoutHost.ErrorValue().message == "XR world canvas policy requires an explicit signed XR host.");
+        const auto duplicate =
+            Bootstrap({"HoroEditor", "--xr-host-world-canvas-minimum-span-pixels=48", "--xr-host-world-canvas-minimum-span-pixels=96"});
+        REQUIRE(duplicate.HasError());
+        CHECK(duplicate.ErrorValue().message == "XR world canvas span requires one integer from 1 to 65535.");
+    }
+
     TEST_CASE("Explicit executable XR bootstrap rejects incomplete ambiguous and unapproved inputs before installation",
               "[xr][host][bootstrap]") {
         SECTION("partial host selection") {

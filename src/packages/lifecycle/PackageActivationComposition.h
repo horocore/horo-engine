@@ -69,6 +69,8 @@ namespace Horo::Packages::Detail {
                                                   std::map<std::filesystem::path, Sha256Digest> &artifacts);
         [[nodiscard]] Result<void> Materialize(const PackageActivationCandidate &candidate, const std::filesystem::path &root,
                                                const CancellationToken &cancellation) const;
+        // Publication can be revoked before the native manager finishes retiring this exact install.
+        std::shared_ptr<const VerifiedPackageInstallRecord> install_;
         std::filesystem::path root_;
         std::shared_ptr<PackageActivationSnapshot> snapshot_{std::make_shared<PackageActivationSnapshot>()};
         std::unique_ptr<Assets::AssetImporterCatalog> catalog_{std::make_unique<Assets::AssetImporterCatalog>()};

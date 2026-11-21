@@ -6,6 +6,7 @@
 #include "editor/document/SceneDocumentPersistence.h"
 #include "editor/modals/source_document/SourceDocumentCloseModal.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
+#include "editor/screens/workspace/EditorWorkspaceScreen.h"
 #include "editor/screens/workspace/GameplayBehaviorRequestValidation.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 
@@ -319,6 +320,185 @@ namespace {
         std::ifstream disk(directory.Path() / "code.cpp");
         CHECK((std::string{std::istreambuf_iterator<char>{disk}, {}} == (decision == SourceCloseDecision::Save ? "edited" : "base")));
         CHECK(edited.Value().Text() == "edited");
+    }
+
+    TEST_CASE("Workspace canvas tabs share the revision-fenced close modal and recover after shutdown",
+              "[unit][editor][gui][ui_canvas][recovery]") {
+        using namespace Runtime::Ui;
+        const Horo::Tests::OwnedTestDirectory project{"workspace-canvas-recovery"};
+        NativeDurableFileSystem files;
+        ProjectMutationCoordinator mutations(files);
+        ProjectMutationCoordinator otherMutations(files);
+        JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 16, .ioWorkerCount = 1}};
+        Editor::Tests::EditorGuiContextFixture gui;
+        const auto path = project.Path() / "Hud.uicanvas";
+        const auto owner = Assets::AssetId::Parse("12345678-1234-4234-8234-123456789abc").Value();
+        const auto nextOwner = Assets::AssetId::Parse("12345678-1234-4234-8234-123456789def").Value();
+        SerializedUiId bytes{};
+        bytes.back() = 1;
+        const auto documentId = UiDocumentId::Create(bytes).Value();
+        bytes.back() = 2;
+        const auto canvasId = UiCanvasId::Create(bytes).Value();
+        bytes.back() = 3;
+        const auto rootId = UiElementId::Create(bytes).Value();
+        const auto build = [&](std::uint64_t revision) {
+            UiDocumentBuilder canvas(documentId, UiDocumentRevision::Create(revision).Value());
+            REQUIRE(canvas.AddCanvas({.id = canvasId, .rootElement = rootId, .referenceResolution = {.width = 1920, .height = 1080}})
+                        .HasValue());
+            auto document = std::move(canvas).Build();
+            REQUIRE(document.HasValue());
+            return std::move(document).Value();
+        };
+        REQUIRE(SaveUiCanvasDocument(project.Path(), path, {.document = build(1), .state = {1}}, {}, false, mutations, files).HasValue());
+
+        Runtime::RuntimeSceneService runtime;
+        REQUIRE(runtime.Startup({}).HasValue());
+        EditorWorkspaceController controller{project.Path(),
+                                             runtime,
+                                             {},
+                                             {.world = {.documentSessionOwner = owner},
+                                              .mutations = &mutations,
+                                              .durableFiles = &files,
+                                              .jobs = &jobs}};
+        EditorWorkspaceViewCommandData open;
+        open.command = EditorWorkspaceViewCommand::OpenSourceFile;
+        open.sourceOpenRequest = SourceOpenRequest{.path = "Hud.uicanvas"};
+        controller.ProcessCommand(open);
+        REQUIRE(controller.ViewModel().uiCanvasDocuments.size() == 1);
+        auto source = controller.ViewModel().uiCanvasDocuments.front();
+        const auto firstState = source.state;
+        EditorWorkspaceViewCommandData edit;
+        edit.command = EditorWorkspaceViewCommand::UiCanvasCreate;
+        edit.documentInstance = source.identity.instance;
+        edit.uiCanvasState = source.state;
+        edit.uiCanvasElement = source.root;
+        controller.ProcessCommand(edit);
+        source = controller.ViewModel().uiCanvasDocuments.front();
+        REQUIRE(source.dirty);
+        REQUIRE(source.canUndo);
+        CHECK(source.state != firstState);
+
+        const auto child = std::ranges::find_if(source.rows, [&](const auto &row) {
+            return row.parent == source.root;
+        });
+        REQUIRE(child != source.rows.end());
+        EditorWorkspaceViewCommandData select;
+        select.command = EditorWorkspaceViewCommand::UiCanvasSelect;
+        select.documentInstance = source.identity.instance;
+        select.uiCanvasState = source.state;
+        select.uiCanvasElement = child->element;
+        controller.ProcessCommand(select);
+        const auto &inspection = controller.ViewModel().uiCanvasDocuments.front().preview.selectedLayout;
+        REQUIRE(inspection);
+        CHECK(inspection->element == child->element);
+
+        EditorWorkspaceViewCommandData close;
+        close.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument;
+        close.documentInstance = source.identity.instance;
+        WorkspaceScreenDetail::WorkspaceSourceDocumentCommands routes;
+        routes.BeginSession();
+        REQUIRE(routes.HandleMenuAction(&controller, EditorMenuAction::Undo));
+        const auto &undone = controller.ViewModel().uiCanvasDocuments.front();
+        CHECK_FALSE(undone.dirty);
+        CHECK_FALSE(undone.preview.selectedLayout);
+        REQUIRE(routes.HandleMenuAction(&controller, EditorMenuAction::Redo));
+        source = controller.ViewModel().uiCanvasDocuments.front();
+        REQUIRE(source.dirty);
+        EditorModalHost host{gui.editorEvents, gui.input};
+        CHECK(routes.OpenCloseModal(controller, close, host, gui.context));
+        host.OnUpdate(1.0F / 60.0F);
+        CHECK(host.HasOpenModal());
+        controller.ProcessCommand(close);
+        REQUIRE(controller.ViewModel().uiCanvasDocuments.size() == 1);
+        CHECK(controller.ViewModel().uiCanvasDocuments.front().dirty);
+
+        auto lifetime = std::make_shared<int>(0);
+        SourceDocumentCloseModal stale{gui.context, controller, lifetime, firstState, "Hud.uicanvas"};
+        CHECK(stale.Resolve(SourceCloseDecision::Discard).HasError());
+        SourceDocumentCloseModal choice{gui.context, controller, lifetime, source.state, "Hud.uicanvas"};
+        CHECK(choice.Resolve(SourceCloseDecision::Cancel).Value());
+        SECTION("external source changes keep dirty state open until explicit discard") {
+            const auto external =
+                SaveUiCanvasDocument(project.Path(), path, {.document = build(9), .state = {1}}, {}, true, otherMutations, files);
+            REQUIRE(external.HasValue());
+            CHECK(choice.Resolve(SourceCloseDecision::Save).HasError());
+            CHECK(controller.ViewModel().uiCanvasDocuments.front().dirty);
+            CHECK(choice.Resolve(SourceCloseDecision::Discard).Value());
+            CHECK(controller.ViewModel().uiCanvasDocuments.empty());
+            CHECK(LoadUiCanvasDocument(path).Value().document.Revision().Value() == 9);
+        }
+        SECTION("timed recovery uses the I/O worker and shutdown leaves a recoverable draft") {
+            auto gate = std::make_shared<std::atomic_bool>(false);
+
+            struct Unblock final {
+                std::shared_ptr<std::atomic_bool> gate;
+
+                ~Unblock() {
+                    gate->store(true);
+                }
+            } unblock{gate};
+
+            const auto occupied = jobs.SubmitResult({.resource = JobResource::Io}, [gate](const CancellationToken &cancellation) {
+                while (!gate->load() && !cancellation.IsCancellationRequested())
+                    std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                return Result<void>::Success();
+            });
+            REQUIRE(occupied.HasValue());
+            const auto startDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            while (occupied.Value().Snapshot()->state != JobState::Running && std::chrono::steady_clock::now() < startDeadline)
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            REQUIRE(occupied.Value().Snapshot()->state == JobState::Running);
+            controller.UpdateAutosave(60, 1);
+            DocumentRecoveryService storage(project.Path(), mutations, files);
+            const auto pending = storage.Inspect(Assets::AssetId::FromBytes(documentId.Bytes()), source.identity.key);
+            REQUIRE(pending.HasValue());
+            CHECK_FALSE(pending.Value());
+            CHECK(jobs.AdmissionSnapshot().queued[static_cast<std::size_t>(JobPriority::Background)] == 1);
+            SECTION("explicit save cancels accepted work before canonical publication") {
+                REQUIRE(controller.SaveSourceDocuments().HasValue());
+                CHECK_FALSE(controller.HasDirtySourceDocuments());
+                CHECK(jobs.AdmissionSnapshot().queued[static_cast<std::size_t>(JobPriority::Background)] == 0);
+                CHECK_FALSE(storage.Inspect(Assets::AssetId::FromBytes(documentId.Bytes()), source.identity.key).Value());
+                CHECK(LoadUiCanvasDocument(path).Value().document.Revision() == source.documentRevision);
+            }
+            SECTION("completed recovery restores in a newly opened workspace") {
+                gate->store(true);
+
+                const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+                bool durable{};
+                while (!durable && std::chrono::steady_clock::now() < deadline) {
+                    controller.UpdateAutosave(0, 1);
+                    const auto checkpoint = storage.Inspect(Assets::AssetId::FromBytes(documentId.Bytes()), source.identity.key);
+                    durable = checkpoint.HasValue() && checkpoint.Value().has_value();
+                    if (!durable)
+                        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                }
+                REQUIRE(durable);
+                REQUIRE(controller.ShutdownUiCanvasDocuments().HasValue());
+                CHECK(controller.ViewModel().uiCanvasDocuments.empty());
+                CHECK(LoadUiCanvasDocument(path).Value().document.Revision().Value() == 1);
+                EditorWorkspaceController reopened{project.Path(),
+                                                   runtime,
+                                                   {},
+                                                   {.world = {.documentSessionOwner = nextOwner},
+                                                    .mutations = &mutations,
+                                                    .durableFiles = &files}};
+                reopened.ProcessCommand(open);
+                const auto &canvas = reopened.ViewModel().uiCanvasDocuments.front();
+                REQUIRE(canvas.recovery);
+                EditorWorkspaceViewCommandData restore;
+                restore.command = EditorWorkspaceViewCommand::UiCanvasRecover;
+                restore.documentInstance = canvas.identity.instance;
+                restore.uiCanvasState = canvas.state;
+                restore.uiCanvasRecovery = canvas.recovery;
+                reopened.ProcessCommand(restore);
+                REQUIRE(reopened.ViewModel().uiCanvasDocuments.front().dirty);
+                CHECK(reopened.ViewModel().uiCanvasDocuments.front().documentRevision == source.documentRevision);
+                REQUIRE(reopened.SaveSourceDocuments().HasValue());
+                CHECK_FALSE(reopened.HasDirtySourceDocuments());
+                CHECK(LoadUiCanvasDocument(path).Value().document.Revision() == source.documentRevision);
+            }
+        }
     }
 
     TEST_CASE("Source close modal retains stale conflicted and expired documents and renders recovery",

@@ -6,6 +6,8 @@
 
 static_assert(std::is_final_v<Horo::Prefab::PrefabRestoreEntities>);
 static_assert(std::is_copy_constructible_v<Horo::Prefab::PrefabPersistentState>);
+static_assert(
+    std::is_same_v<decltype(Horo::Prefab::PrefabPersistentLookup::provenance), std::vector<Horo::Prefab::CookedPrefabProvenance>>);
 static_assert(!std::is_copy_constructible_v<Horo::Runtime::SceneRestoreCandidateCommands>);
 
 int main() {

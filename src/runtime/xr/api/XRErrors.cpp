@@ -88,6 +88,15 @@ namespace Horo::XR::XRErrors {
         .retryable = false,
         .userActionable = true,
     };
+    const ErrorCodeDescriptor PermissionDenied{
+        .domain = XRDomain,
+        .code = ErrorCode{"xr.permission.denied"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "The XR runtime or platform denied a required permission.",
+        .remediationHint = "Review your XR runtime and operating system privacy permissions before retrying.",
+        .retryable = true,
+        .userActionable = true,
+    };
     const ErrorCodeDescriptor CapacityExceeded{
         .domain = XRDomain,
         .code = ErrorCode{"xr.operation.capacity_exceeded"},
@@ -159,6 +168,15 @@ namespace Horo::XR::XRErrors {
         .remediationHint = "Acquire the current immutable tracking snapshot before querying device pose evidence.",
         .retryable = true,
         .userActionable = false,
+    };
+    const ErrorCodeDescriptor ActionProfileChanged{
+        .domain = XRDomain,
+        .code = ErrorCode{"xr.action_profile.changed"},
+        .defaultSeverity = ErrorSeverity::Warning,
+        .summary = "The admitted XR interaction profile was lost or replaced.",
+        .remediationHint = "Start a new XR Play session to prepare the current interaction profile.",
+        .retryable = true,
+        .userActionable = true,
     };
     const ErrorCodeDescriptor ViewPlanInvalid{
         .domain = XRDomain,
@@ -300,6 +318,7 @@ namespace Horo::XR::XRErrors {
             &OperationUnsupported,
             &OperationUnavailable,
             &OperationIncompatible,
+            &PermissionDenied,
             &CapacityExceeded,
             &OperationInvalid,
             &CoordinateSpaceIncompatible,
@@ -308,6 +327,7 @@ namespace Horo::XR::XRErrors {
             &OriginRevisionStale,
             &TrackingSnapshotInvalid,
             &TrackingSnapshotStale,
+            &ActionProfileChanged,
             &ViewPlanInvalid,
             &ViewConfigurationStale,
             &ExternalTargetInvalid,

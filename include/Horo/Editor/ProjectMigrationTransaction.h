@@ -95,13 +95,22 @@ namespace Horo::Editor {
          * @param mutations Shared project mutation coordinator.
          * @param jobs Scheduler consumed by migration preparation.
          * @param storagePolicy Conservative admission and cleanup bounds.
+         * @param executionServices Host-selected preparation capabilities retained by this service and each synchronous execution.
          */
         ProjectMigrationTransactionService(DurableFileSystem &files, WallClock &wallClock, ProjectMutationCoordinator &mutations,
-                                           JobSystem &jobs, const ProjectMigrationStoragePolicy &storagePolicy = {}) noexcept;
+                                           JobSystem &jobs, const ProjectMigrationStoragePolicy &storagePolicy = {},
+                                           Application::ProjectMigrationExecutionServices executionServices = {}) noexcept;
 
         /** @brief Prepares, validates, and durably publishes one migration. @param request Transaction request. @return
          * Commit result or typed failure. */
         [[nodiscard]] Result<ProjectMigrationTransactionResult> Execute(const ProjectMigrationTransactionRequest &request);
+        /**
+         * @brief Verifies the transaction's complete target candidate in disposable staging.
+         * @param request The selected production plan and its source and target identities.
+         * @return Bounded changed-file evidence or a typed preparation or final validation error.
+         * @details Checks compatibility, recovery and source freshness without acquiring a project mutation lease or writing a journal.
+         */
+        [[nodiscard]] Result<Application::ProjectMigrationDryRunResult> Verify(const ProjectMigrationTransactionRequest &request) const;
         /** @brief Computes typed read-only storage admission components. @param request Proposed migration.
          * @return Conservative components or inventory/capacity query failure. */
         [[nodiscard]] Result<ProjectMigrationStorageAdmission> InspectStorageAdmission(
@@ -123,5 +132,6 @@ namespace Horo::Editor {
         ProjectMutationCoordinator &mutations_;
         JobSystem &jobs_;
         ProjectMigrationStoragePolicy storagePolicy_;
+        Application::ProjectMigrationExecutionServices executionServices_;
     };
 }  // namespace Horo::Editor

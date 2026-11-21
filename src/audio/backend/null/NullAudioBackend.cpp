@@ -95,8 +95,8 @@ namespace Horo::Audio::Backend {
     }
 
     Result<void> NullAudioBackend::ValidateQuiesceRequest(const Quiesce &request) const {
-        return state_ == NullAudioBackendState::Rendering && request.epoch == epoch_ ? Result<void>::Success()
-                                                                                     : Failure(AudioErrors::RuntimeInactive);
+        const bool attached = state_ == NullAudioBackendState::Priming || state_ == NullAudioBackendState::Rendering;
+        return attached && request.epoch == epoch_ ? Result<void>::Success() : Failure(AudioErrors::RuntimeInactive);
     }
 
     Result<void> NullAudioBackend::ValidateStopRequest(const Stop &request) const {
@@ -393,7 +393,7 @@ namespace Horo::Audio::Backend {
             return Failure(AudioErrors::RuntimeInactive);
         if (eventCount_ >= MaximumInjectedEvents)
             return Failure(AudioErrors::HandleCapacityExhausted);
-        if (const auto result = PushEvent({config_.owner, DeviceLost{device_, cause}}); result.HasError())
+        if (const auto result = PushEvent({config_.owner, DeviceLost{epoch_, cause}}); result.HasError())
             return result;
         return Result<void>::Success();
     }
@@ -404,7 +404,7 @@ namespace Horo::Audio::Backend {
             return Failure(AudioErrors::RuntimeInactive);
         if (eventCount_ >= MaximumInjectedEvents)
             return Failure(AudioErrors::HandleCapacityExhausted);
-        if (const auto result = PushEvent({config_.owner, DeviceInterruption{device_, state}}); result.HasError())
+        if (const auto result = PushEvent({config_.owner, DeviceInterruption{epoch_, state}}); result.HasError())
             return result;
         return Result<void>::Success();
     }

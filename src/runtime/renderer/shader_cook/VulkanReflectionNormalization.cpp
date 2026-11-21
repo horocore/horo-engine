@@ -1,4 +1,8 @@
+#include "Horo/Runtime/Render/NativeReconstructionKernel.h"
+#include "Horo/Runtime/Render/ShaderArtifact.h"
 #include "Horo/Runtime/Render/ShaderReflectionErrors.h"
+#include "Horo/Runtime/Render/UiPaintKernel.h"
+#include "Horo/Runtime/Render/UiPaintWorkload.h"
 #include "ShaderReflectionCookJson.h"
 
 #include <algorithm>
@@ -8,6 +12,8 @@
 #include <utility>
 
 namespace Horo::Render {
+#include "VulkanCoverageReduction.inl"
+
     namespace {
         using Foundation::Json;
 
@@ -30,7 +36,7 @@ namespace Horo::Render {
             std::uint8_t columns;
         };
 
-        /** @brief Admits the explicit float viewport shapes and unsigned multiview layer scalar; other types fail closed. */
+        /** @brief Admits the exact supported scalar, vector and matrix shapes from Vulkan raster reflection. */
         Shape ValueShape(const std::string &type) {
             if (type == "float")
                 return {ShaderValueType::Float32, 1, 1};
@@ -38,6 +44,8 @@ namespace Horo::Render {
                 return {ShaderValueType::Uint32, 1, 1};
             if (type.size() == 4 && type.starts_with("vec") && type[3] >= '2' && type[3] <= '4')
                 return {ShaderValueType::Float32, 1, static_cast<std::uint8_t>(type[3] - '0')};
+            if (type.size() == 5 && type.starts_with("uvec") && type[4] >= '2' && type[4] <= '4')
+                return {ShaderValueType::Uint32, 1, static_cast<std::uint8_t>(type[4] - '0')};
             if (type.size() == 4 && type.starts_with("mat") && type[3] >= '2' && type[3] <= '4')
                 return {ShaderValueType::Float32, static_cast<std::uint8_t>(type[3] - '0'), static_cast<std::uint8_t>(type[3] - '0')};
             throw InvalidEvidence{};
@@ -83,11 +91,75 @@ namespace Horo::Render {
                    manifest.parameters.size() <= 512 && ValidateShaderManifest(manifest).HasValue();
         }
 
+        /** @brief Selects the bounded compute profile by its canonical manifest and authored name identities. */
+        bool AdmittedReconstructionEnvelope(const ShaderManifest &manifest, const ShaderTargetRequirement &target,
+                                            std::span<const SpirvReflectionStage> stages,
+                                            std::span<const ShaderReflectionBindingName> names) {
+            if (stages.size() != 1 || stages.front().stage != ShaderStage::Compute || manifest.entryPoints.size() != 1)
+                return false;
+            for (const auto kind : {NativeReconstructionEntry::Spatial, NativeReconstructionEntry::TemporalSeed,
+                                    NativeReconstructionEntry::TemporalHistory}) {
+                const auto canonical = DescribeNativeReconstructionShader(kind, target);
+                if (canonical.HasError())
+                    return false;
+                const auto &expected = canonical.Value();
+                if (manifest.sourceIdentity != expected.manifest.sourceIdentity ||
+                    manifest.sourceRevision != expected.manifest.sourceRevision || names.size() != expected.reflectionNames.size() ||
+                    manifest.entryPoints.front().name != expected.manifest.entryPoints.front().name)
+                    continue;
+                const auto actualId = ComputeShaderInterfaceCompatibilityId(manifest);
+                const auto canonicalId = ComputeShaderInterfaceCompatibilityId(expected.manifest);
+                if (actualId.HasError() || canonicalId.HasError() || actualId.Value() != canonicalId.Value())
+                    return false;
+                return std::ranges::is_permutation(names, expected.reflectionNames, [](const auto &a, const auto &b) {
+                    return a.id == b.id && a.name == b.name &&
+                           std::ranges::is_permutation(a.parameters, b.parameters, [](const auto &first, const auto &second) {
+                        return first.id == second.id && first.name == second.name;
+                    });
+                });
+            }
+            return false;
+        }
+
+        /** @brief Maps the admitted shader stages to the visibility published in reflected bindings. */
+        constexpr ShaderStageVisibility Visibility(ShaderStage stage) noexcept {
+            if (stage == ShaderStage::Compute)
+                return ShaderStageVisibility::Compute;
+            return stage == ShaderStage::Vertex ? ShaderStageVisibility::Vertex : ShaderStageVisibility::Fragment;
+        }
+
+        /** @brief Requires the complete compiler-reported push block without descriptor or packed-member indirection. */
+        void ValidateReconstructionConstants(const Json &json) {
+            const auto &blocks = json.at("push_constants");
+            if (!blocks.is_array() || blocks.size() != 1)
+                throw InvalidEvidence{};
+            const auto &block = blocks.front();
+            if (block.at("name") != "Dispatch" || block.at("push_constant") != true || block.contains("array") ||
+                block.contains("binding") || block.contains("set"))
+                throw InvalidEvidence{};
+            const auto &type = json.at("types").at(block.at("type").get<std::string>());
+            const auto &members = type.at("members");
+            constexpr std::array names{"Extents", "SampleParameters", "DepthParameters"};
+            constexpr std::array types{"uvec4", "vec4", "vec4"};
+            constexpr std::array offsets{offsetof(NativeReconstructionDispatch, extents), offsetof(NativeReconstructionDispatch, sample),
+                                         offsetof(NativeReconstructionDispatch, depth)};
+            if (type.at("name") != "type.ConstantBuffer.ReconstructionDispatch" || !members.is_array() || members.size() != names.size())
+                throw InvalidEvidence{};
+            for (std::size_t i = 0; i < names.size(); ++i) {
+                const auto &member = members[i];
+                if (member.at("name") != names[i] || member.at("type") != types[i] || Unsigned(member.at("offset")) != offsets[i])
+                    throw InvalidEvidence{};
+                for (const auto key : {"array", "array_stride", "array_size_is_literal", "matrix_stride", "row_major", "physical_pointer"})
+                    if (member.contains(key))
+                        throw InvalidEvidence{};
+            }
+        }
+
         class Normalizer final {
         public:
             Normalizer(const ShaderManifest &manifest, const ShaderTargetRequirement &target,
-                       std::span<const ShaderReflectionBindingName> names)
-                : manifest_(manifest), names_(names) {
+                       std::span<const ShaderReflectionBindingName> names, bool reconstruction)
+                : manifest_(manifest), names_(names), reconstruction_(reconstruction) {
                 candidate_.backend = target.backend;
                 candidate_.interfaceSchemaVersion = target.interfaceSchemaVersion;
             }
@@ -113,14 +185,22 @@ namespace Horo::Render {
                 Uniforms(json, stage.stage, seen);
                 SampledResources(json, stage.stage, "separate_images", ShaderResourceKind::SampledTexture, seen);
                 SampledResources(json, stage.stage, "separate_samplers", ShaderResourceKind::Sampler, seen);
+                if (reconstruction_) {
+                    ValidateReconstructionConstants(json);
+                    StorageImages(json, stage.stage, seen);
+                    if (!std::ranges::all_of(candidate_.bindings, &ShaderReflectedBinding::active))
+                        throw InvalidEvidence{};
+                }
             }
 
             ShaderReflectionCandidate candidate_;
 
         private:
-            /** @brief Restricts native resource classes to the implemented read-only raster contract. */
-            static bool SupportedBinding(const ShaderResourceBinding &binding) noexcept {
+            /** @brief Restricts native resource classes to the admitted raster or reconstruction profile. */
+            bool SupportedBinding(const ShaderResourceBinding &binding) const noexcept {
                 using enum Horo::Render::ShaderResourceKind;
+                if (reconstruction_ && binding.kind == StorageTexture)
+                    return binding.arrayCount == 1 && binding.access == ShaderResourceAccess::ReadWrite;
                 const bool kind = binding.kind == UniformBuffer || binding.kind == SampledTexture || binding.kind == Sampler;
                 return kind && binding.arrayCount == 1 && binding.access == ShaderResourceAccess::ReadOnly;
             }
@@ -165,20 +245,40 @@ namespace Horo::Render {
             }
 
             /** @brief Rejects foreign or ambiguous compiler entry metadata. */
-            static void ValidateEntry(const Json &json, const SpirvReflectionStage &stage) {
+            void ValidateEntry(const Json &json, const SpirvReflectionStage &stage) const {
                 const auto &entries = json.at("entryPoints");
-                const auto mode = stage.stage == ShaderStage::Vertex ? "vert" : "frag";
+                const auto mode = reconstruction_ ? "comp" : (stage.stage == ShaderStage::Vertex ? "vert" : "frag");
                 if (!entries.is_array() || entries.size() != 1 || entries[0].at("name") != stage.entryPoint ||
                     entries[0].at("mode") != mode)
                     throw InvalidEvidence{};
+                if (reconstruction_) {
+                    constexpr auto extent = NativeReconstructionDispatch::GroupExtent;
+                    const auto &size = entries[0].at("workgroup_size");
+                    if (!size.is_array() || size.size() != 3 || Unsigned(size[0]) != extent || Unsigned(size[1]) != extent ||
+                        Unsigned(size[2]) != 1)
+                        throw InvalidEvidence{};
+                    for (const auto key : {"workgroup_size_is_spec_constant", "workgroup_size_is_spec_constant_id"})
+                        if (entries[0].contains(key) && entries[0].at(key) != Json::array({false, false, false}))
+                            throw InvalidEvidence{};
+                }
             }
 
             /** @brief Other resource classes need their own typed native admission rather than silent omission. */
-            static void RejectUnsupportedResources(const Json &json) {
-                for (const auto key : {"textures", "images", "ssbos", "push_constants", "subpass_inputs", "counters",
-                                       "acceleration_structures", "tensors", "specialization_constants"})
+            void RejectUnsupportedResources(const Json &json) const {
+                const auto requireAbsent = [&](const char *key) {
                     if (json.contains(key) && !json.at(key).empty())
                         throw InvalidEvidence{};
+                };
+                if (!reconstruction_) {
+                    requireAbsent("images");
+                    requireAbsent("push_constants");
+                }
+                if (reconstruction_)
+                    for (const auto key : {"inputs", "outputs", "separate_samplers", "ubos"})
+                        requireAbsent(key);
+                for (const auto key :
+                     {"textures", "ssbos", "subpass_inputs", "counters", "acceleration_structures", "tensors", "specialization_constants"})
+                    requireAbsent(key);
             }
 
             /** @brief Every named resource must occur once in its actual class and declared stage. */
@@ -195,7 +295,7 @@ namespace Horo::Render {
                 if (resource == manifest_.bindings.end() || resource->kind != kind)
                     throw InvalidEvidence{};
                 const auto index = static_cast<std::size_t>(resource - manifest_.bindings.begin());
-                if (const auto visibility = stage == ShaderStage::Vertex ? ShaderStageVisibility::Vertex : ShaderStageVisibility::Fragment;
+                if (const auto visibility = Visibility(stage);
                     std::exchange(seen[index], true) || (static_cast<unsigned>(resource->stages) & static_cast<unsigned>(visibility)) == 0)
                     throw InvalidEvidence{};
                 return index;
@@ -207,9 +307,10 @@ namespace Horo::Render {
                 auto &mapping = candidate_.targetBindings[index];
                 const auto space = Unsigned(evidence.at("set"));
                 const auto binding = Unsigned(evidence.at("binding"));
-                if (mapping.active && (mapping.nativeSpace != space || mapping.nativeBinding != binding))
+                if ((reconstruction_ && (space != 0 || binding != resource.id.value - 1)) ||
+                    (mapping.active && (mapping.nativeSpace != space || mapping.nativeBinding != binding)))
                     throw InvalidEvidence{};
-                const auto visibility = stage == ShaderStage::Vertex ? ShaderStageVisibility::Vertex : ShaderStageVisibility::Fragment;
+                const auto visibility = Visibility(stage);
                 resource.stages = resource.active ? resource.stages | visibility : visibility;
                 resource.active = true;
                 mapping = {resource.id, 0, space, binding, evidence.at("name").get<std::string>(), {}, true};
@@ -226,6 +327,21 @@ namespace Horo::Render {
                 for (const auto &row : rows) {
                     const auto index = Resource(row, kind, stage, seen);
                     if (row.at("type") != (kind == ShaderResourceKind::Sampler ? "sampler" : "texture2D"))
+                        throw InvalidEvidence{};
+                    Activate(row, index, stage);
+                }
+            }
+
+            /** @brief Proves the two reconstruction output image formats before publishing any native map. */
+            void StorageImages(const Json &json, ShaderStage stage, std::array<bool, 128> &seen) {
+                constexpr auto kind = ShaderResourceKind::StorageTexture;
+                const auto &rows = json.at("images");
+                if (!rows.is_array() || rows.size() > 2)
+                    throw InvalidEvidence{};
+                for (const auto &row : rows) {
+                    const auto index = Resource(row, kind, stage, seen);
+                    const auto format = candidate_.bindings[index].id.value == 2 ? "rgba32f" : "r32f";
+                    if (row.at("type") != "image2D" || row.at("format") != format || row.value("readonly", false))
                         throw InvalidEvidence{};
                     Activate(row, index, stage);
                 }
@@ -268,6 +384,8 @@ namespace Horo::Render {
                 const auto blockBytes = Unsigned(ubo.at("block_size"));
                 if (blockBytes == 0 || blockBytes > 16U * 1024U * 1024U)
                     throw InvalidEvidence{};
+                if (manifest_.sourceIdentity == UiPaintShaderSourceIdentity && blockBytes != sizeof(UiPaintParameters))
+                    throw InvalidEvidence{};
                 std::array<bool, 512> memberSeen{};
                 for (const auto &member : members) {
                     const auto declared =
@@ -308,6 +426,7 @@ namespace Horo::Render {
 
             const ShaderManifest &manifest_;
             std::span<const ShaderReflectionBindingName> names_;
+            const bool reconstruction_;
         };
     }  // namespace
 
@@ -315,14 +434,18 @@ namespace Horo::Render {
     Result<NormalizedShaderReflection> NormalizeVulkanReflection(const ShaderManifest &manifest, const ShaderTargetRequirement &target,
                                                                  const std::span<const SpirvReflectionStage> stages,
                                                                  const std::span<const ShaderReflectionBindingName> names) {
-        if (!AdmittedVulkanEnvelope(manifest, target, stages, names))
-            return Result<NormalizedShaderReflection>::Failure(MakeError(ShaderReflectionErrors::InvalidReflection));
         try {
-            Normalizer normalizer(manifest, target, names);
+            if (manifest.sourceIdentity == CoverageReductionSource)
+                return ReflectCoverageReduction(manifest, target, stages, names);
+            const bool reconstruction = AdmittedReconstructionEnvelope(manifest, target, stages, names);
+            if (!reconstruction && !AdmittedVulkanEnvelope(manifest, target, stages, names))
+                throw InvalidEvidence{};
+            Normalizer normalizer(manifest, target, names, reconstruction);
             normalizer.Initialize();
             std::array<bool, 2> seen{};
             for (const auto &stage : stages) {
-                if (stage.stage > ShaderStage::Fragment || std::exchange(seen[static_cast<std::size_t>(stage.stage)], true))
+                if (!reconstruction &&
+                    (stage.stage > ShaderStage::Fragment || std::exchange(seen[static_cast<std::size_t>(stage.stage)], true)))
                     throw InvalidEvidence{};
                 normalizer.Stage(stage);
             }

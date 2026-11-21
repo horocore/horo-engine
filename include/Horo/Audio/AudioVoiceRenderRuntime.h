@@ -4,6 +4,7 @@
  * @brief Retained immutable voice routing/spatial generations and real playback-to-mixer execution.
  */
 
+#include "Horo/Audio/AudioDeviceTiming.h"
 #include "Horo/Audio/AudioStreamingService.h"
 #include "Horo/Audio/AudioVoicePlayback.h"
 #include "Horo/Audio/CoreStereoSpatialRenderer.h"
@@ -101,6 +102,12 @@ namespace Horo::Audio {
         AudioVoiceRenderRuntime &operator=(const AudioVoiceRenderRuntime &) = delete;
         /** @brief Read immutable admitted identity. @return Exact voice. */
         [[nodiscard]] AudioVoiceHandle Voice() const noexcept;
+        /** @brief Report whether the exclusive owner retains copied resident PCM. @return False for streamed or detached playback. */
+        [[nodiscard]] bool HasResidentSource() const noexcept;
+        /** @brief Copies the source converter's immutable preparation bound without reading callback state.
+         * @return Input read-ahead in source frames and its rate.
+         */
+        [[nodiscard]] AudioTimingFrames ResamplerLookAhead() const noexcept;
         /** @brief Read the audible/logical cursor on the exclusive processing owner.
          * @return Source position excluding decoder look-ahead, or zero after detached release.
          */
@@ -137,11 +144,16 @@ namespace Horo::Audio {
         void Close() noexcept;
         /** @brief Release ports/playback/state on control after exact-epoch native stop/join proof.
          * @param callbackDetached Host proof that no in-flight or future callback can use this owner.
-         * @return False for unclosed or unproved teardown, preserving all ownership; repeated success is harmless.
+         * @return False for unclosed, unproved or invalid-identity teardown, preserving ownership; repeated success is harmless.
          * @details Host reconciles accepted staging work/outcomes before releasing its transport. Queue consumption,
          * silence, Close or a timeout alone never authorize detachment. Stream retirement is a later control operation.
          */
         [[nodiscard]] bool CompleteShutdown(bool callbackDetached) noexcept;
+        /** @brief Read the retained terminal outcome after detached retirement, without inspecting callback state.
+         * @return Empty until CompleteShutdown succeeds, then the original terminal state or explicit shutdown cancellation.
+         * @pre Called on the control owner. Copy the value before destroying this runtime.
+         */
+        [[nodiscard]] std::optional<AudioVoiceSnapshot> TerminalSnapshot() const noexcept;
 
     private:
         std::unique_ptr<State> state_;

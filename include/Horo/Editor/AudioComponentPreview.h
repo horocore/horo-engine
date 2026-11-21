@@ -16,7 +16,38 @@ namespace Horo::Editor {
         extern const ErrorCodeDescriptor ProviderUnavailable;
         extern const ErrorCodeDescriptor Busy;
         extern const ErrorCodeDescriptor Stale;
+        extern const ErrorCodeDescriptor UnsupportedSwitch;
     }  // namespace AudioComponentPreviewErrors
+
+    /** @brief Caller-selected policy for playback on a replacement output. */
+    enum class AudioComponentPreviewSwitchPolicy : std::uint8_t {
+        Restart,
+        Preserve
+    };
+
+    /** @brief Explicit intent against the exact active output, resolved in a fresh catalog for its backend. */
+    struct AudioComponentPreviewOutputSwitch final {
+        Audio::AudioDeviceEpoch source;
+        Audio::AudioDefaultDeviceRole targetRole{Audio::AudioDefaultDeviceRole::Multimedia};
+        AudioComponentPreviewSwitchPolicy policy{AudioComponentPreviewSwitchPolicy::Preserve};
+    };
+
+    /** @brief One accepted switch's observable disposition. */
+    enum class AudioComponentPreviewSwitchStatus : std::uint8_t {
+        Pending,
+        Applied,
+        Failed,
+        Cancelled
+    };
+
+    /** @brief Retained switch receipt; Applied proves the replacement Start ran on its callback. */
+    struct AudioComponentPreviewSwitchReceipt final {
+        std::uint64_t id{}; /**< Nonzero identity, unique for the application preview owner. */
+        AudioComponentPreviewOutputSwitch intent;
+        AudioComponentPreviewSwitchStatus status{AudioComponentPreviewSwitchStatus::Pending};
+        std::optional<Audio::AudioDeviceEpoch> target; /**< Exact replacement output after activation, if reached. */
+        std::optional<Error> failure;
+    };
 
     /** @brief Immutable authoring capture; no document/ECS reference reaches Audio callbacks. */
     struct AudioComponentPreviewRequest final {
@@ -27,6 +58,7 @@ namespace Horo::Editor {
         Assets::AssetRegistrySnapshot assets;
         Audio::AudioSpatialSource source;
         std::optional<Audio::AudioSpatialListener> listener;
+        std::optional<AudioComponentPreviewOutputSwitch> outputSwitch; /**< Uses the active preview's admitted source and listener. */
     };
 
     /** @brief Owned UI status; Active means admitted Audio output, not proof of human audibility. */
@@ -36,6 +68,8 @@ namespace Horo::Editor {
         std::uint64_t object{};
         std::optional<Audio::AudioFrontendSnapshot> output;
         std::optional<Error> failure;
+        std::optional<AudioComponentPreviewSwitchReceipt>
+            outputSwitch; /**< Retained until this capture changes or another switch is admitted. */
     };
 
     /** @brief Borrowed application capability; the host outlives workspaces and retains closing output.
@@ -46,8 +80,9 @@ namespace Horo::Editor {
     class IAudioComponentPreview {
     public:
         virtual ~IAudioComponentPreview() = default;
-        /** @brief Prepares an isolated production Audio lane for an immutable scene capture.
-         * @param request Exact workspace/object/revision and source data. @return Admission or typed missing/busy/error outcome. */
+        /** @brief Prepares a preview or admits an explicit replacement for the current output.
+         * @param request Exact workspace/object/revision, and source data for a fresh preview or a fenced switch intent.
+         * @return Admission or a typed failure. Unsupported switch policies leave current playback running. */
         [[nodiscard]] virtual Result<void> Start(const AudioComponentPreviewRequest &request) = 0;
         /** @brief Revokes the matching workspace preview and requests asynchronous native retirement.
          * @param workspace Exact owner; a foreign owner cannot stop another workspace. */

@@ -29,6 +29,39 @@ namespace Horo::Runtime::Ui {
             return UiOwnershipGeneration::Create(771).Value();
         }
 
+        /** @brief Adds real layout and receipt tracking to the independently composed startup view. */
+        UiPresentationReceipt StartupView(UiReloadCanvas &canvas) {
+            const auto &tree = canvas.tree;
+            const auto root = tree.Root().Value().handle;
+            const std::array descriptors{UiLayoutElementDescriptor{root, {}, {}}};
+            auto evaluator = UiDeclarativeLayoutEvaluator::Create(descriptors);
+            REQUIRE(evaluator.HasValue());
+            const auto interaction = UiInteractionRevision::Create(1).Value();
+            auto engine = UiLayoutEngine::Create({tree.Instance(), tree.Canvas(), tree.SourceDocument(), 8, 8, 3, interaction});
+            REQUIRE(engine.HasValue());
+            canvas.layoutEngine.emplace(std::move(engine).Value());
+            const UiLayoutSourceRevisions sources{tree.SourceDocumentRevision(),
+                                                  tree.Revision(),
+                                                  UiLayoutContentRevision::Create(1).Value(),
+                                                  UiLayoutStyleRevision::Create(1).Value(),
+                                                  UiLayoutIntrinsicRevision::Create(1).Value(),
+                                                  UiLayoutCanvasRevision::Create(1).Value(),
+                                                  UiLayoutPolicyRevision::Create(1).Value()};
+            auto layout = canvas.layoutEngine->Update(tree, {sources, {{0, 0}, {100, 100}}, {{0, 0}, {100, 100}}, &evaluator.Value()});
+            REQUIRE(layout.HasValue());
+            canvas.layout.emplace(std::move(layout).Value());
+            const UiRenderViewId view{Owner(), root.slot, 1};
+            auto tracker = UiPresentedInteractionState::Create(view, tree.Canvas());
+            REQUIRE(tracker.HasValue());
+            canvas.presentations.push_back(std::move(tracker).Value());
+            return {view,
+                    tree.Canvas(),
+                    interaction,
+                    UiRenderSnapshotRevision::Create(1).Value(),
+                    UiPresentationOutcome::Skipped,
+                    UiPresentationReason::OutputUnavailable};
+        }
+
         struct Fixture final {
             Assets::AssetRegistry registry;
             Assets::MemoryAssetProvider provider;
@@ -180,6 +213,94 @@ namespace Horo::Runtime::Ui {
             REQUIRE(producer.Fail(std::move(error)).HasValue());
             REQUIRE(canvas.controls.front().control.ObserveAsyncActions(store).HasValue());
             return weak;
+        }
+
+        TEST_CASE("Startup display minimum follows an actual presentation while a replacement loads independently",
+                  "[runtime_ui][screen_transition][startup]") {
+            Fixture f;
+            auto request = f.Request(1);
+            request.minimumStartupDisplayTicks = 5;
+            auto initial = f.screen.Begin(request, 1);
+            REQUIRE(initial.HasValue());
+            f.Pump();
+            REQUIRE(f.screen.PrepareAssets(initial.Value(), 1).HasValue());
+            auto canvases = f.Canvases(*f.screen.LoadedDocument(), request.instance);
+            auto receipt = StartupView(canvases.front());
+            REQUIRE(f.screen.Prepare(initial.Value(), std::move(canvases), 1).HasValue());
+            constexpr auto cutoff = UiStructuralCommitPoint::ApplyQueuedOwnerThreadCommands;
+            REQUIRE(f.screen.Commit(initial.Value(), cutoff, 1) == UiScreenTransitionCommitResult::Committed);
+            REQUIRE(f.screen.CollectRetired().HasValue());
+            auto startup = f.screen.Acquire();
+            REQUIRE(startup.HasValue());
+            CHECK(f.screen.StartupDisplay().awaitingFirstPresentation);
+            CHECK(f.screen.StartupDisplay().remainingTicks == 5);
+
+            f.Ready(2, 2);
+            REQUIRE(f.screen.Cancel(f.screen.Progress().operation).HasValue());
+            CHECK(f.screen.Progress().state == UiScreenTransitionState::Cancelled);
+            CHECK(f.screen.Failure());
+            REQUIRE(f.screen.CollectRetired().HasValue());
+            CHECK(f.screen.IsCurrent(startup.Value()));
+
+            f.Publish(2, true);
+            const auto missing = f.screen.Begin(f.Request(3), 3);
+            REQUIRE(missing.HasValue());
+            f.Pump(3);
+            REQUIRE(f.screen.PrepareAssets(missing.Value(), 3).HasError());
+            REQUIRE(f.screen.Failure());
+            CHECK(f.screen.Failure()->code.Value() == UiErrors::AssetMissing.code.Value());
+            CHECK(f.screen.IsCurrent(startup.Value()));
+            CHECK(f.screen.StartupDisplay().remainingTicks == 5);
+            REQUIRE(f.screen.CollectRetired().HasValue());
+
+            f.Publish(3);
+            f.Ready(4, 4);
+            const auto replacement = f.screen.Progress().operation;
+            CHECK(f.screen.Commit(replacement, cutoff, 9) == UiScreenTransitionCommitResult::StartupDisplayPending);
+            const auto skipped = f.screen.ApplyPresentation(startup.Value(), receipt, 9);
+            REQUIRE(skipped.HasValue());
+            CHECK_FALSE(skipped.Value());
+            CHECK(f.screen.StartupDisplay().awaitingFirstPresentation);
+
+            receipt.snapshotRevision = UiRenderSnapshotRevision::Create(2).Value();
+            receipt.outcome = UiPresentationOutcome::Presented;
+            receipt.reason = UiPresentationReason::None;
+            CHECK(f.screen.ApplyPresentation(startup.Value(), receipt, 8).HasError());
+            const auto beforePresentation = Horo::Tests::AllocationProbe::Count();
+            const auto presented = f.screen.ApplyPresentation(startup.Value(), receipt, 10);
+            const auto afterPresentation = Horo::Tests::AllocationProbe::Count();
+            REQUIRE(presented.HasValue());
+            CHECK(afterPresentation == beforePresentation);
+            CHECK_FALSE(f.screen.StartupDisplay().awaitingFirstPresentation);
+            receipt.snapshotRevision = UiRenderSnapshotRevision::Create(3).Value();
+            REQUIRE(f.screen.ApplyPresentation(startup.Value(), receipt, 13).HasValue());
+            CHECK(f.screen.StartupDisplay().remainingTicks == 2);
+            CHECK(f.screen.Commit(replacement, cutoff, 14) == UiScreenTransitionCommitResult::StartupDisplayPending);
+            const auto before = Horo::Tests::AllocationProbe::Count();
+            const auto committed = f.screen.Commit(replacement, cutoff, 15);
+            const auto after = Horo::Tests::AllocationProbe::Count();
+            REQUIRE(committed == UiScreenTransitionCommitResult::Committed);
+            CHECK(after == before);
+            CHECK(f.screen.StartupDisplay().remainingTicks == 0);
+            CHECK_FALSE(f.screen.IsCurrent(startup.Value()));
+            CHECK(f.screen.ApplyPresentation(startup.Value(), receipt, 16).HasError());
+        }
+
+        TEST_CASE("Startup display minimum requires an admitted view before publishing", "[runtime_ui][screen_transition][startup]") {
+            Fixture f;
+            auto request = f.Request(1);
+            request.minimumStartupDisplayTicks = 5;
+            const auto operation = f.screen.Begin(request, 1);
+            REQUIRE(operation.HasValue());
+            f.Pump();
+            REQUIRE(f.screen.PrepareAssets(operation.Value(), 1).HasValue());
+            auto canvases = f.Canvases(*f.screen.LoadedDocument(), request.instance);
+            const auto rejected = f.screen.Prepare(operation.Value(), std::move(canvases), 1);
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == UiScreenTransitionErrors::Invalid.code.Value());
+            CHECK_FALSE(f.screen.Acquire().HasValue());
+            REQUIRE(f.screen.CollectRetired().HasValue());
+            f.Ready(2);
         }
 
         TEST_CASE("Screen loading privately composes a whole generation and publishes once", "[runtime_ui][screen_transition]") {

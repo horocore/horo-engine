@@ -29,7 +29,7 @@ namespace Horo::XR {
         RuntimeInternal::XRFakeRuntimeHostComposition host{this};
         Bindings candidateBindings;
         Bindings activeBindings;
-        XRSimulatorBindingFingerprint expectedFingerprint{};
+        const XRSimulatorScenario *activatingScenario{}; /**< Borrowed only while the private session candidate prepares. */
         XRSimulatorBindingFingerprint captureFingerprint{};
         std::optional<XRSimulatorScenario> scenario;
         XRSimulatorStep controls;
@@ -56,14 +56,14 @@ namespace Horo::XR {
         [[nodiscard]] Result<void> Lane() const;
         void Close() noexcept;
         void Finish() noexcept;
-        [[nodiscard]] Result<void> Activate(XRSimulatorInitialState initial);
+        [[nodiscard]] Result<void> Activate(const XRSimulatorScenario *scenario = nullptr);
         [[nodiscard]] Result<void> Bootstrap(XRSimulatorInitialState initial);
         [[nodiscard]] Result<void> Prepare(XRSessionPreparation stage, const XRSessionId &candidate, const XRFeaturePlan &plan) override;
         void Release(XRSessionPreparation stage, const XRSessionId &session) noexcept override;
         [[nodiscard]] Result<void> CopyBindings(const XRResolvedActionBindings &plan);
         [[nodiscard]] Result<void> PrepareBindings(const XRSessionId &candidate);
         [[nodiscard]] Result<void> CheckBindings() const;
-        [[nodiscard]] Result<void> ValidateControlBindings(const XRSimulatorStep &step) const;
+        [[nodiscard]] static Result<void> ValidateControlBindings(const XRSimulatorStep &step, const Bindings &bindings);
         [[nodiscard]] Result<XRSimulatorAdvance> Advance(XRSimulatorCutoff hostCutoff);
         [[nodiscard]] Result<void> Publish(const XRSimulatorStep &step, const XRFakeOutcome &outcome);
         [[nodiscard]] Result<void> PublishRecords(

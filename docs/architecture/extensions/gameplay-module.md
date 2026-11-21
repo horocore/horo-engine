@@ -19,7 +19,9 @@ long-term extension C ABI.
 - Registration is declarative and complete before a runtime scene becomes active.
 - Gameplay state lives in runtime scenes or game-owned services, not process globals.
 - Native code hot reload is optional development behavior and never a shipping requirement.
-- A project has one primary native gameplay module in the initial contract; additional gameplay modules, mods, or script packages are future extension points.
+- A project may publish one primary native gameplay module. The
+  [Gameplay Module Composition Policy](./gameplay-module-composition-policy.md)
+  defines how reusable libraries, packaged capabilities, and scripts fit around it.
 
 Host-created native shadow copies retain at most 64 UTF-8 bytes of the source
 stem without splitting a code point, replace prior `.horo_reload_` suffixes,

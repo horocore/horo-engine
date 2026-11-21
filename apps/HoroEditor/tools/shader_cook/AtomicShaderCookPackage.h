@@ -40,6 +40,19 @@ namespace Horo::Editor::Offline {
     [[nodiscard]] Result<void> ValidateAtomicShaderCookDestination(const std::filesystem::path &, std::string_view reservedPrefix);
     [[nodiscard]] Result<void> ValidateAtomicShaderCookPaths(const std::filesystem::path &, const std::filesystem::path &,
                                                              std::string_view reservedPrefix);
+    /** @brief Publishes an exact bounded file inventory from an exclusively owned staging parent.
+     * @param destination New absolute directory; existing content is preserved.
+     * @param reservedPrefix Reserved basename prefix for private sibling stages.
+     * @param files Complete nonempty borrowed inventory of relative paths and bytes.
+     * @param verify Synchronous read-only verification of the written private candidate.
+     * @param context Borrowed caller state passed to verify.
+     * @return Success only after verification and native no-replace promotion.
+     */
+    [[nodiscard]] Result<void> PublishAtomicShaderCookFiles(const std::filesystem::path &destination, std::string_view reservedPrefix,
+                                                            std::span<const AtomicShaderCookAuxiliaryFile> files,
+                                                            Result<void> (*verify)(const std::filesystem::path &, const void *),
+                                                            const void *context);
+
     [[nodiscard]] Result<void> PublishAtomicShaderCookPackage(const std::filesystem::path &, const AtomicShaderCookPackage &,
                                                               const Application::Internal::AuthenticatedShaderCookConfiguration &);
 }  // namespace Horo::Editor::Offline

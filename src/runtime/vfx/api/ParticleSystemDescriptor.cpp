@@ -232,8 +232,9 @@ namespace Horo::Vfx {
             return ExactObject(root,
                                {"schemaVersion", "emitterId", "simulationPreference", "maximumParticles", "shape", "spawnRate", "lifetime",
                                 "initialSpeed", "initialSize", "initialOpacity", "materialId", "renderMode", "sortMode", "collisionMode"},
-                               {"collisionResponse", "gpuReadback"}) &&
-                   ExactObject(root.at("lifetime"), {"kind", "seconds", "killCondition"});
+                               {"collisionResponse", "gpuReadback", "photosensitiveFlash"}) &&
+                   ExactObject(root.at("lifetime"), {"kind", "seconds", "killCondition"}) &&
+                   (!root.contains("photosensitiveFlash") || root.at("photosensitiveFlash").is_boolean());
         }
 
         [[nodiscard]] Result<ParticleSystemDescriptorData> DecodeRoot(const Json &root) {
@@ -283,7 +284,8 @@ namespace Horo::Vfx {
                  .collisionResponse = root.contains("collisionResponse")
                                           ? EnumValue(root.at("collisionResponse"), CollisionResponses, ParticleCollisionResponse::Count)
                                           : ParticleCollisionResponse::Bounce,
-                 .gpuReadback = readback.Value()});
+                 .gpuReadback = readback.Value(),
+                 .photosensitiveFlash = root.value("photosensitiveFlash", false)});
         }
 
         [[nodiscard]] bool FiniteOrdered(const ParticleScalarRange &range) noexcept {

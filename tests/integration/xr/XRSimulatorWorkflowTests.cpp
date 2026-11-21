@@ -78,6 +78,28 @@ namespace {
         REQUIRE_FALSE(stream.fail());
     }
 
+    XRSimulatorStep LifecycleEvent(const XRSessionEvent event) {
+        return {.event = event, .executeFrame = false, .shouldRender = false, .deltaNanoseconds = 0};
+    }
+
+    XRSimulatorScenario FaultScenario(const XRSimulatorStep &ordinary, const XRSimulatorBindingFingerprint &bindings) {
+        auto delayed = ordinary;
+        delayed.shouldRender = false;
+        delayed.failure = XRFakeFailure::Wait;
+        delayed.deltaNanoseconds *= 3;
+        auto resumed = ordinary;
+        resumed.actions[0].x = 0.5F;
+        const std::array steps{ordinary,
+                               delayed,
+                               LifecycleEvent(XRSessionEvent::FocusLost),
+                               LifecycleEvent(XRSessionEvent::BecameFocused),
+                               resumed,
+                               LifecycleEvent(XRSessionEvent::SessionLost)};
+        auto scenario = XRSimulatorScenario::Create({.steps = steps, .bindings = bindings});
+        REQUIRE(scenario.HasValue());
+        return std::move(scenario).Value();
+    }
+
     TEST_CASE("Materialize typed XR simulator project and genuine recorded sample", "[.materialize][xr-simulator-materialize]") {
         const auto *destination = std::getenv("HORO_XR_SAMPLE_OUTPUT");
         REQUIRE(destination != nullptr);
@@ -105,6 +127,9 @@ namespace {
         const auto syntheticBytes = EncodeXRSimulatorScenario(synthetic.Value());
         REQUIRE(syntheticBytes.HasValue());
         Write(root / "Scenarios/synthetic-movement.json", syntheticBytes.Value());
+        const auto fault = EncodeXRSimulatorScenario(FaultScenario(authored.front(), decoded.Value().BindingFingerprint()));
+        REQUIRE(fault.HasValue());
+        Write(root / "Scenarios/focus-and-session-loss.json", fault.Value());
     }
 
     TEST_CASE("Simulator sample loads real project Lua Scene and consumed view without authored camera", "[xr][simulator][workflow]") {
@@ -208,6 +233,57 @@ namespace {
         REQUIRE(
             second->Model().Import(target.state.session.session, std::as_bytes(std::span{malformed.data(), malformed.size()})).HasError());
         REQUIRE(second->Model().Snapshot().state.session.session == target.state.session.session);
+    }
+
+    TEST_CASE("Shipped XR fault scenario replays wait, focus loss and terminal retirement on fresh owners", "[xr][simulator][workflow]") {
+        Project project;
+        auto workflow = Open(project.root);
+        const auto asset = workflow->Artifacts()->ReadScenario("Scenarios/focus-and-session-loss.json");
+        REQUIRE(asset.HasValue());
+        const auto decoded = ParseXRSimulatorScenario(asset.Value());
+        REQUIRE(decoded.HasValue());
+        const auto regenerated =
+            EncodeXRSimulatorScenario(FaultScenario(decoded.Value().Steps().front(), decoded.Value().BindingFingerprint()));
+        REQUIRE(regenerated.HasValue());
+        CHECK(regenerated.Value() == asset.Value());
+
+        const auto before = workflow->Model().Snapshot().state.session.session;
+        REQUIRE(workflow->Model().Import(before, asset.Value()).HasValue());
+        Frame(*workflow);  // Publish the outgoing Input collection's neutral state before replay.
+        Apply(*workflow, XRSimulatorCommandKind::Replay);
+        const auto replay = workflow->Model().Snapshot().state.session.session;
+        CHECK(replay != before);
+        const auto stale = workflow->Model().Apply({before, XRSimulatorCommandKind::Reset, {}});
+        CHECK(stale.HasError());
+        const auto origin = X(*workflow);
+
+        struct Expected final {
+            XRSessionState state;
+            float offset;
+            bool preview;
+        };
+
+        const std::array timeline{
+            Expected{XRSessionState::Focused, 0.25F, true},  Expected{XRSessionState::Focused, 0.25F, false},
+            Expected{XRSessionState::Visible, 0.25F, false}, Expected{XRSessionState::Focused, 0.25F, false},
+            Expected{XRSessionState::Focused, 0.75F, true},  Expected{XRSessionState::Lost, 0.75F, false},
+        };
+        std::uint64_t elapsed{};
+        for (std::size_t index = 0; index < timeline.size(); ++index) {
+            CAPTURE(index);
+            Frame(*workflow);
+            const auto snapshot = workflow->Model().Snapshot().state;
+            const auto &expected = timeline[index];
+            elapsed += decoded.Value().Steps()[index].deltaNanoseconds;
+            CHECK(snapshot.cursor == index + 1);
+            CHECK(snapshot.relativeNanoseconds == elapsed);
+            CHECK(snapshot.session.state == expected.state);
+            CHECK(X(*workflow) == Catch::Approx(origin + expected.offset));
+            CHECK(workflow->Preview().has_value() == expected.preview);
+        }
+        CHECK(workflow->Model().Snapshot().state.playback == XRSimulatorPlayback::Failed);
+        Apply(*workflow, XRSimulatorCommandKind::Reset);
+        CHECK(workflow->Model().Snapshot().state.session.session != replay);
     }
 
     TEST_CASE("Simulator focus tracking loss and session failure clear consumed preview and permit explicit recovery",

@@ -36,6 +36,55 @@ namespace Horo::Editor {
 
     using PrefabSourceEdit = std::variant<RenamePrefabObject, TransformPrefabObject>;
 
+    /** @brief Exact matching Scene history state for one cross-document source edit. */
+    struct PrefabApplyHistoryGroup final {
+        Assets::AssetId sceneOwner;
+        std::uint64_t sceneOpening{};
+        std::uint64_t sceneState{};
+        auto operator<=>(const PrefabApplyHistoryGroup &) const noexcept = default;
+    };
+
+    /** @brief Stable source-local member difference between a retained draft and one exact disk revision. */
+    enum class PrefabExternalChange : std::uint8_t {
+        DraftOnly,
+        DiskOnly,
+        Modified
+    };
+
+    /** @brief One local member's compared labels and modified field categories. */
+    struct PrefabExternalMemberDifference final {
+        Prefab::LocalObjectId object;
+        PrefabExternalChange change;
+        std::string draftName;
+        std::string diskName;
+        bool parentChanged{};
+        bool transformChanged{};
+        bool payloadChanged{};
+    };
+
+    /** @brief Immutable comparison captured without publishing either side as authoritative. */
+    struct PrefabExternalComparison final {
+        Assets::AssetSourceIdentity observed;
+        std::vector<PrefabExternalMemberDifference> members;
+        std::optional<Error> diskError; /**< Deleted, malformed or unreadable external source. */
+        bool compositionChanged{};
+    };
+
+    /** @brief One immutable inspection request, independent of the live workspace and document lifetime. */
+    struct PrefabExternalInspection final {
+        std::filesystem::path root;
+        std::filesystem::path path;
+        PrefabDocumentFence fence;
+        Assets::AssetSourceIdentity accepted;
+        std::shared_ptr<const Prefab::PrefabDocument> draft;
+        Prefab::PrefabLimitProfile limits;
+        std::shared_ptr<const PrefabExternalComparison> previous;
+    };
+
+    /** @brief Reads and compares a bounded exact disk source on the existing project I/O lane. */
+    [[nodiscard]] Result<std::shared_ptr<const PrefabExternalComparison>> ComparePrefabExternal(const PrefabExternalInspection &request,
+                                                                                                const CancellationToken &cancellation = {});
+
     /** @brief Immutable source/session projection; dirty/saved/recovery and runtime state are independent. */
     struct PrefabDocumentSnapshot final {
         DocumentIdentity identity;
@@ -51,7 +100,24 @@ namespace Horo::Editor {
         bool canUndo{};
         bool canRedo{};
         bool stageActive{};
+        std::shared_ptr<const PrefabExternalComparison> externalComparison;
+        bool keepExternalDraft{};
     };
+
+    /** @brief Detached immutable source and exact recovery metadata owned until its I/O attempt settles. */
+    struct PrefabRecoveryCheckpoint final {
+        DocumentRecoveryRecord record;
+        std::shared_ptr<const Prefab::PrefabDocument> source;
+        Prefab::PrefabLimitProfile limits;
+        std::shared_ptr<const DocumentRecoveryRecord> acceptedRecovery;
+    };
+
+    /** @brief Encodes and persists only the captured recovery slot, without borrowing a live document session.
+     * @return Exact durable record for owner-lane presentation, or typed failure.
+     */
+    [[nodiscard]] Result<std::shared_ptr<const DocumentRecoveryRecord>> WritePrefabRecovery(const PrefabRecoveryCheckpoint &checkpoint,
+                                                                                            DocumentRecoveryService &recovery,
+                                                                                            const CancellationToken &cancellation = {});
 
     /** @brief Owner-thread session. Source edits use exact semantic history; the stage owns no save authority.
      * @details Load/command time only. Caller serializes requests on the creating thread. The shared
@@ -93,6 +159,23 @@ namespace Horo::Editor {
             return identity_.instance;
         }
 
+        /** @brief Reports whether a workspace tab currently presents this owner. */
+        [[nodiscard]] bool HasPresentation() const noexcept {
+            return presented_;
+        }
+
+        /** @brief Checks dirty state without copying the shared document projection. */
+        [[nodiscard]] bool IsDirty() const noexcept {
+            return state_ != saved_;
+        }
+
+        /** @brief Tests whether a retained group still needs the source owner after closing its tab. */
+        [[nodiscard]] bool HasApplyHistory() const noexcept;
+        /** @brief Suspends only workspace presentation, keeping the clean source and its existing paired history. */
+        void SuspendPresentation() noexcept;
+        /** @brief Attaches a fresh registry-issued identity for the same authorized source key. */
+        void ResumePresentation(DocumentIdentity identity) noexcept;
+
         /** @brief Applies one semantic transaction. @param fence Exact source admission. @param edit Source-owned edit.
          * @return Success or zero-mutation validation/history/stale error. */
         [[nodiscard]] Result<void> Execute(const PrefabDocumentFence &fence, const PrefabSourceEdit &edit);
@@ -108,6 +191,8 @@ namespace Horo::Editor {
         /** @brief Replays exact semantic values. @param fence Current source admission. @param redo Replay direction.
          * @return Success or zero-mutation rejection. */
         [[nodiscard]] Result<void> Replay(const PrefabDocumentFence &fence, bool redo);
+        /** @brief Returns an exact source-side coordinated replay candidate, if one is next. */
+        [[nodiscard]] std::optional<PrefabApplyHistoryGroup> NextApplyGroup(bool redo) const noexcept;
         /** @brief Saves through the existing project and asset publication authorities.
          * @param fence Current source admission. @param mutations Shared project writer. @param files Native durable service.
          * @return Tracked publication; uncertain durability retains dirty state and raises conflict. */
@@ -115,9 +200,20 @@ namespace Horo::Editor {
                                                                   const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
         /** @brief Observes external bytes without changing source/history. @return Capture result. */
         [[nodiscard]] Result<void> InspectExternal();
+        /** @brief Captures read-only observation inputs from the current owner without any filesystem work. */
+        [[nodiscard]] PrefabExternalInspection CaptureExternalInspection() const;
+        /** @brief Adopts current external evidence without changing draft, saved state or history. */
+        [[nodiscard]] bool ObserveExternal(const PrefabExternalInspection &request,
+                                           std::shared_ptr<const PrefabExternalComparison> comparison);
+        /** @brief Acknowledges keeping the draft for the exact compared conflict without accepting a new save base. */
+        [[nodiscard]] Result<void> KeepExternalDraft(const PrefabDocumentFence &fence, const PrefabExternalComparison &expected);
+
         /** @brief Replaces accepted source only after explicit dirty-state decision and complete validation.
-         * @param fence Exact admission. @param discardDirty Explicit discard decision. @return Success or retained session. */
-        [[nodiscard]] Result<void> Reload(const PrefabDocumentFence &fence, bool discardDirty);
+         * @param fence Exact admission. @param discardDirty Explicit discard decision.
+         * @param expectedDisk Exact disk comparison accepted by the user when supplied.
+         * @return Success or retained session. */
+        [[nodiscard]] Result<void> Reload(const PrefabDocumentFence &fence, bool discardDirty,
+                                          std::optional<Assets::AssetSourceIdentity> expectedDisk = std::nullopt);
         /** @brief Writes dirty source to shared recovery storage, never canonical source.
          * @param mutations Shared writer. @param files Native durable service. @return Durable recovery or retained prior record. */
         [[nodiscard]] Result<void> Autosave(const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
@@ -130,6 +226,12 @@ namespace Horo::Editor {
          * @param mutations Shared writer. @param files Durable service. @return Success or retained candidate on failure.
          */
         [[nodiscard]] Result<void> DiscardOwnedRecovery(const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
+        /** @brief Freezes recovery inputs on the owner thread without formatting source or accessing files.
+         * @return Immutable dirty checkpoint, absence for a clean/already checkpointed revision, or a typed owner error. */
+        [[nodiscard]] Result<std::optional<PrefabRecoveryCheckpoint>> CaptureRecovery() const;
+        /** @brief Acknowledges completed recovery only for the exact owner, source authority and still-relevant revision. */
+        bool AcknowledgeRecovery(const PrefabRecoveryCheckpoint &checkpoint) noexcept;
+
         /** @brief Discards an exact inspected candidate after an explicit user decision, including a foreign/stale session.
          * @param fence Current source admission. @param record Exact displayed candidate, never a guessed record path.
          * @param mutations Shared writer. @param files Durable service.
@@ -170,6 +272,8 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> Close(const PrefabDocumentFence &fence, bool discardDirty);
 
     private:
+        friend class PrefabApplyTransaction;
+
         /** @brief Materializes bounded parser characters from typed bytes; allocation failure is a typed error. */
         [[nodiscard]] static Result<std::string> ReadSourceText(std::span<const std::byte> bytes);
 
@@ -186,7 +290,8 @@ namespace Horo::Editor {
             std::optional<Prefab::PrefabValueOverrideSet> overrides;
         };
 
-        using Edit = std::variant<RenamePrefabObject, TransformPrefabObject, LayerReplacement>;
+        using SourceReplacement = std::shared_ptr<const Prefab::PrefabDocument>;
+        using Edit = std::variant<RenamePrefabObject, TransformPrefabObject, LayerReplacement, SourceReplacement>;
         [[nodiscard]] Result<LayerReplacement> Layer(std::optional<Prefab::LocalObjectId> placement) const;
         [[nodiscard]] Result<Edit> Before(const Edit &edit) const;
         [[nodiscard]] Result<std::size_t> EditBytes(const Edit &before, const Edit &after) const;
@@ -196,7 +301,24 @@ namespace Horo::Editor {
             Edit before;
             Edit after;
             std::size_t bytes{};
+            std::optional<PrefabApplyHistoryGroup> applyGroup;
         };
+
+        /** @brief Detached complete source and its already reserved semantic history. */
+        struct PreparedApply final {
+            SourceReplacement source;
+            Sha256Digest state;
+            std::unique_ptr<SemanticDocumentHistory<Delta>> history;
+        };
+
+        /** @brief Prepares the exact source-side state and history for a coordinated instance promotion. */
+        [[nodiscard]] Result<PreparedApply> PrepareApply(const PrefabDocumentFence &fence, Prefab::PrefabDocument source,
+                                                         PrefabApplyHistoryGroup group) const;
+        /** @brief Reserves exact source replay for the same coordinated Scene history group. */
+        [[nodiscard]] Result<PreparedApply> PrepareApplyReplay(const PrefabDocumentFence &fence, PrefabApplyHistoryGroup group,
+                                                               bool redo) const;
+        /** @brief Publishes durable source evidence and its previously reserved owner state without callbacks. */
+        void PublishApply(PreparedApply &prepared, Assets::AssetSourceIdentity durable) noexcept;
 
         [[nodiscard]] Result<void> Admit(const PrefabDocumentFence &fence) const;
         [[nodiscard]] Result<std::shared_ptr<const Prefab::PrefabDocument>> Apply(const Edit &edit) const;
@@ -215,7 +337,7 @@ namespace Horo::Editor {
         Sha256Digest state_;
         Sha256Digest saved_;
         SemanticDocumentHistory<Delta> history_;
-        std::optional<DocumentRecoveryRecord> acceptedRecovery_;
+        std::shared_ptr<const DocumentRecoveryRecord> acceptedRecovery_;
 
         /** @brief Owns one preview incarnation while retaining its successful publication counter across retirement. */
         struct PreviewState final {
@@ -231,7 +353,10 @@ namespace Horo::Editor {
 
         std::uint64_t revision_{1};
         std::uint64_t recoveryRevision_{};
+        bool presented_{true};
         bool conflict_{};
+        std::shared_ptr<const PrefabExternalComparison> externalComparison_;
+        bool keepExternalDraft_{};
         bool closed_{};
         bool busy_{};
     };

@@ -7,6 +7,7 @@
 #include <compare>
 #include <cstdint>
 #include <limits>
+#include <string_view>
 
 namespace Horo::AI {
     struct DecisionGraphAssetIdentityTag;
@@ -58,6 +59,23 @@ namespace Horo::AI {
         Utility,
         Count,
     };
+
+    /** @brief Returns the canonical registered project asset type for a decision family.
+     * @param kind Exact semantic family. @return Stable type name or empty for an invalid family.
+     */
+    [[nodiscard]] constexpr std::string_view DecisionAssetType(const DecisionPlanKind kind) noexcept {
+        using enum DecisionPlanKind;
+        switch (kind) {
+            case BehaviorTree:
+                return "core.behavior_tree";
+            case StateMachine:
+                return "core.state_machine";
+            case Utility:
+                return "core.utility";
+            default:
+                return {};
+        }
+    }
 
     /** @brief Origin family of a node descriptor contribution. */
     enum class DecisionDescriptorSourceKind : std::uint8_t {

@@ -1,13 +1,16 @@
 #include "HeadlessProjectScene.h"
 
 #include "Horo/Application/PrefabProjectSettings.h"
+#include "Horo/Application/ProjectAiSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
+#include "Horo/Application/ProjectNetworkSettings.h"
 #include "Horo/Application/ProjectSurfaceSettings.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Network/NetworkErrors.h"
 #include "Horo/Platform/NativeProjectIoOwners.h"
 #include "Horo/Platform/NativeProjectReadFiles.h"
 #include "Horo/Scene/SceneRuntimeConversion.h"
+#include "ProjectSceneNavigationComposition.h"
 
 #include <utility>
 
@@ -73,18 +76,22 @@ namespace Horo::Application::Internal {
 
         /** @brief Resolves only the selected actual Scene envelope; embedded revision is admitted by Scene's canonical decoder. */
         Result<Runtime::RuntimeSceneDefinition> ReadProductCookedScene(const HeadlessProjectSceneOptions &launch,
-                                                                       const HeadlessProjectSceneResources &resources) {
-            if (!resources.committed)
+                                                                       HeadlessProjectSceneResources &resources,
+                                                                       const CommittedSceneAssets *committed) {
+            if (!committed)
                 return Result<Runtime::RuntimeSceneDefinition>::Failure(
                     MakeError(Net::NetworkErrors::NetworkModeInvalid, "Cooked Scene selection requires --cooked-root and --cook-target."));
             auto id = Assets::AssetId::Parse(std::string_view{launch.scene}.substr(std::string_view{"cooked:"}.size()));
             if (id.HasError())
                 return Result<Runtime::RuntimeSceneDefinition>::Failure(id.ErrorValue());
-            return resources.committed->DecodeScene(id.Value());
+            auto decoded = committed->DecodeScene(id.Value());
+            if (decoded.HasValue())
+                resources.sceneAsset = id.Value();
+            return decoded;
         }
 
-        /** @brief Captures complete registry state and an explicitly selected verified cook generation. */
-        Result<void> CaptureProductAssets(const HeadlessProjectSceneOptions &launch, HeadlessProjectSceneResources &resources) {
+        /** @brief Publishes the complete project identity registry before admitting either authored or cooked Scenes. */
+        Result<void> CaptureProductRegistry(const HeadlessProjectSceneOptions &launch, HeadlessProjectSceneResources &resources) {
             auto candidate = Assets::PrepareAssetRegistryCandidate(launch.projectRoot);
             if (candidate.HasError())
                 return Result<void>::Failure(candidate.ErrorValue());
@@ -92,17 +99,42 @@ namespace Horo::Application::Internal {
                 published.status != Assets::AssetRegistryBuildStatus::Complete)
                 return Result<void>::Failure(published.diagnostics.empty() ? MakeError(Net::NetworkErrors::NetworkModeInvalid)
                                                                            : published.diagnostics.front().error);
-            if (!launch.cookedRoot.empty()) {
-                auto target = Assets::AssetCookTargetId::Parse(launch.cookTarget);
-                if (target.HasError())
-                    return Result<void>::Failure(target.ErrorValue());
-                const NativeDurableFileSystem cookFiles;
-                auto committed =
-                    CommittedSceneAssets::Capture(cookFiles, {launch.cookedRoot, std::move(target).Value()}, resources.registry.Snapshot());
-                if (committed.HasError())
-                    return Result<void>::Failure(committed.ErrorValue());
-                resources.committed = std::move(committed).Value();
+            return Result<void>::Success();
+        }
+
+        /** @brief Resolves the admitted Scene once before retaining its selected simulation payloads. */
+        Result<void> CaptureProductDefinition(const HeadlessProjectSceneOptions &launch, HeadlessProjectSceneResources &resources,
+                                              const CommittedSceneAssets *committed) {
+            auto definition = launch.scene.starts_with("source:") ? ReadProductSceneSource(launch, resources)
+                                                                  : ReadProductCookedScene(launch, resources, committed);
+            if (definition.HasError())
+                return Result<void>::Failure(definition.ErrorValue());
+            resources.definition = std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(definition).Value());
+            return Result<void>::Success();
+        }
+
+        /** @brief Keeps only reachable runtime bytes when the dedicated composition supplies a typed payload policy. */
+        Result<void> CaptureProductAssets(const HeadlessProjectSceneOptions &launch, HeadlessProjectSceneResources &resources) {
+            if (launch.cookedRoot.empty())
+                return Result<void>::Success();
+            auto target = Assets::AssetCookTargetId::Parse(launch.cookTarget);
+            if (target.HasError())
+                return Result<void>::Failure(target.ErrorValue());
+            SceneAssetRetention retain;
+            if (launch.simulationAssets) {
+                retain = [&](const CommittedSceneAssets &committed) {
+                    if (auto definition = CaptureProductDefinition(launch, resources, &committed); definition.HasError())
+                        return Result<std::vector<Assets::AssetId>>::Failure(definition.ErrorValue());
+                    return SelectHeadlessSimulationAssets(committed, *resources.definition, resources.sceneAsset, *launch.simulationAssets,
+                                                          resources.prefabPolicy, resources.load.cancellation);
+                };
             }
+            const NativeDurableFileSystem cookFiles;
+            auto committed = CommittedSceneAssets::Capture(cookFiles, {launch.cookedRoot, std::move(target).Value()},
+                                                           resources.registry.Snapshot(), retain);
+            if (committed.HasError())
+                return Result<void>::Failure(committed.ErrorValue());
+            resources.committed = std::move(committed).Value();
             return Result<void>::Success();
         }
 
@@ -144,34 +176,81 @@ namespace Horo::Application::Internal {
                 resources.prefabLoads = std::make_unique<Assets::AssetLoadService>(resources.jobs, resources.committed->ArtifactProvider());
         }
 
+        /** @brief Captures the canonical project root and its selected owner policies before opening the Scene. */
+        Result<ProjectMetadata> CaptureProductProject(const HeadlessProjectSceneOptions &launch, HeadlessProjectSceneResources &resources) {
+            using Metadata = Result<ProjectMetadata>;
+            auto root = LoadProjectSourceDocument(launch.projectRoot);
+            if (root.HasError())
+                return Metadata::Failure(root.ErrorValue());
+            const auto ai = ResolveProjectAiSettings(root.Value());
+            if (ai.HasError())
+                return Metadata::Failure(ai.ErrorValue());
+            if (const auto &policy = ai.Value()) {
+                resources.decisionScheduler = policy->Scheduler();
+                resources.decisionSchedulerModeAuthored = policy->HasAuthoredSchedulerMode();
+                resources.perceptionWorkUnitsLimit = policy->PerceptionWorkUnitsLimit();
+                resources.queryWorkUnitsLimit = policy->QueryWorkUnitsLimit();
+                resources.queryCacheLimits = policy->QueryCacheLimits();
+                resources.developmentReplayAllowed =
+                    policy->AllowsDebug(AiProjectRuntimeKind::Development, AiProjectDebugOperation::ReplayCapture);
+            }
+            if (launch.captureNetworkSettings) {
+                auto settings = ResolveProjectNetworkSettings(root.Value());
+                if (settings.HasError())
+                    return Metadata::Failure(settings.ErrorValue());
+                resources.networkSettings = std::move(settings).Value();
+            }
+            auto metadata = std::move(root).Value().metadata;
+            if (auto sources = CaptureProductSourceIo(launch, resources, metadata); sources.HasError())
+                return Metadata::Failure(sources.ErrorValue());
+            const auto prefabSettings = LoadPrefabProjectSettings(launch.projectRoot);
+            if (prefabSettings.HasError())
+                return Metadata::Failure(prefabSettings.ErrorValue());
+            resources.prefabPolicy = prefabSettings.Value().settings->Limits().Policy();
+            return Metadata::Success(std::move(metadata));
+        }
+
     }  // namespace
 
     /** @copydoc PrepareHeadlessProjectSceneResources */
     Result<std::unique_ptr<HeadlessProjectSceneResources>> PrepareHeadlessProjectSceneResources(const HeadlessProjectSceneOptions &launch) {
-        auto resources = std::make_unique<HeadlessProjectSceneResources>();
+        auto resources = std::make_unique<HeadlessProjectSceneResources>(launch.cpuWorkerCount);
         // One absolute budget covers source/cook capture and all roles; no per-record reset.
         resources->deadline = std::chrono::steady_clock::now() + launch.loadTimeout;
         resources->load = {resources->cancellation.Token(), resources->deadline};
-        auto metadata = LoadProjectMetadata(launch.projectRoot);
+        auto metadata = CaptureProductProject(launch, *resources);
         if (metadata.HasError())
             return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(metadata.ErrorValue());
-        if (auto sources = CaptureProductSourceIo(launch, *resources, metadata.Value()); sources.HasError())
-            return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(sources.ErrorValue());
-        const auto prefabSettings = LoadPrefabProjectSettings(launch.projectRoot);
-        if (prefabSettings.HasError())
-            return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(prefabSettings.ErrorValue());
-        resources->prefabPolicy = prefabSettings.Value().settings->Limits().Policy();
+        if (const auto registry = CaptureProductRegistry(launch, *resources); registry.HasError())
+            return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(registry.ErrorValue());
         if (const auto assets = CaptureProductAssets(launch, *resources); assets.HasError())
             return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(assets.ErrorValue());
-        auto definition =
-            launch.scene.starts_with("source:") ? ReadProductSceneSource(launch, *resources) : ReadProductCookedScene(launch, *resources);
-        if (definition.HasError())
-            return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(definition.ErrorValue());
-        if (!definition.Value().AssetDependencies().empty() && !resources->committed)
+        if (!resources->definition)
+            if (const auto definition = CaptureProductDefinition(launch, *resources, resources->committed.get()); definition.HasError())
+                return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(definition.ErrorValue());
+        if (!resources->definition->AssetDependencies().empty() && !resources->committed)
             return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(
                 MakeError(Net::NetworkErrors::NetworkModeInvalid,
                           "This Scene requires committed asset payloads; provide --cooked-root and --cook-target."));
-        resources->definition = std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(definition).Value());
+        if (!launch.perceptionPolicyPath.empty()) {
+            auto policy = CaptureProjectScenePerception(*resources->sourceFiles, resources->sourceContext, launch.perceptionPolicyPath,
+                                                        resources->sceneAsset, *resources->definition, resources->perceptionWorkUnitsLimit);
+            if (policy.HasError())
+                return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(policy.ErrorValue());
+            resources->perceptionPolicy = std::move(policy).Value();
+        }
+        if (launch.navigationMode == HeadlessNavigationMode::RecastDetour) {
+            const auto *artifact = resources->committed ? resources->committed->Find(resources->sceneAsset) : nullptr;
+            if (!artifact)
+                return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(
+                    MakeError(Navigation::NavigationErrors::NoNavigationData));
+            auto navigation =
+                CaptureProjectSceneNavigation({*resources->sourceFiles, resources->sourceContext, resources->registry.Snapshot(),
+                                               *resources->definition, resources->sceneAsset, artifact->target, resources->jobs});
+            if (navigation.HasError())
+                return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(navigation.ErrorValue());
+            resources->navigation = std::move(navigation).Value();
+        }
         PrepareProductLoaders(*resources);
         if (const auto settings = CaptureProductPhysics(launch, *resources, metadata.Value().projectId); settings.HasError())
             return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(settings.ErrorValue());

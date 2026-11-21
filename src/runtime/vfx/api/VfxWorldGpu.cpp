@@ -301,23 +301,28 @@ namespace Horo::Vfx {
     }
 
     bool VfxRenderExtractor::AppendGpuEmitters(const VfxWorld &world, Render::RenderWorldFrameData &data,
-                                               const Math::WorldCoordinate64 &origin, VfxExtractionReport &report) const noexcept {
+                                               const Math::WorldCoordinate64 &origin, VfxExtractionReport &report,
+                                               VfxFlashPolicy flashes) const noexcept {
         for (const auto &entry : world.gpuEmitters_)
-            if (entry.live && !AppendGpuEmitter(entry.effect, entry.emitter, *entry.simulator, entry.capacity, data, origin, report))
+            if (entry.live &&
+                !AppendGpuEmitter(entry.effect, entry.emitter, *entry.simulator, entry.capacity, data, origin, report, flashes))
                 return false;
         return true;
     }
 
     bool VfxRenderExtractor::AppendGpuEmitter(EffectSystemId effect, EmitterId emitter, const GpuParticleSimulator &simulator,
                                               std::uint32_t capacity, Render::RenderWorldFrameData &data,
-                                              const Math::WorldCoordinate64 &origin, VfxExtractionReport &report) const noexcept {
+                                              const Math::WorldCoordinate64 &origin, VfxExtractionReport &report,
+                                              VfxFlashPolicy flashes) const noexcept {
         const auto state = simulator.RenderState();
         if (!state.active || !state.preparation.IsLive()) {
             report.status = VfxExtractionStatus::InvalidParticleData;
             return false;
         }
+        const bool suppressDraw = state.photosensitiveFlash && flashes == VfxFlashPolicy::Suppress;
+        const std::uint32_t draws = suppressDraw ? 0U : 1U;
         if (report.admittedBatches >= budget_.maximumBatches || capacity > budget_.maximumInstances - report.admittedInstances ||
-            report.reservedDrawCalls == budget_.maximumDrawCalls) {
+            draws > budget_.maximumDrawCalls - report.reservedDrawCalls) {
             if (!report.omittedBatches)
                 report.firstOmitted = BatchId(effect, emitter);
             ++report.omittedBatches;
@@ -330,16 +335,15 @@ namespace Horo::Vfx {
             report.status = VfxExtractionStatus::InvalidParticleData;
             return false;
         }
-        Render::GpuVfxRenderBatch batch{BatchId(effect, emitter),   state.preparation,
-                                        state.generation,           {},
-                                        state.lifetimeCancellation, delta};
+        Render::GpuVfxRenderBatch
+            batch{BatchId(effect, emitter), state.preparation, state.generation, {}, state.lifetimeCancellation, delta, suppressDraw};
         const auto work = simulator.PendingWork();
         if (!work.empty())
             batch.pending = work.front();
         data.gpuBatches_.push_back(std::move(batch));
         ++report.admittedBatches;
         report.admittedInstances += capacity;
-        ++report.reservedDrawCalls;
+        report.reservedDrawCalls += draws;
         return true;
     }
 }  // namespace Horo::Vfx

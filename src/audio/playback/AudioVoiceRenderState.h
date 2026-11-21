@@ -38,6 +38,7 @@ namespace Horo::Audio {
         AudioVoiceHandle voice;
         AudioResamplerDescriptor conversion;
         std::optional<AudioResamplerPlan> residentPlan;
+        AudioTimingFrames resamplerLookAhead; /**< Immutable plan evidence captured before callback ownership begins. */
         std::uint64_t coefficientBytes{};
 
         /** @brief Control-owned slots and SC mailboxes shared with the callback lane. */
@@ -70,6 +71,7 @@ namespace Horo::Audio {
         CallbackState callback;
 
         bool released{};
+        std::optional<AudioVoiceSnapshot> terminalVoice;
         bool streamVoice{};
         std::uint64_t sourceFrames{};
         bool seekable{};

@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Render/NativeReconstructionKernel.h"
 #include "Horo/Runtime/Render/RenderCapabilities.h"
 #include "Horo/Runtime/Render/RenderFrontend.h"
 #include "Horo/Runtime/Render/RenderMemoryBudgetErrors.h"
@@ -85,6 +86,22 @@ namespace Horo::Render {
                    (requested & static_cast<std::uint8_t>(~allowed)) == 0 && support.IsValid() && support.Supports(descriptor);
         }
 
+        /** @brief Closed stereo scalar coverage shape, with an optional diagnostic copy-source role. */
+        [[nodiscard]] constexpr bool IsStereoCoverageTexture(const RenderTextureDescriptor &descriptor) noexcept {
+            using enum RenderTextureUsage;
+            return descriptor.dimension == RenderTextureDimension::TwoD && descriptor.depth == 1 && descriptor.mipCount == 1 &&
+                   descriptor.layerCount == 2 && descriptor.sampleCount == 1 && descriptor.format == RenderTextureFormat::R32Float &&
+                   (descriptor.usage == (Sampled | RenderAttachment) || descriptor.usage == (Sampled | RenderAttachment | CopySource));
+        }
+
+        /** @brief Admits the exact stereo coverage target only with selected device extent, format and multiview evidence. */
+        [[nodiscard]] constexpr bool AdmitStereoCoverageTexture(const RenderTextureDescriptor &descriptor,
+                                                                const RenderCapabilitySnapshot &support) noexcept {
+            return IsStereoCoverageTexture(descriptor) && support.IsValid() && support.Supports(descriptor) &&
+                   support.features.Supports(RenderCapability::ViewIndexedShaders) &&
+                   support.limits.maxMultiviewViews >= descriptor.layerCount;
+        }
+
         [[nodiscard]] constexpr ResourceDescriptorAdmission AdmitCurrentTextureDescriptor(const RenderTextureDescriptor &descriptor,
                                                                                           const bool uiPaintAvailable) noexcept {
             using enum RenderTextureUsage;
@@ -111,19 +128,55 @@ namespace Horo::Render {
             return IsDepthCopySourceDescriptor(descriptor) && support.IsValid() && support.Supports(descriptor);
         }
 
-        /** @brief Keeps legacy admission while requiring complete advertised facts for additional copy roles. */
-        [[nodiscard]] constexpr bool TextureDescriptorAdmitted(const RenderTextureDescriptor &descriptor,
-                                                               const RenderCapabilitySnapshot &support) noexcept {
-            return AdmitCurrentTextureDescriptor(descriptor, support.features.Supports(RenderCapability::UiPaint)) ==
-                       ResourceDescriptorAdmission::Supported ||
-                   AdmitColorTextureDescriptor(descriptor, support) || AdmitDepthCopySourceDescriptor(descriptor, support);
+        /** @brief Accepts exact device-proven stencil attachments independently of a primary UI composition capability. */
+        [[nodiscard]] constexpr bool AdmitStencilAttachment(const RenderTextureDescriptor &descriptor,
+                                                            const RenderCapabilitySnapshot &support) noexcept {
+            return descriptor.format == RenderTextureFormat::Depth32FloatStencil8 && IsSingleColorTexture(descriptor) &&
+                   descriptor.usage == RenderTextureUsage::RenderAttachment && support.IsValid() && support.Supports(descriptor);
         }
 
-        [[nodiscard]] constexpr ResourceDescriptorAdmission AdmitCurrentTextureViewDescriptor(const RenderTextureViewDescriptor &descriptor,
-                                                                                              const bool uiPaintAvailable) noexcept {
+        /** @brief Checks which closed reconstruction role can use the selected texture format. */
+        bool ReconstructionTextureFormat(RenderTextureFormat format, bool storage) noexcept {
+            using Image = NativeReconstructionImage;
+            if (storage)
+                return NativeReconstructionImageFormatMatches(Image::OutputColor, format) ||
+                       NativeReconstructionImageFormatMatches(Image::OutputDepth, format);
+            for (const auto role : {Image::CurrentColor, Image::CurrentDepth, Image::Motion})
+                if (NativeReconstructionImageFormatMatches(role, format))
+                    return true;
+            return false;
+        }
+
+        /** @brief Admits whole image reconstruction storage and guides only on a qualified selected renderer. */
+        bool AdmitReconstructionTextureDescriptor(const RenderTextureDescriptor &descriptor,
+                                                  const RenderCapabilitySnapshot &support) noexcept {
+            using enum RenderTextureUsage;
+            if (!support.features.Supports(RenderCapability::NativeReconstruction) || !IsSingleColorTexture(descriptor) ||
+                !HasTextureUsage(descriptor.usage, Sampled))
+                return false;
+            const bool storage = HasTextureUsage(descriptor.usage, Storage);
+            const auto permitted = storage ? Sampled | Storage | CopySource : Sampled | RenderAttachment | CopySource | CopyDestination;
+            return (static_cast<std::uint8_t>(descriptor.usage) & ~static_cast<std::uint8_t>(permitted)) == 0 &&
+                   ReconstructionTextureFormat(descriptor.format, storage) && support.IsValid() && support.Supports(descriptor);
+        }
+
+        /** @brief Keeps legacy admission while requiring complete advertised facts for additional copy roles. */
+        [[nodiscard]] bool TextureDescriptorAdmitted(const RenderTextureDescriptor &descriptor,
+                                                     const RenderCapabilitySnapshot &support) noexcept {
+            return AdmitCurrentTextureDescriptor(descriptor, support.features.Supports(RenderCapability::UiPaint)) ==
+                       ResourceDescriptorAdmission::Supported ||
+                   AdmitColorTextureDescriptor(descriptor, support) || AdmitDepthCopySourceDescriptor(descriptor, support) ||
+                   AdmitStencilAttachment(descriptor, support) || AdmitReconstructionTextureDescriptor(descriptor, support) ||
+                   AdmitStereoCoverageTexture(descriptor, support);
+        }
+
+        [[nodiscard]] ResourceDescriptorAdmission AdmitCurrentTextureViewDescriptor(const RenderTextureViewDescriptor &descriptor,
+                                                                                    const RenderCapabilitySet &features) noexcept {
             return descriptor.dimension == RenderTextureViewDimension::TwoD &&
-                           (IsCurrentTextureFormatSupported(descriptor.format, uiPaintAvailable) ||
-                            IsColorPipelineFormat(descriptor.format))
+                           (IsCurrentTextureFormatSupported(descriptor.format, features.Supports(RenderCapability::UiPaint)) ||
+                            IsColorPipelineFormat(descriptor.format) ||
+                            (features.Supports(RenderCapability::NativeReconstruction) && descriptor.aspect == RenderTextureAspect::Color &&
+                             ReconstructionTextureFormat(descriptor.format, false)))
                        ? ResourceDescriptorAdmission::Supported
                        : ResourceDescriptorAdmission::Unsupported;
         }
@@ -138,6 +191,9 @@ namespace Horo::Render {
             if (IsDepthCopySourceDescriptor(descriptor) && !initialData.empty())
                 return Result<void>::Failure(MakeFrontendError(FrontendErrors::ResourceUnsupported,
                                                                "Depth copy-source attachments do not admit initial upload bytes."));
+            if (IsStereoCoverageTexture(descriptor) && !initialData.empty())
+                return Result<void>::Failure(MakeFrontendError(FrontendErrors::ResourceUnsupported,
+                                                               "Stereo coverage attachments do not admit initial upload bytes."));
             if (const auto bytes = RenderTextureBaseLevelByteSize(descriptor);
                 !bytes || (!initialData.empty() && initialData.size() != *bytes))
                 return Result<void>::Failure(
@@ -307,7 +363,8 @@ namespace Horo::Render {
 
     /** @copydoc RenderFrontend::AdmitUiPaintBufferRequest */
     Result<void> RenderFrontend::AdmitUiPaintBufferRequest(const RenderBufferDescriptor &descriptor,
-                                                           const std::span<const std::byte> initialData) const {
+                                                           const std::span<const std::byte> initialData,
+                                                           const bool stereoCoverageCounter) const {
         if (auto admission = RequireOpenOwner(); admission.HasError())
             return Result<void>::Failure(std::move(admission).ErrorValue());
         if (activeFrameScope_ != nullptr)
@@ -317,7 +374,12 @@ namespace Horo::Render {
             return Result<void>::Failure(
                 MakeFrontendError(FrontendErrors::InvalidBufferDescriptor,
                                   "The buffer descriptor is structurally invalid: " + DescribeRenderBufferRequest(descriptor)));
+        const bool exactCoverageCounter = stereoCoverageCounter && initialData.empty() &&
+                                          descriptor.access == RenderBufferAccess::HostVisible &&
+                                          descriptor.usage == (RenderBufferUsage::Storage | RenderBufferUsage::CopyDestination) &&
+                                          descriptor.byteSize == RenderGraphStereoCoverageReduction::CounterBytes;
         if (const auto &features = backend_->Capabilities().support.features;
+            !exactCoverageCounter &&
             AdmitCurrentBufferDescriptor(descriptor, features.Supports(RenderCapability::LightCulling),
                                          SupportsClosedGpuStorage(features)) == ResourceDescriptorAdmission::Unsupported)
             return Result<void>::Failure(
@@ -339,8 +401,8 @@ namespace Horo::Render {
     /** @copydoc RenderFrontend::CreateOwnedUiPaintBuffer */
     Result<ResourceCreation<RenderBufferHandle>> RenderFrontend::CreateOwnedUiPaintBuffer(
         const RenderMemoryScopeId scope, const RenderBufferDescriptor &descriptor, const std::span<const std::byte> initialData,
-        const std::shared_ptr<Detail::UiPaintOwnerRetirement> &owner) {
-        if (const auto valid = AdmitUiPaintBufferRequest(descriptor, initialData); valid.HasError())
+        const std::shared_ptr<Detail::UiPaintOwnerRetirement> &owner, const bool stereoCoverageCounter) {
+        if (const auto valid = AdmitUiPaintBufferRequest(descriptor, initialData, stereoCoverageCounter); valid.HasError())
             return Result<ResourceCreation<RenderBufferHandle>>::Failure(valid.ErrorValue());
         auto admitted =
             ReserveAdmittedResource(*resourceRegistry_, *memoryBudget_, scope, Detail::RenderResourceClass::Buffer, [this, &descriptor] {
@@ -469,7 +531,8 @@ namespace Horo::Render {
     /** @copydoc RenderFrontend::CreateMultiviewDepthTexture */
     Result<ResourceCreation<RenderTextureHandle>> RenderFrontend::CreateMultiviewDepthTexture(const RenderMemoryScopeId scope,
                                                                                               const FramebufferExtent extent,
-                                                                                              const std::uint32_t viewCount) {
+                                                                                              const std::uint32_t viewCount,
+                                                                                              const bool sampled) {
         if (const auto owner = RequireOpenOwner(); owner.HasError())
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(owner.ErrorValue());
         if (activeFrameScope_ != nullptr)
@@ -477,7 +540,8 @@ namespace Horo::Render {
         const RenderTextureDescriptor descriptor{.extent = extent,
                                                  .format = RenderTextureFormat::Depth32Float,
                                                  .layerCount = viewCount,
-                                                 .usage = RenderTextureUsage::RenderAttachment};
+                                                 .usage = sampled ? RenderTextureUsage::RenderAttachment | RenderTextureUsage::Sampled
+                                                                  : RenderTextureUsage::RenderAttachment};
         if (ValidateRenderTextureDescriptor(descriptor).HasError())
             return Result<ResourceCreation<RenderTextureHandle>>::Failure(MakeError(FrontendErrors::InvalidTextureDescriptor));
         const auto &capabilities = backend_->Capabilities();
@@ -532,7 +596,7 @@ namespace Horo::Render {
             return Result<ResourceCreation<RenderTextureViewHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::InvalidTextureViewDescriptor, "The texture-view descriptor is structurally invalid."));
         }
-        if (AdmitCurrentTextureViewDescriptor(descriptor, backend_->Capabilities().support.features.Supports(RenderCapability::UiPaint)) ==
+        if (AdmitCurrentTextureViewDescriptor(descriptor, backend_->Capabilities().support.features) ==
             ResourceDescriptorAdmission::Unsupported) {
             return Result<ResourceCreation<RenderTextureViewHandle>>::Failure(
                 MakeFrontendError(FrontendErrors::ResourceUnsupported,

@@ -1,6 +1,6 @@
 #pragma once
 
-#include "Horo/Editor/UiCanvasDocument.h"
+#include "Horo/Runtime/Ui/UiDocument.h"
 
 #include <string>
 #include <string_view>

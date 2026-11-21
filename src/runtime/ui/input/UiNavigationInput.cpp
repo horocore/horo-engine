@@ -211,8 +211,9 @@ namespace Horo::Runtime::Ui {
             ++presentation_.revision;
         for (std::size_t index = 0; index < UiNavigationActionCount; ++index) {
             const auto glyph = glyphs_[index][modality == Input::InputModality::Gamepad ? 1 : 0];
-            presentation_.glyphs[index] =
-                modality != Input::InputModality::Unknown && glyph ? Input::CanonicalGlyph(*glyph) : Input::InputGlyphPresentation{};
+            presentation_.glyphs[index] = modality != Input::InputModality::Unknown && glyph
+                                              ? Input::ResolveInputGlyph(*glyph, descriptor_.glyphProvider, device)
+                                              : Input::InputGlyphPresentation{};
         }
     }
 

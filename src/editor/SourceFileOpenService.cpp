@@ -227,6 +227,9 @@ namespace Horo::Editor {
             .pcgGraphExtensions = {".hpcg"},
             .sequenceExtensions = {".hsequence"},
             .prefabExtensions = {".prefab"},
+            .blackboardSchemaExtensions = {".horo_bb"},
+            .environmentQueryExtensions = {".horo_eqs"},
+            .decisionGraphExtensions = {".horo_bt", ".horo_sm", ".horo_utility"},
         };
     }
 
@@ -249,6 +252,9 @@ namespace Horo::Editor {
         policy_.sequenceExtensions = NormalizeValues(policy_.sequenceExtensions, true);
         policy_.uiCanvasExtensions = NormalizeValues(policy_.uiCanvasExtensions, true);
         policy_.prefabExtensions = NormalizeValues(policy_.prefabExtensions, true);
+        policy_.blackboardSchemaExtensions = NormalizeValues(policy_.blackboardSchemaExtensions, true);
+        policy_.environmentQueryExtensions = NormalizeValues(policy_.environmentQueryExtensions, true);
+        policy_.decisionGraphExtensions = NormalizeValues(policy_.decisionGraphExtensions, true);
     }
 
     SourceFileOpenService::SourceFileOpenService(SourceFileOpenService &&other) noexcept
@@ -284,6 +290,12 @@ namespace Horo::Editor {
             return SourceFileClassification{HoroScript, extension};
         if (Contains(policy_.prefabExtensions, extension))
             return SourceFileClassification{Prefab, extension};
+        if (Contains(policy_.blackboardSchemaExtensions, extension))
+            return SourceFileClassification{BlackboardSchema, extension};
+        if (Contains(policy_.environmentQueryExtensions, extension))
+            return SourceFileClassification{EnvironmentQuery, extension};
+        if (Contains(policy_.decisionGraphExtensions, extension))
+            return SourceFileClassification{DecisionGraph, extension};
         if (Contains(policy_.pcgGraphExtensions, extension))
             return SourceFileClassification{PCGGraph, extension};
         if (Contains(policy_.sequenceExtensions, extension))
@@ -393,6 +405,12 @@ namespace Horo::Editor {
             documentKind = DocumentKind::Sequence;
         else if (classification.kind == SourceFileKind::UiCanvas)
             documentKind = DocumentKind::UiCanvas;
+        else if (classification.kind == SourceFileKind::BlackboardSchema)
+            documentKind = DocumentKind::BlackboardSchema;
+        else if (classification.kind == SourceFileKind::EnvironmentQuery)
+            documentKind = DocumentKind::EnvironmentQuery;
+        else if (classification.kind == SourceFileKind::DecisionGraph)
+            documentKind = DocumentKind::DecisionGraph;
         const DocumentOpenKey key{.kind = documentKind, .source = location.document};
         const Result<DocumentOpenResult> document = documentRegistry_->Open(key);
         if (document.HasError())

@@ -6,6 +6,7 @@
 #include "Horo/AI/AISceneComponents.h"
 #include "Horo/AI/AITaskLifecycle.h"
 #include "Horo/AI/BlackboardInstance.h"
+#include "Horo/Runtime/Scene/RuntimeScene.h"
 
 #include <memory>
 #include <thread>
@@ -41,6 +42,17 @@ namespace Horo::AI {
         /** @brief Resolves a durable ID in the exact bound publication. @param agent Authored identity. @return Exact handle or typed
          * failure. */
         [[nodiscard]] Result<AgentHandle> ResolveAgent(AgentId agent) const;
+        /** @brief Reads the exact live entity of an admitted AI agent.
+         * @param agent Exact active agent generation. @return Copied Scene identity or a typed stale/owner error.
+         */
+        [[nodiscard]] Result<Runtime::EntityRef> ResolveAgentOwner(AgentHandle agent) const;
+        /** @brief Captures the exact admitted agent's cancellation ancestry for host-owned work.
+         * @param agent Exact active generation.
+         * @return Detached read-only cancellation token, or a typed stale/owner failure.
+         * @details Capture on the Scene owner lane. The token does not own the Scene or any provider and
+         * is revoked on disable, despawn, restore and shutdown before old work can publish.
+         */
+        [[nodiscard]] Result<CancellationToken> CaptureAgentLifetime(AgentHandle agent) const;
         /** @brief Starts an admitted definition. @param agent Exact agent. @param task Inert registered metadata. @param cancellation Grant
          * lifetime.
          * @param diagnostics Copied operation lineage. @return Exact task or typed failure. */
@@ -57,9 +69,20 @@ namespace Horo::AI {
         /** @brief Cancels an exact execution idempotently. @param agent Exact agent. @param task Exact execution. @return Transition or
          * typed failure. */
         [[nodiscard]] Result<AiTaskTransitionDisposition> CancelTask(AgentHandle agent, TaskHandle task) const;
+        /** @brief Cancels the exact execution while preserving the downstream cancellation reason.
+         * @param agent Exact agent. @param task Exact execution. @param reason Original owner reason.
+         * @return Transition or typed failure.
+         */
+        [[nodiscard]] Result<AiTaskTransitionDisposition> CancelTask(AgentHandle agent, TaskHandle task,
+                                                                     AiTaskCancellationReason reason) const;
         /** @brief Publishes successful completion through the common lifecycle. @param agent Exact agent. @param task Exact execution.
          * @return Transition or typed failure; cancellation takes precedence. */
         [[nodiscard]] Result<AiTaskTransitionDisposition> CompleteTask(AgentHandle agent, TaskHandle task) const;
+        /** @brief Publishes downstream failure without replacing a terminal result.
+         * @param agent Exact agent. @param task Exact execution. @param failure Original typed cause and family.
+         * @return Transition or typed failure.
+         */
+        [[nodiscard]] Result<AiTaskTransitionDisposition> FailTask(AgentHandle agent, TaskHandle task, AiTaskFailureDetail failure) const;
         /** @brief Releases terminal resources exactly once; running work must be completed or cancelled first.
          * @param agent Exact agent. @param task Exact execution. @return Success or typed lifecycle failure. */
         [[nodiscard]] Result<void> ReleaseTask(AgentHandle agent, TaskHandle task) const;

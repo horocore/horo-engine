@@ -139,12 +139,13 @@ namespace Horo::Audio::Backend {
             const auto owner = Epoch().device.owner;
             const std::array<Event, 4> events{Event{owner, DevicesChanged{2}},
                                               Event{owner, DefaultChanged{3, AudioDefaultDeviceRole::Console, std::nullopt}},
-                                              Event{owner, DeviceLost{Epoch().device, DeviceLossCause::ServiceRestart}},
-                                              Event{owner, DeviceInterruption{Epoch().device, InterruptionState::Began}}};
+                                              Event{owner, DeviceLost{Epoch(), DeviceLossCause::ServiceRestart}},
+                                              Event{owner, DeviceInterruption{Epoch(), InterruptionState::Began}}};
             REQUIRE(std::get<DevicesChanged>(events[0].fact).discoveryRevision == 2);
             REQUIRE_FALSE(std::get<DefaultChanged>(events[1].fact).device);
-            REQUIRE(std::get<DeviceLost>(events[2].fact).device == Epoch().device);
+            REQUIRE(std::get<DeviceLost>(events[2].fact).epoch == Epoch());
             REQUIRE(std::get<DeviceInterruption>(events[3].fact).state == InterruptionState::Began);
+            REQUIRE(std::get<DeviceInterruption>(events[3].fact).epoch == Epoch());
         }
 
         TEST_CASE("Audio render port is borrowed noexcept and fails safely before installation", "[audio][backend]") {

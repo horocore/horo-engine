@@ -33,6 +33,31 @@ namespace Horo::Editor {
         CHECK_FALSE(current->dirty);
     }
 
+    TEST_CASE("Partitioned World v2 admits only explicit signed-millimeter authored anchors", "[editor][world_source][world_anchor]") {
+        const auto legacy = DecodePartitionedWorldDocument(WorldSource());
+        REQUIRE(legacy.HasValue());
+        CHECK_FALSE(legacy.Value().pages.front().objects.front().anchor);
+        auto source = WorldSource();
+        ReplaceSource(source, R"("version":1)", R"("version":2)");
+        ReplaceSource(source, R"("layer":0)",
+                      R"("layer":0,"worldAnchor":{"position":[9007199254740993,-1,7],"cameraTarget":[9007199254740994,-1,7]})");
+        const auto world = DecodePartitionedWorldDocument(source);
+        REQUIRE(world.HasValue());
+        const auto &anchor = world.Value().pages.front().objects.front().anchor;
+        REQUIRE(anchor);
+        CHECK(anchor->position.Millimeters()[0] == 9'007'199'254'740'993);
+        REQUIRE(anchor->cameraTarget);
+        CHECK(anchor->cameraTarget->Millimeters()[0] == 9'007'199'254'740'994);
+        SECTION("Old schema does not silently grant anchor authority") {
+            ReplaceSource(source, R"("version":2)", R"("version":1)");
+            RequireSourceFailure(source, &WorldDocumentErrors::Invalid);
+        }
+        SECTION("Floating point coordinates are not accepted") {
+            ReplaceSource(source, "9007199254740993", "9007199254740993.0");
+            RequireSourceFailure(source, &WorldDocumentErrors::Invalid);
+        }
+    }
+
     TEST_CASE("Partitioned world source rejects malformed duplicate missing and version-skewed fields", "[editor][world_source]") {
         auto source = WorldSource();
         const ErrorCodeDescriptor *error = &WorldDocumentErrors::Invalid;
@@ -49,7 +74,7 @@ namespace Horo::Editor {
             ReplaceSource(source, "\"version\":1", "\"version\":1,\"extra\":0");
         }
         SECTION("new schema") {
-            ReplaceSource(source, "\"version\":1", "\"version\":2");
+            ReplaceSource(source, "\"version\":1", "\"version\":3");
             error = &WorldDocumentErrors::Unsupported;
         }
         SECTION("missing world") {

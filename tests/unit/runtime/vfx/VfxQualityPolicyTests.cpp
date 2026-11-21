@@ -1,4 +1,6 @@
+#include "Horo/Vfx/CpuParticleSimulator.h"
 #include "Horo/Vfx/VfxQualityPolicy.h"
+#include "support/VfxTestSupport.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -6,6 +8,7 @@
 #include <limits>
 #include <span>
 #include <type_traits>
+#include <utility>
 
 namespace Horo::Vfx {
     namespace {
@@ -85,6 +88,44 @@ namespace Horo::Vfx {
                     .expectedPolicyRevision = policy.Revision(),
                     .requirements = requirements,
                     .fallbackVariants = fallbacks};
+        }
+
+        /** @brief Executes this fixture host's authored variant 73 through the genuine CPU simulator after resolution. */
+        void CheckCpuSubstitute(const VfxResolution &selected) {
+            REQUIRE(selected.domain == ResolvedSimulationDomain::CPU);
+            REQUIRE(selected.selectedVariantId == 73);
+            auto data = Tests::ValidParticleDescriptorData();
+            data.simulationPreference = SimulationPreference::RequireCPU;
+            data.maximumParticles = 512;
+            data.shape = ParticleEmitterShape::Point;
+            data.spawnRate = {0, 0};
+            data.initialSpeed = {0, 0};
+            data.lifetimeSeconds = {10, 10};
+            data.collisionMode = ParticleCollisionMode::None;
+            const auto descriptor = Tests::ParticleDescriptor(data);
+            REQUIRE(selected.selectedCount == descriptor.Data().maximumParticles);
+            const auto scope = VfxIdentityScope::Create(73).Value();
+            const std::array forces{CpuParticleForceModule{.kind = CpuParticleForceKind::Gravity, .vector = {0, -1, 0}}};
+            auto created = CpuParticleSimulator::Create(descriptor, {.buffer = {scope, 1, 1},
+                                                                     .activation = {scope, 2, 1},
+                                                                     .effectSeed = 73,
+                                                                     .maximumBurstParticles = 512,
+                                                                     .forces = forces});
+            REQUIRE(created.HasValue());
+            auto simulator = std::move(created).Value();
+            REQUIRE(simulator.Advance({.deltaSeconds = 0, .burstCount = 512, .tick = 0}).HasValue());
+            for (std::uint64_t tick = 1; tick <= 2; ++tick)
+                REQUIRE(simulator.Advance({.deltaSeconds = .125F, .tick = tick}).HasValue());
+            const auto extracted = simulator.Extract();
+            REQUIRE(extracted.HasValue());
+            const auto &view = extracted.Value();
+            REQUIRE(view.positionY.size() == selected.selectedCount);
+            for (std::size_t i = 0; i < view.positionY.size(); ++i) {
+                CHECK(view.positionY[i] == -.046875F);
+                CHECK(view.velocityY[i] == -.25F);
+                CHECK(view.age[i] == .25F);
+            }
+            CHECK(simulator.Statistics().active == selected.selectedCount);
         }
 
         void CheckError(const Result<VfxResolution> &result, const ErrorCodeDescriptor &expected) {
@@ -210,6 +251,51 @@ namespace Horo::Vfx {
                 ResolvedSimulationDomain::CPU);
         requirements.hasCpuKernel = false;
         CheckError(ResolveSimulationDomain(capabilities, policy, Request(capabilities, policy, requirements)), VfxErrors::MissingKernel);
+    }
+
+    TEST_CASE("Every product tier records the authored CPU substitute when compute is absent or unqualified",
+              "[unit][vfx][quality][gpu-qualification]") {
+        constexpr std::array profiles{VfxQualityProfile::Baseline, VfxQualityProfile::Standard, VfxQualityProfile::High,
+                                      VfxQualityProfile::Ultra};
+        constexpr std::array supportStates{VfxCapabilitySupport::Unsupported, VfxCapabilitySupport::Unknown};
+        for (const auto profile : profiles) {
+            for (const auto support : supportStates) {
+                INFO("profile=" << static_cast<unsigned>(profile) << " compute=" << static_cast<unsigned>(support));
+                auto facts = Facts(false);
+                facts[static_cast<std::size_t>(VfxCapability::GpuSimulation)].support = support;
+                const auto capabilities = VfxCapabilities::Create(CapabilityRevision(), facts, Limits()).Value();
+                const auto policy = Policy(Limits(), 17, profile);
+                auto requirements = Requirements(SimulationPreference::PreferGPU, 2048);
+                requirements.hasCpuKernel = false;
+                requirements.minimumAuthoredCount = 512;
+                VfxFallbackVariant fallback{.stableId = 73,
+                                            .category = VfxEffectCategory::Particle,
+                                            .degradation = VfxDegradation::CompatibleCpu,
+                                            .domain = ResolvedSimulationDomain::CPU,
+                                            .selectedCount = 512,
+                                            .bytesPerElement = 64,
+                                            .workMilliseconds = 4.0};
+                const auto resolve = [&] {
+                    return ResolveSimulationDomain(capabilities, policy, Request(capabilities, policy, requirements, {&fallback, 1}));
+                };
+                const auto selected = resolve();
+                REQUIRE(selected.HasValue());
+                CHECK(selected.Value().domain == ResolvedSimulationDomain::CPU);
+                CHECK(selected.Value().degradation == VfxDegradation::CompatibleCpu);
+                CHECK(selected.Value().selectedVariantId == 73);
+                CHECK(selected.Value().selectedCount == 512);
+                CHECK(selected.Value().selectedMemoryBytes == 512 * 64);
+                CHECK(selected.Value().capabilityRevision == capabilities.Revision());
+                CHECK(selected.Value().policyRevision == policy.Revision());
+                CheckCpuSubstitute(selected.Value());
+
+                fallback.workMilliseconds = 4.0001;
+                CheckError(resolve(), VfxErrors::MissingVariant);
+                fallback.workMilliseconds = 4.0;
+                requirements.preference = SimulationPreference::RequireGPU;
+                CheckError(resolve(), VfxErrors::MissingVariant);
+            }
+        }
     }
 
     TEST_CASE("Every effect category accepts its exact limit and rejects one beyond", "[unit][vfx][quality]") {

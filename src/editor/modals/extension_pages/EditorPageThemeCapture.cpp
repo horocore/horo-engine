@@ -4,6 +4,7 @@
 #include "Horo/Editor/GuiLiveReload.h"
 #include "Horo/Extensions/ExtensionErrors.h"
 
+#include <algorithm>
 #include <imgui.h>
 #include <limits>
 
@@ -124,7 +125,7 @@ namespace Horo::Editor {
 
         /** @brief Captures a local structural signature over actual owner inputs only; never hashes struct padding or persists native
          * pointers. */
-        Sha256Digest Signature(const DesignSystem::DesignTokens &t, const ImGuiStyle &style) {
+        Sha256Digest Signature(const DesignSystem::DesignTokens &t, const ImGuiStyle &style, Theme::VisualPreferences preferences) {
             Sha256Builder hash;
             const auto color = [&](ImVec4 value) {
                 const std::array values{value.x, value.y, value.z, value.w};
@@ -141,7 +142,8 @@ namespace Horo::Editor {
             const auto &motion = t.motion;
             const std::array durations{motion.fast, motion.normal, motion.slow, motion.hover, motion.press, motion.focus, motion.modal};
             static_cast<void>(hash.Update(std::as_bytes(std::span{durations})));
-            const std::array policy{static_cast<std::uint8_t>(motion.reduceMotion)};
+            const std::array policy{static_cast<std::uint8_t>(motion.reduceMotion), static_cast<std::uint8_t>(preferences.highContrast),
+                                    static_cast<std::uint8_t>(preferences.suppressFlash)};
             static_cast<void>(hash.Update(std::as_bytes(std::span{policy})));
             for (const auto &size : t.components.sizes) {
                 const std::array values{size.fontSize, size.paddingX, size.paddingY, size.minimumHeight, size.iconSize};
@@ -166,16 +168,16 @@ namespace Horo::Editor {
     Result<void> EditorPageThemeCapture::Update(const EditorGuiContext &context) {
         if (exhausted_ || !ImGui::GetCurrentContext())
             return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&Extensions::ExtensionErrors::EditorThemeTokenInvalid>()));
-        if (!context.theme.fonts.sans || !context.theme.fonts.sansCompact || !context.theme.fonts.sansEmphasis ||
-            !context.theme.fonts.icon) {
+        const auto &f = context.theme.fonts;
+        const std::array<const ImFont *, 4> fonts{f.sans, f.sansCompact, f.sansEmphasis, f.icon};
+        if (std::ranges::find(fonts, nullptr) != fonts.end()) {
             frame_->revision = 0;
             return Result<void>::Failure(MakeError(GuiLive::HostSymbol<&Extensions::ExtensionErrors::EditorThemeTokenInvalid>()));
         }
         const auto &tokens = Theme::GetActiveTokens();
         const auto &style = ImGui::GetStyle();
-        const auto digest = Signature(tokens, style);
-        const auto &f = context.theme.fonts;
-        const std::array<const ImFont *, 4> fonts{f.sans, f.sansCompact, f.sansEmphasis, f.icon};
+        const auto preferences = Theme::GetVisualPreferences();
+        const auto digest = Signature(tokens, style, preferences);
         if (signature_ == digest && fonts == fonts_ && frame_->revision != 0)
             return Result<void>::Success();
         if (revision_ == std::numeric_limits<std::uint64_t>::max()) {
@@ -191,7 +193,9 @@ namespace Horo::Editor {
         candidate.motion = {0, motion.fast, motion.normal, motion.slow, motion.hover, motion.press, motion.focus, motion.modal};
         candidate.supportedFontMask &= ~EditorThemeFontRoleBit(EditorThemeFontRole::Monospace);
         candidate.interaction = {0, 0, style.DisabledAlpha, style.FrameBorderSize / tokens.sizes.uiScale, 0, 1, true};
-        candidate.accessibility = {false, motion.reduceMotion, false, 1, EditorThemeColorVisionMode::None, 1};
+        candidate.accessibility = {preferences.highContrast,         motion.reduceMotion,
+                                   preferences.suppressFlash,        1,
+                                   EditorThemeColorVisionMode::None, 1};
         if (auto valid = ValidateEditorThemeFrame(candidate); valid.HasError()) {
             frame_->revision = 0;
             return valid;

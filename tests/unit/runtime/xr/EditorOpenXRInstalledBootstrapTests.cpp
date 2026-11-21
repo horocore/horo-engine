@@ -25,6 +25,7 @@ namespace Horo::Editor::Tests {
               "[xr][host][bootstrap][install]") {
         InstalledProductFixture fixture{HORO_TEST_OPENXR_LOADER};
         auto arguments = fixture.BootstrapArguments();
+        arguments.emplace_back("--xr-host-world-canvas-minimum-span-pixels=48");
         fixture.RetireInstaller();
         const auto cache = std::filesystem::canonical(fixture.storage.Path()) / "cache";
         REQUIRE_FALSE(std::filesystem::exists(cache / "native"));
@@ -38,6 +39,8 @@ namespace Horo::Editor::Tests {
         REQUIRE(services.bindings);
         CHECK(services.bindings->schema.actions.size() == 1);
         CHECK(services.trackingRoot == Runtime::SceneObjectId{1});
+        const auto &canvasSpan = services.configuration.invocation.at(SettingKey{"xr.world_canvas.minimum_span_pixels"});
+        CHECK(std::get<std::int64_t>(canvasSpan.value) == 48);
         REQUIRE(services.jobs);
         REQUIRE(services.validateAdmission);
         CHECK(services.validateAdmission().HasValue());
@@ -131,5 +134,196 @@ namespace Horo::Editor::Tests {
             REQUIRE(parsed.Value()->actionLabels.size() == 1);
             CHECK(parsed.Value()->actionLabels.front().text == label);
         }
+    }
+
+    TEST_CASE("Installed XR bindings retain only bounded explicitly signed baseline haptic metadata",
+              "[xr][host][bootstrap][install][haptics]") {
+        using Horo::XR::XRTrackedDeviceRole;
+        auto root = nlohmann::json::parse(InstalledProductFixture::BindingDocument());
+        auto route = nlohmann::json{{"profile", 1},
+                                    {"set", 1},
+                                    {"role", static_cast<unsigned>(XRTrackedDeviceRole::LeftController)},
+                                    {"path", "/user/hand/left/output/haptic"},
+                                    {"label", "Vibration"}};
+        bool malformed{};
+        SECTION("complete declaration") {}
+        SECTION("cannot assign a player in native binding files") {
+            route["player"] = 0;
+            malformed = true;
+        }
+        SECTION("roles are limited to controllers") {
+            route["role"] = static_cast<unsigned>(XRTrackedDeviceRole::Head);
+            malformed = true;
+        }
+        root["haptics"] = nlohmann::json::array({route});
+        InstalledProductFixture fixture{HORO_TEST_OPENXR_LOADER, root.dump()};
+        const auto candidate = fixture.Candidate();
+        const auto parsed =
+            Application::Internal::ReadInstalledOpenXRBindings(candidate.component,
+                                                               RequireValue(Packages::PackagePath::Parse("runtime/xr/bindings.json")));
+        if (malformed) {
+            CHECK(parsed.HasError());
+        } else {
+            REQUIRE(parsed.HasValue());
+            REQUIRE(parsed.Value()->haptics.size() == 1);
+            const auto &output = parsed.Value()->haptics.front();
+            CHECK(output.role == XRTrackedDeviceRole::LeftController);
+            CHECK(output.path == "/user/hand/left/output/haptic");
+        }
+    }
+
+    TEST_CASE("Installed XR locomotion selects one authored actor and typed actions", "[xr][host][bootstrap][install][locomotion]") {
+        auto root = nlohmann::json::parse(InstalledProductFixture::BindingDocument());
+        auto move = root["actions"].front();
+        move["id"] = "locomotion.move";
+        move["type"] = static_cast<unsigned>(Input::ActionValueType::Axis2D);
+        auto turn = move;
+        turn["id"] = "locomotion.turn";
+        turn["type"] = static_cast<unsigned>(Input::ActionValueType::Axis1D);
+        root["actions"].push_back(move);
+        root["actions"].push_back(turn);
+        auto selected =
+            nlohmann::json{{"actor", 17},
+                           {"moveAction", "locomotion.move"},
+                           {"speedMetersPerSecond", 2.5},
+                           {"deadZone", 0.15},
+                           {"snapTurn", {{"action", "locomotion.turn"}, {"angleRadians", 0.5}, {"engage", 0.65}, {"release", 0.25}}}};
+        bool malformed{};
+        bool armSwing{};
+        bool roomScale{};
+        bool teleport{};
+        bool declareAim{true};
+        bool declareBothGrips{true};
+        const nlohmann::json physical{{"gain", 1.25}, {"maximumTrackingGapMilliseconds", 120}};
+        SECTION("exact authored actor and routes") {}
+        SECTION("arm swing selects paired tracking instead of a stick") {
+            armSwing = true;
+            selected.erase("moveAction");
+            selected.erase("deadZone");
+            selected["armSwing"] = physical;
+        }
+        SECTION("teleport requires a digital action with an authored aim pose") {
+            teleport = true;
+            selected.erase("moveAction");
+            selected.erase("deadZone");
+            selected["teleport"] = {{"action", "select"}, {"maximumDistanceMeters", 6}};
+        }
+        SECTION("teleport rejects a binding without aim evidence") {
+            selected.erase("moveAction");
+            selected.erase("deadZone");
+            selected["teleport"] = {{"action", "select"}, {"maximumDistanceMeters", 6}};
+            declareAim = false;
+            malformed = true;
+        }
+        SECTION("room scale selects headset-driven Character motion") {
+            roomScale = true;
+            selected.erase("moveAction");
+            selected.erase("deadZone");
+            selected["roomScale"] = {{"maximumSampleDistanceMeters", 0.4}, {"maximumTrackingGapMilliseconds", 120}};
+        }
+        SECTION("room scale rejects an unbounded jump") {
+            selected.erase("moveAction");
+            selected.erase("deadZone");
+            selected["roomScale"] = {{"maximumSampleDistanceMeters", 0.0}, {"maximumTrackingGapMilliseconds", 120}};
+            malformed = true;
+        }
+        SECTION("room scale cannot be combined with a stick") {
+            selected["roomScale"] = {{"maximumSampleDistanceMeters", 0.4}, {"maximumTrackingGapMilliseconds", 120}};
+            malformed = true;
+        }
+        SECTION("arm swing requires both declared grip poses") {
+            selected.erase("moveAction");
+            selected.erase("deadZone");
+            selected["armSwing"] = physical;
+            declareBothGrips = false;
+            malformed = true;
+        }
+        SECTION("an arm swing route cannot specify a second translation mode") {
+            selected["armSwing"] = physical;
+            malformed = true;
+        }
+        SECTION("arm swing requires a bounded fresh tracking gap") {
+            selected.erase("moveAction");
+            selected.erase("deadZone");
+            selected["armSwing"] = physical;
+            selected["armSwing"]["maximumTrackingGapMilliseconds"] = 1'001;
+            malformed = true;
+        }
+        SECTION("a digital action cannot act as a movement vector") {
+            selected["moveAction"] = root["actions"].front()["id"];
+            malformed = true;
+        }
+        SECTION("a duplicate authored action has no authority") {
+            root["actions"].push_back(move);
+            malformed = true;
+        }
+        SECTION("the installation cannot assign a player") {
+            selected["player"] = 1;
+            malformed = true;
+        }
+        SECTION("turn release must be below engage") {
+            selected["snapTurn"]["release"] = selected["snapTurn"]["engage"];
+            malformed = true;
+        }
+        if (selected.contains("teleport") && declareAim) {
+            root["poses"].push_back({{"profile", 1},
+                                     {"set", 1},
+                                     {"role", static_cast<unsigned>(XR::XRTrackedDeviceRole::LeftController)},
+                                     {"kind", static_cast<unsigned>(XR::XRTrackedPoseKind::Aim)},
+                                     {"path", "/user/hand/left/input/aim/pose"},
+                                     {"label", "Aim"}});
+        }
+        if (selected.contains("armSwing")) {
+            auto grip = nlohmann::json{{"profile", 1},
+                                       {"set", 1},
+                                       {"role", static_cast<unsigned>(XR::XRTrackedDeviceRole::LeftController)},
+                                       {"kind", static_cast<unsigned>(XR::XRTrackedPoseKind::Grip)},
+                                       {"path", "/user/hand/left/input/grip/pose"},
+                                       {"label", "Grip"}};
+            root["poses"].push_back(grip);
+            if (declareBothGrips) {
+                grip["role"] = static_cast<unsigned>(XR::XRTrackedDeviceRole::RightController);
+                grip["path"] = "/user/hand/right/input/grip/pose";
+                root["poses"].push_back(std::move(grip));
+            }
+        }
+        root["locomotion"] = std::move(selected);
+        InstalledProductFixture fixture{HORO_TEST_OPENXR_LOADER, root.dump()};
+        const auto candidate = fixture.Candidate();
+        const auto loaded =
+            Application::Internal::ReadInstalledOpenXRBindings(candidate.component,
+                                                               RequireValue(Packages::PackagePath::Parse("runtime/xr/bindings.json")));
+        if (malformed) {
+            CHECK(loaded.HasError());
+            return;
+        }
+        REQUIRE(loaded.HasValue());
+        REQUIRE(loaded.Value()->locomotion);
+        const auto &route = *loaded.Value()->locomotion;
+        CHECK(route.actor == 17);
+        if (armSwing) {
+            const auto *swing = std::get_if<Application::Internal::OpenXRArmSwingBinding>(&route.translation);
+            REQUIRE(swing);
+            CHECK(swing->gain == 1.25F);
+            CHECK(swing->maximumTrackingGapNanoseconds == 120'000'000);
+        } else if (teleport) {
+            const auto *routeTeleport = std::get_if<Application::Internal::OpenXRTeleportBinding>(&route.translation);
+            REQUIRE(routeTeleport);
+            CHECK(routeTeleport->action == Input::ActionId{"select"});
+            CHECK(routeTeleport->maximumDistanceMeters == 6.0F);
+        } else if (roomScale) {
+            const auto *room = std::get_if<Application::Internal::OpenXRRoomScaleBinding>(&route.translation);
+            REQUIRE(room);
+            CHECK(room->maximumSampleDistanceMeters == 0.4F);
+            CHECK(room->maximumTrackingGapNanoseconds == 120'000'000);
+        } else {
+            const auto *stick = std::get_if<Application::Internal::OpenXRStickMoveBinding>(&route.translation);
+            REQUIRE(stick);
+            CHECK(stick->action == Input::ActionId{"locomotion.move"});
+            CHECK(stick->deadZone == 0.15F);
+        }
+        CHECK(route.speedMetersPerSecond == 2.5F);
+        REQUIRE(route.turn);
+        CHECK(route.turn->action == Input::ActionId{"locomotion.turn"});
     }
 }  // namespace Horo::Editor::Tests

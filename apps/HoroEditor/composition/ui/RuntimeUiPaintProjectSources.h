@@ -4,6 +4,8 @@
 #include "Horo/Application/ShaderBuildService.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
+#include "Horo/Runtime/Ui/UiAssetLoading.h"
+#include "Horo/Runtime/Ui/UiPresentationReceipt.h"
 #include "RuntimeUiPaintHost.h"
 
 #include <filesystem>
@@ -11,6 +13,31 @@
 #include <variant>
 
 namespace Horo::Application::Internal {
+    /** @brief Resolves a centered local XY canvas using the current Scene's exact bounded parent transforms.
+     * @param scene Current view of the actual selected Scene owner.
+     * @param entity Exact owner of the registered canvas reference.
+     * @param loaded Exact registry-pinned cooked document matching the entity's Canvas reference.
+     * @param maximumRasterAxis Selected render owner's admitted texture-dimension ceiling.
+     * @return World placement and offscreen extent, or typed identity, capacity or projection failure.
+     * @details Logical (0,0) is local (-0.5,+0.5,0). Full width is +X, full height is -Y, and inherited scale sets physical size.
+     * The result grants no renderer, input or Scene publication authority. */
+    [[nodiscard]] Result<RuntimeUiPaintWorldCanvas> ResolveRuntimeUiPaintWorldCanvas(Runtime::RuntimeSceneView scene,
+                                                                                     Runtime::EntityRef entity,
+                                                                                     const Runtime::Ui::UiRuntimeAssetLoadResult &loaded,
+                                                                                     std::uint32_t maximumRasterAxis);
+    /** @brief Refreshes exact Scene geometry without reloading assets or changing the admitted raster projection.
+     * @param scene Current owner-lane Scene view for the actual frame.
+     * @param canvas World canvas binding prepared from the same Scene and registered document.
+     * @return Current local-to-Scene plane, or typed stale/foreign/invalid geometry.
+     * @pre Caller checks the binding against its own current Runtime UI document publication before encoding. */
+    [[nodiscard]] Result<Runtime::Ui::UiWorldCanvasProjection> CaptureRuntimeUiPaintWorldCanvasPlane(
+        Runtime::RuntimeSceneView scene, const RuntimeUiPaintWorldCanvas &canvas);
+
+    /** @brief Converts the same plane retained for hit testing to the renderer's centered quad coordinates.
+     * @param plane Current World canvas plane in the selected scene's coordinate system.
+     * @return Affine local-to-scene matrix, or a typed failure for a degenerate or nonfinite plane. */
+    [[nodiscard]] Result<Math::Mat4> BuildRuntimeUiPaintWorldCanvasTransform(const Runtime::Ui::UiWorldCanvasProjection &plane);
+
     /** @brief Explicit admitted launcher route, used only for a real authored source at a load-time Scene safe point.
      * @details Both borrowed services outlive project factories and their synchronous preparation jobs. No tool discovery occurs. */
     struct RuntimeUiPaintProjectCompiler final {
@@ -34,6 +61,8 @@ namespace Horo::Application::Internal {
         std::uint32_t maximumElements{512};
         std::uint32_t previousInstanceSlot{};
         std::uint32_t previousCanvasSlot{};
+        std::optional<std::filesystem::path> vulkanSceneCanvasAssets; /**< Exact package root admitted by the selected viewport. */
+        bool enableVulkanCameraCanvas{true};                          /**< Whether the viewport can draw an authored camera canvas. */
     };
 
     /** @brief One application source namespace, shared by real preview/Play factories and pinned through source retirement.

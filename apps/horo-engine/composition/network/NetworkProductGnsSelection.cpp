@@ -10,7 +10,9 @@ namespace Horo::Application::Internal {
                                                                std::shared_ptr<const Network::MessageCodecRegistry> codecs,
                                                                std::span<const NetworkProductInboundHandler> handlers,
                                                                const Network::GnsNativeSecurityOptions &options,
-                                                               std::optional<Network::NetworkWorldBindingPolicy> worldBinding) {
+                                                               std::optional<Network::NetworkWorldBindingPolicy> worldBinding,
+                                                               std::shared_ptr<Network::INetworkInitialStateHost> initialStateHost,
+                                                               std::shared_ptr<Network::INetworkStateUpdateHost> stateUpdateHost) {
         namespace Net = Network;
         if (const auto &trust = policy.trust;
             providers.certificates || providers.peers || providers.privateKeys || providers.channel || trust.id != options.trust.id ||
@@ -35,10 +37,30 @@ namespace Horo::Application::Internal {
         // Protocol, trust, timeout and resource requirements remain host-selected unchanged.
         auto capturedPolicy = policy;
         capturedPolicy.local.transport = composition.transport->Capabilities();
-        auto captured =
-            NetworkProductAdmission::Capture(capturedPolicy, std::move(providers), std::move(codecs), handlers, std::move(worldBinding));
+        auto captured = NetworkProductAdmission::Capture(capturedPolicy, std::move(providers), std::move(codecs), handlers,
+                                                         std::move(worldBinding), std::move(initialStateHost), std::move(stateUpdateHost));
         if (captured.HasError())
             return Result<NetworkProductGnsSelection>::Failure(captured.ErrorValue());
         return Result<NetworkProductGnsSelection>::Success({std::move(composition.transport), std::move(captured).Value()});
+    }
+
+    /** @copydoc CreateSecureNetworkProductTransport */
+    Result<std::unique_ptr<Network::INetworkModeService>> CreateSecureNetworkProductTransport(
+        const Network::NetworkProjectRole role, const Network::NetworkAddress &bind, const Network::NetworkAddress &connect,
+        std::shared_ptr<NetworkDebuggerService> debugger, std::shared_ptr<ClientSessionOwner> sessions,
+        const std::shared_ptr<const NetworkProductAdmission> &admission, const Network::GnsNativeSecurityOptions &options) {
+        using Service = Result<std::unique_ptr<Network::INetworkModeService>>;
+        if (!admission)
+            return Service::Failure(MakeError(Network::NetworkErrors::AdmissionPolicyInvalid));
+        const auto &binding = admission->WorldBinding();
+        auto selected =
+            SelectNetworkProductGns(admission->Policy(), admission->Providers(), admission->Codecs(), admission->Handlers(), options,
+                                    binding ? std::optional{binding->policy} : std::nullopt, binding ? binding->initialStateHost : nullptr,
+                                    binding ? binding->stateUpdateHost : nullptr);
+        if (selected.HasError())
+            return Service::Failure(std::move(selected).ErrorValue());
+        auto composition = std::move(selected).Value();
+        return CreateNetworkProductTransport(std::move(composition.transport), role, bind, connect, std::move(debugger),
+                                             std::move(sessions), std::move(composition.admission));
     }
 }  // namespace Horo::Application::Internal

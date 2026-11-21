@@ -466,6 +466,49 @@ namespace Horo::Character {
      * Optional values distinguish absent translation/facing intent from a requested zero velocity or
      * identity heading. Character consumes the owning FixedStepContext quantum exactly once.
      */
+    /** @brief Host-correlated origin of one authoritative animation interval. */
+    struct CharacterRootMotionSource final {
+        std::uint64_t simulationTick{}; /**< Source scheduler tick, independent of the Character world tick. */
+        std::uint64_t attempt{};        /**< Non-reused attempt within the source scheduler. */
+        bool operator==(const CharacterRootMotionSource &) const noexcept = default;
+    };
+
+    /** @brief Translation policy for one fixed root motion intent. */
+    enum class CharacterRootTranslation : std::uint8_t {
+        GameplayOnly,
+        Suggest,
+        Additive,
+        Override
+    };
+    /** @brief Only twist about the Character up basis is eligible to change heading. */
+    enum class CharacterRootRotation : std::uint8_t {
+        GameplayOnly,
+        Additive,
+        Override
+    };
+
+    /** @brief Displacement in the starting root frame with unit rotation and no scale. */
+    struct CharacterRootDelta final {
+        Math::Vec3 translation{};
+        Math::Quaternion rotation{};
+    };
+
+    /** @brief Immutable root travel supplied by the host for this controller and command tick. */
+    struct CharacterRootMotionIntent final {
+        CharacterRootMotionSource source;
+        CharacterRootDelta delta;
+        CharacterRootTranslation translation{CharacterRootTranslation::Suggest};
+        CharacterRootRotation rotation{CharacterRootRotation::GameplayOnly};
+    };
+
+    /** @brief Collision-resolved travel attributed to the exact admitted source interval. */
+    struct CharacterRootMotionFeedback final {
+        CharacterRootMotionSource source;
+        CharacterRootDelta applied;   /**< Displacement in the admitted starting root frame. */
+        CharacterRootDelta remaining; /**< Displacement from applied root to the requested endpoint. */
+    };
+
+    /** @brief Tick-addressed immutable Character input. */
     struct CharacterMovementRequest final {
         CharacterControllerHandle controller;
         std::uint64_t tick{};
@@ -478,6 +521,7 @@ namespace Horo::Character {
         std::optional<CharacterCollisionSelectors>
             filterChange;               /**< Applies to every probe of this command and persists only on tick commit. */
         bool detachPlatformRequested{}; /**< Explicitly leave support; the configured transfer policy applies once. */
+        std::optional<CharacterRootMotionIntent> rootMotion; /**< Separately correlated animation travel. */
     };
 
     /** @brief Fixed-tick outcome of movement-base tracking; no callback or presentation event is emitted. */
@@ -593,6 +637,7 @@ namespace Horo::Character {
         CharacterSurfaceAvailability surfaceAvailability{CharacterSurfaceAvailability::Unavailable};
         std::optional<Physics::PhysicsSurfaceEvidence> groundSurface;
         CharacterSemanticSurfaceSource groundSurfaceSource{CharacterSemanticSurfaceSource::None};
+        std::optional<CharacterRootMotionFeedback> rootMotion; /**< Present for commands carrying a root motion source. */
     };
 
     /**

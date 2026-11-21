@@ -14,6 +14,15 @@ namespace Horo::AI::AIErrors {
         .retryable = true,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor DecisionScriptCallbackFailed{
+        .domain = AiDomain,
+        .code = ErrorCode{"ai.decision.script_callback_failed"},
+        .defaultSeverity = ErrorSeverity::Error,
+        .summary = "An admitted decision script callback failed or returned an invalid result.",
+        .remediationHint = "Inspect the authored callback or use the declared decision fallback.",
+        .retryable = false,
+        .userActionable = true,
+    };
     const ErrorCodeDescriptor SchedulerPolicyInvalid{
         .domain = AiDomain,
         .code = ErrorCode{"ai.scheduler.policy_invalid"},
@@ -104,6 +113,9 @@ namespace Horo::AI::AIErrors {
         .retryable = false,
         .userActionable = false,
     };
+    const ErrorCodeDescriptor NavigationTaskUnreachable{AiDomain, ErrorCode{"ai.navigation.unreachable"}, ErrorSeverity::Warning,
+                                                        "The movement task has no complete route to the admitted goal.",
+                                                        "Select a reachable goal or wait for navigation coverage to change."};
     const ErrorCodeDescriptor TaskFailureInvalid{
         .domain = AiDomain,
         .code = ErrorCode{"ai.task.failure_invalid"},

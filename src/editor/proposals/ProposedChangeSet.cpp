@@ -1,6 +1,7 @@
 #include "Horo/Editor/ProposedChangeSet.h"
 
 #include "Horo/Foundation/Utf8.h"
+#include "ProposedPatchInternal.h"
 
 #include <algorithm>
 #include <new>
@@ -57,23 +58,10 @@ namespace Horo::Editor::Proposals {
             });
         }
 
-        /** @brief Folds only ASCII for portable alias rejection; physical Unicode alias checks belong to the host. */
-        char Lower(const char c) noexcept {
-            return c >= 'A' && c <= 'Z' ? static_cast<char>(c + ('a' - 'A')) : c;
-        }
-
-        /** @brief Owns one bounded collision key without changing the canonical source spelling. */
-        std::string Fold(std::string_view text) {
-            std::string result(text);
-            for (auto &c : result)
-                c = Lower(c);
-            return result;
-        }
-
         /** @brief Compares a portable filename stem with one lowercase reserved name without allocation. */
         bool StemEquals(const std::string_view stem, const std::string_view reserved) noexcept {
             return stem.size() == reserved.size() && std::equal(stem.begin(), stem.end(), reserved.begin(), [](char a, char b) {
-                return Lower(a) == b;
+                return PatchDetail::Lower(a) == b;
             });
         }
 
@@ -219,7 +207,7 @@ namespace Horo::Editor::Proposals {
             Result<void> Reserve(const SourceDocumentId &path) {
                 if (!policy_.Allows(path))
                     return Fail<void>(Errors::PolicyDenied);
-                if (!touched_.insert(Fold(path.Value())).second)
+                if (!touched_.insert(PatchDetail::Fold(path.Value())).second)
                     return Fail<void>(Errors::Invalid);
                 return Result<void>::Success();
             }
@@ -274,7 +262,7 @@ namespace Horo::Editor::Proposals {
 
         /** @brief Compares stable file identity and both independently observed revisions. */
         bool SameBaseRevision(const FileBase &base, const FileBase &current) {
-            return base.path == current.path && base.revision == current.revision && base.diskRevision == current.diskRevision;
+            return base.revision == current.revision && base.diskRevision == current.diskRevision;
         }
 
         /** @brief Compares exact current/saved content evidence and the current encoding marker. */
@@ -315,6 +303,24 @@ namespace Horo::Editor::Proposals {
             if (hunk.offset < (base.utf8Bom ? 3U : 0U) || !ScalarBoundary(text, hunk.offset) ||
                 !ScalarBoundary(text, hunk.offset + hunk.before.size()) || text.substr(hunk.offset, hunk.before.size()) != hunk.before)
                 return Fail<void>(Errors::StaleBase);
+            return Result<void>::Success();
+        }
+
+        /** @brief Validates exact source bytes, with revision counters required for non-recovered evidence. */
+        Result<void> ValidateSnapshot(const FileBase &base, const std::span<const TextHunk> hunks, const SourceDocumentSnapshot &current,
+                                      const ReviewSourceMatch sourceMatch) {
+            const auto actual = FileBase::Capture(current);
+            if (actual.HasError())
+                return Result<void>::Failure(actual.ErrorValue());
+            const auto &observed = actual.Value();
+            if (base.path != observed.path || !SameBaseContent(base, observed) ||
+                (sourceMatch != ReviewSourceMatch::RecoveredContent && !SameBaseRevision(base, observed)))
+                return Fail<void>(Errors::StaleBase);
+            if (const auto structure = ValidateSnapshotHunkStructure(base, hunks); structure.HasError())
+                return structure;
+            for (const auto &hunk : hunks)
+                if (const auto valid = ValidateSnapshotHunk(base, hunk, current.Text()); valid.HasError())
+                    return valid;
             return Result<void>::Success();
         }
 
@@ -428,7 +434,7 @@ namespace Horo::Editor::Proposals {
             Append(identity, project);
             Append(identity, std::to_string(revision));
             for (const auto &rule : rules) {
-                if (!PortablePath(rule.path) || !paths.insert(Fold(rule.path.Value())).second)
+                if (!PortablePath(rule.path) || !paths.insert(PatchDetail::Fold(rule.path.Value())).second)
                     return Fail<ProjectPolicy>(Errors::PolicyDenied);
                 Append(identity, rule.path.Value());
                 Append(identity, rule.descendants ? "tree" : "file");
@@ -493,19 +499,14 @@ namespace Horo::Editor::Proposals {
 
     /** @copydoc ValidateAgainstSnapshot */
     Result<void> ValidateAgainstSnapshot(const FileBase &base, std::span<const TextHunk> hunks, const SourceDocumentSnapshot &current) {
-        const auto actual = FileBase::Capture(current);
-        if (actual.HasError())
-            return Result<void>::Failure(actual.ErrorValue());
-        if (!SameBaseRevision(base, actual.Value()) || !SameBaseContent(base, actual.Value()))
+        return ValidateSnapshot(base, hunks, current, ReviewSourceMatch::CurrentRevision);
+    }
+
+    /** @copydoc FilePreview::ValidateSource */
+    Result<void> FilePreview::ValidateSource(const FileBase &base, const std::span<const TextHunk> hunks) const {
+        if (!before.IsCurrent() || before.ExternalState() != SourceExternalState::InSync)
             return Fail<void>(Errors::StaleBase);
-        if (const auto structure = ValidateSnapshotHunkStructure(base, hunks); structure.HasError())
-            return structure;
-        for (const auto &hunk : hunks) {
-            const auto valid = ValidateSnapshotHunk(base, hunk, current.Text());
-            if (valid.HasError())
-                return valid;
-        }
-        return Result<void>::Success();
+        return ValidateSnapshot(base, hunks, before, sourceMatch);
     }
 
     /** @copydoc Review */

@@ -151,15 +151,24 @@ Result<RenderTimelinePoint> VulkanResourceRuntime::BufferCompletion(const std::u
 /** @copydoc VulkanResourceRuntime::WriteHostFrameBuffer */
 Result<void> VulkanResourceRuntime::WriteHostFrameBuffer(const std::uint64_t instance, const std::span<const std::byte> bytes) {
     auto *buffer = Impl::Find(impl_->buffers, instance);
-    if (!buffer || buffer->descriptor.access != RenderBufferAccess::HostVisible ||
+    if (!buffer || buffer->coverageInputSealed || buffer->descriptor.access != RenderBufferAccess::HostVisible ||
         (!HasBufferUsage(buffer->descriptor.usage, RenderBufferUsage::Uniform) && buffer->descriptor.usage != RenderBufferUsage::Vertex) ||
         bytes.size() != buffer->descriptor.byteSize)
         return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceRequestInvalid));
     buffer->vfxPublished = false;
+    buffer->uiPaint = {};
     if (!impl_->Upload(*buffer, bytes))
         return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceCreationFailed));
     buffer->graphState.contentsDefined = true;
     return Result<void>::Success();
+}
+
+/** @copydoc VulkanResourceRuntime::WriteHostUniform */
+Result<void> VulkanResourceRuntime::WriteHostUniform(const std::uint64_t instance, const std::span<const std::byte> bytes) {
+    const auto *buffer = Impl::Find(impl_->buffers, instance);
+    if (!buffer || buffer->descriptor.usage != RenderBufferUsage::Uniform)
+        return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceRequestInvalid));
+    return WriteHostFrameBuffer(instance, bytes);
 }
 
 /** @copydoc VulkanResourceRuntime::VfxPublication */
@@ -200,21 +209,25 @@ Result<void> VulkanResourceRuntime::UpdateVfxFrame(const NativeVfxFrameUpdate &u
         return Result<void>::Failure(MakeError(VfxFrameErrors::Cancelled));
     // Native dispatch can be injected in qualification. Revalidate the same registry generation after map,
     // before writing, while the canonical command owner's borrow prevents device retirement on shutdown.
-    void *mapped{};
+    void *mapped = buffer->mapped;
+    const bool temporaryMapping = !mapped;
     const auto device = impl_->device;
-    if (impl_->dispatch.mapMemory(device, buffer->memory, 0, update.parameters.size(), 0, &mapped) != VK_SUCCESS)
+    if (temporaryMapping && impl_->dispatch.mapMemory(device, buffer->memory, 0, update.parameters.size(), 0, &mapped) != VK_SUCCESS)
         return Result<void>::Failure(MakeError(VulkanBackendErrors::ResourceCreationFailed));
     const auto current = impl_->buffers.find(update.instance);
     if (closing || current == impl_->buffers.end() || current->second.get() != buffer.get() || !mapped ||
         update.cancellation.IsCancellationRequested() ||
         shaders_.ValidateVfxMaterial(*material, update.pipeline, *update.layout).HasError()) {
-        impl_->dispatch.unmapMemory(device, buffer->memory);
+        if (temporaryMapping)
+            impl_->dispatch.unmapMemory(device, buffer->memory);
         return Result<void>::Failure(MakeError(VfxFrameErrors::InvalidInput));
     }
     *update.writeStatus = VfxFrameWriteStatus::Attempted;
     buffer->vfxPublished = false;
+    buffer->uiPaint = {};
     std::ranges::copy(update.parameters, static_cast<std::byte *>(mapped));
-    impl_->dispatch.unmapMemory(device, buffer->memory);
+    if (temporaryMapping)
+        impl_->dispatch.unmapMemory(device, buffer->memory);
     const auto accepted = impl_->buffers.find(update.instance);
     if (closing || accepted == impl_->buffers.end() || accepted->second.get() != buffer.get() ||
         shaders_.ValidateVfxMaterial(*material, update.pipeline, *update.layout).HasError())

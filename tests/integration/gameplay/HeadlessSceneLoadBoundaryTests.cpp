@@ -1,8 +1,17 @@
+#include "CommittedSceneAssets.h"
+#include "DecisionGraphCompilerTestSupport.h"
+#include "HeadlessCookedDecisionAdmission.h"
+#include "HeadlessNetworkServices.h"
 #include "HeadlessSceneLoadBoundary.h"
+#include "Horo/AI/EnvironmentQueryGenerators.h"
+#include "Horo/AI/EnvironmentQuerySourceCodec.h"
+#include "OwnedTestDirectory.h"
 #include "PhysicsSceneActivationTestSupport.h"
+#include "assets/AssetCookOutputFixture.h"
 
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <thread>
 #include <utility>
@@ -177,5 +186,185 @@ namespace {
             CHECK_FALSE(fixture.provider.entered.load());
             CHECK_FALSE(fixture.scene.ActiveScene().has_value());
         }
+    }
+
+    TEST_CASE("Headless cooked controller admission verifies query outputs against its committed generation", "[gameplay][decision][eqs]") {
+        using namespace AI;
+        namespace Decisions = AI::DecisionGraphTestSupport;
+        namespace Output = Assets::OutputTestSupport;
+        Decisions::Fixture fixture;
+        const auto key = Decisions::MakeIdentity<BlackboardKeyId>(43);
+        const auto queryId = Decisions::MakeIdentity<QueryId>(44);
+        const auto resultId = Decisions::MakeIdentity<QueryResultSchemaId>(45);
+        const auto registry = CaptureBuiltinQuerySchema();
+        REQUIRE(registry.HasValue());
+        const auto query = CreateBuiltinLatticeQuery(queryId, Decisions::MakeIdentity<QueryStageId>(46), resultId, "Test positions",
+                                                     {.stepMillimeters = 500, .outerSteps = 1}, 8);
+        REQUIRE(query.HasValue());
+        const std::array keys{
+            BlackboardKeyDescriptor{.key = key, .kind = BlackboardValueKind::WorldCoordinate, .presence = BlackboardKeyPresence::Optional}};
+        auto schema = BlackboardSchema::Capture({.identity = Decisions::SchemaId(), .keys = keys});
+        REQUIRE(schema.HasValue());
+        fixture.schema = std::make_shared<const BlackboardSchema>(std::move(schema).Value());
+        const auto &result = query.Value().ResultSchema();
+        const BehaviorTreeQueryOutput output{queryId, result.id, result.version, result.itemType, key, 10};
+        auto registration = Decisions::Registration(fixture.probe);
+        registration.contract.properties.emplace_back(Decisions::MakeIdentity<BehaviorTreePropertyId>(47), "output",
+                                                      BehaviorTreePropertyKind::QueryOutput, output);
+        auto providers = DecisionNodeGeneration::Capture({&registration, 1}, fixture.admission);
+        REQUIRE(providers.HasValue());
+        fixture.providers = std::move(providers).Value();
+        auto task = Decisions::TreeNode(2, DecisionControlKind::Task);
+        task.properties = registration.contract.properties;
+        task.requirements = {{.key = key,
+                              .kind = BlackboardValueKind::WorldCoordinate,
+                              .access = BlackboardKeyAccess::ReadWrite,
+                              .source = Decisions::Location()}};
+        auto graph = Decisions::Tree(1, {Decisions::TreeNode(1, DecisionControlKind::Root), task}, {Decisions::Edge(1, 1, 2)});
+        graph.executionTask = Decisions::MakeIdentity<TaskId>(48);
+        const auto compiled = DecisionGraphCompiler::Compile(graph.asset, std::span{&graph, 1}, fixture.Environment());
+        REQUIRE(compiled.HasValue());
+        for (const auto &diagnostic : compiled.Value().validation.Diagnostics())
+            UNSCOPED_INFO(diagnostic.message);
+        REQUIRE(compiled.Value().plan);
+        const AiControllerDescriptor controller{.controller = Decisions::MakeIdentity<ControllerTypeId>(49),
+                                                .decisionAsset = graph.asset,
+                                                .decisionKind = DecisionPlanKind::BehaviorTree,
+                                                .blackboardSchema = fixture.schema};
+        const std::array catalog{controller};
+        const auto decision = DecisionPlanCodec::EncodeCooked(*compiled.Value().plan);
+        REQUIRE(decision.HasValue());
+        const auto payload = EnvironmentQueryCookedCodec::Encode(query.Value(), registry.Value());
+        REQUIRE(payload.HasValue());
+
+        const bool available = GENERATE(true, false);
+        const auto decisionId = Assets::AssetId::FromBytes({103});
+        const auto queryAsset = Assets::AssetId::FromBytes({104});
+        const auto decisionType = Assets::AssetTypeId::Parse(DecisionAssetType(DecisionPlanKind::BehaviorTree)).Value();
+        const auto queryType = Assets::AssetTypeId::Parse(EnvironmentQuerySourceAssetType).Value();
+        const auto target = Output::Target("headless-null");
+        std::vector<Assets::AssetCookManifestEntry> manifest;
+        std::vector<std::vector<std::uint8_t>> artifacts;
+        std::vector<Assets::AssetRecord> records;
+        const auto add = [&](Assets::AssetId id, const auto &type, const auto &bytes, std::string_view path) {
+            auto encoded = Assets::EncodeCookedArtifact(
+                {.id = id, .type = type, .target = target, .payloadDigest = Output::DigestOf(bytes), .payload = bytes});
+            REQUIRE(encoded.HasValue());
+            manifest.push_back({id, type, id.ToString() + ".cooked", Output::DigestOf(encoded.Value())});
+            artifacts.push_back(std::move(encoded).Value());
+            records.push_back({id, type, ProjectPath::Parse(path).Value(), ProjectPath::Parse(std::string{path} + ".horo").Value()});
+        };
+        add(decisionId, decisionType, decision.Value(), "assets/decision.horo_bt");
+        if (available)
+            add(queryAsset, queryType, payload.Value(), "assets/tactics.horo_eqs");
+        Horo::Tests::OwnedTestDirectory directory{"headless-query-admission"};
+        REQUIRE(Output::PublishFixture(directory.Path(), target, manifest, artifacts).HasValue());
+        Assets::AssetRegistry assets;
+        REQUIRE(assets.Publish(std::move(records)).status == Assets::AssetRegistryBuildStatus::Complete);
+        const auto committed = CommittedSceneAssets::Capture(NativeDurableFileSystem{}, {directory.Path(), target}, assets.Snapshot());
+        REQUIRE(committed.HasValue());
+        Runtime::SceneDefinitionBuilder builder{{7}, {1}};
+        builder.Add({.object = {8}, .localTransform = {.translation = {2, 0, 0}}});
+        Runtime::RuntimeEntityDefinition querier{.object = {9},
+                                                 .parent = Runtime::SceneObjectId{8},
+                                                 .localTransform = {.translation = {0.5F, 0, 0}}};
+        const auto identity = Decisions::MakeIdentity<AgentId>(50);
+        querier.components.aiAgent = AiAgentComponent{.agent = identity};
+        querier.components.aiController = AiControllerComponent{.controller = controller.controller,
+                                                                .decisionAsset = graph.asset,
+                                                                .blackboardSchema = fixture.schema->Identity()};
+        builder.Add(querier);
+        auto scene = std::move(builder).Build();
+        REQUIRE(scene.HasValue());
+        const auto limits = Prefab::PrefabLimitProfile::Create({});
+        REQUIRE(limits.HasValue());
+        const HeadlessCookedDecisionInput input{.committed = *committed.Value(),
+                                                .environment = fixture.Environment(),
+                                                .bindings = {{controller.controller, decisionId}},
+                                                .querySchema = std::make_shared<const QuerySchemaRegistry>(registry.Value())};
+        const auto admitted = AdmitHeadlessCookedControllers(catalog, scene.Value(), input, limits.Value(), {});
+        if (available) {
+            REQUIRE(admitted.HasValue());
+            REQUIRE(admitted.Value().size() == 1);
+            CHECK(admitted.Value().front().cookedPlan->Root() == graph.asset);
+        } else {
+            REQUIRE(admitted.HasError());
+            CHECK(admitted.ErrorValue().code.Value() == AIErrors::EnvironmentQueryDescriptorUnavailable.code.Value());
+        }
+        CHECK(fixture.probe.factories == 0);
+#if HORO_TEST_PHYSICS_NATIVE
+        if (available) {
+            using namespace Network;
+            const auto mode = GENERATE(NetworkProjectRole::Standalone, NetworkProjectRole::ListenServer);
+            JobSystem jobs{{1, 8}};
+            Assets::AssetLoadService loads{jobs, committed.Value()->SceneProvider()};
+            const HeadlessSceneLoadBoundary load{{}, std::chrono::steady_clock::now() + std::chrono::seconds{5}};
+            auto execution = input;
+            execution.execution.emplace(AiSceneCookedDecisionExecution{jobs, {}, {}});
+            Gameplay::GameplayReplicationAdmissionPolicy replication;
+            replication.inventory.completeness = NetworkReplicationInventoryCompleteness::Complete;
+            auto composed =
+                ComposeHeadlessSceneNetworkServices(std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(scene).Value()),
+                                                    {.mode = Physics::PhysicsRuntimeMode::Canonical,
+                                                     .settings = Physics::Settings(),
+                                                     .registry = assets,
+                                                     .loads = loads,
+                                                     .load = load,
+                                                     .aiControllers = catalog,
+                                                     .cookedDecisions =
+                                                         std::make_shared<const HeadlessCookedDecisionInput>(std::move(execution))},
+                                                    {}, std::nullopt, replication);
+            REQUIRE(composed.HasValue());
+            const auto service = [&](NetworkModeServiceKind kind, NetworkModeWorldKind world, Runtime::SceneRuntimeId sceneId) {
+                return composed.Value().factories.services[static_cast<std::size_t>(kind)]({kind, mode, {}, world, sceneId});
+            };
+            const auto authority =
+                mode == NetworkProjectRole::Standalone ? NetworkModeWorldKind::Standalone : NetworkModeWorldKind::AuthorityServer;
+            auto sceneService = service(NetworkModeServiceKind::Scene, authority, {7});
+            REQUIRE(sceneService.HasValue());
+            REQUIRE(sceneService.Value()->Prepare().HasValue());
+            auto physics = service(NetworkModeServiceKind::Physics, authority, {7});
+            REQUIRE(physics.HasValue());
+            REQUIRE(physics.Value()->Prepare().HasValue());
+            REQUIRE(physics.Value()->Activate().HasValue());
+            const auto before = InspectHeadlessDecisionValue(*physics.Value(), identity, key);
+            REQUIRE(before.HasValue());
+            CHECK_FALSE(before.Value());
+            for (std::uint64_t tick = 1; tick <= 5; ++tick) {
+                const auto frame = physics.Value()->RunFixedTick({tick, Duration::FromNanoseconds(16'666'667), {}});
+                if (frame.HasError())
+                    UNSCOPED_INFO(frame.ErrorValue().message);
+                REQUIRE(frame.HasValue());
+            }
+            const auto after = InspectHeadlessDecisionValue(*physics.Value(), identity, key);
+            const auto diagnostic = InspectHeadlessDecisionFailure(*physics.Value());
+            REQUIRE(diagnostic.HasValue());
+            CHECK_FALSE(diagnostic.Value());
+            REQUIRE(after.HasValue());
+            REQUIRE(after.Value());
+            const auto &winner = std::get<Math::WorldCoordinate64>(std::get<BlackboardScalarValue>(*after.Value()));
+            CHECK(winner == Math::WorldCoordinate64::FromMillimeters(2000, 0, -500));
+            CHECK(fixture.probe.factories == 0);
+            if (mode == NetworkProjectRole::ListenServer) {
+                auto client = service(NetworkModeServiceKind::Scene, NetworkModeWorldKind::Client, {8});
+                REQUIRE(client.HasValue());
+                REQUIRE(client.Value()->Prepare().HasValue());
+                const auto replica = InspectHeadlessScene(*client.Value());
+                REQUIRE(replica);
+                CHECK(replica->RuntimeId() == Runtime::SceneRuntimeId{8});
+                const auto clientValue = InspectHeadlessDecisionValue(*client.Value(), identity, key);
+                REQUIRE(clientValue.HasError());
+                CHECK(clientValue.ErrorValue().code.Value() == AIErrors::RuntimeUnavailable.code.Value());
+                const auto unchanged = InspectHeadlessDecisionValue(*physics.Value(), identity, key);
+                REQUIRE(unchanged.HasValue());
+                CHECK(unchanged.Value() == after.Value());
+                client.Value()->Shutdown();
+            }
+            physics.Value()->Shutdown();
+            sceneService.Value()->Shutdown();
+            CHECK(InspectHeadlessDecisionValue(*physics.Value(), identity, key).HasError());
+            CHECK(InspectHeadlessDecisionFailure(*physics.Value()).HasError());
+        }
+#endif
     }
 }  // namespace

@@ -10,6 +10,11 @@ if(HORO_BUILD_EDITOR_GUI)
         HoroEditor/app/HoroEditorApp.cpp
         HoroEditor/app/EditorWindowChrome.cpp
         HoroEditor/app/EditorNavigationBakeHost.cpp
+        HoroEditor/app/EditorLocalAgentPanel.cpp
+        HoroEditor/app/EditorLocalAgentPatch.cpp
+        HoroEditor/app/EditorLocalAgentPatchCheckpoint.cpp
+        HoroEditor/app/EditorLocalAgentContext.cpp
+        HoroEditor/app/EditorLocalAgentHistory.cpp
         HoroEditor/app/EditorWorkerShutdown.cpp
         HoroEditor/app/EditorAudioPreviewHost.cpp
         HoroEditor/app/EditorAudioPreviewDecode.cpp
@@ -29,8 +34,9 @@ if(HORO_BUILD_EDITOR_GUI)
         target_link_libraries(HoroEditor PRIVATE dwmapi)
     endif()
 
-    target_link_libraries(HoroEditor PRIVATE HoroEngine::PlatformProjectReadFiles HoroShaderHotReloadHostInternal)
-    target_link_libraries(HoroEditor PRIVATE HoroXRSimulatorPlayHost)
+    target_link_libraries(HoroEditor PRIVATE HoroEngine::PlatformProjectReadFiles HoroShaderHotReloadHostInternal HoroEngine::Assets)
+    target_link_libraries(HoroEditor PRIVATE HoroEditorAgentTurnInternal HoroMcpEditorAgentToolsInternal HoroEditorAgentHistoryInternal HoroEngine::ModelProviderAdapters)
+    target_link_libraries(HoroEditor PRIVATE HoroXRSimulatorPlayHost HoroEngine::VisualAccessibility)
     target_link_libraries(HoroEditor PRIVATE HoroXRSimulatorProjectArtifacts HoroEngine::PlatformProjectIo)
     include(HoroEditorGuiLiveReloadHost)
     if(HORO_EDITOR_LIVE_UI)
@@ -128,6 +134,7 @@ if(HORO_BUILD_EDITOR_GUI)
     set_property(SOURCE HoroEditor/app/HoroEditorApp.cpp
         APPEND PROPERTY COMPILE_DEFINITIONS HORO_SOURCE_REVISION="${HORO_SOURCE_REVISION}")
     target_link_libraries(HoroEditor PRIVATE HoroNativeNavigationBakeHost HoroEngine::PlatformProjectIo)
+    target_link_libraries(HoroEditor PRIVATE HoroEngine::RuntimeConsole HoroEditorConsoleLaunchInternal HoroEditorRuntimeConsoleViewInternal)
 
     if(BUILD_TESTING AND HORO_ENABLE_GPU_SMOKE_TESTS AND HORO_BUILD_RENDER_OPENGL)
         target_sources(HoroEditor PRIVATE HoroEditor/app/EditorSurfaceLifecycleQualification.cpp)
@@ -158,6 +165,7 @@ if(HORO_BUILD_EDITOR_GUI)
     target_link_libraries(HoroEditor
         PRIVATE
             HoroPackageProjectHost
+            HoroEditorImageProviderHostInternal
             HoroRuntimeUiPaintHost
             HoroEditorUiStyleHostInternal
             HoroEditorTerrainHostInternal
@@ -170,6 +178,7 @@ if(HORO_BUILD_EDITOR_GUI)
             HoroEngine::Runtime
             HoroEngine::RuntimeScene
             HoroEngine::PhysicsSceneIntegration
+            HoroEngine::AISceneIntegration
             HoroEditorSceneProductHost
             HoroEditorPlaySceneHostInternal
             HoroScenePhysicsHost
@@ -204,6 +213,7 @@ if(HORO_BUILD_EDITOR_GUI)
         if(TARGET HoroOpenXRApplicationHost)
             target_compile_definitions(HoroEditor PRIVATE HORO_HAS_OPENXR_VULKAN_HOST=1)
             target_link_libraries(HoroEditor PRIVATE HoroOpenXRApplicationHost)
+            target_include_directories(HoroEditor PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/shared/xr")
         endif()
     endif()
     if(TARGET HoroAudioSdl3)

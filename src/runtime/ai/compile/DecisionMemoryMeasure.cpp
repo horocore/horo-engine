@@ -96,7 +96,10 @@ namespace Horo::AI::Detail {
             }
             if (std::holds_alternative<std::shared_ptr<const CookedStateMachinePlan>>(graph.execution))
                 storage.taskSlots += providers;
-            return Add(storage.coreInstanceBytes, DecisionNodeGeneration::ExecutorStorageBytes(providers));
+            const auto executorBytes = std::holds_alternative<std::shared_ptr<const CookedUtilityPlan>>(graph.execution)
+                                           ? providers * DecisionNodeGeneration::ExecutorStorageBytes(1)
+                                           : DecisionNodeGeneration::ExecutorStorageBytes(providers);
+            return Add(storage.coreInstanceBytes, executorBytes);
         }
     }  // namespace
 

@@ -47,9 +47,10 @@ namespace Horo::Application::Internal {
 
     /** @copydoc MakeNativeEditorPlaySaveFactory */
     Result<EditorPlaySaveFactory> MakeNativeEditorPlaySaveFactory(JobSystem &jobs, OperationStore &operations, Clock &clock,
-                                                                  WallClock &wallClock) {
+                                                                  WallClock &wallClock,
+                                                                  std::optional<EditorPlaySaveSupplement> supplement) {
         const PlaySaveRootEnvironment environment;
         return MakeEditorPlaySaveFactory(jobs, operations, clock, wallClock, environment, RootPlatform(),
-                                         Platform::CreateNativeSecureRandomSource());
+                                         Platform::CreateNativeSecureRandomSource(), std::move(supplement));
     }
 }  // namespace Horo::Application::Internal

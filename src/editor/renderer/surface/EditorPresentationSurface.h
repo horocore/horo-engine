@@ -69,12 +69,14 @@ namespace Horo::Editor {
          * @param mode Already negotiated native presentation policy.
          * @param admission Idle owner-thread admission; cancellation and active frames remain typed errors.
          * @param recovery Retry permits one retained-owner realization attempt; Defer performs no native work while Lost.
+         * @param displayRevision Nonzero monotonic revision from the owning window. It changes on display, scale or fullscreen transitions.
          * @return Publication with the exact nativeFailure on loss, or a fatal host/lifecycle admission error.
          * @pre The host reports nativeFailure and does not admit GPU work from a Lost snapshot.
          */
         [[nodiscard]] Result<EditorSurfaceObservation> Observe(std::optional<Render::FramebufferExtent> extent,
                                                                Render::ResolvedPresentMode mode, EditorSurfaceAdmission admission,
-                                                               EditorSurfaceRecovery recovery = EditorSurfaceRecovery::Defer);
+                                                               EditorSurfaceRecovery recovery = EditorSurfaceRecovery::Defer,
+                                                               std::uint64_t displayRevision = 1);
         /** @brief Stops admission and publishes Close before the host destroys native resources.
          * @return Closed snapshot or typed owner/state failure. Repeated calls are harmless.
          * @param admission Host frame state; cancellation permits Close, an active frame does not.
@@ -93,7 +95,7 @@ namespace Horo::Editor {
         /** @brief Publishes suspension without invoking the native realizer. */
         [[nodiscard]] Result<EditorSurfaceObservation> Suspend(const Render::RenderSurfaceSnapshot &current);
         /** @brief Realizes a frozen candidate and preserves native failure after committing Lost. */
-        [[nodiscard]] Result<EditorSurfaceObservation> Realize(Render::FramebufferExtent extent, Render::ResolvedPresentMode mode,
+        [[nodiscard]] Result<EditorSurfaceObservation> Realize(const Render::RenderSurfaceConfiguration &target,
                                                                Render::RenderSurfaceState state);
         /** @brief Rejects host state and unnegotiated mode changes before native work. */
         [[nodiscard]] Result<void> ValidateAdmission(Render::ResolvedPresentMode mode, EditorSurfaceAdmission admission) const;
@@ -106,6 +108,7 @@ namespace Horo::Editor {
         std::optional<Render::ResolvedPresentMode> admittedMode_;
         std::optional<Render::RenderSurfaceTransition> pending_;
         std::uint64_t sequence_{};
+        std::uint64_t observedDisplayRevision_{1};
         bool closed_{};
     };
 }  // namespace Horo::Editor

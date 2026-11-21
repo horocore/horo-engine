@@ -12,7 +12,7 @@ namespace Horo::Animation::Test::Scene {
     using Runtime::EntityRef;
 
     struct Forwarder final : Runtime::RuntimeLifecycleParticipant {
-        std::unique_ptr<Runtime::SceneAnimationRuntime> adapter;
+        std::shared_ptr<Runtime::SceneAnimationRuntime> adapter;
         bool enabled{true};
         bool evaluated{};
         std::uint64_t lastTick{};
@@ -62,6 +62,7 @@ namespace Horo::Animation::Test::Scene {
     };
 
     struct Peer final : Runtime::RuntimeLifecycleParticipant {
+        std::function<Result<void>(const Runtime::FixedStepContext &)> movement;
         bool failUpdate{};
         Runtime::FrameScheduler *retireBeforeFence{};
         Runtime::SceneAnimationRuntime *closeDuringUpdate{};
@@ -76,7 +77,12 @@ namespace Horo::Animation::Test::Scene {
             return Result<void>::Success();
         }
 
-        Result<void> OnFixedUpdate(const Runtime::FixedStepContext &) override {
+        Result<void> OnFixedUpdate(const Runtime::FixedStepContext &context) override {
+            if (movement) {
+                auto staged = movement(context);
+                if (staged.HasError())
+                    return staged;
+            }
             if (closeDuringUpdate)
                 closeDuringUpdate->Shutdown();
             if (std::exchange(failUpdate, false))
@@ -132,7 +138,9 @@ namespace Horo::Animation::Test::Scene {
         EntityRef entity;
         bool clipSource{};
 
-        explicit Fixture(bool directClip = false, bool withStructuralOwner = true, const SourcePreparation &prepareSources = {})
+        explicit Fixture(bool directClip = false, bool withStructuralOwner = true, const SourcePreparation &prepareSources = {},
+                         std::shared_ptr<const Runtime::SceneAnimationInputSource> inputs = {},
+                         std::optional<Runtime::SceneAnimationParallelEvaluation> parallel = {}, bool enableRootMotion = false)
             : committed(CaptureRuntimeAssets(cook, prepareSources, sourceBinding)), clipSource(directClip) {
             scheduler = Cook::Take(Runtime::FrameScheduler::Create(clock, {.fixedStep = Duration::FromNanoseconds(10)}));
             Runtime::SceneAnimationRuntimeConfig config;
@@ -140,6 +148,10 @@ namespace Horo::Animation::Test::Scene {
             config.runtimeOwner = Id<AnimationRuntimeId>(501);  // Explicit test-owned namespace, never derived from a Scene ID.
             config.target = cook.request.target;
             config.ownerCancellation = token;
+            config.inputs = std::move(inputs);
+            config.enableRootMotionRequests = enableRootMotion;
+            if (parallel)
+                config.parallelEvaluation.emplace(*parallel);
             auto adapter = Cook::Take(Runtime::SceneAnimationRuntime::Create(config));
             REQUIRE(scenes.AddActivationParticipant(adapter->MakeActivationParticipant()).HasValue());
             if (withStructuralOwner)

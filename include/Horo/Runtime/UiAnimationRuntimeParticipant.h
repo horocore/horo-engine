@@ -138,7 +138,8 @@ namespace Horo::Runtime {
          * @param source Exact actual host/scheduler DispatchSource; default-invalid capabilities reject.
          * @param config Explicit trusted application role, viewport and finite source/command capacities.
          * @return Move-only participant/controller composition or typed admission/capacity failure.
-         * @pre Call on the same owner thread before scheduler dispatch; no prior UI source duration is silently adopted.
+         * @pre Call on the same owner thread while scheduler dispatch is idle.
+         * @post Pre-binding committed simulation and presentation time do not advance the new source.
          */
         [[nodiscard]] static Result<UiAnimationRuntimeComposition> Compose(Ui::UiAnimationOwner owner, RuntimeDispatchSource source,
                                                                            UiAnimationRuntimeConfig config);
@@ -169,6 +170,11 @@ namespace Horo::Runtime {
          * @param viewport Complete typed application facts. @return Admission or typed malformed/lifecycle failure.
          */
         [[nodiscard]] Result<void> SetViewport(Ui::UiAnimationViewport viewport);
+        /** @brief Applies the host's latest immutable visual accessibility policy without advancing a clock.
+         * @param policy Complete flags from the same committed configuration revision.
+         * @return Original lifecycle or stale/invalid policy failure from the animation owner.
+         */
+        [[nodiscard]] Result<void> SetVisualAccessibility(const Ui::UiVisualPresentationPolicy &policy);
         /** @copydoc Ui::UiAnimationOwner::ConfigureInspection */
         [[nodiscard]] Result<void> ConfigureInspection(Ui::UiPresentationAttachmentId attachment, Ui::UiLayoutInspectorLimits limits,
                                                        bool enabled);

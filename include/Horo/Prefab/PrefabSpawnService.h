@@ -18,6 +18,23 @@
 namespace Horo::Prefab {
     class PrefabSpawnService;
 
+    /** @brief Host owner of optional state published with an exact cooked Prefab occurrence. */
+    class IPrefabGroupPublicationOwner {
+    public:
+        virtual ~IPrefabGroupPublicationOwner() = default;
+        /**
+         * @brief Binds verified recipe provenance to an occurrence before structural submission.
+         * @param recipe Prepared cooked template and ordered member provenance, borrowed for this call.
+         * @param request Exact admitted spawn intent, borrowed for this call.
+         * @param projected Typed projected components in cooked entity order, borrowed for this call.
+         * @param creator Authenticated local capability principal selected by the Prefab service.
+         * @return Owner for spawn and later despawn, null to omit, or typed failure. No state is published here.
+         */
+        [[nodiscard]] virtual Result<std::shared_ptr<const Runtime::SceneGroupPublication>> Bind(
+            const PreparedPrefabSpawn &recipe, const PrefabSpawnRequest &request, std::span<const Runtime::RuntimeComponentSet> projected,
+            std::string_view creator) const = 0;
+    };
+
     /** @brief Explicit host-owned inert codec for built-in cooked members.
      * @details Borrowed only synchronously on the Scene owner lane during bounded
      * preparation. The host outlives the spawn service; neither a queued
@@ -48,6 +65,12 @@ namespace Horo::Prefab {
         struct PrefabInstanceState;
     }  // namespace Detail
 
+    /** @brief One generation-checked spawned entity and its portable authored identity. */
+    struct PrefabSpawnedMember final {
+        Runtime::EntityRef entity;
+        CookedPrefabProvenance provenance;
+    };
+
     /** @brief Read-only identity of one complete spawned group; never mutable Scene
      * storage. */
     class PrefabInstance final {
@@ -56,6 +79,13 @@ namespace Horo::Prefab {
         /** @brief Returns the generation-qualified root. @return Invalid for an empty
          * instance. */
         [[nodiscard]] Runtime::EntityRef Root() const noexcept;
+        /** @brief Resolves one exact prefab-local address through the currently committed owning Scene.
+         * @param address Stable cooked source address, including every enclosing nested occurrence.
+         * @param scene Current owner-lane view of this group's Scene incarnation.
+         * @return Owned entity/provenance or typed missing-address, wrong-scene or stale-generation failure.
+         */
+        [[nodiscard]] Result<PrefabSpawnedMember> ResolveMember(const PrefabObjectAddress &address,
+                                                                const Runtime::RuntimeSceneView &scene) const;
         /** @brief Returns the actual durable occurrence for semantic persistence, even after this runtime cookie becomes stale.
          * @return Exact issued Save identity, or absence for an empty/ephemeral instance. Identity alone grants no mutation.
          */
@@ -301,6 +331,13 @@ namespace Horo::Prefab {
          * Existing ephemeral groups are never assigned reconstructed IDs after publication.
          */
         [[nodiscard]] Result<void> InstallPersistenceOwner(std::shared_ptr<IPrefabPersistenceOwner> persistence);
+        /**
+         * @brief Installs an optional host publication owner for future cooked group transactions.
+         * @param owner Explicit owner scoped to this service, retained until retirement.
+         * @return Success or typed late, foreign, or closed rejection.
+         * @pre No structural Prefab group has been submitted to this service.
+         */
+        [[nodiscard]] Result<void> InstallGroupPublicationOwner(std::shared_ptr<const IPrefabGroupPublicationOwner> owner);
         /** @brief Admits an explicitly permitted module to this exact active Scene.
          * @param binding Trusted host policy and routing; never inferred from a
          * service locator.
@@ -309,6 +346,24 @@ namespace Horo::Prefab {
          * owner-lane state and is not thread-safe.
          */
         [[nodiscard]] Result<std::shared_ptr<Gameplay::GameplayPrefabContext>> Acquire(GameplayPrefabBinding binding) const;
+        /**
+         * @brief Queues an admitted replica with its exact Scene publication owner.
+         * @param request Verified local cooked source and resolved spawn intent.
+         * @param publication One replica mapping owner, retained through later despawn.
+         * @param cancellation Owning replica scope cancellation.
+         * @return Operation receipt or typed admission failure.
+         * @details Host-only submission uses the current safe-point cursor, including before the first fixed tick.
+         */
+        [[nodiscard]] Result<PrefabOperation> SpawnReplica(PrefabSpawnRequest request,
+                                                           std::shared_ptr<const Runtime::SceneGroupPublication> publication,
+                                                           const CancellationToken &cancellation) const;
+        /**
+         * @brief Retires an exact replica through its original group publication owner.
+         * @param instance Group previously committed through SpawnReplica.
+         * @param cancellation Owning replica scope cancellation.
+         * @return Operation receipt or typed admission failure.
+         */
+        [[nodiscard]] Result<PrefabOperation> DespawnReplica(const PrefabInstance &instance, const CancellationToken &cancellation) const;
         /** @brief Advances bounded load/completion work and at most one eligible
          * Scene transaction.
          * @param tick Monotonic committed fixed tick; zero is allowed only before the

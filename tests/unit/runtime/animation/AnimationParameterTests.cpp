@@ -19,6 +19,44 @@ namespace Horo::Animation {
         }
     }  // namespace
 
+    TEST_CASE("Queued graph scalars are typed and consumed at the commit fence", "[animation][parameters]") {
+        const Prepared fixture(Test::Instance::AllScalarTypes());
+        auto instance = fixture.Create();
+        const auto weight = Id<GraphParameterId>(1);
+        const std::array invocation{GraphParameterInput{weight, 0.25F}};
+        CHECK(instance.QueueParameter({weight, true}).failure == GraphInstanceFailure::TypeMismatch);
+        CHECK(instance.QueueParameter({weight, std::numeric_limits<float>::infinity()}).failure == GraphInstanceFailure::Malformed);
+        CHECK(instance.QueueParameter({Id<GraphParameterId>(4), true}).failure == GraphInstanceFailure::TypeMismatch);
+        CHECK(instance.QueueParameter({Id<GraphParameterId>(99), 0.0F}).failure == GraphInstanceFailure::BindingMismatch);
+
+        std::array<GraphParameterInput, 4> output;
+        const auto before = HoroAnimationTestAllocationCount();
+        const auto first = instance.QueueParameter({weight, 0.75F});
+        const auto latest = instance.QueueParameter({weight, 1.0F});
+        const auto staged = instance.Evaluate({Id<AnimationTickId>(1), {1}, {}, invocation});
+        const auto pending = instance.QueueParameter({weight, 0.0F});
+        const auto aborted = instance.Abort();
+        const auto retried = instance.Evaluate({Id<AnimationTickId>(1), {1}, {}, invocation});
+        const auto committed = instance.Commit(Id<AnimationTickId>(1));
+        const auto copied = instance.CopyParameters(committed.publication.currentPose, output);
+        CHECK(HoroAnimationTestAllocationCount() == before);
+        CHECK(first.HasValue());
+        CHECK(latest.HasValue());
+        CHECK(staged.HasValue());
+        CHECK(pending.failure == GraphInstanceFailure::StateInvalid);
+        CHECK(aborted.HasValue());
+        CHECK(retried.HasValue());
+        REQUIRE(committed.HasValue());
+        REQUIRE(copied.HasValue());
+        CHECK(std::get<float>(output[0].value) == 1.0F);
+
+        const auto next = Id<AnimationTickId>(2);
+        REQUIRE(instance.Evaluate({next, {1}, {}, invocation}).HasValue());
+        REQUIRE(instance.Commit(next).HasValue());
+        REQUIRE(instance.CopyParameters(instance.Publication().currentPose, output).HasValue());
+        CHECK(std::get<float>(output[0].value) == 0.25F);
+    }
+
     TEST_CASE("Animation parameter triggers survive abort and consume only one committed tick", "[animation][parameters]") {
         Prepared fixture(Test::Instance::AllScalarTypes());
         auto instance = fixture.Create();

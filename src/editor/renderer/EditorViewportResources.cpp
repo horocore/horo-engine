@@ -201,7 +201,9 @@ namespace Horo::Editor {
         meshes_.clear();
         pendingMeshes_.clear();
         allocatedExtent_ = {};
+        declinedCameraCrossFadeExtent_ = {};
         meshesReady_ = false;
+        cameraCrossFade_.reset();
     }
 
     std::optional<EditorViewportResources::MeshBinding> EditorViewportResources::FindMesh(const std::uint64_t sourceId) const noexcept {
@@ -387,6 +389,9 @@ namespace Horo::Editor {
     }
 
     Result<void> EditorViewportResources::SynchronizeTarget(const EditorViewportExtent extent) {
+        if (declinedCameraCrossFadeExtent_ == extent)
+            return Result<void>::Success();
+        declinedCameraCrossFadeExtent_ = {};
         if (allocatedExtent_ == extent) {
             if (pendingViewportTarget_.extent.IsValid())
                 ReleaseViewportTarget(pendingViewportTarget_);
@@ -398,6 +403,8 @@ namespace Horo::Editor {
         const auto targetReady = AdvanceViewportTarget(pendingViewportTarget_);
         if (targetReady.HasError())
             return Result<void>::Failure(targetReady.ErrorValue());
+        if (cameraCrossFade_ && !pendingViewportTarget_.crossFadeDeclined && !PrepareCameraCrossFadeSource(extent))
+            return Result<void>::Success();
         if (!targetReady.Value())
             return Result<void>::Success();
         if (config_.resolveImage == nullptr) {
@@ -413,6 +420,21 @@ namespace Horo::Editor {
         viewportTarget_ = std::exchange(pendingViewportTarget_, {});
         allocatedExtent_ = extent;
         return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportResources::PrepareCameraCrossFadeSource */
+    bool EditorViewportResources::PrepareCameraCrossFadeSource(const EditorViewportExtent extent) {
+        const auto source = AdvanceCameraCrossFadeSource(pendingViewportTarget_.crossFade, {extent.width, extent.height});
+        if (source.HasValue())
+            return source.Value();
+        ReleaseCameraCrossFadeSource(pendingViewportTarget_.crossFade);
+        if (!viewportTarget_.crossFade.target.IsValid()) {
+            pendingViewportTarget_.crossFadeDeclined = true;
+            return true;  // The first ordinary output remains usable without the optional reservation.
+        }
+        ReleaseViewportTarget(pendingViewportTarget_);
+        declinedCameraCrossFadeExtent_ = extent;
+        return false;  // Preserve the existing complete pair and any admitted camera transitions.
     }
 
     Result<bool> EditorViewportResources::AdvanceViewportTarget(ViewportTargetResources &resources) {
@@ -432,18 +454,14 @@ namespace Horo::Editor {
     }
 
     Result<bool> EditorViewportResources::AdvanceViewportTextures(ViewportTargetResources &resources) {
-        using enum Render::RenderTextureUsage;
         const Render::FramebufferExtent extent{resources.extent.width, resources.extent.height};
-        const auto color =
-            AdvanceTexture(*frontend_, config_.memoryScope,
-                           {.extent = extent,
-                            .format = colorPipeline_ ? Render::RenderTextureFormat::Rgba16Float : Render::RenderTextureFormat::Rgba8Unorm,
-                            .usage = colorPipeline_ ? Sampled | RenderAttachment | CopySource : Sampled | RenderAttachment},
-                           resources.colorTexture, resources.colorTextureOperation);
+        const auto color = AdvanceTexture(*frontend_, config_.memoryScope, SceneColorDescriptor(extent), resources.colorTexture,
+                                          resources.colorTextureOperation);
         if (color.HasError())
             return Result<bool>::Failure(color.ErrorValue());
         const auto depth =
-            AdvanceTexture(*frontend_, config_.memoryScope, {.extent = extent, .format = config_.depthFormat, .usage = RenderAttachment},
+            AdvanceTexture(*frontend_, config_.memoryScope,
+                           {.extent = extent, .format = config_.depthFormat, .usage = Render::RenderTextureUsage::RenderAttachment},
                            resources.depthTexture, resources.depthTextureOperation);
         if (depth.HasError())
             return Result<bool>::Failure(depth.ErrorValue());
@@ -469,11 +487,113 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorViewportResources::EnableColorPipeline */
-    Result<void> EditorViewportResources::EnableColorPipeline() {
-        if (viewportTarget_.colorTexture.IsValid() || pendingViewportTarget_.colorTexture.IsValid())
+    Result<void> EditorViewportResources::EnableColorPipeline(bool spatial) {
+        if (cameraCrossFade_ || viewportTarget_.colorTexture.IsValid() || pendingViewportTarget_.colorTexture.IsValid())
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
         colorPipeline_ = true;
+        spatialColor_ = spatial;
         return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportResources::EnableCameraCrossFade */
+    Result<void> EditorViewportResources::EnableCameraCrossFade(const CameraCrossFadeOutput output) {
+        if (colorPipeline_ || viewportTarget_.colorTexture.IsValid() || pendingViewportTarget_.colorTexture.IsValid())
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+        cameraCrossFade_ = output;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportResources::CameraCrossFadeTarget */
+    Render::RenderTargetHandle EditorViewportResources::CameraCrossFadeTarget() const noexcept {
+        return viewportTarget_.crossFade.target;
+    }
+
+    /** @copydoc EditorViewportResources::CameraCrossFadeImages */
+    std::optional<EditorViewportResources::CameraCrossFadeAttachments> EditorViewportResources::CameraCrossFadeImages() const noexcept {
+        const auto &source = viewportTarget_.crossFade;
+        if (!source.target.IsValid())
+            return std::nullopt;
+        return CameraCrossFadeAttachments{source.color, source.depth, source.colorView, source.depthView};
+    }
+
+    /** @copydoc EditorViewportResources::IsSubmissionPinCapacityFailure */
+    bool EditorViewportResources::IsSubmissionPinCapacityFailure(const Error &error) noexcept {
+        const auto &capacity = Render::FrontendErrors::ResourceSubmissionCapacityExceeded;
+        return error.domain.Value() == capacity.domain.Value() && error.code.Value() == capacity.code.Value();
+    }
+
+    /** @copydoc EditorViewportResources::CameraCrossFadeColorView */
+    Render::RenderTextureViewHandle EditorViewportResources::CameraCrossFadeColorView() const noexcept {
+        return viewportTarget_.crossFade.colorView;
+    }
+
+    /** @copydoc EditorViewportResources::AdvanceCameraCrossFadeSource */
+    Result<bool> EditorViewportResources::AdvanceCameraCrossFadeSource(CameraCrossFadeSource &source,
+                                                                       const Render::FramebufferExtent extent) {
+        const auto color =
+            AdvanceTexture(*frontend_, config_.memoryScope, SceneColorDescriptor(extent), source.color, source.colorOperation);
+        if (color.HasError())
+            return color;
+        const auto depth =
+            AdvanceTexture(*frontend_, config_.memoryScope,
+                           {.extent = extent, .format = config_.depthFormat, .usage = Render::RenderTextureUsage::RenderAttachment},
+                           source.depth, source.depthOperation);
+        if (depth.HasError())
+            return depth;
+        if (!color.Value() || !depth.Value())
+            return Result<bool>::Success(false);
+        const auto colorView = AdvanceTextureView(*frontend_,
+                                                  {.texture = source.color,
+                                                   .format = Render::RenderTextureFormat::Rgba8Unorm,
+                                                   .aspect = Render::RenderTextureAspect::Color},
+                                                  source.colorView, source.colorViewOperation);
+        if (colorView.HasError())
+            return colorView;
+        const auto depthView =
+            AdvanceTextureView(*frontend_, {.texture = source.depth, .format = config_.depthFormat, .aspect = config_.depthAspect},
+                               source.depthView, source.depthViewOperation);
+        if (depthView.HasError())
+            return depthView;
+        if (!colorView.Value() || !depthView.Value())
+            return Result<bool>::Success(false);
+        return AdvanceRenderTarget(*frontend_, {.colorAttachment = source.colorView, .depthAttachment = source.depthView, .extent = extent},
+                                   source.target, source.targetOperation);
+    }
+
+    /** @copydoc EditorViewportResources::SceneColorDescriptor */
+    Render::RenderTextureDescriptor EditorViewportResources::SceneColorDescriptor() const noexcept {
+        return SceneColorDescriptor({allocatedExtent_.width, allocatedExtent_.height});
+    }
+
+    /** @brief Describes the actual resident scene texture creation policy. */
+    Render::RenderTextureDescriptor EditorViewportResources::SceneColorDescriptor(Render::FramebufferExtent extent) const noexcept {
+        using enum Render::RenderTextureUsage;
+        return {.extent = extent,
+                .format = colorPipeline_ ? Render::RenderTextureFormat::Rgba16Float : Render::RenderTextureFormat::Rgba8Unorm,
+                .usage = colorPipeline_ || cameraCrossFade_ == CameraCrossFadeOutput::CopySource ? Sampled | RenderAttachment | CopySource
+                                                                                                 : Sampled | RenderAttachment};
+    }
+
+    /** @copydoc EditorViewportResources::SpatialColorDescriptor */
+    Render::RenderTextureDescriptor EditorViewportResources::SpatialColorDescriptor() const noexcept {
+        return SpatialColorDescriptor({allocatedExtent_.width, allocatedExtent_.height});
+    }
+
+    /** @brief The native spatial shader writes a whole distinct RGBA32F storage and sampled texture. */
+    Render::RenderTextureDescriptor EditorViewportResources::SpatialColorDescriptor(Render::FramebufferExtent extent) noexcept {
+        return {.extent = extent,
+                .format = Render::RenderTextureFormat::Rgba32Float,
+                .usage = Render::RenderTextureUsage::Storage | Render::RenderTextureUsage::Sampled};
+    }
+
+    /** @copydoc EditorViewportResources::SpatialTexture */
+    Render::RenderTextureHandle EditorViewportResources::SpatialTexture() const noexcept {
+        return viewportTarget_.spatialTexture;
+    }
+
+    /** @copydoc EditorViewportResources::SpatialTextureView */
+    Render::RenderTextureViewHandle EditorViewportResources::SpatialTextureView() const noexcept {
+        return viewportTarget_.spatialView;
     }
 
     /** @copydoc EditorViewportResources::DisplayTexture */
@@ -500,6 +620,18 @@ namespace Horo::Editor {
     Result<bool> EditorViewportResources::AdvanceColorPipelineTargets(ViewportTargetResources &resources) {
         using enum Horo::Render::RenderTextureUsage;
         using namespace Render;
+
+        if (spatialColor_) {
+            const auto descriptor = SpatialColorDescriptor({resources.extent.width, resources.extent.height});
+            const auto created =
+                AdvanceTexture(*frontend_, config_.memoryScope, descriptor, resources.spatialTexture, resources.spatialOperation);
+            if (created.HasError() || !created.Value())
+                return created;
+            const auto viewed = AdvanceTextureView(*frontend_, {.texture = resources.spatialTexture, .format = descriptor.format},
+                                                   resources.spatialView, resources.spatialViewOperation);
+            if (viewed.HasError() || !viewed.Value())
+                return viewed;
+        }
 
         struct Attachment {
             RenderTextureHandle *texture;
@@ -631,6 +763,7 @@ namespace Horo::Editor {
     }
 
     void EditorViewportResources::ReleaseViewportTarget(ViewportTargetResources &resources) noexcept {
+        ReleaseCameraCrossFadeSource(resources.crossFade);
         if (resources.target.IsValid())
             static_cast<void>(frontend_->ReleaseRenderTarget(resources.target));
         if (resources.depthView.IsValid())
@@ -641,12 +774,25 @@ namespace Horo::Editor {
             static_cast<void>(frontend_->ReleaseTexture(resources.depthTexture));
         if (resources.colorTexture.IsValid())
             static_cast<void>(frontend_->ReleaseTexture(resources.colorTexture));
-        for (const auto view : {resources.displayView, resources.presentationView})
+        for (const auto view : {resources.displayView, resources.presentationView, resources.spatialView})
             if (view.IsValid())
                 static_cast<void>(frontend_->ReleaseTextureView(view));
-        for (const auto texture : {resources.displayTexture, resources.presentationTexture})
+        for (const auto texture : {resources.displayTexture, resources.presentationTexture, resources.spatialTexture})
             if (texture.IsValid())
                 static_cast<void>(frontend_->ReleaseTexture(texture));
         resources = {};
+    }
+
+    /** @copydoc EditorViewportResources::ReleaseCameraCrossFadeSource */
+    void EditorViewportResources::ReleaseCameraCrossFadeSource(CameraCrossFadeSource &source) noexcept {
+        if (source.target.IsValid())
+            static_cast<void>(frontend_->ReleaseRenderTarget(source.target));
+        for (const auto view : {source.depthView, source.colorView})
+            if (view.IsValid())
+                static_cast<void>(frontend_->ReleaseTextureView(view));
+        for (const auto texture : {source.depth, source.color})
+            if (texture.IsValid())
+                static_cast<void>(frontend_->ReleaseTexture(texture));
+        source = {};
     }
 }  // namespace Horo::Editor

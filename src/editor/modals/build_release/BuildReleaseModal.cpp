@@ -3,6 +3,7 @@
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "editor/design_system/components/EditorBusyIndicator.h"
+#include "editor/design_system/components/EditorUiLabelWrap.h"
 
 #include <algorithm>
 #include <array>
@@ -12,6 +13,20 @@
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Reflows a form label within its current column. */
+        void WrappedFieldLabel(const char *label, const Theme::Fonts &fonts) {
+            ImGui::PushTextWrapPos(0.0F);
+            Ui::FieldLabel(label, fonts);
+            ImGui::PopTextWrapPos();
+        }
+
+        /** @brief Keeps the localized heading within the release form's content bounds. */
+        void WrappedSectionTitle(const char *label, const Theme::Fonts &fonts) {
+            ImGui::PushTextWrapPos(0.0F);
+            Ui::SectionTitle(label, fonts);
+            ImGui::PopTextWrapPos();
+        }
+
         constexpr std::array PlatformKeys{"build_release.windows", "build_release.macos", "build_release.linux"};
         constexpr std::array ArchitectureKeys{"build_release.x64", "build_release.arm64"};
         constexpr std::array ConfigurationKeys{"build_release.shipping", "build_release.development", "build_release.test_config"};
@@ -95,7 +110,7 @@ namespace Horo::Editor {
         template <class Left, class Right>
         void Pair(const char *id, const EditorGuiContext &context, const char *leftKey, const char *rightKey, Left left, Right right) {
             const auto label = [&](const char *key) {
-                Ui::FieldLabel(BuildReleaseModal::kTextScope.Text(context.localization, key).c_str(), context.theme.fonts);
+                WrappedFieldLabel(BuildReleaseModal::kTextScope.Text(context.localization, key).c_str(), context.theme.fonts);
             };
             if (ImGui::GetContentRegionAvail().x < 500) {
                 label(leftKey);
@@ -347,7 +362,7 @@ namespace Horo::Editor {
     /** @copydoc BuildReleaseModal::DrawReview */
     void BuildReleaseModal::DrawReview() const {
         const auto &fonts = context_.theme.fonts;
-        Ui::SectionTitle(Label("prepare_release.review_heading").c_str(), fonts);
+        WrappedSectionTitle(Label("prepare_release.review_heading").c_str(), fonts);
         Ui::Hint(Label("prepare_release.review_hint").c_str(), fonts);
         ImGui::Spacing();
         const bool wide = ImGui::GetContentRegionAvail().x >= 500;
@@ -383,7 +398,7 @@ namespace Horo::Editor {
                     return false;
                 ImGui::TableNextRow();
                 ImGui::TableNextColumn();
-                Ui::FieldLabel(Label(key).c_str(), fonts);
+                WrappedFieldLabel(Label(key).c_str(), fonts);
                 ImGui::TableNextColumn();
                 return true;
             };
@@ -515,16 +530,21 @@ namespace Horo::Editor {
             secondary = Label("content_browser.navigation.back").c_str();
         if (job && !Running(job))
             primary = Text("close").c_str();
-        const auto &metrics = DesignSystem::MetricsFor(Theme::GetActiveTokens(), Ui::ComponentSize::Medium);
-        float width{};
+        const auto &tokens = Theme::GetActiveTokens();
+        const auto &metrics = DesignSystem::MetricsFor(tokens, Ui::ComponentSize::Medium);
+        const float available = std::max(1.0F, std::floor(ImGui::GetContentRegionAvail().x));
+        Ui::WrappedButtonLabel primaryButton;
+        Ui::WrappedButtonLabel secondaryButton;
         {
             Theme::ScopedTextStyle style{fonts.sans, metrics.fontSize, Theme::FontPx::Sans};
-            width = ImGui::CalcTextSize(primary).x + metrics.paddingX * 2;
+            primaryButton = Ui::MeasureWrappedButtonLabel(primary, "release.primary", available, metrics);
             if (secondary)
-                width += ImGui::CalcTextSize(secondary).x + metrics.paddingX * 2 + ImGui::GetStyle().ItemSpacing.x;
+                secondaryButton = Ui::MeasureWrappedButtonLabel(secondary, "release.secondary", available, metrics);
         }
-        const bool inlineActions = ImGui::GetContentRegionAvail().x >= width;
-        const bool wide = ImGui::GetContentRegionAvail().x >= width + 220;
+        const float width = primaryButton.width + (secondary ? secondaryButton.width + ImGui::GetStyle().ItemSpacing.x : 0.0F);
+        const bool inlineActions = available >= width;
+        const bool wide = available >= width + 220;
+        const float scale = tokens.sizes.uiScale;
         if (job) {
             if (Running(job)) {
                 const auto pos = ImGui::GetCursorScreenPos();
@@ -542,10 +562,13 @@ namespace Horo::Editor {
             if (wide)
                 ImGui::SameLine();
         }
-        if (wide || !job)
+        if (wide || (!job && inlineActions))
             ImGui::SetCursorPosX(ImGui::GetCursorPosX() + std::max(0.0F, ImGui::GetContentRegionAvail().x - width));
         if (secondary) {
-            if (Ui::Button({.label = secondary, .variant = Ui::ButtonVariant::Secondary, .font = fonts.sans})) {
+            if (Ui::Button({.label = secondaryButton.label.c_str(),
+                            .size = {secondaryButton.width / scale, secondaryButton.height / scale},
+                            .variant = Ui::ButtonVariant::Secondary,
+                            .font = fonts.sans})) {
                 if (job) {
                     const auto cancelled = releases_->RequestCancel();
                     if (cancelled.HasError())
@@ -556,7 +579,10 @@ namespace Horo::Editor {
             if (inlineActions)
                 ImGui::SameLine();
         }
-        if (Ui::Button({.label = primary, .enabled = job || !review, .font = fonts.sans})) {
+        if (Ui::Button({.label = primaryButton.label.c_str(),
+                        .size = {primaryButton.width / scale, primaryButton.height / scale},
+                        .enabled = job || !review,
+                        .font = fonts.sans})) {
             if (job)
                 return true;
             draft_.view = static_cast<int>(BuildReleaseTab::Review);

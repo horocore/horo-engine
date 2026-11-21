@@ -227,6 +227,25 @@ namespace Horo::Runtime::Ui {
             RequireError(engine.Layout(malformed), UiErrors::TextLayoutInputInvalid);
         }
 
+        TEST_CASE("Text layout refuses older presentation lineage after a scaled publication", "[runtime_ui][text_layout][validation]") {
+            TwoClusterText text;
+            auto engine = MakeEngine();
+            auto current = Request(text);
+            current.source.revisions.presentation = Rev<UiLayoutPresentationRevision>(2);
+            current.options.scale = UiTextScale::Create(1536).Value();
+            const auto published = engine.Layout(current);
+            REQUIRE(published.HasValue());
+
+            auto stale = current;
+            stale.source.revisions.presentation = Rev<UiLayoutPresentationRevision>(1);
+            stale.options.scale = UiTextScale{};
+            RequireError(engine.Layout(stale), UiErrors::TextLayoutSourceStale);
+            stale.source.revisions.presentation = {};
+            RequireError(engine.Layout(stale), UiErrors::TextLayoutSourceStale);
+            REQUIRE(published.Value().Descriptor().options.scale == current.options.scale);
+            REQUIRE(engine.Layout(current).HasValue());
+        }
+
         TEST_CASE("Text layout result leases survive replacement, slot pressure, and engine shutdown",
                   "[runtime_ui][text_layout][lifetime]") {
             TwoClusterText text;

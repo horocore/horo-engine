@@ -21,7 +21,7 @@ namespace Horo::SceneSource {
                                                                                                  "light",
                                                                                                  "audioSource",
                                                                                                  "",
-                                                                                                 "",
+                                                                                                 "uiCanvas",
                                                                                                  "navigationSurface",
                                                                                                  "navigationRegion",
                                                                                                  "navigationModifier",
@@ -82,7 +82,7 @@ namespace Horo::SceneSource {
                 AdoptField<&Runtime::RuntimeComponentSet::light, &SceneObjectComponentSet::light>,
                 AdoptField<&Runtime::RuntimeComponentSet::audioSource, &SceneObjectComponentSet::audioSource>,
                 nullptr,
-                nullptr,
+                AdoptField<&Runtime::RuntimeComponentSet::uiCanvas, &SceneObjectComponentSet::uiCanvas>,
                 AdoptField<&Runtime::RuntimeComponentSet::navigationSurface, &SceneObjectComponentSet::navigationSurface>,
                 AdoptField<&Runtime::RuntimeComponentSet::navigationRegion, &SceneObjectComponentSet::navigationRegion>,
                 AdoptField<&Runtime::RuntimeComponentSet::navigationModifier, &SceneObjectComponentSet::navigationModifier>,
@@ -160,7 +160,8 @@ namespace Horo::SceneSource {
         };
         for (const auto version :
              {PrefabBuiltinComponentCodecContractVersion, PrefabBuiltinComponentPayloadSchemaVersion, Detail::kSceneSchemaVersion,
-              Detail::kCharacterSceneSchemaVersion, Detail::kNavigationSourceSceneSchemaVersion, Detail::kAnimationSceneSchemaVersion})
+              Detail::kCharacterSceneSchemaVersion, Detail::kNavigationSourceSceneSchemaVersion, Detail::kAnimationSceneSchemaVersion,
+              Detail::kUiCanvasSceneSchemaVersion})
             append(std::to_string(version));
         const auto actual = Runtime::BuiltinSceneComponentSchemas();
         std::vector<Runtime::BuiltinSceneComponentSchema> schemas(actual.begin(), actual.end());

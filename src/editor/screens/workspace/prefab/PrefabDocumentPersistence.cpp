@@ -1,9 +1,11 @@
 #include "Horo/Editor/SourceDocumentService.h"
 #include "Horo/Editor/WorkspacePanelHost.h"
+#include "Horo/Foundation/JobSystem.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
 
 #include <chrono>
+#include <map>
 
 namespace Horo::Editor {
     namespace {
@@ -23,6 +25,66 @@ namespace Horo::Editor {
             }
         };
     }  // namespace
+
+    /** @copydoc ComparePrefabExternal */
+    Result<std::shared_ptr<const PrefabExternalComparison>> ComparePrefabExternal(const PrefabExternalInspection &request,
+                                                                                  const CancellationToken &cancellation) {
+        using Return = Result<std::shared_ptr<const PrefabExternalComparison>>;
+        if (cancellation.IsCancellationRequested())
+            return Return::Failure(JobCancelled().ErrorValue());
+        const auto captured = Assets::CaptureAssetSource(request.root, request.path, Prefab::PrefabHardLimits::SourceDocumentBytes);
+        if (captured.HasError()) {
+            if (request.previous && request.previous->diskError &&
+                request.previous->diskError->code.Value() == captured.ErrorValue().code.Value())
+                return Return::Success(request.previous);
+            return Return::Success(
+                std::make_shared<const PrefabExternalComparison>(PrefabExternalComparison{.diskError = captured.ErrorValue()}));
+        }
+        if (captured.Value().identity == request.accepted)
+            return Return::Success({});
+        if (request.previous && request.previous->observed == captured.Value().identity)
+            return Return::Success(request.previous);
+        PrefabExternalComparison result{.observed = captured.Value().identity};
+        if (!result.observed.exists) {
+            result.diskError = MakeError(Assets::AssetSourceErrors::ReadFailed);
+            return Return::Success(std::make_shared<const PrefabExternalComparison>(std::move(result)));
+        }
+        const auto &draft = request.draft->Data();
+        const auto &bytes = captured.Value().bytes;
+        const auto disk = Prefab::PrefabDocument::Parse({reinterpret_cast<const char *>(bytes.data()), bytes.size()}, request.limits,
+                                                        {.expectedProjectVersion = draft.projectVersion});
+        if (disk.HasError())
+            result.diskError = disk.ErrorValue();
+        else if (disk.Value().Data().assetId != draft.assetId)
+            result.diskError = MakeError(Prefab::PrefabErrors::IdentityInvalid);
+        if (result.diskError)
+            return Return::Success(std::make_shared<const PrefabExternalComparison>(std::move(result)));
+        const auto &external = disk.Value().Data();
+        result.compositionChanged = draft.composition != external.composition || draft.referencedAssets != external.referencedAssets;
+        std::map<Prefab::LocalObjectId, std::pair<const Prefab::PrefabObjectNode *, const Prefab::PrefabObjectNode *>> objects;
+        for (const auto &object : draft.objects)
+            objects[object.localId].first = &object;
+        for (const auto &object : external.objects)
+            objects[object.localId].second = &object;
+        for (const auto &[id, sides] : objects) {
+            if (cancellation.IsCancellationRequested())
+                return Return::Failure(JobCancelled().ErrorValue());
+            const auto &[local, stored] = sides;
+            if (local && stored && *local == *stored)
+                continue;
+            const auto change =
+                local ? (stored ? PrefabExternalChange::Modified : PrefabExternalChange::DraftOnly) : PrefabExternalChange::DiskOnly;
+            PrefabExternalMemberDifference difference{id, change, local ? local->name : std::string{},
+                                                      stored ? stored->name : std::string{}};
+            if (local && stored) {
+                difference.parentChanged = local->parentLocalId != stored->parentLocalId;
+                difference.transformChanged = local->localTransform != stored->localTransform;
+                difference.payloadChanged = local->components != stored->components || local->behaviors != stored->behaviors;
+            }
+            result.members.push_back(std::move(difference));
+        }
+        return Return::Success(std::make_shared<const PrefabExternalComparison>(std::move(result)));
+    }
 
     /** @copydoc PrefabDocumentSession::Save */
     Result<Assets::AssetSourcePublication> PrefabDocumentSession::Save(const PrefabDocumentFence &fence,
@@ -63,17 +125,13 @@ namespace Horo::Editor {
         return published;
     }
 
-    /** @copydoc PrefabDocumentSession::Autosave */
-    Result<void> PrefabDocumentSession::Autosave(const ProjectMutationCoordinator &mutations, DurableFileSystem &files) {
+    /** @copydoc PrefabDocumentSession::CaptureRecovery */
+    Result<std::optional<PrefabRecoveryCheckpoint>> PrefabDocumentSession::CaptureRecovery() const {
+        using Return = Result<std::optional<PrefabRecoveryCheckpoint>>;
         if (auto admitted = Admit({owner_, identity_.instance, revision_}); admitted.HasError())
-            return admitted;
-        if (state_ == saved_)
-            return Result<void>::Success();
-        if (const auto validated = source_->ValidateLimits(limits_); validated.HasError())
-            return Result<void>::Failure(validated.ErrorValue());
-        auto encoded = source_->SerializeCanonical();
-        if (encoded.HasError())
-            return Result<void>::Failure(encoded.ErrorValue());
+            return Return::Failure(admitted.ErrorValue());
+        if (state_ == saved_ || (recoveryRevision_ == revision_ && !acceptedRecovery_))
+            return Return::Success(std::nullopt);
         const auto seconds = std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
         DocumentRecoveryRecord record{source_->Data().assetId,
                                       identity_.key,
@@ -84,16 +142,59 @@ namespace Horo::Editor {
                                       accepted_,
                                       state_,
                                       {}};
+        return Return::Success(PrefabRecoveryCheckpoint{std::move(record), source_, limits_, acceptedRecovery_});
+    }
+
+    /** @copydoc WritePrefabRecovery */
+    Result<std::shared_ptr<const DocumentRecoveryRecord>> WritePrefabRecovery(const PrefabRecoveryCheckpoint &checkpoint,
+                                                                              DocumentRecoveryService &recovery,
+                                                                              const CancellationToken &cancellation) {
+        using Return = Result<std::shared_ptr<const DocumentRecoveryRecord>>;
+        if (cancellation.IsCancellationRequested())
+            return Return::Failure(JobCancelled().ErrorValue());
+        if (auto validated = checkpoint.source->ValidateLimits(checkpoint.limits); validated.HasError())
+            return Return::Failure(validated.ErrorValue());
+        auto encoded = checkpoint.source->SerializeCanonical();
+        if (encoded.HasError())
+            return Return::Failure(encoded.ErrorValue());
+        if (cancellation.IsCancellationRequested())
+            return Return::Failure(JobCancelled().ErrorValue());
+        auto record = std::make_shared<DocumentRecoveryRecord>(checkpoint.record);
         const auto bytes = std::as_bytes(std::span(encoded.Value()));
-        record.payload.assign(bytes.begin(), bytes.end());
+        record->payload.assign(bytes.begin(), bytes.end());
+        const auto published = checkpoint.acceptedRecovery ? recovery.ReplaceAccepted(*record, *checkpoint.acceptedRecovery, cancellation)
+                                                           : recovery.Write(*record, cancellation);
+        return published.HasError() ? Return::Failure(published.ErrorValue()) : Return::Success(std::move(record));
+    }
+
+    /** @copydoc PrefabDocumentSession::AcknowledgeRecovery */
+    bool PrefabDocumentSession::AcknowledgeRecovery(const PrefabRecoveryCheckpoint &checkpoint) noexcept {
+        const auto &record = checkpoint.record;
+        if (closed_ || thread_ != std::this_thread::get_id() || record.sessionOwner != owner_ ||
+            record.sessionGeneration != identity_.instance.Value() || record.document != identity_.key ||
+            record.acceptedSource != accepted_ || record.revision < recoveryRevision_ || record.revision > revision_ ||
+            checkpoint.acceptedRecovery != acceptedRecovery_)
+            return false;
+        recoveryRevision_ = record.revision;
+        acceptedRecovery_.reset();
+        return true;
+    }
+
+    /** @copydoc PrefabDocumentSession::Autosave */
+    Result<void> PrefabDocumentSession::Autosave(const ProjectMutationCoordinator &mutations, DurableFileSystem &files) {
+        auto captured = CaptureRecovery();
+        if (captured.HasError())
+            return Result<void>::Failure(captured.ErrorValue());
+        if (!captured.Value())
+            return Result<void>::Success();
+        const auto &checkpoint = *captured.Value();
         PublicationGuard guard(busy_);
         DocumentRecoveryService recovery(root_, mutations, files);
-        auto result = acceptedRecovery_ ? recovery.ReplaceAccepted(record, *acceptedRecovery_) : recovery.Write(record);
-        if (result.HasValue()) {
-            recoveryRevision_ = revision_;
-            acceptedRecovery_.reset();
-        }
-        return result;
+        auto result = WritePrefabRecovery(checkpoint, recovery);
+        if (result.HasError())
+            return Result<void>::Failure(result.ErrorValue());
+        static_cast<void>(AcknowledgeRecovery(checkpoint));
+        return Result<void>::Success();
     }
 
     /** @copydoc PrefabDocumentSession::DiscardOwnedRecovery */
@@ -159,7 +260,7 @@ namespace Horo::Editor {
         if (parsed.Value().Data().assetId != record.asset || ComputeSha256(std::as_bytes(std::span(encoded.Value()))) != record.state)
             return Result<void>::Failure(MakeError(Prefab::PrefabErrors::DocumentInvalid));
         auto replacement = std::make_shared<const Prefab::PrefabDocument>(std::move(parsed).Value());
-        std::optional<DocumentRecoveryRecord> acceptedRecord{record};
+        auto acceptedRecord = std::make_shared<const DocumentRecoveryRecord>(record);
         PublicationGuard guard(busy_);
         DocumentRecoveryService recovery(root_, mutations, files);
         const auto currentRecord = recovery.Inspect(record.asset, record.document);
@@ -176,6 +277,8 @@ namespace Horo::Editor {
         acceptedRecovery_.swap(acceptedRecord);
         state_ = record.state;
         conflict_ = false;
+        externalComparison_.reset();
+        keepExternalDraft_ = false;
         history_.Clear();
         ++revision_;
         recoveryRevision_ = revision_;

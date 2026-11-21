@@ -51,8 +51,9 @@ namespace Horo::Application::Internal {
     class ModeParticipant final : public Runtime::RuntimeLifecycleParticipant {
     public:
         ModeParticipant(Network::NetworkModeComposition mode, std::shared_ptr<ClientSessionOwner> sessions,
-                        std::unique_ptr<Runtime::RuntimeLifecycleParticipant> fixed) noexcept
-            : mode_(std::move(mode)), sessions_(std::move(sessions)), fixed_(std::move(fixed)) {
+                        std::unique_ptr<Runtime::RuntimeLifecycleParticipant> fixed,
+                        std::optional<HeadlessSceneTravelLoad> travelLoad) noexcept
+            : mode_(std::move(mode)), sessions_(std::move(sessions)), fixed_(std::move(fixed)), travelLoad_(travelLoad) {
             sessions_->Bind(mode_);
         }
 
@@ -103,11 +104,11 @@ namespace Horo::Application::Internal {
         Result<void> OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &frame) override {
             if (auto prepared = PreparePhase(phase, frame); prepared.HasError())
                 return FailPhase(prepared.ErrorValue());
-            if (auto advanced = mode_.RunPhase(phase); advanced.HasError())
+            if (auto advanced = mode_.RunPhase(phase, frame.completedSimulationTick, frame.cancellation); advanced.HasError())
                 return FailPhase(advanced.ErrorValue());
             if (auto failed = mode_.TakeTravelFailure(); failed && !travelFailure_)
                 travelFailure_ = std::move(failed);
-            return phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && pending_ ? AdvanceQueuedTravel()
+            return phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && pending_ ? AdvanceQueuedTravel(frame.cancellation)
                                                                                               : Result<void>::Success();
         }
 
@@ -157,10 +158,12 @@ namespace Horo::Application::Internal {
             return phase == Runtime::RuntimePhase::NetworkPoll ? sessions_->BeginPoll() : Result<void>::Success();
         }
 
-        Result<void> AdvanceQueuedTravel() {
+        Result<void> AdvanceQueuedTravel(const CancellationToken &cancellation) {
             pending_ = false;
             if (auto reconciled = sessions_->Reconcile(); reconciled.HasError())
                 return reconciled;
+            if (travelLoad_)
+                travelLoad_->boundary = {cancellation, std::chrono::steady_clock::now() + travelLoad_->timeout};
             if (auto traveled = mode_.Travel({nextWorlds_.data(), nextWorldCount_}, Runtime::RuntimePhase::CommitDeferredLifecycleChanges,
                                              nextSession_);
                 traveled.HasError())
@@ -179,6 +182,7 @@ namespace Horo::Application::Internal {
         Network::NetworkModeComposition mode_;
         std::shared_ptr<ClientSessionOwner> sessions_;
         std::unique_ptr<Runtime::RuntimeLifecycleParticipant> fixed_;
+        std::optional<HeadlessSceneTravelLoad> travelLoad_;
         std::array<Network::NetworkModeWorld, 2> nextWorlds_{};
         std::size_t nextWorldCount_{};
         std::optional<Network::NetworkOperationGeneration> nextSession_;
@@ -201,6 +205,17 @@ namespace Horo::Application::Internal {
                 return Result<Network::NetworkModePlan>::Failure(MakeError(Network::NetworkErrors::NetworkModeUnavailable,
                                                                            "Product, package, host or project does not admit this mode."));
             return Network::ResolveNetworkModePlan(assessment, inputs.selection, inputs.hostGeneration, inputs.worlds, inputs.presentation);
+        }
+
+        /** @brief Check that the selected per-peer Snapshot allowance fits the authored project profile. */
+        bool FitsSnapshotBudget(const NetworkProductHostInputs &inputs) {
+            if (!inputs.worldBinding || !inputs.worldBinding->policy.stateUpdates)
+                return true;
+            const auto &route = *inputs.worldBinding->policy.stateUpdates;
+            const auto &profile = inputs.project.Profile();
+            return route.maximumMessagesPerTick <= profile.maxMessagesPerConnectionPerTick.value &&
+                   route.maximumBytesPerTick <= profile.burstBytesPerConnection.value &&
+                   route.maximumBytesPerTick <= profile.maxUnreliableQueuedBytesPerConnection.value;
         }
 
         Result<std::unique_ptr<Runtime::RuntimeLifecycleParticipant>> PrepareFixedParticipant(const NetworkProductHostInputs &inputs,
@@ -245,9 +260,10 @@ namespace Horo::Application::Internal {
     }  // namespace
 
     NetworkProductHost::NetworkProductHost(ConstructionKey, std::unique_ptr<Runtime::RuntimeHost> runtime, ModeParticipant *mode,
-                                           std::shared_ptr<NetworkDebuggerService> debugger,
-                                           NetworkNativeRetirementPoll retirement) noexcept
-        : pollRetirement_(std::move(retirement)), debugger_(std::move(debugger)), runtime_(std::move(runtime)), mode_(mode) {}
+                                           std::shared_ptr<NetworkDebuggerService> debugger, NetworkNativeRetirementPoll retirement,
+                                           NetworkAiHealthSource aiHealth) noexcept
+        : pollRetirement_(std::move(retirement)), aiHealth_(std::move(aiHealth)), debugger_(std::move(debugger)),
+          runtime_(std::move(runtime)), mode_(mode) {}
 
     NetworkProductHost::~NetworkProductHost() noexcept {
         try {
@@ -264,6 +280,10 @@ namespace Horo::Application::Internal {
                                                                            Network::NetworkModeFactories factories,
                                                                            Network::NetworkTargetDiagnostic *diagnostic,
                                                                            std::shared_ptr<NetworkDebuggerService> debugger) {
+        if (inputs.sceneTravelLoad && !IsHeadlessSceneLoadTimeoutValid(inputs.sceneTravelLoad->timeout))
+            return Result<std::unique_ptr<NetworkProductHost>>::Failure(MakeError(HeadlessSceneLoadErrors::Invalid));
+        if (!FitsSnapshotBudget(inputs))
+            return Result<std::unique_ptr<NetworkProductHost>>::Failure(MakeError(Network::NetworkErrors::AdmissionPolicyInvalid));
         auto plan = PrepareProductPlan(inputs, diagnostic);
         if (plan.HasError())
             return Result<std::unique_ptr<NetworkProductHost>>::Failure(plan.ErrorValue());
@@ -280,14 +300,14 @@ namespace Horo::Application::Internal {
         auto fixed = PrepareFixedParticipant(inputs, runtime.Value()->DispatchSource());
         if (fixed.HasError())
             return Result<std::unique_ptr<NetworkProductHost>>::Failure(std::move(fixed).ErrorValue());
-        auto participant =
-            std::make_unique<ModeParticipant>(std::move(composition).Value(), std::move(sessions).Value(), std::move(fixed).Value());
+        auto participant = std::make_unique<ModeParticipant>(std::move(composition).Value(), std::move(sessions).Value(),
+                                                             std::move(fixed).Value(), inputs.sceneTravelLoad);
         auto *mode = participant.get();
         if (auto added = runtime.Value()->AddParticipant(std::move(participant)); added.HasError())
             return Result<std::unique_ptr<NetworkProductHost>>::Failure(added.ErrorValue());
         return Result<std::unique_ptr<NetworkProductHost>>::Success(
             std::make_unique<NetworkProductHost>(ConstructionKey{}, std::move(runtime).Value(), mode, std::move(debugger),
-                                                 inputs.pollRetirement));
+                                                 inputs.pollRetirement, inputs.aiHealth));
     }
 
     Result<void> NetworkProductHost::Startup() {
@@ -344,6 +364,14 @@ namespace Horo::Application::Internal {
     Result<Network::NetworkModeRoleView> NetworkProductHost::Role(const Network::NetworkModeWorldKind world,
                                                                   const Runtime::SceneRuntimeId scene) const {
         return mode_->Mode().Role(world, scene);
+    }
+
+    /** @copydoc NetworkProductHost::AiHealth */
+    std::optional<HeadlessAiHealth> NetworkProductHost::AiHealth(const Network::NetworkModeWorld world) const {
+        if (std::this_thread::get_id() != owner_ || !aiHealth_ || world.kind == Network::NetworkModeWorldKind::Client ||
+            Role(world.kind, world.scene).HasError())
+            return std::nullopt;
+        return aiHealth_(world, runtime_->Statistics().completedSimulationTick);
     }
 
     /** @copydoc NetworkProductHost::AcquireReplication */

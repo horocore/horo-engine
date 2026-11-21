@@ -287,7 +287,7 @@ namespace Horo::Packages {
 
     /** @copydoc PackageLifecycleService::Active */
     std::shared_ptr<const PackageActivationSnapshot> PackageLifecycleService::Active() const {
-        return impl_->active;
+        return std::this_thread::get_id() == impl_->owner ? impl_->active : nullptr;
     }
 
     /** @copydoc PackageLifecycleService::State */

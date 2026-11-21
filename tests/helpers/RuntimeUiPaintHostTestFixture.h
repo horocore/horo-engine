@@ -24,8 +24,9 @@ namespace Horo::Tests::UiPaintHostTesting {
     /** @brief Actual ordered RuntimeHost renderer consumer; it owns the same frame for scene, UI and native present. */
     class Renderer final : public Runtime::RuntimeLifecycleParticipant {
     public:
-        Renderer(Render::RenderFrontend &frontend, RuntimeUiPaintPort port, const Render::FramebufferExtent &output)
-            : frontend_(frontend), port_(std::move(port)), output_(output) {}
+        Renderer(Render::RenderFrontend &frontend, RuntimeUiPaintPort port, const Render::FramebufferExtent &output,
+                 std::function<void(std::uint64_t)> observe = {})
+            : frontend_(frontend), port_(std::move(port)), output_(output), observe_(std::move(observe)) {}
 
         Result<void> Startup(const CancellationToken &) override {
             return Result<void>::Success();
@@ -41,6 +42,8 @@ namespace Horo::Tests::UiPaintHostTesting {
 
         Result<void> OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &context) override {
             if (phase == Runtime::RuntimePhase::RenderExecution) {
+                if (observe_)
+                    observe_(context.frameNumber);
                 auto begun = frontend_.BeginFrame({.frameNumber = context.frameNumber, .outputExtent = output_});
                 if (begun.HasError())
                     return Result<void>::Failure(begun.ErrorValue());
@@ -61,6 +64,7 @@ namespace Horo::Tests::UiPaintHostTesting {
         Render::RenderFrontend &frontend_;
         RuntimeUiPaintPort port_;
         const Render::FramebufferExtent &output_;
+        std::function<void(std::uint64_t)> observe_;
         std::optional<Render::RenderFrameScope> frame_;
     };
 
@@ -96,7 +100,8 @@ namespace Horo::Tests::UiPaintHostTesting {
             return result;
         }
 
-        explicit Fixture(const bool paintAvailable = true, const UiLogicalPoint initialScroll = {})
+        explicit Fixture(const bool paintAvailable = true, const UiLogicalPoint initialScroll = {}, const bool contrastVariants = false,
+                         const bool compactControl = false)
             : frontend(Frontend(paintAvailable)), source(false, false, true, initialScroll) {
             std::array<std::byte, 64> pixels;
             pixels.fill(std::byte{128});
@@ -104,13 +109,18 @@ namespace Horo::Tests::UiPaintHostTesting {
             REQUIRE(frontend->ProcessResourceRequests().HasValue());
             const auto admitted = Take(source.service.Acquire(Source::Instance()));
             authoredCanvas = admitted.Get()->Instance().Canvases().front();
-            auto resources = Runtime::Ui::AnimationTests::Resources(admitted.Get()->Canvases().front());
-            if (initialScroll != UiLogicalPoint{})
-                for (auto &element : resources.definition.elements)
-                    if (element.element == Source::Stable<UiElementId>(11)) {
-                        element.layout.positioning = UiLayoutPositioning::Absolute;
-                        element.layout.offsets.top = NestedEffectChildOffset;
-                    }
+            auto resources = Runtime::Ui::AnimationTests::Resources(admitted.Get()->Canvases().front(), false, 1'000'000'000, false, false,
+                                                                    contrastVariants);
+            for (auto &element : resources.definition.elements) {
+                if (element.element != Source::Stable<UiElementId>(11))
+                    continue;
+                if (initialScroll != UiLogicalPoint{} || compactControl) {
+                    element.layout.positioning = UiLayoutPositioning::Absolute;
+                    element.layout.offsets.top = compactControl ? 40 * UiScalarUnitsPerDip : NestedEffectChildOffset;
+                }
+                if (compactControl)
+                    element.layout.width = UiLength::Dip(5 * UiScalarUnitsPerDip);
+            }
             auto composition = Take(RuntimeUiPaintHost::Compose(*frontend, host->DispatchSource(), std::move(source.service)));
             port = composition.port;
             const UiRenderExtractorDescriptor extraction{view, {8, 2, 16, 8, 4, 8, 4, 4}, 8};

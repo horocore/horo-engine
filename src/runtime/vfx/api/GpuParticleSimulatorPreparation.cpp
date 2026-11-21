@@ -158,6 +158,7 @@ namespace Horo::Vfx::GpuParticleDetail {
                                                                             const GpuParticleSimulatorCreateInfo &i,
                                                                             const Render::GpuParticleLayout &layout) {
             auto s = std::make_unique<Detail::GpuParticleSimulatorState>();
+            s->photosensitiveFlash = admission.Descriptor().Data().photosensitiveFlash;
             s->preparation.descriptor = Descriptor(admission, i, layout);
             s->initialWords.resize(layout.wordCount);
             s->forceWords.resize(i.forces.size() * Render::GpuParticleForceWords::Count);

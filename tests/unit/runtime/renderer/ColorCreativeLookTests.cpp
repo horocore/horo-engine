@@ -257,3 +257,19 @@ TEST_CASE("Cold and complete color admission share grading and aggregate atlas b
         CHECK(complete.ErrorValue().code.Value() == cold.ErrorValue().code.Value());
     }
 }
+
+TEST_CASE("Vulkan color recipe admits explicit manual exposure and the existing SDR encoder", "[renderer][color][vulkan]") {
+    const ShaderTargetRequirement target{ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16, 1, 1, 16, 128};
+    using enum ColorOutputShaderStage;
+    const auto manual = MakeColorOutputShaderManifest(SceneToDisplayLinear, target);
+    REQUIRE(manual.HasValue());
+    CHECK(manual.Value().bindings.size() == 6);
+    CHECK(manual.Value().parameters.size() == 2);
+    const auto names = ColorOutputShaderReflectionNames(SceneToDisplayLinear, target.backend);
+    REQUIRE(names.size() == 6);
+    REQUIRE(names.front().parameters.size() == 2);
+    CHECK(names.front().parameters.back().name == "ExposureSelection");
+    CHECK(MakeColorOutputShaderManifest(EncodeSdr, target).HasValue());
+    CHECK(MakeColorOutputShaderManifest(SceneToDisplayLinearWithLook, target).HasError());
+    CHECK(ColorOutputShaderReflectionNames(SceneToDisplayLinearWithLook, target.backend).empty());
+}

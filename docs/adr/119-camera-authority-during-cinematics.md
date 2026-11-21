@@ -142,9 +142,12 @@ Camera transitions are explicit product capabilities:
 | Advanced `DualViewCrossFade` | Publish two immutable view snapshots plus a finite composition weight through an explicit frontend capability | Requires two qualified views, budget and compositor support; absence is a typed denial |
 
 A requested transition declares its minimum mode and fallback policy at cook/
-activation. The owner may use an explicitly authored `HardCut` fallback when the
-requested blend capability or budget is unavailable. It cannot silently substitute a
-single-view geometric blend for a dual-view cross-fade, or vice versa.
+activation. `HardCut` replaces a denied blend directly. `LinearThenHardCut`
+allows a denied dual-view request to fall back to linear geometric interpolation
+with its original window when the single-view owner and endpoints admit it,
+then to a hard cut if interpolation is unavailable. `Fail` returns the exact
+transition error before acquiring playback authority. These are authored
+policies, and the renderer never substitutes a transition.
 
 `SingleViewBlend` interpolates camera pose and compatible projection/lens parameters
 in Camera-owned, backend-neutral code. Incompatible projection models or invalid

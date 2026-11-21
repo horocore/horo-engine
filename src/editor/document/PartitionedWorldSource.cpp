@@ -90,14 +90,24 @@ namespace Horo::Editor {
         }
 
         /** @brief Decodes one exact page head and its revision-correlated source-object metadata. */
-        PartitionedWorldPage DecodePage(const Json &page, const WS::WorldPartitionId world) {
+        PartitionedWorldPage DecodePage(const Json &page, const WS::WorldPartitionId world, const std::uint16_t version) {
             const auto revision = WS::WorldAuthoringRevision::Create(Integer<std::uint64_t>(page.at("revision")));
             if (revision.HasError())
                 throw std::invalid_argument("revision");
             PartitionedWorldPage decoded{
                 .head = {.partition = world, .sourceAsset = Asset(page.at("asset")), .revision = revision.Value()}};
             for (const auto &object : page.at("objects")) {
-                Fields(object, {"id", "source", "bounds", "placement", "layer"});
+                std::optional<WS::WorldObjectAnchor> anchor;
+                if (version == 2 && object.contains("worldAnchor")) {
+                    Fields(object, {"id", "source", "bounds", "placement", "layer", "worldAnchor"});
+                    const auto &authored = object.at("worldAnchor");
+                    Fields(authored, {"position", "cameraTarget"});
+                    anchor.emplace(WS::WorldObjectAnchor{Coordinate(authored.at("position")), {}});
+                    if (!authored.at("cameraTarget").is_null())
+                        anchor->cameraTarget = Coordinate(authored.at("cameraTarget"));
+                } else {
+                    Fields(object, {"id", "source", "bounds", "placement", "layer"});
+                }
                 decoded.objects.push_back(
                     {.descriptor = {.address = {.page = decoded.head.sourceAsset, .object = Integer<std::uint64_t>(object.at("id"))},
                                     .revision = revision.Value(),
@@ -105,13 +115,15 @@ namespace Horo::Editor {
                                     .bounds = Bounds(object.at("bounds")),
                                     .placement =
                                         static_cast<WS::WorldSpatialObjectPlacementClass>(Integer<std::uint8_t>(object.at("placement")))},
-                     .layer = Layer(object.at("layer"))});
+                     .layer = Layer(object.at("layer")),
+                     .anchor = anchor});
             }
             return decoded;
         }
 
         /** @brief Checks aggregate source-object capacity before constructing any page's object vector. */
-        Result<void> DecodePages(const Json &pages, PartitionedWorldDocument &document, const std::stop_token cancellation) {
+        Result<void> DecodePages(const Json &pages, PartitionedWorldDocument &document, const std::uint16_t version,
+                                 const std::stop_token cancellation) {
             std::size_t objectCount{};
             for (const auto &page : pages) {
                 if (cancellation.stop_requested())
@@ -123,7 +135,7 @@ namespace Horo::Editor {
                 if (objects.size() > 65536 - objectCount)
                     return Result<void>::Failure(MakeError(WorldDocumentErrors::Capacity));
                 objectCount += objects.size();
-                document.pages.push_back(DecodePage(page, document.settings.partition));
+                document.pages.push_back(DecodePage(page, document.settings.partition, version));
             }
             return Result<void>::Success();
         }
@@ -131,7 +143,8 @@ namespace Horo::Editor {
         /** @brief Decodes complete source metadata through the existing semantic admission authority. */
         Result<PartitionedWorldDocument> Decode(const Json &root, const std::stop_token cancellation) {
             Fields(root, {"version", "world", "bounds", "grid", "layers", "pages"});
-            if (Integer<std::uint16_t>(root.at("version")) != 1)
+            const auto version = Integer<std::uint16_t>(root.at("version"));
+            if (version != 1 && version != 2)
                 return Result<PartitionedWorldDocument>::Failure(MakeError(WorldDocumentErrors::Unsupported));
             const auto owner = Asset(root.at("world"));
             const auto policy = Grid(root.at("grid"));
@@ -148,7 +161,7 @@ namespace Horo::Editor {
                 return Result<PartitionedWorldDocument>::Failure(MakeError(WorldDocumentErrors::Capacity));
             for (const auto &layer : layers)
                 document.layers.push_back(DecodeLayer(layer));
-            if (const auto decoded = DecodePages(pages, document, cancellation); decoded.HasError())
+            if (const auto decoded = DecodePages(pages, document, version, cancellation); decoded.HasError())
                 return Result<PartitionedWorldDocument>::Failure(decoded.ErrorValue());
             // The existing authority is the only semantic validator; this temporary admission never reaches application state.
             PartitionedWorldWorkspace validator{owner};

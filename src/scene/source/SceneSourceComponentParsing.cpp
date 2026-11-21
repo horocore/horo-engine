@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Ui/UiDocumentSerialization.h"
 #include "SceneSourceInternal.h"
 
 #include <algorithm>
@@ -447,6 +448,30 @@ namespace Horo::SceneSource::Detail {
             {value["view"].get<std::uint32_t>(), static_cast<std::int32_t>(priority), weight, value["enabled"].get<bool>()});
     }
 
+    /** @brief Parses one durable reference to a specific canvas in one registry asset. */
+    [[nodiscard]] Result<Runtime::UiCanvasComponent> ParseUiCanvasComponent(const Json &value) {
+        using Parsed = Result<Runtime::UiCanvasComponent>;
+        namespace Ui = Runtime::Ui;
+        if (!value.is_object() || value.size() != 4 || !HasFields(value, {"asset", "document", "canvas", "minimumRevision"}) ||
+            !value["asset"].is_string() || !value["document"].is_string() || !value["canvas"].is_string() ||
+            !value["minimumRevision"].is_number_unsigned())
+            return Parsed::Failure(PersistenceError(SceneInvalid, "UI canvas reference is invalid."));
+        const auto asset = Assets::AssetId::Parse(value["asset"].get_ref<const Json::string_t &>());
+        const auto documentBytes = Ui::ParseUiStableId(value["document"].get_ref<const Json::string_t &>());
+        const auto canvasBytes = Ui::ParseUiStableId(value["canvas"].get_ref<const Json::string_t &>());
+        if (asset.HasError() || documentBytes.HasError() || canvasBytes.HasError())
+            return Parsed::Failure(PersistenceError(SceneInvalid, "UI canvas reference is invalid."));
+        const auto document = Ui::UiDocumentId::Create(documentBytes.Value());
+        const auto canvas = Ui::UiCanvasId::Create(canvasBytes.Value());
+        const auto minimum = Ui::UiDocumentRevision::Create(value["minimumRevision"].get<std::uint64_t>());
+        if (document.HasError() || canvas.HasError() || minimum.HasError())
+            return Parsed::Failure(PersistenceError(SceneInvalid, "UI canvas asset, document, canvas or revision identity is invalid."));
+        const Runtime::UiCanvasComponent component{{asset.Value(), document.Value(), canvas.Value(), minimum.Value()}};
+        if (auto valid = Runtime::Ui::ValidateUiCanvasAssetReference(component.canvas); valid.HasError())
+            return Parsed::Failure(valid.ErrorValue());
+        return Parsed::Success(component);
+    }
+
     /** @brief Preserves existing optional component parsing order and typed errors. */
     Result<void> ParseCoreComponents(const Json &value, SceneObjectComponentSet &components, std::size_t &recognized) {
         const auto parse = [&]<typename Component, typename Parser>(const std::string_view name, std::optional<Component> &destination,
@@ -463,7 +488,7 @@ namespace Horo::SceneSource::Detail {
             return parsed;
         if (auto parsed = parse("audioListener", components.audioListener, ParseAudioListenerComponent); parsed.HasError())
             return parsed;
-        return Result<void>::Success();
+        return parse("uiCanvas", components.uiCanvas, ParseUiCanvasComponent);
     }
 
     /** @brief Preserves existing optional component parsing order and typed errors. */

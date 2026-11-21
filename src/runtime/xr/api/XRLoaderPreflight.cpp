@@ -133,7 +133,8 @@ namespace Horo::XR {
         : contractVersion_(request.contractVersion), attempt_(request.attempt), backend_(request.backend),
           installRecord_(request.installRecord), productProfile_(request.productProfile), loaderSource_(request.loaderSource),
           runtimeSelection_(request.runtimeSelection), loaderApiVersion_(evidence.loaderApiVersion),
-          runtimeGeneration_(evidence.runtimeGeneration), consumedProbeSteps_(evidence.consumedProbeSteps) {}
+          runtimeGeneration_(evidence.runtimeGeneration), consumedProbeSteps_(evidence.consumedProbeSteps),
+          productMode_(request.productMode) {}
 
     /** @copydoc XRLoaderPreflightSnapshot::ContractVersion */
     XRContractVersion XRLoaderPreflightSnapshot::ContractVersion() const noexcept {
@@ -163,6 +164,11 @@ namespace Horo::XR {
     /** @copydoc XRLoaderPreflightSnapshot::LoaderSource */
     XRLoaderSourcePolicy XRLoaderPreflightSnapshot::LoaderSource() const noexcept {
         return loaderSource_;
+    }
+
+    /** @copydoc XRLoaderPreflightSnapshot::ProductMode */
+    XRPreflightProductMode XRLoaderPreflightSnapshot::ProductMode() const noexcept {
+        return productMode_;
     }
 
     /** @copydoc XRLoaderPreflightSnapshot::RuntimeSelection */

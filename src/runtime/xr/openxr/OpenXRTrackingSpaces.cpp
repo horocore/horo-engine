@@ -1,5 +1,6 @@
 #include "host/OpenXRActionBindings.h"
 
+#include <cmath>
 #include <format>
 #include <limits>
 
@@ -15,22 +16,59 @@ namespace Horo::XR::OpenXRInternal {
             return Result<XrPosef>::Success({{inverse.x, inverse.y, inverse.z, inverse.w}, {position.x, position.y, position.z}});
         }
 
+        /** @brief Converts the admitted reference kind to its native identifier. */
+        XrReferenceSpaceType NativeReference(const XRSpaceKind kind) noexcept {
+            if (kind == XRSpaceKind::Stage)
+                return XR_REFERENCE_SPACE_TYPE_STAGE;
+            if (kind == XRSpaceKind::View)
+                return XR_REFERENCE_SPACE_TYPE_VIEW;
+            return XR_REFERENCE_SPACE_TYPE_LOCAL;
+        }
+
+        /** @brief Maps the only two options admitted as the application tracking reference. */
+        XRSpaceKind AlternateKind(const XRSpaceKind base) noexcept {
+            return base == XRSpaceKind::Stage ? XRSpaceKind::Local : XRSpaceKind::Stage;
+        }
+
         /** @brief Preserves exact native space creation/retirement evidence. */
         Error SpaceFailure(const char *phase, const XrResult result) {
+            if (result == XR_ERROR_REFERENCE_SPACE_UNSUPPORTED || result == XR_ERROR_FUNCTION_UNSUPPORTED)
+                return MakeError(XRErrors::OperationUnsupported, phase);
             return MakeError(XRErrors::OperationUnavailable,
                              std::format("OpenXR {} failed; native result={}", phase, static_cast<std::int32_t>(result)));
         }
     }  // namespace
 
+    /** @copydoc OpenXRActionBindings::Tracking::SpaceCount */
+    std::size_t OpenXRActionBindings::Tracking::SpaceCount() const noexcept {
+        return actions.size() + 2 + static_cast<std::size_t>(request->worldFromBase.has_value()) +
+               static_cast<std::size_t>(request->alternateReferenceAvailable) +
+               static_cast<std::size_t>(request->consentedGazeSet.has_value());
+    }
+
+    /** @copydoc OpenXRActionBindings::Tracking::ReadStageBounds */
+    Result<void> OpenXRActionBindings::Tracking::ReadStageBounds(const TrackingContext &context) {
+        XrExtent2Df extent{};
+        const auto result = context.DispatchTable().getBounds(context.Native().session, XR_REFERENCE_SPACE_TYPE_STAGE, &extent);
+        if (result == XR_SPACE_BOUNDS_UNAVAILABLE && extent.width == 0.0F && extent.height == 0.0F)
+            return Result<void>::Success();
+        if (result != XR_SUCCESS && result != XR_SPACE_BOUNDS_UNAVAILABLE)
+            return Result<void>::Failure(SpaceFailure("read Stage bounds", result));
+        if (result != XR_SUCCESS || !std::isfinite(extent.width) || !std::isfinite(extent.height) || extent.width <= 0.0F ||
+            extent.height <= 0.0F)
+            return Result<void>::Failure(MakeError(XRErrors::OperationInvalid, "OpenXR returned malformed Stage bounds."));
+        stageBounds = XRStageBounds{extent.width, extent.height};
+        return Result<void>::Success();
+    }
+
     /** @copydoc OpenXRActionBindings::Tracking::PrepareSpaces */
     Result<void> OpenXRActionBindings::Tracking::PrepareSpaces(const TrackingContext &context) {
         if (!request)
             return Result<void>::Success();
-        if (!context.Preparing() && context.Native().maximumSpaces < actions.size() + 2 + (request->worldFromBase.has_value() ? 1U : 0U))
+        if (!context.Preparing() && context.Native().maximumSpaces < SpaceCount())
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
-        const auto reference = request->base == XRSpaceKind::Stage ? XR_REFERENCE_SPACE_TYPE_STAGE : XR_REFERENCE_SPACE_TYPE_LOCAL;
         XrReferenceSpaceCreateInfo info{XR_TYPE_REFERENCE_SPACE_CREATE_INFO};
-        info.referenceSpaceType = reference;
+        info.referenceSpaceType = NativeReference(request->base);
         info.poseInReferenceSpace.orientation.w = 1.0F;  // Native space offset, never a fabricated tracked pose.
         auto result = context.DispatchTable().createReference(context.Native().session, &info, &base);
         if (XR_FAILED(result) || base == XR_NULL_HANDLE)
@@ -41,6 +79,16 @@ namespace Horo::XR::OpenXRInternal {
         if (XR_FAILED(result) || view == XR_NULL_HANDLE)
             return Result<void>::Failure(
                 SpaceFailure("create head reference space", XR_FAILED(result) ? result : XR_ERROR_RUNTIME_FAILURE));
+        if (request->alternateReferenceAvailable) {
+            info.referenceSpaceType = NativeReference(AlternateKind(request->base));
+            result = context.DispatchTable().createReference(context.Native().session, &info, &alternate);
+            if (result != XR_SUCCESS || alternate == XR_NULL_HANDLE)
+                return Result<void>::Failure(
+                    SpaceFailure("create alternate reference space", result == XR_SUCCESS ? XR_ERROR_RUNTIME_FAILURE : result));
+        }
+        if (request->base == XRSpaceKind::Stage || alternate != XR_NULL_HANDLE)
+            if (auto bounds = ReadStageBounds(context); bounds.HasError())
+                return bounds;
         if (auto preparedWorld = PrepareWorldSpace(context); preparedWorld.HasError())
             return preparedWorld;
         for (auto &action : actions) {
@@ -53,6 +101,19 @@ namespace Horo::XR::OpenXRInternal {
             if (XR_FAILED(result) || action.space == XR_NULL_HANDLE)
                 return Result<void>::Failure(SpaceFailure("create action space", XR_FAILED(result) ? result : XR_ERROR_RUNTIME_FAILURE));
         }
+        return PrepareGazeSpace(context);
+    }
+
+    /** @copydoc OpenXRActionBindings::Tracking::PrepareGazeSpace */
+    Result<void> OpenXRActionBindings::Tracking::PrepareGazeSpace(const TrackingContext &context) {
+        if (gazeAction == XR_NULL_HANDLE)
+            return Result<void>::Success();
+        XrActionSpaceCreateInfo info{XR_TYPE_ACTION_SPACE_CREATE_INFO};
+        info.action = gazeAction;
+        info.poseInActionSpace.orientation.w = 1.0F;
+        const auto result = context.DispatchTable().createSpace(context.Native().session, &info, &gazeSpace);
+        if (result != XR_SUCCESS || gazeSpace == XR_NULL_HANDLE)
+            return Result<void>::Failure(SpaceFailure("create gaze space", result == XR_SUCCESS ? XR_ERROR_RUNTIME_FAILURE : result));
         return Result<void>::Success();
     }
 
@@ -66,7 +127,7 @@ namespace Horo::XR::OpenXRInternal {
         const auto pose = CalibratedWorldPose(*request->worldFromBase);
         if (pose.HasError())
             return Result<void>::Failure(pose.ErrorValue());
-        info.referenceSpaceType = request->base == XRSpaceKind::Stage ? XR_REFERENCE_SPACE_TYPE_STAGE : XR_REFERENCE_SPACE_TYPE_LOCAL;
+        info.referenceSpaceType = NativeReference(request->base);
         info.poseInReferenceSpace = pose.Value();
         if (const auto result = context.DispatchTable().createReference(context.Native().session, &info, &world);
             XR_FAILED(result) || world == XR_NULL_HANDLE)
@@ -94,15 +155,26 @@ namespace Horo::XR::OpenXRInternal {
         };
         baseIdentity = issue(request->base);
         viewIdentity = issue(XRSpaceKind::View);
+        if (alternate != XR_NULL_HANDLE)
+            alternateIdentity = issue(AlternateKind(request->base));
         for (auto &action : actions)
             action.identity = issue(XRSpaceKind::Action);
         if (world != XR_NULL_HANDLE)
             worldIdentity = issue(XRSpaceKind::World);
+        if (gazeSpace != XR_NULL_HANDLE)
+            gazeIdentity = issue(XRSpaceKind::Action);
         return Result<void>::Success();
     }
 
     /** @copydoc OpenXRActionBindings::Tracking::CloseSpaces */
     Result<void> OpenXRActionBindings::Tracking::CloseSpaces(const TrackingContext &context) {
+        if (gazeSpace != XR_NULL_HANDLE) {
+            const auto result = context.DispatchTable().destroySpace(gazeSpace);
+            if (XR_FAILED(result))
+                return Result<void>::Failure(SpaceFailure("destroy gaze space", result));
+            gazeSpace = XR_NULL_HANDLE;
+            gazeIdentity = {};
+        }
         for (auto action = actions.rbegin(); action != actions.rend(); ++action) {
             if (action->space == XR_NULL_HANDLE)
                 continue;
@@ -112,7 +184,7 @@ namespace Horo::XR::OpenXRInternal {
             action->space = XR_NULL_HANDLE;
             action->identity = {};
         }
-        for (auto *space : {&world, &view, &base}) {
+        for (auto *space : {&world, &alternate, &view, &base}) {
             if (*space == XR_NULL_HANDLE)
                 continue;
             const auto result = context.DispatchTable().destroySpace(*space);
@@ -123,9 +195,31 @@ namespace Horo::XR::OpenXRInternal {
         baseIdentity = {};
         viewIdentity = {};
         worldIdentity = {};
+        alternateIdentity = {};
+        stageBounds.reset();
         eyeIdentities = {};
         nextSpaceSlot = 0;
         return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRActionBindings::References */
+    Result<XRReferenceSpaceSnapshot> OpenXRActionBindings::References(const XRSessionId &session) const {
+        using Outcome = Result<XRReferenceSpaceSnapshot>;
+        if (auto lane = ControlLane(); lane.HasError())
+            return Outcome::Failure(lane.ErrorValue());
+        if (sampling_)
+            return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
+        const Operation operation{sampling_};
+        if (const auto current = Current(session); current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        if (!tracking_.request)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
+        const auto &local = tracking_.request->base == XRSpaceKind::Local ? tracking_.baseIdentity : tracking_.alternateIdentity;
+        const auto &stage = tracking_.request->base == XRSpaceKind::Stage ? tracking_.baseIdentity : tracking_.alternateIdentity;
+        if (!local.id.IsValid())
+            return Outcome::Failure(MakeError(XRErrors::OperationUnsupported));
+        return Outcome::Success(
+            {session, tracking_.viewIdentity, local, stage.id.IsValid() ? std::optional{stage} : std::nullopt, tracking_.stageBounds});
     }
 
     /** @copydoc OpenXRActionBindings::WorldSpace */

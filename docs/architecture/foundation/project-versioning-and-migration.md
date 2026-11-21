@@ -71,9 +71,17 @@ failure, or process termination.
 
 ## Current Development Baseline
 
-Horo `0.3.0` introduces the project-owned semantic surface catalog. Frozen
-`0.0.1`, `0.1.0` and `0.2.0` release descriptors and migration definitions remain
-unchanged; the first supported predecessor remains `0.0.1`. The automatically
+Horo `0.4.0` adds the project-root Platform Services salt and explicit portable
+policy, permanent identity ledger, and separate achievement/stat/leaderboard/presence
+source documents. Its sequential `core.authoring.platform_services_identity` edge
+adopts an absent namespace once through injected cryptographic entropy in the existing
+transactional candidate. Partial or required-schema missing identity fails without
+repair; complete source generations are preserved and validated. Native provider
+installation/trust/availability is resolved by the host, separately from portable
+migration shape admission. Root and platform documents publish under the existing
+root-last recovery contract. Horo `0.3.0` introduced the project-owned semantic
+surface catalog. Frozen `0.0.1`, `0.1.0`, `0.2.0` and `0.3.0` descriptors and migration
+definition trees remain unchanged; the first supported predecessor is `0.0.1`. The automatically
 discovered sequential definition
 `core.project_settings.compression_defaults` upgrades `0.0.1` projects to
 `0.1.0`: missing `settings.assetCompression` and

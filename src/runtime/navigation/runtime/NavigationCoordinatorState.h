@@ -92,8 +92,11 @@ namespace Horo::Navigation {
         [[nodiscard]] static bool SameSource(const NavigationOutcomeProvenance &a, const NavigationOutcomeProvenance &b) noexcept;
         /** @brief Reject provider outputs exceeding the admitted shape and bounds. */
         [[nodiscard]] static bool ValidResult(const NavigationPathRequest &request, const NavigationPath &path) noexcept;
+        /** @brief Contains one provider failure within its original request so later batch members can execute. */
+        [[nodiscard]] static Result<NavigationPath> ExecuteQuery(const Work &work);
 
         JobSystem &jobs;
+        NavigationCoordinator *owner{}; /**< Only the owner lane reads or changes this binding. */
         NavigationPathBatchLimits limits;
         std::vector<Slot> slots;
         std::vector<Batch> batches;

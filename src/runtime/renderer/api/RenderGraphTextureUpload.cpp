@@ -6,20 +6,33 @@
 
 namespace Horo::Render {
     namespace {
-        /** @brief Checks the tight RGBA8 product before multiplication can overflow the host byte extent. */
-        bool UploadBytesValid(const RenderGraphTextureUpload &upload) noexcept {
-            if (!upload.extent.IsValid())
-                return false;
-            const auto pixels = std::uint64_t{upload.extent.width} * upload.extent.height;
-            return pixels <= std::numeric_limits<std::size_t>::max() / 4U && upload.byteCount == pixels * 4U;
+        /** @brief Closed set of color formats with exact tightly packed transfer ABIs. */
+        std::size_t UploadTexelBytes(RenderTextureFormat format) noexcept {
+            switch (format) {
+                case RenderTextureFormat::Rgba8Unorm:
+                case RenderTextureFormat::R32Float:
+                    return 4;
+                case RenderTextureFormat::Rgba32Float:
+                    return 16;
+                default:
+                    return 0;
+            }
         }
 
-        /** @brief Admits exactly one whole single-sample RGBA8 color base level. */
+        /** @brief Checks the tight image product before multiplication can overflow the host byte extent. */
+        bool UploadBytesValid(const RenderGraphTextureUpload &upload) noexcept {
+            const auto bytes = UploadTexelBytes(upload.format);
+            if (!upload.extent.IsValid() || bytes == 0)
+                return false;
+            const auto pixels = std::uint64_t{upload.extent.width} * upload.extent.height;
+            return pixels <= std::numeric_limits<std::size_t>::max() / bytes && upload.byteCount == pixels * bytes;
+        }
+
+        /** @brief Admits exactly one whole single-sample base level in the packet's declared color format. */
         bool UploadTextureValid(const RenderGraphTextureUpload &upload, const RenderTextureDescriptor &texture) noexcept {
-            return texture.IsValid() && texture.format == RenderTextureFormat::Rgba8Unorm &&
-                   texture.dimension == RenderTextureDimension::TwoD && texture.extent == upload.extent && texture.depth == 1 &&
-                   texture.mipCount == 1 && texture.layerCount == 1 && texture.sampleCount == 1 &&
-                   HasTextureUsage(texture.usage, RenderTextureUsage::CopyDestination);
+            return texture.IsValid() && texture.format == upload.format && texture.dimension == RenderTextureDimension::TwoD &&
+                   texture.extent == upload.extent && texture.depth == 1 && texture.mipCount == 1 && texture.layerCount == 1 &&
+                   texture.sampleCount == 1 && HasTextureUsage(texture.usage, RenderTextureUsage::CopyDestination);
         }
 
         /** @brief Resolves only an exact graph-local resource kind before any indexed access. */
@@ -47,7 +60,7 @@ namespace Horo::Render {
         if (!UploadBytesValid(upload) || !UploadTextureValid(upload, destination))
             return Result<void>::Failure(
                 MakeError(RenderGraphExecutionErrors::InvalidGraph,
-                          "Texture upload requires exact tightly packed whole RGBA8 2D base-level bounds and CopyDestination usage."));
+                          "Texture upload requires exact tightly packed whole color 2D base-level bounds and CopyDestination usage."));
         return Result<void>::Success();
     }
 

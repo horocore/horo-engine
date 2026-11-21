@@ -1,4 +1,8 @@
 #include "GnsTransportFactory.h"
+#include "HeadlessInitialStateAuthority.h"
+#include "Horo/Network/NetworkAuthoredScenePage.h"
+#include "Horo/Network/NetworkInitialStateStream.h"
+#include "Horo/Network/NetworkPrefabLifecycle.h"
 #include "NetworkAdmissionProductTestSupport.h"
 #include "NetworkProductGnsSelection.h"
 
@@ -20,6 +24,77 @@ namespace Horo::Network::AdmissionTests {
             unsigned calls{};
             bool validRequest{};
         };
+
+        /** @brief Explicit inert initial-state owner used to check native service composition and retention. */
+        class InitialStateProbe final : public INetworkInitialStateHost {
+        public:
+            Result<NetworkPeerId> ClientRecipient(const PeerSessionLifecycle &) override {
+                return Unexpected<NetworkPeerId>();
+            }
+
+            Result<std::optional<ReplicationInitialStateSnapshot>> Capture(const ReplicationWorldReadLease &,
+                                                                           const ReplicationWorldLifecycle &, const PeerSessionLifecycle &,
+                                                                           std::size_t) override {
+                return Unexpected<std::optional<ReplicationInitialStateSnapshot>>();
+            }
+
+            Result<NetworkInitialStateTarget> PrepareReceiver(const ReplicationInboundAuthority &, ReplicationWorldLifecycle &,
+                                                              std::span<const ReplicationInitialOwnership>, std::uint64_t) override {
+                return Unexpected<NetworkInitialStateTarget>();
+            }
+
+            unsigned calls{};
+
+        private:
+            template <typename T> Result<T> Unexpected() {
+                ++calls;
+                return Result<T>::Failure(MakeError(NetworkErrors::NetworkLifecycleInvalid));
+            }
+        };
+
+        /** @brief Startup never resolves a gameplay peer before native authentication. */
+        class UnusedInitialAuthority final : public Application::Internal::IHeadlessInitialStateAuthority {
+        public:
+            Result<Application::Internal::HeadlessInitialRecipient> Resolve(const AuthenticationResult &,
+                                                                            const ReplicationWorldReadLease &) const override {
+                ++calls;
+                return Result<Application::Internal::HeadlessInitialRecipient>::Failure(MakeError(NetworkErrors::AuthenticationRejected));
+            }
+
+            mutable unsigned calls{};
+        };
+
+        /** @brief Extends the same admitted protocol fixture with its real authored, prefab and initial routes. */
+        NetworkWorldBindingSetup InitialWorldSetup(const ProductPair &fixture) {
+            auto policy = fixture.WorldPolicy();
+            const auto protocol = policy.control.protocol;
+            const auto route = [protocol](std::uint16_t id) {
+                return MessageIdentityDescriptor{protocol,
+                                                 TestSupport::WireIdentity<MessageTypeId>(id),
+                                                 TestSupport::WireIdentity<MessageSchemaId>(id),
+                                                 {1, 0},
+                                                 false};
+            };
+            const std::array routes{route(106), route(107), route(108)};
+            policy.authoredScene = NetworkAuthoredScenePolicy{routes[0], policy.feature};
+            policy.prefabLifecycle = NetworkPrefabLifecyclePolicy{routes[1], policy.feature};
+            policy.initialState = NetworkInitialStatePolicy{routes[2], fixture.features.front(), 4096};
+            const std::array capacities{MaximumNetworkAuthoredScenePageBytes, MaximumNetworkPrefabLifecycleBytes,
+                                        MaximumNetworkInitialStateFrameBytes};
+            std::vector messages(fixture.messages.begin(), fixture.messages.end());
+            std::vector codecs(fixture.codecDescriptors.begin(), fixture.codecDescriptors.end());
+            for (std::size_t index = 0; index < routes.size(); ++index) {
+                messages.push_back(routes[index]);
+                codecs.push_back({protocol, routes[index].id, routes[index].schema, {{1, 0}, {1, 0}}, capacities[index]});
+            }
+            const std::array features{FeatureIdentityDescriptor{protocol, fixture.features[0], {1, 0}},
+                                      FeatureIdentityDescriptor{protocol, fixture.features[1], {1, 0}}};
+            const auto identities = ProtocolIdentityRegistry::Create({fixture.protocols, messages, features, {}});
+            REQUIRE(identities.HasValue());
+            auto registry = MessageCodecRegistry::Create({codecs, {}}, identities.Value());
+            REQUIRE(registry.HasValue());
+            return {policy, std::make_shared<const MessageCodecRegistry>(std::move(registry).Value())};
+        }
 
         /** @brief Explicit startup-denial selection, separate from any successful authentication fixture. */
         GnsNativeSecurityOptions DeniedOptions(const NetworkTrustPolicySnapshot &trust,
@@ -176,6 +251,56 @@ namespace Horo::Network::AdmissionTests {
         REQUIRE(selected.ErrorValue().domain.Value() == expected->domain.Value());
         REQUIRE(selected.ErrorValue().code.Value() == expected->code.Value());
         REQUIRE(issuer->calls == 0);
+    }
+
+    TEST_CASE("Secure product transport preserves the configured initial-state owner and rejects a different trust policy",
+              "[integration][network][gns][security][replication]") {
+        using namespace Application::Internal;
+        ProductPair fixture;
+        auto issuer = std::make_shared<ProductRejectingIssuer>();
+        auto policy = fixture.Policy(0);
+        policy.trust.exposure = NetworkExposure::LocalNetwork;
+        policy.trust.allowUnprotectedInMemoryLoopback = false;
+        auto providers = fixture.authorities[0]->Providers(fixture.authorities[0]);
+        providers.certificates.reset();
+        providers.peers.reset();
+        providers.privateKeys.reset();
+        providers.channel.reset();
+        const auto world = InitialWorldSetup(fixture);
+        auto authority = std::make_shared<UnusedInitialAuthority>();
+        auto delegate = std::make_shared<InitialStateProbe>();
+        auto owner = std::make_shared<HeadlessInitialStateHost>(authority, delegate);
+        const std::weak_ptr<HeadlessInitialStateHost> lifetime = owner;
+        auto admitted = NetworkProductAdmission::Capture(policy, std::move(providers), world.codecs, {}, world.policy, owner);
+        REQUIRE(admitted.HasValue());
+        auto admission = std::move(admitted).Value();
+        auto debugger = std::make_shared<Application::NetworkDebuggerService>();
+        REQUIRE(debugger->Begin(1901, 1, true, NetworkDiagnosticProvider::Native));
+        auto options = DeniedOptions(policy.trust, issuer);
+        ++options.trust.revision;
+        const auto rejected = CreateSecureNetworkProductTransport(NetworkProjectRole::DedicatedServer, {}, {}, debugger,
+                                                                  fixture.owners[0]->sessions, admission, options);
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == NetworkErrors::AdmissionPolicyInvalid.code.Value());
+        CHECK(issuer->calls == 0);
+        options.trust = policy.trust;
+
+        auto service = CreateSecureNetworkProductTransport(NetworkProjectRole::DedicatedServer, {}, {}, debugger,
+                                                           fixture.owners[0]->sessions, admission, options);
+        REQUIRE(service.HasValue());
+        admission.reset();
+        owner.reset();
+        REQUIRE_FALSE(lifetime.expired());
+        CHECK(delegate->calls == 0);
+        CHECK(authority->calls == 0);
+        CHECK(issuer->calls == 0);
+        const auto prepared = service.Value()->Prepare();
+        REQUIRE(prepared.HasError());
+        CHECK(prepared.ErrorValue().code.Value() == NetworkErrors::AuthenticationRejected.code.Value());
+        CHECK(issuer->calls == 1);
+        CHECK(authority->calls == 0);
+        service.Value()->Shutdown();
+        CHECK(lifetime.expired());
     }
 
     TEST_CASE("The production native selection retains one inert declaration and capture without invoking an issuer",

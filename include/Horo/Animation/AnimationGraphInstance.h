@@ -6,7 +6,7 @@
  */
 
 #include "Horo/Animation/AnimationComponents.h"
-#include "Horo/Animation/AnimationGraph.h"
+#include "Horo/Animation/AnimationGraphGameplay.h"
 #include "Horo/Animation/AnimationParameterCurve.h"
 #include "Horo/Foundation/CancellationToken.h"
 
@@ -19,13 +19,6 @@ namespace Horo::Animation {
     struct GraphPlaybackRate final {
         std::int32_t millionths{1'000'000};
         auto operator<=>(const GraphPlaybackRate &) const = default;
-    };
-
-    /** @brief Exact typed parameter snapshot entry, identified independently of
-     * declaration order. */
-    struct GraphParameterInput final {
-        GraphParameterId id{};
-        GraphParameterValue value{0.0F};
     };
 
     /** @brief Immutable snapshots retained by an instance; no raw dependency borrow
@@ -83,15 +76,6 @@ namespace Horo::Animation {
         float minimumStateContribution{};
     };
 
-    /** @brief Fixed implementation ceilings for event payloads, owned queues and traversal scratch. */
-    struct AnimationNotifyHardLimits final {
-        static constexpr std::uint32_t OccurrencesPerTick = 16384;
-        static constexpr std::uint32_t Consumers = 16;
-        static constexpr std::uint32_t TypesPerConsumer = 64;
-        static constexpr std::uint32_t QueuedOccurrences = 65536;
-        static constexpr std::uint64_t Operations = 64ULL * 1024ULL * 1024ULL;
-    };
-
     /** @brief Owner-assigned identity and finite storage/work admission, captured
      * at the control boundary. */
     struct GraphInstanceCreateContext final {
@@ -108,6 +92,7 @@ namespace Horo::Animation {
         AnimationEvaluationDomain evaluationDomain{
             AnimationEvaluationDomain::Count}; /**< Adapters must forward the actual component domain when clips contain event metadata;
                                                   Count only preserves event-empty legacy instances. */
+        bool extractRootMotion{};              /**< Explicit opt-in for an authoritative instance with one tracked skeleton root. */
     };
 
     /** @brief One attempted fixed tick; caller views are copied before execution
@@ -129,33 +114,6 @@ namespace Horo::Animation {
         AnimationTickId tick{};
         PoseHandle previousPose{};
         PoseHandle currentPose{};
-    };
-    /** @brief Committed state lifecycle records; clip notifies remain their
-     * separate Animation responsibility. */
-    enum class GraphStateEventKind : std::uint8_t {
-        Entered,
-        Exited,
-        TransitionStarted,
-        TransitionInterrupted,
-        TransitionCompleted,
-        Loop
-    };
-
-    /** @brief Copied immutable lifecycle occurrence, fenced by instance, compiled
-     * occurrence, tick and entry generation. */
-    struct GraphStateEvent final {
-        AnimationInstanceHandle instance{};
-        AnimationTickId tick{};
-        GraphSourceLocation source{};
-        std::uint32_t occurrence{};
-        std::uint32_t ordinal{};
-        GraphStateEventKind kind{};
-        GraphStateId state{};
-        GraphTransitionId transition{};
-        std::uint64_t activation{};
-        std::uint64_t loopOrdinal{};
-        AnimationTraversalDirection direction{AnimationTraversalDirection::Held};
-        bool operator==(const GraphStateEvent &) const = default;
     };
 
     /** @brief Publication-scoped synchronization result for one exact
@@ -199,118 +157,6 @@ namespace Horo::Animation {
         ClipFailure
     };
 
-    /** @brief Exact instance-generation scoped request identity; copying it does
-     * not create or retain a request. */
-    struct GraphActionHandle final {
-        AnimationInstanceHandle instance{};
-        std::uint64_t ordinal{};
-
-        [[nodiscard]] bool IsValid() const noexcept {
-            return instance.IsValid() && ordinal != 0;
-        }
-
-        bool operator==(const GraphActionHandle &) const = default;
-    };
-    /** @brief Explicit command admission policy; accepted commands still obey
-     * active interruption policy at Commit. */
-    enum class GraphActionQueuePolicy : std::uint8_t {
-        IfIdle,
-        Queue,
-        Interrupt,
-        Count
-    };
-    /** @brief Explicit owner cancellation handoff. */
-    enum class GraphActionStopPolicy : std::uint8_t {
-        BlendOut,
-        Cut,
-        Count
-    };
-    /** @brief Action lifecycle is separate from clip notifies and state-machine
-     * transition events. */
-    enum class GraphActionPhase : std::uint8_t {
-        Pending,
-        Queued,
-        Playing,
-        BlendingOut,
-        Terminal
-    };
-    /** @brief Committed terminal result, except Shutdown which is an explicit owner
-     * terminal operation. */
-    enum class GraphActionCompletionReason : std::uint8_t {
-        None,
-        Completed,
-        Cancelled,
-        Interrupted,
-        Rejected,
-        Shutdown
-    };
-    /** @brief Finite lightweight command failure without owning diagnostic
-     * allocation. */
-    enum class GraphActionFailure : std::uint8_t {
-        None,
-        Closed,
-        ThreadViolation,
-        EvaluationPending,
-        Malformed,
-        BindingMismatch,
-        CapacityExceeded,
-        HandleStale,
-        NotTerminal
-    };
-
-    /** @brief One immutable command intent, copied into the existing owner request
-     * table. */
-    struct GraphActionRequest final {
-        GraphActionId action{};
-        GraphActionSectionId startSection{};
-        GraphActionQueuePolicy queue{GraphActionQueuePolicy::Queue};
-        CancellationToken cancellation{};
-    };
-
-    /** @brief Complete retained request fact; terminal records live until explicit
-     * owner release. */
-    struct GraphActionObservation final {
-        GraphActionHandle handle{};
-        GraphActionId action{};
-        GraphActionSlotId slot{};
-        GraphActionPhase phase{GraphActionPhase::Pending};
-        GraphActionCompletionReason reason{GraphActionCompletionReason::None};
-        GraphActionSectionId section{};
-        AnimationTime sampleTime{};
-        float weight{};
-        AnimationTickId terminalTick{};
-        bool operator==(const GraphActionObservation &) const = default;
-    };
-
-    /** @brief Typed no-allocation command response; handle is valid only after
-     * actual request admission. */
-    struct GraphActionCommandOutcome final {
-        GraphActionFailure failure{GraphActionFailure::None};
-        GraphActionHandle handle{};
-
-        [[nodiscard]] bool HasValue() const noexcept {
-            return failure == GraphActionFailure::None;
-        }
-
-        [[nodiscard]] bool HasError() const noexcept {
-            return !HasValue();
-        }
-    };
-
-    /** @brief Typed owner query of one exact live/retained terminal request. */
-    struct GraphActionQueryOutcome final {
-        GraphActionFailure failure{GraphActionFailure::None};
-        GraphActionObservation observation{};
-
-        [[nodiscard]] bool HasValue() const noexcept {
-            return failure == GraphActionFailure::None;
-        }
-
-        [[nodiscard]] bool HasError() const noexcept {
-            return !HasValue();
-        }
-    };
-
     /** @brief Immutable publication-scoped per-slot request and queue projection.
      */
     struct GraphActionSlotObservation final {
@@ -322,56 +168,6 @@ namespace Horo::Animation {
         float weight{};
         std::uint32_t queued{};
         bool operator==(const GraphActionSlotObservation &) const = default;
-    };
-
-    /** @brief Actual point/window delivery phase, separate from graph state/action lifecycle records. */
-    enum class AnimationNotifyPhase : std::uint8_t {
-        End,
-        Begin,
-        Point
-    };
-    /** @brief Truthful cause of delivery/closure, including discontinuities with no fabricated endpoint travel. */
-    enum class AnimationNotifyReason : std::uint8_t {
-        Crossed,
-        Activation,
-        Resumed,
-        Loop,
-        SectionChanged,
-        Cancelled,
-        Interrupted,
-        Inactive,
-        Suppressed,
-        ReverseIneligible,
-        PlaybackEnd,
-        Reentered
-    };
-
-    /** @brief Stable value identity for the exact instance/player/revision/tick/directed occurrence. */
-    struct AnimationEventOccurrenceId final {
-        AnimationInstanceHandle instance{};
-        AnimationTickId tick{};
-        AnimationClipId clip{};
-        AnimationClipGeneration clipGeneration{};
-        AnimationEventMarkerId marker{};
-        std::uint32_t player{};
-        std::uint64_t serial{};
-        std::int64_t loopOrdinal{};
-        AnimationNotifyPhase phase{AnimationNotifyPhase::Point};
-        AnimationTraversalDirection direction{AnimationTraversalDirection::Held};
-        bool operator==(const AnimationEventOccurrenceId &) const = default;
-    };
-
-    /** @brief Fully owned fixed-capacity occurrence; payload remains valid after clip reload and instance retirement. */
-    struct AnimationEventOccurrence final {
-        AnimationEventOccurrenceId id{};
-        AnimationEventTypeId type{};
-        std::uint32_t schemaRevision{};
-        AnimationEventPayload payload{};
-        AnimationTime time{};
-        GraphActionHandle action{};
-        std::uint64_t windowBeginSerial{}; /**< End refers to the actual previously delivered Begin; zero only for points. */
-        AnimationNotifyReason reason{AnimationNotifyReason::Crossed};
-        bool operator==(const AnimationEventOccurrence &) const = default;
     };
 
     /** @brief Exact bounded hot-path outcome; successful commit also carries
@@ -474,6 +270,15 @@ namespace Horo::Animation {
          * attempted tick.
          */
         [[nodiscard]] GraphInstanceOutcome QueueTrigger(GraphParameterId parameter);
+
+        /** @brief Stages one typed scalar override for the next committed tick.
+         * @param parameter Declared float, boolean, or integer parameter and value.
+         * @return Success or a typed owner, lifecycle, identity, type, or non-finite value failure.
+         * @details The most recently accepted value for an ID overrides the invocation input. Failed attempts
+         * retain the queue for retry. A successful commit consumes it. Trigger declarations use QueueTrigger.
+         */
+        [[nodiscard]] GraphInstanceOutcome QueueParameter(const GraphParameterInput &parameter);
+
         /** @brief Copies an immutable typed gameplay parameter block from an exact
          * committed pose publication.
          * @param publication Exact resident instance/slot/generation identity
@@ -488,6 +293,12 @@ namespace Horo::Animation {
          * supplied.
          */
         [[nodiscard]] GraphInstanceOutcome CopyParameters(const PoseHandle &publication, std::span<GraphParameterInput> output) const;
+        /** @brief Copies the graph's composed rigid motion for one exact resident pose.
+         * @param publication Exact current or previous committed handle. @param output Receives the motion on success.
+         * @return Typed owner, admission or residency outcome. Failure preserves output.
+         * @details Requires explicit authoritative extraction at creation. The value carries no movement authority.
+         */
+        [[nodiscard]] GraphInstanceOutcome CopyRootMotion(const PoseHandle &publication, AnimationRootMotionDelta &output) const;
         /** @brief Copies the complete state lifecycle event block for an exact
          * resident committed publication.
          * @param publication Exact pose publication returned by Commit; both retained
@@ -590,6 +401,23 @@ namespace Horo::Animation {
          * @return Success or typed stale/binding/size failure before any writes.
          */
         [[nodiscard]] GraphInstanceOutcome CopyPose(const PoseHandle &pose, std::span<Math::Transform> output) const;
+
+        /** @brief Reads the model-space joint transform from an exact committed local pose.
+         * @param pose Current or previous resident pose handle.
+         * @param joint Stable skeleton-local joint identity.
+         * @return Value matrix or a typed owner, handle, missing joint, or transform error.
+         * @pre Invoke on the instance owner thread. Successful reads perform no allocation.
+         */
+        [[nodiscard]] Result<Math::Mat4> JointModelTransform(const PoseHandle &pose, JointId joint) const;
+
+        /** @brief Reads the model-space attachment transform from an exact committed local pose.
+         * @param pose Current or previous resident pose handle.
+         * @param socket Stable skeleton-local socket identity.
+         * @return Joint model matrix composed with the authored socket offset, or a typed query error.
+         * @pre Invoke on the instance owner thread. Successful reads perform no allocation.
+         */
+        [[nodiscard]] Result<Math::Mat4> SocketModelTransform(const PoseHandle &pose, SkeletonSocketId socket) const;
+
         /** @brief Returns last committed metadata. @return Empty handles before the
          * first commit. */
         [[nodiscard]] GraphInstancePublication Publication() const noexcept;
@@ -601,6 +429,11 @@ namespace Horo::Animation {
 
     private:
         friend struct Detail::GraphSceneCommitAccess;
+        /** @brief Validates and stages one exact declared parameter or trigger. */
+        [[nodiscard]] GraphInstanceOutcome QueueParameterInput(const GraphParameterInput &parameter, bool trigger);
+        /** @brief Evaluates with exclusive access granted by the Scene owner for the lifetime of one joined batch. */
+        [[nodiscard]] GraphInstanceOutcome EvaluateExclusive(const GraphEvaluationInput &input,
+                                                             const CancellationToken &publicationCancellation);
         /** @brief Performs every fallible admission before a Scene-owned global fixed-tick fence. */
         [[nodiscard]] GraphInstanceOutcome PrepareCommit(AnimationTickId tick);
         /** @brief Publishes one exclusively owned armed candidate; caller has committed the actual tick. */

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <format>
 #include <limits>
 
@@ -67,6 +68,27 @@ namespace Horo::Editor {
             }
         }
 
+        /** @brief Retain selected evidence outside drawing and discard any selection missing from this layout. */
+        void RefreshSelectedLayout(UiCanvasPreviewPresentation &preview, const Runtime::Ui::UiElementId selection) {
+            preview.selectedLayout.reset();
+            if (!preview.layout || !selection.IsValid())
+                return;
+            const auto &boxes = preview.layout->boxes;
+            const auto box = std::ranges::find(boxes, selection, &UiCanvasPreviewBox::element);
+            if (box != boxes.end())
+                preview.selectedLayout = *box;
+        }
+
+        /** @brief Publish geometry and failure evidence from the same evaluation. */
+        void RefreshCanvasPreview(const UiCanvasDocument &owner, UiCanvasPreviewPresentation &preview,
+                                  const UiInspectorResourceSnapshot &resources) {
+            auto evaluated = BuildUiCanvasPreview(owner.Document(), preview.state, owner.Identity().instance, &resources, &preview.problem,
+                                                  &preview.problemStyleProperty);
+            preview.diagnostic = evaluated.HasError() ? std::optional{evaluated.ErrorValue()} : std::nullopt;
+            preview.layout = evaluated.HasValue() ? std::optional{std::move(evaluated).Value()} : std::nullopt;
+            RefreshSelectedLayout(preview, owner.Selection());
+        }
+
         /** @brief Refresh cached authored rows and selected values only after their canonical fences change. */
         void RefreshDocumentProjection(const UiCanvasDocument &owner, UiCanvasWorkspaceDocument &projection,
                                        const UiInspectorResourceSnapshot &resources) {
@@ -90,11 +112,10 @@ namespace Horo::Editor {
                 projection.state = owner.CurrentState();
             }
             if (sourceChanged || projection.inspectorResourcePublication != resources.publication ||
-                projection.inspectorStyles != resources.StyleGeneration() || projection.inspectorTheme != resources.theme) {
-                auto preview = BuildUiCanvasPreview(owner.Document(), projection.preview.state, owner.Identity().instance, &resources);
-                projection.preview.diagnostic = preview.HasError() ? std::optional{preview.ErrorValue()} : std::nullopt;
-                projection.preview.layout = preview.HasValue() ? std::optional{std::move(preview).Value()} : std::nullopt;
-            }
+                projection.inspectorStyles != resources.StyleGeneration() || projection.inspectorTheme != resources.theme)
+                RefreshCanvasPreview(owner, projection.preview, resources);
+            else if (selectionChanged)
+                RefreshSelectedLayout(projection.preview, owner.Selection());
         }
 
         /** @brief Change only session device state, resolving actual source inputs when geometry changes. */
@@ -105,11 +126,8 @@ namespace Horo::Editor {
             const bool resolve = projection.preview.state.device != command.uiCanvasPreviewState->device ||
                                  projection.preview.state.rotated != command.uiCanvasPreviewState->rotated;
             projection.preview.state = *command.uiCanvasPreviewState;
-            if (resolve) {
-                auto preview = BuildUiCanvasPreview(owner.Document(), projection.preview.state, owner.Identity().instance, &resources);
-                projection.preview.diagnostic = preview.HasError() ? std::optional{preview.ErrorValue()} : std::nullopt;
-                projection.preview.layout = preview.HasValue() ? std::optional{std::move(preview).Value()} : std::nullopt;
-            }
+            if (resolve)
+                RefreshCanvasPreview(owner, projection.preview, resources);
             return Result<void>::Success();
         }
 
@@ -177,16 +195,121 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorWorkspaceController::SaveUiCanvasSource */
-    Result<void> EditorWorkspaceController::SaveUiCanvasSource(UiCanvasDocument &owner) const {
+    Result<void> EditorWorkspaceController::SaveUiCanvasSource(UiCanvasDocument &owner) {
         if (!m_mutations)
             return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::WriteFailed));
-        NativeDurableFileSystem files;
+        if (auto drained = DrainUiCanvasRecovery(); drained.HasError())
+            return drained;
+        NativeDurableFileSystem fallback;
+        auto &files = m_durableFiles ? *m_durableFiles : fallback;
         const auto saved = owner.Save(ProjectRoot(), *m_mutations, files);
         if (saved.HasError())
             return Result<void>::Failure(saved.ErrorValue());
         if (saved.Value().status != UiCanvasDocumentSaveStatus::Saved)
             return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::Conflict));
+        DocumentRecoveryService recovery(ProjectRoot(), *m_mutations, files);
+        return owner.DiscardRecovery(m_workspaceSession, recovery);
+    }
+
+    /** @copydoc EditorWorkspaceController::InspectUiCanvasRecovery */
+    void EditorWorkspaceController::InspectUiCanvasRecovery(const UiCanvasDocument &owner, UiCanvasWorkspaceDocument &view) {
+        view.recovery.reset();
+        if (!m_mutations || !m_durableFiles)
+            return;
+        DocumentRecoveryService recovery(ProjectRoot(), *m_mutations, *m_durableFiles);
+        auto record = owner.InspectRecovery(recovery);
+        if (record.HasError())
+            view.diagnostic = record.ErrorValue();
+        else if (record.Value() && (record.Value()->sessionOwner != m_workspaceSession ||
+                                    record.Value()->sessionGeneration != owner.Identity().instance.Value()))
+            view.recovery = std::make_shared<const DocumentRecoveryRecord>(std::move(*record.Value()));
+    }
+
+    /** @copydoc EditorWorkspaceController::ReportUiCanvasRecoveryError */
+    void EditorWorkspaceController::ReportUiCanvasRecoveryError(const DocumentInstanceId instance, const Error &error) {
+        const auto projection = std::ranges::find_if(m_viewModel.uiCanvasDocuments, [instance](const auto &entry) {
+            return entry.identity.instance == instance;
+        });
+        if (projection != m_viewModel.uiCanvasDocuments.end())
+            projection->diagnostic = error;
+    }
+
+    /** @copydoc EditorWorkspaceController::ObserveUiCanvasRecovery */
+    bool EditorWorkspaceController::ObserveUiCanvasRecovery() {
+        if (!m_uiCanvasRecovery)
+            return true;
+        const auto snapshot = m_uiCanvasRecovery->job.Snapshot();
+        if (!snapshot || !snapshot->terminalResult)
+            return false;
+        auto checkpoint = std::move(m_uiCanvasRecovery->checkpoint);
+        m_uiCanvasRecovery.reset();
+        if (snapshot->state == JobState::Succeeded) {
+            const auto canvas = std::ranges::find_if(m_uiCanvasDocuments, [&](const auto &entry) {
+                return entry.Identity().instance == checkpoint->state.instance;
+            });
+            if (canvas != m_uiCanvasDocuments.end())
+                canvas->AcknowledgeRecovery(*checkpoint);
+        } else if (snapshot->state != JobState::Cancelled && snapshot->terminalResult->error) {
+            ReportUiCanvasRecoveryError(checkpoint->state.instance, *snapshot->terminalResult->error);
+        }
+        return true;
+    }
+
+    /** @copydoc EditorWorkspaceController::DrainUiCanvasRecovery */
+    Result<void> EditorWorkspaceController::DrainUiCanvasRecovery(const std::optional<DocumentInstanceId> instance) {
+        if (!m_uiCanvasRecovery || (instance && m_uiCanvasRecovery->checkpoint->state.instance != *instance))
+            return Result<void>::Success();
+        static_cast<void>(m_uiCanvasRecovery->job.RequestCancel());
+        const auto joined = m_uiCanvasRecovery->job.Wait();
+        if (!ObserveUiCanvasRecovery())
+            return joined;
         return Result<void>::Success();
+    }
+
+    /** @copydoc EditorWorkspaceController::ScheduleUiCanvasRecovery */
+    void EditorWorkspaceController::ScheduleUiCanvasRecovery(UiCanvasDocument &canvas) {
+        auto captured = canvas.CaptureRecovery(m_workspaceSession);
+        if (captured.HasError()) {
+            ReportUiCanvasRecoveryError(canvas.Identity().instance, captured.ErrorValue());
+            return;
+        }
+        if (!captured.Value())
+            return;
+        auto checkpoint = std::make_shared<const UiCanvasRecoveryCheckpoint>(std::move(captured).Value().value());
+        auto submitted = m_sourceRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Io},
+                                                            [root = std::filesystem::path(ProjectRoot()), mutations = m_mutations,
+                                                             files = m_durableFiles, checkpoint](const CancellationToken &cancellation) {
+            DocumentRecoveryService recovery(root, *mutations, *files);
+            return WriteUiCanvasRecovery(*checkpoint, recovery, cancellation);
+        });
+        if (submitted.HasError()) {
+            ReportUiCanvasRecoveryError(canvas.Identity().instance, submitted.ErrorValue());
+            return;
+        }
+        m_uiCanvasRecovery.emplace(CanvasRecoveryWork{std::move(submitted).Value(), std::move(checkpoint)});
+    }
+
+    /** @copydoc EditorWorkspaceController::UpdateUiCanvasAutosave */
+    void EditorWorkspaceController::UpdateUiCanvasAutosave(const float seconds, const int minutes) {
+        if (!ObserveUiCanvasRecovery() || !m_mutations || !m_durableFiles || !m_sourceRecoveryJobs || minutes <= 0 || seconds < 0 ||
+            !std::isfinite(seconds))
+            return;
+        m_uiCanvasAutosaveSeconds += seconds;
+        if (m_uiCanvasRecoveryQueue.empty() && m_uiCanvasAutosaveSeconds >= static_cast<float>(minutes) * 60) {
+            m_uiCanvasAutosaveSeconds = 0;
+            for (const auto &canvas : m_uiCanvasDocuments)
+                if (canvas.IsDirty())
+                    m_uiCanvasRecoveryQueue.push_back(canvas.Identity().instance);
+        }
+        if (!m_uiCanvasRecoveryQueue.empty() && !m_uiCanvasRecovery) {
+            const auto instance = m_uiCanvasRecoveryQueue.back();
+            m_uiCanvasRecoveryQueue.pop_back();
+            const auto canvas = std::ranges::find_if(m_uiCanvasDocuments, [instance](const auto &entry) {
+                return entry.Identity().instance == instance;
+            });
+            if (canvas != m_uiCanvasDocuments.end())
+                ScheduleUiCanvasRecovery(*canvas);
+        }
     }
 
     /** @copydoc EditorWorkspaceController::ExecuteUiCanvasCommand */
@@ -224,7 +347,20 @@ namespace Horo::Editor {
         } else if (command.command == UiCanvasSave) {
             result = SaveUiCanvasSource(owner);
         } else if (command.command == UiCanvasReload) {
+            if (auto drained = DrainUiCanvasRecovery(owner.Identity().instance); drained.HasError())
+                return drained;
             result = owner.Reload();
+        } else if (command.command == UiCanvasRecover || command.command == UiCanvasDiscardRecovery) {
+            if (!m_mutations || !m_durableFiles || !command.uiCanvasRecovery)
+                return Result<void>::Failure(MakeError(UiCanvasDocumentErrors::Conflict));
+            if (auto drained = DrainUiCanvasRecovery(owner.Identity().instance); drained.HasError())
+                return drained;
+            DocumentRecoveryService recovery(ProjectRoot(), *m_mutations, *m_durableFiles);
+            result = command.command == UiCanvasRecover
+                         ? owner.Recover(command.uiCanvasState, *command.uiCanvasRecovery, recovery)
+                         : owner.DiscardRecovery(m_workspaceSession, recovery, command.uiCanvasRecovery.get());
+            if (result.HasValue())
+                projection.recovery.reset();
         } else {
             result = ApplyHierarchy(owner, projection, command);
         }
@@ -234,7 +370,7 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::ProcessUiCanvasCommand */
     bool EditorWorkspaceController::ProcessUiCanvasCommand(const EditorWorkspaceViewCommandData &command) {
         using enum EditorWorkspaceViewCommand;
-        if (command.command < UiCanvasSelect || command.command > UiCanvasReload)
+        if (command.command < UiCanvasSelect || command.command > UiCanvasDiscardRecovery)
             return false;
         if (!command.documentInstance)
             return true;

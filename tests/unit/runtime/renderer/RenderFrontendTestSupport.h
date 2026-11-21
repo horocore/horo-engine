@@ -41,22 +41,38 @@ namespace Horo::Tests::RenderFrontendTesting {
         RenderGraphResourceId color;
         std::vector<RenderGraphResourceId> sampled;
         std::vector<UiPaintDraw> draws;
+        RenderTextureHandle colorTexture;
+        bool clearColor{};
     };
 
     /** @brief CPU admission ledger only; never native completion or pixel evidence. */
     struct UiPaintUploadAudit final {
         bool enabled{}, pending{};
+        bool requireGraphNeutralSample{};
+        bool supportsPrimaryUiPaint{true};
         std::size_t updates{}, kernels{};
         std::vector<UiPaintPassAudit> passes;
         std::size_t graphCalls{}, failGraphCall{};
         bool retainAfterAbort{};
-        std::function<void()> onGraph; /**< Test-only reentry probe; cleared before its borrowed frame leaves scope. */
+        std::function<void()> onUpload; /**< Synchronous test hook before committing the exact native frame update. */
+        std::function<void()> onGraph;  /**< Test-only reentry probe; cleared before its borrowed frame leaves scope. */
+        std::function<void(const RenderGraphExecutionRequest &)> inspectGraph; /**< Synchronous observation of exact admitted graph. */
         std::uint64_t revision{};
         std::array<std::uint64_t, 3> instances{};
+        FrameToken frame;
+    };
+
+    /** @brief Ordered deterministic graph acceptance fault injection; no actual GPU commands or completion are claimed. */
+    struct ReconstructionSubmissionAudit final {
+        bool enabled{};
+        std::size_t acceptedPrefix{};
+        std::vector<RenderTimelinePoint> recorded;
+        RenderTimelinePoint queried;
     };
 
     struct BackendLifecycleState {  // NOSONAR(cpp:S1820) Flat assertion ledger keeps injected backend transitions directly observable.
         UiPaintUploadAudit uiPaint;
+        ReconstructionSubmissionAudit reconstruction;
         int initializeCount{0};
         int shutdownCount{0};
         int abortCount{0};

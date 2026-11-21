@@ -2,6 +2,7 @@
 /** @file EditorXrSceneGeometry.h
  * @brief Non-installed camera-free canonical geometry handoff from Workspace into the actual Play Scene.
  */
+#include "Horo/Runtime/Render/MotionHistory.h"
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
@@ -49,6 +50,8 @@ namespace Horo::Editor {
          * @return Owner-lane borrow invalidated by Update/Revoke/destruction. Revalidate source before frame admission.
          */
         [[nodiscard]] std::span<const Render::RenderStaticMeshInstance> Instances() const noexcept;
+        /** @brief Borrows canonical object identities in the same exact order as Instances through this preparation's lifetime. */
+        [[nodiscard]] std::span<const Render::RenderMotionObjectId> MotionObjects() const noexcept;
         /** @brief Updates fixed instance values against the exact candidate Scene and cached parent order.
          * @param scene SAME SceneRuntimeId and entity generations captured cold.
          * @return Synchronous instance borrow, or typed stale/structural/source/transform failure with no partial update.

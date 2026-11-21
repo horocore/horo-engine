@@ -1,5 +1,9 @@
 #include "NavigationCoordinatorState.h"
 
+#include <exception>
+#include <new>
+#include <string>
+#include <string_view>
 #include <tuple>
 
 namespace Horo::Navigation {
@@ -253,6 +257,23 @@ namespace Horo::Navigation {
                path.waypoints.size() <= (output.maximumWaypoints ? output.maximumWaypoints : points);
     }
 
+    /** @copydoc NavigationCoordinator::State::ExecuteQuery */
+    Result<NavigationPath> NavigationCoordinator::State::ExecuteQuery(const Work &work) {
+        try {
+            auto result = work.query.worldLease.Backend().FindPath(work.query.request, work.query.requestCancellation);
+            if (result.HasValue() && !ValidResult(work.query.request, result.Value()))
+                return Result<NavigationPath>::Failure(MakeError(NavigationErrors::ProviderFailed));
+            return result;
+        } catch (const std::bad_alloc &) {
+            return Result<NavigationPath>::Failure(MakeError(NavigationErrors::CapacityExceeded));
+        } catch (const std::exception &error) {
+            return Result<NavigationPath>::Failure(
+                MakeError(NavigationErrors::ProviderFailed, std::string{std::string_view{error.what()}.substr(0, 512)}));
+        } catch (...) {
+            return Result<NavigationPath>::Failure(MakeError(NavigationErrors::ProviderFailed));
+        }
+    }
+
     /** @copydoc NavigationCoordinator::State::Execute */
     Result<void> NavigationCoordinator::State::Execute(const std::shared_ptr<State> &state, const std::uint32_t index,
                                                        const CancellationToken &cancellation) {
@@ -263,9 +284,7 @@ namespace Horo::Navigation {
             auto result = Result<NavigationPath>::Failure(MakeError(NavigationErrors::QueryCancelled));
             if (!cancellation.IsCancellationRequested() && !work.query.requestCancellation.IsCancellationRequested() &&
                 !work.query.worldLease.IsRevoked()) {
-                result = work.query.worldLease.Backend().FindPath(work.query.request, work.query.requestCancellation);
-                if (result.HasValue() && !ValidResult(work.query.request, result.Value()))
-                    result = Result<NavigationPath>::Failure(MakeError(NavigationErrors::ProviderFailed));
+                result = ExecuteQuery(work);
             }
             if (auto completion = Complete(work, 0, std::move(result));
                 state->completions.TryPush(completion) != NavigationQueueEnqueueResult::Enqueued)

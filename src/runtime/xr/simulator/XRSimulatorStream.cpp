@@ -216,6 +216,7 @@ namespace Horo::XR {
         }
         if (replay && (!scenario || cursor == scenario->Steps().size())) {
             playback = XRSimulatorPlayback::Paused;
+            host.RevokeTracking();
             return Result<XRSimulatorAdvance>::Success({.cursor = cursor, .relativeNanoseconds = time});
         }
         const auto step = [this] {
@@ -227,7 +228,7 @@ namespace Horo::XR {
     }
 
     Result<XRSimulatorAdvance> XRSimulatorRuntime::Impl::Consume(const XRSimulatorStep &step, const XRSimulatorCutoff hostCutoff) {
-        if (auto bindings = ValidateControlBindings(step); bindings.HasError())
+        if (auto bindings = ValidateControlBindings(step, activeBindings); bindings.HasError())
             return Result<XRSimulatorAdvance>::Failure(bindings.ErrorValue());
         if (constexpr auto maximum = static_cast<std::uint64_t>(std::numeric_limits<std::int64_t>::max()) - 1;
             step.deltaNanoseconds > maximum - time)

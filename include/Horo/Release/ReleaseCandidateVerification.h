@@ -23,20 +23,31 @@ namespace Horo::Release {
         [[nodiscard]] ReleaseCandidateId Candidate() const noexcept;
         /** @brief Returns the canonical manifest digest. @return Exact finalized metadata identity. */
         [[nodiscard]] const Sha256Digest &ManifestDigest() const noexcept;
+        /** @brief Returns checked detached metadata, if host policy required it. @return Borrowed exact envelope identity. */
+        [[nodiscard]] const std::optional<ReleaseManifestSignatureIdentity> &ManifestSignature() const noexcept;
         /** @brief Returns the checked directory. @return Borrowed immutable path. */
         [[nodiscard]] const std::filesystem::path &Root() const noexcept;
+
+        /** @brief Rechecks the exact authenticated tree bytes for publication using this final verification evidence.
+         * @param manifest Caller-selected canonical manifest bound to this candidate.
+         * @return Success only when every artifact and the exact verified metadata still match.
+         */
+        [[nodiscard]] Result<void> RevalidateTree(const ReleaseArtifactManifest &manifest) const;
 
     private:
         friend Result<VerifiedReleaseCandidate> VerifyReleaseCandidate(const std::filesystem::path &, const ReleaseArtifactManifest &,
                                                                        std::span<const ReleaseCandidateSmokeKind>,
                                                                        IReleaseCandidateSignatureVerifier *,
-                                                                       std::span<IReleaseCandidateSmokeProbe *const>);
+                                                                       std::span<IReleaseCandidateSmokeProbe *const>,
+                                                                       const IReleaseManifestSignatureVerifier *);
         /** @brief Issued only by the complete final verifier. */
-        VerifiedReleaseCandidate(ReleaseCandidateId candidate, const Sha256Digest &manifestDigest, std::filesystem::path root);
+        VerifiedReleaseCandidate(ReleaseCandidateId candidate, const Sha256Digest &manifestDigest, std::filesystem::path root,
+                                 std::optional<ReleaseManifestSignatureIdentity> manifestSignature);
 
         ReleaseCandidateId candidate_;
         Sha256Digest manifestDigest_;
         std::filesystem::path root_;
+        std::optional<ReleaseManifestSignatureIdentity> manifestSignature_;
     };
 
     /** @brief Host-specific smoke checks selected by release policy. */
@@ -85,11 +96,12 @@ namespace Horo::Release {
      * @param requiredSmoke Policy-selected required smoke capabilities; duplicates fail closed.
      * @param signatureVerifier Required when the manifest declares signing.
      * @param probes Host-installed smoke adapters; missing or duplicate required kinds fail closed.
+     * @param manifestVerifier Explicit independent publisher trust when detached manifest verification is required.
+     * A null verifier selects the existing exact-tree contract without detached metadata.
      * @return Success only after every required check passes on the exact candidate.
      */
-    [[nodiscard]] Result<VerifiedReleaseCandidate> VerifyReleaseCandidate(const std::filesystem::path &root,
-                                                                          const ReleaseArtifactManifest &manifest,
-                                                                          std::span<const ReleaseCandidateSmokeKind> requiredSmoke,
-                                                                          IReleaseCandidateSignatureVerifier *signatureVerifier,
-                                                                          std::span<IReleaseCandidateSmokeProbe *const> probes);
+    [[nodiscard]] Result<VerifiedReleaseCandidate> VerifyReleaseCandidate(
+        const std::filesystem::path &root, const ReleaseArtifactManifest &manifest,
+        std::span<const ReleaseCandidateSmokeKind> requiredSmoke, IReleaseCandidateSignatureVerifier *signatureVerifier,
+        std::span<IReleaseCandidateSmokeProbe *const> probes, const IReleaseManifestSignatureVerifier *manifestVerifier = nullptr);
 }  // namespace Horo::Release

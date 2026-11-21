@@ -87,4 +87,15 @@ namespace Horo::Editor {
      */
     [[nodiscard]] PrefabCreationOutcome CreatePrefabFromSelection(SceneDocumentTransactions &scene, const PrefabCreationRequest &request,
                                                                   const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
+    /** @brief Creates a non-overwriting registered copy of an exact owned prefab draft.
+     * @param draft Captured source whose original asset and files remain authoritative for their current session.
+     * @param projectRoot Canonical project authority. @param destination Exclusive contained asset destination.
+     * @param asset Fresh host-generated identity. @param registry Frozen registry for duplicate identity admission.
+     * @param mutations Shared writer coordinator. @param files Native durable authority.
+     * @return Exact source/sidecar commit or existing rollback receipts for explicit recovery.
+     */
+    [[nodiscard]] PrefabCreationOutcome CreatePrefabFork(const Prefab::PrefabDocument &draft, const std::filesystem::path &projectRoot,
+                                                         const std::filesystem::path &destination, Assets::AssetId asset,
+                                                         const Assets::AssetRegistrySnapshot &registry,
+                                                         const ProjectMutationCoordinator &mutations, DurableFileSystem &files);
 }  // namespace Horo::Editor

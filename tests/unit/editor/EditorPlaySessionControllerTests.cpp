@@ -1,12 +1,27 @@
+#include "../../helpers/GameplayModuleTestSupport.h"
+#include "DecisionGraphCompilerTestSupport.h"
 #include "EditorPlayXrHost.h"
+#include "EditorProjectSceneHost.h"
+#include "Horo/AI/AIErrors.h"
+#include "Horo/AI/PerceptionSenseProvider.h"
+#include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Runtime/RuntimeHost.h"
 #include "Horo/Runtime/Scene/PrimitiveMesh.h"
+#include "Horo/Scene/CookedSceneDefinition.h"
+#include "Horo/Scene/SceneRuntimeConversion.h"
+#include "PrefabSceneCookHostFixture.h"
+#include "assets/AssetCookOutputFixture.h"
 #include "editor/document/EditorAssetMeshCache.h"
 #include "editor/gameplay/EditorPlaySessionController.h"
 #include "editor/renderer/xr/EditorXrSceneGeometry.h"
 
+#include <array>
+#include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -201,7 +216,9 @@ namespace {
             CpuSelectedXrHost &host_;
         };
 
-        std::unique_ptr<Runtime::SceneActivationParticipant> MakeSceneParticipant() override {
+        std::unique_ptr<Runtime::SceneActivationParticipant> MakeSceneParticipant(Editor::EditorMountedXrGeometryCapture mounted) override {
+            if (mounted)
+                return {};
             return std::make_unique<Participant>(*this);
         }
 
@@ -211,6 +228,10 @@ namespace {
 
     struct PlayOwnerObservations final {
         std::vector<Runtime::SceneRuntimeId> admitted;
+        std::optional<Editor::EditorPlayDecisionProblem> decisionProblem;
+        std::uint64_t inspectionTick{};
+        std::uint32_t inspectionGeneration{1};
+        std::size_t inspectionReads{};
         std::size_t ticks{};
         std::size_t closed{};
         bool failTick{};
@@ -245,6 +266,23 @@ namespace {
             ++observations_->ticks;
             return observations_->failTick ? Result<void>::Failure(MakeError(Gameplay::GameplayErrors::PhysicsUnavailable))
                                            : Result<void>::Success();
+        }
+
+        /** @brief Supplies an owned report for the session projection test. */
+        std::optional<Editor::EditorPlayDecisionProblem> ReadDecisionProblem() const override {
+            return observations_->decisionProblem;
+        }
+
+        std::uint64_t AgentInspectionTick() const noexcept override {
+            return observations_->inspectionTick;
+        }
+
+        std::optional<Editor::EditorPlayAgentInspection> ReadAgentInspection(Runtime::EntityRef owner) const override {
+            ++observations_->inspectionReads;
+            const AI::AgentHandle handle{AI::AiRuntimeIncarnation::Create(owner.runtime.value).Value(),
+                                         {owner.entity.index, observations_->inspectionGeneration}};
+            return Editor::EditorPlayAgentInspection{owner, handle, observations_->inspectionTick,
+                                                     std::make_shared<const AI::AiAgentInspectionSnapshot>()};
         }
 
         Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context) override {
@@ -545,6 +583,77 @@ TEST_CASE("Play injects one Scene owner and steps it only at admitted fixed quan
     CHECK(observations->closed == 2);
 }
 
+TEST_CASE("Play exposes the owned Decision problem while playing and paused", "[editor][play][ai]") {
+    const auto observations = std::make_shared<PlayOwnerObservations>();
+    auto registry = Registry();
+    Editor::EditorPlaySessionController play;
+    CHECK_FALSE(play.ReadDecisionProblem());
+
+    REQUIRE(play.Start(AuthoringScene(), registry, ObservePlayOwner(observations)).HasValue());
+    REQUIRE(play.SceneView());
+    CHECK_FALSE(play.ReadDecisionProblem());
+    const auto error = MakeError(Gameplay::GameplayErrors::PhysicsUnavailable);
+    const auto agent = AI::AgentId::Create(7).Value();
+    observations->decisionProblem = Editor::EditorPlayDecisionProblem{.scene = play.SceneView()->RuntimeId(),
+                                                                      .tick = 2,
+                                                                      .agent = agent,
+                                                                      .phase = Editor::EditorPlayDecisionPhase::Evaluate,
+                                                                      .error = error,
+                                                                      .entity = std::nullopt};
+
+    const auto captured = play.ReadDecisionProblem();
+    REQUIRE(captured);
+    CHECK(captured->tick == 2);
+    CHECK(captured->agent == agent);
+    REQUIRE(play.Pause().HasValue());
+    REQUIRE(play.ReadDecisionProblem());
+    play.Stop();
+    CHECK_FALSE(play.ReadDecisionProblem());
+    CHECK(captured->error.code.Value() == error.code.Value());
+}
+
+TEST_CASE("Play keeps bounded immutable agent inspection history for one live generation", "[editor][play][ai]") {
+    using Controller = Editor::EditorPlaySessionController;
+    const auto observations = std::make_shared<PlayOwnerObservations>();
+    auto registry = Registry();
+    Controller play;
+    REQUIRE(play.Start(AuthoringScene(), registry, ObservePlayOwner(observations)).HasValue());
+    const auto owner = play.SceneView()->Find({2});
+    REQUIRE(owner);
+    play.RefreshAgentInspection(owner);
+    CHECK(play.AgentInspectionHistory().empty());
+
+    constexpr auto spacing = Controller::AgentInspectionTickSpacing;
+    constexpr auto limit = Controller::AgentInspectionHistoryLimit;
+    for (std::uint64_t sample = 0; sample <= limit; ++sample) {
+        observations->inspectionTick = 1 + sample * spacing;
+        play.RefreshAgentInspection(owner);
+        play.RefreshAgentInspection(owner);
+        ++observations->inspectionTick;
+        play.RefreshAgentInspection(owner);
+    }
+    REQUIRE(play.AgentInspectionHistory().size() == limit);
+    CHECK(play.AgentInspectionHistory().front().tick == 1 + spacing);
+    CHECK(observations->inspectionReads == limit + 1);
+
+    REQUIRE(play.Pause().HasValue());
+    observations->inspectionTick = 1 + (limit + 1) * spacing;
+    ++observations->inspectionGeneration;
+    play.RefreshAgentInspection(owner);
+    REQUIRE(play.AgentInspectionHistory().size() == 1);
+    CHECK(play.AgentInspectionHistory().front().agent.slot.generation == 2);
+
+    auto stale = *owner;
+    ++stale.entity.generation;
+    play.RefreshAgentInspection(stale);
+    CHECK(play.AgentInspectionHistory().empty());
+    play.RefreshAgentInspection(owner);
+    CHECK(play.AgentInspectionHistory().empty());
+    CHECK(observations->inspectionReads == limit + 2);
+    play.Stop();
+    CHECK(play.AgentInspectionHistory().empty());
+}
+
 TEST_CASE("Play injected-owner failure preserves cause and closes the single Scene service", "[editor][play][ownership]") {
     auto observations = std::make_shared<PlayOwnerObservations>();
     observations->failTick = true;
@@ -660,7 +769,478 @@ namespace {
         PlayFixedParticipant *session{};
         PlayFixedGate *gate{};
     };
+
+    /** @brief A real registered native executor with a typed failure in the reactive condition callback. */
+    class EditorDecisionFixtureExecutor final : public AI::IBehaviorTreeExecutor {
+    public:
+        enum class FailedCallback {
+            Condition,
+            Start,
+            Resume
+        };
+
+        struct State final {
+            std::atomic_bool admitted{true};
+            AI::AiTaskContinuation continuation;
+            std::uint64_t startTick{}, resumeTick{}, checkTick{};
+            unsigned factories{};
+            FailedCallback failure{FailedCallback::Condition};
+        };
+
+        explicit EditorDecisionFixtureExecutor(State &state) : state_(state) {}
+
+        Result<AI::AiTaskState> Start(const AI::BehaviorTreeEvaluationContext &context,
+                                      const AI::AiTaskOperationContext &) noexcept override {
+            state_.startTick = context.tick;
+            state_.continuation = context.continuation;
+            if (state_.failure == FailedCallback::Start)
+                return Result<AI::AiTaskState>::Failure(MakeError(AI::AIErrors::TaskFailureInvalid));
+            return Result<AI::AiTaskState>::Success(AI::AiTaskState::Running);
+        }
+
+        Result<AI::AiTaskState> Resume(const AI::BehaviorTreeEvaluationContext &context,
+                                       const AI::AiTaskOperationContext &) noexcept override {
+            state_.resumeTick = context.tick;
+            if (state_.failure == FailedCallback::Resume)
+                return Result<AI::AiTaskState>::Failure(MakeError(AI::AIErrors::TaskFailureInvalid));
+            return Result<AI::AiTaskState>::Success(AI::AiTaskState::Running);
+        }
+
+        void Abort(const AI::AiTaskOperationContext &, AI::AiTaskCancellationReason) noexcept override {}
+
+        void Cleanup(const AI::AiTaskOperationContext &, const AI::AiTaskTerminalResult &) noexcept override {}
+
+        Result<bool> Check(const AI::BehaviorTreeEvaluationContext &context) noexcept override {
+            state_.checkTick = context.tick;
+            if (state_.failure == FailedCallback::Condition && context.tick == 2)
+                return Result<bool>::Failure(MakeError(AI::AIErrors::TaskFailureInvalid));
+            return Result<bool>::Success(true);
+        }
+
+        Result<void> Service(const AI::BehaviorTreeEvaluationContext &) noexcept override {
+            return Result<void>::Success();
+        }
+
+    private:
+        State &state_;
+    };
 }  // namespace
+
+TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only committed live failures", "[editor][play][ai][product]") {
+    namespace Decisions = AI::DecisionGraphTestSupport;
+    namespace Cook = Application::PrefabCookTestSupport;
+    namespace Output = Assets::OutputTestSupport;
+    using namespace Application::Internal;
+    Cook::HostFixture project;
+    Decisions::Fixture inputs;
+    const auto providerState = std::make_shared<EditorDecisionFixtureExecutor::State>();
+    std::array registrations{Decisions::Registration(inputs.probe), Decisions::Registration(inputs.probe, 502)};
+    registrations[1].contract.role = AI::DecisionNodeRole::Condition;
+    for (auto &registration : registrations) {
+        registration.contract.memory.stateBytes = sizeof(EditorDecisionFixtureExecutor);
+        registration.factory.userData = providerState.get();
+        registration.factory.create = [](void *owner, std::span<const AI::BehaviorTreeProperty>) -> AI::IBehaviorTreeExecutor * {
+            auto &state = *static_cast<EditorDecisionFixtureExecutor::State *>(owner);
+            ++state.factories;
+            return new EditorDecisionFixtureExecutor(state);
+        };
+    }
+    auto providers = AI::DecisionNodeGeneration::Capture(registrations, {providerState, &providerState->admitted});
+    REQUIRE(providers.HasValue());
+    inputs.providers = std::move(providers).Value();
+    auto condition = Decisions::TreeNode(2, AI::DecisionControlKind::Condition);
+    condition.kind = AI::BehaviorTreeNodeKind::Decorator;
+    condition.type = Decisions::MakeIdentity<AI::BehaviorTreeNodeTypeId>(502);
+    condition.minimumChildren = 1;
+    condition.maximumChildren = 1;
+    condition.control.abortMode = AI::BehaviorTreeAbortMode::Self;
+    auto graph = Decisions::Tree(84,
+                                 {Decisions::TreeNode(1, AI::DecisionControlKind::Root), condition,
+                                  Decisions::TreeNode(3, AI::DecisionControlKind::Task)},
+                                 {Decisions::Edge(1, 1, 2), Decisions::Edge(2, 2, 3)});
+    graph.executionTask = Decisions::MakeIdentity<AI::TaskId>(401);
+    const auto decision = inputs.Compile(std::span{&graph, 1}, 84);
+    const auto controller = Decisions::MakeIdentity<AI::ControllerTypeId>(402);
+    const auto agent = Decisions::MakeIdentity<AI::AgentId>(403);
+    const auto decisionId = Assets::AssetId::FromBytes({0x42});
+    const auto schemaId = Assets::AssetId::FromBytes({0x43});
+    constexpr auto sceneType = "core.scene";
+    constexpr auto treeType = "core.behavior_tree";
+    constexpr auto scenePath = "assets/level.horo";
+    constexpr auto perceptionPath = "play-perception.json";
+    bool livePerception = false;
+    std::optional<AI::AiSchedulingMode> watchedScheduler;
+    bool inferWatchedScheduler = false;
+    SECTION("Prepared native sensing reaches the selected agent's committed inspection memory") {
+        livePerception = true;
+        SECTION("Fixed scheduling retains the existing inspection contract") {}
+        SECTION("Authored best-effort scheduling wakes only when a watched decision has work") {
+            watchedScheduler = AI::AiSchedulingMode::BestEffort;
+        }
+        SECTION("Authored scheduler limits can omit the mode when Perception watches select it") {
+            watchedScheduler = AI::AiSchedulingMode::BestEffort;
+            inferWatchedScheduler = true;
+        }
+        SECTION("An explicit deterministic scheduler rejects authored reactive watches") {
+            watchedScheduler = AI::AiSchedulingMode::Deterministic;
+        }
+    }
+    SceneSource::SceneSourceDocument source;
+    source.objects.push_back({.id = {7},
+                              .name = "Owned AI and camera",
+                              .components = {.camera = Runtime::CameraComponent{},
+                                             .aiAgent = AI::AiAgentComponent{.agent = agent},
+                                             .aiController = AI::AiControllerComponent{.controller = controller,
+                                                                                       .decisionAsset = graph.asset,
+                                                                                       .blackboardSchema = inputs.schema->Identity()}}});
+    if (livePerception) {
+        auto *configured = &*source.objects.front().components.aiController;
+        configured->requiredCapabilities = AI::AiCapabilitySet::Of(AI::AiCapability::Perception);
+        source.objects.push_back({.id = {8},
+                                  .name = "Sensed peer",
+                                  .localTransform = {.translation = {1.0F, 0.0F, 0.0F}},
+                                  .components = {.aiAgent = AI::AiAgentComponent{.agent = Decisions::MakeIdentity<AI::AgentId>(404)},
+                                                 .aiController = *configured}});
+    }
+    const SceneSource::SceneSourceView view{source.objects, source.prefabInstances};
+    const auto runtime = SceneSource::ConvertSceneSourceToRuntime(view, SceneCook::SceneDefinitionIdForAsset(project.sceneId), {1});
+    REQUIRE(runtime.HasValue());
+    const auto scene = SceneCook::EncodeCookedSceneDefinition(runtime.Value());
+    const auto plan = AI::DecisionPlanCodec::EncodeCooked(*decision);
+    const auto schema = AI::BlackboardSchemaCodec::Encode(*inputs.schema);
+    const auto authored = AI::DecisionPlanCodec::EncodeSource(std::span{&graph, 1}, graph.asset);
+    REQUIRE(scene.HasValue());
+    REQUIRE(plan.HasValue());
+    REQUIRE(schema.HasValue());
+    REQUIRE(authored.HasValue());
+    std::filesystem::rename(project.project.dir.path / "assets/level.scene", project.project.dir.path / scenePath);
+    std::filesystem::rename(project.project.dir.path / "assets/level.scene.horo", project.project.dir.path / "assets/level.horo.horo");
+    project.WriteText(scenePath, SceneSource::EncodeSceneSource(view));
+    project.WriteText("assets/check.horo_bt", {reinterpret_cast<const char *>(authored.Value().data()), authored.Value().size()});
+    project.WriteText("assets/check.horo_bt.horo", Cook::SidecarJson(decisionId.ToString(), treeType));
+    const auto schemaPath = std::string{"assets/keys"} + std::string{AI::BlackboardSchemaSourceExtension};
+    project.WriteText(schemaPath, {reinterpret_cast<const char *>(schema.Value().data()), schema.Value().size()});
+    project.WriteText(schemaPath + ".horo", Cook::SidecarJson(schemaId.ToString(), AI::BlackboardSchemaAssetType));
+    const auto target = project.request.assets.target;
+    std::vector<Assets::AssetCookManifestEntry> entries;
+    std::vector<std::vector<std::uint8_t>> artifacts;
+    const auto add = [&](const Assets::AssetId id, std::string_view type, const std::vector<std::uint8_t> &bytes) {
+        const auto assetType = Cook::Type(type);
+        auto encoded = Assets::EncodeCookedArtifact(
+            {.id = id, .type = assetType, .target = target, .payloadDigest = Output::DigestOf(bytes), .payload = bytes});
+        REQUIRE(encoded.HasValue());
+        entries.push_back({id, assetType, id.ToString() + ".cooked", Output::DigestOf(encoded.Value())});
+        artifacts.push_back(std::move(encoded).Value());
+    };
+    add(project.sceneId, sceneType, scene.Value());
+    add(decisionId, treeType, plan.Value());
+    add(schemaId, AI::BlackboardSchemaAssetType, schema.Value());
+    REQUIRE(Output::PublishFixture(project.cooked.path, target, entries, artifacts).HasValue());
+
+    bool changed = false;
+    bool rejectFixed = false;
+    bool discloseKey = false;
+    bool authorizeForeignSchema = false;
+    bool decisionDebug = false;
+    bool projectDisallowsDebug = false;
+    using FailedCallback = EditorDecisionFixtureExecutor::FailedCallback;
+    SECTION("Committed pause and step retain a consecutive local Decision clock") {}
+    SECTION("Approved agent debugging steps one slice and releases the breakpoint on view closure") {
+        decisionDebug = true;
+    }
+    SECTION("Authored development permissions keep an explicitly requested debugger read-only") {
+        projectDisallowsDebug = true;
+    }
+    if (projectDisallowsDebug || watchedScheduler) {
+        std::ifstream input{project.project.dir.path / ".horo/project.json", std::ios::binary};
+        REQUIRE(input.is_open());
+        std::string metadata{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+        input.close();
+        constexpr std::string_view backend = R"("renderBackend":"opengl")";
+        const auto insertion = metadata.find(backend);
+        REQUIRE(insertion != std::string::npos);
+        const auto mode = watchedScheduler == AI::AiSchedulingMode::BestEffort ? "bestEffort" : "deterministic";
+        const auto writtenMode = inferWatchedScheduler ? std::string{} : std::string{R"("mode":")"} + mode + "\",";
+        const auto evaluations = watchedScheduler ? 2 : 1;
+        metadata.insert(insertion + backend.size(), std::string{R"(,"ai":{"schemaVersion":1,"scheduler":{)"} + writtenMode +
+                                                        R"("evaluationsPerTick":)" + std::to_string(evaluations) +
+                                                        R"(},"development":{"liveMutation":false}})");
+        project.WriteText(".horo/project.json", metadata);
+    }
+    SECTION("An explicit schema-scoped inspector key reveals only its admitted value") {
+        discloseKey = true;
+    }
+    SECTION("An inspector key from another schema leaves this Blackboard redacted") {
+        authorizeForeignSchema = true;
+    }
+    SECTION("Start errors reach Problems on the first committed tick") {
+        providerState->failure = FailedCallback::Start;
+    }
+    SECTION("Resume errors reach Problems after a paused step") {
+        providerState->failure = FailedCallback::Resume;
+    }
+    SECTION("An aborted step retires the evaluated owner before retry") {
+        rejectFixed = true;
+    }
+    SECTION("A changed live Scene cannot admit stale cooked controllers") {
+        changed = true;
+    }
+    if (changed)
+        source.objects.front().localTransform.translation.x = 3;
+
+    REQUIRE_FALSE(inputs.schema->Keys().empty());
+    const auto &disclosed = inputs.schema->Keys().front();
+    std::vector<EditorPlayInspectionKey> disclosure;
+    if (discloseKey)
+        disclosure.push_back({inputs.schema->Identity(), disclosed.key});
+    if (authorizeForeignSchema)
+        disclosure.push_back({Decisions::MakeIdentity<AI::BlackboardSchemaId>(inputs.schema->Identity().Value() + 1), disclosed.key});
+    std::unique_ptr<Gameplay::LoadedGameModule> senseModule;
+    std::shared_ptr<const AI::PerceptionSenseGeneration> senses;
+    if (livePerception) {
+        const Gameplay::GameModuleLoadExpectation expected{"game.ai.tests", Gameplay::CurrentGameplayBuildFingerprint(),
+                                                           Horo::Tests::ReadDescriptorRevision(HORO_TEST_AI_MODULE_REVISION_PATH)};
+        auto loaded = Gameplay::GameModuleHost{}.Load(HORO_TEST_AI_MODULE_PATH, expected);
+        REQUIRE(loaded.HasValue());
+        REQUIRE_FALSE(loaded.Value().diagnostic);
+        senseModule = std::move(loaded).Value().owner;
+        auto generation = senseModule->AcquirePerceptionSenses();
+        REQUIRE(generation.HasValue());
+        senses = std::move(generation).Value();
+        REQUIRE(senses->Contracts().size() == 1);
+        const auto &contract = senses->Contracts().front();
+        const auto sense = std::to_string(contract.sense.identity.Value());
+        const auto units = (contract.workUnits + AI::PerceptionSenseGeneration::ValidationWorkUnits + 1) * 3;
+        const auto watches = watchedScheduler ? R"(,"decisionWatches":[{"node":3,"listener":91}])" : "";
+        project.WriteText(perceptionPath,
+                          "{\"schema\":2,\"sceneAsset\":\"" + project.sceneId.ToString() +
+                              "\",\"sceneRevision\":1,\"worldOriginMillimeters\":[0,0,0],\"controllers\":[{\"controller\":" +
+                              std::to_string(controller.Value()) + ",\"listeners\":[91],\"sources\":[" + sense +
+                              "],\"layers\":1,\"mask\":1" + watches + "}],\"native\":{\"listeners\":[{\"id\":91,\"sense\":" + sense +
+                              "}],\"radiusMillimeters\":4000,\"visibleLayers\":1,\"workUnitsPerTick\":" + std::to_string(units) + "}}");
+    }
+    const auto projectFactory =
+        MakeEditorProjectSceneFactory(project.jobs, {.cooked = SceneCookSelection{project.cooked.path, target},
+                                                     .decisions = EditorPlayDecisionSelection{project.project.dir.path,
+                                                                                              project.sceneId,
+                                                                                              {{controller, decisionId, {}}},
+                                                                                              std::move(disclosure),
+                                                                                              livePerception ? perceptionPath : "",
+                                                                                              Duration::FromMilliseconds(10),
+                                                                                              decisionDebug || projectDisallowsDebug}});
+    const Editor::EditorPlaySceneFactory factory = [&](Runtime::SceneRuntimeId id, const Runtime::RuntimeSceneDefinition &definition) {
+        return projectFactory(project.project.dir.path, id, definition);
+    };
+    Gameplay::BehaviorRegistry registry;
+    Gameplay::ComponentRegistry components;
+    REQUIRE(registry.Freeze().HasValue());
+    REQUIRE(components.Freeze().HasValue());
+    Editor::EditorPlaySessionController play;
+    DeterministicClock clock;
+    auto scheduler = Runtime::FrameScheduler::Create(clock, {.fixedStep = Duration::FromMilliseconds(10)});
+    REQUIRE(scheduler.HasValue());
+    REQUIRE(play.BindRuntimeDispatch(scheduler.Value()->DispatchSource()).HasValue());
+    const Editor::SceneDocumentSnapshot document{{1}, {1}, source.objects};
+    const auto started = play.Start(document, registry, components, factory, {}, Editor::EditorPlayViewSource::AuthoredCamera, nullptr, {},
+                                    nullptr, {.decision = [&] {
+        return Result<std::shared_ptr<const AI::DecisionNodeGeneration>>::Success(inputs.providers);
+    }, .perception = [&] {
+        return Result<std::shared_ptr<const AI::PerceptionSenseGeneration>>::Success(senses);
+    }});
+    if (watchedScheduler == AI::AiSchedulingMode::Deterministic) {
+        REQUIRE(started.HasError());
+        const auto &failure = AI::AIErrors::SchedulerPolicyInvalid;
+        CHECK(ErrorChainContains(started.ErrorValue(), failure.domain, failure.code));
+        CHECK(providerState->factories == 0);
+        CHECK_FALSE(play.SceneView());
+        return;
+    }
+    if (changed) {
+        REQUIRE(started.HasError());
+        CHECK(providerState->factories == 0);
+        CHECK_FALSE(play.SceneView());
+        return;
+    }
+    if (started.HasError())
+        UNSCOPED_INFO(started.ErrorValue().message);
+    REQUIRE(started.HasValue());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+    while (play.State() == Editor::EditorPlaySessionState::Starting && std::chrono::steady_clock::now() < deadline) {
+        play.PresentationUpdate({0});
+        std::this_thread::yield();
+    }
+    if (play.LastError())
+        UNSCOPED_INFO(play.LastError()->message);
+    REQUIRE(play.State() == Editor::EditorPlaySessionState::Playing);
+    REQUIRE(play.SceneView());
+    const auto entity = play.SceneView()->Find({7});
+    REQUIRE(entity);
+    play.RefreshAgentInspection(entity);
+    CHECK(play.AgentInspectionHistory().empty());
+    CHECK(play.QuiesceForReload().HasError());
+    Runtime::RuntimeLifecycle lifecycle;
+    REQUIRE(lifecycle.AddParticipant(std::make_unique<PlayFixedParticipant>(play)).HasValue());
+    auto gate = std::make_unique<PlayFixedGate>();
+    auto *gateView = gate.get();
+    REQUIRE(lifecycle.AddParticipant(std::move(gate)).HasValue());
+    const CancellationSource cancellation;
+    REQUIRE(lifecycle.Startup(cancellation.Token()).HasValue());
+    REQUIRE(scheduler.Value()->RunFrame(lifecycle, cancellation.Token(), false).HasValue());
+    const auto tick = [&] {
+        clock.Advance(Duration::FromMilliseconds(10));
+        return scheduler.Value()->RunFrame(lifecycle, cancellation.Token(), false);
+    };
+    const auto verifyProblem = [&](const std::uint64_t expectedTick) {
+        const auto problem = play.ReadDecisionProblem();
+        REQUIRE(problem);
+        CHECK(problem->tick == expectedTick);
+        CHECK(problem->agent == agent);
+        CHECK(problem->entity == entity);
+        const auto &failure = AI::AIErrors::TaskFailureInvalid;
+        CHECK(ErrorChainContains(problem->error, failure.domain, failure.code));
+        if (providerState->failure == FailedCallback::Condition) {
+            CHECK(problem->phase == Editor::EditorPlayDecisionPhase::Evaluate);
+        } else {
+            CHECK(problem->phase == Editor::EditorPlayDecisionPhase::TaskProvider);
+            CHECK(problem->graph == graph.asset);
+            CHECK(problem->node == Decisions::MakeIdentity<AI::DecisionNodeId>(3));
+            CHECK(play.SceneView());
+        }
+    };
+    REQUIRE(tick().HasValue());
+    CHECK(providerState->startTick == 1);
+    play.RefreshAgentInspection(entity);
+    REQUIRE(play.AgentInspectionHistory().size() == 1);
+    const auto &inspection = play.AgentInspectionHistory().front();
+    CHECK(inspection.owner == entity);
+    CHECK(inspection.tick == 1);
+    REQUIRE(inspection.snapshot);
+    if (!watchedScheduler) {
+        REQUIRE(inspection.decisionTrace);
+        CHECK(inspection.decisionTrace->Header().tick == 1);
+        CHECK(inspection.decisionTrace->Header().root == graph.asset);
+        CHECK(inspection.decisionTrace->Header().blackboard.agent == inspection.agent);
+    }
+    CHECK(inspection.snapshot->agent == inspection.agent);
+    CHECK(inspection.snapshot->decisionTick == 1);
+    using enum Editor::EditorPlayDecisionDebugAction;
+    const auto selectedAgent = inspection.agent;
+    CHECK_FALSE(play.ApplyDecisionDebugCommand({selectedAgent, Pause}));
+    play.SetDecisionDebugView(selectedAgent);
+    if (decisionDebug) {
+        REQUIRE(play.ReadDecisionDebugState());
+        auto stale = selectedAgent;
+        ++stale.slot.generation;
+        CHECK_FALSE(play.ApplyDecisionDebugCommand({stale, Pause}));
+        CHECK_FALSE(play.ApplyDecisionDebugCommand({selectedAgent, Step}));
+        REQUIRE(play.ApplyDecisionDebugCommand({selectedAgent, Pause}));
+        REQUIRE(tick().HasValue());
+        CHECK(providerState->checkTick == 1);
+        REQUIRE(play.ApplyDecisionDebugCommand({selectedAgent, Step}));
+        REQUIRE(tick().HasValue());
+        CHECK(providerState->checkTick == 3);
+        CHECK(play.ReadDecisionDebugState()->paused);
+        CHECK_FALSE(play.ReadDecisionDebugState()->stepPending);
+        REQUIRE(play.ReadDecisionDebugState()->trace);
+        CHECK(play.ReadDecisionDebugState()->trace->Header().tick == 3);
+        REQUIRE(tick().HasValue());
+        CHECK(providerState->checkTick == 3);
+        const Editor::EditorPlayDecisionBreakpoint target{graph.asset, Decisions::MakeIdentity<AI::DecisionNodeId>(3), 0};
+        auto foreignOccurrence = target;
+        ++foreignOccurrence.occurrence;
+        CHECK_FALSE(play.ApplyDecisionDebugCommand({selectedAgent, SetBreakpoint, foreignOccurrence}));
+        REQUIRE(play.ApplyDecisionDebugCommand({selectedAgent, SetBreakpoint, target}));
+        REQUIRE(play.ApplyDecisionDebugCommand({selectedAgent, Resume}));
+        REQUIRE(tick().HasValue());
+        CHECK(providerState->checkTick == 5);
+        CHECK(play.ReadDecisionDebugState()->paused);
+        REQUIRE(tick().HasValue());
+        CHECK(providerState->checkTick == 5);
+        play.SetDecisionDebugView(std::nullopt);
+        CHECK_FALSE(play.ReadDecisionDebugState());
+        CHECK_FALSE(play.ApplyDecisionDebugCommand({selectedAgent, Pause}));
+        REQUIRE(tick().HasValue());
+        CHECK(providerState->checkTick == 7);
+        play.Stop();
+        lifecycle.Shutdown();
+        return;
+    }
+    CHECK_FALSE(play.ReadDecisionDebugState());
+    CHECK_FALSE(play.ApplyDecisionDebugCommand({selectedAgent, Pause}));
+    if (livePerception) {
+        CHECK_FALSE(inspection.snapshot->perceptionFailure);
+        REQUIRE(inspection.snapshot->stimuli.size() == 1);
+        const auto &stimulus = inspection.snapshot->stimuli.front();
+        REQUIRE(play.SceneView()->Find({8}));
+        CHECK(stimulus.key.source.slot == play.SceneView()->Find({8})->entity.index);
+        CHECK(stimulus.key.sense == senses->Contracts().front().sense.identity);
+        CHECK(stimulus.firstSensedTick == 1);
+        CHECK(stimulus.lastSensedTick == 1);
+        CHECK(stimulus.ageSeconds == 0);
+        CHECK(stimulus.sensed);
+        if (watchedScheduler) {
+            REQUIRE(tick().HasValue());
+            CHECK(providerState->checkTick == 1);
+            CHECK(providerState->resumeTick == 0);
+            REQUIRE(providerState->continuation.NotifyEvent() == AI::AiTaskPublicationDisposition::Accepted);
+            REQUIRE(tick().HasValue());
+            CHECK(providerState->checkTick == 3);
+            CHECK(providerState->resumeTick == 3);
+        }
+        play.Stop();
+        lifecycle.Shutdown();
+        return;
+    }
+    CHECK(inspection.snapshot->omittedDecisionTasks == 0);
+    if (providerState->failure == FailedCallback::Start) {
+        CHECK(inspection.snapshot->decisionTasks.empty());
+    } else {
+        REQUIRE(inspection.snapshot->decisionTasks.size() == 1);
+        const auto &task = inspection.snapshot->decisionTasks.front();
+        CHECK(task.occurrence.graph == graph.asset);
+        CHECK(task.node == Decisions::MakeIdentity<AI::DecisionNodeId>(3));
+        CHECK(task.task.IsValid());
+        CHECK(task.execution.IsValid());
+    }
+    for (const auto &key : inspection.snapshot->keys) {
+        if (discloseKey && key.key == disclosed.key) {
+            CHECK(key.status == (disclosed.defaultValue ? AI::AiInspectionValueStatus::Present : AI::AiInspectionValueStatus::Unset));
+            CHECK(key.value == disclosed.defaultValue);
+        } else {
+            CHECK(key.status == AI::AiInspectionValueStatus::Redacted);
+            CHECK_FALSE(key.value);
+        }
+    }
+    if (providerState->failure == FailedCallback::Start) {
+        verifyProblem(1);
+        play.Stop();
+        CHECK_FALSE(play.ReadDecisionProblem());
+        lifecycle.Shutdown();
+        return;
+    }
+    CHECK_FALSE(play.ReadDecisionProblem());
+    REQUIRE(play.Pause().HasValue());
+    REQUIRE(tick().HasValue());
+    REQUIRE(tick().HasValue());
+    CHECK(providerState->checkTick == 1);
+    REQUIRE(play.Step().HasValue());
+    gateView->fail = rejectFixed;
+    if (rejectFixed) {
+        REQUIRE(tick().HasError());
+        CHECK(providerState->checkTick == 2);
+        CHECK_FALSE(play.SceneView());
+        CHECK_FALSE(play.ReadDecisionProblem());
+    } else {
+        REQUIRE(tick().HasValue());
+        CHECK(providerState->checkTick == 2);
+        if (providerState->failure == FailedCallback::Resume)
+            CHECK(providerState->resumeTick == 2);
+        verifyProblem(2);
+    }
+    play.Stop();
+    CHECK_FALSE(play.ReadDecisionProblem());
+    lifecycle.Shutdown();
+}
 
 TEST_CASE("Play typed fixed path publishes only after actual same-attempt commitment", "[editor][play][fixed-commit]") {
     PlayFixedFixture fixture;

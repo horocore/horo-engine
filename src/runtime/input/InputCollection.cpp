@@ -37,11 +37,16 @@ namespace Horo::Input {
             return Stale<void>();
         if (const auto &source = sources[slot];
             source.generation != generation || source.retiring || source.configuration != router->impl_->configurationRevision ||
-            source.assignment != router->impl_->assignmentRevision || !router->TokenActive(source.context) ||
+            !AssignmentCurrent(source.assignment) || !router->TokenActive(source.context) ||
             (source.device &&
              (!router->Snapshot().FindGamepad(*source.device) || router->PlayerForGamepad(*source.device) != source.player)))
             return Stale<void>();
         return Result<void>::Success();
+    }
+
+    /** @brief Explicit external player ports do not borrow another device family's assignment revision. */
+    bool InputCollectionLifetime::AssignmentCurrent(const std::optional<std::uint64_t> revision) const noexcept {
+        return !revision || *revision == router->impl_->assignmentRevision;
     }
 
     Result<void> InputCollectionLifetime::ValidateFrame(const std::uint64_t frame) const {
@@ -95,8 +100,8 @@ namespace Horo::Input {
                 continue;
             auto &source = sources[entry.source];
             const bool current = !source.retiring && source.generation == entry.generation &&
-                                 source.configuration == router->impl_->configurationRevision &&
-                                 source.assignment == router->impl_->assignmentRevision && router->TokenActive(source.context) &&
+                                 source.configuration == router->impl_->configurationRevision && AssignmentCurrent(source.assignment) &&
+                                 router->TokenActive(source.context) &&
                                  (!source.device || ((candidate ? *candidate : router->Snapshot()).FindGamepad(*source.device) &&
                                                      router->PlayerForGamepad(*source.device) == source.player));
             entry.previous = entry.current;
@@ -141,12 +146,14 @@ namespace Horo::Input {
         CommitValues(true);
     }
 
-    void InputCollectionLifetime::Accumulate(const std::size_t action, const std::optional<PlayerId> player, ActionValue &value) noexcept {
+    void InputCollectionLifetime::Accumulate(const std::uint64_t context, const std::size_t action, const std::optional<PlayerId> player,
+                                             ActionValue &value) noexcept {
         for (auto &entry : entries) {
-            if (entry.generation == 0 || entry.action != action || (player.has_value() && sources[entry.source].player != player))
+            if (entry.generation == 0 || entry.action != action)
                 continue;
-            if (const auto &source = sources[entry.source];
-                source.configuration != router->impl_->configurationRevision || source.assignment != router->impl_->assignmentRevision)
+            if (const auto &source = sources[entry.source]; source.context != context || (player.has_value() && source.player != player) ||
+                                                            source.configuration != router->impl_->configurationRevision ||
+                                                            !AssignmentCurrent(source.assignment))
                 continue;
             const bool down = entry.current.active && (entry.current.x != 0.0F || entry.current.y != 0.0F);
             const bool previous = entry.previous.active && (entry.previous.x != 0.0F || entry.previous.y != 0.0F);
@@ -181,6 +188,88 @@ namespace Horo::Input {
         return Result<InputActionCollection>::Success(std::move(port));
     }
 
+    /** @copydoc InputRouter::ActionCollectionForPlayer */
+    Result<InputActionCollection> InputRouter::ActionCollectionForPlayer(const InputContextToken &context, const PlayerId player) const {
+        auto borrowed = ActionCollection(context);
+        if (borrowed.HasError())
+            return borrowed;
+        auto port = std::move(borrowed).Value();
+        port.player_ = player;
+        port.assignment_.reset();
+        return Result<InputActionCollection>::Success(std::move(port));
+    }
+
+    /** @copydoc InputRouter::RefreshPlayerActionCollection */
+    Result<bool> InputRouter::RefreshPlayerActionCollection(InputActionCollection &port) const {
+        if (port.assignment_ || !port.player_)
+            return Result<bool>::Success(false);
+        const auto owner = port.owner_.lock();
+        if (owner != impl_->collection)
+            return Stale<bool>();
+        if (const auto borrowed = owner->Borrow(); borrowed.HasError())
+            return Result<bool>::Failure(borrowed.ErrorValue());
+        if (!TokenActive(port.context_) || impl_->configurationRevision == 0)
+            return Stale<bool>();
+        if (port.configuration_ == impl_->configurationRevision)
+            return Result<bool>::Success(false);
+        port.configuration_ = impl_->configurationRevision;
+        return Result<bool>::Success(true);
+    }
+
+    /** @copydoc InputActionCollection::RoutingEligible */
+    bool InputActionCollection::RoutingEligible() const noexcept {
+        const auto owner = owner_.lock();
+        if (!owner || owner->thread != std::this_thread::get_id() || !owner->router)
+            return false;
+        const auto &router = *owner->router;
+        return configuration_ == router.impl_->configurationRevision && owner->AssignmentCurrent(assignment_) &&
+               (!device_ || (router.Snapshot().FindGamepad(*device_) && router.PlayerForGamepad(*device_) == player_)) &&
+               !router.impl_->bindingCaptureTerminal && router.impl_->ContextEligible(context_);
+    }
+
+    /** @copydoc InputActionCollection::ReadPlayerAssignmentRevision */
+    std::optional<std::uint64_t> InputActionCollection::ReadPlayerAssignmentRevision() const noexcept {
+        const auto owner = owner_.lock();
+        if (!owner || !player_ || !RoutingEligible())
+            return std::nullopt;
+        return owner->router->impl_->assignmentRevision;
+    }
+
+    /** @copydoc InputActionCollection::ReadCollectedAxis */
+    std::optional<ActionValue> InputActionCollection::ReadCollectedAxis(const ActionId &action) const noexcept {
+        return ReadCollectedValue(action, false);
+    }
+
+    std::optional<bool> InputActionCollection::ReadCollectedButton(const ActionId &action) const noexcept {
+        if (const auto value = ReadCollectedValue(action, true))
+            return value->x > 0.0F;
+        return std::nullopt;
+    }
+
+    std::optional<ActionValue> InputActionCollection::ReadCollectedValue(const ActionId &action, bool digital) const noexcept {
+        const auto owner = owner_.lock();
+        if (!owner || !player_ || !RoutingEligible())
+            return std::nullopt;
+        const auto actions = owner->router->Actions();
+        const auto descriptor = std::ranges::find(actions, action, &ActionDescriptor::id);
+        if (descriptor == actions.end() || (descriptor->valueType == ActionValueType::Digital) != digital)
+            return std::nullopt;
+
+        ActionValue value;
+        const auto index = static_cast<std::size_t>(descriptor - actions.begin());
+        for (const auto &entry : owner->entries) {
+            if (entry.generation == 0 || entry.action != index || !entry.current.active)
+                continue;
+            const auto &source = owner->sources[entry.source];
+            if (!source.retiring && source.context == context_ && source.player == player_ && source.configuration == configuration_ &&
+                owner->AssignmentCurrent(source.assignment)) {
+                value.x += entry.current.x;
+                value.y += entry.current.y;
+            }
+        }
+        return ActionValue{.x = std::clamp(value.x, -1.0F, 1.0F), .y = std::clamp(value.y, -1.0F, 1.0F)};
+    }
+
     /** @copydoc InputActionCollection::RegisterSource */
     Result<InputActionSourceToken> InputActionCollection::RegisterSource(const std::span<const ActionDescriptor> actions) const {
         const auto owner = owner_.lock();
@@ -190,7 +279,7 @@ namespace Horo::Input {
         if (router.HasError())
             return Result<InputActionSourceToken>::Failure(router.ErrorValue());
         if (const auto &impl = *router.Value()->impl_; configuration_ != impl.configurationRevision ||
-                                                       assignment_ != impl.assignmentRevision || !router.Value()->TokenActive(context_) ||
+                                                       !owner->AssignmentCurrent(assignment_) || !router.Value()->TokenActive(context_) ||
                                                        owner->collecting || actions.empty())
             return Stale<InputActionSourceToken>();
         auto registered = owner->Register({.context = context_,
@@ -282,7 +371,7 @@ namespace Horo::Input {
             return Stale<InputCollectionFrame>();
         if (auto router = owner->Borrow(); router.HasError())
             return Result<InputCollectionFrame>::Failure(router.ErrorValue());
-        if (configuration_ != owner->router->impl_->configurationRevision || assignment_ != owner->router->impl_->assignmentRevision ||
+        if (configuration_ != owner->router->impl_->configurationRevision || !owner->AssignmentCurrent(assignment_) ||
             !owner->router->TokenActive(context_))
             return Stale<InputCollectionFrame>();
         if (owner->collecting || owner->serial == std::numeric_limits<std::uint64_t>::max())

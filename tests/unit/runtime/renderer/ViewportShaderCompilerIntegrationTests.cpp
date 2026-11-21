@@ -1,7 +1,11 @@
+#include "ColorOutputCook.h"
+#include "ColorOutputShaderRecipe.h"
 #include "EditorViewportShaderRecipe.h"
+#include "EditorVulkanViewportShader.h"
 #include "support/ShaderCompilerToolchainFixture.h"
 
 #include <array>
+#include <cstdlib>
 
 using namespace Horo::Tests::ShaderCompilerFixture;
 
@@ -48,6 +52,28 @@ namespace {
         REQUIRE(compatibility.HasValue());
         CHECK(reflection.interfaceCompatibility == compatibility.Value());
     }
+
+    /** @brief Checks the real position/UV, sampler and premultiplied-color interface of the sampled canvas consumer. */
+    void CheckSampledCanvasShader(ShaderCompilationRequest request, const ExternalShaderCompilerAdapter &adapter,
+                                  const ShaderCompilerToolIdentity &cross) {
+        using namespace Horo::Editor;
+        request.manifest = EditorVulkanWorldCanvasShaderManifest();
+        request.source = Read(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / request.manifest.sourceIdentity);
+        request.reflection = ShaderCompilerReflectionRequest{cross, EditorVulkanWorldCanvasReflectionNames()};
+        const auto compiled = CompileShaderTargets(request, adapter, {});
+        INFO((compiled.HasError() ? compiled.ErrorValue().message : "compiled sampled canvas recipe"));
+        REQUIRE(compiled.HasValue());
+        REQUIRE(compiled.Value().artifacts.size() == 1);
+        const auto &artifact = compiled.Value().artifacts.front();
+        REQUIRE(artifact.reflection);
+        const auto metadata = EncodeReflectedShaderArtifact(*artifact.reflection);
+        REQUIRE(metadata.HasValue());
+        const auto cooked = LoadEditorVulkanWorldCanvasCook(artifact.payload, metadata.Value());
+        REQUIRE(cooked.HasValue());
+        CHECK(cooked.Value().metadata.cookedArtifactKey == artifact.reflection->cookedArtifactKey);
+        CHECK(LoadEditorVulkanViewportCook(artifact.payload, metadata.Value()).HasError());
+        CHECK(LoadEditorVulkanCameraCrossFadeCook(artifact.payload, metadata.Value()).HasError());
+    }
 }  // namespace
 #endif
 
@@ -86,5 +112,123 @@ TEST_CASE("Reviewed Linux tools compile the complete canonical viewport shader f
                   second.Value().artifacts.front().reflection->cookedArtifactKey);
         }
     }
+#endif
+}
+
+TEST_CASE("Reviewed Vulkan tools cook and separate the linear scene raster from display viewport output",
+          "[runtime][renderer][shader-compiler][toolchain][integration][viewport][reconstruction]") {
+#ifndef __linux__
+    SKIP("Actual viewport compiler qualification requires the reviewed Linux tool artifacts on Linux.");
+#else
+    using namespace Horo::Editor;
+    const auto dxc = Installation(ShaderCompilerTool::Dxc, "HORO_TEST_SHADER_DXC");
+    const auto spirvTools = Installation(ShaderCompilerTool::SpirvTools, "HORO_TEST_SHADER_SPIRV_VAL");
+    const auto spirvCross = Installation(ShaderCompilerTool::SpirvCross, "HORO_TEST_SHADER_SPIRV_CROSS");
+    if (!dxc || !spirvTools || !spirvCross)
+        SKIP("Set the three HORO_TEST_SHADER_* paths to the reviewed Vulkan compiler artifacts.");
+
+    TemporaryDirectory temporary;
+    ShaderCompilerToolchainConfiguration configuration;
+    configuration.hostPlatform = "linux-x86_64-ubuntu-26.04";
+    configuration.scratchRoot = temporary.Path() / "scratch";
+    configuration.tools = {*dxc, *spirvTools, *spirvCross};
+    const auto adapter = ExternalShaderCompilerAdapter::Create(std::move(configuration), std::make_shared<NativeExternalProcessRunner>());
+    REQUIRE(adapter.HasValue());
+    auto request = Request(ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16, {dxc->identity, spirvTools->identity});
+    request.dependencies.clear();
+    request.targets.front().requirement = EditorVulkanViewportShaderTarget();
+    CheckSampledCanvasShader(request, adapter.Value(), spirvCross->identity);
+    request.source = Read(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/shaders/editor/viewport.hlsl");
+    request.reflection = ShaderCompilerReflectionRequest{spirvCross->identity, EditorVulkanViewportReflectionNames()};
+
+    request.manifest = EditorVulkanViewportShaderManifest();
+    const auto display = CompileShaderTargets(request, adapter.Value(), {});
+    INFO((display.HasError() ? display.ErrorValue().message : "compiled display recipe"));
+    REQUIRE(display.HasValue());
+    const auto &displayArtifact = display.Value().artifacts.front();
+    REQUIRE(displayArtifact.reflection);
+    const auto displayMetadata = EncodeReflectedShaderArtifact(*displayArtifact.reflection);
+    REQUIRE(displayMetadata.HasValue());
+    CHECK(LoadEditorVulkanViewportCook(displayArtifact.payload, displayMetadata.Value()).HasValue());
+    CHECK(LoadEditorVulkanSceneLinearCook(displayArtifact.payload, displayMetadata.Value()).HasError());
+
+    request.manifest = EditorVulkanSceneLinearShaderManifest();
+    const auto scene = CompileShaderTargets(request, adapter.Value(), {});
+    INFO((scene.HasError() ? scene.ErrorValue().message : "compiled scene-linear recipe"));
+    REQUIRE(scene.HasValue());
+    const auto &sceneArtifact = scene.Value().artifacts.front();
+    REQUIRE(sceneArtifact.reflection);
+    const auto sceneMetadata = EncodeReflectedShaderArtifact(*sceneArtifact.reflection);
+    REQUIRE(sceneMetadata.HasValue());
+    CHECK(LoadEditorVulkanSceneLinearCook(sceneArtifact.payload, sceneMetadata.Value()).HasValue());
+    CHECK(LoadEditorVulkanViewportCook(sceneArtifact.payload, sceneMetadata.Value()).HasError());
+    CHECK(sceneArtifact.artifactKey != displayArtifact.artifactKey);
+    const auto state = EditorVulkanSceneLinearPipelineState();
+    CHECK(state.colorFormat == RenderTextureFormat::Rgba16Float);
+    CHECK(state.depthFormat == RenderTextureFormat::Depth32Float);
+
+    request.source = Read(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/shaders/editor/viewport_temporal_inputs.hlsl");
+    const std::array inputs{EditorVulkanTemporalInput::LinearDepth, EditorVulkanTemporalInput::Motion};
+    for (const auto input : inputs) {
+        const bool motion = input == EditorVulkanTemporalInput::Motion;
+        request.manifest = EditorVulkanTemporalInputShaderManifest(input);
+        request.reflection = ShaderCompilerReflectionRequest{spirvCross->identity, EditorVulkanTemporalInputReflectionNames(input)};
+        request.defines = {{"HORO_VIEWPORT_TEMPORAL_MOTION", motion ? "1" : "0"}};
+        const auto compiled = CompileShaderTargets(request, adapter.Value(), {});
+        INFO((compiled.HasError() ? compiled.ErrorValue().message : "compiled temporal input recipe"));
+        REQUIRE(compiled.HasValue());
+        REQUIRE(compiled.Value().artifacts.size() == 1);
+        const auto &artifact = compiled.Value().artifacts.front();
+        REQUIRE(artifact.reflection);
+        const auto metadata = EncodeReflectedShaderArtifact(*artifact.reflection);
+        REQUIRE(metadata.HasValue());
+        CHECK(ValidateEditorVulkanTemporalInputCook(input, artifact.payload, metadata.Value()).HasValue());
+        const auto other = motion ? EditorVulkanTemporalInput::LinearDepth : EditorVulkanTemporalInput::Motion;
+        CHECK(ValidateEditorVulkanTemporalInputCook(other, artifact.payload, metadata.Value()).HasError());
+    }
+#endif
+}
+
+TEST_CASE("Reviewed Vulkan tools publish the analytic manual exposure and SDR encoder package",
+          "[runtime][renderer][shader-compiler][toolchain][integration][viewport][color-output]") {
+#ifndef __linux__
+    SKIP("The real product cook uses the reviewed Linux tool artifacts.");
+#else
+    using namespace Horo::Render::Internal;
+    using Horo::Editor::Offline::CookVulkanManualColorOutput;
+    const auto dxc = Installation(ShaderCompilerTool::Dxc, "HORO_TEST_SHADER_DXC");
+    const auto spirvTools = Installation(ShaderCompilerTool::SpirvTools, "HORO_TEST_SHADER_SPIRV_VAL");
+    const auto spirvCross = Installation(ShaderCompilerTool::SpirvCross, "HORO_TEST_SHADER_SPIRV_CROSS");
+    const auto *analytic = std::getenv("HORO_TEST_COLOR_ANALYTIC_ROOT");
+    if (!dxc || !spirvTools || !spirvCross || !analytic)
+        SKIP("Set the three reviewed tool paths and HORO_TEST_COLOR_ANALYTIC_ROOT to genuine pinned producer output.");
+
+    TemporaryDirectory temporary;
+    const auto scratch = temporary.Path() / "scratch";
+    REQUIRE(std::filesystem::create_directory(scratch));
+    ShaderCompilerToolchainConfiguration configuration;
+    configuration.hostPlatform = "linux-x86_64-ubuntu-26.04";
+    configuration.scratchRoot = scratch;
+    configuration.tools = {*dxc, *spirvTools, *spirvCross};
+    const auto adapter = ExternalShaderCompilerAdapter::Create(std::move(configuration), std::make_shared<NativeExternalProcessRunner>());
+    REQUIRE(adapter.HasValue());
+    const std::array tools{dxc->identity, spirvTools->identity, spirvCross->identity};
+    const auto destination = temporary.Path() / "manual color output";
+    const auto cooked =
+        CookVulkanManualColorOutput(HORO_PROJECT_SOURCE_DIR, std::filesystem::path{analytic}, destination, scratch, tools, adapter.Value());
+    INFO((cooked.HasError() ? cooked.ErrorValue().message : "manual Vulkan package written"));
+    REQUIRE(cooked.HasValue());
+    auto package = LoadColorOutputCookPackage(destination, ShaderTargetBackend::Vulkan);
+    REQUIRE(package.HasValue());
+    CHECK(package.Value().programCount == 2);
+    CHECK(package.Value().LookProgram() == nullptr);
+    CHECK(package.Value().target.backend == ShaderTargetBackend::Vulkan);
+    CHECK(package.Value().target.payloadFormat == ShaderPayloadFormat::SpirV16);
+    CHECK(LoadColorOutputCookPackage(destination).HasError());
+    CHECK(
+        CookVulkanManualColorOutput(HORO_PROJECT_SOURCE_DIR, std::filesystem::path{analytic}, destination, scratch, tools, adapter.Value())
+            .HasError());
+    std::filesystem::remove(destination / (std::string{ColorOutputCookPrefix(1, ShaderTargetBackend::Vulkan)} + ".reflection.json"));
+    CHECK(LoadColorOutputCookPackage(destination, ShaderTargetBackend::Vulkan).HasError());
 #endif
 }

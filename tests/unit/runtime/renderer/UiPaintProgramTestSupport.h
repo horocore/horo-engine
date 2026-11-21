@@ -49,15 +49,17 @@ namespace Horo::Tests::UiPaintProgramTesting {
     using Runtime::Ui::UiSolidDraw;
 
     /** @brief Establishes the injected backend before constructing its owning fixture member. */
-    inline std::unique_ptr<RenderFrontend> PaintFrontend() {
+    inline std::unique_ptr<RenderFrontend> PaintFrontend(bool explicitSubmissions = false, bool supportsPrimary = true) {
         lifecycleState = {};
         lifecycleState.uiPaint.enabled = true;
+        lifecycleState.uiPaint.supportsPrimaryUiPaint = supportsPrimary;
+        lifecycleState.reconstruction.enabled = explicitSubmissions;
         return CreateTrackingFrontend();
     }
 
     /** @brief Exercises the public program, real graph and ComposeUi admission; tracking never claims native pixels. */
     struct ProgramFixture final {
-        std::unique_ptr<RenderFrontend> frontend{PaintFrontend()};
+        std::unique_ptr<RenderFrontend> frontend;
         UiElementTree tree{UiTree()};
         UiRenderSnapshotLimits limits{4, 0, 0, 0, 3, 1, 1, 3};
         UiRenderExtractor extractor{UiRequire(UiRenderExtractor::Create({{UiOwner(), 9, 1}, limits, 8}))};
@@ -83,7 +85,8 @@ namespace Horo::Tests::UiPaintProgramTesting {
         std::uint64_t revision{1};
         std::uint64_t frameNumber{1};
 
-        ProgramFixture() {
+        explicit ProgramFixture(bool explicitSubmissions = false, bool supportsPrimary = true)
+            : frontend(PaintFrontend(explicitSubmissions, supportsPrimary)) {
             std::array<std::byte, 64> alpha;
             alpha.fill(std::byte{128});
             texture = UiRequire(frontend->CreateUiMaskTexture(images, image, 0, alpha));

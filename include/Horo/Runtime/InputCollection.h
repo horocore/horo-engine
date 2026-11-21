@@ -78,7 +78,8 @@ namespace Horo::Input {
 
     /** @brief Borrowed, assignment-bound producer port; it cannot create actions, assign players or consume transitions.
      * All methods run on the creating router thread. Router destruction safely invalidates every borrow/token.
-     * InputRouter is nonmovable; map/profile/assignment changes invalidate registrations. */
+     * InputRouter is nonmovable. Map and profile changes invalidate registrations.
+     * Changes in physical device assignment invalidate ports that borrow that assignment evidence. */
     class InputActionCollection final {
     public:
         /** @brief Registers existing canonical descriptors in this exact context. @param actions Exact registered schemas.
@@ -89,12 +90,34 @@ namespace Horo::Input {
          * @return Move-only transaction or typed stale/owner-thread/sequence denial. */
         [[nodiscard]] Result<InputCollectionFrame> Begin(const RawInputSnapshot &raw) const;
 
+        /** @brief Observes whether the exact collection context can currently route input.
+         * @return False after focus, modal, assignment or ownership loss. Does not consume input.
+         */
+        [[nodiscard]] bool RoutingEligible() const noexcept;
+
+        /** @brief Copies the port's assigned player. @return Empty for unscoped ports. Callers still validate currentness. */
+        [[nodiscard]] std::optional<PlayerId> AssignedPlayer() const noexcept {
+            return player_;
+        }
+
+        /** @brief Reads the live local player-assignment revision for this routable port.
+         * @return Current revision, or absence for unscoped, stale, blocked or foreign-thread ports. */
+        [[nodiscard]] std::optional<std::uint64_t> ReadPlayerAssignmentRevision() const noexcept;
+
+        /** @brief Reads the committed analog value from collected sources for the exact assigned player and context.
+         * @return The analog components with empty transitions, or no value for unsupported actions, blocked routing or an unscoped port.
+         */
+        [[nodiscard]] std::optional<ActionValue> ReadCollectedAxis(const ActionId &action) const noexcept;
+        /** @brief Reads the held state of a committed digital action without consuming its transitions. */
+        [[nodiscard]] std::optional<bool> ReadCollectedButton(const ActionId &action) const noexcept;
+
     private:
+        [[nodiscard]] std::optional<ActionValue> ReadCollectedValue(const ActionId &action, bool digital) const noexcept;
         friend class InputRouter;
         std::weak_ptr<InputCollectionLifetime> owner_;
         std::uint64_t context_{};
         std::uint64_t configuration_{};
-        std::uint64_t assignment_{};
+        std::optional<std::uint64_t> assignment_;
         std::optional<PlayerId> player_;
         std::optional<GamepadDeviceId> device_;
     };

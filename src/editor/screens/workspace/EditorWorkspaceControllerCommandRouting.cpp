@@ -53,6 +53,20 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::DispatchWorkspaceCommand */
     void EditorWorkspaceController::DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &cmd) {
+        if (cmd.command == EditorWorkspaceViewCommand::ControlPlayDecision) {
+            if (cmd.playDecisionDebugCommand && m_playSession.ApplyDecisionDebugCommand(*cmd.playDecisionDebugCommand))
+                m_viewModel.playDecisionDebug = m_playSession.ReadDecisionDebugState();
+            return;
+        }
+        if (cmd.command == EditorWorkspaceViewCommand::NavigatePlayDecisionProblem) {
+            if (cmd.playDecisionNavigation)
+                NavigatePlayDecisionProblem(*cmd.playDecisionNavigation);
+            return;
+        }
+        if (cmd.command == EditorWorkspaceViewCommand::RestorePrefabApplyRecovery) {
+            RestorePrefabApplyRecovery(cmd.prefabApplyRecovery);
+            return;
+        }
         if (cmd.command == EditorWorkspaceViewCommand::WorldLayerAuthoring) {
             const auto result = cmd.worldLayerIntent
                                     ? ApplyWorldLayerIntent(*cmd.worldLayerIntent)
@@ -64,10 +78,11 @@ namespace Horo::Editor {
         if (ProcessTerrainDocumentCommand(cmd))
             return;
         if (ProcessWorldStreamingPreviewCommand(cmd) || ProcessWorldBakeCommand(cmd) || ProcessWorldCompositionCommand(cmd) ||
-            ProcessWorldSourceCommand(cmd) || ProcessUiCanvasCommand(cmd) || ProcessPrefabDocumentCommand(cmd) ||
-            ProcessWorkspaceDocumentCommand(cmd) || ProcessSequenceDocumentCommand(cmd) || ProcessSourceDocumentCommand(cmd) ||
-            ProcessPCGDocumentCommand(cmd) || ProcessContentBrowserCommand(cmd) || ProcessActivePanelCommand(cmd) ||
-            ProcessLayoutCommand(cmd))
+            ProcessWorldSourceCommand(cmd) || ProcessUiCanvasCommand(cmd) || ProcessBlackboardDocumentCommand(cmd) ||
+            ProcessEnvironmentQueryPreview(cmd) || ProcessEnvironmentQueryEdit(cmd) || ProcessDecisionGraphEdit(cmd) ||
+            ProcessPrefabDocumentCommand(cmd) || ProcessWorkspaceDocumentCommand(cmd) || ProcessSequenceDocumentCommand(cmd) ||
+            ProcessSourceDocumentCommand(cmd) || ProcessPCGDocumentCommand(cmd) || ProcessContentBrowserCommand(cmd) ||
+            ProcessActivePanelCommand(cmd) || ProcessLayoutCommand(cmd))
             return;
         if (m_activeTerrainDocument) {
             ProcessFocusedTerrainCommand(cmd);
@@ -165,11 +180,17 @@ namespace Horo::Editor {
                 DiscardSceneRecovery();
                 break;
             case EditorWorkspaceViewCommand::UndoScene:
-                HandleDocumentCommandResult(m_documentCommands.Undo(), "Undo");
+            case EditorWorkspaceViewCommand::RedoScene: {
+                const bool redo = cmd.command == EditorWorkspaceViewCommand::RedoScene;
+                auto paired = ReplayPrefabApply(redo);
+                if (paired.HasError()) {
+                    m_viewModel.prefabOverrideError = std::move(paired).ErrorValue();
+                    HandleDocumentCommandResult(Result<SceneCommandResult>::Failure(*m_viewModel.prefabOverrideError),
+                                                redo ? "Redo prefab overrides" : "Undo prefab overrides");
+                } else if (!paired.Value())
+                    HandleDocumentCommandResult(redo ? m_documentCommands.Redo() : m_documentCommands.Undo(), redo ? "Redo" : "Undo");
                 break;
-            case EditorWorkspaceViewCommand::RedoScene:
-                HandleDocumentCommandResult(m_documentCommands.Redo(), "Redo");
-                break;
+            }
             default:
                 return false;
         }

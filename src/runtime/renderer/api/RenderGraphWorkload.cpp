@@ -96,10 +96,52 @@ namespace Horo::Render {
             return source && destination;
         }
 
+        /** @brief Resolves only a compiled graph's own persistent resource of the expected kind. */
+        bool IsPersistentResource(const CompiledRenderGraphExecution &graph, const RenderGraphResourceId id,
+                                  const RenderGraphResourceKind kind) {
+            if (id.value == 0 || id.value > graph.Resources().size())
+                return false;
+            const auto &resource = graph.Resources()[id.value - 1];
+            return resource.id == id && resource.kind == kind && resource.resourceClass == RenderGraphResourceClass::Persistent;
+        }
+
+        /** @brief Only retained renderer storage can participate in the closed coverage readback workload. */
+        bool MatchesStereoCoverageCopy(const CompiledRenderGraphExecution &graph, const RenderGraphExecutionPass &pass,
+                                       std::span<const RenderGraphResourceUsage> uses, const RenderGraphStereoCoverageCopy &copy) {
+            if (pass.kind != RenderPassKind::Copy || uses.size() != 2 || copy.PackedBytes() == 0)
+                return false;
+            if (!IsPersistentResource(graph, copy.source, RenderGraphResourceKind::Texture) ||
+                !IsPersistentResource(graph, copy.destination, RenderGraphResourceKind::Buffer))
+                return false;
+            const auto source = std::ranges::find(uses, copy.source, &RenderGraphResourceUsage::resource);
+            const auto destination = std::ranges::find(uses, copy.destination, &RenderGraphResourceUsage::resource);
+            return source != uses.end() && destination != uses.end() &&
+                   MatchesCopyUse(*source, copy.source, RenderGraphUsageKind::CopySource, RenderGraphAccess::Read) &&
+                   MatchesCopyUse(*destination, copy.destination, RenderGraphUsageKind::CopyDestination, RenderGraphAccess::Write);
+        }
+
+        /** @brief Matches only the sampled mask and accumulating counter storage of the closed kernel. */
+        bool MatchesStereoCoverageReduction(const CompiledRenderGraphExecution &graph, const RenderGraphExecutionPass &pass,
+                                            std::span<const RenderGraphResourceUsage> uses,
+                                            const RenderGraphStereoCoverageReduction &reduction) {
+            if (pass.kind != RenderPassKind::Compute || uses.size() != 2 || !reduction.reducer || reduction.reset == reduction.result)
+                return false;
+            if (!IsPersistentResource(graph, reduction.mask, RenderGraphResourceKind::Texture) ||
+                !IsPersistentResource(graph, reduction.reset, RenderGraphResourceKind::Buffer) ||
+                !IsPersistentResource(graph, reduction.result, RenderGraphResourceKind::Buffer))
+                return false;
+            return std::ranges::any_of(uses, [&](const auto &use) {
+                return MatchesCopyUse(use, reduction.mask, RenderGraphUsageKind::Sampled, RenderGraphAccess::Read);
+            }) && std::ranges::any_of(uses, [&](const auto &use) {
+                return MatchesCopyUse(use, reduction.result, RenderGraphUsageKind::Storage, RenderGraphAccess::ReadWrite);
+            });
+        }
+
         bool ExternallyValidated(const RenderGraphWorkload &workload) {
             return std::holds_alternative<RenderGraphMaterialRaster>(workload) || std::holds_alternative<RenderGraphMultiview>(workload) ||
                    std::holds_alternative<RenderGraphVfx>(workload) || std::holds_alternative<RenderGraphExposureGpu>(workload) ||
-                   std::holds_alternative<RenderGraphTextureUpload>(workload);
+                   std::holds_alternative<RenderGraphTextureUpload>(workload) ||
+                   std::holds_alternative<RenderGraphNativeReconstruction>(workload);
         }
 
         bool MatchesBasic(const RenderGraphExecutionPass &pass, std::span<const RenderGraphResourceUsage> uses,
@@ -130,6 +172,10 @@ namespace Horo::Render {
                 return MatchesColor(pass, uses, *value);
             if (const auto *value = std::get_if<RenderGraphBufferCopy>(&workload))
                 return MatchesCopy(pass, uses, *value);
+            if (const auto *value = std::get_if<RenderGraphStereoCoverageCopy>(&workload))
+                return MatchesStereoCoverageCopy(request.graph, pass, uses, *value);
+            if (const auto *value = std::get_if<RenderGraphStereoCoverageReduction>(&workload))
+                return MatchesStereoCoverageReduction(request.graph, pass, uses, *value);
             return MatchesBasic(pass, uses, workload);
         }
 
@@ -319,6 +365,8 @@ namespace Horo::Render {
         /** @brief Preserves semantic validator failures instead of collapsing them into a generic boolean graph error. */
         Result<void> ValidateTypedPass(const RenderGraphExecutionRequest &request, const RenderGraphExecutionPass &pass,
                                        const RenderGraphWorkload &workload) {
+            if (const auto *reconstruction = std::get_if<RenderGraphNativeReconstruction>(&workload))
+                return ValidateNativeReconstructionGraphWorkload(request, pass, *reconstruction);
             if (const auto *upload = std::get_if<RenderGraphTextureUpload>(&workload))
                 return ValidateTextureUploadGraphWorkload(request, pass, *upload);
             if (const auto *raster = std::get_if<RenderGraphMaterialRaster>(&workload))
@@ -330,21 +378,208 @@ namespace Horo::Render {
             return Result<void>::Success();
         }
 
+        /** @brief Compares the producer's exact ordered views while allowing distinct output material generations. */
+        bool SameMultiviewProjection(const RenderGraphMultiview &color, const RenderGraphMultiview &motion) {
+            return color.active == motion.active &&
+                   std::ranges::equal(color.scene->Views(), motion.scene->Views(), [](const auto &a, const auto &b) {
+                return a.index == b.index && a.depthRange == b.depthRange && a.worldToClip == b.worldToClip;
+            });
+        }
+
+        /** @brief Keeps image ownership disjoint across compositor projection and auxiliary outputs. */
+        bool DisjointMultiviewTargets(const RenderGraphMultiview &color, const RenderGraphMultiview &motion) {
+            for (const auto &target : color.targets) {
+                if (std::ranges::any_of(motion.targets, [&](const auto &auxiliary) {
+                    return target.color == auxiliary.color || target.color == auxiliary.depth ||
+                           (target.depth.IsValid() && (target.depth == auxiliary.color || target.depth == auxiliary.depth)) ||
+                           (auxiliary.predecessorDepth.IsValid() &&
+                            (target.color == auxiliary.predecessorDepth || target.depth == auxiliary.predecessorDepth));
+                }))
+                    return false;
+            }
+            return true;
+        }
+
+        /** @brief Requires the coverage replay to use the projection's exact visible geometry, without its material. */
+        bool SameCoverageGeometry(const RenderGraphMultiview &projection, const RenderGraphMultiview &coverage) {
+            const auto equivalent = [&](const auto &a, const auto &b) {
+                const auto &first = projection.scene->Instances()[a.instanceIndex];
+                const auto &second = coverage.scene->Instances()[b.instanceIndex];
+                return a.visibleViews == b.visibleViews && first.mesh == second.mesh && first.localToWorld == second.localToWorld;
+            };
+            return std::ranges::equal(projection.scene->Draws(), coverage.scene->Draws(), equivalent);
+        }
+
+        /** @brief Requires coverage of the same samples and ordered layers as the auxiliary producer. */
+        bool SameCoverageRaster(const RenderGraphMultiview &motion, const RenderGraphMultiview &coverage) {
+            const auto sameEye = [](const MultiviewGraphTarget &output, const MultiviewGraphTarget &mask) {
+                return std::tie(output.rectangle, output.arrayLayer, output.depthArrayLayer) ==
+                       std::tie(mask.rectangle, mask.arrayLayer, mask.depthArrayLayer);
+            };
+            return SameCoverageGeometry(motion, coverage) && std::ranges::equal(motion.targets, coverage.targets, sameEye);
+        }
+
+        /** @brief Enforces producer and consumer order within one validated submission range. */
+        bool SharesOrderedSubmission(const RenderGraphExecutionRequest &request, const std::size_t producer, const std::size_t consumer) {
+            if (producer >= consumer)
+                return false;
+            return std::ranges::any_of(request.submissions, [&](const auto &submission) {
+                const auto [offset, count] = submission.passes;
+                return submission.passes.IsValidFor(request.workloads.size()) && offset <= producer && consumer < offset + count;
+            });
+        }
+
+        /** @brief Every requested tile must be inside its exact written eye view. */
+        bool CoverageTilesWrittenBy(const RenderGraphStereoCoverageCopy &copy, const RenderGraphMultiview &coverage) {
+            for (std::size_t eye = 0; eye < copy.tiles.size(); ++eye) {
+                const auto &target = coverage.targets[eye];
+                const auto &tile = copy.tiles[eye];
+                const auto &rect = target.rectangle;
+                if (target.color != copy.source || target.arrayLayer != eye || tile.x < rect.x || tile.y < rect.y ||
+                    !MultiviewRenderRectangle{tile.x - rect.x, tile.y - rect.y, tile.width, tile.height}.Fits({rect.width, rect.height}))
+                    return false;
+            }
+            return true;
+        }
+
+        /** @brief The observed content and staging receipt have no second writer. */
+        bool CoverageCopyProven(const RenderGraphExecutionRequest &request, const RenderGraphMultiview &coverage,
+                                const RenderGraphStereoCoverageCopy &copy, const std::size_t producer, const std::size_t consumer) {
+            if (!SharesOrderedSubmission(request, producer, consumer) || !CoverageTilesWrittenBy(copy, coverage))
+                return false;
+            const auto coveragePass = request.workloads[producer].pass;
+            const auto readbackPass = request.workloads[consumer].pass;
+            return std::ranges::none_of(request.graph.Usages(), [&](const auto &use) {
+                if (use.resource == copy.destination)
+                    return use.pass != readbackPass;
+                return use.resource == copy.source && use.access != RenderGraphAccess::Read && use.pass != coveragePass;
+            });
+        }
+
+        /** @brief The full-eye reader samples precisely the two coverage attachment views of this frame. */
+        bool MatchesReductionEyes(const RenderGraphStereoCoverageReduction &reduction, const RenderGraphMultiview &coverage) {
+            if (coverage.targets.size() != reduction.eyes.size())
+                return false;
+            for (std::size_t eye = 0; eye < reduction.eyes.size(); ++eye) {
+                const auto &target = coverage.targets[eye];
+                if (target.color != reduction.mask || target.colorView != reduction.eyes[eye] || target.arrayLayer != eye ||
+                    target.rectangle != reduction.rectangles[eye])
+                    return false;
+            }
+            return true;
+        }
+
+        /** @brief Finds the exact full mask clear and full counter reset ordered before their respective consumers. */
+        std::optional<std::array<RenderGraphPassRef, 2>> FindReductionInitializers(const RenderGraphExecutionRequest &request,
+                                                                                   const RenderGraphStereoCoverageReduction &reduction,
+                                                                                   std::size_t coverage, std::size_t consumer) {
+            std::array<RenderGraphPassRef, 2> initializers;
+            for (std::size_t index = 0; index < coverage; ++index) {
+                const auto &entry = request.workloads[index];
+                const auto *clear = std::get_if<RenderGraphColorAttachment>(&entry.workload);
+                if (clear && clear->texture == reduction.mask && clear->operations.loadOperation == AttachmentLoadOperation::Clear &&
+                    clear->operations.clearColor.red == 0.0F && SharesOrderedSubmission(request, index, coverage))
+                    initializers[0] = entry.pass;
+            }
+            for (std::size_t index = 0; index < consumer; ++index) {
+                const auto &entry = request.workloads[index];
+                const auto *reset = std::get_if<RenderGraphBufferCopy>(&entry.workload);
+                if (reset && reset->source == reduction.reset && reset->destination == reduction.result && reset->sourceOffset == 0 &&
+                    reset->destinationOffset == 0 && reset->byteCount == reduction.CounterBytes &&
+                    SharesOrderedSubmission(request, index, consumer))
+                    initializers[1] = entry.pass;
+            }
+            if (!initializers[0].IsValid() || !initializers[1].IsValid())
+                return std::nullopt;
+            return initializers;
+        }
+
+        /** @brief Prevents alternate writes or reads from changing the paired mask or full-eye result. */
+        bool ReductionInputsExclusive(const RenderGraphExecutionRequest &request, const RenderGraphStereoCoverageReduction &reduction,
+                                      RenderGraphPassRef coverage, RenderGraphPassRef consumer,
+                                      const std::array<RenderGraphPassRef, 2> &initializers) {
+            return std::ranges::all_of(request.graph.Usages(), [&](const auto &use) {
+                if (use.resource == reduction.mask)
+                    return use.pass == initializers[0] || use.pass == coverage || use.pass == consumer;
+                if (use.resource == reduction.reset)
+                    return use.pass == initializers[1];
+                if (use.resource == reduction.result)
+                    return use.pass == initializers[1] || use.pass == consumer;
+                return true;
+            });
+        }
+
+        /** @brief Proves the same-submission producer pair and its unique initialization before reduction. */
+        bool CoverageReductionProven(const RenderGraphExecutionRequest &request, const RenderGraphMultiview &coverage,
+                                     const RenderGraphStereoCoverageReduction &reduction, std::size_t motion, std::size_t producer,
+                                     std::size_t consumer) {
+            if (!SharesOrderedSubmission(request, motion, consumer) || !SharesOrderedSubmission(request, producer, consumer) ||
+                !MatchesReductionEyes(reduction, coverage))
+                return false;
+            const auto initializers = FindReductionInitializers(request, reduction, producer, consumer);
+            return initializers && ReductionInputsExclusive(request, reduction, request.workloads[producer].pass,
+                                                            request.workloads[consumer].pass, *initializers);
+        }
+
         Result<void> ValidateTypedWorkloads(const RenderGraphExecutionRequest &request) {
-            std::size_t multiviewCount = 0;
+            std::array<const RenderGraphMultiview *, RenderGraphMultiview::MaximumPassesPerFrame> multiview{};
+            std::size_t reconstructionCount = 0;
+            const RenderGraphStereoCoverageCopy *readback{};
+            const RenderGraphStereoCoverageReduction *reduction{};
+            std::size_t coverageIndex{}, motionIndex{}, readbackIndex{}, reductionIndex{};
             for (std::size_t index = 0; index < request.workloads.size(); ++index) {
                 const auto &binding = request.workloads[index];
+                if (std::holds_alternative<RenderGraphNativeReconstruction>(binding.workload) &&
+                    ++reconstructionCount > RenderGraphNativeReconstruction::MaximumPassesPerFrame)
+                    return Result<void>::Failure(MakeError(NativeReconstructionErrors::InvalidDispatch));
                 if (auto valid = ValidateTypedPass(request, request.graph.Passes()[index], binding.workload); valid.HasError())
                     return valid;
+                if (const auto *copy = std::get_if<RenderGraphStereoCoverageCopy>(&binding.workload)) {
+                    if (readback)
+                        return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+                    readback = copy;
+                    readbackIndex = index;
+                }
+                if (const auto *reducer = std::get_if<RenderGraphStereoCoverageReduction>(&binding.workload)) {
+                    if (reduction)
+                        return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload));
+                    reduction = reducer;
+                    reductionIndex = index;
+                }
                 if (const auto *scene = std::get_if<RenderGraphMultiview>(&binding.workload)) {
-                    if (++multiviewCount > 1)
-                        return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload,
-                                                               "One graph admits one complete multiview scene contribution within its "
-                                                               "fixed native scratch envelope."));
                     if (const auto valid = ValidateMultiviewGraphWorkload(request, request.graph.Passes()[index], *scene); valid.HasError())
                         return valid;
+                    auto &output = multiview[static_cast<std::size_t>(scene->output)];
+                    if (output)
+                        return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::UnsupportedWorkload,
+                                                               "One graph admits at most one multiview pass for each output."));
+                    output = scene;
+                    if (scene->output == MultiviewOutput::ReprojectionCoverage)
+                        coverageIndex = index;
+                    if (scene->output == MultiviewOutput::MotionDepth)
+                        motionIndex = index;
                 }
             }
+            const auto *color = multiview[static_cast<std::size_t>(MultiviewOutput::ProjectionColor)];
+            const auto *motion = multiview[static_cast<std::size_t>(MultiviewOutput::MotionDepth)];
+            const auto *coverage = multiview[static_cast<std::size_t>(MultiviewOutput::ReprojectionCoverage)];
+            if (color && motion && (!SameMultiviewProjection(*color, *motion) || !DisjointMultiviewTargets(*color, *motion)))
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph,
+                                                       "Paired multiview outputs require the same exact views and disjoint attachments."));
+            if (coverage && (!color || !SameMultiviewProjection(*color, *coverage) || !SameCoverageGeometry(*color, *coverage) ||
+                             !DisjointMultiviewTargets(*color, *coverage) || (motion && !DisjointMultiviewTargets(*motion, *coverage))))
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph,
+                                                       "Coverage requires the exact current projection geometry and disjoint outputs."));
+            if (coverage && motion && !SameCoverageRaster(*motion, *coverage))
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph,
+                                                       "Paired coverage requires the exact motion raster and ordered eye layers."));
+            if (readback && (!coverage || !CoverageCopyProven(request, *coverage, *readback, coverageIndex, readbackIndex)))
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph,
+                                                       "Coverage readback requires exact owned eye tiles and its producer submission."));
+            if (reduction && (!motion || !coverage ||
+                              !CoverageReductionProven(request, *coverage, *reduction, motionIndex, coverageIndex, reductionIndex)))
+                return Result<void>::Failure(MakeError(RenderGraphExecutionErrors::InvalidGraph,
+                                                       "Coverage reduction requires exact paired eyes, reset and producer submission."));
             return Result<void>::Success();
         }
 

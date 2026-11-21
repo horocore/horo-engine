@@ -6,7 +6,10 @@ namespace Horo::XR {
 
     /** @copydoc XRFrameLifecycle::BindConfiguration */
     XRFrameStatus XRFrameLifecycle::BindConfiguration(const XRViewConfigurationId &configuration, const XRCapabilitySnapshot &capabilities,
-                                                      const XRFrameLimits limits) noexcept {
+                                                      const XRFrameLimits limits,
+                                                      const std::optional<XRReprojectionPolicy> reprojection) noexcept {
+        if (!sessions_->IsOwnerThread())
+            return XRFrameStatus::WrongThread;
         if (shutdown_)
             return XRFrameStatus::Shutdown;
         if (current_.phase != XRFramePhase::Idle)
@@ -22,6 +25,11 @@ namespace Horo::XR {
             limits.maximumLayers > XRFrameHardLimits::MaximumLayers)
             return XRFrameStatus::CapacityExceeded;
 
+        if (const auto status = ValidateReprojectionPolicy(reprojection, limits); status != XRFrameStatus::Ok)
+            return status;
+
+        previousProjection_.reset();
+        reprojection_ = reprojection;
         configuration_ = configuration;
         revision_ = capabilities.Revision();
         limits_ = limits;
@@ -30,6 +38,8 @@ namespace Horo::XR {
 
     /** @copydoc XRFrameLifecycle::ReserveWait */
     XRFrameWaitOutcome XRFrameLifecycle::ReserveWait(const XRSessionId &session) noexcept {
+        if (!sessions_->IsOwnerThread())
+            return {XRFrameStatus::WrongThread, {}};
         if (shutdown_)
             return {XRFrameStatus::Shutdown, {}};
         if (!session.IsValid())
@@ -57,6 +67,8 @@ namespace Horo::XR {
 
     /** @copydoc XRFrameLifecycle::CancelWait */
     XRFrameStatus XRFrameLifecycle::CancelWait() noexcept {
+        if (!sessions_->IsOwnerThread())
+            return XRFrameStatus::WrongThread;
         if (shutdown_)
             return XRFrameStatus::Shutdown;
         if (current_.phase != XRFramePhase::WaitReserved)
@@ -67,6 +79,15 @@ namespace Horo::XR {
 
     /** @copydoc XRFrameLifecycle::RecordWait */
     XRFrameWaitOutcome XRFrameLifecycle::RecordWait(const XRRenderPredictionTime predictedDisplayTime, const bool shouldRender) noexcept {
+        return RecordWaitWithNativePeriod(predictedDisplayTime, shouldRender, {});
+    }
+
+    /** @copydoc XRFrameLifecycle::RecordWaitWithNativePeriod */
+    XRFrameWaitOutcome XRFrameLifecycle::RecordWaitWithNativePeriod(const XRRenderPredictionTime predictedDisplayTime,
+                                                                    const bool shouldRender,
+                                                                    const Duration predictedDisplayPeriod) noexcept {
+        if (!sessions_->IsOwnerThread())
+            return {XRFrameStatus::WrongThread, {}};
         if (shutdown_)
             return {XRFrameStatus::Shutdown, {}};
         if (current_.phase != XRFramePhase::WaitReserved)
@@ -74,6 +95,7 @@ namespace Horo::XR {
 
         const XRFrameId frame = current_.frame;
         current_.predictedDisplayTime = predictedDisplayTime;
+        currentPeriod_ = predictedDisplayPeriod;
         current_.phase = XRFramePhase::Waited;
         current_.shouldRender = shouldRender;
         if (!predictedDisplayTime.IsValid())
@@ -129,14 +151,16 @@ namespace Horo::XR {
             return XRFrameStatus::CapacityExceeded;
 
         images_[current_.acquiredImages] = image;
+        reprojectionImages_[current_.acquiredImages].reset();
         released_[current_.acquiredImages] = false;
         ++current_.acquiredImages;
         current_.phase = XRFramePhase::ImagesAcquired;
         return XRFrameStatus::Ok;
     }
 
-    /** @copydoc XRFrameLifecycle::Submit */
-    XRFrameStatus XRFrameLifecycle::Submit(const XRFrameId &frame, const std::span<const XRSwapchainImageId> completedImages) noexcept {
+    /** @copydoc XRFrameLifecycle::ValidateSubmission */
+    XRFrameStatus XRFrameLifecycle::ValidateSubmission(const XRFrameId &frame,
+                                                       const std::span<const XRSwapchainImageId> completedImages) const noexcept {
         if (const XRFrameStatus valid = ValidateCurrent(frame); valid != XRFrameStatus::Ok)
             return valid;
         if (!current_.renderAdmitted)
@@ -153,6 +177,13 @@ namespace Horo::XR {
             if (completedImages[index] != images_[index])
                 return XRFrameStatus::IncompleteSubmission;
         }
+        return XRFrameStatus::Ok;
+    }
+
+    /** @copydoc XRFrameLifecycle::Submit */
+    XRFrameStatus XRFrameLifecycle::Submit(const XRFrameId &frame, const std::span<const XRSwapchainImageId> completedImages) noexcept {
+        if (const auto status = ValidateSubmission(frame, completedImages); status != XRFrameStatus::Ok)
+            return status;
         submitted_ = true;
         current_.phase = XRFramePhase::RendererSubmitted;
         return XRFrameStatus::Ok;
@@ -201,6 +232,7 @@ namespace Horo::XR {
         if (const auto status = ValidateEnd(frame, layerCount); status != XRFrameStatus::Ok)
             return status;
         lastEnded_ = frame;
+        previousProjection_.reset();
         ClearFrame();
         return XRFrameStatus::Ok;
     }
@@ -243,20 +275,24 @@ namespace Horo::XR {
 
     /** @copydoc XRFrameLifecycle::Snapshot */
     XRFrameSnapshot XRFrameLifecycle::Snapshot() const noexcept {
-        return current_;
+        return sessions_->IsOwnerThread() ? current_ : XRFrameSnapshot{};
     }
 
     /** @copydoc XRFrameLifecycle::ResetAfterQuiescence */
     void XRFrameLifecycle::ResetAfterQuiescence() noexcept {
+        if (!sessions_->IsOwnerThread())
+            return;
         ClearFrame();
         configuration_ = {};
+        previousProjection_.reset();
+        reprojection_.reset();
         revision_ = {};
         limits_ = {};
     }
 
     /** @copydoc XRFrameLifecycle::Shutdown */
     void XRFrameLifecycle::Shutdown() noexcept {
-        if (shutdown_)
+        if (!sessions_->IsOwnerThread() || shutdown_)
             return;
         ResetAfterQuiescence();
         shutdown_ = true;
@@ -264,6 +300,8 @@ namespace Horo::XR {
 
     /** @copydoc XRFrameLifecycle::ValidateCurrent */
     XRFrameStatus XRFrameLifecycle::ValidateCurrent(const XRFrameId &frame) const noexcept {
+        if (!sessions_->IsOwnerThread())
+            return XRFrameStatus::WrongThread;
         if (shutdown_)
             return XRFrameStatus::Shutdown;
         if (!frame.IsValid())
@@ -291,6 +329,8 @@ namespace Horo::XR {
     /** @copydoc XRFrameLifecycle::ClearFrame */
     void XRFrameLifecycle::ClearFrame() noexcept {
         current_ = {};
+        currentPeriod_ = {};
+        currentReference_.reset();
         images_.fill({});
         released_.fill(false);
         aborted_ = false;

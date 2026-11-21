@@ -81,8 +81,8 @@ namespace {
             }
         }
 
-        void Initialize() {
-            REQUIRE(RegisterVulkanRenderBackend(registry, loader).HasValue());
+        void Initialize(VulkanEditorGraphicsBridge *bridge = nullptr) {
+            REQUIRE(RegisterVulkanRenderBackend(registry, loader, bridge).HasValue());
             REQUIRE(registry.Seal().HasValue());
             auto created = registry.Create(RenderBackendId{"vulkan"});
             REQUIRE(created.HasValue());
@@ -119,7 +119,8 @@ namespace {
             fragment = Shader(ShaderStage::Fragment, fragmentBytes);
         }
 
-        void PreparePipeline(const RenderViewRouting routing = RenderViewRouting::SingleView) {
+        void PreparePipeline(const RenderViewRouting routing = RenderViewRouting::SingleView,
+                             const RenderGraphicsPipelineState *exactState = nullptr) {
             const auto identity = backend->QueryPipelineDeviceIdentity();
             REQUIRE(identity.HasValue());
             RenderGraphicsPipelineDescriptor pipeline{.vertex = {{1}, 1, 1},
@@ -133,6 +134,8 @@ namespace {
                 pipeline.state.depthWrite = false;
                 pipeline.state.cull = RenderCullMode::None;
             }
+            if (exactState)
+                pipeline.state = *exactState;
             pipeline.state.viewRouting = routing;
             pipeline.compatibility = {.schemaVersion = 1,
                                       .backend = identity.Value().backend,

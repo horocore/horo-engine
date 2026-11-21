@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <functional>
 #include <memory>
 
 namespace Horo::Network::ModeBindingTests {
@@ -22,7 +23,8 @@ namespace Horo::Network::ModeBindingTests {
         return owner;
     }
 
-    inline void CompleteAdmission(const std::shared_ptr<PeerSessionLifecycle> &owner, const NetworkOperationGeneration generation) {
+    inline void CompleteAdmission(const std::shared_ptr<PeerSessionLifecycle> &owner, const NetworkOperationGeneration generation,
+                                  ProtocolFeatureId additionalFeature = {}, ProtocolFeatureId snapshotFeature = {}) {
         const auto connection = owner->Connection();
         HandshakeSelection selected;
         selected.connection = connection;
@@ -32,9 +34,18 @@ namespace Horo::Network::ModeBindingTests {
         selected.schemaFingerprint = 42;
         selected.features.values[0] = WireIdentity<ProtocolFeatureId>(1);
         selected.features.count = 1;
+        if (additionalFeature.IsValid()) {
+            selected.features.values[1] = additionalFeature;
+            selected.features.count = 2;
+        }
         selected.transport.capabilityRevision = 3;
         selected.transport.admittedDelivery[static_cast<std::size_t>(DeliveryPolicy::ReliableOrdered)] = true;
         selected.transport.channelCount = 2;
+        if (snapshotFeature.IsValid()) {
+            selected.features.values[selected.features.count++] = snapshotFeature;
+            selected.transport.admittedDelivery[static_cast<std::size_t>(DeliveryPolicy::UnreliableUnordered)] = true;
+            selected.transport.channelCount = 4;
+        }
         selected.transport.maximumMessageBytes = 1200;
         REQUIRE(owner->AcceptNegotiation(selected, 2).HasValue());
         AuthenticationResult authentication;
@@ -113,13 +124,20 @@ namespace Horo::Network::ModeBindingTests {
             return Result<ConnectionHandle>::Failure(MakeError(NetworkErrors::TransportNativeUnavailable));
         }
 
-        Result<void> Send(ConnectionHandle, ChannelId channel, std::span<const std::byte> bytes, DeliveryPolicy delivery) override {
-            if (bytes.size() > sent.size() || channel.Value() != 0 || delivery != DeliveryPolicy::ReliableOrdered)
+        Result<void> Send(ConnectionHandle destination, ChannelId channel, std::span<const std::byte> bytes,
+                          DeliveryPolicy delivery) override {
+            const auto isControl = channel.Value() == 0 && delivery == DeliveryPolicy::ReliableOrdered;
+            const auto isSnapshot = snapshotEnabled && channel.Value() == 2 && delivery == DeliveryPolicy::UnreliableUnordered;
+            if (bytes.size() > sent.size() || !(isControl || isSnapshot))
                 return Result<void>::Failure(MakeError(NetworkErrors::TransportLimitExceeded));
             if (backpressure)
                 return Result<void>::Failure(MakeError(NetworkErrors::TransportReliableBackpressure));
             std::copy(bytes.begin(), bytes.end(), sent.begin());
             size = bytes.size();
+            lastChannel = channel;
+            lastDelivery = delivery;
+            if (observeSend)
+                observeSend(destination, bytes);
             return Result<void>::Success();
         }
 
@@ -153,6 +171,10 @@ namespace Horo::Network::ModeBindingTests {
             caps.revision = 3;
             caps.delivery[static_cast<std::size_t>(DeliveryPolicy::ReliableOrdered)] = TransportSupport::Available;
             caps.maximumChannels = 2;
+            if (snapshotEnabled) {
+                caps.delivery[static_cast<std::size_t>(DeliveryPolicy::UnreliableUnordered)] = TransportSupport::Available;
+                caps.maximumChannels = 4;
+            }
             caps.maximumMessageBytes = maximumMessageBytes;
             return caps;
         }
@@ -161,10 +183,14 @@ namespace Horo::Network::ModeBindingTests {
             queued = false;
         }
 
-        std::array<std::byte, 256> sent;
+        std::array<std::byte, 8192> sent;
+        std::function<void(ConnectionHandle, std::span<const std::byte>)> observeSend;
         const std::uint64_t maximumMessageBytes;
         std::size_t size{};
         NetworkTransportEvent event;
+        ChannelId lastChannel;
+        DeliveryPolicy lastDelivery{DeliveryPolicy::ReliableOrdered};
+        bool snapshotEnabled{};
         bool queued{};
         bool backpressure{};
         std::size_t closed{};
@@ -184,6 +210,7 @@ namespace Horo::Network::ModeBindingTests {
         }
 
         void AttachOwner(std::weak_ptr<NetworkWorldBindingController> canonical) {
+            transport.snapshotEnabled = setup.policy.stateUpdates.has_value();
             binding = std::move(canonical);
             auto owner = binding.lock();
             REQUIRE(owner);
@@ -194,6 +221,11 @@ namespace Horo::Network::ModeBindingTests {
         }
 
         void PublishInitial(NetworkModeComposition &mode, const std::shared_ptr<PeerSessionLifecycle> &client) {
+            StageInitial(mode, client);
+            REQUIRE(mode.RunPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges).HasValue());
+        }
+
+        void StageInitial(NetworkModeComposition &mode, const std::shared_ptr<PeerSessionLifecycle> &client) {
             auto owner = binding.lock();
             REQUIRE(owner);
             server = Active(ConnectionHandle::Create(3, 1).Value(), TestSupport::Session(8));
@@ -202,13 +234,18 @@ namespace Horo::Network::ModeBindingTests {
             RegisterClient(client);
             REQUIRE(mode.RunPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges).HasValue());
             Deliver();
-            REQUIRE(mode.RunPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges).HasValue());
         }
 
         void RegisterClient(const std::shared_ptr<PeerSessionLifecycle> &client) {
-            const std::vector<MessageDeliveryChannel> channels{{{}, DeliveryPolicy::ReliableOrdered, MessageTrafficClass::Control, false},
-                                                               {ChannelId::Create(1, 2).Value(), DeliveryPolicy::ReliableOrdered,
-                                                                MessageTrafficClass::Command, false}};
+            std::vector<MessageDeliveryChannel> channels{{{}, DeliveryPolicy::ReliableOrdered, MessageTrafficClass::Control, false},
+                                                         {ChannelId::Create(1, 2).Value(), DeliveryPolicy::ReliableOrdered,
+                                                          MessageTrafficClass::Command, false}};
+            if (setup.policy.stateUpdates) {
+                channels.push_back(
+                    {setup.policy.stateUpdates->channel, DeliveryPolicy::UnreliableUnordered, MessageTrafficClass::Snapshot, false});
+                channels.push_back(
+                    {ChannelId::Create(3, 4).Value(), DeliveryPolicy::UnreliableUnordered, MessageTrafficClass::Snapshot, false});
+            }
             auto gate = MessageDeliveryGate::Create(client->Negotiation()->transport, 3, client->Connection(),
                                                     client->Negotiation()->sessionGeneration, channels);
             REQUIRE(gate.HasValue());

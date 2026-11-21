@@ -3,6 +3,7 @@
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <limits>
+#include <utility>
 
 namespace Horo::Editor {
     namespace {
@@ -11,15 +12,27 @@ namespace Horo::Editor {
             return !playActive && activation.plan.TrackCount() == 0 && activation.plan.EventCount() == 0;
         }
 
+        /** @brief Distinguishes an authored transition refusal from ordinary preview binding loss. */
+        bool IsCameraTransitionRefusal(const Error &error) noexcept {
+            using namespace Runtime::CameraErrors;
+            return error.domain.Value() == UnsupportedTransition.domain.Value() &&
+                   (error.code.Value() == UnsupportedTransition.code.Value() ||
+                    error.code.Value() == TransitionBudgetExceeded.code.Value() ||
+                    error.code.Value() == IncompatibleTransition.code.Value());
+        }
+
         /** @brief Copies the current editor owner's base camera; never captures a pre-cinematic value. */
-        Runtime::CameraProposal AuthoringProposal(const EditorViewportCamera &camera) {
+        Runtime::CameraProposal AuthoringProposal(const EditorViewportCamera &camera, const std::uint64_t sceneRevision) {
             const auto kind = camera.projection == Runtime::CameraProjection::Perspective ? Render::RenderProjectionKind::Perspective
                                                                                           : Render::RenderProjectionKind::Orthographic;
-            return {{},
-                    {camera.position,
-                     camera.target,
-                     camera.up,
-                     {kind, camera.verticalFovRadians, camera.orthographicHeight, camera.nearPlane, camera.farPlane}}};
+            Runtime::CameraProposal proposal{{},
+                                             {camera.position,
+                                              camera.target,
+                                              camera.up,
+                                              {kind, camera.verticalFovRadians, camera.orthographicHeight, camera.nearPlane,
+                                               camera.farPlane}}};
+            proposal.sceneRevision = sceneRevision;
+            return proposal;
         }
 
         /** @brief Projects the committed copied runtime values into the existing viewport extraction contract. */
@@ -43,6 +56,13 @@ namespace Horo::Editor {
           crossings(runtime.ServiceSnapshot().budget.maximumBoundaryOccurrences) {}
 
     EditorWorkspaceController::~EditorWorkspaceController() {
+        InvalidateAgentSceneSelection();
+        StopBlackboardUsageReview();
+        StopEnvironmentQueryPreview();
+        static_cast<void>(DrainUiCanvasRecovery());
+        JoinAiDocumentRecovery();
+        static_cast<void>(DrainPrefabRecovery());
+        StopPrefabExternalWatch();
         static_cast<void>(ShutdownTerrainDocuments(true));
         ShutdownTerrainCook();
         static_cast<void>(ShutdownPrefabSettings(true));
@@ -74,11 +94,14 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::StartCameraCutPreview */
     Result<void> EditorWorkspaceController::StartCameraCutPreview(Cinematic::SequencePlaybackActivation activation,
                                                                   const Cinematic::CameraCutActivation &cuts,
-                                                                  const Runtime::CameraViewContextId view) {
+                                                                  const Runtime::CameraViewContextId view,
+                                                                  const Runtime::CameraTransitionSupport transitions,
+                                                                  const std::optional<Runtime::CameraCrossFadeAdmission> crossFade) {
         const auto scene = m_runtimeScene.ActiveScene();
         if (!scene || !EligiblePreview(activation, m_playSession.IsActive()))
             return Result<void>::Failure(MakeError(Runtime::CameraErrors::InvalidContext));
-        auto camera = Runtime::CameraService::Create({view, scene->RuntimeId(), Runtime::CameraViewDomain::EditorPreview});
+        auto camera =
+            Runtime::CameraService::Create({view, scene->RuntimeId(), Runtime::CameraViewDomain::EditorPreview}, transitions, crossFade);
         if (camera.HasError())
             return Result<void>::Failure(camera.ErrorValue());
         auto runtime = Cinematic::CinematicRuntimeService::Create({activation.player.handle.session});
@@ -145,24 +168,58 @@ namespace Horo::Editor {
         SynchronizeRuntimeScenePreview();
     }
 
-    Result<EditorViewportCamera> EditorWorkspaceController::ResolveCameraCutPreview(const Runtime::RuntimeSceneView scene) {
+    /** @copydoc EditorWorkspaceController::SetCameraCutPreviewShake */
+    Result<void> EditorWorkspaceController::SetCameraCutPreviewShake(Runtime::CameraViewContextId view, Math::Vec3 worldOffset) {
+        if (!m_cameraPreview || m_cameraPreview->camera.Context().view != view)
+            return Result<void>::Failure(MakeError(Runtime::CameraErrors::InvalidContext));
+        if (!Math::IsFinite(worldOffset))
+            return Result<void>::Failure(MakeError(Runtime::CameraErrors::InvalidTarget, "Camera shake must be finite."));
+        m_cameraPreview->shakeOffset = worldOffset;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorWorkspaceController::SetCameraShakeScale */
+    void EditorWorkspaceController::SetCameraShakeScale(float scale) noexcept {
+        m_cameraShakeScale = scale;
+    }
+
+    /** @copydoc EditorWorkspaceController::ResolveCameraCutPreview */
+    Result<EditorWorkspaceController::CameraPreviewFrame> EditorWorkspaceController::ResolveCameraCutPreview(
+        const Runtime::RuntimeSceneView scene, const std::optional<EditorViewportCrossFadeCapacity> capacity) {
         const auto &base = m_viewport.Current().camera;
         if (!m_cameraPreview)
-            return Result<EditorViewportCamera>::Success(base);
+            return Result<CameraPreviewFrame>::Success({base, std::nullopt});
         if (scene.RuntimeId() != m_cameraPreview->camera.Context().scene) {
             m_cameraPreview.reset();
-            return Result<EditorViewportCamera>::Success(base);
+            return Result<CameraPreviewFrame>::Success({base, std::nullopt});
         }
-        if (const auto published = m_cameraPreview->playback->Publish(scene); published.HasError()) {
-            LOG_ERROR("editor.viewport", "Camera preview released after binding loss: %s", published.ErrorValue().message.c_str());
+        if (capacity) {
+            const auto admission = capacity->generation == 0
+                                       ? std::nullopt
+                                       : std::optional{Runtime::CameraCrossFadeAdmission{m_cameraPreview->camera.Context(),
+                                                                                         capacity->generation, capacity->availableViews}};
+            if (auto refreshed = m_cameraPreview->camera.RefreshCrossFadeAdmission(admission); refreshed.HasError())
+                return Result<CameraPreviewFrame>::Failure(std::move(refreshed).ErrorValue());
+        }
+        if (auto published = m_cameraPreview->playback->Publish(scene); published.HasError()) {
             m_cameraPreview.reset();
-            return Result<EditorViewportCamera>::Success(base);
+            if (IsCameraTransitionRefusal(published.ErrorValue())) {
+                m_activeRuntimeRevision = {};
+                return Result<CameraPreviewFrame>::Failure(std::move(published).ErrorValue());
+            }
+            LOG_ERROR("editor.viewport", "Camera preview released after binding loss: %s", published.ErrorValue().message.c_str());
+            return Result<CameraPreviewFrame>::Success({base, std::nullopt});
         }
         if (m_cameraPreview->frame == std::numeric_limits<std::uint64_t>::max())
-            return Result<EditorViewportCamera>::Failure(MakeError(Runtime::CameraErrors::InvalidFrame));
-        const auto selection = m_cameraPreview->camera.Commit(++m_cameraPreview->frame, AuthoringProposal(base));
+            return Result<CameraPreviewFrame>::Failure(MakeError(Runtime::CameraErrors::InvalidFrame));
+        const auto selection =
+            m_cameraPreview->camera.CommitWithShake(++m_cameraPreview->frame, scene, AuthoringProposal(base, scene.StructuralRevision()),
+                                                    {m_cameraPreview->shakeOffset, m_cameraShakeScale});
         if (selection.HasError())
-            return Result<EditorViewportCamera>::Failure(selection.ErrorValue());
-        return Result<EditorViewportCamera>::Success(ViewportCamera(selection.Value().selected.values));
+            return Result<CameraPreviewFrame>::Failure(selection.ErrorValue());
+        CameraPreviewFrame frame{ViewportCamera(selection.Value().selected.values), std::nullopt};
+        if (const auto &source = selection.Value().crossFade)
+            frame.crossFade.emplace(source->source, source->destinationWeight, source->admissionGeneration);
+        return Result<CameraPreviewFrame>::Success(frame);
     }
 }  // namespace Horo::Editor

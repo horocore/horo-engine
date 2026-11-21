@@ -56,6 +56,7 @@ namespace Horo::Application {
         Log::LoggerConfiguration logging;                     /**< Queue, filtering, local persistence, and optional sink policy. */
         HostObservabilityIdentity identity;                   /**< Safe process/build/project identity. */
         std::vector<HostDiagnosticSummaryProvider> summaries; /**< At most eight explicit capture-free summary contributions. */
+        std::vector<std::string> summaryOnlyNamespaces;       /**< Closed diagnostic roots exported only via approved summary providers. */
     };
 
     /** @brief RAII owner of the process observability lifecycle and support-bundle composition. */

@@ -1,5 +1,7 @@
+#include "Horo/Packages/GameplayPackageModuleHost.h"
 #include "PackageProjectHostInternal.h"
 
+#include <algorithm>
 #include <limits>
 
 namespace Horo::Application::Internal {
@@ -37,6 +39,13 @@ namespace Horo::Application::Internal {
         if (metadataMaximumAge <= Duration{} || metadataMaximumAge > Duration::FromMilliseconds(60'000) || policy.cacheRoot.empty() ||
             !policy.cacheRoot.is_absolute() || !policy.lifecycle.artifactGate)
             return Result<std::unique_ptr<PackageProjectHost>>::Failure(Failure("packages.host.invalid_policy"));
+        if (const auto &pin = policy.executionProjectRoot;
+            pin && (!pin->is_absolute() || *pin != pin->lexically_normal() || *pin != policy.projectRoot || !policy.gameplayModules))
+            return Result<std::unique_ptr<PackageProjectHost>>::Failure(Failure("packages.host.policy_mismatch"));
+        if (policy.gameplayModules && !std::ranges::any_of(policy.lifecycle.moduleHosts, [&policy](const auto &host) {
+            return host.get() == policy.gameplayModules;
+        }))
+            return Result<std::unique_ptr<PackageProjectHost>>::Failure(Failure("packages.host.policy_mismatch"));
         auto impl = std::make_unique<Impl>(services, std::move(policy), metadataMaximumAge, source, publishers);
         return Result<std::unique_ptr<PackageProjectHost>>::Success(
             std::make_unique<PackageProjectHost>(ConstructionKey{}, std::move(impl)));
@@ -63,6 +72,8 @@ namespace Horo::Application::Internal {
             return Result<std::shared_ptr<PackageApplication>>::Failure(Failure("packages.host.closed"));
         if (root.empty() || !root.is_absolute() || root != root.lexically_normal())
             return Result<std::shared_ptr<PackageApplication>>::Failure(Failure("packages.host.invalid_project"));
+        if (impl_->policy.executionProjectRoot && root != *impl_->policy.executionProjectRoot)
+            return Result<std::shared_ptr<PackageApplication>>::Failure(Failure("packages.host.project_stale"));
         if (root != impl_->policy.projectRoot || impl_->generation == 0) {
             if (auto advanced = impl_->AdvanceGeneration(); advanced.HasError())
                 return Result<std::shared_ptr<PackageApplication>>::Failure(advanced.ErrorValue());
@@ -99,7 +110,8 @@ namespace Horo::Application::Internal {
             if (auto composed = impl_->ComposePrepared(); composed.HasError())
                 return composed;
         }
-        if (!impl_->policy.projectRoot.empty() && !impl_->metadataJob && !impl_->Fresh(now)) {
+        if (!impl_->policy.projectRoot.empty() && (!impl_->policy.executionProjectRoot || impl_->generation != 0) && !impl_->metadataJob &&
+            !impl_->Fresh(now)) {
             if (auto started = impl_->StartMetadata(); started.HasError()) {
                 impl_->diagnostic = started.ErrorValue();
                 return started;
@@ -156,6 +168,43 @@ namespace Horo::Application::Internal {
         if (!impl_->current)
             return Outcome::Failure(Failure("packages.host.preparing"));
         return impl_->current->InstalledRecord();
+    }
+
+    /** @copydoc PackageProjectHost::ActivationTrustRequired */
+    bool PackageProjectHost::ActivationTrustRequired(const std::filesystem::path &root) const {
+        if (Generation() == 0 || root != impl_->policy.projectRoot || !impl_->current || impl_->Admission().HasError())
+            return false;
+        const auto application = impl_->current->Application();
+        if (application.HasError())
+            return false;
+        const auto required = application.Value()->ActivationTrustRequired();
+        return required.HasValue() && required.Value();
+    }
+
+    /** @copydoc PackageProjectHost::DecisionCatalog */
+    std::optional<PackageDecisionCatalogStamp> PackageProjectHost::DecisionCatalog(const std::filesystem::path &root) const {
+        const auto project = Generation();
+        if (!project || root != impl_->policy.projectRoot || !impl_->current)
+            return std::nullopt;
+        const auto activation = impl_->current->DecisionCatalogGeneration();
+        return activation ? std::optional{PackageDecisionCatalogStamp{project, activation}} : std::nullopt;
+    }
+
+    /** @copydoc PackageProjectHost::AcquireDecisionNodes */
+    Result<PackageDecisionNodeLeaves> PackageProjectHost::AcquireDecisionNodes(const std::filesystem::path &root,
+                                                                               const PackageDecisionCatalogStamp &stamp) const {
+        using Outcome = Result<PackageDecisionNodeLeaves>;
+        if (const auto lane = impl_->Lane(); lane.HasError())
+            return Outcome::Failure(lane.ErrorValue());
+        if (DecisionCatalog(root) != stamp)
+            return Outcome::Failure(Failure("packages.host.decision_catalog_stale"));
+        return impl_->current->AcquireDecisionNodes(stamp.activation);
+    }
+
+    /** @copydoc PackageProjectHost::HasGameplayModuleOwner */
+    bool PackageProjectHost::HasGameplayModuleOwner() const noexcept {
+        const auto *owner = impl_->policy.gameplayModules;
+        return owner && owner->Supports(Extensions::ExtensionModuleRole::RuntimeParticipant);
     }
 
     /** @copydoc PackageProjectHost::Close */

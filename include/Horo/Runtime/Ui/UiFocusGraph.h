@@ -307,6 +307,12 @@ namespace Horo::Runtime::Ui {
         /** @brief Returns current focus, if any, without allocating. @return Optional target or lifecycle failure. */
         [[nodiscard]] Result<std::optional<UiFocusTarget>> CurrentFocus() const;
 
+        /** @brief Binds the current owner's reveal policy to one matching layout candidate without changing focus.
+         * @param layout Candidate from this exact retained tree; its interaction revision may advance.
+         * @return Optional owner-fenced reveal request, or the original stale, foreign or stopped result.
+         */
+        [[nodiscard]] Result<std::optional<UiFocusBringIntoViewRequest>> RevealInLayout(const UiLayoutSnapshot &layout) const;
+
         /** @brief Resolves one navigation edge without changing focus, modal, scrolling or restoration state.
          * @param direction One of the six focus movement directions, excluding Submit/Cancel.
          * @return The exact ordinary Move decision or typed lifecycle/invalid-direction failure; bounded, allocation-free.

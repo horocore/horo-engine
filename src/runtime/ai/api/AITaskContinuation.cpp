@@ -44,7 +44,7 @@ namespace Horo::AI {
 
     /** @copydoc AiTaskContinuation::IsCurrent */
     bool AiTaskContinuation::IsCurrent() const noexcept {
-        return mailbox_ && !operation_.cancellation.IsCancellationRequested() && mailbox_->IsCurrent(slot_, operation_.task);
+        return mailbox_ && !operation_.IsCancellationRequested() && mailbox_->IsCurrent(slot_, operation_.task);
     }
 
     namespace Detail {
@@ -63,6 +63,7 @@ namespace Horo::AI {
             } else {
                 record.task = operation.task;
                 record.pending = {};
+                record.pendingGeneration.store(0);
                 record.published = false;
                 record.generation.store(operation.task.slot.generation);
                 return Result<AiTaskContinuation>::Success(AiTaskContinuation(shared_from_this(), slot, operation));
@@ -72,11 +73,26 @@ namespace Horo::AI {
         /** @copydoc AiTaskMailbox::Take */
         AiTaskMailbox::Pending AiTaskMailbox::Take(const std::size_t slot, const TaskHandle task) {
             auto &record = slots_[slot];
-            if (const std::unique_lock lock(record.mutex, std::try_to_lock);
-                !lock.owns_lock() || record.task != task || !IsCurrent(slot, task))
+            const std::unique_lock lock(record.mutex, std::try_to_lock);
+            if (!lock.owns_lock() || record.task != task || !IsCurrent(slot, task))
                 return {};
-            else
-                return std::exchange(record.pending, {});
+            record.pendingGeneration.store(0);
+            return std::exchange(record.pending, {});
+        }
+
+        /** @copydoc AiTaskMailbox::HasPending */
+        bool AiTaskMailbox::HasPending() noexcept {
+            // Clear the hint before scanning so a producer racing the scan can signal another check.
+            if (!pendingHint_.load() || !pendingHint_.exchange(false))
+                return false;
+            for (const auto &slot : slots_) {
+                const auto generation = slot.generation.load();
+                if (generation != 0 && slot.pendingGeneration.load() == generation) {
+                    pendingHint_.store(true);
+                    return true;
+                }
+            }
+            return false;
         }
 
         /** @copydoc AiTaskMailbox::Retire */
@@ -93,22 +109,26 @@ namespace Horo::AI {
         AiTaskPublicationDisposition AiTaskMailbox::Publish(const std::size_t slot, const TaskHandle task,
                                                             AiTaskTerminalResult *result) noexcept {
             auto &record = slots_[slot];
+
             using enum AiTaskPublicationDisposition;
-            if (const std::unique_lock lock(record.mutex, std::try_to_lock); !lock.owns_lock()) {
-                return Contended;
-            } else {
+            {
+                const std::unique_lock lock(record.mutex, std::try_to_lock);
+                if (!lock.owns_lock())
+                    return Contended;
                 if (record.task != task || !IsCurrent(slot, task))
                     return Stale;
                 if (record.published)
                     return AlreadyPublished;
-                if (result) {
+                if (result)
                     record.pending.terminal.emplace(std::move(*result));
-                    record.published = true;
-                } else {
+                else
                     record.pending.event = true;
-                }
-                return Accepted;
+                record.published = result != nullptr;
+                record.pendingGeneration.store(task.slot.generation);
             }
+
+            pendingHint_.store(true);
+            return Accepted;
         }
     }  // namespace Detail
 }  // namespace Horo::AI

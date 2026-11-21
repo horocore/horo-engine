@@ -330,12 +330,13 @@ namespace Horo::Runtime::Ui {
 
         [[nodiscard]] Result<IntrinsicState> ResolveIntrinsic(const std::span<const UiLayoutElementDescriptor> descriptors,
                                                               const UiLayoutStyle &style, const UiLayoutIntrinsicSource &source,
-                                                              const UiLayoutConstraints &constraints,
-                                                              const std::span<const UiLayoutChildMeasurement> children,
-                                                              const UiLayoutIntrinsicProvider *provider, const UiElementHandle element) {
+                                                              const UiLayoutMeasureRequest &measure,
+                                                              const UiLayoutIntrinsicProvider *provider) {
             if (source.kind == UiLayoutIntrinsicKind::None)
-                return AggregateIntrinsic(descriptors, style, constraints, children);
-            const UiLayoutIntrinsicRequest request{element, constraints.maximum, IsExplicit(style.width), IsExplicit(style.height)};
+                return AggregateIntrinsic(descriptors, style, measure.constraints, measure.children);
+            const auto scale = source.kind == UiLayoutIntrinsicKind::Text ? measure.fontScale : UiCanvasScaleFactor{};
+            const UiLayoutIntrinsicRequest request{measure.element, measure.constraints.maximum, IsExplicit(style.width),
+                                                   IsExplicit(style.height), scale};
             auto provided = QueryIntrinsic(source, request, provider);
             if (provided.HasError()) {
                 if (source.required)
@@ -430,8 +431,8 @@ namespace Horo::Runtime::Ui {
 
         [[nodiscard]] Result<UiLayoutMeasurement> FinishMeasurement(const MeasurementAxes &axes,
                                                                     const UiLayoutIntrinsicMeasurement &intrinsic,
-                                                                    const UiLayoutConstraints &constraints,
-                                                                    UiLayoutConstraintResult result) {
+                                                                    const UiLayoutConstraints &constraints, UiLayoutConstraintResult result,
+                                                                    const bool dependsOnFontScale) {
             const auto width = std::clamp(axes.width.preferred, constraints.minimum.width, constraints.maximum.width);
             const auto height = std::clamp(axes.height.preferred, constraints.minimum.height, constraints.maximum.height);
             if (width != axes.width.preferred || height != axes.height.preferred)
@@ -440,15 +441,15 @@ namespace Horo::Runtime::Ui {
                                                          axes.width.depends || intrinsic.dependsOnParentWidth,
                                                          axes.height.depends || intrinsic.dependsOnParentHeight,
                                                          result,
-                                                         intrinsic.baseline});
+                                                         intrinsic.baseline,
+                                                         dependsOnFontScale});
         }
 
         [[nodiscard]] Result<UiLayoutMeasurement> MeasureElement(const std::span<const UiLayoutElementDescriptor> descriptors,
                                                                  const UiLayoutElementDescriptor &descriptor,
                                                                  const UiLayoutMeasureRequest &request,
                                                                  const UiLayoutIntrinsicProvider *provider) {
-            auto intrinsic = ResolveIntrinsic(descriptors, descriptor.style, descriptor.intrinsic, request.constraints, request.children,
-                                              provider, request.element);
+            auto intrinsic = ResolveIntrinsic(descriptors, descriptor.style, descriptor.intrinsic, request, provider);
             if (intrinsic.HasError())
                 return Result<UiLayoutMeasurement>::Failure(intrinsic.ErrorValue());
             auto axes = ResolveMeasurementAxes(descriptor.style, request.constraints, intrinsic.Value());
@@ -460,26 +461,44 @@ namespace Horo::Runtime::Ui {
                     ApplyAspect(descriptor.style.aspectRatio, resolvedAxes.width, resolvedAxes.height, intrinsic.Value().available, result);
                 aspect.HasError())
                 return Result<UiLayoutMeasurement>::Failure(aspect.ErrorValue());
-            return FinishMeasurement(resolvedAxes, intrinsic.Value().measurement, request.constraints, result);
+            return FinishMeasurement(resolvedAxes, intrinsic.Value().measurement, request.constraints, result,
+                                     descriptor.intrinsic.kind == UiLayoutIntrinsicKind::Text);
         }
     }  // namespace
 
     /** @copydoc UiDeclarativeLayoutEvaluator::Create */
     Result<UiDeclarativeLayoutEvaluator> UiDeclarativeLayoutEvaluator::Create(const std::span<const UiLayoutElementDescriptor> descriptors,
                                                                               const UiLayoutIntrinsicProvider *intrinsic) {
+        return Create(descriptors, intrinsic, nullptr);
+    }
+
+    /** @copydoc UiDeclarativeLayoutEvaluator::Create */
+    Result<UiDeclarativeLayoutEvaluator> UiDeclarativeLayoutEvaluator::Create(const std::span<const UiLayoutElementDescriptor> descriptors,
+                                                                              const UiLayoutIntrinsicProvider *intrinsic,
+                                                                              UiElementHandle *failedElement) {
+        if (failedElement)
+            *failedElement = {};
         if (descriptors.empty())
             return Failure<UiDeclarativeLayoutEvaluator>(UiErrors::LayoutInvalid);
-        bool requiresProvider = false;
+        UiElementHandle firstRequiredIntrinsic;
         for (std::size_t index = 0; index < descriptors.size(); ++index) {
-            if (!descriptors[index].IsValid())
+            const auto &descriptor = descriptors[index];
+            if (index > 0 && descriptors[index - 1].element >= descriptor.element)
                 return Failure<UiDeclarativeLayoutEvaluator>(UiErrors::LayoutInvalid);
-            if (index > 0 && descriptors[index - 1].element >= descriptors[index].element)
+            if (!descriptor.IsValid()) {
+                if (failedElement)
+                    *failedElement = descriptor.element;
                 return Failure<UiDeclarativeLayoutEvaluator>(UiErrors::LayoutInvalid);
-            requiresProvider = requiresProvider ||
-                               (descriptors[index].intrinsic.kind != UiLayoutIntrinsicKind::None && descriptors[index].intrinsic.required);
+            }
+            if (!intrinsic && !firstRequiredIntrinsic.IsValid() && descriptor.intrinsic.kind != UiLayoutIntrinsicKind::None &&
+                descriptor.intrinsic.required)
+                firstRequiredIntrinsic = descriptor.element;
         }
-        if (requiresProvider && intrinsic == nullptr)
+        if (firstRequiredIntrinsic.IsValid()) {
+            if (failedElement)
+                *failedElement = firstRequiredIntrinsic;
             return Failure<UiDeclarativeLayoutEvaluator>(UiErrors::LayoutIntrinsicUnavailable);
+        }
         return Result<UiDeclarativeLayoutEvaluator>::Success(UiDeclarativeLayoutEvaluator{descriptors, intrinsic});
     }
 

@@ -3,8 +3,10 @@
 /** @file RuntimeSceneCellPayload.h
  * @brief Scene-owned immutable flattened cell baseline and fenced RuntimeScene admission.
  */
-#include "Horo/Runtime/Scene/RuntimeScene.h"
+#include "Horo/Runtime/Scene/SceneInstances.h"
 #include "Horo/WorldStreaming/WorldPartitionDescriptor.h"
+
+#include <array>
 
 namespace Horo::Runtime {
     namespace SceneCellPayloadErrors {
@@ -48,6 +50,14 @@ namespace Horo::Runtime {
         std::uint32_t version{};
     };
 
+    /** @brief Immutable global position authority tied to one exact object in the same cooked baseline. */
+    struct SceneCellWorldAnchor final {
+        SceneObjectId object;
+        std::array<std::int64_t, 3> positionMillimeters;
+        std::optional<std::array<std::int64_t, 3>> cameraTargetMillimeters;
+        [[nodiscard]] auto operator<=>(const SceneCellWorldAnchor &) const noexcept = default;
+    };
+
     /** @brief Borrowed complete offline-expanded runtime input for one cell, with no editor state or nested prefab loads. */
     struct SceneCellPayloadSource final {
         SceneCellPayloadIdentity identity;
@@ -56,6 +66,7 @@ namespace Horo::Runtime {
         std::span<const SceneCellComponentSchema> componentSchemas;
         std::span<const SceneCellBehaviorSchema> behaviorSchemas;
         std::span<const TriggerVolumeMigrationEvidence> triggerVolumeEvidence; /**< Complete portable binding constraints. */
+        std::span<const SceneCellWorldAnchor> worldAnchors; /**< Explicit authored authority. An empty list grants no global positions. */
     };
 
     /** @brief Owned immutable CoreEcs semantic baseline; encoding remains the Scene provider's responsibility. */
@@ -71,16 +82,20 @@ namespace Horo::Runtime {
         [[nodiscard]] const RuntimeSceneDefinition &Definition() const noexcept;
         /** @brief Returns host logical owned storage charge. @return Bytes checked against the captured cook ceiling. */
         [[nodiscard]] std::size_t RetainedBytes() const noexcept;
+        /** @brief Returns explicit global anchors in object identity order. @return Borrowed immutable owner evidence. */
+        [[nodiscard]] std::span<const SceneCellWorldAnchor> WorldAnchors() const noexcept;
 
     private:
         friend Result<RuntimeSceneCellPayload> CookRuntimeSceneCellPayload(const WorldStreaming::WorldPartitionDescriptor &,
                                                                            const SceneCellPayloadSource &, const SceneCellPayloadIdentity &,
                                                                            SceneCellPayloadLimits, const CancellationToken &);
         /** @brief Owns the complete validated baseline and checked logical storage charge. */
-        RuntimeSceneCellPayload(SceneCellPayloadIdentity identity, RuntimeSceneDefinition definition, std::size_t retainedBytes) noexcept;
+        RuntimeSceneCellPayload(SceneCellPayloadIdentity identity, RuntimeSceneDefinition definition, std::size_t retainedBytes,
+                                std::vector<SceneCellWorldAnchor> worldAnchors) noexcept;
         SceneCellPayloadIdentity identity_;
         RuntimeSceneDefinition definition_;
         std::size_t retainedBytes_{};
+        std::vector<SceneCellWorldAnchor> worldAnchors_;
     };
 
     /**
@@ -118,7 +133,7 @@ namespace Horo::Runtime {
 
     /** @brief Complete immutable owner evidence and explicit resident limits for a cell attachment. */
     struct SceneCellAttachmentRequest final {
-        SceneRuntimeId runtime; /**< Receiving canonical domain; never a candidate runtime ID. */
+        SceneRuntimeId runtime; /**< Exact receiving domain: live ordinarily, next unpublished ID for startup. */
         WorldStreaming::StreamingFence fence;
         Assets::AssetRegistryRevision registry;
         SceneBaselineAttachmentLimits limits;
@@ -157,6 +172,57 @@ namespace Horo::Runtime {
                                                                const SceneCellAttachmentRequest &request,
                                                                std::vector<RuntimeGroupAssetLease> resources,
                                                                std::shared_ptr<const SceneCellPayloadAuthority> authority);
+
+    /** @brief Queues a streamed child under one exact live parent using real cell residency authority.
+     * @param service Canonical parent Scene owner.
+     * @param address Exact Streamed mode, authored occurrence, parent runtime and prepared baseline definition.
+     * @param payload Complete immutable cooked cell baseline. @param request Current residency/catalog and bounds.
+     * @param resources Prepared verified dependency leases. @param authority Current shared streaming owner.
+     * @param replaces Exact currently published operation, or null to require absence.
+     * @return Exact cancellable receipt or typed failure. The canonical safe point owns publication.
+     * @details The parent admits one resident baseline per definition. Replacement must advance its content revision.
+     */
+    [[nodiscard]] Result<SceneInstanceOperation> QueueStreamedSceneInstance(
+        RuntimeSceneService &service, const SceneInstanceAddress &address, const RuntimeSceneCellPayload &payload,
+        const SceneCellAttachmentRequest &request, std::vector<RuntimeGroupAssetLease> resources,
+        std::shared_ptr<const SceneCellPayloadAuthority> authority, const SceneInstanceOperation *replaces = nullptr);
+
+    /** @brief Prepares one Streamed baseline inside the exact unpublished root before Scene activation callbacks.
+     * @param service Receiving Scene service on its construction lane.
+     * @param parent Immutable root definition, using normal Scene preparation and asset discovery.
+     * @param address Exact next Scene runtime, Streamed occurrence and child definition.
+     * @param payload Verified assetless Core ECS cell baseline. Camera, light and procedural mesh data are supported.
+     * @param request Exact catalog and streaming admission evidence, cancellation and attachment limits. Replacement must be absent.
+     * @param authority Shared streaming readiness authority retained until root publication or rejection.
+     * @return Tracked root publication receipt or typed admission error. Deferred failure preserves the current active Scene.
+     * @details The cell is visible to activation participants in the private root. The regular root safe point commits both together.
+     * The caller owns its streaming reservation and observes the receipt before exposing Active residency.
+     */
+    [[nodiscard]] Result<ScenePublicationReceipt> QueuePreparationWithInitialStreamedScene(
+        RuntimeSceneService &service, const RuntimeSceneDefinition &parent, const SceneInstanceAddress &address,
+        const RuntimeSceneCellPayload &payload, const SceneCellAttachmentRequest &request,
+        std::shared_ptr<const SceneCellPayloadAuthority> authority);
+
+    /** @brief Observes an exact current streamed instance through its parent's canonical cell attachment.
+     * @param parent Current parent view. @param address Expected Streamed occurrence.
+     * @param identity Exact committed cell content. @param epoch Exact mounted partition.
+     * @return Borrowed baseline evidence, or absence after parent retirement or mismatch.
+     */
+    [[nodiscard]] std::optional<SceneBaselineAttachmentView> FindStreamedSceneInstance(const RuntimeSceneView &parent,
+                                                                                       const SceneInstanceAddress &address,
+                                                                                       const SceneCellPayloadIdentity &identity,
+                                                                                       WorldStreaming::PartitionEpoch epoch) noexcept;
+
+    /** @brief Retires the exact streamed occurrence at the canonical Scene safe point.
+     * @param service Canonical parent Scene owner. @param current Exact committed operation.
+     * @param request Current exact eviction fence and parent/catalog/cancellation evidence.
+     * @param authority Retained streaming authority for eviction.
+     * @return Exact cancellable receipt or typed failure, preserving all unmatched resident instances.
+     */
+    [[nodiscard]] Result<SceneInstanceOperation> QueueStreamedSceneRemoval(RuntimeSceneService &service,
+                                                                           const SceneInstanceOperation &current,
+                                                                           const SceneCellAttachmentRequest &request,
+                                                                           std::shared_ptr<const SceneCellPayloadAuthority> authority);
 
     /** @brief Retires exactly one attached baseline at the canonical Scene safe point.
      * @param service Canonical Scene owner. @param identity Exact committed baseline identity and revision.

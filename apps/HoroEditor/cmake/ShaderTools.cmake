@@ -4,11 +4,26 @@ target_compile_features(HoroEditorUiPaintShaderCook PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorUiPaintShaderCook PRIVATE HoroEditorShaderCookHostInternal HoroHostSignatureDocuments
     HoroUiPaintShaderPackage HoroEngine::Platform)
 
+# Only the offline host consumes the compiler and pre-sign stage publisher.
+set(HORO_EDITOR_RECONSTRUCTION_RELEASE_COOK_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_reconstruction_release_cook_headers")
+file(MAKE_DIRECTORY "${HORO_EDITOR_RECONSTRUCTION_RELEASE_COOK_HEADERS}")
+configure_file("HoroEditor/tools/VulkanReconstructionReleaseCook.h"
+    "${HORO_EDITOR_RECONSTRUCTION_RELEASE_COOK_HEADERS}/VulkanReconstructionReleaseCook.h" COPYONLY)
+add_library(HoroEditorNativeReconstructionReleaseCookInternal STATIC
+    HoroEditor/tools/VulkanReconstructionReleaseCook.cpp)
+target_compile_features(HoroEditorNativeReconstructionReleaseCookInternal PUBLIC cxx_std_20)
+target_include_directories(HoroEditorNativeReconstructionReleaseCookInternal
+    PUBLIC "${HORO_EDITOR_RECONSTRUCTION_RELEASE_COOK_HEADERS}")
+target_link_libraries(HoroEditorNativeReconstructionReleaseCookInternal
+    PUBLIC HoroEngine::Application HoroEngine::RenderApi
+    PRIVATE HoroEditorNativeReconstructionReleaseLayoutInternal HoroAtomicShaderCookPackageInternal HoroEditorVulkanShaderInternal)
+
 # Offline preparation tool, never linked into HoroEditor or a runtime renderer.
 add_executable(HoroEditorVulkanShaderCook EXCLUDE_FROM_ALL HoroEditor/tools/VulkanViewportCook.cpp)
 target_compile_features(HoroEditorVulkanShaderCook PRIVATE cxx_std_20)
 target_link_libraries(HoroEditorVulkanShaderCook PRIVATE HoroEditorVulkanShaderInternal
-    HoroEngine::ShaderCompilerToolchain HoroEngine::Platform)
+    HoroEngine::ShaderCompilerToolchain HoroEngine::Platform HoroEditorNativeReconstructionReleaseCookInternal
+    HoroColorOutputCookInternal)
 
 include("${PROJECT_SOURCE_DIR}/cmake/HoroEditorClusteredLightingAssets.cmake")
 horo_add_editor_clustered_lighting_assets_target()
@@ -20,10 +35,13 @@ if(TARGET HoroEditor)
         HoroEditorBaselineLightingAssetsInternal HoroEngine::EditorViewportLightingInternal)
 endif()
 
-if(TARGET HoroEditor AND TARGET HoroEditorViewportMetal)
-    target_sources(HoroEditor PRIVATE HoroEditor/app/EditorClusteredLightingStartup.cpp)
+if(TARGET HoroEditor AND (TARGET HoroEditorViewportMetal OR TARGET HoroEditorVulkanGuiInternal))
     target_sources(HoroEditor PRIVATE HoroEditor/app/EditorColorPipelineStartup.cpp)
     target_link_libraries(HoroEditor PRIVATE HoroColorOutputPackageInternal HoroEditorViewportColorInternal)
+endif()
+
+if(TARGET HoroEditor AND TARGET HoroEditorViewportMetal)
+    target_sources(HoroEditor PRIVATE HoroEditor/app/EditorClusteredLightingStartup.cpp)
     include(HoroEditorColorPipelineAssets)
     horo_stage_editor_color_pipeline()
 endif()

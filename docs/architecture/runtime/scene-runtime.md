@@ -4,8 +4,9 @@
 complete Scene transaction. Prefab Runtime uses this dedicated evidence without
 consuming global host operation notifications. Receipts preserve the original
 pre-publication error or the committed group identities through service shutdown.
-Post-publication hook faults remain distinct host errors and do not reverse
-committed topology. `DestroyGroup` validates complete resource-group membership,
+Scene makes committed receipts visible after installing the new aggregate and
+before calling post-publication hooks. Hook faults remain distinct host errors
+and do not reverse committed topology. `DestroyGroup` validates complete resource-group membership,
 exact generations and cancellation, then retires reverse topology atomically.
 Cook-projected reference interfaces and inherited spawn lineage are immutable
 Scene-owned group metadata; Scene resolves interfaces after complete reservation
@@ -78,6 +79,8 @@ observation lifetime and captured structural revision. Destruction revokes the
 observation before subsystem/storage teardown; reused owner addresses cannot
 make an old view current. `View` and view queries allocate nothing. Copied runtime,
 definition and preparation identities remain inspectable after retirement.
+`SameIncarnation` compares the captured weak owner identity across structural
+revisions. A caller must also have a current view to access storage.
 This C++ value-layout change requires the paired native gameplay boundary22 /
 `gameplay-sdk22` fingerprint. Rebuild hosts, native modules and consumers together;
 the canonical module loader rejects SDK21 before activation.
@@ -203,6 +206,10 @@ revision captured by `AssetLoadService`; they never query mutable registry
 state. At the owner-thread safe point, the service compares the captured
 revision with the authoritative registry revision. A stale candidate is
 dropped, even when every worker completed successfully.
+
+An assetless Scene captures the configured registry revision when staged, so
+later cell attachments can use the active Scene's admission evidence. A Scene
+service with no configured registry uses the empty registry revision.
 
 An active scene pins immutable payload leases. A replacement at the same
 registry revision reuses each matching AssetId/type payload independently;
@@ -568,6 +575,17 @@ Component add/remove, reparent, and direct system-owned component writes require
 the later ECS access/scheduling contract. They are not silently emulated by the
 baseline storage API.
 
+An explicit replica host can bind the Scene service to its Runtime scheduler
+before that Scene starts, including during travel on the scheduler's owner
+lane. It can then commit an admitted local transform batch
+synchronously with the live `CommitDeferredLifecycleChanges` evidence and
+exact active Scene revision. The complete batch passes through the same Scene
+candidate validation, final cancellation check, and atomic publication as
+queued structural work. The capability carries neither mutable Scene storage
+nor permission to create, destroy, or reparent entities. Existing Scene service
+callers keep the queued contract. Rebuild native Scene consumers for the
+additive scheduler binding.
+
 ## System Contract
 
 ```cpp
@@ -743,6 +761,87 @@ reference is:
 
 Reference loading participates in the parent task group and cancellation tree.
 An unloaded parent cannot receive a late child activation.
+
+Embedded child instances enter the normal Scene structural transaction from
+a prepared child definition and verified dependency leases. The exact live
+parent, authored occurrence, child definition, source publication and
+cancellation guard that transaction. A replacement must present the
+current published child operation and source revision. Only one resident embedded occurrence
+of a child definition can occupy a parent; the same definition can be
+embedded by another parent. Cancelling an operation resolves its receipt
+without affecting another attempt or a published child. Parent retirement
+removes the complete child attachment with the parent runtime.
+
+Streamed child instances use the same tracked Scene transaction for a cooked
+cell baseline. The host supplies the current streaming fence, verified artifact
+leases and required-provider authority. The attachment records the authored
+occurrence separately from the partition, cell and mounted epoch. Replacement
+or eviction requires the exact published occurrence and current streaming
+authority. Parent cancellation ends pending publication; replacing or retiring
+the parent discards all its attached children. Streamed admission neither
+selects residency nor mounts a partition.
+
+Cold startup can admit one verified Streamed baseline for the Scene service's
+exact next runtime. The service applies the ordinary baseline topology and
+resource checks to the private root before preparing activation participants.
+This route admits assetless Core ECS with optional camera, light and procedural
+mesh data. Structural callbacks for a live Scene remain on the live path.
+The host supplies a current streaming reservation, the complete catalog
+fence and cancellation. The final root publication gate rechecks that evidence
+after activation participants validate. Observers receive a tracked aggregate
+receipt. Only a published receipt authorizes the host to expose Active cell
+residency. Prepare failure, cancellation or stale admission releases the private
+root and its cell together. Save restore continues to use its own private
+candidate authority.
+
+The mounted World startup owner loads the selected committed cell through its
+planner and holds the scheduler's activation reservation while the private root
+receipt is pending. Reconciliation checks the published runtime, structural
+revision and exact cell occurrence before completing scheduler activation and
+exposing the cell's canonical anchors. Rejection retires the same reservation.
+Closing the mount cancels its pending Scene predicate before releasing the
+planner, scheduler or residency ledger.
+
+Activated instances use a separate, one-use RuntimeSceneService and entity
+domain. The canonical parent reserves the child's runtime identity from its
+monotonic cursor and supplies the existing asset authorities. An explicitly
+composed host supplies the immutable child definition, its current publication
+check, and any independent subsystem adapters. One pending operation advances
+at the parent's normal lifecycle safe point. Replacement publishes the validated
+new child before retiring the old one. Parent cancellation closes discovery of
+the child immediately and retires it at the safe point. Parent replacement,
+unload and shutdown cancel pending children and shut down resident children
+before the retiring parent's subsystem owners. This boundary currently admits
+direct children only. Authoring, nested dependency loading, and aggregation
+into a parent's renderer or subsystem simulation require explicit host
+composition.
+
+Scene source schema 6 represents a direct Activated occurrence as
+`childScenes` with a nonzero `instanceId`, stable `sourceAsset`, and explicit
+`"mode": "activated"`. Each parent document has unique occurrence IDs. Two
+occurrences may select the same asset. Documents without children retain their
+existing encoding. The opt-in child-aware decoder preserves the whole list
+and rejects other modes. Canonical cook resolves each child from the same
+pinned Scene asset inventory and prepares leaf output before its callers.
+The current direct-child contract rejects missing assets, wrong types,
+self references, nested references and cycles before cook publication.
+Each cooked v6 occurrence stores its exact stable child definition, revision
+and full payload digest in canonical occurrence order. Child input commitments
+enter the parent's cook key and output dependency inventory. Legacy cooked
+formats retain their existing bytes. The installed and release catalogs
+require the exact child leaf bytes in the captured generation.
+
+The Editor preserves authoring references in the document, external reload,
+save and autosave recovery. The old source reader still rejects child-bearing
+documents. The workspace previews the parent entities. Installed Editor Play
+matches the workspace source path and canonical authored digest against the
+exact committed Scene generation. Its initial Activated route admits assetless
+Core ECS leaf Scenes. The parent owns their independent runtime IDs and
+prepares their private worlds before any parent publication callbacks. The
+parent and child set become visible in the same aggregate transfer.
+Stale content, cancellation and unsupported child adapters preserve the
+previous aggregate. Save and Restore require independent child capture and are
+unavailable for this Play scope.
 
 ## Editor Interaction
 

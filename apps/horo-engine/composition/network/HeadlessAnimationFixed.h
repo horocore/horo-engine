@@ -1,5 +1,7 @@
 #pragma once
 
+#include "HeadlessReplicaAnimationInputs.h"
+
 /** @file HeadlessAnimationFixed.h
  * @brief Target-private fixed participant borrowing the exact generation-owned world records.
  */
@@ -64,11 +66,20 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return Result<void>::Success();
         }
 
-        Result<void> OnPhase(Runtime::RuntimePhase, const Runtime::FrameContext &) override {
+        Result<void> OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &frame) override {
             if (!OnOwner())
                 return Rejected();
             DrainResolved();
+            if (phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && owners_->configured &&
+                (owners_->configured->initialSceneState ||
+                 (owners_->configured->mountedWorld && owners_->configured->mountedWorld->liveCell)))
+                sceneDispatch_ = frame.dispatchEvidence;
             return closed_ ? Rejected() : Result<void>::Success();
+        }
+
+        /** @brief Borrows current structural evidence for the paired generation-owned Scene services. */
+        const Runtime::RuntimeDispatchEvidence &SceneDispatch() const noexcept {
+            return sceneDispatch_;
         }
 
         Result<void> OnFixedUpdate(const Runtime::FixedStepContext &context) override {
@@ -97,6 +108,15 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return record->animation->OnFixedUpdate(context);
         }
 
+        /** @brief Arms only the current opaque fixed dispatch for the configured standalone World. */
+        void ArmDecisionReplay(WorldRecord &record, const Runtime::FixedStepContext &context) {
+            if (auto *replay = DecisionReplay(); replay && replay->WantsTick(context.simulationTick) && attempting_ && !closed_ &&
+                                                 Valid(context) && Same(context) && std::ranges::any_of(pins_, [&record](const auto &pin) {
+                return pin.get() == &record;
+            }))
+                replay->Arm(record, context);
+        }
+
         /** @brief Tracks the actual attempted gameplay owner before its fallible callback; unrelated pinned Worlds stay untouched. */
         Result<void> TrackGameplay(const std::shared_ptr<WorldRecord> &record, const Runtime::FixedStepContext &context) {
             if (!Valid(context) || !Same(context) || !attempting_ || closed_)
@@ -118,7 +138,23 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 if (prepared.HasError())
                     return prepared;
             }
-            return PrepareGameplay(context);
+            if (auto prepared = PrepareGameplay(context); prepared.HasError())
+                return prepared;
+            for (std::size_t index = 0; index < count_; ++index) {
+                const auto &record = evaluated_[index];
+                if (record->request.world == Network::NetworkModeWorldKind::Client)
+                    continue;
+                if (auto prepared = record->native.PrepareAnimationFixedCommit(context); prepared.HasError())
+                    return prepared;
+                if (record->navigationPath)
+                    record->navigationPath->DispatchAtFixedTick(context.simulationTick);
+            }
+            if (auto *replay = DecisionReplay()) {
+                for (const auto &record : pins_)
+                    if (record)
+                        replay->Prepare(*record, context);
+            }
+            return Result<void>::Success();
         }
 
         void CommitFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
@@ -129,9 +165,13 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 std::terminate();
             if (facts.committedTick != facts.fixedTick || facts.committedAttempt != facts.fixedAttempt)
                 std::terminate();
-            for (std::size_t index = 0; index < count_; ++index)
+            for (std::size_t index = 0; index < count_; ++index) {
+                evaluated_[index]->native.CommitAnimationFixedTick(context);
                 evaluated_[index]->animation->CommitFixedUpdate(context);
+            }
             CommitGameplay(context);
+            if (auto *replay = DecisionReplay())
+                replay->Commit(context);
             Resolve();  // Keep every strong pin until a safe phase/Shutdown, never cold teardown in nofail publication.
         }
 
@@ -143,8 +183,14 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 status != Runtime::RuntimeDispatchStatus::Valid && status != Runtime::RuntimeDispatchStatus::Retired)
                 return;
             AbortGameplay(context);
-            for (std::size_t index = count_; index > 0; --index)
+            if (auto *replay = DecisionReplay())
+                replay->Abort(context);
+            for (std::size_t index = count_; index > 0; --index) {
+                if (auto &paths = evaluated_[index - 1]->navigationPath)
+                    paths->DiscardMotionFeedback();
+                evaluated_[index - 1]->native.AbortAnimationFixedTick(context);
                 evaluated_[index - 1]->animation->AbortFixedUpdate(context);
+            }
             Resolve();
         }
 
@@ -161,6 +207,11 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         }
 
     private:
+        /** @brief Reads only the optional configured diagnostic mailbox. */
+        HeadlessDecisionReplay *DecisionReplay() const noexcept {
+            return owners_->configured ? owners_->configured->decisionReplay.get() : nullptr;
+        }
+
         static Result<void> Rejected() {
             return Result<void>::Failure(MakeError(Animation::AnimationErrors::GraphAdmissionRejected));
         }
@@ -196,8 +247,14 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         }
 
         void CommitGameplay(const Runtime::FixedStepContext &context) noexcept {
-            for (std::size_t index = 0; index < gameplayCount_; ++index)
-                gameplay_[index]->activeGameplay->CommitFixedUpdate(context);
+            for (std::size_t index = 0; index < gameplayCount_; ++index) {
+                const auto &record = gameplay_[index];
+                record->activeGameplay->CommitFixedUpdate(context);
+                if (record->publicTransforms && !record->sceneCancellation.IsCancellationRequested()) {
+                    if (const auto scene = record->scenes->ActiveScene())
+                        static_cast<void>(record->publicTransforms->ObserveCommittedTick(*scene, context.dispatchEvidence));
+                }
+            }
         }
 
         void AbortGameplay(const Runtime::FixedStepContext &context) noexcept {
@@ -264,6 +321,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         std::shared_ptr<WorldOwners> owners_;
         Runtime::RuntimeDispatchSource source_;
         Runtime::RuntimeDispatchEvidence evidence_;
+        Runtime::RuntimeDispatchEvidence sceneDispatch_;
         std::array<std::shared_ptr<WorldRecord>, 4> pins_;
         std::array<std::shared_ptr<WorldRecord>, 4> evaluated_;
         std::size_t count_{};
@@ -290,7 +348,17 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         config.runtimeOwner = issued.identity;
         config.target = input.animationTarget;
         config.ownerCancellation = record.sceneCancellation;
-        config.inputs = input.animationInputs;
+        if (input.animationParallel && record.request.world == Network::NetworkModeWorldKind::AuthorityServer)
+            config.parallelEvaluation.emplace(*input.animationParallel);
+        if (record.request.world == Network::NetworkModeWorldKind::Client) {
+            config.evaluationDomain = Animation::AnimationEvaluationDomain::Presentation;
+            if (!input.replicaAnimationBindings.empty())
+                record.replicaAnimation = std::make_shared<ReplicaAnimationInputs>(input.replicaAnimationBindings);
+            config.inputs = record.replicaAnimation ? record.replicaAnimation : input.replicaAnimationInputs;
+        } else {
+            config.inputs = input.animationInputs;
+            config.enableRootMotionRequests = input.mode == Physics::PhysicsRuntimeMode::Canonical;
+        }
         auto adapter = Runtime::SceneAnimationRuntime::Create(config);
         if (adapter.HasError())
             return Result<void>::Failure(std::move(adapter).ErrorValue());

@@ -26,7 +26,8 @@ namespace Horo::Render {
                     return false;
                 previous = id.value;
             }
-            return true;
+            return !paint.kernel->RequiresGraphNeutralSample() ||
+                   (paint.neutralSample.IsValid() && std::ranges::binary_search(paint.sampledResources, paint.neutralSample));
         }
 
         using FixedPaintResources = std::array<RenderGraphResourceId, 5>;

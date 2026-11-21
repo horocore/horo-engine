@@ -1,0 +1,87 @@
+#pragma once
+
+#include "AgentContext.h"
+#include "AgentTurn.h"
+#include "Horo/Foundation/BuildOutputStore.h"
+#include "Horo/Mcp/McpInProcessAdapter.h"
+#include "Horo/Security/SecureMemory.h"
+
+namespace Horo::Agent {
+    inline constexpr std::string_view ProjectDiagnosticsTool = "project.diagnostics"; /**< Shared name of the diagnostic Query. */
+
+    /** @brief Captured by the host alongside the exact authenticated project-bound MCP session. */
+    struct AgentContextProjectAuthority final {
+        std::string identity;
+        std::uint64_t generation{};
+    };
+
+    /** @brief One immutable host-selected diagnostic projection with a thread-safe freshness witness. */
+    struct AgentDiagnosticCapture final {
+        std::string revision;
+        std::vector<std::string> messages;
+        bool truncated{};
+        std::function<bool()> isCurrent;
+    };
+
+    /** @brief Reads one selected editor or build diagnostic projection through a private Query-only session.
+     * @param captured Bounded owned messages and their source revision. @param context Project and worker stop fence.
+     * @param requestId Host preview identity. @param entropy Host credential entropy.
+     * @return Owned read-only MCP response or typed failure. The query session expires before return.
+     */
+    [[nodiscard]] Result<Application::CodeQueryPage> ReadLocalDiagnostics(AgentDiagnosticCapture captured,
+                                                                          const Application::CodeQueryContext &context,
+                                                                          std::uint64_t requestId,
+                                                                          std::shared_ptr<Security::SecureRandomSource> entropy);
+
+    /** @brief Reads one bounded diagnostic capture through a private, authenticated MCP query session.
+     * @param tail Owned warning/error capture for the operation explicitly selected in the workspace.
+     * @param context Current project and synchronous worker stop fence.
+     * @param requestId Exact host preview turn.
+     * @param entropy Host entropy for the one-use local credential.
+     * @return An owned revisioned page or typed failure. No model or other capability receives the session.
+     */
+    [[nodiscard]] Result<Application::CodeQueryPage> ReadLocalBuildDiagnostics(BuildOutputOperationTail tail,
+                                                                               const Application::CodeQueryContext &context,
+                                                                               std::uint64_t requestId,
+                                                                               std::shared_ptr<Security::SecureRandomSource> entropy);
+
+    /** @brief Editor-host adapter over one already authenticated in-process MCP session generation. */
+    class AgentTurnMcp final : public IAgentTurnTools {
+    public:
+        /** @brief Captures the session generation before any model-derived operation is admitted.
+         * @param adapter Exact authenticated MCP session.
+         * @param project Same host-approved project binding as the authenticated session, or absence for turn-only use.
+         * @param pump Optional bounded pump for immutable tools owned by this caller's lane. */
+        explicit AgentTurnMcp(std::shared_ptr<const Mcp::McpInProcessAdapter> adapter, AgentContextProjectAuthority project = {},
+                              std::function<Result<void>()> pump = {});
+
+        /** @copydoc IAgentTurnTools::ValidArguments */
+        [[nodiscard]] bool ValidArguments(std::string_view arguments) const override;
+
+        /** @copydoc IAgentTurnTools::Run */
+        [[nodiscard]] AgentTurnStatus Run(std::uint64_t turnId, std::size_t callOrdinal, const ModelToolIntent &intent,
+                                          std::chrono::steady_clock::time_point deadline, std::stop_token stop,
+                                          std::string &result) const override;
+
+        /** @brief Captures one explicit diagnostic or build-status query through the authenticated MCP controller.
+         * @param requestId Host-issued preview request identity.
+         * @param itemOrdinal Unique item ordinal in that preview request.
+         * @param query Typed explicit read-only context query.
+         * @param context Borrowed project fence, stop state and deadline.
+         * @return Typed project evidence or admission/stop failure.
+         * @pre Host runs this on a worker while the registered MCP owner pumps query work. */
+        [[nodiscard]] Result<Application::CodeQueryPage> ReadContextQuery(std::uint64_t requestId, std::size_t itemOrdinal,
+                                                                          const Application::CodeQueryRequest &query,
+                                                                          const Application::CodeQueryContext &context) const;
+
+    private:
+        /** @brief Submits and settles one session-fenced controller operation with its scoped cancellation. */
+        [[nodiscard]] Result<nlohmann::json> CallTool(std::string id, std::string_view name, nlohmann::json arguments,
+                                                      std::chrono::steady_clock::time_point deadline,
+                                                      const std::function<bool()> &stopped) const;
+        std::shared_ptr<const Mcp::McpInProcessAdapter> adapter_;
+        Mcp::McpSessionHandle session_;
+        AgentContextProjectAuthority project_;
+        std::function<Result<void>()> pump_;
+    };
+}  // namespace Horo::Agent

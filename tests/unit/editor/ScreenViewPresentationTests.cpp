@@ -341,6 +341,40 @@ TEST_CASE("Workspace document strip retains long source identities and exposes n
     CheckSourceSaveAndUnavailable(fixture, view, model, source.Value(), width);
 }
 
+namespace {
+    struct LoadingRecoveryBounds {
+        float buttonTop{FLT_MAX};
+        float progressBottom{-FLT_MAX};
+        float buttonRight{-FLT_MAX};
+        float buttonBottom{-FLT_MAX};
+        float textRight{-FLT_MAX};
+        int errorVertices{};
+    };
+
+    LoadingRecoveryBounds MeasureLoadingRecoveryBounds(const ImGuiWindow &modal, const float footerTop) {
+        using namespace Horo::Editor;
+        LoadingRecoveryBounds bounds;
+        const auto whitePixel = ImGui::GetDrawListSharedData()->TexUvWhitePixel;
+        for (const auto &vertex : modal.DrawList->VtxBuffer) {
+            if (vertex.col == ImGui::GetColorU32(Theme::Err()))
+                ++bounds.errorVertices;
+            // Include the antialiased fringe when recovering fill bounds; its alpha varies with tessellation.
+            constexpr ImU32 rgbMask = ~IM_COL32_A_MASK;
+            if ((vertex.col & rgbMask) == (ImGui::GetColorU32(Theme::Err()) & rgbMask) && vertex.uv.x == whitePixel.x &&
+                vertex.uv.y == whitePixel.y)
+                bounds.progressBottom = std::max(bounds.progressBottom, vertex.pos.y);
+            if ((vertex.col & rgbMask) == (ImGui::GetColorU32(Theme::Bg3()) & rgbMask)) {
+                bounds.buttonTop = std::min(bounds.buttonTop, vertex.pos.y);
+                bounds.buttonRight = std::max(bounds.buttonRight, vertex.pos.x);
+                bounds.buttonBottom = std::max(bounds.buttonBottom, vertex.pos.y);
+            }
+            if (vertex.col == ImGui::GetColorU32(Theme::Text()) && vertex.pos.y >= footerTop)
+                bounds.textRight = std::max(bounds.textRight, vertex.pos.x);
+        }
+        return bounds;
+    }
+}  // namespace
+
 TEST_CASE("Loading recovery actions keep padding and failures use error colors", "[unit][editor][gui][project-loading-layout]") {
     using namespace Horo::Editor;
     const auto locale = GENERATE("en-US", "tr-TR");
@@ -380,41 +414,20 @@ TEST_CASE("Loading recovery actions keep padding and failures use error colors",
     const auto &tokens = Theme::GetActiveTokens();
     const auto &metrics = DesignSystem::MetricsFor(tokens, DesignSystem::ComponentSize::Medium);
     const float inset = DesignSystem::SpacingFor(tokens, DesignSystem::SpacingSize::Large);
-    float buttonTop = FLT_MAX;
-    float progressBottom = -FLT_MAX;
-    const auto whitePixel = ImGui::GetDrawListSharedData()->TexUvWhitePixel;
-    float buttonRight = -FLT_MAX;
-    float buttonBottom = -FLT_MAX;
-    float textRight = -FLT_MAX;
-    int errorVertices{};
     const float footerTop = modal->Pos.y + modal->Size.y - inset - metrics.minimumHeight;
-    for (const auto &vertex : modal->DrawList->VtxBuffer) {
-        if (vertex.col == ImGui::GetColorU32(Theme::Err()))
-            ++errorVertices;
-        // Include the antialiased fringe when recovering fill bounds; its alpha varies with tessellation.
-        constexpr ImU32 rgbMask = ~IM_COL32_A_MASK;
-        if ((vertex.col & rgbMask) == (ImGui::GetColorU32(Theme::Err()) & rgbMask) && vertex.uv.x == whitePixel.x &&
-            vertex.uv.y == whitePixel.y)
-            progressBottom = std::max(progressBottom, vertex.pos.y);
-        if ((vertex.col & rgbMask) == (ImGui::GetColorU32(Theme::Bg3()) & rgbMask)) {
-            buttonTop = std::min(buttonTop, vertex.pos.y);
-            buttonRight = std::max(buttonRight, vertex.pos.x);
-            buttonBottom = std::max(buttonBottom, vertex.pos.y);
-        }
-        if (vertex.col == ImGui::GetColorU32(Theme::Text()) && vertex.pos.y >= footerTop)
-            textRight = std::max(textRight, vertex.pos.x);
-    }
+    const auto bounds = MeasureLoadingRecoveryBounds(*modal, footerTop);
     INFO(locale << ", scale=" << scale << ", width=" << viewportWidth);
-    CHECK(errorVertices > 12);  // Status text, percentage, and filled progress bar all carry error color.
-    CHECK(buttonTop - progressBottom == Catch::Approx(DesignSystem::SpacingFor(tokens, DesignSystem::SpacingSize::Medium)).margin(2.0F));
-    CHECK(buttonRight == Catch::Approx(modal->Pos.x + modal->Size.x - inset).margin(1.5F));
-    CHECK(buttonBottom == Catch::Approx(modal->Pos.y + modal->Size.y - inset).margin(1.5F));
-    CHECK(textRight > modal->Pos.x);
-    CHECK(buttonRight - textRight >= metrics.paddingX - 2.0F);
+    CHECK(bounds.errorVertices > 12);  // Status text, percentage, and filled progress bar all carry error color.
+    CHECK(bounds.buttonTop - bounds.progressBottom ==
+          Catch::Approx(DesignSystem::SpacingFor(tokens, DesignSystem::SpacingSize::Medium)).margin(2.0F));
+    CHECK(bounds.buttonRight == Catch::Approx(modal->Pos.x + modal->Size.x - inset).margin(1.5F));
+    CHECK(bounds.buttonBottom == Catch::Approx(modal->Pos.y + modal->Size.y - inset).margin(1.5F));
+    CHECK(bounds.textRight > modal->Pos.x);
+    CHECK(bounds.buttonRight - bounds.textRight >= metrics.paddingX - 2.0F);
     CHECK(modal->Pos.y + modal->Size.y <= 1000.0F);
-    ImGui::ActivateItemByID(modal->GetID(fixture.localization.Get("editor", "project_loading.action.retry").c_str()));
+    ImGui::ActivateItemByID(modal->GetID("###action.retry"));
     CHECK(draw() == ProjectLoadingViewCommand::Retry);
-    ImGui::ActivateItemByID(modal->GetID(fixture.localization.Get("editor", "project_loading.action.back").c_str()));
+    ImGui::ActivateItemByID(modal->GetID("###action.back"));
     CHECK(draw() == ProjectLoadingViewCommand::Back);
 }
 

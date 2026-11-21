@@ -175,6 +175,26 @@ namespace Horo::Audio::Backend {
             REQUIRE(std::holds_alternative<Closed>(Complete(*backend, Close{}).outcome));
         }
 
+        TEST_CASE("SDL3 audio retires attached priming without committing rendering", "[unit][audio][sdl3]") {
+            auto fixture = CreateOpenedBackend();
+            auto &backend = *fixture.backend;
+            const auto epoch = fixture.epoch;
+            Trace trace;
+            REQUIRE(std::holds_alternative<Started>(Complete(backend, Start{epoch, {&trace, Render}}).outcome));
+            const auto quiesce = Begin(backend, Quiesce{epoch});
+            REQUIRE(backend.AdvanceControl().HasValue());
+            CHECK(backend.CommitRendering(epoch).HasError());
+            REQUIRE(WaitForEvent(backend, ExpectedCallbackEvent::Quiesced));
+            REQUIRE(backend.AdvanceControl().HasValue());
+            const auto completion = backend.Poll(quiesce);
+            REQUIRE(completion.HasValue());
+            REQUIRE(completion.Value().has_value());
+            REQUIRE(std::get<Quiesced>(completion.Value()->outcome).epoch == epoch);
+            REQUIRE(backend.AcknowledgeCompletion(quiesce).HasValue());
+            REQUIRE(std::get<Stopped>(Complete(backend, Stop{epoch}).outcome).epoch == epoch);
+            REQUIRE(std::holds_alternative<Closed>(Complete(backend, Close{}).outcome));
+        }
+
         TEST_CASE("SDL3 audio rejects malformed construction and lifecycle requests", "[unit][audio][sdl3]") {
             REQUIRE(CreateSdl3AudioBackend({}).HasError());
             auto backend = std::move(CreateSdl3AudioBackend(Config())).Value();

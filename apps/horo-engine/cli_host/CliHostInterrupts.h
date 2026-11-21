@@ -11,6 +11,7 @@ namespace Horo::Application::Internal {
     /** @brief Owns one process signal lease and a tooling-only stop relay; never composed by feature code.
      * The stop controller outlives this scope. The invocation thread starts/destroys the scope; the owned
      * relay alone consumes lock-free pending flags and joins before native handlers are restored.
+     * POSIX broken-pipe writes report stream failure during this lease so command owners can drain normally.
      */
     class NativeCliInterrupts final {
     public:
@@ -32,8 +33,10 @@ namespace Horo::Application::Internal {
         bool interruptInstalled_{};
 #if !defined(_WIN32)
         bool terminateInstalled_{};
+        bool pipeInstalled_{};
         struct sigaction interrupt_{};
         struct sigaction terminate_{};
+        struct sigaction pipe_{};
 #endif
         std::jthread relay_;
     };

@@ -6,6 +6,15 @@
 namespace Horo::Physics::Detail {
     class CanonicalPhysicsStateResources;
 
+    /** @brief Semantic filter and surface facts installed in the actual solver owner. */
+    struct CanonicalReplaySimulation final {
+        Sha256Digest filters;
+        Sha256Digest surfaces;
+    };
+
+    /** @brief Reads the same installed collision facts used by the state snapshot compatibility contract. */
+    [[nodiscard]] Result<CanonicalReplaySimulation> ReadCanonicalReplaySimulation(CanonicalWorldHandle world);
+
     /** @brief Exact native shape/schema/surface lease payload metadata; no
      * caller-created replacement authority. */
     [[nodiscard]] std::size_t CanonicalPhysicsStateResourceBytes(

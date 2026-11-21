@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <ranges>
 #include <tuple>
 #include <utility>
 
@@ -81,7 +82,8 @@ namespace Horo::AI {
 
     /** @copydoc AIPerceptionMemory::Observe */
     Result<void> AIPerceptionMemory::Observe(const PerceptionObservation &observation, const std::uint64_t simulationTick) {
-        if (observation.key.sense == SenseTypeIds::Team || observation.key.stimulus == StimulusTypeIds::Team)
+        if (observation.key.sense == SenseTypeIds::Team || observation.key.stimulus == StimulusTypeIds::Team ||
+            observation.key.sense == SenseTypeIds::Hearing || observation.key.stimulus == StimulusTypeIds::Sound)
             return Result<void>::Failure(MakeError(AIErrors::PerceptionEventUnauthorized));
         return ObserveAdmitted(observation, simulationTick);
     }
@@ -168,19 +170,28 @@ namespace Horo::AI {
     Result<void> AIPerceptionMemory::ForgetSource(const PerceptionSourceRef source) {
         if (!source.IsValid() || source.sceneIncarnation != sceneIncarnation_)
             return Result<void>::Failure(MakeError(AIErrors::PerceptionMemoryInvalid));
-        for (std::size_t index = 0; index < count_;) {
-            if (entries_[index].key.source == source)
-                Erase(index);
-            else
-                ++index;
-        }
+        ForgetRetiredSources(std::span{&source, 1});
         return Result<void>::Success();
+    }
+
+    /** @copydoc AIPerceptionMemory::ForgetRetiredSources */
+    void AIPerceptionMemory::ForgetRetiredSources(const std::span<const PerceptionSourceRef> retired) noexcept {
+        if (retired.empty())
+            return;
+        const auto active = std::span{entries_}.first(count_);
+        const auto removed = std::ranges::remove_if(active, [retired](const PerceivedStimulus &stimulus) {
+            return std::ranges::binary_search(retired, stimulus.key.source) || std::ranges::binary_search(retired, stimulus.provenance);
+        });
+        count_ -= static_cast<std::size_t>(removed.size());
+        std::ranges::fill(removed, PerceivedStimulus{});
     }
 
     /** @brief Removes stale weak references before exposing decision-visible memory. */
     void AIPerceptionMemory::PruneDead(const PerceptionSourceLiveness liveness) {
         for (std::size_t index = 0; index < count_;) {
-            if (!liveness.isAlive(liveness.context, entries_[index].key.source))
+            const auto &entry = entries_[index];
+            if (!liveness.isAlive(liveness.context, entry.key.source) ||
+                (entry.provenance != entry.key.source && !liveness.isAlive(liveness.context, entry.provenance)))
                 Erase(index);
             else
                 ++index;
@@ -241,6 +252,21 @@ namespace Horo::AI {
     /** @copydoc AIPerceptionMemory::SceneIncarnation */
     std::uint64_t AIPerceptionMemory::SceneIncarnation() const noexcept {
         return sceneIncarnation_;
+    }
+
+    /** @copydoc AIPerceptionMemory::DecisionFactsChanged */
+    bool AIPerceptionMemory::DecisionFactsChanged(const AIPerceptionMemory &previous,
+                                                  const PerceptionListenerTypeId listener) const noexcept {
+        const auto selected = [listener](const PerceivedStimulus &stimulus) {
+            return stimulus.key.listener == listener;
+        };
+        auto current = std::span{entries_}.first(count_) | std::views::filter(selected);
+        auto before = std::span{previous.entries_}.first(previous.count_) | std::views::filter(selected);
+        return !std::ranges::equal(current, before, [](const PerceivedStimulus &left, const PerceivedStimulus &right) {
+            return left.key == right.key && left.provenance == right.provenance && left.lastKnownPosition == right.lastKnownPosition &&
+                   left.lastKnownVelocity == right.lastKnownVelocity && left.firstSensedTick == right.firstSensedTick &&
+                   left.isCurrentlySensed == right.isCurrentlySensed;
+        });
     }
 
     /** @copydoc AIPerceptionMemory::StoredCount */

@@ -72,6 +72,12 @@ namespace Horo::Editor {
             ImGui::SameLine();
             ToolbarButton(context, "workspace.ui_canvas.redo", UiCanvasRedo, document.canRedo, output);
             ToolbarButton(context, "workspace.ui_canvas.reload", UiCanvasReload, !document.dirty, output);
+            if (document.recovery) {
+                ToolbarButton(context, "workspace.ui_canvas.recover", UiCanvasRecover, !document.dirty, output);
+                ToolbarButton(context, "workspace.ui_canvas.discard_recovery", UiCanvasDiscardRecovery, true, output);
+                if (output.command == UiCanvasRecover || output.command == UiCanvasDiscardRecovery)
+                    output.uiCanvasRecovery = document.recovery;
+            }
             if (document.diagnostic)
                 Ui::ErrorText(Text(context, "workspace.ui_canvas.command_failed").c_str(), context.theme.fonts);
             std::array<char, 257> search{};
@@ -402,7 +408,8 @@ namespace Horo::Editor {
     }
 
     /** @copydoc UiCanvasDocumentView::DrawPreview */
-    void UiCanvasDocumentView::DrawPreview(const UiCanvasWorkspaceDocument &document, EditorWorkspaceViewCommandData &output) const {
+    Runtime::Ui::UiStylePropertyId UiCanvasDocumentView::DrawPreview(const UiCanvasWorkspaceDocument &document,
+                                                                     EditorWorkspaceViewCommandData &output) const {
         auto state = document.preview.state;
         const auto label = [&](const char *key) {
             return m_context.localization.Get("editor", key).c_str();
@@ -415,8 +422,26 @@ namespace Horo::Editor {
         }
         if (document.preview.diagnostic || !document.preview.layout) {
             Ui::ErrorText(label("workspace.ui_canvas.preview.unavailable"), m_context.theme.fonts);
+            if (const auto &problem = document.preview.problem) {
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, problem->code.Value().c_str(), Theme::Muted(), m_context.theme.fonts);
+                for (const auto &field : std::span{problem->correlation}.first(problem->correlationCount)) {
+                    const auto *element = std::get_if<Runtime::Ui::UiElementId>(&field.value);
+                    if (field.key != Runtime::Ui::UiDiagnosticCorrelationKey::Element || !element)
+                        continue;
+                    const auto target = document.preview.problemStyleProperty;
+                    const auto *action = target.IsValid() ? "workspace.ui_canvas.preview.inspect_problem_property"
+                                                          : "workspace.ui_canvas.preview.inspect_problem_element";
+                    if (Ui::Button({.label = Text(m_context, action).c_str(), .font = m_context.theme.fonts.sans})) {
+                        output.command = EditorWorkspaceViewCommand::UiCanvasSelect;
+                        output.uiCanvasElement = *element;
+                        m_gesture.reset();
+                        return target;
+                    }
+                    break;
+                }
+            }
             m_gesture.reset();
-            return;
+            return {};
         }
         Ui::WrappedText(ImGui::GetContentRegionAvail().x, label("workspace.ui_canvas.preview.hint"), Theme::Muted(), m_context.theme.fonts);
         // Wrapped controls may exhaust a narrow pane; retain a scrollable preview instead of removing its interaction surface.
@@ -426,7 +451,7 @@ namespace Horo::Editor {
         const auto viewportExtent = ImGui::GetWindowSize();
         if (!ImGui::BeginChild("canvas_preview", {0, height})) {
             ImGui::EndChild();
-            return;
+            return {};
         }
         const auto start = ImGui::GetCursorScreenPos();
         const auto available = ImGui::GetContentRegionAvail();
@@ -442,6 +467,7 @@ namespace Horo::Editor {
         HandlePress(document, viewportExtent, geometry.origin, geometry.scale, changed, output);
         FinishGesture(document, output);
         ImGui::EndChild();
+        return {};
     }
 
     /** @copydoc UiCanvasDocumentView::Draw */
@@ -456,7 +482,8 @@ namespace Horo::Editor {
         ImGui::PushID(static_cast<int>(document->identity.instance.Value()));
         DrawToolbar(m_context, *document, outCommand);
         DrawPalette(m_context, *document, outCommand);
-        DrawPreview(*document, outCommand);
+        const auto problemProperty = DrawPreview(*document, outCommand);
+        const auto problemElement = outCommand.uiCanvasElement;
         const float available = ImGui::GetContentRegionAvail().x;
         if (const float minimumColumn = ImGui::CalcTextSize(Text(m_context, "workspace.ui_inspector.title").c_str()).x +
                                         Theme::GetActiveTokens().spacing.propertyRowGap * 2;
@@ -476,8 +503,11 @@ namespace Horo::Editor {
             ImGui::EndChild();
         }
         ImGui::PopID();
+        if (problemProperty.IsValid() && outCommand.command == EditorWorkspaceViewCommand::UiCanvasSelect &&
+            outCommand.uiCanvasElement == problemElement)
+            m_inspector->QueueStyleProblemFocus(*document, problemElement, problemProperty);
         if (outCommand.command >= EditorWorkspaceViewCommand::UiCanvasSelect &&
-            outCommand.command <= EditorWorkspaceViewCommand::UiCanvasReload) {
+            outCommand.command <= EditorWorkspaceViewCommand::UiCanvasDiscardRecovery) {
             outCommand.documentInstance = document->identity.instance;
             outCommand.uiCanvasState = document->state;
         }

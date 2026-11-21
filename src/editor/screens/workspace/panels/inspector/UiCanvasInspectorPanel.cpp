@@ -6,7 +6,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdio>
 #include <limits>
+#include <utility>
 
 namespace Horo::Editor {
     namespace {
@@ -15,6 +17,15 @@ namespace Horo::Editor {
         /** @brief Resolve presentation text without inventing an authored property schema. */
         const char *Label(const EditorGuiContext &context, const char *key) {
             return UiCanvasInspectorPanel::kTextScope.Text(context.localization, key).c_str();
+        }
+
+        /** @brief Show a logical extent from the last accepted layout evaluation. */
+        void DrawEvaluatedExtent(const EditorGuiContext &context, const char *key, const UiLogicalExtent extent) {
+            std::array<char, 64> text{};
+            constexpr auto units = static_cast<double>(UiScalarUnitsPerDip);
+            std::snprintf(text.data(), text.size(), "%.2f × %.2f", extent.width / units, extent.height / units);
+            Ui::FieldLabel(Label(context, key), context.theme.fonts);
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, text.data(), Theme::Muted(), context.theme.fonts);
         }
 
         /** @brief Capture canonical UUID presentation only on source/input changes. */
@@ -93,6 +104,7 @@ namespace Horo::Editor {
 
     /** @copydoc UiCanvasInspectorPanel::Clear */
     void UiCanvasInspectorPanel::Clear() noexcept {
+        styleProblemFocus_.reset();
         if (!context_)
             return;
         sourceElement_ = {};
@@ -396,9 +408,17 @@ namespace Horo::Editor {
         return true;
     }
 
+    /** @copydoc UiCanvasInspectorPanel::QueueStyleProblemFocus */
+    void UiCanvasInspectorPanel::QueueStyleProblemFocus(const UiCanvasWorkspaceDocument &source, const Runtime::Ui::UiElementId element,
+                                                        const Runtime::Ui::UiStylePropertyId property) noexcept {
+        styleProblemFocus_ =
+            StyleProblemFocus{source.identity.instance, source.state, element, property, source.inspectorResourcePublication};
+    }
+
     /** @copydoc UiCanvasInspectorPanel::Draw */
     void UiCanvasInspectorPanel::Draw(const UiCanvasWorkspaceDocument &source, const EditorGuiContext &context,
                                       EditorWorkspaceViewCommandData &output) {
+        const auto focus = std::exchange(styleProblemFocus_, std::nullopt);
         if (DrawTheme(source, context, output))
             return;
         if (!source.selectedElement || source.selectionRevision == std::numeric_limits<std::uint64_t>::max()) {
@@ -421,8 +441,18 @@ namespace Horo::Editor {
         }
         if (!context_ || *context_ != current)
             Capture(source, current);
+        if (focus && !dirty_ && focus->document == current.document && focus->state == current.state && focus->element == current.element &&
+            focus->resourcePublication == current.resourcePublication && source.preview.problemStyleProperty == focus->property) {
+            const auto found = std::ranges::find(presentation_.inlineStyle, focus->property, &UiStyleAssignment::property);
+            if (found != presentation_.inlineStyle.end())
+                SelectProperty(static_cast<int>(found - presentation_.inlineStyle.begin()));
+        }
         const auto &id = current.element.Bytes();
         ImGui::PushID(reinterpret_cast<const char *>(id.data()), reinterpret_cast<const char *>(id.data() + id.size()));
+        if (const auto &layout = source.preview.selectedLayout; layout && layout->element == current.element) {
+            DrawEvaluatedExtent(context, "layout_measured_dip", layout->measurement.desired);
+            DrawEvaluatedExtent(context, "layout_content_dip", layout->bounds.extent);
+        }
         const bool changed = DrawFields(context, source.inspectorStyles.IsValid());
         if (changed) {
             dirty_ = true;

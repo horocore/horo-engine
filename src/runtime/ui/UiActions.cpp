@@ -201,6 +201,15 @@ namespace Horo::Runtime::Ui {
         }, command);
     }
 
+    /** @copydoc UiActionIdOf */
+    std::optional<UiActionId> UiActionIdOf(const UiActionCommand &command) noexcept {
+        return std::visit([](const auto &typed) noexcept -> std::optional<UiActionId> {
+            if constexpr (requires { typed.action; })
+                return typed.action;
+            return std::nullopt;
+        }, command);
+    }
+
     /** @copydoc UiActionOriginOf */
     UiActionOrigin UiActionOriginOf(const UiActionCommand &command) noexcept {
         switch (UiActionCommandKindOf(command)) {

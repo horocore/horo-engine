@@ -25,7 +25,12 @@ namespace Horo::AI {
 
     /** @copydoc AiTaskJobLease::Run */
     Result<void> AiTaskJobLease::Run(const AiTaskOperationContext &operation, const CancellationToken &cancellation) const {
-        return state_->work->Run(operation, cancellation);
+        if (operation.IsCancellationRequested() || cancellation.IsCancellationRequested())
+            return JobCancelled();
+        auto result = state_->work->Run(operation, cancellation);
+        if (operation.IsCancellationRequested() || cancellation.IsCancellationRequested())
+            return JobCancelled();
+        return result;
     }
 
     struct AiTaskJobService::Entry final {
@@ -33,6 +38,7 @@ namespace Horo::AI {
         AiTaskContinuation continuation;
         std::optional<AiTaskTerminalResult> pending;
         AiTaskCancellationReason cancellation{AiTaskCancellationReason::Requested};
+        bool discard{};
     };
 
     /** @copydoc AiTaskJobService::AiTaskJobService */
@@ -98,6 +104,10 @@ namespace Horo::AI {
                 const auto snapshot = entry.job.Snapshot();
                 if (!snapshot || !snapshot->terminalResult)
                     continue;
+                if (entry.discard) {
+                    entry = {};
+                    continue;
+                }
                 const auto &terminal = *snapshot->terminalResult;
                 if (terminal.state == JobState::Succeeded)
                     entry.pending.emplace(AiTaskTerminalResult{.state = AiTaskState::Succeeded});
@@ -121,6 +131,17 @@ namespace Horo::AI {
                 entry.cancellation = reason;
                 static_cast<void>(entry.job.RequestCancel());
             }
+        }
+    }
+
+    /** @copydoc AiTaskJobService::DiscardAgentWork */
+    void AiTaskJobService::DiscardAgentWork(const AgentHandle agent) noexcept {
+        for (auto &entry : entries_) {
+            if (entry.job.Id() == 0 || entry.continuation.Operation().agent != agent)
+                continue;
+            entry.discard = true;
+            entry.pending.reset();
+            static_cast<void>(entry.job.RequestCancel());
         }
     }
 

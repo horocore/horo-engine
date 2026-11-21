@@ -91,6 +91,30 @@ safe merely by reducing permissions.
 In non-interactive mode, new trust requirements fail unless a policy allowlist or
 previous user-local trust state exists.
 
+### Editor Gameplay Package Approval
+
+The ordinary desktop Editor accepts an explicit startup project, a separate
+publisher roots document in the existing signature-document format, and one or
+more exact gameplay module approvals.
+
+```text
+HoroEditor --project <absolute-project> --gameplay-package-publisher-trust <absolute-roots-json> --approve-gameplay-package <package> <extension> <module> <archive-sha256> <manifest-sha256> <descriptor-revision>
+```
+
+The publisher roots document must be outside the project and package cache.
+Repeat the approval option for additional modules. All approvals for one package
+must identify the same archive, manifest and extension. The archive publisher
+signature is reverified from the offline cache. The selected native role also
+requires its own signed `<artifact>.signature.json` sibling in the exact
+verified contribution inventory. The SDK build fingerprint comes from the host.
+
+Startup approval makes the role available for explicit activation from the
+existing Package dialog. Decision descriptors become visible only after that
+activation publishes and disappear when it is withdrawn. The configured package
+host is bound to the one startup project. A selected XR package host currently
+rejects the combined gameplay package request. The default desktop package
+host continues to require configured execution authority.
+
 ### Extension Activation Hand-Off
 
 For each enabled extension descriptor, `PackageLifecycleService` lends
@@ -143,6 +167,31 @@ must equal its capability activation generation. Duplicate realm identities,
 shared registry aliases and absent/wrong module realms fail closed. Hosts retain
 the realm through retirement; the application retains its normal owner-lane
 context and completion responsibilities.
+
+Platform provider packages use the same verified native handoff. Applications pass
+`PackageLifecycleConfiguration::platformProviderCommit` explicitly to publish the
+copied `platform.services.provider` claim into their Platform Services composition.
+Both `Activate` and `NativePackageModuleHost` forward this callback to the existing
+extension manager; an omitted callback rejects the provider before native load.
+PackageLifecycle checks the provider's copied permission requests against the exact
+package approval before invoking the application callback. A broader process policy
+cannot grant permissions absent from that package approval. PackageLifecycle
+acquires no Platform Services target dependency and never selects or initializes a
+provider. The application validates its additional provider policy and owns the
+publication registry, lifecycle host and owner-lane drain.
+
+This is an additive configuration field owned by the existing
+`HoroPackageLifecycle` public-header boundary. Existing applications keep their
+current behavior; provider applications set the callback before constructing the
+native role host. The callback's captured owners must outlive every package
+retirement. Exact product selection remains application-owned while a different
+contract version stages in the registry. A registry rejects a duplicate
+capability/version; the application must disable and drain before reusing that
+slot. Neither path permits silent fallback or premature unload.
+Mixed provider/importer contributions remain rejected under the current atomic
+provider-only ABI profile. A failed package attempt revokes its publication through
+the normal extension rollback owner, including cancellation and stale-install
+failures after native registration.
 
 `GameplayPackageModuleHost` is a dedicated application adapter target linking the
 PackageLifecycle and GameplayModuleHost contracts. PackageLifecycle does not depend

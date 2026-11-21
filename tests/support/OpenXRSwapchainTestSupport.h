@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <optional>
 
 #if defined(XR_USE_GRAPHICS_API_VULKAN)
 #include <vulkan/vulkan.h>
@@ -19,6 +20,7 @@ namespace Horo::Tests::OpenXR {
         static inline SwapchainScript *active{};
         std::vector<std::string_view> calls;
         std::string_view fail;
+        std::optional<std::int64_t> rejectCreateFormat;
         XrResult failure{XR_ERROR_RUNTIME_FAILURE};
         std::uint32_t formatCount{1};
         std::int64_t format{37};
@@ -28,6 +30,7 @@ namespace Horo::Tests::OpenXR {
         std::uint32_t releases{};
         std::uint32_t destroys{};
         bool timeout{};
+        XrSwapchain timeoutSwapchain{XR_NULL_HANDLE};
         XrSwapchainCreateInfo created{};
 
         SwapchainScript() {
@@ -52,6 +55,8 @@ namespace Horo::Tests::OpenXR {
 
         static XRAPI_ATTR XrResult XRAPI_CALL Create(XrSession, const XrSwapchainCreateInfo *info, XrSwapchain *swapchain) {
             const auto result = Record("create");
+            if (active->rejectCreateFormat == info->format)
+                return active->failure;
             if (XR_SUCCEEDED(result)) {
                 active->created = *info;
                 *swapchain = NativeHandle<XrSwapchain>(++active->creates);
@@ -66,16 +71,19 @@ namespace Horo::Tests::OpenXR {
             return result;
         }
 
-        static XRAPI_ATTR XrResult XRAPI_CALL Images(XrSwapchain, std::uint32_t capacity, std::uint32_t *count,
+        static XRAPI_ATTR XrResult XRAPI_CALL Images(XrSwapchain swapchain, std::uint32_t capacity, std::uint32_t *count,
                                                      XrSwapchainImageBaseHeader *images) {
             *count = active->imageCount;
 #if defined(XR_USE_GRAPHICS_API_VULKAN)
             if (capacity >= *count && images != nullptr) {
                 auto *typed = reinterpret_cast<XrSwapchainImageVulkanKHR *>(images);
+                // Each scripted swapchain owns a distinct bounded image range.
+                const auto base = 900 + reinterpret_cast<std::uintptr_t>(swapchain) * 64;
                 for (std::uint32_t index = 0; index < *count; ++index)
-                    typed[index].image = NativeHandle<VkImage>(900 + index);
+                    typed[index].image = NativeHandle<VkImage>(base + index);
             }
 #else
+            (void)swapchain;
             (void)capacity;
             (void)images;
 #endif
@@ -87,11 +95,11 @@ namespace Horo::Tests::OpenXR {
             return Record("acquire");
         }
 
-        static XRAPI_ATTR XrResult XRAPI_CALL Wait(XrSwapchain, const XrSwapchainImageWaitInfo *info) {
+        static XRAPI_ATTR XrResult XRAPI_CALL Wait(XrSwapchain swapchain, const XrSwapchainImageWaitInfo *info) {
             CHECK(info->timeout >= 0);
             CHECK(info->timeout <= 100'000'000);
             const auto result = Record("wait");
-            return XR_SUCCEEDED(result) && active->timeout ? XR_TIMEOUT_EXPIRED : result;
+            return XR_SUCCEEDED(result) && (active->timeout || active->timeoutSwapchain == swapchain) ? XR_TIMEOUT_EXPIRED : result;
         }
 
         static XRAPI_ATTR XrResult XRAPI_CALL Release(XrSwapchain, const XrSwapchainImageReleaseInfo *) {

@@ -193,6 +193,38 @@ namespace Horo::Runtime {
             return std::move(builder).Build();
         }
 
+        /** @brief Checks authored positions against this detached Scene's exact object and camera authority. */
+        Result<std::vector<SceneCellWorldAnchor>> BuildWorldAnchors(const SceneCellPayloadSource &source,
+                                                                    const CancellationToken &cancellation) {
+            using Output = Result<std::vector<SceneCellWorldAnchor>>;
+            if (source.worldAnchors.empty())
+                return Output::Success({});
+            std::vector<const RuntimeEntityDefinition *> objects;
+            objects.reserve(source.entities.size());
+            for (const auto &entity : source.entities)
+                objects.push_back(&entity);
+            const auto identity = [](const RuntimeEntityDefinition *entity) {
+                return entity->object;
+            };
+            std::ranges::sort(objects, {}, identity);
+            std::vector<SceneCellWorldAnchor> anchors{source.worldAnchors.begin(), source.worldAnchors.end()};
+            std::ranges::sort(anchors, {}, &SceneCellWorldAnchor::object);
+            SceneObjectId previous;
+            for (const auto &anchor : anchors) {
+                if (cancellation.IsCancellationRequested())
+                    return Output::Failure(MakeError(SceneCellPayloadErrors::Cancelled));
+                const auto entity = std::ranges::lower_bound(objects, anchor.object, {}, identity);
+                if (!anchor.object.IsValid() || anchor.object == previous || entity == objects.end() ||
+                    (*entity)->object != anchor.object ||
+                    (anchor.cameraTargetMillimeters &&
+                     (!(*entity)->components.camera || *anchor.cameraTargetMillimeters == anchor.positionMillimeters)))
+                    return Output::Failure(
+                        MakeError(SceneCellPayloadErrors::Invalid, "World anchors must uniquely match cooked entity and camera roles."));
+                previous = anchor.object;
+            }
+            return Output::Success(std::move(anchors));
+        }
+
         /** @brief Includes authoritative builder-projected dependencies in the complete retained charge and count ceiling. */
         Result<void> ChargeProjectedDependencies(StorageCharge &charge, const RuntimeSceneDefinition &definition,
                                                  const SceneCellPayloadSource &source, const SceneCellPayloadLimits limits) {
@@ -237,8 +269,10 @@ namespace Horo::Runtime {
 
     /** @copydoc RuntimeSceneCellPayload::RuntimeSceneCellPayload */
     RuntimeSceneCellPayload::RuntimeSceneCellPayload(SceneCellPayloadIdentity identity, RuntimeSceneDefinition definition,
-                                                     const std::size_t retainedBytes) noexcept
-        : identity_(std::move(identity)), definition_(std::move(definition)), retainedBytes_(retainedBytes) {}
+                                                     const std::size_t retainedBytes,
+                                                     std::vector<SceneCellWorldAnchor> worldAnchors) noexcept
+        : identity_(std::move(identity)), definition_(std::move(definition)), retainedBytes_(retainedBytes),
+          worldAnchors_(std::move(worldAnchors)) {}
 
     /** @copydoc RuntimeSceneCellPayload::Identity */
     const SceneCellPayloadIdentity &RuntimeSceneCellPayload::Identity() const noexcept {
@@ -255,6 +289,11 @@ namespace Horo::Runtime {
         return retainedBytes_;
     }
 
+    /** @copydoc RuntimeSceneCellPayload::WorldAnchors */
+    std::span<const SceneCellWorldAnchor> RuntimeSceneCellPayload::WorldAnchors() const noexcept {
+        return worldAnchors_;
+    }
+
     /** @copydoc CookRuntimeSceneCellPayload */
     Result<RuntimeSceneCellPayload> CookRuntimeSceneCellPayload(const WorldStreaming::WorldPartitionDescriptor &partition,
                                                                 const SceneCellPayloadSource &source,
@@ -264,6 +303,8 @@ namespace Horo::Runtime {
         if (const auto valid = ValidateSource(partition, source, expected, limits, cancellation); valid.HasError())
             return Result<RuntimeSceneCellPayload>::Failure(valid.ErrorValue());
         StorageCharge charge{limits.maximumRetainedBytes};
+        if (source.worldAnchors.size() > source.entities.size() || !charge.Add(source.worldAnchors.size(), sizeof(SceneCellWorldAnchor)))
+            return Result<RuntimeSceneCellPayload>::Failure(MakeError(SceneCellPayloadErrors::CapacityExceeded));
         if (const auto charged = ChargeSource(charge, source, cancellation); charged.HasError())
             return Result<RuntimeSceneCellPayload>::Failure(charged.ErrorValue());
         if (const auto charged = ChargeDependencies(charge, source.dependencies, cancellation); charged.HasError())
@@ -275,7 +316,11 @@ namespace Horo::Runtime {
             return Result<RuntimeSceneCellPayload>::Failure(projected.ErrorValue());
         if (cancellation.IsCancellationRequested())
             return Result<RuntimeSceneCellPayload>::Failure(MakeError(SceneCellPayloadErrors::Cancelled));
-        return Result<RuntimeSceneCellPayload>::Success(RuntimeSceneCellPayload{source.identity, std::move(built).Value(), charge.Bytes()});
+        auto anchors = BuildWorldAnchors(source, cancellation);
+        if (anchors.HasError())
+            return Result<RuntimeSceneCellPayload>::Failure(anchors.ErrorValue());
+        return Result<RuntimeSceneCellPayload>::Success(
+            RuntimeSceneCellPayload{source.identity, std::move(built).Value(), charge.Bytes(), std::move(anchors).Value()});
     }
 
     /** @copydoc QueueRuntimeSceneCellPayload */

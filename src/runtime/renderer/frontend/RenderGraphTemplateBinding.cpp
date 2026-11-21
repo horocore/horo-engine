@@ -75,12 +75,16 @@ namespace Horo::Render::Detail {
         }
         // PERF: capacity is the cold complete-use set; selection only shrinks/reuses that backing.
         execution.usages_.clear();
-        for (const auto &use : reads_.completeUses) {
-            const auto index = use.resource.value - 1;
-            if (reads_.roles[index] == -1 || reads_.selected[index])
-                execution.usages_.push_back(use);
+        for (std::size_t pass = 0; pass < execution.passes_.size(); ++pass) {
+            const auto complete = reads_.completePassUses[pass];
+            const auto offset = execution.usages_.size();
+            for (const auto &use : std::span{reads_.completeUses}.subspan(complete.offset, complete.count)) {
+                const auto index = use.resource.value - 1;
+                if (reads_.roles[index] == -1 || reads_.selected[index])
+                    execution.usages_.push_back(use);
+            }
+            execution.passes_[pass].usages = {offset, execution.usages_.size() - offset};
         }
-        execution.passes_.front().usages = {0, execution.usages_.size()};
         return Result<void>::Success();
     }
 

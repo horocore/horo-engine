@@ -7,6 +7,12 @@
 #include <thread>
 
 namespace Horo::XR::RuntimeInternal {
+    /** @brief Whether a validated fake fault can occur with the selected frame rendering intent. */
+    [[nodiscard]] constexpr bool SupportsXRFakeFrameFailure(const XRFakeFailure failure, const bool shouldRender) noexcept {
+        using enum Horo::XR::XRFakeFailure;
+        return shouldRender || failure < Locate || failure > Release;
+    }
+
     /** @brief Owns one fake and exact-candidate tracking publications, with no second session/frame authority.
      * Optional resource children are borrowed trusted composition and must outlive this owner. Prepare receives only
      * lifecycle-issued candidates. Each child must clean its failed preparation before returning/throwing, like the

@@ -2,6 +2,7 @@
 
 #include "Horo/Cli/CliErrors.h"
 #include "Horo/Foundation/String.h"
+#include "Horo/Foundation/Utf8.h"
 
 #include <algorithm>
 #include <cmath>
@@ -157,15 +158,22 @@ namespace Horo::Cli {
         }
 
         [[nodiscard]] Result<std::optional<std::chrono::steady_clock::time_point>> ResolveDeadline(
-            const CliTimeoutPolicy &policy, const std::uint64_t requestedMilliseconds) {
+            const CliTimeoutPolicy &policy, const std::uint64_t requestedMilliseconds,
+            const std::optional<std::chrono::steady_clock::time_point> hostDeadline) {
             if (requestedMilliseconds != 0 && (policy.maximumMilliseconds == 0 || requestedMilliseconds > policy.maximumMilliseconds))
                 return Result<std::optional<std::chrono::steady_clock::time_point>>::Failure(MakeError(CliErrors::ExecutionContextInvalid));
 
             const std::uint64_t timeout = requestedMilliseconds == 0 ? policy.defaultMilliseconds : requestedMilliseconds;
             if (timeout == 0)
-                return Result<std::optional<std::chrono::steady_clock::time_point>>::Success(std::nullopt);
-            return Result<std::optional<std::chrono::steady_clock::time_point>>::Success(std::chrono::steady_clock::now() +
-                                                                                         std::chrono::milliseconds(timeout));
+                return Result<std::optional<std::chrono::steady_clock::time_point>>::Success(hostDeadline);
+            const auto now = std::chrono::steady_clock::now();
+            const auto available =
+                std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::time_point::max() - now);
+            if (timeout > static_cast<std::uint64_t>(available.count()))
+                return Result<std::optional<std::chrono::steady_clock::time_point>>::Failure(MakeError(CliErrors::ExecutionContextInvalid));
+            const auto requestedDeadline = now + std::chrono::milliseconds(timeout);
+            return Result<std::optional<std::chrono::steady_clock::time_point>>::Success(
+                hostDeadline ? std::min(*hostDeadline, requestedDeadline) : requestedDeadline);
         }
 
         [[nodiscard]] Result<const CliCommandDescriptor *> ValidateRegistration(const CliCommandAdapterRegistration &registration,
@@ -302,6 +310,33 @@ namespace Horo::Cli {
         return Result<void>::Success();
     }
 
+    /** @copydoc CliSafeAssetSource::IsValid */
+    bool CliSafeAssetSource::IsValid() const noexcept {
+        if (assetId.size() != 36)
+            return false;
+        bool nonzero{};
+        for (std::size_t position = 0; position < assetId.size(); ++position) {
+            const char character = assetId[position];
+            const bool separator = position == 8 || position == 13 || position == 18 || position == 23;
+            if (separator ? character != '-' : !((character >= '0' && character <= '9') || (character >= 'a' && character <= 'f')))
+                return false;
+            nonzero |= !separator && character != '0';
+        }
+        const auto &path = projectPath.String();
+        return nonzero && !path.empty() && path.size() <= 4096 && IsValidUtf8ScalarSequence(path) &&
+               std::ranges::none_of(path, [](const unsigned char character) {
+            return character < 32 || character == 127 || character == ':';
+        });
+    }
+
+    /** @copydoc CliExecutionContext::BindAssetSource */
+    Result<void> CliExecutionContext::BindAssetSource(CliSafeAssetSource source) {
+        if (!correlation_.operation || correlation_.assetSource || !source.IsValid())
+            return Result<void>::Failure(MakeError(CliErrors::ExecutionContextInvalid));
+        correlation_.assetSource = std::move(source);
+        return Result<void>::Success();
+    }
+
     /** @copydoc CliExecutionContext::BindJob */
     Result<void> CliExecutionContext::BindJob(const CliJobId job) {
         if (!job.IsValid() || (correlation_.job.has_value() && correlation_.job != job)) {
@@ -391,7 +426,8 @@ namespace Horo::Cli {
                                                             : CliErrors::ExecutionCancelled));
 
         Result<std::optional<std::chrono::steady_clock::time_point>> admittedDeadline =
-            ResolveDeadline(descriptor->timeout, invocation.timeoutMilliseconds);
+            ResolveDeadline(descriptor->timeout, invocation.timeoutMilliseconds,
+                            invocation.stopControl == nullptr ? std::nullopt : invocation.stopControl->Deadline());
         if (admittedDeadline.HasError())
             return CliTerminalResult::Failure(std::move(initial), admittedDeadline.ErrorValue());
         const std::optional<std::chrono::steady_clock::time_point> deadline = std::move(admittedDeadline).Value();

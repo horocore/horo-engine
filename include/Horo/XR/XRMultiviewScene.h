@@ -32,6 +32,29 @@ namespace Horo::XR {
         Render::MultiviewExtractionLimits limits;
     };
 
+    /** @brief A centered XY quad expressed in the same world basis as the selected stereo scene. */
+    struct XRWorldCanvasDescriptor final {
+        Math::Mat4 worldFromCanvas; /**< Local top left is (-0.5,+0.5,0); local bottom right is (+0.5,-0.5,0). */
+        float minimumSpanPixels{};  /**< Explicit minimum projected span that both eyes must meet. */
+    };
+
+    /** @brief One eye's projected canvas and exact color render rectangle. No native image authority is retained. */
+    struct XRWorldCanvasView final {
+        XRViewId view;
+        Math::Mat4 canvasToClip;
+        XRRenderRectangle renderRectangle;
+        std::uint32_t arrayLayer{};
+        float projectedSpanPixels{};
+    };
+
+    /** @brief One fixed-capacity stereo projection decision sharing the world plane with interaction. */
+    struct XRWorldCanvasProjection final {
+        Render::MultiviewPublication publication; /**< Exact scene, frame, origin, view and render owner fences. */
+        Math::Mat4 worldFromCanvas;
+        std::array<XRWorldCanvasView, 2> views;
+        bool drawable{}; /**< Both eyes must intersect the quad and meet the readability threshold. */
+    };
+
     /** @brief Immutable XR identity/target evidence retained alongside one canonical render presentation.
      * @details Readable after source teardown. Liveness-sensitive consumers must Validate against the actual XR/frame
      * owner before importing targets or submitting. Scene data and poses are presentation copies, never simulation authority.
@@ -52,6 +75,15 @@ namespace Horo::XR {
         /** @brief Revalidates the exact session/configuration/origin/acquired-image and renderer publication fences.
          * @param active Current owner facts; invalid after shutdown. @return Success or original typed stale/unavailable failure. */
         [[nodiscard]] Result<void> Validate(const XRMultiviewOwnerState &active) const;
+        /** @brief Projects one shared World canvas through the exact live stereo view and color-target tuple.
+         * @param canvas Centered scene-space geometry shared by rendering and interaction, and a positive pixel readability floor.
+         * @param active Current XR and renderer owner facts.
+         * @return Complete per-eye values, including an explicit non-drawable result, or the original typed admission failure.
+         * @details Near/far-plane crossings and unreadable or offscreen placements suppress both eyes. Scene depth occlusion
+         * remains the consuming renderer's responsibility. This method issues no native or interaction authority.
+         * @post Successful projection is allocation-free with bounded work for two eyes. */
+        [[nodiscard]] Result<XRWorldCanvasProjection> ProjectWorldCanvas(const XRWorldCanvasDescriptor &canvas,
+                                                                         const XRMultiviewOwnerState &active) const;
         /** @brief Extracts ready presentation instances using this already converted immutable view set.
          * @param instances Canonical scene presentation with ready exact frame material generations.
          * @param active Current owner fences. @param policy Explicit optimization/fallback policy.

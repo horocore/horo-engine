@@ -91,6 +91,12 @@ namespace Horo::Render::Detail {
          */
         [[nodiscard]] Result<void> Submit(VulkanCommandTicket ticket, const RenderQueueSubmission &submission,
                                           VkSemaphore presentationSignal = VK_NULL_HANDLE);
+        /** @brief Reads the exact accepted timeline ledger without polling native completion.
+         * @param signal Frontend-issued point to check immediately after a submit/present attempt.
+         * @param deviceIncarnation Expected selected device.
+         * @return True for native queue acceptance, false for an unissued point on this queue, or typed identity/owner failure.
+         */
+        [[nodiscard]] Result<bool> WasSubmissionAccepted(RenderTimelinePoint signal, std::uint64_t deviceIncarnation) const;
         /** @brief Nonblocking completion drain; releases only proven-complete command and resident references. */
         [[nodiscard]] Result<void> Poll();
         /** @brief Observes exact admitted completion; only declared finite purposes may block. */

@@ -2,6 +2,7 @@
 #include "Horo/Gameplay/GameModule.h"
 #include "Horo/Gameplay/GameServiceRegistry.h"
 #include "Horo/Gameplay/NativeDecisionNode.h"
+#include "Horo/Gameplay/NativePerceptionSense.h"
 
 #include <memory>
 
@@ -101,6 +102,37 @@ namespace {
     };
 }  // namespace
 HORO_AI_NODE(PackageDecisionNode, "201")
+
+namespace {
+    /** @brief Native custom sense carrying actual package provenance from the verified package role. */
+    class PackagePerceptionSense final : public Horo::AI::IPerceptionSenseProvider {
+    public:
+        static Horo::AI::PerceptionSenseContract DescribePerceptionSense() {
+            using namespace Horo::AI;
+            PerceptionSenseContract contract;
+            contract.sense.origin = {PerceptionDescriptorSourceKind::Package, PerceptionProviderId::Create(701).Value(), 1};
+            contract.sense.displayName = "package spatial sense";
+            contract.sense.requiredCapabilities = PerceptionCapabilitySet::Of(PerceptionCapability::SpatialCandidateQuery);
+            contract.stimulus = {StimulusTypeId::Create(702).Value(), contract.sense.origin, "package spatial observation", 1, {}};
+            contract.workUnits = 4;
+            contract.maximumCandidates = 2;
+            return contract;
+        }
+
+        /** @copydoc Horo::AI::IPerceptionSenseProvider::Evaluate */
+        Horo::Result<std::size_t> Evaluate(const Horo::AI::PerceptionSenseInput &input,
+                                           const std::span<Horo::AI::PerceptionSenseSample> output,
+                                           Horo::AI::AiWorkBudget &budget) override {
+            for (std::size_t index = 0; index < input.candidates.size(); ++index) {
+                if (!budget.Consume())
+                    return Horo::Result<std::size_t>::Failure(Horo::MakeError(Horo::AI::AIErrors::SchedulerBudgetExhausted));
+                output[index] = {static_cast<std::uint32_t>(index), true};
+            }
+            return Horo::Result<std::size_t>::Success(input.candidates.size());
+        }
+    };
+}  // namespace
+HORO_AI_SENSE(PackagePerceptionSense, "202")
 
 /** @brief Constructs the real package fixture module through the supported native SDK boundary. */
 extern "C" HORO_GAME_EXPORT Horo::Gameplay::IGameModule *CreateGameModule() noexcept {

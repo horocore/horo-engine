@@ -36,7 +36,7 @@ namespace Horo::Network {
         NetworkWorldBindingController &operator=(const NetworkWorldBindingController &) = delete;
 
         /** @brief Stage the selected local server occurrence before any role publication. */
-        [[nodiscard]] Result<void> Prepare();
+        [[nodiscard]] Result<void> Prepare(const NetworkAuthoredSceneProjection &authored = {}, NetworkAuthoredSceneProjection client = {});
         /** @brief Install the exact weak admitted handler before native listeners; caller detaches before transport destruction. */
         [[nodiscard]] Result<void> Attach(INetworkTransport &transport, InboundMessageDispatcher &dispatcher,
                                           const std::shared_ptr<NetworkWorldBindingController> &owner);
@@ -51,6 +51,26 @@ namespace Horo::Network {
         [[nodiscard]] Result<void> Handle(const MessageEnvelope &message) override;
         /** @brief Validate exact authenticated direction/principal/feature/schema before staging public metadata. */
         [[nodiscard]] Result<void> HandleAdmitted(const InboundMessageContext &context, const MessageEnvelope &message) override;
+        /** @brief Reports whether the immutable setup selected the protected Prefab route. */
+        [[nodiscard]] bool HasPrefabLifecycle() const noexcept;
+        /** @brief Reports whether the exact client Scene must provide an authored projection. */
+        [[nodiscard]] bool HasAuthoredScene() const noexcept;
+        /** @brief Delegates the client Scene safe-point transfer to its exact published world. */
+        [[nodiscard]] Result<std::vector<NetworkPrefabLifecycleRecord>> TakePrefab(Runtime::SceneRuntimeId scene,
+                                                                                   Runtime::RuntimePhase phase);
+        /** @brief Resolves prepared replica bindings only against the currently admitted client. */
+        [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareClientPrefab(
+            Runtime::SceneRuntimeId scene, const NetworkPrefabLifecycleRecord &spawn, std::span<const Runtime::EntityRef> members,
+            bool creating, const CancellationToken &cancellation) const;
+        /** @brief Reverse-resolves an entity in the current authority world. */
+        [[nodiscard]] Result<NetworkObjectId> FindAuthorityObject(Runtime::EntityRef entity) const;
+        /** @brief Resolves a mapped object in the exact client Scene. */
+        [[nodiscard]] Result<Runtime::EntityRef> ResolveClientObject(Runtime::SceneRuntimeId scene, NetworkSessionGeneration session,
+                                                                     NetworkObjectId object) const;
+        /** @brief Reads the initial owner of a live client object with no current ownership authority grant. */
+        [[nodiscard]] Result<ReplicationInitialOwnership> InitialClientOwnership(Runtime::SceneRuntimeId scene,
+                                                                                 NetworkSessionGeneration session,
+                                                                                 NetworkObjectId object) const;
         /** @brief Authorize non-Control dispatch against the same live peer and published local world. */
         [[nodiscard]] Result<void> AdmitWorldDispatch(ConnectionHandle connection, NetworkOperationGeneration generation,
                                                       const PeerSessionLifecycle &peer, std::uint64_t nowTick) const;
@@ -68,7 +88,9 @@ namespace Horo::Network {
         /** @brief Flush bounded control debt only in NetworkFlush, retaining sequence on backpressure. */
         [[nodiscard]] Result<void> Flush(std::uint64_t nowTick);
         /** @brief Prepare host-selected local travel candidates; never read a local Scene/path from a packet. */
-        [[nodiscard]] Result<void> PrepareTravel(std::span<const NetworkModeWorld> worlds);
+        [[nodiscard]] Result<void> PrepareTravel(std::span<const NetworkModeWorld> worlds,
+                                                 const NetworkAuthoredSceneProjection &authored = {},
+                                                 NetworkAuthoredSceneProjection client = {});
         /** @brief Whether one finite local travel candidate still exists; false after expiry/cancel/teardown. */
         [[nodiscard]] bool TravelPending() const noexcept;
         /** @brief Query pending status or its original canonical retirement reason. */
@@ -76,7 +98,8 @@ namespace Horo::Network {
         /** @brief Whether every local detached candidate and required commit outbox reservation is ready. */
         [[nodiscard]] bool TravelReady() const noexcept;
         /** @brief Commit only at the actual canonical safe point after all dependent service preparation. */
-        [[nodiscard]] Result<void> Commit(Runtime::RuntimePhase phase);
+        [[nodiscard]] Result<void> Commit(Runtime::RuntimePhase phase, std::uint64_t localSimulationTick = 1,
+                                          const CancellationToken &cancellation = {});
         /** @brief Discard only detached travel candidates, retaining old published worlds. */
         [[nodiscard]] Result<void> CancelTravel();
         /** @brief Query canonical readiness without allocating an expected-unready frame error. */
@@ -86,6 +109,10 @@ namespace Horo::Network {
         /** @brief Acquire actual phase/tick role permission from the same canonical lifecycle. */
         [[nodiscard]] Result<ReplicationWorldReadLease> Acquire(NetworkModeWorldKind kind, const ReplicationWorldWorkRequest &request,
                                                                 ReplicationWorldCapability capability) const;
+        /** @brief Routes a generation-scoped host Scene mutation into the canonical authority lifecycle. */
+        [[nodiscard]] Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareAuthorityObjects(
+            Runtime::SceneRuntimeId scene, std::span<const ReplicationDynamicSceneObject> added,
+            std::span<const Runtime::EntityRef> retired, const CancellationToken &cancellation) const;
         /** @brief Revoke worlds/handler/outboxes idempotently before dependent owner teardown. */
         void Shutdown() noexcept;
 

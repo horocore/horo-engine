@@ -5,6 +5,9 @@
  * @brief Non-installed app-injected ownership boundary for isolated Editor Play Scene services.
  */
 #include "EditorPlaySaveSession.h"
+#include "Horo/AI/AIIdentity.h"
+#include "Horo/AI/DecisionIdentity.h"
+#include "Horo/Foundation/Sha256.h"
 #include "Horo/Gameplay/BehaviorRuntimeRestore.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
@@ -18,15 +21,24 @@ namespace Horo::Gameplay {
     class ComponentRegistry;
 }
 
+namespace Horo::AI {
+    struct AiAgentInspectionSnapshot;
+    class DecisionStepTrace;
+    class DecisionNodeGeneration;
+    class PerceptionSenseGeneration;
+}  // namespace Horo::AI
+
 namespace Horo::Runtime {
     class SceneAnimationRuntime;
-}
+    class PrimitiveMeshCache;
+}  // namespace Horo::Runtime
 
 namespace Horo::Editor {
     /** @brief Host-reserved namespace divider; edit preview admission stays strictly below this value. */
     inline constexpr std::uint64_t EditorPlaySceneNamespace = 0x8000000000000000ULL;
     /** @brief First Play identity; the divider itself is never issued. */
     inline constexpr Runtime::SceneRuntimeId EditorFirstPlayScene{EditorPlaySceneNamespace + 1};
+    inline constexpr std::uint64_t EditorPlayAgentInspectionTickSpacing = 4;
 
     /** @brief Actual application-owned peer lifecycle, independent of editor draft/publication policy. */
     enum class EditorScenePhysicsState : std::uint8_t {
@@ -59,6 +71,85 @@ namespace Horo::Editor {
      */
     class IEditorPlayXrHost;
 
+    /** @brief Exact authored root to resolve against the immutable installed Scene inventory. */
+    struct EditorPlayChildSceneSource final {
+        std::filesystem::path projectRelativeSource;
+        Sha256Digest sourceDigest;
+    };
+
+    /** @brief Runtime stage reported by an exact completed Decision tick. */
+    enum class EditorPlayDecisionPhase : std::uint8_t {
+        Evaluate,
+        Commit,
+        TaskProvider
+    };
+
+    /** @brief Detached runtime Problem from the selected Play scene. */
+    struct EditorPlayDecisionProblem final {
+        Runtime::SceneRuntimeId scene;
+        std::uint64_t tick{};
+        AI::AgentId agent;
+        EditorPlayDecisionPhase phase{};
+        Error error;
+        std::optional<Runtime::EntityRef> entity; /**< Available only when the runtime verified the original entity generation. */
+        AI::DecisionGraphAssetId graph;           /**< Cooked graph identity when the failing callback reported a source. */
+        AI::DecisionNodeId node;                  /**< Cooked source node within graph, when available. */
+    };
+
+    /** @brief Copied Navigation registration for the exact selected Play entity. */
+    struct EditorPlayAgentNavigation final {
+        std::uint64_t profile{};
+        std::uint64_t filter{};
+        bool enabled{};
+    };
+
+    /** @brief Play-committed identity and immutable copied inspection data. */
+    struct EditorPlayAgentInspection final {
+        Runtime::EntityRef owner;
+        AI::AgentHandle agent;
+        std::uint64_t tick{};
+        std::shared_ptr<const AI::AiAgentInspectionSnapshot> snapshot;
+        std::optional<EditorPlayAgentNavigation> navigation;
+        std::shared_ptr<const AI::DecisionStepTrace> decisionTrace;
+    };
+
+    /** @brief A node in one exact cooked graph occurrence. */
+    struct EditorPlayDecisionBreakpoint final {
+        AI::DecisionGraphAssetId graph;
+        AI::DecisionNodeId node;
+        std::uint32_t occurrence{};
+        bool operator==(const EditorPlayDecisionBreakpoint &) const = default;
+    };
+
+    /** @brief Owner-lane commands scoped to the current Editor Play inspection view. */
+    enum class EditorPlayDecisionDebugAction : std::uint8_t {
+        Pause,
+        Step,
+        Resume,
+        SetBreakpoint,
+        ClearBreakpoint
+    };
+
+    struct EditorPlayDecisionDebugCommand final {
+        AI::AgentHandle agent;
+        EditorPlayDecisionDebugAction action{};
+        std::optional<EditorPlayDecisionBreakpoint> breakpoint;
+    };
+
+    struct EditorPlayDecisionDebugState final {
+        AI::AgentHandle agent;
+        bool paused{};
+        bool stepPending{};
+        std::optional<EditorPlayDecisionBreakpoint> breakpoint;
+        std::shared_ptr<const AI::DecisionStepTrace> trace;
+    };
+
+    /** @brief Independent synchronous acquisitions from the current Project's existing provider owner. */
+    struct EditorPlayDecisionProviderSource final {
+        std::function<Result<std::shared_ptr<const AI::DecisionNodeGeneration>>()> decision;
+        std::function<Result<std::shared_ptr<const AI::PerceptionSenseGeneration>>()> perception;
+    };
+
     class EditorPlaySceneHost {
     public:
         /** @brief Identifies the actual selected XR participant in this factory composition.
@@ -70,10 +161,86 @@ namespace Horo::Editor {
         }
 
         virtual ~EditorPlaySceneHost() = default;
+
+        /** @brief Whether the actual Play host owns a separate canonical viewport publication. */
+        [[nodiscard]] virtual bool UsesMountedViewport() const noexcept {
+            return false;
+        }
+
+        /** @brief Borrows the actual workspace mesh cache through Play preparation.
+         * @param cache The same owner that issues ordinary viewport mesh identities, outliving the Play host.
+         */
+        virtual void BindViewportPrimitiveCache(Runtime::PrimitiveMeshCache *) noexcept {}
+
         /** @brief Borrows the actual single Scene service for preparation, behavior transactions and read-only presentation.
          * @return Service owned by this host until shutdown/destruction.
          */
         [[nodiscard]] virtual Runtime::RuntimeSceneService &Scenes() noexcept = 0;
+
+        /** @brief Copies one current Decision problem on the Play owner lane.
+         * @return Last completed failure or absence for unconfigured/healthy hosts. No runtime ownership escapes.
+         */
+        [[nodiscard]] virtual std::optional<EditorPlayDecisionProblem> ReadDecisionProblem() const {
+            return std::nullopt;
+        }
+
+        /** @brief Last fully committed Decision tick available for inspection, or zero before readiness. */
+        [[nodiscard]] virtual std::uint64_t AgentInspectionTick() const noexcept {
+            return 0;
+        }
+
+        /** @brief Copies the exact selected live agent at the host's current committed tick. */
+        [[nodiscard]] virtual std::optional<EditorPlayAgentInspection> ReadAgentInspection(Runtime::EntityRef) const {
+            return std::nullopt;
+        }
+
+        /** @brief Selects the entity generation eligible for read-only trace sampling. */
+        virtual void SelectDecisionTraceOwner(std::optional<Runtime::EntityRef>) noexcept {}
+
+        /** @brief Admits a visible inspection lease and releases its control on closure or target change. */
+        virtual void SetDecisionDebugView(std::optional<AI::AgentHandle>) {}
+
+        /** @brief Applies a typed command to the approved view's exact live agent. */
+        virtual bool ApplyDecisionDebugCommand(const EditorPlayDecisionDebugCommand &) {
+            return false;
+        }
+
+        /** @brief Returns the visible lease's current control state when session policy grants it. */
+        [[nodiscard]] virtual std::optional<EditorPlayDecisionDebugState> ReadDecisionDebugState() const noexcept {
+            return std::nullopt;
+        }
+
+        /** @brief Reports an explicit host-selected committed Decision configuration awaiting the project provider lease. */
+        [[nodiscard]] virtual bool RequiresDecisionProviders() const noexcept {
+            return false;
+        }
+
+        /** @brief Whether this host owns a cooked provider lease that cannot be replaced mid-Play. */
+        [[nodiscard]] virtual bool UsesCookedDecisionExecution() const noexcept {
+            return false;
+        }
+
+        /** @brief Admits exactly the selected cooked controllers before Scene startup, with the current provider lease. */
+        [[nodiscard]] virtual Result<void> ConfigureDecisionProviders(const Runtime::RuntimeSceneDefinition &,
+                                                                      const EditorPlayDecisionProviderSource &, const CancellationToken &) {
+            return Result<void>::Failure(MakeError(Runtime::SaveErrors::CompositionUnsupported));
+        }
+
+        /** @brief Executes bounded Decision phases before Gameplay on the authenticated fixed owner lane.
+         * @return True when Decision state advanced. Aborting this fixed attempt then retires the Play owner.
+         */
+        [[nodiscard]] virtual Result<bool> EvaluateDecisionBeforeGameplay(const Runtime::FixedStepContext &) {
+            return Result<bool>::Success(false);
+        }
+
+        /** @brief Queues the initial Scene using an explicitly selected installed child-aware host when required.
+         * @param definition Existing immutable authored parent conversion. @param source Exact source evidence for child-bearing roots.
+         * @param cancellation Actual Play preparation lifetime.
+         * @return Typed initial admission result. Hosts without an installed child catalog reject that scope.
+         */
+        [[nodiscard]] virtual Result<void> QueueInitialScene(const Runtime::RuntimeSceneDefinition &definition,
+                                                             const EditorPlayChildSceneSource *source,
+                                                             const CancellationToken &cancellation);
 
         /** @brief Borrows the actual composed Animation owner on its owner lane; never register a second evaluation path.
          * @return Null when unselected; the Scene host retains lifecycle ownership through shutdown/retirement. */
@@ -96,9 +263,10 @@ namespace Horo::Editor {
         }
 
         /** @brief Resolves explicitly granted gameplay services after aggregate readiness.
+         * @param registry The exact frozen behavior registry selected for this Play generation.
          * @return Captured typed services or a failure before behavior creation; default withholds all optional capabilities.
          */
-        [[nodiscard]] virtual Result<Gameplay::BehaviorRuntimeServiceBindings> GameplayServices() {
+        [[nodiscard]] virtual Result<Gameplay::BehaviorRuntimeServiceBindings> GameplayServices(const Gameplay::BehaviorRegistry &) {
             return Result<Gameplay::BehaviorRuntimeServiceBindings>::Success({});
         }
 
@@ -160,6 +328,11 @@ namespace Horo::Editor {
         /** @brief Actual host fixed callback after gameplay; legacy native owners retain their existing numeric stepping.
          * @details An Animation-bearing application composition overrides this boundary to stage its real adapter before Physics.
          * The legacy default introduces no animation or transactional native-state claim. */
+        /** @brief Stages application-owned commands before native fixed-tick collection. */
+        [[nodiscard]] virtual Result<void> BeforeNativeFixedUpdate(const Runtime::FixedStepContext &) {
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] virtual Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context) {
             return FixedUpdate(Gameplay::FixedDeltaTime{static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0});
         }

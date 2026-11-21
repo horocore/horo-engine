@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <limits>
+#include <numeric>
 #include <utility>
 
 namespace Horo::WorldStreaming {
@@ -24,7 +25,8 @@ namespace Horo::WorldStreaming {
         entries_.reserve(request.maximumEntries);
         candidates_.reserve(request.maximumEntries);
         ranked_.resize(request.maximumEntries);
-        eligible_.resize(request.maximumEntries);
+        eligibility_.resize(request.maximumEntries);
+        admissionIndex_.resize(request.maximumEntries);
     }
 
     /** @copydoc StreamingFairQueue::Create */
@@ -139,22 +141,42 @@ namespace Horo::WorldStreaming {
         return Result<void>::Success();
     }
 
-    Result<void> StreamingFairQueue::ValidateAdmission(const std::span<const StreamingFairQueueAdmission> admission) const {
+    Result<void> StreamingFairQueue::ProjectAdmission(const std::span<const StreamingFairQueueAdmission> admission) {
         if (admission.size() > request_.maximumEntries)
             return Failure<void>(FairQueueCapacityExceeded);
         if (admission.size() != entries_.size())
             return Failure<void>(FairQueueInvalid);
+
+        // Track seen entries independently of their eligibility; deferred rows are also unique.
+        std::ranges::fill(std::span{eligibility_}.first(entries_.size()), std::nullopt);
+        std::span<std::size_t> sorted;
+        const auto operationId = [this](const std::size_t index) {
+            return entries_[index].operation.operation;
+        };
         for (std::size_t index = 0; index < admission.size(); ++index) {
             const auto &row = admission[index];
             if (!row.operation.IsValid())
                 return Failure<void>(FairQueueInvalid);
             if (row.eligibility != StreamingFairQueueEligibility::Admissible && row.eligibility != StreamingFairQueueEligibility::Deferred)
                 return Failure<void>(FairQueueUnsupported);
-            if (Find(row.operation) == entries_.size())
-                return Failure<void>(FairQueueStale);
-            for (std::size_t prior = 0; prior < index; ++prior)
-                if (admission[prior].operation == row.operation)
-                    return Failure<void>(FairQueueIdentityConflict);
+
+            auto entryIndex = index;
+            if (entries_[index].operation != row.operation) {
+                // Canonical snapshots need no index. Permuted rows use scratch storage without changing arrival order.
+                if (sorted.empty()) {
+                    sorted = std::span{admissionIndex_}.first(entries_.size());
+                    std::iota(sorted.begin(), sorted.end(), std::size_t{0});
+                    std::ranges::sort(sorted, std::ranges::less{}, operationId);
+                }
+                const auto match = std::ranges::lower_bound(sorted, row.operation.operation, std::ranges::less{}, operationId);
+                if (match == sorted.end() || entries_[*match].operation != row.operation)
+                    return Failure<void>(FairQueueStale);
+                entryIndex = *match;
+            }
+            auto &eligibility = eligibility_[entryIndex];
+            if (eligibility.has_value())
+                return Failure<void>(FairQueueIdentityConflict);
+            eligibility = row.eligibility;
         }
         return Result<void>::Success();
     }
@@ -165,14 +187,11 @@ namespace Horo::WorldStreaming {
         using SelectionResult = Result<std::optional<StreamingFairQueueSelection>>;
         if (const auto valid = ValidateContext(context); valid.HasError())
             return SelectionResult::Failure(valid.ErrorValue());
-        if (const auto valid = ValidateAdmission(admission); valid.HasError())
+        if (const auto valid = ProjectAdmission(admission); valid.HasError())
             return SelectionResult::Failure(valid.ErrorValue());
-        std::ranges::fill(eligible_, std::uint8_t{0});
-        for (const auto &row : admission)
-            eligible_[Find(row.operation)] = row.eligibility == StreamingFairQueueEligibility::Admissible;
         candidates_.clear();
         for (std::size_t index = 0; index < entries_.size(); ++index)
-            if (eligible_[index])
+            if (eligibility_[index] == StreamingFairQueueEligibility::Admissible)
                 candidates_.push_back(entries_[index].priority);
         if (const auto ranked = RankStreamingCellPriorities(policy_, PriorityContext(request_, policy_, context.serviceTimeMilliseconds),
                                                             candidates_, ranked_);
@@ -196,7 +215,7 @@ namespace Horo::WorldStreaming {
     std::size_t StreamingFairQueue::SelectIndex(const bool fair) const noexcept {
         std::size_t selected = entries_.size();
         for (std::size_t index = 0; index < entries_.size(); ++index) {
-            if (!eligible_[index])
+            if (eligibility_[index] != StreamingFairQueueEligibility::Admissible)
                 continue;
             if (!fair) {
                 if (entries_[index].priority.cell == ranked_[0].candidate.cell) {

@@ -12,6 +12,7 @@ namespace Horo::Application::WorldBakeDetail {
         std::vector<W::StreamingCellId> cells;
         std::vector<Runtime::TriggerVolumeMigrationEvidence> triggers;
         std::size_t sceneIndex{};
+        std::optional<Runtime::SceneCellWorldAnchor> anchor;
     };
 
     struct PreparedWorld final {

@@ -44,6 +44,29 @@ namespace Horo::Animation::Test {
         CHECK(retry.members[0].sampleTime.ticks == 20);
     }
 
+    TEST_CASE("Blend tree root motion follows synchronized travel independently of clip pose offsets",
+              "[animation][blend_tree][root-motion]") {
+        Prepared prepared;
+        for (auto &clip : prepared.compileClips) {
+            auto data = clip.Data();
+            data.descriptor.hasRootMotion = true;
+            auto rooted = AnimationClipAsset::Create(std::move(data), *prepared.skeleton);
+            REQUIRE(rooted.HasValue());
+            clip = std::move(rooted).Value();
+        }
+        prepared.Refresh();
+        prepared.context.evaluationDomain = AnimationEvaluationDomain::AuthoritativeSimulation;
+        prepared.context.extractRootMotion = true;
+        auto instance = prepared.Create();
+        AnimationRootMotionDelta motion;
+        Tick first(instance, 1, 25);
+        REQUIRE(instance.CopyRootMotion(first.outcome.publication.currentPose, motion).HasValue());
+        CHECK(motion.translation.x == 25.0F);
+        Tick shifted(instance, 2, 10, Coordinates(1));
+        REQUIRE(instance.CopyRootMotion(shifted.outcome.publication.currentPose, motion).HasValue());
+        CHECK(motion.translation.x == 5.0F);
+    }
+
     TEST_CASE("Animation 2D trees use authored barycentric interiors and nearest hull edges", "[animation][blend_tree]") {
         const auto graph = Data(Triangle());
         Prepared prepared(graph);

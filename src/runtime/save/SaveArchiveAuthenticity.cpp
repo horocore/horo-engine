@@ -1,5 +1,6 @@
 #include "Horo/Runtime/Save/SaveArchiveAuthenticity.h"
 
+#include "Horo/Foundation/Logging/LogContext.h"
 #include "Horo/Runtime/Save/SaveErrors.h"
 
 #include <algorithm>
@@ -114,7 +115,10 @@ namespace Horo::Runtime {
             for (std::size_t i = 0; i < keyId.size(); ++i)
                 keyId[i] = std::to_integer<std::uint8_t>(trailer.Value().bytes[34 + i]);
             const auto message = SignatureMessage(trailer.Value().bytes);
-            auto verified = provider->Verify(keyId, trustedScope, message, trailer.Value().bytes.subspan(52, 64));
+            const auto verified = [&] {
+                const Log::ScopedDiagnosticSuppression suppressProviderDiagnostics;
+                return provider->Verify(keyId, trustedScope, message, trailer.Value().bytes.subspan(52, 64));
+            }();
             if (verified.HasError())
                 return Result<ValidatedSaveArchive>::Failure(MakeError(SafeVerifierError(verified.ErrorValue())));
         }

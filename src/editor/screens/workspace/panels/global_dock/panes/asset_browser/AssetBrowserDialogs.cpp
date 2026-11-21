@@ -1,15 +1,20 @@
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserDialogs.h"
 
+#include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorTheme.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
+#include "editor/screens/workspace/BlackboardKeyWidgets.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserPane.h"
 
 #include <algorithm>
+#include <array>
+#include <charconv>
 #include <format>
+#include <span>
 #include <string>
 
 namespace Horo::Editor {
@@ -384,14 +389,355 @@ namespace Horo::Editor {
             }
             PopModalStyle();
         }
+
+        /** @brief Selects an exact eligible saved Blackboard AssetId without doing filesystem work while drawing. */
+        bool ChooseDecisionSchema(std::span<const DecisionSchemaChoice> schemas, Assets::AssetId &asset, const EditorGuiContext &context,
+                                  const char *identity) {
+            const auto &fonts = context.theme.fonts;
+            const auto &empty = context.localization.Get("editor", "workspace.decision_graph.create_select_schema");
+            Ui::FieldLabel(context.localization.Get("editor", "workspace.decision_graph.create_schema").c_str(), fonts);
+            const auto current = std::ranges::find(schemas, asset, &DecisionSchemaChoice::asset);
+            int index = current == schemas.end() ? 0 : static_cast<int>(current - schemas.begin()) + 1;
+            const Ui::ComboItemSource choices{.label = [&](int item) {
+                return item == 0 ? empty.c_str() : schemas[static_cast<std::size_t>(item - 1)].path.c_str();
+            }};
+            if (Ui::ComboControl(identity, &index, static_cast<int>(schemas.size()) + 1, choices, fonts))
+                asset = index == 0 ? Assets::AssetId{} : schemas[static_cast<std::size_t>(index - 1)].asset;
+            return index > 0;
+        }
+
+        /** @brief Picks a clean opened schema for the selected registered asset. Save-time validation still owns publication. */
+        const BlackboardSchemaDocumentSnapshot *FindCreationSchema(const EditorWorkspaceViewModel &model, Assets::AssetId asset) {
+            const BlackboardSchemaDocumentSnapshot *matched{};
+            for (const auto &document : model.blackboardDocuments) {
+                const auto &snapshot = document.snapshot;
+                if (!snapshot.source || snapshot.source->asset != asset || !snapshot.schema || !snapshot.sourceDigest || snapshot.dirty ||
+                    snapshot.conflict)
+                    continue;
+                if (matched)
+                    return nullptr;
+                matched = &snapshot;
+            }
+            return matched;
+        }
+
+        /** @brief Uses the shared Decision palette and projects its visible selection into the modal submission. */
+        void ChooseDecisionTask(AssetBrowserInteractionState &state, const EditorWorkspaceViewModel &model,
+                                const BlackboardSchemaDocumentSnapshot *schema, const EditorGuiContext &context,
+                                EditorWorkspaceViewCommandData &command) {
+            auto &draft = state.createTaskDecision;
+            DrawDecisionPackageTrustRequired(model.decisionPackageActivationTrustRequired, context);
+            const DecisionTaskPaletteCatalog catalog{
+                .choices = model.decisionTaskPaletteChoices,
+                .revision = model.availableBehaviorsRevision,
+                .providers = model.decisionProviderMetadata.get(),
+                .schema = schema ? schema->schema.get() : nullptr,
+                .allowQueryOutput = draft.family == AI::DecisionPlanKind::BehaviorTree,
+                .initialFamily = draft.family,
+            };
+            const auto *selected = DrawDecisionTaskPalette(catalog, state.initialTaskPalette, context, command);
+            draft.task = selected ? selected->type : AI::DecisionNodeTypeId{};
+            draft.provider = selected ? selected->provider : AI::DecisionProviderId{};
+            draft.version = selected ? selected->version : 0;
+        }
+
+        /** @brief Offers only single scalar keys and resets a selection that is absent from the current schema. */
+        AI::BlackboardKeyId PickUtilityScoreKey(const std::span<const BlackboardSchemaRow> rows, const AI::BlackboardKeyId current,
+                                                const EditorGuiContext &context) {
+            const auto &fonts = context.theme.fonts;
+            std::array<const BlackboardSchemaRow *, AI::MaximumBlackboardKeys + 1> options{};
+            int count{1};
+            int index{};
+            for (const auto &row : rows) {
+                if (row.descriptor.kind != AI::BlackboardValueKind::Scalar ||
+                    row.descriptor.cardinality != AI::BlackboardValueCardinality::Scalar)
+                    continue;
+                if (static_cast<std::size_t>(count) == options.size())
+                    break;
+                if (row.descriptor.key == current)
+                    index = count;
+                options[static_cast<std::size_t>(count++)] = &row;
+            }
+            Ui::FieldLabel(context.localization.Get("editor", "workspace.decision_graph.scoring_key").c_str(), fonts);
+            const auto &empty = context.localization.Get("editor", "workspace.decision_graph.select_scoring_key");
+            std::array<char, 32> idBuffer{};
+            const Ui::ComboItemSource choices{.label = [&](int item) -> const char * {
+                const auto *row = options[static_cast<std::size_t>(item)];
+                if (!row)
+                    return empty.c_str();
+                if (row->displayName)
+                    return row->displayName->c_str();
+                const auto converted = std::to_chars(idBuffer.data(), idBuffer.data() + idBuffer.size() - 1, row->descriptor.key.Value());
+                *converted.ptr = char{};
+                return idBuffer.data();
+            }};
+            (void)Ui::ComboControl("##NewUtilityScoreKey", &index, count, choices, fonts);
+            const auto *selected = options[static_cast<std::size_t>(index)];
+            return selected ? selected->descriptor.key : AI::BlackboardKeyId{};
+        }
+
+        /** @brief Draws Utility scoring keys from a clean opened Blackboard, whose durable version is rechecked on commit. */
+        void ChooseUtilityScore(AssetBrowserInteractionState &state, const BlackboardSchemaDocumentSnapshot *source,
+                                const EditorGuiContext &context) {
+            auto &draft = state.createTaskDecision;
+            if (!draft.score)
+                return;
+            auto &score = *draft.score;
+            const auto &fonts = context.theme.fonts;
+            const auto text = [&](std::string_view key) -> const std::string & {
+                return context.localization.Get("editor", key);
+            };
+            if (!source) {
+                score.key = {};
+                score.schemaSource = {};
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("workspace.decision_graph.open_scoring_schema"), Theme::Muted(),
+                                fonts);
+                return;
+            }
+            score.schemaSource = *source->sourceDigest;
+            score.key = PickUtilityScoreKey(source->source->rows, score.key, context);
+            Ui::FieldLabel(text("workspace.decision_graph.score_minimum").c_str(), fonts);
+            Ui::InputFloatControl("##UtilityScoreMinimum", &state.utilityMinimum, fonts);
+            Ui::FieldLabel(text("workspace.decision_graph.score_maximum").c_str(), fonts);
+            Ui::InputFloatControl("##UtilityScoreMaximum", &state.utilityMaximum, fonts);
+            score.minimum = state.utilityMinimum;
+            score.maximum = state.utilityMaximum;
+        }
+
+        void DrawCreateTaskDecisionPopup(AssetBrowserInteractionState &state, const EditorWorkspaceViewModel &model,
+                                         EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
+            constexpr const char *popupId = "##ContentBrowserCreateTaskDecision";
+            if (state.openCreateTaskDecision) {
+                ImGui::OpenPopup(popupId);
+                state.openCreateTaskDecision = false;
+            }
+            const ImGuiViewport *viewport = ImGui::GetMainViewport();
+            const float width = std::max(160.0F, std::min(460.0F, viewport->WorkSize.x - 32.0F));
+            ImGui::SetNextWindowPos(viewport->GetWorkCenter(), ImGuiCond_Appearing, {0.5F, 0.5F});
+            ImGui::SetNextWindowSizeConstraints({width, 0.0F}, {width, viewport->WorkSize.y - 48.0F});
+            PushModalStyle();
+            if (ImGui::BeginPopupModal(popupId, nullptr,
+                                       ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar |
+                                           ImGuiWindowFlags_NoSavedSettings)) {
+                auto &draft = state.createTaskDecision;
+                const auto &fonts = context.theme.fonts;
+                const auto text = [&](std::string_view key) -> const std::string & {
+                    return context.localization.Get("editor", key);
+                };
+                DrawModalHeading(text(draft.family == AI::DecisionPlanKind::Utility ? "workspace.decision_graph.new_utility"
+                                                                                    : "workspace.decision_graph.new_tree"),
+                                 context);
+                Ui::FieldLabel(text("workspace.decision_graph.create_name").c_str(), fonts);
+                static_cast<void>(Ui::InputTextControl("##NewTaskDecisionName", draft.name,
+                                                       AI::BlackboardSchemaAuthoringRow::MaximumLabelBytes + 1, fonts));
+                const bool schemaSelected =
+                    ChooseDecisionSchema(model.decisionSchemaChoices, draft.schema, context, "##NewTaskDecisionSchema");
+                const auto *schema = FindCreationSchema(model, draft.schema);
+                ChooseDecisionTask(state, model, schema, context, command);
+                ChooseUtilityScore(state, schema, context);
+                const bool current = draft.catalogRevision == model.availableBehaviorsRevision;
+                if (!current)
+                    Ui::ErrorText(text("workspace.decision_graph.catalog_changed").c_str(), fonts);
+                ImGui::Dummy({0.0F, 12.0F});
+                if (Ui::Button({.label = AssetBrowserPane::kTextScope.Text(context.localization, "action.cancel").c_str(),
+                                .variant = Ui::ButtonVariant::Secondary,
+                                .font = fonts.sans}))
+                    ImGui::CloseCurrentPopup();
+                ImGui::SameLine();
+                if (Ui::Button({.label = text("workspace.decision_graph.create_task_graph").c_str(),
+                                .variant = Ui::ButtonVariant::Primary,
+                                .enabled = current && schemaSelected && AssetBrowserInteractionSession::CanConfirmTaskDecision(draft),
+                                .font = fonts.sans})) {
+                    if (auto confirmed = AssetBrowserInteractionSession::ConfirmTaskDecision(draft)) {
+                        command = std::move(*confirmed);
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+                ImGui::EndPopup();
+            }
+            PopModalStyle();
+        }
+
+        void DrawCreateStateMachinePopup(AssetBrowserInteractionState &state, std::span<const DecisionSchemaChoice> schemas,
+                                         EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
+            constexpr const char *popupId = "##ContentBrowserCreateStateMachine";
+            if (state.openCreateStateMachine) {
+                ImGui::OpenPopup(popupId);
+                state.openCreateStateMachine = false;
+            }
+            const ImGuiViewport *viewport = ImGui::GetMainViewport();
+            const float width = std::max(160.0F, std::min(460.0F, viewport->WorkSize.x - 32.0F));
+            ImGui::SetNextWindowPos(viewport->GetWorkCenter(), ImGuiCond_Appearing, {0.5F, 0.5F});
+            ImGui::SetNextWindowSizeConstraints({width, 0.0F}, {width, viewport->WorkSize.y - 48.0F});
+            PushModalStyle();
+            if (ImGui::BeginPopupModal(popupId, nullptr,
+                                       ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar |
+                                           ImGuiWindowFlags_NoSavedSettings)) {
+                const auto text = [&](std::string_view key) -> const std::string & {
+                    return context.localization.Get("editor", key);
+                };
+                auto &draft = state.createStateMachine;
+                const auto &fonts = context.theme.fonts;
+                DrawModalHeading(text("workspace.decision_graph.create_title"), context);
+                Ui::FieldLabel(text("workspace.decision_graph.create_name").c_str(), fonts);
+                static_cast<void>(Ui::InputTextControl("##NewStateMachineName", draft.name,
+                                                       AI::BlackboardSchemaAuthoringRow::MaximumLabelBytes + 1, fonts));
+                const bool schemaSelected = ChooseDecisionSchema(schemas, draft.schema, context, "##NewStateMachineSchema");
+                Ui::FieldLabel(text("workspace.decision_graph.create_outcome").c_str(), fonts);
+                const std::array labels{text("workspace.decision_graph.succeeded").c_str(),
+                                        text("workspace.decision_graph.failed").c_str()};
+                int outcome = draft.outcome == AI::DecisionStateTerminal::Failed ? 1 : 0;
+                if (Ui::ComboControl("##NewStateMachineOutcome", &outcome, labels.data(), static_cast<int>(labels.size()), fonts))
+                    draft.outcome = outcome == 0 ? AI::DecisionStateTerminal::Succeeded : AI::DecisionStateTerminal::Failed;
+                ImGui::Dummy({0.0F, 12.0F});
+                if (Ui::Button({.label = AssetBrowserPane::kTextScope.Text(context.localization, "action.cancel").c_str(),
+                                .variant = Ui::ButtonVariant::Secondary,
+                                .font = fonts.sans}))
+                    ImGui::CloseCurrentPopup();
+                ImGui::SameLine();
+                if (Ui::Button({.label = text("workspace.decision_graph.create_confirm").c_str(),
+                                .variant = Ui::ButtonVariant::Primary,
+                                .enabled = schemaSelected && AssetBrowserInteractionSession::CanConfirmStateMachine(draft),
+                                .font = fonts.sans})) {
+                    if (auto confirmed = AssetBrowserInteractionSession::ConfirmStateMachine(draft)) {
+                        command = std::move(*confirmed);
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+                ImGui::EndPopup();
+            }
+            PopModalStyle();
+        }
+
+        void DrawCreateBlackboardPopup(AssetBrowserInteractionState &state, EditorWorkspaceViewCommandData &command,
+                                       const EditorGuiContext &context) {
+            constexpr const char *popupId = "##ContentBrowserCreateBlackboard";
+            if (state.openCreateBlackboard) {
+                ImGui::OpenPopup(popupId);
+                state.openCreateBlackboard = false;
+            }
+            const ImGuiViewport *viewport = ImGui::GetMainViewport();
+            const float width = std::max(160.0F, std::min(460.0F, viewport->WorkSize.x - 32.0F));
+            ImGui::SetNextWindowPos(viewport->GetWorkCenter(), ImGuiCond_Appearing, {0.5F, 0.5F});
+            ImGui::SetNextWindowSizeConstraints({width, 0.0F}, {width, viewport->WorkSize.y - 48.0F});
+            PushModalStyle();
+            if (ImGui::BeginPopupModal(popupId, nullptr,
+                                       ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar |
+                                           ImGuiWindowFlags_NoSavedSettings)) {
+                const auto text = [&](std::string_view key) -> const std::string & {
+                    return context.localization.Get("editor", key);
+                };
+                auto &draft = state.createBlackboard;
+                const auto &fonts = context.theme.fonts;
+                DrawModalHeading(text("workspace.blackboard.create_title"), context);
+                const auto name = [&](const char *id, std::string_view caption, std::string &value) {
+                    Ui::FieldLabel(text(caption).c_str(), fonts);
+                    static_cast<void>(Ui::InputTextControl(id, value, AI::BlackboardSchemaAuthoringRow::MaximumLabelBytes + 1, fonts));
+                };
+                name("##NewBlackboardName", "workspace.blackboard.create_schema_name", draft.request.name);
+                name("##NewBlackboardKey", "workspace.blackboard.create_key_name", draft.request.keyName);
+                DrawBlackboardDraftKey(context, draft.request.key, draft.numericDefault, command);
+                if (draft.request.key.presence == AI::BlackboardKeyPresence::Required && !draft.request.key.defaultValue)
+                    Ui::ErrorText(text("workspace.blackboard.create_required_default").c_str(), fonts);
+                ImGui::Dummy({0.0F, 12.0F});
+                if (Ui::Button({.label = AssetBrowserPane::kTextScope.Text(context.localization, "action.cancel").c_str(),
+                                .variant = Ui::ButtonVariant::Secondary,
+                                .font = fonts.sans}))
+                    ImGui::CloseCurrentPopup();
+                ImGui::SameLine();
+                if (Ui::Button({.label = text("workspace.blackboard.create_confirm").c_str(),
+                                .variant = Ui::ButtonVariant::Primary,
+                                .enabled = AssetBrowserInteractionSession::CanConfirmCreateBlackboard(draft),
+                                .font = fonts.sans})) {
+                    if (auto confirmed = AssetBrowserInteractionSession::ConfirmCreateBlackboard(draft)) {
+                        command = std::move(*confirmed);
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+                ImGui::EndPopup();
+            }
+            PopModalStyle();
+        }
+
+        void DrawCreateQueryPopup(AssetBrowserInteractionState &state, EditorWorkspaceViewCommandData &command,
+                                  const EditorGuiContext &context) {
+            constexpr const char *popupId = "##ContentBrowserCreateEnvironmentQuery";
+            if (state.openCreateQuery) {
+                ImGui::OpenPopup(popupId);
+                state.openCreateQuery = false;
+            }
+            const ImGuiViewport *viewport = ImGui::GetMainViewport();
+            const float width = std::max(160.0F, std::min(460.0F, viewport->WorkSize.x - 32.0F));
+            ImGui::SetNextWindowPos(viewport->GetWorkCenter(), ImGuiCond_Appearing, {0.5F, 0.5F});
+            ImGui::SetNextWindowSizeConstraints({width, 0.0F}, {width, viewport->WorkSize.y - 48.0F});
+            PushModalStyle();
+            if (ImGui::BeginPopupModal(popupId, nullptr,
+                                       ImGuiWindowFlags_AlwaysAutoResize | ImGuiWindowFlags_NoTitleBar |
+                                           ImGuiWindowFlags_NoSavedSettings)) {
+                const auto text = [&](std::string_view key) -> const std::string & {
+                    return context.localization.Get("editor", key);
+                };
+                const auto &fonts = context.theme.fonts;
+                auto &draft = state.createQuery;
+                DrawModalHeading(text("workspace.environment_query.create_title"), context);
+                Ui::FieldLabel(text("workspace.environment_query.create_name").c_str(), fonts);
+                static_cast<void>(Ui::InputTextControl("##NewQueryName", draft.name.data(), draft.name.size(), fonts));
+                const auto integer = [&](const char *identity, std::string_view label, int &value) {
+                    Ui::FieldLabel(text(label).c_str(), fonts);
+                    Ui::InputIntControl(identity, &value, fonts);
+                };
+                static_cast<void>(
+                    Ui::CheckboxControl(text("workspace.environment_query.perceived_actors").c_str(), &draft.perceivedActors, fonts));
+                integer("##NewQueryMaximum", "workspace.environment_query.create_limit", draft.maximumResults);
+                if (draft.perceivedActors) {
+                    static_cast<void>(
+                        Ui::CheckboxControl(text("workspace.environment_query.currently_sensed").c_str(), &draft.currentlySensed, fonts));
+                } else {
+                    integer("##NewQueryStep", "workspace.environment_query.create_step", draft.stepMillimeters);
+                    integer("##NewQueryOuter", "workspace.environment_query.create_outer", draft.outerSteps);
+                    static_cast<void>(
+                        Ui::CheckboxControl(text("workspace.environment_query.create_annulus").c_str(), &draft.annulus, fonts));
+                    if (draft.annulus)
+                        integer("##NewQueryInner", "workspace.environment_query.create_inner", draft.innerSteps);
+                    static_cast<void>(
+                        Ui::CheckboxControl(text("workspace.environment_query.create_distance").c_str(), &draft.distance, fonts));
+                    if (draft.distance) {
+                        integer("##NewQueryRadius", "workspace.environment_query.create_radius", draft.radiusMillimeters);
+                        static_cast<void>(Ui::CheckboxControl(text("workspace.environment_query.create_prefer_nearer").c_str(),
+                                                              &draft.preferNearer, fonts));
+                    }
+                }
+                ImGui::Dummy({0.0F, 12.0F});
+                if (Ui::Button({.label = AssetBrowserPane::kTextScope.Text(context.localization, "action.cancel").c_str(),
+                                .variant = Ui::ButtonVariant::Secondary,
+                                .font = fonts.sans}))
+                    ImGui::CloseCurrentPopup();
+                ImGui::SameLine();
+                if (Ui::Button({.label = text("workspace.environment_query.create_confirm").c_str(),
+                                .variant = Ui::ButtonVariant::Primary,
+                                .enabled = AssetBrowserInteractionSession::CanConfirmCreateQuery(draft),
+                                .font = fonts.sans})) {
+                    if (auto confirmed = AssetBrowserInteractionSession::ConfirmCreateQuery(draft)) {
+                        command = std::move(*confirmed);
+                        ImGui::CloseCurrentPopup();
+                    }
+                }
+                ImGui::EndPopup();
+            }
+            PopModalStyle();
+        }
     }  // namespace
 
     /** @copydoc DrawAssetBrowserDialogs */
-    void DrawAssetBrowserDialogs(AssetBrowserInteractionState &state, const ContentBrowserDirectory &directory,
+    void DrawAssetBrowserDialogs(AssetBrowserInteractionState &state, const EditorWorkspaceViewModel &model,
                                  EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
         DrawInfoPopup(state, context);
         DrawRenamePopup(state, command, context);
         DrawDeletePopup(state, command, context);
-        DrawCreateFolderPopup(state, directory, command, context);
+        DrawCreateFolderPopup(state, model.contentBrowser, command, context);
+        DrawCreateStateMachinePopup(state, model.decisionSchemaChoices, command, context);
+        DrawCreateTaskDecisionPopup(state, model, command, context);
+        DrawCreateBlackboardPopup(state, command, context);
+        DrawCreateQueryPopup(state, command, context);
     }
 }  // namespace Horo::Editor

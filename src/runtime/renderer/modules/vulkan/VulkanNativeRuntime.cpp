@@ -406,8 +406,11 @@ namespace Horo::Render {
                                                        .properties = &properties.properties});
                     prepared.HasError())
                     return prepared;
+                const bool computeRole = std::ranges::any_of(request.queueAssignments, [](const auto &assignment) {
+                    return assignment.role == RenderQueueRole::Compute;
+                });
                 if (auto published = PublishResourceCapabilities(physical, properties.properties, allocationLimits.maxMemoryAllocationSize,
-                                                                 incarnation.Value());
+                                                                 incarnation.Value(), computeRole);
                     published.HasError())
                     return published;
                 return request.enableSwapchainMaintenance ? InitializePresentation(physical, request, incarnation.Value())
@@ -444,6 +447,11 @@ namespace Horo::Render {
                 return presentation_ ? presentation_->PollAvailability(extent) : IVulkanCommandPort::PollPresentationAvailability(extent);
             }
 
+            /** @copydoc IVulkanCommandPort::ObservePresentationOutput */
+            Result<RenderPresentationOutput> ObservePresentationOutput() const override {
+                return presentation_ ? presentation_->ObserveOutput() : IVulkanCommandPort::ObservePresentationOutput();
+            }
+
             Result<void> ResizePresentation(const FramebufferExtent extent, const PresentMode mode) override {
                 return presentation_ ? presentation_->Resize(extent, mode) : IVulkanCommandPort::ResizePresentation(extent, mode);
             }
@@ -454,6 +462,11 @@ namespace Horo::Render {
 
             RenderCapabilitySnapshot ResourceCapabilities() const noexcept override {
                 return resourceCapabilities_;
+            }
+
+            Result<std::shared_ptr<IResidentNativeReconstructionKernel>> RealizeNativeReconstructionKernel(
+                const CookedNativeReconstructionKernel &kernel) override {
+                return graph_.RealizeNativeReconstructionKernel(kernel);
             }
 
             Result<NativeVfxGpuPreparationResources> QueryVfxGpuNativePreparationResources(
@@ -514,12 +527,32 @@ namespace Horo::Render {
                 return true;
             }
 
+            bool SupportsGraphMaterialRaster() const noexcept override {
+                return graph_.SupportsGraphMaterialRaster();
+            }
+
             Result<void> ExecuteMaterialPass(const RenderMaterialExecutionRequest &request) override {
                 return graph_.ExecuteMaterialPass(request);
             }
 
             Result<void> UpdateVfxFrame(const NativeVfxFrameUpdate &update) override {
                 return graph_.UpdateVfxFrame(update);
+            }
+
+            Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &update) override {
+                return graph_.UpdateUiPaintFrame(update);
+            }
+
+            Result<std::shared_ptr<IResidentUiPaintKernel>> RealizeUiPaintKernel(const CookedUiPaintKernel &cooked) override {
+                using Outcome = Result<std::shared_ptr<IResidentUiPaintKernel>>;
+                const auto color = static_cast<std::size_t>(cooked.colorFormat);
+                const auto stencil = static_cast<std::size_t>(cooked.stencilFormat);
+                if (color >= uiPaintFormats_.size() || stencil >= uiPaintFormats_.size())
+                    return Outcome::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
+                auto device = uiPaintDevice_;
+                device.colorFeatures = uiPaintFormats_[color];
+                device.stencilFeatures = uiPaintFormats_[stencil];
+                return graph_.RealizeUiPaintKernel(cooked, device, uiPaintFormats_, dispatch_.getDeviceProcAddr);
             }
 
 #include "VulkanNativeEditorDelegation.inl"
@@ -549,6 +582,18 @@ namespace Horo::Render {
                     presentationFrameToken_ = {};
                     presentationCompletion_ = {};
                 }
+            }
+
+            /** @copydoc IVulkanCommandPort::ObserveGraphSubmissionAcceptance */
+            std::optional<bool> ObserveGraphSubmissionAcceptance(RenderTimelinePoint signal,
+                                                                 std::uint64_t deviceIncarnation) const noexcept override {
+                try {
+                    const auto accepted = graph_.WasSubmissionAccepted(signal, deviceIncarnation);
+                    if (accepted.HasValue())
+                        return accepted.Value();
+                } catch (...) {  // Retain uncertainty if the backend cannot provide typed acceptance evidence.
+                }
+                return std::nullopt;
             }
 
             Result<bool> ObserveSubmission(const RenderCpuWait &wait) override {
@@ -675,7 +720,8 @@ namespace Horo::Render {
 
             /** @brief Publishes queried device/format facts, intersected with this concrete implementation's resource policy. */
             Result<void> PublishResourceCapabilities(const VkPhysicalDevice device, const VkPhysicalDeviceProperties &properties,
-                                                     const VkDeviceSize allocationLimit, const std::uint64_t incarnation) {
+                                                     const VkDeviceSize allocationLimit, const std::uint64_t incarnation,
+                                                     bool computeRole) {
                 using enum RenderTextureFormat;
                 auto &snapshot = resourceCapabilities_;
                 snapshot = {.deviceIncarnation = incarnation,
@@ -702,11 +748,19 @@ namespace Horo::Render {
                                   "vkGetPhysicalDeviceFormatProperties is required to publish native resource capabilities."));
                 }
                 snapshot.formats.sampleCountMask = std::uint64_t{1} << 1U;
-                for (const auto format : {Rgba8Unorm, Rgba16Float, Depth24Stencil8, Depth32Float}) {
+                uiPaintDevice_ = {.device = device_, .incarnation = incarnation, .limits = properties.limits};
+                uiPaintFormats_.fill(0);
+                const bool reconstruction = computeRole && graph_.SupportsNativeReconstruction();
+                for (const auto format : {Rgba8Unorm, Rgba16Float, Depth24Stencil8, Depth32Float, Depth32FloatStencil8, R16Float, R32Float,
+                                          Rg16Float, Rg32Float, Rgba32Float}) {
                     using enum RenderTextureUsage;
                     VkFormatProperties native{};
                     query(device, Detail::VulkanResourceConversion::TextureFormat(format), &native);
+                    uiPaintFormats_[static_cast<std::size_t>(format)] = native.optimalTilingFeatures;
                     auto usage = None;
+                    if (reconstruction && (format == Rgba32Float || format == R32Float) &&
+                        (native.optimalTilingFeatures & VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT) != 0)
+                        usage = usage | Storage;
                     if ((native.optimalTilingFeatures & VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT) != 0)
                         usage = usage | Sampled;
                     if ((native.optimalTilingFeatures &
@@ -717,6 +771,16 @@ namespace Horo::Render {
                     if ((native.optimalTilingFeatures & VK_FORMAT_FEATURE_TRANSFER_DST_BIT) != 0)
                         usage = usage | CopyDestination;
                     snapshot.formats.usages[static_cast<std::size_t>(format)] = usage;
+                }
+                const auto hasFormat = [&](RenderTextureFormat format, RenderTextureUsage usage) {
+                    return HasTextureUsage(snapshot.formats.usages[static_cast<std::size_t>(format)], usage);
+                };
+                if (reconstruction && hasFormat(Rgba32Float, RenderTextureUsage::Sampled | RenderTextureUsage::Storage) &&
+                    hasFormat(R32Float, RenderTextureUsage::Sampled | RenderTextureUsage::Storage) &&
+                    (hasFormat(Rg16Float, RenderTextureUsage::Sampled) || hasFormat(Rg32Float, RenderTextureUsage::Sampled))) {
+                    snapshot.queues.compute = true;
+                    snapshot.features.Enable(RenderCapability::Compute);
+                    snapshot.features.Enable(RenderCapability::NativeReconstruction);
                 }
                 PublishVfxCapabilities();
                 return PublishMultiviewCapabilities(device, properties);
@@ -954,6 +1018,8 @@ namespace Horo::Render {
             const std::thread::id editorOwner_{std::this_thread::get_id()};
             Detail::VulkanEditorGraphicsBridge *editorBridge_{};
             std::array<Detail::IVulkanEditorDeviceChild *, 2> editorChildren_{};
+            Detail::VulkanUiPaintDevice uiPaintDevice_;
+            Detail::VulkanUiPaintCommands::FormatFeatures uiPaintFormats_{};
             VkPhysicalDevice editorPhysical_{};
             std::uint32_t editorGraphicsFamily_{};
             std::uint32_t editorFrames_{};

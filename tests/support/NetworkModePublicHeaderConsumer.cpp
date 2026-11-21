@@ -1,7 +1,11 @@
 #include "Horo/Network/AdmissionProtection.h"
 #include "Horo/Network/InboundMessageDispatcher.h"
 #include "Horo/Network/NetworkAdmissionController.h"
+#include "Horo/Network/NetworkAuthoredScenePage.h"
+#include "Horo/Network/NetworkInitialStateStream.h"
 #include "Horo/Network/NetworkModeComposition.h"
+#include "Horo/Network/NetworkObjectMapping.h"
+#include "Horo/Network/NetworkPrefabLifecycle.h"
 #include "Horo/Network/NetworkWorldBinding.h"
 #include "Horo/Network/ReplicationInboundApply.h"
 #include "Horo/Network/ReplicationSnapshotHistory.h"
@@ -37,6 +41,11 @@ namespace {
         };
     static_assert(!std::is_default_constructible_v<Horo::Network::ProofIssuanceAuthorization>);
     static_assert(!std::is_copy_constructible_v<Horo::Network::NetworkAdmissionController>);
+    static_assert(!std::is_copy_constructible_v<Horo::Network::NetworkInitialStateInbox>);
+    static_assert(std::is_abstract_v<Horo::Network::INetworkStateUpdateHost>);
+    static_assert(std::is_default_constructible_v<Horo::Network::NetworkStateUpdatePolicy>);
+    static_assert(std::is_same_v<decltype(Horo::Network::NetworkWorldBindingSetup::stateUpdateHost),
+                                 std::shared_ptr<Horo::Network::INetworkStateUpdateHost>>);
     static_assert(!std::is_default_constructible_v<Horo::Network::NetworkAdmissionController>);
     template <typename Controller>
     concept BypassesAdmissionFactory = requires { Controller{{}, {}}; };
@@ -48,6 +57,16 @@ namespace {
     static_assert(!BypassesCaptureFactory<Horo::Network::ReplicationStateCapture>);
     static_assert(!BypassesStateCodecFactory<Horo::Network::ReplicationStateCodec>);
     static_assert(!BypassesSceneSourceFactory<Horo::Network::SceneReplicationCommitSource>);
+    using SceneApplyOwner = Horo::Network::SceneReplicationApplyOwner;
+    using SceneServiceApplyFactory = Horo::Result<std::shared_ptr<SceneApplyOwner>> (*)(
+        std::weak_ptr<Horo::Runtime::RuntimeSceneService>, Horo::Runtime::RuntimeSceneView, Horo::Runtime::RuntimeDispatchEvidence,
+        Horo::Network::ReplicationSchemaId, Horo::Network::ReplicationSchemaVersion,
+        std::span<const Horo::Network::SceneReplicationFieldBinding>);
+    static_assert(std::is_same_v<decltype(&SceneApplyOwner::CreateForService), SceneServiceApplyFactory>);
+    static_assert(std::is_same_v<decltype(&Horo::Network::SceneReplicationCommitSource::AcquireCaptureReadAfterCommit),
+                                 Horo::Result<Horo::Network::ReplicationWorldCaptureRead> (Horo::Network::SceneReplicationCommitSource::*)(
+                                     const Horo::Network::ReplicationWorldLifecycle &, Horo::Runtime::RuntimePhase,
+                                     const Horo::CancellationToken &) const>);
     static_assert(std::is_same_v<Horo::Network::RpcScalar, std::variant<std::int64_t, std::uint64_t, double>>);
     static_assert(std::is_default_constructible_v<Horo::Network::RpcGameplayPolicy>);
     static_assert(!std::is_copy_constructible_v<Horo::Network::ReplicationStateCapture>);
@@ -66,5 +85,14 @@ int main() {
                                  bool (Horo::Network::NetworkModeComposition::*)() const noexcept>);
     static_assert(Horo::Network::NetworkWorldBindingWireBytes == 60);
     static_assert(std::is_trivially_copyable_v<Horo::Network::NetworkWorldBindingRecord>);
+    constexpr auto prefabAsset = Horo::Assets::AssetId::FromBytes({1});
+    constexpr Horo::Network::NetworkPrefabTemplateIdentity prefabRecipe{prefabAsset, Horo::Sha256Digest{{2}}, 3};
+    static_assert(Horo::Network::NetworkPrefabMemberSource{prefabRecipe, 2}.IsValid());
+    static_assert(!Horo::Network::NetworkPrefabMemberSource{prefabRecipe, 3}.IsValid());
+    static_assert(Horo::Network::MaximumNetworkPrefabLegacyBytes == 7254);
+    static_assert(Horo::Network::MaximumNetworkPrefabLifecycleBytes == 11352);
+    static_assert(Horo::Network::MaximumNetworkAuthoredScenePageBytes == 666);
+    static_assert(!std::is_copy_constructible_v<Horo::Network::NetworkAuthoredSceneAssembly>);
+    static_assert(std::is_default_constructible_v<Horo::Network::NetworkClientPrefabInbox>);
     return Horo::Network::NetworkProjectRole::Standalone == Horo::Network::NetworkProjectRole::Count ? 1 : 0;
 }

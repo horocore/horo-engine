@@ -39,18 +39,20 @@ namespace Horo::Animation::Test::Actions {
     }
 
     /** @brief Real immutable loop clips; region traversal supplies the authored one-shot policy without changing them. */
-    inline AnimationClipAsset Clip(const SkeletonAsset &skeleton, const std::uint8_t id, const std::uint64_t generation) {
+    inline AnimationClipAsset Clip(const SkeletonAsset &skeleton, const std::uint8_t id, const std::uint64_t generation,
+                                   bool rootMotion = false) {
         AnimationClipData data;
         data.descriptor = {.id = Asset<AnimationClipId>(id),
                            .generation = Id<AnimationClipGeneration>(generation),
                            .skeleton = skeleton.Data().skeleton,
                            .skeletonGeneration = Id<SkeletonAssetGeneration>(5),
                            .duration = {100},
-                           .wrapMode = AnimationWrapMode::Loop};
+                           .wrapMode = AnimationWrapMode::Loop,
+                           .hasRootMotion = rootMotion};
         Math::Transform first;
         first.translation.x = id == 3 ? 0.0F : 100.0F;
         auto last = first;
-        last.translation.x += 100;
+        last.translation.x += rootMotion ? 200.0F : 100.0F;
         data.tracks = {{Id<JointId>(1), {{{0}, first}, {{100}, last}}}};
         auto result = AnimationClipAsset::Create(std::move(data), skeleton);
         REQUIRE(result.HasValue());
@@ -66,9 +68,10 @@ namespace Horo::Animation::Test::Actions {
         std::shared_ptr<const AnimationGraphProgram> program;
         GraphInstanceCreateContext context;
 
-        explicit Prepared(AnimationGraphData data = Data(), const std::uint64_t generation = 6) : graph(std::move(data)) {
+        explicit Prepared(AnimationGraphData data = Data(), const std::uint64_t generation = 6, bool rootMotion = false)
+            : graph(std::move(data)) {
             compileClips.push_back(Clip(*skeleton, 3, generation));
-            compileClips.push_back(Clip(*skeleton, 4, generation));
+            compileClips.push_back(Clip(*skeleton, 4, generation, rootMotion));
             for (const auto &clip : compileClips)
                 clips.push_back(std::make_shared<const AnimationClipAsset>(clip));
             auto compiled = AnimationGraphProgram::Compile(graph, CompileContext());
@@ -76,6 +79,10 @@ namespace Horo::Animation::Test::Actions {
             REQUIRE(compiled.HasValue());
             program = std::make_shared<const AnimationGraphProgram>(std::move(compiled).Value());
             context.instance = {Id<AnimationRuntimeId>(1), Id<AnimationComponentId>(2), {0, 1}};
+            if (rootMotion) {
+                context.evaluationDomain = AnimationEvaluationDomain::AuthoritativeSimulation;
+                context.extractRootMotion = true;
+            }
         }
 
         [[nodiscard]] AnimationGraphCompileContext CompileContext() const {

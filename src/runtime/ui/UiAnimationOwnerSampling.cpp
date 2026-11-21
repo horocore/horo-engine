@@ -5,6 +5,13 @@
 #include <algorithm>
 
 namespace Horo::Runtime::Ui {
+    namespace {
+        /** @brief Classifies presentation only; the timeline and its semantic markers are still evaluated. */
+        bool TracksVisible(const UiAnimationDefinition &definition, const UiVisualPresentationPolicy &policy) noexcept {
+            return !definition.visualFlash || !policy.suppressFlash;
+        }
+    }  // namespace
+
     /** @copydoc UiAnimationOwner::EvaluateTimelineCursor */
     Result<void> UiAnimationOwner::EvaluateTimelineCursor(Storage &storage, const std::uint32_t index) {
         auto &timeline = storage.candidate.timelines[index];
@@ -24,6 +31,9 @@ namespace Horo::Runtime::Ui {
         auto evaluated = [&] {
             if (timeline.cancellation != UiAnimationCancellation::None)
                 return AnimationInternal::CancelPlayback(initial, timeline.cancellation);
+            if (storage.accessibility.reduceMotion && definition.motionIntent == UiAnimationMotionIntent::Decorative)
+                return Result<AnimationInternal::PlaybackCursor>::Success(
+                    AnimationInternal::FinishReducedMotion(timeline.cursor, definition.time));
             if (seek)
                 return AnimationInternal::SeekPlayback(definition.time, delta);
             return AnimationInternal::AdvancePlayback(initial, definition.time, delta, storage.candidate.remainingCrossings);
@@ -97,7 +107,10 @@ namespace Horo::Runtime::Ui {
             const auto &timeline = storage.candidate.timelines[index];
             if (!timeline.occupied || timeline.waiting || !timeline.cursor.sample.contributesValue)
                 continue;
-            for (const auto &track : storage.definition.animations[timeline.definition].tracks) {
+            const auto &definition = storage.definition.animations[timeline.definition];
+            if (!TracksVisible(definition, storage.accessibility))
+                continue;
+            for (const auto &track : definition.tracks) {
                 const auto target = std::ranges::find(storage.definition.elements, track.target, &UiAnimationElementDefinition::element);
                 ++storage.work.sampleCounts[static_cast<std::size_t>(target - storage.definition.elements.begin())];
             }
@@ -109,7 +122,10 @@ namespace Horo::Runtime::Ui {
         for (const auto &timeline : storage.candidate.timelines) {
             if (!timeline.occupied || timeline.waiting || !timeline.cursor.sample.contributesValue)
                 continue;
-            for (const auto &track : storage.definition.animations[timeline.definition].tracks) {
+            const auto &definition = storage.definition.animations[timeline.definition];
+            if (!TracksVisible(definition, storage.accessibility))
+                continue;
+            for (const auto &track : definition.tracks) {
                 const auto target = std::ranges::find(storage.definition.elements, track.target, &UiAnimationElementDefinition::element);
                 const auto index = static_cast<std::size_t>(target - storage.definition.elements.begin());
                 const auto value = AnimationInternal::SamplePropertyTrack(track, timeline.cursor.sample.progress);

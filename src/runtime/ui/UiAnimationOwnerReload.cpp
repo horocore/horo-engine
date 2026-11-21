@@ -62,6 +62,7 @@ namespace Horo::Runtime::Ui {
             auto next = std::make_shared<Storage>(Detail::UiAnimationPublisher{UiHotReload{std::shared_ptr<UiHotReload::Storage>{}}},
                                                   std::move(registry), std::move(styles), std::move(definition), source.limits,
                                                   std::move(reserved).Value(), canvas->controls.size());
+            next->accessibility = source.accessibility;
             if (const auto bound = InitializeBindings(*next, replacement); bound.HasError())
                 return Result<std::shared_ptr<Storage>>::Failure(bound.ErrorValue());
             for (std::size_t index = 0; index < UiTimeDomainCount; ++index) {

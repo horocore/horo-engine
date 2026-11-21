@@ -1,6 +1,9 @@
 #include "CommittedSceneAssets.h"
 
+#include "Horo/Assets/NavMeshAssetType.h"
+
 #include <algorithm>
+#include <set>
 #include <utility>
 
 namespace Horo::Application::Internal {
@@ -15,9 +18,11 @@ namespace Horo::Application::Internal {
                                               {}};
         constexpr std::size_t MaximumCommittedBytes = 256U * 1024U * 1024U;
 
-        bool IsAnimation(const Assets::AssetTypeId &type) noexcept {
-            return type.Value() == "core.animation.skeleton" || type.Value() == "core.animation.clip" ||
-                   type.Value() == "core.animation.graph";
+        /** @brief Selects Scene decoders that verify canonical artifact metadata with the payload. */
+        bool RequiresSceneEnvelope(const Assets::AssetTypeId &type) noexcept {
+            const auto name = type.Value();
+            return name == Assets::NavMeshAssetTypeName || name == "core.animation.skeleton" || name == "core.animation.clip" ||
+                   name == "core.animation.graph";
         }
 
         bool MatchesCommittedIdentity(const Assets::AssetRecord *record, const Assets::AssetCookManifestEntry &entry,
@@ -30,9 +35,9 @@ namespace Horo::Application::Internal {
         class SceneBytes final : public Assets::IAssetProvider {
         public:
             SceneBytes(const Assets::IAssetProvider &payloads, const Assets::IAssetProvider &artifacts,
-                       std::vector<Assets::AssetId> animation)
-                : payloads_(payloads), artifacts_(artifacts), animation_(std::move(animation)) {
-                std::ranges::sort(animation_);
+                       std::vector<Assets::AssetId> enveloped)
+                : payloads_(payloads), artifacts_(artifacts), enveloped_(std::move(enveloped)) {
+                std::ranges::sort(enveloped_);
             }
 
             Result<bool> Exists(Assets::AssetId id, const CancellationToken &cancellation) const override {
@@ -45,19 +50,20 @@ namespace Horo::Application::Internal {
 
         private:
             const Assets::IAssetProvider &Select(Assets::AssetId id) const noexcept {
-                return std::ranges::binary_search(animation_, id) ? artifacts_ : payloads_;
+                return std::ranges::binary_search(enveloped_, id) ? artifacts_ : payloads_;
             }
 
             const Assets::IAssetProvider &payloads_;
             const Assets::IAssetProvider &artifacts_;
-            std::vector<Assets::AssetId> animation_;
+            std::vector<Assets::AssetId> enveloped_;
         };
     }  // namespace
 
     /** @copydoc CommittedSceneAssets::Capture */
     Result<std::unique_ptr<CommittedSceneAssets>> CommittedSceneAssets::Capture(const DurableFileSystem &files,
                                                                                 const SceneCookSelection &selection,
-                                                                                const Assets::AssetRegistrySnapshot &registry) {
+                                                                                const Assets::AssetRegistrySnapshot &registry,
+                                                                                const SceneAssetRetention &retain) {
         auto generation = Assets::ResolveCurrentCookGeneration(files, selection.targetRoot);
         if (generation.HasError())
             return Result<std::unique_ptr<CommittedSceneAssets>>::Failure(generation.ErrorValue());
@@ -68,7 +74,6 @@ namespace Horo::Application::Internal {
             return Result<std::unique_ptr<CommittedSceneAssets>>::Failure(contents.ErrorValue());
         auto published = std::move(contents).Value();
         auto result = std::make_unique<CommittedSceneAssets>();
-        std::vector<Assets::AssetId> animation;
         result->artifacts_.reserve(published.entries.size());
         for (std::size_t index = 0; index < published.entries.size(); ++index) {
             const auto &entry = published.entries[index];
@@ -78,17 +83,33 @@ namespace Horo::Application::Internal {
                 return Result<std::unique_ptr<CommittedSceneAssets>>::Failure(artifact.ErrorValue());
             if (!MatchesCommittedIdentity(record, entry, artifact.Value(), selection.target))
                 return Result<std::unique_ptr<CommittedSceneAssets>>::Failure(MakeError(InvalidCook));
-            if (IsAnimation(entry.assetType))
-                animation.push_back(entry.assetId);
-            // Keep the actual verified metadata and bytes. This provider is populated only from
-            // committed envelopes, never from synthetic material or Scene artifacts.
-            result->provider_.Insert(entry.assetId, artifact.Value().payload);
-            // Transfer the original verified envelope, including its framing and whole-artifact digest input.
-            // The decoded payload provider retains its established Scene/material loading semantics.
-            result->artifactProvider_.Insert(entry.assetId, std::move(published.artifacts[index]));
             result->artifacts_.push_back(std::move(artifact).Value());
         }
-        result->sceneProvider_ = std::make_unique<SceneBytes>(result->provider_, result->artifactProvider_, std::move(animation));
+        std::set<Assets::AssetId> selected;
+        if (retain) {
+            auto ids = retain(*result);
+            if (ids.HasError())
+                return Result<std::unique_ptr<CommittedSceneAssets>>::Failure(std::move(ids).ErrorValue());
+            selected.insert(ids.Value().begin(), ids.Value().end());
+        }
+        std::vector<Assets::AssetId> enveloped;
+        std::size_t kept{};
+        for (std::size_t index = 0; index < result->artifacts_.size(); ++index) {
+            auto &artifact = result->artifacts_[index];
+            if (retain && selected.erase(artifact.id) == 0)
+                continue;
+            if (RequiresSceneEnvelope(artifact.type))
+                enveloped.push_back(artifact.id);
+            result->provider_.Insert(artifact.id, artifact.payload);
+            result->artifactProvider_.Insert(artifact.id, std::move(published.artifacts[index]));
+            if (kept != index)
+                result->artifacts_[kept] = std::move(artifact);
+            ++kept;
+        }
+        if (!selected.empty())
+            return Result<std::unique_ptr<CommittedSceneAssets>>::Failure(MakeError(InvalidCook, "A selected payload is missing."));
+        result->artifacts_.resize(kept);
+        result->sceneProvider_ = std::make_unique<SceneBytes>(result->provider_, result->artifactProvider_, std::move(enveloped));
         return Result<std::unique_ptr<CommittedSceneAssets>>::Success(std::move(result));
     }
 
@@ -109,8 +130,13 @@ namespace Horo::Application::Internal {
 
     /** @copydoc CommittedSceneAssets::Find */
     const Assets::AssetCookArtifact *CommittedSceneAssets::Find(const Assets::AssetId id) const noexcept {
-        const auto found = std::ranges::find(artifacts_, id, &Assets::AssetCookArtifact::id);
-        return found == artifacts_.end() ? nullptr : std::to_address(found);
+        const auto found = std::ranges::lower_bound(artifacts_, id, {}, &Assets::AssetCookArtifact::id);
+        return found == artifacts_.end() || found->id != id ? nullptr : std::to_address(found);
+    }
+
+    /** @copydoc CommittedSceneAssets::Artifacts */
+    std::span<const Assets::AssetCookArtifact> CommittedSceneAssets::Artifacts() const noexcept {
+        return artifacts_;
     }
 
     /** @copydoc CommittedSceneAssets::DecodeScene */
@@ -118,6 +144,23 @@ namespace Horo::Application::Internal {
         const auto *artifact = Find(id);
         if (!artifact || artifact->type.Value() != "core.scene")
             return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(InvalidCook));
-        return SceneCook::DecodeCookedSceneWithEmbeddedRevision(artifact->payload, SceneCook::SceneDefinitionIdForAsset(id));
+        auto definition = SceneCook::DecodeCookedSceneWithEmbeddedRevision(artifact->payload, SceneCook::SceneDefinitionIdForAsset(id));
+        if (definition.HasError())
+            return definition;
+        std::set<Assets::AssetId> verified;
+        for (const auto &child : definition.Value().ChildScenes())
+            if (verified.insert(child.asset).second)
+                if (const auto checked = DecodeChildScene(child); checked.HasError())
+                    return checked;
+        return definition;
+    }
+
+    /** @copydoc CommittedSceneAssets::DecodeChildScene */
+    Result<Runtime::RuntimeSceneDefinition> CommittedSceneAssets::DecodeChildScene(
+        const Runtime::SceneChildDefinitionReference &reference) const {
+        const auto *artifact = Find(reference.asset);
+        if (!artifact || artifact->type.Value() != "core.scene")
+            return Result<Runtime::RuntimeSceneDefinition>::Failure(MakeError(InvalidCook, "The exact child Scene artifact is missing."));
+        return SceneCook::DecodeCookedChildScene(artifact->payload, reference);
     }
 }  // namespace Horo::Application::Internal

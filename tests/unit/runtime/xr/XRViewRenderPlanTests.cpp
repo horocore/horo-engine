@@ -397,6 +397,81 @@ namespace Horo::XR {
                     .capabilities = {XRHardLimits::MaximumViews, true, true, false}};
         }
 
+        TEST_CASE("XR World canvas uses each live eye rectangle and one shared readable plane", "[unit][xr][multiview][world-canvas]") {
+            PlanFixture fixture;
+            fixture.targets[1].renderRectangle = {21, 13, 512, 640};
+            fixture.views[1].pose.components.positionMeters.value = Math::Vec3{0.064F, 1.7F, 0};
+            const auto plan = fixture.Create();
+            auto active = MultiviewOwner(fixture);
+            const std::array origins{OriginSample(fixture, 0), OriginSample(fixture, 1)};
+            const auto scene =
+                XRMultiviewScene::Create({.plan = plan, .referenceToWorld = origins, .publication = active.renderer}, active);
+            REQUIRE(scene.HasValue());
+
+            XRWorldCanvasDescriptor canvas{Math::Mat4::Identity(), 120};
+            canvas.worldFromCanvas.values[12] = 3;
+            canvas.worldFromCanvas.values[13] = 1.7F;
+            canvas.worldFromCanvas.values[14] = -2;
+            const auto allocationsBefore = Tests::AllocationProbe::Count();
+            const auto projected = scene.Value().ProjectWorldCanvas(canvas, active);
+            const auto allocationsAfter = Tests::AllocationProbe::Count();
+            REQUIRE(projected.HasValue());
+            CHECK(allocationsBefore == allocationsAfter);
+            const auto &stereo = projected.Value();
+            REQUIRE(stereo.drawable);
+            CHECK(stereo.publication == active.renderer);
+            CHECK(stereo.worldFromCanvas.values == canvas.worldFromCanvas.values);
+            CHECK(stereo.views[0].view == fixture.views[0].id);
+            CHECK(stereo.views[1].view == fixture.views[1].id);
+            CHECK(stereo.views[0].arrayLayer == 0);
+            CHECK(stereo.views[1].arrayLayer == 1);
+            CHECK(stereo.views[1].renderRectangle == fixture.targets[1].renderRectangle);
+            CHECK(Math::NearlyEqual(stereo.views[0].projectedSpanPixels, 256.0F));
+            CHECK(Math::NearlyEqual(stereo.views[1].projectedSpanPixels, 128.0F));
+            CHECK(!Math::NearlyEqual(stereo.views[0].canvasToClip.At(0, 3), stereo.views[1].canvasToClip.At(0, 3)));
+
+            canvas.minimumSpanPixels = 129;
+            const auto unreadable = scene.Value().ProjectWorldCanvas(canvas, active);
+            REQUIRE(unreadable.HasValue());
+            CHECK_FALSE(unreadable.Value().drawable);
+
+            canvas.minimumSpanPixels = 1;
+            canvas.worldFromCanvas.values[14] = -0.05F;
+            const auto tooClose = scene.Value().ProjectWorldCanvas(canvas, active);
+            REQUIRE(tooClose.HasValue());
+            CHECK_FALSE(tooClose.Value().drawable);
+            canvas.worldFromCanvas.values[14] = -2;
+            canvas.worldFromCanvas.values[12] = 40;
+            const auto offscreen = scene.Value().ProjectWorldCanvas(canvas, active);
+            REQUIRE(offscreen.HasValue());
+            CHECK_FALSE(offscreen.Value().drawable);
+
+            const auto diagonal = Math::Transform{.translation = {5.12F, 3.82F, -2},
+                                                  .rotation = Math::Quaternion::FromEulerRadians({0, 0, Math::Pi / 4}),
+                                                  .scale = {0.3F, 0.3F, 1}}
+                                      .TryToMatrix();
+            REQUIRE(diagonal.HasValue());
+            canvas.worldFromCanvas = diagonal.Value();
+            const auto beyondCorner = scene.Value().ProjectWorldCanvas(canvas, active);
+            REQUIRE(beyondCorner.HasValue());
+            CHECK_FALSE(beyondCorner.Value().drawable);
+
+            const auto edgeOn =
+                Math::Transform{.translation = {3, 1.7F, -2}, .rotation = Math::Quaternion::FromEulerRadians({0, Math::Pi / 2, 0})}
+                    .TryToMatrix();
+            REQUIRE(edgeOn.HasValue());
+            canvas.worldFromCanvas = edgeOn.Value();
+            const auto thin = scene.Value().ProjectWorldCanvas(canvas, active);
+            REQUIRE(thin.HasValue());
+            CHECK_FALSE(thin.Value().drawable);
+
+            canvas.minimumSpanPixels = 0;
+            RequireFailureIdentity(scene.Value().ProjectWorldCanvas(canvas, active), XRErrors::ViewPlanInvalid);
+            canvas.minimumSpanPixels = 1;
+            active.originRevision = Horo::Tests::IdentityValue<XRWorldOriginRevision>(10);
+            RequireFailureIdentity(scene.Value().ProjectWorldCanvas(canvas, active), XRErrors::OriginRevisionStale);
+        }
+
         TEST_CASE("XR multiview converts actual asymmetric projections and declared reference poses", "[unit][xr][multiview]") {
             PlanFixture fixture;
             fixture.views[0].projection = {-0.5F, 1.5F, -1.0F, 1.0F};

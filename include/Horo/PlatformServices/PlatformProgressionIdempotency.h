@@ -23,7 +23,8 @@ namespace Horo::PlatformServices {
 
     namespace detail {
         /** @brief Checks whether a fixed byte array contains a nonzero value. */
-        template <std::size_t Size> [[nodiscard]] constexpr bool HasNonZeroByte(const std::array<std::byte, Size> &bytes) noexcept {
+        template <std::size_t Size>
+        [[nodiscard]] constexpr bool HasNonZeroProgressionByte(const std::array<std::byte, Size> &bytes) noexcept {
             for (const auto byte : bytes) {
                 if (byte != std::byte{})
                     return true;
@@ -38,7 +39,7 @@ namespace Horo::PlatformServices {
 
         /** @brief Checks the reserved all-zero representation. @return True when valid. */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return detail::HasNonZeroByte(bytes);
+            return detail::HasNonZeroProgressionByte(bytes);
         }
 
         [[nodiscard]] constexpr auto operator<=>(const PlatformProgressionOccurrenceId &) const noexcept = default;
@@ -50,7 +51,7 @@ namespace Horo::PlatformServices {
 
         /** @brief Checks the reserved all-zero representation. @return True when valid. */
         [[nodiscard]] constexpr bool IsValid() const noexcept {
-            return detail::HasNonZeroByte(bytes);
+            return detail::HasNonZeroProgressionByte(bytes);
         }
 
         [[nodiscard]] constexpr auto operator<=>(const PlatformProgressionMutationId &) const noexcept = default;

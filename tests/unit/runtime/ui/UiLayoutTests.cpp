@@ -8,6 +8,7 @@
 #include <limits>
 #include <new>
 #include <optional>
+#include <vector>
 
 namespace {
     std::atomic<std::size_t> layoutAllocations{};
@@ -41,6 +42,14 @@ namespace Horo::Runtime::Ui {
 
         template <typename Id> Id Stable(const std::uint8_t marker) {
             return Id::Create(StableBytes(marker)).Value();
+        }
+
+        /** @brief Builds distinct stable IDs for the large declarative fixture. */
+        UiElementId LargeElementId(const std::uint32_t ordinal) {
+            SerializedUiId bytes{};
+            bytes[bytes.size() - 2] = static_cast<std::uint8_t>(ordinal >> 8U);
+            bytes.back() = static_cast<std::uint8_t>(ordinal);
+            return UiElementId::Create(bytes).Value();
         }
 
         UiOwnershipGeneration Owner(const std::uint64_t value = 31) {
@@ -79,10 +88,10 @@ namespace Horo::Runtime::Ui {
             return std::move(result).Value();
         }
 
-        UiLayoutEngine Engine(const std::uint32_t snapshots = 3) {
+        UiLayoutEngine Engine(const std::uint32_t snapshots = 3, const bool measureCpuWork = false) {
             const auto tree = TreeDescriptor();
-            auto result = UiLayoutEngine::Create(
-                {tree.instance, tree.canvas, tree.document, tree.limits.elements, 8, snapshots, Rev<UiInteractionRevision>(1)});
+            auto result = UiLayoutEngine::Create({tree.instance, tree.canvas, tree.document, tree.limits.elements, 8, snapshots,
+                                                  Rev<UiInteractionRevision>(1), measureCpuWork});
             REQUIRE(result.HasValue());
             return std::move(result).Value();
         }
@@ -178,14 +187,17 @@ namespace Horo::Runtime::Ui {
         public:
             mutable std::uint32_t textCalls{};
             mutable std::uint32_t imageCalls{};
+            mutable UiCanvasScaleFactor textScale;
             bool failText{};
             bool failImage{};
 
             Result<UiLayoutIntrinsicMeasurement> MeasureText(const UiLayoutIntrinsicRequest &request) const override {
                 ++textCalls;
+                textScale = request.fontScale;
                 if (failText)
                     return Result<UiLayoutIntrinsicMeasurement>::Failure(MakeError(UiErrors::LayoutIntrinsicUnavailable));
-                return Result<UiLayoutIntrinsicMeasurement>::Success({{128, 32}, 24, true, false});
+                const auto width = static_cast<UiScalar>(std::int64_t{128} * textScale.numerator / textScale.denominator);
+                return Result<UiLayoutIntrinsicMeasurement>::Success({{width, 32}, 24, true, false});
             }
 
             Result<UiLayoutIntrinsicMeasurement> MeasureImage(const UiLayoutIntrinsicRequest &request) const override {
@@ -297,6 +309,23 @@ namespace Horo::Runtime::Ui {
             REQUIRE(candidate.Candidate().Records().size() == 4);
             candidate.Abandon();
             REQUIRE(engine.IsDrained());
+        }
+
+        TEST_CASE("Layout timing records production preparation without changing publication", "[runtime_ui][layout][profile]") {
+            auto tree = Tree();
+            auto engine = Engine(3, true);
+            CountingEvaluator evaluator;
+            REQUIRE(engine.Update(tree, Request(evaluator)).HasValue());
+            REQUIRE(engine.Update(tree, Request(evaluator)).HasValue());
+            auto replacement = Engine(3, true);
+            CHECK(replacement.CpuWorkStatistics().attempts == 0);
+            engine.Shutdown();
+            REQUIRE(engine.Update(tree, Request(evaluator)).HasError());
+            const auto timing = engine.CpuWorkStatistics();
+            CHECK(timing.enabled);
+            CHECK(timing.attempts == 3);
+            CHECK(timing.succeeded == 2);
+            CHECK(timing.elapsedNanoseconds >= timing.lastNanoseconds);
         }
 
         TEST_CASE("Incremental layout publishes immutable authored-order geometry", "[runtime_ui][layout]") {
@@ -492,6 +521,37 @@ namespace Horo::Runtime::Ui {
             REQUIRE(updated.Value().Get(tree.Find(Stable<UiElementId>(5)).Value()).HasValue());
         }
 
+        TEST_CASE("Generated malformed root constraints never publish over the live layout", "[runtime_ui][layout][fuzz]") {
+            auto tree = Tree();
+            auto engine = Engine();
+            CountingEvaluator evaluator;
+            const auto original = engine.Update(tree, Request(evaluator));
+            REQUIRE(original.HasValue());
+            const auto interaction = original.Value().Descriptor().interaction;
+            std::uint32_t state = 0x4103c218U;
+            for (std::size_t iteration = 0; iteration < 128; ++iteration) {
+                state = state * 1664525U + 1013904223U;
+                CAPTURE(iteration);
+                auto candidate = Request(evaluator, 2);
+                const auto boundary = static_cast<std::int32_t>((state >> 16U) + 1);
+                if (iteration % 2 == 0)
+                    candidate.rootConstraints.minimum.width = candidate.rootConstraints.maximum.width + boundary;
+                else
+                    candidate.rootContent.extent.height = -boundary;
+                const auto result = engine.Update(tree, candidate);
+                REQUIRE(result.HasError());
+                CHECK_FALSE(result.ErrorValue().code.Value().empty());
+                const auto retained = engine.Update(tree, Request(evaluator));
+                REQUIRE(retained.HasValue());
+                CHECK(retained.Value().Descriptor().interaction == interaction);
+                CHECK(retained.Value().Records().data() == original.Value().Records().data());
+            }
+            const auto recovered = engine.Update(tree, Request(evaluator, 2));
+            REQUIRE(recovered.HasValue());
+            CHECK(recovered.Value().Descriptor().interaction == Rev<UiInteractionRevision>(2));
+            CHECK(original.Value().Descriptor().interaction == interaction);
+        }
+
         TEST_CASE("Layout failure retains the last good generation and pending dirtiness", "[runtime_ui][layout][failure]") {
             auto tree = Tree();
             auto engine = Engine();
@@ -567,6 +627,49 @@ namespace Horo::Runtime::Ui {
             REQUIRE(scaled.Value().Descriptor().fontScale == UiCanvasScaleFactor{3, 2});
         }
 
+        TEST_CASE("Font scale reaches declarative text and remeasures only affected layout branches", "[runtime_ui][layout][font_scale]") {
+            auto tree = Tree();
+            const auto root = tree.Root().Value().handle;
+            const auto group = tree.Find(Stable<UiElementId>(2)).Value();
+            const auto text = tree.Find(Stable<UiElementId>(3)).Value();
+            const auto image = tree.Find(Stable<UiElementId>(4)).Value();
+            const std::array styles{Descriptor(root, {}), Descriptor(group, {}),
+                                    Descriptor(text, {}, {UiLayoutIntrinsicKind::Text, true, {}}),
+                                    Descriptor(image, {}, {UiLayoutIntrinsicKind::Image, true, {}})};
+            IntrinsicProvider provider;
+            auto evaluator = UiDeclarativeLayoutEvaluator::Create(styles, &provider);
+            REQUIRE(evaluator.HasValue());
+            auto engine = Engine();
+            auto request = Request(evaluator.Value());
+            const auto baseline = engine.Update(tree, request);
+            REQUIRE(baseline.HasValue());
+            REQUIRE(baseline.Value().Get(text).Value().measurement.desired.width == 128);
+            const auto imageCalls = provider.imageCalls;
+            request.fontScale = {3, 2};
+            const auto scaled = engine.Update(tree, request);
+            REQUIRE(scaled.HasValue());
+            CHECK(provider.textScale == request.fontScale);
+            CHECK(provider.imageCalls == imageCalls);
+            CHECK(scaled.Value().Get(text).Value().measurement.desired.width == 192);
+            CHECK(scaled.Value().Get(group).Value().work.HasCause(UiLayoutWorkCause::FontScale));
+            CHECK(scaled.Value().Get(image).Value().work.measurements == 0);
+            CHECK(baseline.Value().Get(text).Value().measurement.desired.width == 128);
+
+            request.fontScale = {2, 1};
+            provider.failText = true;
+            RequireError(engine.Update(tree, request), UiErrors::LayoutIntrinsicUnavailable);
+            auto retainedRequest = request;
+            retainedRequest.fontScale = {3, 2};
+            const auto retained = engine.Update(tree, retainedRequest);
+            REQUIRE(retained.HasValue());
+            CHECK(retained.Value().Descriptor().interaction == scaled.Value().Descriptor().interaction);
+            provider.failText = false;
+            const auto recovered = engine.Update(tree, request);
+            REQUIRE(recovered.HasValue());
+            CHECK(recovered.Value().Get(text).Value().measurement.desired.width == 256);
+            CHECK(provider.imageCalls == imageCalls);
+        }
+
         TEST_CASE("Layout frame-hot updates allocate no fallback storage", "[runtime_ui][layout][allocation]") {
             auto tree = Tree();
             auto engine = Engine();
@@ -580,6 +683,79 @@ namespace Horo::Runtime::Ui {
                 REQUIRE(snapshot.HasValue());
             }
             REQUIRE(layoutAllocations.load(std::memory_order_relaxed) == before);
+        }
+
+        TEST_CASE("Large nested declarative layouts preserve geometry within bounded preparation budgets",
+                  "[runtime_ui][layout][allocation][qualification]") {
+            constexpr std::uint32_t groups = 32;
+            constexpr std::uint32_t leavesPerGroup = 64;
+            constexpr std::uint32_t elementCount = 1 + groups * (1 + leavesPerGroup);
+            auto descriptor = TreeDescriptor();
+            descriptor.limits = {elementCount, 3, 8};
+            std::vector<UiElementDescriptor> elements;
+            elements.reserve(elementCount);
+            elements.push_back({LargeElementId(1), {}});
+            for (std::uint32_t group = 0; group < groups; ++group) {
+                const auto parent = LargeElementId(2 + group * (1 + leavesPerGroup));
+                elements.push_back({parent, LargeElementId(1)});
+                for (std::uint32_t leaf = 0; leaf < leavesPerGroup; ++leaf)
+                    elements.push_back({LargeElementId(3 + group * (1 + leavesPerGroup) + leaf), parent});
+            }
+
+            auto allocated = UiElementSlotAllocator::Create(Owner());
+            REQUIRE(allocated.HasValue());
+            auto allocator = std::move(allocated).Value();
+            auto tree = UiElementTree::Create(allocator, descriptor, elements);
+            REQUIRE(tree.HasValue());
+            auto engine = UiLayoutEngine::Create(
+                {descriptor.instance, descriptor.canvas, descriptor.document, elementCount, 8, 3, Rev<UiInteractionRevision>(1), true});
+            REQUIRE(engine.HasValue());
+
+            UiLayoutStyle groupStyle;
+            groupStyle.container.kind = UiLayoutContainerKind::Stack;
+            groupStyle.container.orientation = UiLayoutOrientation::Vertical;
+            UiLayoutStyle leafStyle;
+            leafStyle.width = UiLength::Dip(16);
+            leafStyle.height = UiLength::Dip(8);
+            std::vector<UiLayoutElementDescriptor> styles;
+            styles.reserve(elementCount);
+            for (std::uint32_t index = 0; index < elementCount; ++index) {
+                const auto handle = tree.Value().Find(LargeElementId(index + 1));
+                REQUIRE(handle.HasValue());
+                styles.push_back(
+                    Descriptor(handle.Value(), index == 0 || (index - 1) % (leavesPerGroup + 1) == 0 ? groupStyle : leafStyle));
+            }
+            auto evaluator = UiDeclarativeLayoutEvaluator::Create(styles);
+            REQUIRE(evaluator.HasValue());
+            auto layout = std::move(engine).Value();
+            const auto request = Request(evaluator.Value());
+            const auto before = layoutAllocations.load(std::memory_order_relaxed);
+            const auto baseline = layout.Update(tree.Value(), request);
+            const auto coldAllocations = layoutAllocations.load(std::memory_order_relaxed) - before;
+            REQUIRE(baseline.HasValue());
+            REQUIRE(baseline.Value().Records().size() == elementCount);
+            CHECK(coldAllocations == 0);
+            // Wall-time ceilings catch stalls on shared Debug runners. Work counts below are the portable budget.
+            CHECK(layout.CpuWorkStatistics().lastNanoseconds < 250'000'000);
+
+            const auto leaf = styles.back().element;
+            REQUIRE(layout.Invalidate({leaf, tree.Value().Revision(), UiLayoutDirtyKind::Measure}).HasValue());
+            const auto beforeIncremental = layoutAllocations.load(std::memory_order_relaxed);
+            const auto updated = layout.Update(tree.Value(), request);
+            const auto incrementalAllocations = layoutAllocations.load(std::memory_order_relaxed) - beforeIncremental;
+            REQUIRE(updated.HasValue());
+            REQUIRE(updated.Value().Records().size() == elementCount);
+            CHECK(incrementalAllocations == 0);
+            CHECK(layout.CpuWorkStatistics().lastNanoseconds < 100'000'000);
+            std::uint32_t measurements = 0;
+            for (std::size_t index = 0; index < elementCount; ++index) {
+                const auto &oldRecord = baseline.Value().Records()[index];
+                const auto &newRecord = updated.Value().Records()[index];
+                REQUIRE(newRecord.element == oldRecord.element);
+                REQUIRE(newRecord.arrangement.contentBox == oldRecord.arrangement.contentBox);
+                measurements += newRecord.work.measurements;
+            }
+            CHECK(measurements == 3);
         }
 
         TEST_CASE("Declarative layout resolves anchors pivots offsets box model and intrinsic metrics", "[runtime_ui][layout][semantic]") {
@@ -634,6 +810,87 @@ namespace Horo::Runtime::Ui {
             REQUIRE(provider.textCalls > 0);
             REQUIRE(snapshot.Value().Get(stretched).Value().arrangement.contentBox.extent == UiLogicalExtent{1024, 768});
             REQUIRE(snapshot.Value().Get(root).Value().arrangement.paddingBox == UiLogicalRect{{-8, -8}, {1040, 784}});
+        }
+
+        TEST_CASE("Reading direction republishes nested boxes and preserves physical placement", "[runtime_ui][layout][direction]") {
+            auto tree = Tree();
+            const auto root = tree.Root().Value().handle;
+            const auto group = tree.Find(Stable<UiElementId>(2)).Value();
+            const auto leaf = tree.Find(Stable<UiElementId>(3)).Value();
+            const auto physical = tree.Find(Stable<UiElementId>(4)).Value();
+            UiLayoutStyle groupStyle;
+            groupStyle.width = UiLength::Dip(100);
+            groupStyle.height = UiLength::Dip(50);
+            UiLayoutStyle leafStyle;
+            leafStyle.width = UiLength::Dip(20);
+            leafStyle.height = UiLength::Dip(10);
+            leafStyle.padding.left = 3;
+            UiLayoutStyle physicalStyle = leafStyle;
+            physicalStyle.positioning = UiLayoutPositioning::Absolute;
+            physicalStyle.offsets.left = 150;
+            physicalStyle.horizontalPlacement = UiLayoutHorizontalPlacement::Physical;
+            const std::array styles{Descriptor(root, {}), Descriptor(group, groupStyle), Descriptor(leaf, leafStyle),
+                                    Descriptor(physical, physicalStyle)};
+            auto evaluator = UiDeclarativeLayoutEvaluator::Create(styles);
+            REQUIRE(evaluator.HasValue());
+            auto engine = Engine();
+            auto request = Request(evaluator.Value());
+            const auto left = engine.Update(tree, request);
+            REQUIRE(left.HasValue());
+            request.inlineDirection = UiLayoutInlineDirection::RightToLeft;
+            const auto right = engine.Update(tree, request);
+            REQUIRE(right.HasValue());
+            CHECK(right.Value().Descriptor().inlineDirection == UiLayoutInlineDirection::RightToLeft);
+            CHECK(right.Value().Descriptor().interaction > left.Value().Descriptor().interaction);
+            const auto groupBox = right.Value().Get(group).Value().arrangement.contentBox;
+            CHECK(groupBox.origin.x == request.rootContent.extent.width - groupBox.extent.width);
+            const auto leafBoxes = right.Value().Get(leaf).Value().arrangement;
+            CHECK(leafBoxes.contentBox.origin.x == groupBox.origin.x + groupBox.extent.width - leafBoxes.contentBox.extent.width);
+            CHECK(leafBoxes.paddingBox.origin.x == leafBoxes.contentBox.origin.x);
+            CHECK(leafBoxes.paddingBox.extent.width == leafBoxes.contentBox.extent.width + 3);
+            CHECK(right.Value().Get(physical).Value().arrangement == left.Value().Get(physical).Value().arrangement);
+            CHECK(left.Value().Get(group).Value().arrangement.contentBox.origin.x == 0);
+
+            request.inlineDirection = static_cast<UiLayoutInlineDirection>(255);
+            RequireError(engine.Update(tree, request), UiErrors::LayoutInvalid);
+            request.inlineDirection = UiLayoutInlineDirection::RightToLeft;
+            const auto unchanged = engine.Update(tree, request);
+            REQUIRE(unchanged.HasValue());
+            CHECK(unchanged.Value().Descriptor().interaction == right.Value().Descriptor().interaction);
+        }
+
+        TEST_CASE("Reading direction reverses visual inline order while retaining authored layout records",
+                  "[runtime_ui][layout][direction]") {
+            auto tree = FlatTree();
+            const auto root = tree.Root().Value().handle;
+            const auto first = tree.Find(Stable<UiElementId>(2)).Value();
+            const auto second = tree.Find(Stable<UiElementId>(3)).Value();
+            const auto third = tree.Find(Stable<UiElementId>(4)).Value();
+            UiLayoutStyle row;
+            row.container.orientation = UiLayoutOrientation::Horizontal;
+            row.container.gap = 5;
+            UiLayoutStyle narrow;
+            narrow.width = UiLength::Dip(20);
+            narrow.height = UiLength::Dip(10);
+            auto wide = narrow;
+            wide.width = UiLength::Dip(30);
+            const std::array styles{Descriptor(root, row), Descriptor(first, narrow), Descriptor(second, wide), Descriptor(third, narrow)};
+            auto evaluated = UiDeclarativeLayoutEvaluator::Create(styles);
+            REQUIRE(evaluated.HasValue());
+            auto request = Request(evaluated.Value());
+            request.rootContent = {{40, 0}, {100, 100}};
+            request.rootConstraints.maximum = {100, 100};
+            request.inlineDirection = UiLayoutInlineDirection::RightToLeft;
+            const auto result = Engine().Update(tree, request);
+            REQUIRE(result.HasValue());
+            const auto records = result.Value().Records();
+            REQUIRE(records.size() == styles.size());
+            CHECK(records[1].element == first);
+            CHECK(records[2].element == second);
+            CHECK(records[3].element == third);
+            CHECK(records[1].arrangement.contentBox == UiLogicalRect{{120, 0}, {20, 10}});
+            CHECK(records[2].arrangement.contentBox == UiLogicalRect{{85, 0}, {30, 10}});
+            CHECK(records[3].arrangement.contentBox == UiLogicalRect{{60, 0}, {20, 10}});
         }
 
         TEST_CASE("Declarative layout applies aspect ratio and reports deterministic bound conflicts", "[runtime_ui][layout][semantic]") {
@@ -735,19 +992,34 @@ namespace Horo::Runtime::Ui {
                 Descriptor(image, imageStyle, {UiLayoutIntrinsicKind::Image, false, {40, 20}}),
                 Descriptor(remaining, {}),
             };
+            auto failedElement = image;
+            RequireError(UiDeclarativeLayoutEvaluator::Create(descriptors, nullptr, &failedElement), UiErrors::LayoutIntrinsicUnavailable);
+            CHECK(failedElement == text);
             IntrinsicProvider provider;
-            auto evaluator = UiDeclarativeLayoutEvaluator::Create(descriptors, &provider);
+            auto evaluator = UiDeclarativeLayoutEvaluator::Create(descriptors, &provider, &failedElement);
             REQUIRE(evaluator.HasValue());
+            CHECK_FALSE(failedElement.IsValid());
             auto engine = Engine();
             auto first = engine.Update(tree, Request(evaluator.Value()));
             REQUIRE(first.HasValue());
             const auto firstInteraction = first.Value().Descriptor().interaction;
             provider.failText = true;
             REQUIRE(engine.Invalidate({text, tree.Revision(), UiLayoutDirtyKind::Measure}).HasValue());
-            RequireError(engine.Update(tree, Request(evaluator.Value(), 2)), UiErrors::LayoutIntrinsicUnavailable);
-            REQUIRE(first.Value().Descriptor().interaction == firstInteraction);
+            auto request = Request(evaluator.Value(), 2);
+            request.failedElement = &failedElement;
+            RequireError(engine.Update(tree, request), UiErrors::LayoutIntrinsicUnavailable);
+            CHECK(failedElement == text);
+            CHECK(first.Value().Descriptor().interaction == firstInteraction);
+            auto invalid = request;
+            invalid.evaluator = nullptr;
+            RequireError(engine.Update(tree, invalid), UiErrors::LayoutInvalid);
+            CHECK_FALSE(failedElement.IsValid());
             provider.failText = false;
-            REQUIRE(engine.Update(tree, Request(evaluator.Value(), 2)).HasValue());
+            failedElement = image;
+            const auto recovered = engine.Update(tree, request);
+            REQUIRE(recovered.HasValue());
+            CHECK(recovered.Value().Descriptor().interaction.Value() == firstInteraction.Value() + 1);
+            CHECK_FALSE(failedElement.IsValid());
             provider.failImage = true;
             REQUIRE(engine.Invalidate({image, tree.Revision(), UiLayoutDirtyKind::Measure}).HasValue());
             REQUIRE(engine.Update(tree, Request(evaluator.Value(), 3)).Value().Get(image).Value().measurement.desired ==

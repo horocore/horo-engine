@@ -34,6 +34,9 @@ namespace Horo::Editor {
         Sequence,
         PCGGraph,
         Prefab,
+        BlackboardSchema,
+        EnvironmentQuery,
+        DecisionGraph,
     };
 
     /** @brief Caller that requested one source-open operation. */
@@ -72,11 +75,14 @@ namespace Horo::Editor {
         std::vector<std::string> pcgGraphExtensions;     /**< Binary PCG source suffixes; bypass text admission. */
         std::vector<std::string> sequenceExtensions;     /**< Versioned cinematic sequence source suffixes. */
 
-        std::vector<std::string> prefabExtensions; /**< Canonical prefab authored sources. */
+        std::vector<std::string> prefabExtensions;           /**< Canonical prefab authored sources. */
+        std::vector<std::string> blackboardSchemaExtensions; /**< Binary Blackboard schema source suffixes. */
+        std::vector<std::string> environmentQueryExtensions; /**< Typed Environment Query source suffixes. */
+        std::vector<std::string> decisionGraphExtensions;    /**< Registered semantic Decision graph source suffixes. */
 
         /**
          * @brief Returns the default source and authored-document opening policy.
-         * @return A value containing native source, Horo Script, project-text, UI Canvas, cinematic sequence and binary PCG extensions.
+         * @return Enabled source and authored-document extensions.
          */
         [[nodiscard]] static SourceFilePolicy Default();
     };

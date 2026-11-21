@@ -89,7 +89,7 @@ namespace Horo::PlatformServices {
     struct PlatformProjectConfigurationLimits final {
         std::uint32_t maximumContributions{64};
         std::uint32_t maximumTrustedModules{128};
-        std::uint32_t maximumProjectIdBytes{128};
+        std::uint32_t maximumProjectIdBytes{PlatformServicesMaximumProjectIdBytes};
         std::uint32_t maximumProviderKeyBytes{128};
         std::uint32_t maximumModuleIdBytes{128};
     };
@@ -151,6 +151,17 @@ namespace Horo::PlatformServices {
         std::array<bool, static_cast<std::size_t>(PlatformServiceKind::Count)> selectedServices_{};
         Sha256Digest fingerprint_{};
     };
+
+    /**
+     * @brief Validates portable candidate shape without claiming provider installation, trust or availability.
+     * @param candidate Detached source policy; host profile is explicit and never inferred.
+     * @param limits Finite typed bounds.
+     * @return Success for portable semantics, or typed shape/limit/Null-required-capability failure.
+     * @details Exact provider selection remains unresolved. This operation publishes no immutable runtime policy;
+     * BuildPlatformProjectConfiguration must still resolve the real trusted manifest set before use.
+     */
+    [[nodiscard]] Result<void> ValidatePlatformProjectConfigurationCandidate(const PlatformProjectConfigurationCandidate &candidate,
+                                                                             const PlatformProjectConfigurationLimits &limits = {});
 
     /**
      * @brief Validates one complete project policy and trusted inert provider contribution set.

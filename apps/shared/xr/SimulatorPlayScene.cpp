@@ -159,7 +159,10 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc Editor::IEditorPlayXrHost::MakeSceneParticipant */
-    std::unique_ptr<Runtime::SceneActivationParticipant> SimulatorPlayHost::MakeSceneParticipant() {
+    std::unique_ptr<Runtime::SceneActivationParticipant> SimulatorPlayHost::MakeSceneParticipant(
+        Editor::EditorMountedXrGeometryCapture mounted) {
+        if (mounted)
+            return {};
         return std::make_unique<Impl::Participant>(*impl_);
     }
 

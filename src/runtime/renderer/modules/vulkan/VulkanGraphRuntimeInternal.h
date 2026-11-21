@@ -2,7 +2,9 @@
 
 #include "VulkanGraphRuntime.h"
 #include "VulkanMultiviewRuntime.h"
+#include "VulkanReconstructionRuntime.h"
 #include "VulkanRenderBackendErrors.h"
+#include "VulkanStereoCoverageRuntime.h"
 #include "VulkanVfxGpuRuntime.h"
 
 #include <array>
@@ -44,6 +46,10 @@ namespace Horo::Render::Detail {
             RenderGraphExecutionRange after;
             VulkanMaterialTarget vfxTarget;
             RenderGraphExecutionRange vfxDraws;
+            VulkanPreparedReconstruction reconstruction;
+            VulkanPreparedStereoCoverage coverageReduction;
+            std::optional<std::size_t> materialRaster;
+            VulkanPreparedUiPaint uiPaint;
         };
 
         struct Update {
@@ -83,9 +89,13 @@ namespace Horo::Render::Detail {
              */
             void EncodeTextureUpload(VkCommandBuffer command, const RenderGraphTextureUpload &upload,
                                      std::span<const VulkanGraphResource> resident) const noexcept;
+            /** @brief Copies exact eye tiles and makes the completed coherent storage visible to the host. */
+            void EncodeStereoCoverageCopy(VkCommandBuffer command, const RenderGraphStereoCoverageCopy &copy,
+                                          std::span<const VulkanGraphResource> resident) const noexcept;
             PFN_vkCmdPipelineBarrier2 barrier{};
             PFN_vkCmdCopyBuffer2 copy{};
             PFN_vkCmdCopyBufferToImage2 copyImage{};
+            PFN_vkCmdCopyImageToBuffer2 copyStereoCoverage{};
             PFN_vkCmdBeginRendering beginRendering{};
             PFN_vkCmdEndRendering endRendering{};
             PFN_vkCmdBindPipeline bindPipeline{};
@@ -112,19 +122,26 @@ namespace Horo::Render::Detail {
             RenderGraphExecutionRange barriers;
         };
 
-        std::array<MaterialDraw, RenderMaterialPass::MaximumBatchDraws> materialDraws;
-        std::array<MaterialPass, RenderMaterialPass::MaximumPasses> materialPasses;
+        std::array<MaterialDraw, RenderGraphMaterialRaster::MaximumRetainedDraws> materialDraws;
+        std::array<MaterialPass, RenderGraphMaterialRaster::MaximumRetainedPasses> materialPasses;
         std::size_t materialPassCount{};
         std::size_t materialDrawCount{};
         std::array<VulkanGraphResourceState *, RenderGraphLimits::HardMaxResources> materialPassStates;
         std::size_t materialPassStateCount{};
         VulkanMaterialTarget materialTarget;
-        bool materialDepthOnly{};
         std::vector<MaterialDraw> vfxDraws; /**< Cold-reserved against the canonical whole-scene draw ceiling. */
         std::uint64_t deviceIncarnation{};
         VulkanCommandRuntime commands;
         VulkanVfxGpuRuntime vfxGpu;
-        VulkanMultiviewRecorder multiview;
+        std::array<VulkanMultiviewRecorder, RenderGraphMultiview::MaximumPassesPerFrame> multiview;
+        VulkanReconstructionRuntime reconstruction;
+        VulkanStereoCoverageRuntime coverageReduction;
+        std::size_t reconstructionPassCount{};
+        static constexpr std::size_t MaximumUiPaintKernels = 8;
+        std::array<std::weak_ptr<VulkanUiPaintCommands>, MaximumUiPaintKernels> uiPaintKernels;
+        std::array<const VulkanUiPaintCommands *, MaximumUiPaintKernels> retainedUiPaintKernels{};
+        std::size_t uiPaintDrawCount{};
+        RenderGraphResourceId uiPaintNeutral;
         VulkanResourceRuntime *resources{};
         std::thread::id owner;
         std::vector<VulkanCommandQueue> queues;
@@ -146,7 +163,7 @@ namespace Horo::Render::Detail {
             bool recorded{false};
             bool closing{false};
             bool failedSubmission{false};
-            bool uploadingVfx{false}; /**< Owner-thread native map borrow; closing revokes admission before retirement. */
+            bool uploading{false}; /**< Owner-thread native map borrow; closing revokes admission before retirement. */
         };
 
         Lifecycle lifecycle;
@@ -241,9 +258,15 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> ValidatePassUses(const RenderGraphExecutionRequest &, std::size_t) const;
         [[nodiscard]] Result<void> PrepareClassicWork(const RenderGraphExecutionRequest &, std::size_t, VulkanCommandRetention &);
         [[nodiscard]] Result<void> PrepareParticleWork(const RenderGraphExecutionRequest &, std::size_t);
+        [[nodiscard]] Result<void> PrepareReconstruction(const RenderGraphExecutionRequest &, std::size_t pass,
+                                                         const RenderGraphNativeReconstruction &, VulkanCommandRetention &);
         [[nodiscard]] Result<void> FinishPass(const RenderGraphExecutionRequest &, std::size_t);
         [[nodiscard]] Result<void> ValidateColor(const RenderGraphColorAttachment &, RenderQueueId);
         [[nodiscard]] Result<void> GpuAccess(bool cold) const;
+        /** @brief Polls the selected queue timeline for this exact buffer's last native use. Caller admits owner and phase. */
+        [[nodiscard]] Result<bool> ObserveBufferRetirement(std::uint64_t instance);
+        /** @brief Returns typed busy when a prior reader/writer still retains this native buffer. */
+        [[nodiscard]] Result<void> RequireBufferRetirement(std::uint64_t instance);
         [[nodiscard]] Result<void> ValidateGraphAdmission(const RenderGraphExecutionRequest &) const;
         [[nodiscard]] Result<void> ExecuteGraphCommands(const RenderGraphExecutionRequest &);
         [[nodiscard]] Result<void> RecordPass(VkCommandBuffer, VulkanCommandTicket, const RenderQueueSubmission &,
@@ -267,6 +290,8 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> ValidateDepthAttachment(const RenderGraphDepthAttachment &depth, RenderQueueId queue);
         /** @brief Validates native copy roles, checked ranges and defined contents before recording. */
         [[nodiscard]] Result<void> ValidateBufferCopy(const RenderGraphBufferCopy &copy);
+        /** @brief Validates native owned coverage texture and exact coherent staging bytes before encoding. */
+        [[nodiscard]] Result<void> ValidateStereoCoverageCopy(const RenderGraphStereoCoverageCopy &copy);
         /** @brief Checks exact native upload descriptors and defined source contents before recording.
          * @param upload Closed whole-base-level operation. @return Success or typed failure without persistent state mutation.
          */
@@ -278,8 +303,18 @@ namespace Horo::Render::Detail {
         [[nodiscard]] Result<void> ValidateMaterialAdmission(const RenderMaterialExecutionRequest &request) const;
         [[nodiscard]] Result<void> RecordMaterial(const RenderMaterialExecutionRequest &request, VulkanCommandRetention &pins);
         [[nodiscard]] Result<void> PrepareMaterialTarget(const RenderMaterialExecutionRequest &request, VulkanCommandRetention &pins);
+        /** @brief Captures existing same-device material and mesh identities without graph state mutation. */
+        [[nodiscard]] Result<void> CaptureMaterialDraw(const RenderMaterialDrawInstance &, MaterialDraw &, const VulkanMaterialTarget &,
+                                                       bool depthOnly, VulkanCommandRetention &);
+        /** @brief Prepares a material raster pass using compiled graph barriers and resident resource provenance. */
+        [[nodiscard]] Result<void> PrepareGraphMaterial(const RenderGraphExecutionRequest &, std::size_t pass,
+                                                        const RenderGraphMaterialRaster &, VulkanCommandRetention &);
+        /** @brief Prepares one exact native UI pass using its real graph-owned white sample and captured release lease. */
+        [[nodiscard]] Result<void> PrepareUiPaint(const RenderGraphExecutionRequest &, std::size_t pass, const RenderGraphUiPaint &,
+                                                  VulkanCommandRetention &);
         [[nodiscard]] Result<void> PrepareMaterialDraw(const RenderMaterialDrawInstance &source, MaterialDraw &draw,
-                                                       const RenderQueueSubmission &submission, VulkanCommandRetention &pins);
+                                                       const RenderQueueSubmission &submission, bool depthOnly,
+                                                       VulkanCommandRetention &pins);
         [[nodiscard]] Result<void> PrepareMaterialResources(const VulkanPreparedMaterialBinding &material,
                                                             const RenderQueueSubmission &submission);
         [[nodiscard]] Result<void> PrepareMaterial(const RenderMaterialExecutionRequest &request, VulkanCommandRetention &pins);

@@ -36,6 +36,38 @@ namespace Horo::Editor {
                 return Result<EditorVulkanShadowCook>::Failure(metadata.ErrorValue());
             return LoadEditorVulkanShadowCook(payload.Value(), metadata.Value());
         }
+
+        /** @brief Reads a bounded runtime pair and delegates identity/interface validation to its actual program loader. */
+        template <typename Cook>
+        Result<Cook> LoadPackagedProgram(const std::filesystem::path &prefix,
+                                         Result<Cook> (*load)(std::span<const std::uint8_t>, std::span<const std::uint8_t>)) {
+            auto payloadPath = prefix;
+            payloadPath += ".horoshdr";
+            const auto payload = ReadArtifact(payloadPath, 16U * 1024U * 1024U);
+            if (payload.HasError())
+                return Result<Cook>::Failure(payload.ErrorValue());
+            auto metadataPath = prefix;
+            metadataPath += ".reflection.json";
+            const auto metadata = ReadArtifact(metadataPath, 1024U * 1024U);
+            if (metadata.HasError())
+                return Result<Cook>::Failure(metadata.ErrorValue());
+            return load(payload.Value(), metadata.Value());
+        }
+
+        /** @brief Checks whether an optional program is declared without ignoring package access errors. */
+        Result<bool> DeclaresEnvironmentProjection(const std::filesystem::path &prefix) {
+            bool present = false;
+            for (const auto *suffix : {".horoshdr", ".reflection.json"}) {
+                auto artifact = prefix;
+                artifact += suffix;
+                std::error_code error;
+                const bool exists = std::filesystem::exists(artifact, error);
+                if (error)
+                    return Result<bool>::Failure(BundleError());
+                present |= exists;
+            }
+            return Result<bool>::Success(present);
+        }
     }  // namespace
 
     /** @copydoc LoadPackagedVulkanViewportShader */
@@ -57,14 +89,60 @@ namespace Horo::Editor {
         return Result<EditorVulkanViewportCook>::Success(std::move(cooked));
     }
 
+    /** @copydoc LoadPackagedVulkanCameraCrossFadeShader */
+    Result<EditorVulkanCameraCrossFadeCook> LoadPackagedVulkanCameraCrossFadeShader(const std::filesystem::path &assetRoot) {
+        return LoadPackagedProgram(assetRoot / "shaders/editor/viewport-cross-fade-vulkan", &LoadEditorVulkanCameraCrossFadeCook);
+    }
+
+    /** @copydoc LoadPackagedVulkanWorldCanvasShader */
+    Result<EditorVulkanWorldCanvasCook> LoadPackagedVulkanWorldCanvasShader(const std::filesystem::path &assetRoot) {
+        return LoadPackagedProgram(assetRoot / "shaders/editor/viewport-world-canvas-vulkan", &LoadEditorVulkanWorldCanvasCook);
+    }
+
+    /** @copydoc LoadPackagedVulkanSceneLinearShader */
+    Result<EditorVulkanSceneLinearCook> LoadPackagedVulkanSceneLinearShader(const std::filesystem::path &assetRoot) {
+        return LoadPackagedProgram(assetRoot / "shaders/editor/viewport-scene-linear-vulkan", &LoadEditorVulkanSceneLinearCook);
+    }
+
     /** @copydoc LoadPackagedVulkanMultiviewShader */
     Result<EditorVulkanMultiviewCook> LoadPackagedVulkanMultiviewShader(const std::filesystem::path &assetRoot) {
-        const auto payload = ReadArtifact(assetRoot / "shaders/runtime/multiview-vulkan.horoshdr", 16U * 1024U * 1024U);
-        if (payload.HasError())
-            return Result<EditorVulkanMultiviewCook>::Failure(payload.ErrorValue());
-        const auto metadata = ReadArtifact(assetRoot / "shaders/runtime/multiview-vulkan.reflection.json", 1024U * 1024U);
-        if (metadata.HasError())
-            return Result<EditorVulkanMultiviewCook>::Failure(metadata.ErrorValue());
-        return LoadEditorVulkanMultiviewCook(payload.Value(), metadata.Value());
+        return LoadPackagedProgram(assetRoot / "shaders/runtime/multiview-vulkan", &LoadEditorVulkanMultiviewCook);
+    }
+
+    /** @copydoc LoadPackagedVulkanXrProjection */
+    Result<PackagedVulkanXrProjection> LoadPackagedVulkanXrProjection(const std::filesystem::path &assetRoot) {
+        using Outcome = Result<PackagedVulkanXrProjection>;
+        const auto environmentPrefix = assetRoot / "shaders/runtime/multiview-environment-vulkan";
+        const auto environment = DeclaresEnvironmentProjection(environmentPrefix);
+        if (environment.HasError())
+            return Outcome::Failure(environment.ErrorValue());
+        const auto program =
+            environment.Value() ? EditorVulkanMultiviewProgram::EnvironmentLighting : EditorVulkanMultiviewProgram::Projection;
+        auto cooked = environment.Value() ? LoadPackagedProgram(environmentPrefix, &LoadEditorVulkanMultiviewEnvironmentCook)
+                                          : LoadPackagedVulkanMultiviewShader(assetRoot);
+        if (cooked.HasError())
+            return Outcome::Failure(cooked.ErrorValue());
+        return Outcome::Success({std::move(cooked).Value(), program});
+    }
+
+    /** @copydoc LoadPackagedVulkanMultiviewMotionShader */
+    Result<EditorVulkanMultiviewCook> LoadPackagedVulkanMultiviewMotionShader(const std::filesystem::path &assetRoot) {
+        return LoadPackagedProgram(assetRoot / "shaders/runtime/multiview-motion-vulkan", &LoadEditorVulkanMultiviewMotionCook);
+    }
+
+    /** @copydoc LoadPackagedVulkanXrComfortShader */
+    Result<EditorVulkanXrComfortCook> LoadPackagedVulkanXrComfortShader(const std::filesystem::path &assetRoot) {
+        return LoadPackagedProgram(assetRoot / "shaders/runtime/xr-comfort-vulkan", &LoadEditorVulkanXrComfortCook);
+    }
+
+    /** @copydoc LoadPackagedVulkanMultiviewCoverageShader */
+    Result<EditorVulkanMultiviewCook> LoadPackagedVulkanMultiviewCoverageShader(const std::filesystem::path &assetRoot) {
+        return LoadPackagedProgram(assetRoot / "shaders/runtime/multiview-coverage-vulkan", &LoadEditorVulkanMultiviewCoverageCook);
+    }
+
+    /** @copydoc LoadPackagedVulkanCoverageReductionShader */
+    Result<EditorVulkanCoverageReductionCook> LoadPackagedVulkanCoverageReductionShader(const std::filesystem::path &assetRoot) {
+        return LoadPackagedProgram(assetRoot / "shaders/runtime/multiview-coverage-reduction-vulkan",
+                                   &LoadEditorVulkanCoverageReductionCook);
     }
 }  // namespace Horo::Editor

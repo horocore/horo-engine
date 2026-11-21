@@ -134,6 +134,27 @@ namespace Horo::Gameplay {
         return capability_.InspectTask(agent, task);
     }
 
+    /** @copydoc GameplayAiContext::QueueTaskAnimationTrigger */
+    Result<void> GameplayAiContext::QueueTaskAnimationTrigger(AI::AgentHandle agent, AI::TaskHandle task,
+                                                              const GameplayAnimationContext &animation,
+                                                              Animation::GraphParameterId trigger) const {
+        const auto execution = InspectTask(agent, task);
+        if (execution.HasError())
+            return Result<void>::Failure(execution.ErrorValue());
+        if (execution.Value().state != AI::AiTaskState::Running)
+            return Result<void>::Failure(MakeError(AI::AIErrors::TaskTransitionInvalid));
+        const auto owner = capability_.ResolveAgentOwner(agent);
+        if (owner.HasError())
+            return Result<void>::Failure(owner.ErrorValue());
+        const auto entity = owner.Value();
+        if (animation.ModuleId() != binding_.moduleId || animation.Scene() != entity.runtime.value)
+            return Result<void>::Failure(MakeError(AI::AIErrors::TaskContextInvalid));
+        const auto actor = animation.Observe({entity.runtime.value, entity.entity.index, entity.entity.generation});
+        if (actor.HasError())
+            return Result<void>::Failure(actor.ErrorValue());
+        return animation.QueueTrigger(actor.Value().actor, trigger);
+    }
+
     /** @copydoc GameplayAiContext::CancelTask */
     Result<AI::AiTaskTransitionDisposition> GameplayAiContext::CancelTask(AI::AgentHandle agent, AI::TaskHandle task) const {
         if (auto admitted = Check(); admitted.HasError())

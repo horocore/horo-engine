@@ -80,6 +80,19 @@ namespace Horo::Render {
 
 #include "VulkanBackendShaderDelegation.inl"
 
+            /** @copydoc IRenderBackend::RealizeNativeReconstructionKernel */
+            Result<std::shared_ptr<IResidentNativeReconstructionKernel>> RealizeNativeReconstructionKernel(
+                const CookedNativeReconstructionKernel &kernel) override {
+                using Outcome = Result<std::shared_ptr<IResidentNativeReconstructionKernel>>;
+                if (const auto access = CommandAccess(); access.HasError())
+                    return Outcome::Failure(access.ErrorValue());
+                if (closing_ || activeFrame_.IsValid())
+                    return Outcome::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
+                if (!capabilities_.support.features.Supports(RenderCapability::NativeReconstruction))
+                    return Outcome::Failure(MakeError(NativeReconstructionErrors::Unsupported));
+                return commandPort_->RealizeNativeReconstructionKernel(kernel);
+            }
+
             Result<NativeVfxGpuPreparationResources> QueryVfxGpuNativePreparationResources(
                 const VfxGpuSimulationDescriptor &descriptor) const override {
                 if (const auto access = VfxGpuAccess(true); access.HasError())
@@ -210,8 +223,15 @@ namespace Horo::Render {
                 return frame;
             }
 
-            Result<void> Execute(const RenderExecutionPlan &) override {
-                return UnsupportedVoid();
+            Result<void> Execute(const RenderExecutionPlan &plan) override {
+                // A GUI-only frame enters native submission through PrepareGuiComposition.
+                if (!requirePresentation_ || !plan.frame.IsValid() || !plan.orderedPasses.empty())
+                    return UnsupportedVoid();
+                if (const auto access = CommandAccess(); access.HasError())
+                    return access;
+                if (plan.frame != activeFrame_)
+                    return Result<void>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
+                return Result<void>::Success();
             }
 
             Result<void> ExecuteGraph(const RenderGraphExecutionRequest &request) override {
@@ -239,6 +259,23 @@ namespace Horo::Render {
                 return commandPort_->UpdateVfxFrame(update);
             }
 
+            Result<void> UpdateUiPaintFrame(const NativeUiPaintFrameUpdate &update) override {
+                if (const auto access = CommandAccess(); access.HasError())
+                    return access;
+                if (update.frame != activeFrame_)
+                    return Result<void>::Failure(MakeError(UiPaintFrameErrors::InvalidInput));
+                return commandPort_->UpdateUiPaintFrame(update);
+            }
+
+            Result<std::shared_ptr<IResidentUiPaintKernel>> RealizeUiPaintKernel(const CookedUiPaintKernel &cooked) override {
+                using Outcome = Result<std::shared_ptr<IResidentUiPaintKernel>>;
+                if (const auto access = CommandAccess(); access.HasError())
+                    return Outcome::Failure(access.ErrorValue());
+                if (activeFrame_.IsValid())
+                    return Outcome::Failure(MakeError(UiPaintFrameErrors::Unavailable));
+                return commandPort_->RealizeUiPaintKernel(cooked);
+            }
+
             Result<void> Present(const FrameToken frame) override {
                 if (const auto access = CommandAccess(); access.HasError())
                     return access;
@@ -246,6 +283,8 @@ namespace Horo::Render {
                     return Result<void>::Failure(
                         MakeVulkanError(VulkanBackendErrors::InvalidCommandState, "Submission frame identity is stale."));
                 auto submitted = commandPort_->SubmitFrame(frame);
+                if (submitted.HasError())
+                    commandPort_->AbortFrame(frame);
                 activeFrame_ = {};
                 return submitted;
             }
@@ -284,6 +323,23 @@ namespace Horo::Render {
                 if (activeFrame_.IsValid())
                     return Result<bool>::Failure(MakeError(VulkanBackendErrors::InvalidCommandState));
                 return requirePresentation_ ? commandPort_->PollPresentationAvailability(extent) : Result<bool>::Success(true);
+            }
+
+            /** @copydoc IRenderBackend::PresentationOutput */
+            Result<RenderPresentationOutput> PresentationOutput() const override {
+                if (!requirePresentation_)
+                    return Result<RenderPresentationOutput>::Failure(MakeError(RenderPresentationErrors::OutputUnsupported));
+                if (const auto access = CommandAccess(); access.HasError())
+                    return Result<RenderPresentationOutput>::Failure(access.ErrorValue());
+                return commandPort_->ObservePresentationOutput();
+            }
+
+            /** @copydoc IRenderBackend::ObserveGraphSubmissionAcceptance */
+            std::optional<bool> ObserveGraphSubmissionAcceptance(RenderTimelinePoint signal,
+                                                                 std::uint64_t deviceIncarnation) const noexcept override {
+                if (ownerThread_ != std::this_thread::get_id() || !deviceCreated_ || !commandPort_)
+                    return std::nullopt;
+                return commandPort_->ObserveGraphSubmissionAcceptance(signal, deviceIncarnation);
             }
 
             Result<bool> ObserveSubmission(const RenderCpuWait &wait) override {
@@ -335,6 +391,7 @@ namespace Horo::Render {
                 capabilities_.supportsExplicitGraphSubmissions = commandPort_ != nullptr;
                 capabilities_.supportsExplicitMaterialSubmissions = commandPort_ && commandPort_->SupportsMaterialCommands();
                 capabilities_.supportsMaterialPassBatches = capabilities_.supportsExplicitMaterialSubmissions;
+                capabilities_.supportsMaterialRasterGraph = commandPort_ && commandPort_->SupportsGraphMaterialRaster();
                 capabilities_.supportsSubmissionObservation = commandPort_ != nullptr;
                 capabilities_.support = resourcePort_ != nullptr ? resourcePort_->ResourceCapabilities() : RenderCapabilitySnapshot{};
                 capabilities_.supportsBufferResources = capabilities_.support.features.Supports(BufferResources);

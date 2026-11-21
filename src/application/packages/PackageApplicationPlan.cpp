@@ -1,5 +1,7 @@
+#include "Horo/Packages/PackageLifecycleErrors.h"
 #include "PackageApplicationInternal.h"
 
+#include <algorithm>
 #include <limits>
 #include <new>
 #include <stdexcept>
@@ -40,6 +42,24 @@ namespace Horo::Application {
         if (const auto lane = impl_->CheckLane(); lane.HasError())
             return Result<std::optional<PackageOperationSnapshot>>::Failure(lane.ErrorValue());
         return Result<std::optional<PackageOperationSnapshot>>::Success(impl_->operation);
+    }
+
+    /** @copydoc PackageApplication::ActivationTrustRequired */
+    Result<bool> PackageApplication::ActivationTrustRequired() const {
+        if (const auto lane = impl_->CheckLane(); lane.HasError())
+            return Result<bool>::Failure(lane.ErrorValue());
+        const auto &current = impl_->operation;
+        const auto &required = Packages::PackageLifecycleErrors::TrustRequired;
+        if (impl_->closing || !current || current->kind != PackageOperationKind::Activate ||
+            current->outcome == PackageOperationOutcome::Cancelled)
+            return Result<bool>::Success(false);
+        if (current->outcome == PackageOperationOutcome::Failed && current->diagnostic &&
+            ErrorChainContains(*current->diagnostic, required.domain, required.code))
+            return Result<bool>::Success(true);
+        return Result<bool>::Success(std::ranges::any_of(current->moduleReports, [&required](const auto &report) {
+            return report.outcome == Packages::PackageModuleOutcome::Denied && report.diagnostic &&
+                   ErrorChainContains(*report.diagnostic, required.domain, required.code);
+        }));
     }
 
     /** @copydoc PackageApplication::Plan */

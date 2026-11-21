@@ -10,11 +10,51 @@
 #include <utility>
 
 namespace Horo::Gameplay {
-    Result<std::shared_ptr<const AI::DecisionNodeGeneration>> LoadedGameModule::AcquireDecisionNodes() const {
+    /** @copydoc LoadedGameModule::AcquirePerceptionSenses */
+    Result<std::shared_ptr<const AI::PerceptionSenseGeneration>> LoadedGameModule::AcquirePerceptionSenses() const {
         if (std::this_thread::get_id() != impl_->ownerThread || !impl_->runtimeLeaseAdmission.load(std::memory_order_acquire))
-            return Result<std::shared_ptr<const AI::DecisionNodeGeneration>>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+            return Result<std::shared_ptr<const AI::PerceptionSenseGeneration>>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
         std::shared_ptr<const std::atomic_bool> admission{impl_, &impl_->runtimeLeaseAdmission};
-        return AI::DecisionNodeGeneration::Capture(impl_->decisionNodes, std::move(admission));
+        return AI::PerceptionSenseGeneration::Capture(impl_->perceptionSenses, std::move(admission));
+    }
+
+    /** @copydoc LoadedGameModule::AcquireDecisionNodes */
+    Result<std::shared_ptr<const AI::DecisionNodeGeneration>> LoadedGameModule::AcquireDecisionNodes() const {
+        using Generation = Result<std::shared_ptr<const AI::DecisionNodeGeneration>>;
+        if (std::this_thread::get_id() != impl_->ownerThread || !impl_->runtimeLeaseAdmission.load(std::memory_order_acquire))
+            return Generation::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+        if (auto retained = impl_->decisionGeneration.lock())
+            return Generation::Success(std::move(retained));
+        std::shared_ptr<const std::atomic_bool> admission{impl_, &impl_->runtimeLeaseAdmission};
+        std::shared_ptr<const std::atomic_bool> factories{impl_, &impl_->decisionFactoryAdmission};
+        auto captured = AI::DecisionNodeGeneration::CaptureNative(impl_->decisionNodes, std::move(admission), std::move(factories));
+        if (captured.HasValue())
+            impl_->decisionGeneration = captured.Value();
+        return captured;
+    }
+
+    /** @copydoc PreparedGameModuleImage::AcquireDecisionNodes */
+    Result<std::shared_ptr<const AI::DecisionNodeGeneration>> PreparedGameModuleImage::AcquireDecisionNodes() const {
+        if (!owner_)
+            return Result<std::shared_ptr<const AI::DecisionNodeGeneration>>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+        return owner_->AcquireDecisionNodes();
+    }
+
+    /** @copydoc PreparedGameModuleImage::DescribePerceptionSenses */
+    Result<std::vector<AI::PerceptionSenseContract>> PreparedGameModuleImage::DescribePerceptionSenses() const {
+        using Output = Result<std::vector<AI::PerceptionSenseContract>>;
+        if (!owner_ || owner_->impl_->ownerThread != std::this_thread::get_id() ||
+            !owner_->impl_->runtimeLeaseAdmission.load(std::memory_order_acquire))
+            return Output::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+        try {
+            std::vector<AI::PerceptionSenseContract> contracts;
+            contracts.reserve(owner_->impl_->perceptionSenses.size());
+            for (const auto &registration : owner_->impl_->perceptionSenses)
+                contracts.push_back(registration.contract);
+            return Output::Success(std::move(contracts));
+        } catch (const std::bad_alloc &) {
+            return Output::Failure(MakeError(AI::AIErrors::AgentCapacityExceeded));
+        }
     }
 
     LoadedGameModule::LoadedGameModule(const ConstructionKey &, std::shared_ptr<Impl> impl) noexcept : impl_(std::move(impl)) {}
@@ -32,6 +72,8 @@ namespace Horo::Gameplay {
             impl_->character->Revoke();
         if (impl_ && impl_->navigation)
             impl_->navigation->Revoke();
+        if (impl_ && impl_->animation && impl_->projectServices)
+            impl_->projectServices->RequestCancellation();
     }
 
     /** @copydoc LoadedGameModule::NavigationContext */
@@ -49,6 +91,11 @@ namespace Horo::Gameplay {
         return impl_->buildFingerprint;
     }
 
+    /** @copydoc LoadedGameModule::AnimationContext */
+    std::shared_ptr<const GameplayAnimationContext> LoadedGameModule::AnimationContext() const noexcept {
+        return impl_->animation;
+    }
+
     /** @copydoc LoadedGameModule::DescriptorRevision */
     std::uint64_t LoadedGameModule::DescriptorRevision() const noexcept {
         return impl_->descriptorRevision;
@@ -57,6 +104,11 @@ namespace Horo::Gameplay {
     /** @copydoc LoadedGameModule::LoadedArtifactPath */
     const std::filesystem::path &LoadedGameModule::LoadedArtifactPath() const noexcept {
         return impl_->loadedArtifactPath;
+    }
+
+    /** @copydoc LoadedGameModule::RecordedArtifactDigest */
+    std::optional<Sha256Digest> LoadedGameModule::RecordedArtifactDigest() const noexcept {
+        return impl_->codeImage ? impl_->codeImage->recordedArtifact : std::nullopt;
     }
 
     /** @copydoc LoadedGameModule::Registry */

@@ -436,6 +436,18 @@ namespace Horo::Animation {
         std::uint32_t segments{};
     };
 
+    /** @brief Rigid displacement expressed in the starting root's local frame. */
+    struct AnimationRootMotionDelta final {
+        Math::Vec3 translation{};
+        Math::Quaternion rotation{};
+    };
+
+    /** @brief Root displacement and the exact cursor outcome from the same directed clip interval. */
+    struct AnimationClipRootMotion final {
+        AnimationClipTraversal traversal{};
+        AnimationRootMotionDelta delta{};
+    };
+
     /** @brief Converts typed hot failure to the original owned diagnostic at a
      * control boundary.
      * @param failure Library-owned typed failure and literal context.
@@ -477,6 +489,9 @@ namespace Horo::Animation {
         /** @brief Returns immutable canonical clip data. @return Borrowed data owned
          * by this asset. */
         [[nodiscard]] const AnimationClipData &Data() const noexcept;
+
+        /** @brief Reports whether this publication has a usable root motion track. @return True for a tracked absolute root. */
+        [[nodiscard]] bool HasRootMotionTrack() const noexcept;
 
         /**
          * @brief Advances one canonical cursor by an exact signed amount without
@@ -555,6 +570,20 @@ namespace Horo::Animation {
             std::span<AnimationClipTraversalSegment> output, const AnimationClipLimits &limits = {},
             AnimationClipAdmissionState admission = AnimationClipAdmissionState::Accepting) const;
 
+        /** @brief Extracts rigid root motion from the same directed traversal used by clip playback.
+         * @param cursor Exact region-relative starting cursor. @param delta Signed clip interval.
+         * @param region Clip-local bounds and wrap policy. @param scratch Caller-owned traversal workspace.
+         * @param limits Finite traversal policy. @param admission Captured owner state.
+         * @return Cursor and local displacement, or a typed admission, asset, traversal or numeric failure.
+         * @details Requires an absolute clip flagged for root motion and one tracked skeleton root. Motion is
+         * composed in traversal order, including reverse and loop segments. Held intervals return identity.
+         * @post Allocates nothing, performs no I/O and mutates no clip or cursor state. Scratch may be overwritten.
+         */
+        [[nodiscard]] AnimationClipOutcome<AnimationClipRootMotion> ExtractRootMotionPrepared(
+            AnimationClipCursor cursor, AnimationTimeDelta delta, AnimationClipRegion region,
+            std::span<AnimationClipTraversalSegment> scratch, const AnimationClipLimits &limits = {},
+            AnimationClipAdmissionState admission = AnimationClipAdmissionState::Accepting) const;
+
         /** @brief Executes the same pose sample with allocation-free failure
          * evidence.
          * @param time Exact in-range clip time.
@@ -566,11 +595,13 @@ namespace Horo::Animation {
 
     private:
         AnimationClipAsset(AnimationClipData data, std::vector<std::uint32_t> jointIndices,
-                           std::vector<Math::Transform> skeletonReferencePose) noexcept
-            : data_(std::move(data)), jointIndices_(std::move(jointIndices)), skeletonReferencePose_(std::move(skeletonReferencePose)) {}
+                           std::vector<Math::Transform> skeletonReferencePose, std::optional<std::size_t> rootMotionTrack) noexcept
+            : data_(std::move(data)), jointIndices_(std::move(jointIndices)), skeletonReferencePose_(std::move(skeletonReferencePose)),
+              rootMotionTrack_(rootMotionTrack) {}
 
         AnimationClipData data_;
         std::vector<std::uint32_t> jointIndices_;
         std::vector<Math::Transform> skeletonReferencePose_;
+        std::optional<std::size_t> rootMotionTrack_;
     };
 }  // namespace Horo::Animation

@@ -13,12 +13,29 @@
 #include "Horo/Gameplay/LuaBehavior.h"
 #include "Horo/Prefab/PrefabSpawnService.h"
 
+namespace Horo::AI {
+    class AiSceneRuntime;
+    class PerceptionSpatialBroadphase;
+    struct AiSceneCookedDecisionExecution;
+}  // namespace Horo::AI
+
 namespace Horo::Gameplay {
     class GameplayVfxContext;
     class GameplayVfxScene;
 }  // namespace Horo::Gameplay
 
+namespace Horo::Runtime {
+    class SceneAnimationRuntime;
+}
+
 namespace Horo::Application::Internal {
+    /** @brief Compatibility metadata from the active native or Lua behavior image. */
+    struct GameplayReplayProfile final {
+        Sha256Digest digest;
+        Sha256Digest source;
+        std::uint64_t revision{};
+        bool native{};
+    };
     /** @brief Trusted host policy resolved before invoking project code; no ambient grant. */
     enum class GameplayPhysicsPermission {
         Denied,
@@ -27,7 +44,8 @@ namespace Horo::Application::Internal {
     /** @brief Trusted explicit permission for cooked prefab creation and group retirement. */
     enum class GameplayPrefabPermission {
         Denied,
-        Granted
+        Granted,
+        ReplicaOnly
     };
 
     /** @brief Explicit permission to the already selected Character world; never constructs a consumer. */
@@ -53,8 +71,12 @@ namespace Horo::Application::Internal {
         std::optional<Gameplay::GameplayReplicationAdmissionPolicy>
             replicationAdmission;                                /**< Complete host inventory; absent only for non-network hosts. */
         std::shared_ptr<const Gameplay::GameplayVfxContext> vfx; /**< Explicit module capability; no ambient asset grant. */
+        std::shared_ptr<Gameplay::GameplayNavigationContext> navigationContext; /**< Exact private Scene grant, prepared by the host. */
         std::shared_ptr<Gameplay::GameplayVfxScene>
             vfxScene; /**< Explicit Scene owner; configured factories clone its original cold policy per WorldRecord. */
+        std::shared_ptr<const Prefab::IPrefabGroupPublicationOwner> prefabGroupPublication; /**< Optional host-owned Scene binding. */
+        std::weak_ptr<Runtime::SceneAnimationRuntime> animation; /**< Explicit authority Scene animation owner, when composed. */
+        bool recordReplayImage{};                                /**< Opt-in file-identity capture during native module admission. */
     };
 
     /** @brief Explicit asset authorities and bounds for a composition-owned cooked prefab provider.
@@ -67,6 +89,23 @@ namespace Horo::Application::Internal {
         Prefab::PrefabLimitProfile profile;
         Prefab::PrefabTemplateProviderLimits limits{};
         CancellationToken cancellation;
+    };
+
+    struct ProjectNativePerceptionPolicy;
+
+    /** @brief Exact spatial publisher and authored settings, borrowed until this private Scene activates. */
+    struct GameplayPreparedPerception final {
+        const AI::PerceptionSpatialBroadphase &spatial;
+        const ProjectNativePerceptionPolicy &policy;
+    };
+
+    /** @brief Borrows an exact private Scene and its prepared native provider until startup completes. */
+    struct GameplayPreparedDecisions final {
+        Gameplay::PreparedGameModuleImage &image;
+        const CancellationToken &cancellation;
+        AI::AiSceneRuntime &scene;
+        const AI::AiSceneCookedDecisionExecution &execution;
+        const GameplayPreparedPerception *perception{};
     };
 
     /** @brief Owner-thread gameplay lifetime borrowing an explicit world and Scene.
@@ -133,6 +172,17 @@ namespace Horo::Application::Internal {
                                                                                       std::uint64_t sceneGeneration,
                                                                                       const GameplayWorldSelection &selection,
                                                                                       Character::CharacterWorld *character = nullptr);
+        /** @brief Activates one prepared image and its cooked decisions before Scene behavior callbacks.
+         * @param scenes Private activated Scene service. @param templates Exact optional cooked prefab owner.
+         * @param world Active Physics owner. @param sceneGeneration Exact non-zero activation epoch.
+         * @param selection Same trusted gameplay selection used to prepare the image.
+         * @param character Paired Character owner. @param prepared Borrowed exact image and private Scene decisions.
+         * @return Active private composition or original startup error.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<GameplayWorldComposition>> CreatePrepared(
+            Runtime::RuntimeSceneService &scenes, Prefab::PrefabTemplateProvider *templates, Physics::PhysicsWorld &world,
+            std::uint64_t sceneGeneration, const GameplayWorldSelection &selection, Character::CharacterWorld &character,
+            const GameplayPreparedDecisions &prepared);
         ~GameplayWorldComposition();
         GameplayWorldComposition() = default;
         GameplayWorldComposition(const GameplayWorldComposition &) = delete;
@@ -142,14 +192,17 @@ namespace Horo::Application::Internal {
         /** @brief Dispatch the actual host-committed semantic Input through the same Gameplay/Scene command owner.
          * @param input Existing canonical Input snapshot, borrowed only during this call. @param delta Existing fixed quantum.
          * @return Original callback/transaction failure; no Input or Scene authority is issued. */
-        [[nodiscard]] Result<void> FixedUpdate(std::span<const Gameplay::GameplayInputAction> input, Gameplay::FixedDeltaTime delta);
+        [[nodiscard]] Result<void> FixedUpdate(std::span<const Gameplay::GameplayInputAction> input, Gameplay::FixedDeltaTime delta,
+                                               Gameplay::BehaviorFixedEvidence *evidence = nullptr);
         /** @brief Advances exact host tick addressing then invokes Gameplay callbacks. @param context Current host tick.
          * @return Tick/callback failure; admission is revoked on callback failure. */
         [[nodiscard]] Result<void> FixedTick(const Runtime::FixedStepContext &context);
         /** @param context Exact existing fixed dispatch. @param input Existing host-committed semantic Input.
          * @return Original tick/callback failure through the same fixed owner. */
-        [[nodiscard]] Result<void> FixedTick(const Runtime::FixedStepContext &context,
-                                             std::span<const Gameplay::GameplayInputAction> input);
+        [[nodiscard]] Result<void> FixedTick(const Runtime::FixedStepContext &context, std::span<const Gameplay::GameplayInputAction> input,
+                                             Gameplay::BehaviorFixedEvidence *evidence = nullptr);
+        /** @brief Reads the admitted behavior source compatibility without looking up or reloading a module. */
+        [[nodiscard]] GameplayReplayProfile ReplayProfile() const noexcept;
         /** @brief Advances prefab preparation, commits the actual Scene transaction, and observes its completion.
          * @param phase Host lifecycle phase.
          * @param context Current immutable frame context.
@@ -172,6 +225,19 @@ namespace Horo::Application::Internal {
         void UnloadModule() noexcept;
         /** @brief Borrow the immutable Physics execution context for integrated host diagnostics. */
         [[nodiscard]] std::shared_ptr<const Gameplay::GameplayPhysicsContext> PhysicsContext() const noexcept;
+
+        /** @brief Borrows the installed immutable replication generation on the world owner lane.
+         * @return Active module lease, or null when unavailable. */
+        [[nodiscard]] const Gameplay::GameplayReplicationLease *Replication() const noexcept;
+        /** @brief Queues the host-admitted replica through this world's actual cooked Prefab service. */
+        [[nodiscard]] Result<Prefab::PrefabOperation> SpawnReplicaPrefab(Prefab::PrefabSpawnRequest request,
+                                                                         std::shared_ptr<const Runtime::SceneGroupPublication> publication,
+                                                                         const CancellationToken &cancellation) const;
+        /** @brief Queues removal through the same replica occurrence owner. */
+        [[nodiscard]] Result<Prefab::PrefabOperation> DespawnReplicaPrefab(const Prefab::PrefabInstance &instance,
+                                                                           const CancellationToken &cancellation) const;
+        /** @brief Returns the exact admitted schema subset. @return Borrowed IDs valid for the active module generation. */
+        [[nodiscard]] std::span<const Network::ReplicationSchemaId> AdmittedReplicationSchemas() const noexcept;
         /** @brief Reads the selected module Character scope, including typed unavailable diagnostics. @return Owned holder. */
         [[nodiscard]] std::shared_ptr<const Gameplay::GameplayCharacterContext> CharacterContext() const noexcept;
         /** @brief Borrows this active runner for an aggregate Scene group transaction.
@@ -181,6 +247,13 @@ namespace Horo::Application::Internal {
         [[nodiscard]] std::unique_ptr<Runtime::SceneStructuralParticipant> MakeStructuralParticipant();
 
     private:
+        /** @brief Installs the optional host owner before granting the module access to cooked Prefabs.
+         * @pre The selected host supplies a template provider whenever Prefab access is granted.
+         */
+        [[nodiscard]] Result<void> BindPrefab(const GameplayWorldSelection &selection, Runtime::RuntimeSceneService &scenes,
+                                              Runtime::SceneRuntimeId scene, Prefab::PrefabTemplateProvider *templates,
+                                              const Gameplay::ComponentRegistry *components);
+
         /** @brief Captures native component metadata before activating any service-backed behavior callbacks.
          * @param scenes Published Scene authority, outliving this composition.
          * @param components Explicit optional frozen project metadata; otherwise the loaded module supplies the owned snapshot.
@@ -200,16 +273,18 @@ namespace Horo::Application::Internal {
         [[nodiscard]] static Result<std::unique_ptr<GameplayWorldComposition>> CreateServiceBacked(
             Runtime::RuntimeSceneService &scenes, Prefab::PrefabTemplateProvider *templates, Physics::PhysicsWorld *world,
             std::uint64_t sceneGeneration, const GameplayWorldSelection &selection, const Gameplay::ComponentRegistry *components,
-            Character::CharacterWorld *character);
+            Character::CharacterWorld *character, const GameplayPreparedDecisions *prepared = nullptr);
         /** @brief Validates artifacts and activates callbacks only after Physics admission is resolved. */
         [[nodiscard]] Result<void> Activate(Runtime::RuntimeScene &scene, const GameplayWorldSelection &selection);
         /** @brief Loads the explicitly selected module/script and freezes its registry before any callback. */
-        [[nodiscard]] Result<void> RegisterModule(const GameplayWorldSelection &selection);
+        [[nodiscard]] Result<void> RegisterModule(const GameplayWorldSelection &selection,
+                                                  const GameplayPreparedDecisions *prepared = nullptr);
         /** @brief Loads and contributes one native generation with pre-Start replication admission and retained rollback ownership.
          * @param selection Exact artifact, host policy and explicit retirement owner.
+         * @param prepared Optional scoped activation of the already validated native image.
          * @return Original load/admission/contribution failure, or a contributed native generation.
          */
-        [[nodiscard]] Result<void> RegisterNativeModule(const GameplayWorldSelection &selection);
+        [[nodiscard]] Result<void> RegisterNativeModule(const GameplayWorldSelection &selection, const GameplayPreparedDecisions *prepared);
         /** @brief Pins and admits the loaded generation before any behavior callback. @param selection Complete host policy.
          * @return Original acquisition or declaration failure; native pre-Start admission already ran in its loader. */
         [[nodiscard]] Result<void> AdmitReplication(const GameplayWorldSelection &selection);
@@ -229,16 +304,20 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> ValidateVfxBinding(const GameplayWorldSelection &selection) const;
         std::string vfxModuleId_;
         std::shared_ptr<const Gameplay::GameplayVfxContext> vfx_;
+        std::optional<CancellationSource> scriptAnimationLifetime_;
+        std::shared_ptr<const Gameplay::GameplayAnimationContext> animationContext_;
         std::shared_ptr<Gameplay::GameplayVfxScene> vfxScene_;
         bool vfxTickOpen_{};
         std::shared_ptr<Gameplay::GameplayPhysicsContext> physics_;
         std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi_;
         std::shared_ptr<Gameplay::GameplayCharacterContext> character_;
+        std::shared_ptr<Gameplay::GameplayNavigationContext> navigation_;
         std::unique_ptr<Gameplay::LoadedGameModule> native_;
         std::shared_ptr<Gameplay::GameModuleRetirementQueue> moduleRetirements_;
         std::optional<Gameplay::GameModuleRetirementQueue::Reservation> retirementAdmission_;
         std::unique_ptr<Gameplay::LuaBehaviorProgram> script_;
         std::optional<Gameplay::GameplayReplicationLease> replicationLease_; /**< Released after callbacks and before native retirement. */
+        std::optional<Network::ReplicationDeclarationAssessment> replicationAssessment_;
         Gameplay::BehaviorRegistry registry_;
         std::unique_ptr<Gameplay::BehaviorRuntime> behaviors_;
         std::unique_ptr<Prefab::PrefabTemplateProvider> ownedTemplates_;

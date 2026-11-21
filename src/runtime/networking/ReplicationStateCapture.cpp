@@ -133,7 +133,7 @@ namespace Horo::Network {
             return Result<bool>::Failure(valid.ErrorValue());
         if (const auto complete = writer.Complete(); complete.HasError())
             return Result<bool>::Failure(complete.ErrorValue());
-        const auto prior = target.latest;
+        const auto prior = limits.publicationMode == ReplicationCapturePublicationMode::ChangedState ? target.latest : nullptr;
         const auto compared = CompareCandidate(target, candidate, prior);
         if (compared.HasError())
             return Result<bool>::Failure(compared.ErrorValue());
@@ -157,7 +157,9 @@ namespace Horo::Network {
         candidate.simulationTick_ = read.simulationTick;
         candidate.sourceRevision_ = read.sourceRevision;
         candidate.commitRevision_ = read.commitRevision;
-        candidate.publicationRevision_ = ++target.publication;
+        target.publication =
+            limits.publicationMode == ReplicationCapturePublicationMode::ExactCommit ? read.simulationTick : target.publication + 1;
+        candidate.publicationRevision_ = target.publication;
         target.latest = slot;
         return Result<bool>::Success(true);
     }

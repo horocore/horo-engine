@@ -16,6 +16,8 @@
 #include <vector>
 
 namespace Horo::Network {
+    inline constexpr std::size_t MessageEnvelopeFixedHeaderBytes = 32;
+
     /** @brief Stable non-zero 16-bit identity for an envelope extension field. */
     class MessageEnvelopeFieldId final {
     public:

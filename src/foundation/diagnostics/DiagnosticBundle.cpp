@@ -1,6 +1,7 @@
 #include "Horo/Foundation/Diagnostics/DiagnosticBundle.h"
 
 #include "../FoundationErrors.h"
+#include "DiagnosticPrivacy.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Foundation/TransparentString.h"
 
@@ -72,17 +73,6 @@ namespace Horo::Diagnostics {
                    first == "packages";
         }
 
-        [[nodiscard]] bool IsSensitiveMetadataKey(std::string key) {
-            std::ranges::transform(key, key.begin(), [](const unsigned char character) {
-                return static_cast<char>(std::tolower(character));
-            });
-            static constexpr std::array<std::string_view, 7> forbidden{"password",      "secret", "token",  "credential",
-                                                                       "authorization", "cookie", "api_key"};
-            return std::ranges::any_of(forbidden, [&key](const std::string_view candidate) {
-                return key.find(candidate) != std::string::npos;
-            });
-        }
-
         [[nodiscard]] bool ContainsAbsolutePath(const std::string_view value) noexcept {
             for (std::size_t index = 0; index < value.size(); ++index) {
                 if (const bool boundary = index == 0 || std::isspace(static_cast<unsigned char>(value[index - 1])) ||
@@ -121,23 +111,52 @@ namespace Horo::Diagnostics {
             return output;
         }
 
-        void RedactJson(Json &value, const std::string_view key = {}) {
-            if (!key.empty() && IsSensitiveMetadataKey(std::string{key})) {
+        /** @brief Reports whether the record belongs to a host-owned summary rather than the raw export. */
+        [[nodiscard]] bool SummaryOnlyRecord(const Json &value, const std::span<const std::string> namespaces) {
+            if (namespaces.empty() || !value.is_object())
+                return false;
+            for (const auto key : {"category", "subsystem", "domain"}) {
+                const auto field = value.find(key);
+                if (field == value.end() || !field->is_string())
+                    continue;
+                const std::string_view name = field->get_ref<const std::string &>();
+                if (std::ranges::any_of(namespaces, [name](const std::string_view root) {
+                    return name == root || (name.starts_with(root) && name[root.size()] == '.');
+                }))
+                    return true;
+            }
+            return false;
+        }
+
+        /** @brief Validates a bounded source namespace without permitting wildcard export rules. */
+        [[nodiscard]] bool ValidSummaryNamespace(const std::string_view name) {
+            if (name.empty() || name.size() > 64 || name.front() == '.' || name.back() == '.' || name.find("..") != std::string_view::npos)
+                return false;
+            return std::ranges::all_of(name, [](const char character) {
+                return (character >= 'a' && character <= 'z') || (character >= '0' && character <= '9') || character == '.' ||
+                       character == '-' || character == '_';
+            });
+        }
+
+        void RedactJson(Json &value, const std::span<const std::string> namespaces, const std::string_view key = {}) {
+            if (!key.empty() && Detail::IsSensitiveKey(key)) {
                 value = "[REDACTED]";
                 return;
             }
-            if (value.is_object()) {
+            if (SummaryOnlyRecord(value, namespaces)) {
+                value = nullptr;
+            } else if (value.is_object()) {
                 for (auto &[childKey, child] : value.items())
-                    RedactJson(child, childKey);
+                    RedactJson(child, namespaces, childKey);
             } else if (value.is_array()) {
                 for (Json &child : value)
-                    RedactJson(child);
+                    RedactJson(child, namespaces);
             } else if (value.is_string()) {
                 value = RedactAbsolutePaths(value.get_ref<const std::string &>());
             }
         }
 
-        [[nodiscard]] std::optional<std::string> RedactJsonlLines(const std::string &text) {
+        [[nodiscard]] std::optional<std::string> RedactJsonlLines(const std::string &text, const std::span<const std::string> namespaces) {
             std::istringstream lines{text};
             std::string line;
             std::string sanitized;
@@ -150,7 +169,9 @@ namespace Horo::Diagnostics {
                         break;
                     return std::nullopt;
                 }
-                RedactJson(record);
+                if (SummaryOnlyRecord(record, namespaces))
+                    continue;
+                RedactJson(record, namespaces);
                 sanitized += record.dump();
                 sanitized += '\n';
             }
@@ -158,12 +179,13 @@ namespace Horo::Diagnostics {
         }
 
         [[nodiscard]] std::optional<std::vector<std::byte>> RedactDiagnosticText(const std::filesystem::path &archivePath,
-                                                                                 const std::vector<std::byte> &bytes) {
+                                                                                 const std::vector<std::byte> &bytes,
+                                                                                 const std::span<const std::string> namespaces) {
             const std::string text(reinterpret_cast<const char *>(bytes.data()), bytes.size());  // NOSONAR(cpp:S6022)
             std::string sanitized;
 
             if (archivePath.generic_string().find(".jsonl") != std::string::npos) {
-                auto result = RedactJsonlLines(text);
+                auto result = RedactJsonlLines(text, namespaces);
                 if (!result)
                     return std::nullopt;
                 sanitized = std::move(*result);
@@ -173,7 +195,7 @@ namespace Horo::Diagnostics {
                 Json document = Json::parse(text, nullptr, false, true);
                 if (document.is_discarded())
                     return std::nullopt;
-                RedactJson(document);
+                RedactJson(document, namespaces);
                 sanitized = document.dump();
                 sanitized += '\n';
             } else {
@@ -350,7 +372,7 @@ namespace Horo::Diagnostics {
                     return Result<PreparedBundleData>::Failure(
                         MakeBundleError(ObservabilityErrors::BundleReadFailed, "Unable to read an allowlisted diagnostic file."));
                 if (entry.redactSensitiveText) {
-                    auto redacted = RedactDiagnosticText(entry.archivePath, bytes);
+                    auto redacted = RedactDiagnosticText(entry.archivePath, bytes, request.summaryOnlyNamespaces);
                     if (!redacted.has_value())
                         return Result<PreparedBundleData>::Failure(
                             MakeBundleError(ObservabilityErrors::BundleReadFailed,
@@ -371,7 +393,7 @@ namespace Horo::Diagnostics {
         [[nodiscard]] Result<void> ValidateMetadata(const std::vector<std::pair<std::string, std::string>> &metadata) {
             TransparentStringSet metadataKeys;
             for (const auto &[key, val] : metadata) {
-                if (key.empty() || IsSensitiveMetadataKey(key) || ContainsAbsolutePath(val) || !metadataKeys.insert(key).second)
+                if (key.empty() || Detail::IsSensitiveKey(key) || ContainsAbsolutePath(val) || !metadataKeys.insert(key).second)
                     return Result<void>::Failure(
                         MakeBundleError(ObservabilityErrors::InvalidBundleRequest, "Diagnostic bundle metadata keys must be unique."));
             }
@@ -408,7 +430,50 @@ namespace Horo::Diagnostics {
             manifest += "]}";
             return manifest;
         }
+
+        /** @brief Rejects spellings that cannot name one new absolute output file. */
+        bool ValidDestinationSpelling(const std::filesystem::path &path) {
+            const auto name = path.filename();
+            return !path.empty() && path.is_absolute() && !name.empty() && name != "." && name != ".." &&
+                   path.native().find(std::filesystem::path::value_type{}) == std::filesystem::path::string_type::npos;
+        }
+
+        /** @brief Inspects the destination and its existing parent chain without creating directories. */
+        Result<void> ValidateDestinationAncestors(const std::filesystem::path &outputPath) {
+            std::error_code error;
+            for (auto current = outputPath; !current.empty();) {
+                const auto status = std::filesystem::symlink_status(current, error);
+                if (error && error != std::errc::no_such_file_or_directory)
+                    return Result<void>::Failure(
+                        MakeBundleError(ObservabilityErrors::InvalidBundleRequest, "Diagnostic bundle destination cannot be inspected."));
+                if (std::filesystem::exists(status) && (current == outputPath || !std::filesystem::is_directory(current, error) || error))
+                    return Result<void>::Failure(MakeBundleError(ObservabilityErrors::InvalidBundleRequest,
+                                                                 "Diagnostic bundle destination is occupied or has an invalid parent."));
+                const auto parent = current.parent_path();
+                if (parent == current)
+                    break;
+                current = parent;
+            }
+            return Result<void>::Success();
+        }
     }  // namespace
+
+    /** @copydoc ValidateDiagnosticBundleDestination */
+    Result<void> ValidateDiagnosticBundleDestination(const std::filesystem::path &outputPath) {
+        if (!ValidDestinationSpelling(outputPath))
+            return Result<void>::Failure(
+                MakeBundleError(ObservabilityErrors::InvalidBundleRequest, "Diagnostic bundle output must name a new absolute file."));
+        if (const auto ancestors = ValidateDestinationAncestors(outputPath); ancestors.HasError())
+            return ancestors;
+        std::error_code error;
+        auto temporaryPath = outputPath;
+        temporaryPath += ".tmp";
+        const auto temporary = std::filesystem::symlink_status(temporaryPath, error);
+        if ((error && error != std::errc::no_such_file_or_directory) || std::filesystem::exists(temporary))
+            return Result<void>::Failure(MakeBundleError(ObservabilityErrors::InvalidBundleRequest,
+                                                         "Diagnostic bundle temporary destination is occupied or unavailable."));
+        return Result<void>::Success();
+    }
 
     /** @copydoc GenerateDiagnosticBundle */
     Result<DiagnosticBundleSummary> GenerateDiagnosticBundle(const DiagnosticBundleRequest &request) {
@@ -419,16 +484,12 @@ namespace Horo::Diagnostics {
                 MakeBundleError(ObservabilityErrors::InvalidBundleRequest,
                                 "Diagnostic bundle output must be absolute and the byte limit must be non-zero."));
 
-        std::error_code error;
-        if (std::filesystem::exists(request.outputPath, error) || error)
+        if (request.summaryOnlyNamespaces.size() > 8 || !std::ranges::all_of(request.summaryOnlyNamespaces, ValidSummaryNamespace))
             return Result<DiagnosticBundleSummary>::Failure(
                 MakeBundleError(ObservabilityErrors::InvalidBundleRequest,
-                                "Diagnostic bundle output already exists or cannot be inspected."));
-
-        std::filesystem::create_directories(request.outputPath.parent_path(), error);
-        if (error)
-            return Result<DiagnosticBundleSummary>::Failure(
-                MakeBundleError(ObservabilityErrors::BundleWriteFailed, "Unable to create the diagnostic bundle directory."));
+                                "Diagnostic summary namespaces must be bounded canonical names."));
+        if (const auto destination = ValidateDiagnosticBundleDestination(request.outputPath); destination.HasError())
+            return Result<DiagnosticBundleSummary>::Failure(destination.ErrorValue());
 
         auto entryResult = CollectAndPrepareEntries(request);
         if (entryResult.HasError())
@@ -445,8 +506,14 @@ namespace Horo::Diagnostics {
 
         const std::string manifest = BuildManifestJson(metadata, missingOptional, prepared);
 
-        const std::filesystem::path temporaryPath = request.outputPath.string() + ".tmp";
-        error.clear();
+        std::error_code error;
+        std::filesystem::create_directories(request.outputPath.parent_path(), error);
+        if (error)
+            return Result<DiagnosticBundleSummary>::Failure(
+                MakeBundleError(ObservabilityErrors::BundleWriteFailed, "Unable to create the diagnostic bundle directory."));
+
+        auto temporaryPath = request.outputPath;
+        temporaryPath += ".tmp";
         if (std::filesystem::exists(temporaryPath, error) || error)
             return Result<DiagnosticBundleSummary>::Failure(
                 MakeBundleError(ObservabilityErrors::BundleWriteFailed, "Diagnostic bundle temporary output already exists."));

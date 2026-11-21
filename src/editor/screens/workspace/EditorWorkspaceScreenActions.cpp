@@ -1,4 +1,5 @@
 #include "EditorWorkspaceScreen.h"
+#include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/Logging/Logger.h"
@@ -22,6 +23,173 @@
 
 namespace Horo::Editor::WorkspaceScreenDetail {
     namespace {
+        /** @brief Confirms the exact two paths without granting access during read-only review. */
+        class PrefabApplyRecoveryModal final : public EditorModal {
+        public:
+            PrefabApplyRecoveryModal(const EditorGuiContext &context, std::array<std::string, 2> paths,
+                                     const PrefabApplyRecoveryAction action, std::function<PrefabApplyRecoveryNotice()> confirm)
+                : EditorModal(GuiLocalizationScope{"workspace.paired_recovery"}), context_(context), paths_(std::move(paths)),
+                  action_(action), confirm_(std::move(confirm)) {}
+
+            ModalId Id() const override {
+                return ModalId{0x5046424150524356ULL};
+            }
+
+            ModalPresentation Presentation() const override {
+                return {.size = ModalSizePolicy::Medium, .dimWorkspace = true};
+            }
+
+            ModalClosePolicy ClosePolicy() const override {
+                return {};
+            }
+
+            Result<void> OnOpen(EditorModalContext &) override {
+                return Result<void>::Success();
+            }
+
+            CloseDecision CanClose(ModalCloseReason) override {
+                return CloseDecision::Allow;
+            }
+
+            ModalFrameResult Draw() override {
+                const auto &fonts = context_.theme.fonts;
+                const auto &tokens = Theme::GetActiveTokens();
+                const auto metrics = DesignSystem::MetricsFor(tokens, Ui::ComponentSize::Medium);
+                const float footerHeight = (metrics.minimumHeight * 2.0F + tokens.spacing.propertyRowGap) / tokens.sizes.uiScale + 24.0F;
+                Ui::ScopedModalShell modal({.id = "PrefabApplyRecovery",
+                                            .title = Text("title").c_str(),
+                                            .requestedSize = {600.0F, 380.0F},
+                                            .minimumWidth = 240.0F,
+                                            .minimumHeight = 280.0F,
+                                            .footerHeight = footerHeight},
+                                           fonts);
+                const bool keep = action_ == PrefabApplyRecoveryAction::KeepPublished;
+                ImGui::BeginChild("##PrefabApplyRecoveryReview", {0, modal.BodyHeight()});
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text(keep ? "keep_description" : "description"), Theme::Text(), fonts);
+                for (const auto &path : paths_)
+                    Ui::WrappedText(ImGui::GetContentRegionAvail().x, path, Theme::Muted(), fonts);
+                if (notice_ != PrefabApplyRecoveryNotice::None)
+                    Ui::WrappedText(ImGui::GetContentRegionAvail().x,
+                                    Text(notice_ == PrefabApplyRecoveryNotice::Blocked ? "blocked" : "failed"), Theme::Warn(), fonts);
+                ImGui::EndChild();
+                modal.BeginFooter({16, 12});
+                bool restored = false;
+                if (Ui::Button({.label = Text(keep ? "keep" : "restore").c_str(),
+                                .font = fonts.sans,
+                                .style = {.width = Ui::StyleWidth::FillAvailable}})) {
+                    notice_ = confirm_();
+                    restored = notice_ == PrefabApplyRecoveryNotice::None;
+                }
+                const bool cancelled = Ui::Button({.label = Text("cancel").c_str(),
+                                                   .variant = Ui::ButtonVariant::Secondary,
+                                                   .font = fonts.sans,
+                                                   .style = {.width = Ui::StyleWidth::FillAvailable}});
+                modal.EndFooter();
+                if (restored)
+                    return ModalFrameResult::RequestClose(ModalCloseReason::Completed);
+                return cancelled || modal.CloseRequested() ? ModalFrameResult::RequestClose(ModalCloseReason::Cancelled)
+                                                           : ModalFrameResult::None();
+            }
+
+        private:
+            [[nodiscard]] const std::string &Text(const char *key) const {
+                return LocalizedText(context_.localization, key);
+            }
+
+            const EditorGuiContext &context_;
+            std::array<std::string, 2> paths_;
+            PrefabApplyRecoveryAction action_;
+            std::function<PrefabApplyRecoveryNotice()> confirm_;
+            PrefabApplyRecoveryNotice notice_{};
+        };
+
+        /** @brief Read-only view of one stable source comparison. Keep sends only a fenced owner intent. */
+        class PrefabExternalComparisonModal final : public EditorModal {
+        public:
+            PrefabExternalComparisonModal(const EditorGuiContext &context, std::shared_ptr<const PrefabExternalComparison> comparison,
+                                          std::function<void()> keep)
+                : EditorModal(GuiLocalizationScope{"workspace.prefab_document"}), context_(context), comparison_(std::move(comparison)),
+                  keep_(std::move(keep)) {}
+
+            ModalId Id() const override {
+                return ModalId{0x504642434F4D5041ULL};
+            }
+
+            ModalPresentation Presentation() const override {
+                return {.size = ModalSizePolicy::Medium, .dimWorkspace = true};
+            }
+
+            ModalClosePolicy ClosePolicy() const override {
+                return {};
+            }
+
+            Result<void> OnOpen(EditorModalContext &) override {
+                return Result<void>::Success();
+            }
+
+            CloseDecision CanClose(ModalCloseReason) override {
+                return CloseDecision::Allow;
+            }
+
+            ModalFrameResult Draw() override {
+                const auto &title = Text("compare");
+                Ui::ScopedModalShell modal({.id = "PrefabExternalComparison",
+                                            .title = title.c_str(),
+                                            .requestedSize = {740.0F, 510.0F},
+                                            .footerHeight = 0.0F,
+                                            .showClose = true},
+                                           context_.theme.fonts);
+                if (Ui::Button({.label = Text("keep").c_str(), .font = context_.theme.fonts.sans})) {
+                    keep_();
+                    return ModalFrameResult::RequestClose(ModalCloseReason::Completed);
+                }
+                ImGui::BeginChild("##PrefabCompareBody");
+                DrawDifferences();
+                ImGui::EndChild();
+                return modal.CloseRequested() ? ModalFrameResult::RequestClose(ModalCloseReason::Cancelled) : ModalFrameResult::None();
+            }
+
+        private:
+            [[nodiscard]] const std::string &Text(const char *key) const {
+                return LocalizedText(context_.localization, key);
+            }
+
+            void DrawDifferences() const {
+                if (comparison_->diskError) {
+                    Ui::ErrorText(Text("compare_unavailable").c_str(), context_.theme.fonts);
+                    const auto code = comparison_->diskError->code.Value();
+                    ImGui::TextUnformatted(code.data(), code.data() + code.size());
+                    return;
+                }
+                if (comparison_->compositionChanged)
+                    ImGui::TextUnformatted(Text("composition_changed").c_str());
+                if (comparison_->members.empty() && !comparison_->compositionChanged)
+                    ImGui::TextUnformatted(Text("no_member_changes").c_str());
+                ImGuiListClipper clipper;
+                clipper.Begin(static_cast<int>(comparison_->members.size()));
+                while (clipper.Step()) {
+                    for (int row = clipper.DisplayStart; row < clipper.DisplayEnd; ++row) {
+                        const auto &member = comparison_->members[static_cast<std::size_t>(row)];
+                        const auto *key = member.change == PrefabExternalChange::DraftOnly  ? "draft_only"
+                                          : member.change == PrefabExternalChange::DiskOnly ? "disk_only"
+                                                                                            : "member_changed";
+                        auto label = std::format("{}  {}  {}  /  {}", member.object.value, Text(key), member.draftName, member.diskName);
+                        if (member.parentChanged)
+                            label += std::format("  [{}]", Text("parent_changed"));
+                        if (member.transformChanged)
+                            label += std::format("  [{}]", Text("transform_changed"));
+                        if (member.payloadChanged)
+                            label += std::format("  [{}]", Text("payload_changed"));
+                        ImGui::TextUnformatted(label.c_str());
+                    }
+                }
+            }
+
+            const EditorGuiContext &context_;
+            std::shared_ptr<const PrefabExternalComparison> comparison_;
+            std::function<void()> keep_;
+        };
+
         /** @brief Formats bounded creation diagnostics after the workspace lifetime fence passes. */
         std::string PrefabCreationFailureMessage(const PrefabCreationOutcome *outcome, const ILocalizationService &localization) {
             std::string message = EditorWorkspaceScreen::kTextScope.Text(localization, "prefab.create.failed");
@@ -123,6 +291,65 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                                                                                       : SourceHistoryDirection::Redo};
                 }
                 controller->ProcessCommand(command);
+                return true;
+            }
+            const auto canvas = std::ranges::find_if(model.uiCanvasDocuments, [&](const auto &entry) {
+                return entry.identity.instance == model.workspacePanelHost.ActiveDocument();
+            });
+            if (canvas != model.uiCanvasDocuments.end()) {
+                EditorWorkspaceViewCommandData command;
+                command.documentInstance = canvas->identity.instance;
+                command.uiCanvasState = canvas->state;
+                if (action == EditorMenuAction::SaveScene) {
+                    if (!canvas->dirty)
+                        return true;
+                    command.command = EditorWorkspaceViewCommand::UiCanvasSave;
+                } else {
+                    command.command = action == EditorMenuAction::Undo ? EditorWorkspaceViewCommand::UiCanvasUndo
+                                                                       : EditorWorkspaceViewCommand::UiCanvasRedo;
+                }
+                controller->ProcessCommand(command);
+                return true;
+            }
+            const auto blackboard = std::ranges::find_if(model.blackboardDocuments, [&](const auto &entry) {
+                return entry.snapshot.document.instance == model.workspacePanelHost.ActiveDocument();
+            });
+            if (blackboard != model.blackboardDocuments.end()) {
+                const auto &snapshot = blackboard->snapshot;
+                BlackboardDocumentOperation operation = BlackboardDocumentOperation::Save;
+                if (action == EditorMenuAction::Undo)
+                    operation = BlackboardDocumentOperation::Undo;
+                if (action == EditorMenuAction::Redo)
+                    operation = BlackboardDocumentOperation::Redo;
+                controller->ProcessCommand(
+                    {.command = EditorWorkspaceViewCommand::BlackboardDocument,
+                     .blackboard =
+                         BlackboardWorkspaceRequest{.fence = {snapshot.document.instance, snapshot.revision}, .operation = operation}});
+                return true;
+            }
+            const auto query = std::ranges::find_if(model.environmentQueryDocuments, [&](const auto &entry) {
+                return entry.identity.instance == model.workspacePanelHost.ActiveDocument();
+            });
+            if (query != model.environmentQueryDocuments.end()) {
+                using enum EnvironmentQueryEditAction;
+                if (query->settings || query->perception) {
+                    const auto operation = action == EditorMenuAction::Undo ? Undo : action == EditorMenuAction::Redo ? Redo : Save;
+                    controller->ProcessCommand(MakeEnvironmentQueryEditCommand(*query, operation));
+                }
+                return true;
+            }
+            const auto graph = std::ranges::find_if(model.decisionGraphDocuments, [&](const auto &entry) {
+                return entry.identity.instance == model.workspacePanelHost.ActiveDocument();
+            });
+            if (graph != model.decisionGraphDocuments.end()) {
+                if (graph->editable) {
+                    auto operation = DecisionHistoryAction::Save;
+                    if (action == EditorMenuAction::Undo)
+                        operation = DecisionHistoryAction::Undo;
+                    if (action == EditorMenuAction::Redo)
+                        operation = DecisionHistoryAction::Redo;
+                    controller->ProcessCommand(MakeDecisionHistoryCommand(*graph, operation));
+                }
                 return true;
             }
         }
@@ -261,12 +488,56 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (!command.documentInstance)
             return false;
         const auto snapshot = controller.SourceDocuments().Snapshot(*command.documentInstance);
-        if (snapshot.HasError() || !snapshot.Value().Dirty())
-            return false;
+        if (snapshot.HasValue() && snapshot.Value().Dirty()) {
+            static_cast<void>(modalHost.OpenRoot(
+                std::make_unique<SourceDocumentCloseModal>(context, controller, closeLifetime_,
+                                                           SourceSaveRequest{*command.documentInstance, snapshot.Value().Revision(), {}},
+                                                           snapshot.Value().Identity().key.source.Value())));
+            return true;
+        }
+        const auto &canvases = controller.ViewModel().uiCanvasDocuments;
+        const auto canvas = std::ranges::find_if(canvases, [&](const auto &document) {
+            return document.identity.instance == *command.documentInstance && document.dirty;
+        });
+        if (canvas != canvases.end()) {
+            static_cast<void>(
+                modalHost.OpenRoot(std::make_unique<SourceDocumentCloseModal>(context, controller, closeLifetime_, canvas->state,
+                                                                              canvas->identity.key.source.Value())));
+            return true;
+        }
+        const auto &queries = controller.ViewModel().environmentQueryDocuments;
+        const auto query = std::ranges::find_if(queries, [&](const auto &entry) {
+            return entry.identity.instance == *command.documentInstance && entry.dirty;
+        });
+        if (query != queries.end()) {
+            static_cast<void>(modalHost.OpenRoot(
+                std::make_unique<SourceDocumentCloseModal>(context, controller, closeLifetime_,
+                                                           EnvironmentQueryDocumentFence{query->identity.instance, query->revision},
+                                                           query->identity.key.source.Value())));
+            return true;
+        }
+        const auto &blackboards = controller.ViewModel().blackboardDocuments;
+        const auto blackboard = std::ranges::find_if(blackboards, [&](const auto &document) {
+            return document.snapshot.document.instance == *command.documentInstance && document.snapshot.dirty;
+        });
+        if (blackboard == blackboards.end()) {
+            const auto &graphs = controller.ViewModel().decisionGraphDocuments;
+            const auto graph = std::ranges::find_if(graphs, [&](const auto &document) {
+                return document.identity.instance == *command.documentInstance && document.dirty;
+            });
+            if (graph == graphs.end())
+                return false;
+            static_cast<void>(modalHost.OpenRoot(
+                std::make_unique<SourceDocumentCloseModal>(context, controller, closeLifetime_,
+                                                           DecisionGraphDocumentFence{graph->identity.instance, graph->revision},
+                                                           graph->identity.key.source.Value())));
+            return true;
+        }
+        const auto &schema = blackboard->snapshot;
         static_cast<void>(modalHost.OpenRoot(
             std::make_unique<SourceDocumentCloseModal>(context, controller, closeLifetime_,
-                                                       SourceSaveRequest{*command.documentInstance, snapshot.Value().Revision(), {}},
-                                                       snapshot.Value().Identity().key.source.Value())));
+                                                       BlackboardDocumentFence{schema.document.instance, schema.revision},
+                                                       schema.document.key.source.Value())));
         return true;
     }
 
@@ -278,7 +549,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         const std::filesystem::path root{controller_->ProjectRoot()};
         const auto opened = modalHost_.OpenRoot(std::make_unique<PackageModal>(context_, [acquire, root] {
             return acquire(root);
-        }));
+        }, packages_.gameplayModuleOwner));
         if (opened.HasError())
             LOG_WARN("editor.packages", "Package modal admission failed: %s", opened.ErrorValue().code.Value().c_str());
     }
@@ -311,6 +582,72 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         if (opened.HasError()) {
             LOG_WARN("editor.scene_document", "External scene comparison modal could not open: %s", opened.ErrorValue().message.c_str());
         }
+    }
+
+    /** @copydoc EditorWorkspaceScreen::OpenPrefabApplyRecovery */
+    void EditorWorkspaceScreen::OpenPrefabApplyRecovery(const std::shared_ptr<const PrefabApplyRecoveryCandidate> &candidate) {
+        if (!candidate || !controller_ || candidate != controller_->ViewModel().prefabApplyRecovery)
+            return;
+        const auto &root = controller_->ProjectRoot();
+        std::array paths{WorkspacePortablePathText(candidate->prefab.path.lexically_relative(root)),
+                         WorkspacePortablePathText(candidate->scene.path.lexically_relative(root))};
+        auto confirm = [this, candidate, lifetime = std::weak_ptr<const void>{workspaceControllerLifetime_}] {
+            if (lifetime.expired() || candidate != controller_->ViewModel().prefabApplyRecovery)
+                return PrefabApplyRecoveryNotice::Failed;
+            controller_->ProcessCommand(
+                {.command = EditorWorkspaceViewCommand::RestorePrefabApplyRecovery, .prefabApplyRecovery = candidate});
+            return controller_->ViewModel().prefabApplyRecoveryNotice;
+        };
+        const auto opened = modalHost_.OpenRoot(
+            std::make_unique<PrefabApplyRecoveryModal>(context_, std::move(paths), candidate->action, std::move(confirm)));
+        if (opened.HasError())
+            LOG_WARN("editor.prefab", "Paired Prefab recovery review could not open: %s", opened.ErrorValue().message.c_str());
+    }
+
+    /** @copydoc EditorWorkspaceScreen::OpenPrefabExternalComparison */
+    void EditorWorkspaceScreen::OpenPrefabExternalComparison(const PrefabDocumentFence &fence) {
+        const auto &model = controller_->ViewModel();
+        const auto found = std::ranges::find_if(model.prefabDocuments, [&](const auto &source) {
+            return source.fence.owner == fence.owner && source.fence.instance == fence.instance && source.fence.revision == fence.revision;
+        });
+        if (found == model.prefabDocuments.end() || !found->externalConflict || !found->externalComparison)
+            return;
+        const auto comparison = found->externalComparison;
+        auto keep = [this, fence, comparison, lifetime = std::weak_ptr<const void>{workspaceControllerLifetime_}] {
+            if (lifetime.expired())
+                return;
+            controller_->ProcessCommand({.command = EditorWorkspaceViewCommand::PrefabDocument,
+                                         .prefabFence = fence,
+                                         .prefabExternalComparison = comparison,
+                                         .prefabAction = PrefabDocumentAction::KeepExternalDraft});
+        };
+        const auto opened = modalHost_.OpenRoot(std::make_unique<PrefabExternalComparisonModal>(context_, comparison, std::move(keep)));
+        if (opened.HasError())
+            LOG_WARN("editor.prefab", "External prefab comparison could not open: %s", opened.ErrorValue().message.c_str());
+    }
+
+    /** @copydoc EditorWorkspaceScreen::SavePrefabAs */
+    void EditorWorkspaceScreen::SavePrefabAs(const PrefabDocumentFence &fence) {
+        auto context =
+            input_.router.PushContext(Input::InputContextId{"editor.native_dialog.prefab_save"}, Input::InputContextKind::NativeDialog);
+        const auto filename = context_.localization.Get("editor", "workspace.prefab_document.save_as_filename");
+#if defined(__APPLE__)
+        const std::string suggestion = filename;
+#else
+        const auto suggestion = WorkspacePathText(ProjectLayout::AssetRoot(controller_->ProjectRoot()) / WorkspaceNativePath(filename));
+#endif
+        const auto selected = pfd::save_file(context_.localization.Get("editor", "workspace.prefab_document.save_as"), suggestion,
+                                             {context_.localization.Get("editor", "workspace.prefab_document.file_type"), "*.prefab"})
+                                  .result();
+        if (selected.empty())
+            return;
+        auto destination = WorkspaceNativePath(selected);
+        if (destination.extension().empty())
+            destination += ".prefab";
+        controller_->ProcessCommand({.command = EditorWorkspaceViewCommand::PrefabDocument,
+                                     .prefabFence = fence,
+                                     .prefabSaveDestination = destination.lexically_normal(),
+                                     .prefabAction = PrefabDocumentAction::SaveAs});
     }
 
     /** @copydoc EditorWorkspaceScreen::OpenWorldLayerCreation */

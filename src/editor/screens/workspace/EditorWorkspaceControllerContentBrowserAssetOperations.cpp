@@ -1,3 +1,7 @@
+#include "Horo/AI/DecisionPlanCodec.h"
+#include "Horo/AI/EnvironmentQuerySourceCodec.h"
+#include "Horo/Application/ProjectAssetImportCommitter.h"
+#include "Horo/Foundation/Paths.h"
 #include "WorkspacePathText.h"
 #include "editor/menu/EditorMenuPlatform.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
@@ -74,14 +78,118 @@ namespace Horo::Editor {
         };
     }
 
+    /** @copydoc EditorWorkspaceController::PrepareInitialAiAssetDestination */
+    std::optional<std::filesystem::path> EditorWorkspaceController::PrepareInitialAiAssetDestination(std::string_view directoryPath,
+                                                                                                     std::string_view name,
+                                                                                                     std::string_view extension,
+                                                                                                     std::size_t maximumNameBytes) {
+        const auto directory = NormalizeAbsolute(WorkspaceNativePath(directoryPath));
+        const auto root = ProjectLayout::AssetRoot(ProjectRoot());
+        if (name.size() > maximumNameBytes || !IsPortableEntryName(name) || !IsContentBrowserDirectoryTargetAllowed(root, directory)) {
+            m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.invalid_name";
+            return {};
+        }
+        const auto filename = std::string{name} + std::string{extension};
+        if (DirectoryContainsPortableName(directory, filename) || DirectoryContainsPortableName(directory, filename + ".horo")) {
+            m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.name_exists";
+            return {};
+        }
+        return directory / WorkspaceNativePath(filename);
+    }
+
+    /** @copydoc EditorWorkspaceController::CreateContentBrowserEnvironmentQuery */
+    void EditorWorkspaceController::CreateContentBrowserEnvironmentQuery(const EnvironmentQueryCreationRequest &request) {
+        auto &error = m_viewModel.contentBrowserOperationError;
+        error.clear();
+        if (!m_viewModel.environmentQueryCreationAvailable) {
+            error = "workspace.environment_query.descriptors_unavailable";
+            return;
+        }
+        const auto destination = PrepareInitialAiAssetDestination(request.directory, request.name, AI::EnvironmentQuerySourceExtension,
+                                                                  AI::EnvironmentQuerySchemaLimits::DisplayNameBytes);
+        if (destination)
+            PublishInitialEnvironmentQuery(*destination, request, GenerateRandomAssetId(m_mutableAssetRegistry->Snapshot()));
+    }
+
+    /** @copydoc EditorWorkspaceController::CreateContentBrowserBlackboard */
+    void EditorWorkspaceController::CreateContentBrowserBlackboard(const BlackboardCreationRequest &request) {
+        auto &error = m_viewModel.contentBrowserOperationError;
+        error.clear();
+        if (!m_viewModel.blackboardCreationAvailable) {
+            error = "workspace.content_browser.operation.unavailable";
+            return;
+        }
+        const auto destination = PrepareInitialAiAssetDestination(request.directory, request.name, AI::BlackboardSchemaSourceExtension,
+                                                                  AI::BlackboardSchemaAuthoringRow::MaximumLabelBytes);
+        if (destination)
+            PublishInitialBlackboard(*destination, request, GenerateRandomAssetId(m_mutableAssetRegistry->Snapshot()));
+    }
+
+    /** @copydoc EditorWorkspaceController::CreateContentBrowserStateMachine */
+    void EditorWorkspaceController::CreateContentBrowserStateMachine(const StateMachineCreationRequest &request) {
+        auto &error = m_viewModel.contentBrowserOperationError;
+        error.clear();
+        if (!m_viewModel.blackboardCreationAvailable) {
+            error = "workspace.content_browser.operation.unavailable";
+            return;
+        }
+        const auto destination = PrepareInitialAiAssetDestination(request.directory, request.name, ".horo_sm",
+                                                                  AI::BlackboardSchemaAuthoringRow::MaximumLabelBytes);
+        if (destination)
+            PublishInitialStateMachine(*destination, request, GenerateRandomAssetId(m_mutableAssetRegistry->Snapshot()));
+    }
+
+    /** @copydoc EditorWorkspaceController::CreateContentBrowserTaskDecision */
+    void EditorWorkspaceController::CreateContentBrowserTaskDecision(const TaskDecisionCreationRequest &request) {
+        auto &error = m_viewModel.contentBrowserOperationError;
+        error.clear();
+        if (!m_viewModel.blackboardCreationAvailable) {
+            error = "workspace.content_browser.operation.unavailable";
+            return;
+        }
+        if (request.family != AI::DecisionPlanKind::BehaviorTree && request.family != AI::DecisionPlanKind::Utility) {
+            error = "workspace.decision_graph.create_failed";
+            return;
+        }
+        const auto destination =
+            PrepareInitialAiAssetDestination(request.directory, request.name,
+                                             request.family == AI::DecisionPlanKind::Utility ? ".horo_utility" : ".horo_bt",
+                                             AI::BlackboardSchemaAuthoringRow::MaximumLabelBytes);
+        if (destination)
+            PublishInitialTaskDecision(*destination, request, GenerateRandomAssetId(m_mutableAssetRegistry->Snapshot()));
+    }
+
+    /** @copydoc EditorWorkspaceController::FinishAuthoredAiPublication */
+    bool EditorWorkspaceController::FinishAuthoredAiPublication(const Application::ProjectAssetImportReceipt &receipt,
+                                                                const Result<void> &outcome, std::string_view failureKey) {
+        if (receipt.registryPublished) {
+            m_assetRegistry = m_mutableAssetRegistry->Snapshot();
+            m_viewModel.assetRegistryRevision = m_assetRegistry.Revision();
+            if (m_collisionInventory)
+                *m_collisionInventory = {};
+            if (m_collisionSettings)
+                static_cast<void>(m_collisionSettings->ObserveInventory({}));
+            RebuildContentBrowserProjection(ProjectRoot(), WorkspaceNativePath(m_viewModel.contentBrowser.absoluteCurrentPath));
+        }
+        if (outcome.HasValue())
+            return true;
+        m_viewModel.contentBrowserOperationError = receipt.status == Application::ProjectAssetImportStatus::ReconciliationRequired
+                                                       ? "workspace.content_browser.operation.rollback_failed"
+                                                       : failureKey;
+        return false;
+    }
+
     bool EditorWorkspaceController::CopyContentBrowserAssetTo(const std::filesystem::path &absoluteSource,
                                                               const std::filesystem::path &absoluteDestinationDirectory) {
         const auto plan = PrepareContentBrowserAssetTransfer(absoluteSource, absoluteDestinationDirectory, false);
         if (!plan.has_value())
             return false;
 
-        auto sidecar = ReadSidecarJson(plan->sourceSidecar);
         const Assets::AssetId newId = GenerateRandomAssetId(m_assetRegistry);
+        const auto *source = m_assetRegistry.Find(plan->assetId);
+        if (source && source->type.Value() == AI::EnvironmentQuerySourceAssetType)
+            return CopyEnvironmentQuerySource(*plan, newId);
+        auto sidecar = ReadSidecarJson(plan->sourceSidecar);
         if (!sidecar.has_value() || !newId.IsValid()) {
             m_viewModel.contentBrowserOperationError = "workspace.content_browser.operation.copy_failed";
             return false;
