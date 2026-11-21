@@ -49,6 +49,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
     struct ReplayAuthoredScene final {
         Runtime::RuntimeSceneView initialScene;
         std::vector<Runtime::EntityId> slots;
+        Runtime::SceneDefinitionRevision definitionRevision;
+        Sha256Digest sceneInput;
     };
 
     /** @brief One generation-owned Scene/Physics pair; equal Scene IDs never imply shared storage. */

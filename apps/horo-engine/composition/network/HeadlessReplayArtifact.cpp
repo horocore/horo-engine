@@ -1,6 +1,7 @@
 #include "HeadlessReplayArtifact.h"
 
 #include "HeadlessNetworkServices.h"
+#include "Horo/AI/AIReplayEvidence.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Foundation/Utf8.h"
 #include "Horo/Network/NetworkErrors.h"
@@ -16,6 +17,21 @@ namespace Horo::Application::Internal {
     namespace {
         using Json = nlohmann::json;
         constexpr std::size_t MaximumEvidenceBytes = 128U * 1024U;
+
+        /** @brief Describes supported and omitted boundaries even when trace records were captured for diagnostics. */
+        Json EncodeCoverage() {
+            constexpr auto names =
+                std::to_array<std::string_view>({"scene-input", "perception-input", "query-publication", "blackboard-sync", "decision",
+                                                 "navigation", "gameplay", "physics", "achieved-character-motion", "canonical-ai"});
+            static_assert(names.size() == AI::AiReplayBoundaryCount);
+            auto boundaries = Json::object();
+            for (const auto name : names)
+                boundaries[std::string{name}] = "omitted";
+            boundaries["scene-input"] = "deterministic";
+            boundaries["decision"] = "deterministic";
+            boundaries["canonical-ai"] = "deterministic";
+            return {{"version", AI::AiReplayManifest::CurrentVersion}, {"boundaries", std::move(boundaries)}};
+        }
 
         /** @brief Projects the stable portion of one original v4 trace record. */
         Json EncodeRecord(const AI::DecisionStepRecord &record) {
@@ -38,7 +54,8 @@ namespace Horo::Application::Internal {
         Result<std::string> EncodeEvidence(const HeadlessDecisionReplayData &data, const Sha256Digest &canonicalDigest) {
             const auto &capture = data.evidence;
             if (!capture.trace || capture.trace->DroppedRecords() != 0 || !data.definition.IsValid() || !capture.subject.IsValid() ||
-                data.canonicalRecord.empty() || data.canonicalRecord.size() > HeadlessDecisionReplay::CanonicalBudget)
+                data.definitionRevision.value == 0 || data.sceneInput == Sha256Digest{} || data.canonicalRecord.empty() ||
+                data.canonicalRecord.size() > HeadlessDecisionReplay::CanonicalBudget)
                 return Result<std::string>::Failure(MakeError(AI::AIErrors::CanonicalStateInvalid));
             const auto &header = capture.trace->Header();
             if (!header.MatchesObservation(header.planDigest, capture.tick, capture.blackboard, capture.blackboardRevision))
@@ -52,7 +69,11 @@ namespace Horo::Application::Internal {
                                    {"sceneDefinitionId", std::to_string(data.definition.value)},
                                    {"agentId", std::to_string(capture.subject.Value())},
                                    {"tick", std::to_string(capture.tick)},
-                                   {"recordedBoundaries", {"decision", "canonical-ai"}},
+                                   {"recordedBoundaries", {"scene-input", "decision", "canonical-ai"}},
+                                   {"manifest", EncodeCoverage()},
+                                   {"sceneInput",
+                                    {{"revision", std::to_string(data.definitionRevision.value)},
+                                     {"digest", FormatSha256(data.sceneInput)}}},
                                    {"canonicalAi",
                                     {{"recordVersion", AI::AiCanonicalReferenceRecordVersion}, {"digest", FormatSha256(canonicalDigest)}}},
                                    {"decision",

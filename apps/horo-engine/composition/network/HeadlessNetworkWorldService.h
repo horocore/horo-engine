@@ -421,7 +421,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (auto prepared = PrepareHeadlessSceneAtLoadBoundary(*record_->scenes, *owners_->definition, boundary); prepared.HasError())
                 return Result<void>::Failure(prepared.ErrorValue());
             if (input.decisionReplay && request_.world == Network::NetworkModeWorldKind::Standalone) {
-                if (auto bound = HeadlessDecisionReplay::BindAuthoredScene(*record_); bound.HasError())
+                if (auto bound = HeadlessDecisionReplay::BindAuthoredScene(*record_, *owners_->definition); bound.HasError())
                     return bound;
             }
             if (auto templates = PrepareConfiguredTemplates(); templates.HasError())

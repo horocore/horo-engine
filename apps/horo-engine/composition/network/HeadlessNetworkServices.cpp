@@ -2,12 +2,14 @@
 #include "HeadlessNetworkWorldService.h"
 #include "HeadlessPerceptionPolicy.h"
 #include "HeadlessReplicaAnimationInputs.h"
+#include "Horo/Foundation/Sha256.h"
 #include "Horo/Gameplay/GameplayVfxScene.h"
 #include "Horo/Network/NetworkErrors.h"
 #include "Horo/Network/ReplicationWorldLifecycle.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Physics/PhysicsWorld.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
+#include "Horo/Scene/CookedSceneDefinition.h"
 #include "PhysicsStateHostLifecycle.h"
 
 #include <algorithm>
@@ -55,12 +57,14 @@ namespace Horo::Application::Internal {
             });
             if (encoded.HasError())
                 return HeadlessDecisionReplay::Capture::Failure(std::move(encoded).ErrorValue());
-            return HeadlessDecisionReplay::Capture::Success({std::move(evidence), std::move(encoded).Value(), scene.DefinitionId()});
+            return HeadlessDecisionReplay::Capture::Success(
+                {std::move(evidence), std::move(encoded).Value(), scene.DefinitionId(), authored.definitionRevision, authored.sceneInput});
         }
     }  // namespace
 
     /** @copydoc HeadlessDecisionReplay::BindAuthoredScene */
-    Result<void> HeadlessDecisionReplay::BindAuthoredScene(HeadlessNetworkDetail::WorldRecord &world) {
+    Result<void> HeadlessDecisionReplay::BindAuthoredScene(HeadlessNetworkDetail::WorldRecord &world,
+                                                           const Runtime::RuntimeSceneDefinition &definition) {
         const auto scene = world.scenes->ActiveScene();
         if (!scene || scene->RuntimeId() != world.request.scene || !scene->DefinitionId().IsValid())
             return Result<void>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
@@ -69,7 +73,11 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(
                 MakeError(AI::AIErrors::CanonicalStateInvalid, "Root Scene exceeds the replay identity inventory limit."));
         try {
-            HeadlessNetworkDetail::ReplayAuthoredScene authored{*scene, std::vector<Runtime::EntityId>(slots)};
+            const auto encoded = SceneCook::EncodeCookedSceneDefinition(definition);
+            if (encoded.HasError())
+                return Result<void>::Failure(encoded.ErrorValue());
+            HeadlessNetworkDetail::ReplayAuthoredScene authored{*scene, std::vector<Runtime::EntityId>(slots), definition.Revision(),
+                                                                ComputeSha256(std::as_bytes(std::span{encoded.Value()}))};
             for (std::size_t slot = 0; slot < authored.slots.size(); ++slot) {
                 const auto entity = scene->EntityAt(slot);
                 if (entity && entity->authoredObject)

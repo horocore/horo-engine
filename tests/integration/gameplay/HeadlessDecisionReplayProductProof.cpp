@@ -3,6 +3,7 @@
 #include "Horo/AI/AICanonicalState.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/Network/NetworkErrors.h"
+#include "Horo/Scene/CookedSceneDefinition.h"
 #include "NetworkProductHost.h"
 #include "OwnedTestDirectory.h"
 
@@ -68,6 +69,15 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(artifact.at("agentId") == std::to_string(data.evidence.subject.Value()));
             CHECK(artifact.at("canonicalAi").at("digest") == FormatSha256(digest));
             CHECK(artifact.at("canonicalAi").at("recordVersion") == AI::AiCanonicalReferenceRecordVersion);
+            const auto &coverage = artifact.at("manifest").at("boundaries");
+            CHECK(coverage.at("scene-input") == "deterministic");
+            CHECK(coverage.at("decision") == "deterministic");
+            CHECK(coverage.at("canonical-ai") == "deterministic");
+            CHECK(coverage.at("physics") == "omitted");
+            CHECK(coverage.at("navigation") == "omitted");
+            CHECK(coverage.at("achieved-character-motion") == "omitted");
+            CHECK(artifact.at("sceneInput").at("revision") == std::to_string(data.definitionRevision.value));
+            CHECK(artifact.at("sceneInput").at("digest") == FormatSha256(data.sceneInput));
             const auto &decision = artifact.at("decision");
             CHECK(decision.at("planDigest") == FormatSha256(data.evidence.trace->Header().planDigest));
             CHECK(decision.at("traceVersion") == AI::DecisionTraceHeader::CurrentVersion);
@@ -89,6 +99,10 @@ namespace Horo::Application::PrefabAtomicTest {
                               std::optional<std::uint32_t> referenceGeneration) {
         using namespace Network;
         const auto definitionId = definition->Id();
+        const auto definitionRevision = definition->Revision();
+        const auto encodedScene = SceneCook::EncodeCookedSceneDefinition(*definition);
+        REQUIRE(encodedScene.HasValue());
+        const auto sceneInputDigest = ComputeSha256(std::as_bytes(std::span{encodedScene.Value()}));
         Tests::OwnedTestDirectory artifactOwner{"headless-replay"};
         const auto artifactPath = artifactOwner.Path() / std::filesystem::path{u8"replay evidence ü"};
         const auto utf8 = artifactPath.u8string();
@@ -151,7 +165,9 @@ namespace Horo::Application::PrefabAtomicTest {
                                                           .pollRetirement = std::move(composition.pollRetirement)},
                                                          std::move(composition.factories));
         REQUIRE(host.HasValue());
-        REQUIRE(host.Value()->Startup().HasValue());
+        const auto started = host.Value()->Startup();
+        INFO((started.HasError() ? started.ErrorValue().message : "startup succeeded"));
+        REQUIRE(started.HasValue());
         REQUIRE(host.Value()->RunFrame().HasValue());
         CHECK_FALSE(replay->TakeCommitted());
         clock.Advance(Duration::FromNanoseconds(16'666'667));
@@ -176,6 +192,8 @@ namespace Horo::Application::PrefabAtomicTest {
         INFO((captured->HasError() ? captured->ErrorValue().message : "success"));
         REQUIRE(captured->HasValue());
         const auto &data = captured->Value();
+        CHECK(data.definitionRevision == definitionRevision);
+        CHECK(data.sceneInput == sceneInputDigest);
         const auto &evidence = data.evidence;
         CHECK(evidence.tick == 1);
         CHECK(evidence.subject == agent);

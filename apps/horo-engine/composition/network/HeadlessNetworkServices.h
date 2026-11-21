@@ -80,6 +80,8 @@ namespace Horo::Application::Internal {
         AI::AiSceneDecisionReplayCapture evidence;
         std::vector<std::uint8_t> canonicalRecord;
         Runtime::SceneDefinitionId definition;
+        Runtime::SceneDefinitionRevision definitionRevision;
+        Sha256Digest sceneInput;
     };
 
     /** @brief Product-owned mailbox for one exact committed tick; no concurrent access or file storage. */
@@ -105,7 +107,7 @@ namespace Horo::Application::Internal {
         friend class HeadlessNetworkDetail::HeadlessFixedParticipant;
         friend class HeadlessNetworkDetail::WorldService;
         /** @brief Captures the exact original root Scene bindings before mounted or gameplay entities materialize. */
-        static Result<void> BindAuthoredScene(HeadlessNetworkDetail::WorldRecord &world);
+        static Result<void> BindAuthoredScene(HeadlessNetworkDetail::WorldRecord &world, const Runtime::RuntimeSceneDefinition &definition);
         void Arm(HeadlessNetworkDetail::WorldRecord &world, const Runtime::FixedStepContext &context);
         void Prepare(const HeadlessNetworkDetail::WorldRecord &world, const Runtime::FixedStepContext &context);
         void Commit(const Runtime::FixedStepContext &context) noexcept;
