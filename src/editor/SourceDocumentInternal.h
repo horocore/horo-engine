@@ -93,6 +93,17 @@ namespace Horo::Editor {
             std::optional<HistoryEntry> history;
         };
 
+        struct StagedBatch final {
+            std::vector<StagedBatchEdit> items;
+            std::size_t bytes{};
+        };
+
+        struct StagedBatchUndo final {
+            Record *record;
+            std::shared_ptr<const Detail::SourceDocumentRoot> next;
+            std::size_t position;
+        };
+
         std::filesystem::path projectRoot;
         SourceDocumentLimits limits;
         std::thread::id owner{std::this_thread::get_id()};
@@ -143,6 +154,15 @@ namespace Horo::Editor {
         /** @brief Stages one batch edit and reserves its history before any publication. */
         [[nodiscard]] Result<StagedBatchEdit> StageBatchEdit(Record &record, const SourceTextEdit &edit, CancellationToken cancellation,
                                                              std::size_t reservedBytes) const;
+        /** @brief Prepares every edit without publishing any root or history change. */
+        [[nodiscard]] Result<StagedBatch> StageEdits(std::span<const SourceBatchEdit> edits, CancellationToken cancellation);
+        /** @brief Prepares the immutable result before any root is published. */
+        [[nodiscard]] SourceEditBatch MakeBatchReceipt(std::span<const StagedBatchEdit> edits) const;
+        /** @brief Reserves disk read scratch alongside the staged text, then verifies every original disk base. */
+        [[nodiscard]] Result<void> VerifyBatchBases(const StagedBatch &batch, CancellationToken cancellation) const;
+        /** @brief Prepares the history reversal against the exact publication in the supplied receipt. */
+        [[nodiscard]] Result<StagedBatchUndo> StageBatchUndo(const SourceBatchItem &item, CancellationToken cancellation,
+                                                             std::size_t reservedBytes);
         /** @brief Validates save intent/path and read reservation before filesystem callback admission. */
         [[nodiscard]] Result<std::filesystem::path> PrepareSavePath(const Record &record, const SourceSaveRequest &request,
                                                                     const DocumentIdentity &identity, std::filesystem::path path,
