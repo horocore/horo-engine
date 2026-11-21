@@ -194,6 +194,8 @@ namespace Horo::AI {
         [[nodiscard]] std::uint64_t SceneIncarnation() const noexcept;
         /** @brief Returns currently stored record count, before a new time/liveness query. @return At most Capacity(). */
         [[nodiscard]] std::size_t StoredCount() const noexcept;
+        /** @brief Compares a listener's decision facts, excluding clock-only refresh and confidence decay. */
+        [[nodiscard]] bool DecisionFactsChanged(const AIPerceptionMemory &previous, PerceptionListenerTypeId listener) const noexcept;
 
     private:
         friend Result<void> RouteGameplayPerceptionEvent(const PerceptionEventDelivery &, const PerceptionDescriptorRegistry &,

@@ -1,5 +1,6 @@
 #include "AiSceneTestSupport.h"
 #include "DecisionGraphCompilerTestSupport.h"
+#include "PerceptionSenseTestSupport.h"
 #include "Horo/AI/AIReplayEvidence.h"
 #include "Horo/AI/DecisionQueryTask.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
@@ -191,17 +192,17 @@ namespace Horo::AI {
             CHECK(fixture.probe.cleanups == 1);
         }
 
+        class CommitEmpty final : public IAiCookedDecisionIntentSink {
+        public:
+            Result<bool> Commit(const AiDecisionSliceContext &, AiWorkBudget &) noexcept override {
+                return Result<bool>::Success(true);
+            }
+
+            void Discard(AgentHandle) noexcept override {}
+        };
+
         TEST_CASE("Scene cooked tasks receive the admitted scheduler event after idle ticks",
                   "[unit][ai][scene][decision_reservation][scheduler]") {
-            class CommitEmpty final : public IAiCookedDecisionIntentSink {
-            public:
-                Result<bool> Commit(const AiDecisionSliceContext &, AiWorkBudget &) noexcept override {
-                    return Result<bool>::Success(true);
-                }
-
-                void Discard(AgentHandle) noexcept override {}
-            };
-
             Fixture fixture;
             fixture.probe.succeedTick = 100;
             const auto watched = MakeIdentity<BlackboardKeyId>(1);
@@ -283,6 +284,116 @@ namespace Horo::AI {
             CHECK(fixture.probe.lastTerminal == AiTaskState::Succeeded);
             CHECK(continuation.NotifyEvent() == AiTaskPublicationDisposition::Stale);
             CHECK(tick(8) == 0);
+            runtime.BeginShutdown();
+        }
+
+        class WakeSense final : public IPerceptionSenseProvider {
+        public:
+            explicit WakeSense(const bool &sees) : sees_(sees) {}
+
+            Result<std::size_t> Evaluate(const PerceptionSenseInput &input, std::span<PerceptionSenseSample> output,
+                                         AiWorkBudget &budget) override {
+                for (std::size_t index = 0; index < input.candidates.size(); ++index) {
+                    if (!budget.Consume())
+                        return Result<std::size_t>::Failure(MakeError(AIErrors::SchedulerBudgetExhausted));
+                    output[index] = {static_cast<std::uint32_t>(index), sees_};
+                }
+                return Result<std::size_t>::Success(input.candidates.size());
+            }
+
+        private:
+            const bool &sees_;
+        };
+
+        TEST_CASE("Native perception wakes only declared cooked dependencies when decision facts change",
+                  "[unit][ai][scene][decision_reservation][scheduler]") {
+            Fixture fixture;
+            fixture.probe.succeedTick = 100;
+            auto source = TaskTree(11);
+            source.executionTask = MakeIdentity<TaskId>(9000);
+            const auto plan = fixture.Compile(std::span{&source, 1}, 11);
+            auto authored = SceneFixture(fixture, *plan);
+            authored.descriptor.cookedPlan = plan;
+            bool sees = true;
+            const PerceptionSenseTestSupport::InputFixture native;
+            const auto listener = native.binding.listenerType;
+            authored.agent.controller->requiredCapabilities =
+                authored.agent.controller->requiredCapabilities.Union(AiCapabilitySet::Of(AiCapability::Perception));
+            const auto sense = MakeIdentity<SenseTypeId>(20);
+            const PerceptionDescriptorOrigin origin{PerceptionDescriptorSourceKind::Native, MakeIdentity<PerceptionProviderId>(22), 1};
+            const PerceptionSenseRegistration registration{{{sense, origin, "reactive sight", native.capabilities},
+                                                            {MakeIdentity<StimulusTypeId>(21), origin, "visible actor", 1, {}},
+                                                            sizeof(WakeSense), 2, 2},
+                                                           {&sees, [](void *value) -> IPerceptionSenseProvider * {
+                                                                return new WakeSense{*static_cast<const bool *>(value)};
+                                                            }, [](void *, IPerceptionSenseProvider *provider) noexcept { delete provider; }}};
+            auto generation = PerceptionSenseGeneration::Capture(std::span{&registration, 1}, std::make_shared<std::atomic_bool>(true));
+            REQUIRE(generation.HasValue());
+            authored.descriptor.perceptionEndpoints = std::make_shared<const AiControllerPerceptionEndpoints>(
+                AiControllerPerceptionEndpoints{.registry = std::make_shared<const PerceptionDescriptorRegistry>(native.Registry(registration.contract)),
+                                                .listeners = {listener}, .sources = {sense}});
+
+            Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
+            for (std::uint64_t id = 1; id <= 2; ++id) {
+                auto agent = authored.agent.agent;
+                agent.agent = MakeIdentity<AgentId>(id);
+                builder.Add({.object = Runtime::SceneObjectId{id},
+                             .components = {.aiAgent = agent, .aiController = authored.agent.controller}});
+            }
+            auto definition = std::move(builder).Build();
+            REQUIRE(definition.HasValue());
+            auto scene = Runtime::RuntimeScene::Create(definition.Value(), authored.binding.scene);
+            REQUIRE(scene.HasValue());
+            const auto view = scene.Value()->View();
+            PerceptionSpatialBroadphase spatial;
+            const AiScenePerceptionActivationInput sensing{spatial, {},
+                [](const Runtime::RuntimeSceneView &candidate) {
+                    std::vector<AiScenePerceptionPosition> positions;
+                    for (std::uint64_t id = 1; id <= 2; ++id)
+                        positions.push_back({*candidate.Find(Runtime::SceneObjectId{id}),
+                                             Math::WorldCoordinate64::FromMillimeters(static_cast<std::int64_t>(id) * 1000, 0, 0)});
+                    return Result<std::vector<AiScenePerceptionPosition>>::Success(std::move(positions));
+                },
+                AiScenePerceptionExecution{.generation = generation.Value(), .capabilities = native.capabilities,
+                                           .radiusMillimeters = 5000, .visibleLayers = 1, .workUnitsPerTick = 100}};
+
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            auto runtime = std::move(AiSceneRuntime::Create()).Value();
+            AiSceneActivationParticipant participant{runtime, std::span{&authored.descriptor, 1}, sensing};
+            auto publication = participant.Prepare(definition.Value(), view);
+            REQUIRE(publication.HasValue());
+            publication.Value()->Publish();
+            REQUIRE(runtime.ActivateCookedDecisionsAtSafePoint({.jobs = jobs, .scheduler = {.mode = AiSchedulingMode::BestEffort},
+                                                               .agent = {.intervalTicks = 0}, .intents = std::make_shared<CommitEmpty>(),
+                                                               .timing = AiCookedDecisionTiming::BestEffortExternalFeedback})
+                        .HasValue());
+            auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();
+            const auto agent = runtime.CapabilityAtSafePoint().ResolveAgent(MakeIdentity<AgentId>(1)).Value();
+            const std::array dependencies{DecisionWakePerceptionDependency{Node(2), listener}};
+            const auto subscribed = runtime.SetCookedPerceptionWatchesAtSafePoint(agent, dependencies);
+            INFO((subscribed.HasError() ? subscribed.ErrorValue().code.Value() : "Perception dependency admitted"));
+            REQUIRE(subscribed.HasValue());
+            const std::array invalid{DecisionWakePerceptionDependency{Node(8), listener}};
+            CHECK(runtime.SetCookedPerceptionWatchesAtSafePoint(agent, invalid).HasError());
+            const auto evaluate = [&](const std::uint64_t tick) {
+                REQUIRE(runtime.PollPerceptionAtSensePoll(view, spatial, tick, Duration::FromNanoseconds(sensing.execution->memory.fixedStep.count()))
+                            .HasValue());
+                const auto decision = scheduler->EvaluateAtDecision(tick);
+                REQUIRE(decision.HasValue());
+                CHECK(decision.Value().failed == 0);
+                REQUIRE(scheduler->CommitAtIntentDispatch(tick).HasValue());
+                return decision.Value().evaluated;
+            };
+            CHECK(evaluate(1) == 2);
+            CHECK(evaluate(2) == 0);
+            sees = false;
+            CHECK(evaluate(3) == 1);
+            CHECK(fixture.probe.resumes == 1);
+            CHECK(fixture.probe.lastResumeReason == AiTaskResumeReason::Event);
+            CHECK(evaluate(4) == 0);
+            REQUIRE(runtime.SetCookedPerceptionWatchesAtSafePoint(agent, {}).HasValue());
+            sees = true;
+            CHECK(evaluate(5) == 0);
             runtime.BeginShutdown();
         }
 

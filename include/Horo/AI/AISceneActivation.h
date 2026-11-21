@@ -561,6 +561,11 @@ namespace Horo::AI {
          * @return Active scheduler or typed unavailable failure.
          * @details Borrow expires on scene replacement, restore, shutdown or destruction. Workers must never retain it. */
         [[nodiscard]] Result<AiTaskScheduler *> TaskSchedulerAtSafePoint() const;
+        /** @brief Installs event-only cooked node dependencies on the exact agent's admitted native Perception listeners.
+         * An empty span clears the subscription. Validation and allocation complete before the current subscription is changed.
+         */
+        [[nodiscard]] Result<void> SetCookedPerceptionWatchesAtSafePoint(
+            AgentHandle agent, std::span<const DecisionWakePerceptionDependency> dependencies) const;
 
         /** @brief Copies the first fatal failure or, if absent, first provider advisory from the last completed tick.
          * @param scene The current Scene view owned by this AI runtime.

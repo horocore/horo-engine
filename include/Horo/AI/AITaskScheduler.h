@@ -370,6 +370,12 @@ namespace Horo::AI {
         /** @brief Queues a committed dependency of the exact reactive plan for the next decision tick. */
         void QueueBlackboardWake(AgentHandle agent, const std::shared_ptr<const CookedDecisionPlan> &plan,
                                  std::span<const BlackboardKeyId> changedKeys) noexcept;
+        /** @brief Replaces the exact reactive registration's validated listener dependencies. */
+        [[nodiscard]] Result<void> SetPerceptionWatches(AgentHandle agent, const std::shared_ptr<const CookedDecisionPlan> &plan,
+                                                        std::span<const PerceptionListenerTypeId> listeners);
+        /** @brief Borrows current listeners only on the Scene owner lane, outside native sensing calls. */
+        [[nodiscard]] std::span<const PerceptionListenerTypeId> PerceptionWatches(
+            AgentHandle agent, const std::shared_ptr<const CookedDecisionPlan> &plan) noexcept;
         /** @brief Borrows the selected registered evaluator after the tick has completed. */
         [[nodiscard]] const IAiScheduledDecision *InspectDecision(AgentHandle agent, const std::shared_ptr<const void> &image) noexcept;
         /** @brief Borrows the evaluator only for an exact registered image at an eligible decision replacement boundary. */

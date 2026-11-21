@@ -2,6 +2,7 @@
 
 #include "AISceneRuntimeDetail.h"
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/DecisionGraphCompiler.h"
 
 #include <algorithm>
 #include <limits>
@@ -83,21 +84,6 @@ namespace Horo::AI {
                     return Result<void>::Failure(std::move(*fault));
                 sensing.suspension = std::move(fault);
                 break;
-            }
-            return Result<void>::Success();
-        }
-
-        /** @brief Visits admitted recipients once under the common Scene budget. */
-        [[nodiscard]] Result<void> PollRecipients(const Runtime::RuntimeSceneView &scene, const PerceptionSpatialBroadphase &spatial,
-                                                  const AiScenePerceptionExecution &policy, std::span<Detail::AgentRuntimeState> agents,
-                                                  const std::uint64_t tick) {
-            AiWorkBudget global{policy.workUnitsPerTick};
-            for (auto &agent : agents) {
-                if (!agent.sensing || agent.sensing->suspension)
-                    continue;
-                auto polled = PollRecipient(scene, spatial, *policy.generation, *agent.sensing, tick, global);
-                if (polled.HasError())
-                    return polled;
             }
             return Result<void>::Success();
         }
@@ -410,13 +396,40 @@ namespace Horo::AI {
         }
     }
 
+    /** @copydoc AiSceneRuntime::SetCookedPerceptionWatchesAtSafePoint */
+    Result<void> AiSceneRuntime::SetCookedPerceptionWatchesAtSafePoint(
+        const AgentHandle handle, const std::span<const DecisionWakePerceptionDependency> dependencies) const {
+        if (auto owner = CapabilityAtSafePoint().ValidateAtSafePoint(); owner.HasError())
+            return owner;
+        const auto *agent = Detail::FindAgent(*active_, handle);
+        if (!agent || !agent->cookedPlan || !agent->perceptionEndpoints || !active_->scheduler)
+            return Result<void>::Failure(MakeError(AIErrors::TaskContextInvalid));
+        const auto &plan = agent->cookedPlan;
+        if (dependencies.size() > DecisionAssetValidationHardLimits::NodesPerAsset)
+            return Result<void>::Failure(MakeError(AIErrors::DecisionAssetLimitExceeded));
+        const auto nodes = plan->Graphs()[plan->Occurrences().front().plan].bindings->Nodes();
+        const auto &admitted = agent->perceptionEndpoints->listeners;
+        std::array<PerceptionListenerTypeId, AiControllerPerceptionEndpoints::MaximumSenses> unique{};
+        std::size_t count{};
+        for (const auto &dependency : dependencies) {
+            if (!std::ranges::binary_search(nodes, dependency.node, {}, &DecisionPlanNode::id) ||
+                std::ranges::find(admitted, dependency.listener) == admitted.end())
+                return Result<void>::Failure(MakeError(AIErrors::DecisionAssetSchemaInvalid));
+            const auto current = std::span{unique}.first(count);
+            if (std::ranges::find(current, dependency.listener) == current.end())
+                unique[count++] = dependency.listener;
+        }
+        return active_->scheduler->SetPerceptionWatches(handle, plan, std::span{unique}.first(count));
+    }
+
     /** @copydoc AiSceneRuntime::PollPerceptionAtSensePoll */
     Result<void> AiSceneRuntime::PollPerceptionAtSensePoll(const Runtime::RuntimeSceneView &scene,
                                                            const PerceptionSpatialBroadphase &spatial, const std::uint64_t tick,
                                                            const Duration fixedStep) {
         if (auto owner = CapabilityAtSafePoint().ValidateAtSafePoint(); owner.HasError())
             return owner;
-        const auto &policy = active_->perceptionExecution;
+        const auto state = active_;
+        const auto &policy = state->perceptionExecution;
         if (!policy || !policy->generation->CanAdmit())
             return Result<void>::Failure(MakeError(AIErrors::RuntimeUnavailable));
         if (!scene.IsCurrent() || active_->binding.scene != scene.RuntimeId() || active_->perceptionSpatial != &spatial)
@@ -427,10 +440,33 @@ namespace Horo::AI {
             return active_->perceptionPollFailure ? Result<void>::Failure(*active_->perceptionPollFailure) : Result<void>::Success();
         active_->lastPerceptionTick = tick;
         active_->perceptionPollFailure.reset();
-        auto polled = PollRecipients(scene, spatial, *policy, active_->agents, tick);
-        if (polled.HasError())
-            active_->perceptionPollFailure = polled.ErrorValue();
-        return polled;
+        AiWorkBudget global{policy->workUnitsPerTick};
+        const auto revision = state->revision;
+        for (auto &agent : state->agents) {
+            if (!agent.sensing || agent.sensing->suspension)
+                continue;
+            const auto handle = agent.record.handle;
+            const auto plan = agent.cookedPlan;
+            auto *scheduler = state->scheduler.get();
+            std::optional<AIPerceptionMemory> previous;
+            if (scheduler && !scheduler->PerceptionWatches(handle, plan).empty())
+                previous.emplace(agent.sensing->memory);
+            auto polled = PollRecipient(scene, spatial, *policy->generation, *agent.sensing, tick, global);
+            if (polled.HasError()) {
+                state->perceptionPollFailure = polled.ErrorValue();
+                return polled;
+            }
+            if (state->closed || state != active_ || state->revision != revision) {
+                state->perceptionPollFailure = MakeError(AIErrors::PerceptionSpatialStale);
+                return Result<void>::Failure(*state->perceptionPollFailure);
+            }
+            if (previous && !agent.sensing->suspension &&
+                std::ranges::any_of(scheduler->PerceptionWatches(handle, plan), [&](const auto listener) {
+                    return agent.sensing->memory.DecisionFactsChanged(*previous, listener);
+                }))
+                static_cast<void>(scheduler->Wake(handle, {.perception = true}));
+        }
+        return Result<void>::Success();
     }
 
     /** @copydoc AiSceneRuntime::ReadPerceptionAtSafePoint */
