@@ -1,5 +1,6 @@
 #include "HeadlessReplayTimeline.h"
 
+#include <algorithm>
 #include <initializer_list>
 #include <limits>
 #include <utility>
@@ -65,46 +66,126 @@ namespace Horo::Application::Internal {
             fields["digest"] = FormatSha256(ReadHeadlessReplayDigest(section.at("digest")));
             return fields;
         }
+
+        /** @brief Selects only the original private body observation's stable public operation key. */
+        Json BodyFields(const Json &record) {
+            return SelectFields(record, {"objectId", "bodySlot"}, {"activity"});
+        }
+
+        /** @brief Selects the stable Gameplay transform recipient and leaves the submitted transform private. */
+        Json GameplayFields(const Json &record) {
+            return SelectFields(record, {"objectId"}, {});
+        }
+
+        /** @brief Reads one exact record sequence and its privacy projection. */
+        struct ReplayRecords final {
+            const Json *values{};
+            Json (*project)(const Json &){};
+
+            [[nodiscard]] std::size_t Size() const noexcept {
+                return values ? values->size() : 0;
+            }
+        };
+
+        /** @brief Looks up the original observation sequence for either the timeline or its divergence locator. */
+        ReplayRecords RecordsFor(const Json &frame, const AI::AiReplayBoundary boundary) {
+            const auto find = [&](const char *section, const char *key, Json (*project)(const Json &)) -> ReplayRecords {
+                const auto found = frame.find(section);
+                return found != frame.end() ? ReplayRecords{&found->at(key), project} : ReplayRecords{};
+            };
+            switch (boundary) {
+                case QueryPublication:
+                    return find("queryPublication", "records", QueryFields);
+                case BlackboardSync:
+                    return find("blackboardSync", "records", QueryFields);
+                case Decision:
+                    return find("decision", "records", DecisionFields);
+                case Navigation:
+                    return find("navigation", "results", NavigationFields);
+                case Gameplay:
+                    if (const auto found = frame.find("gameplay"); found != frame.end())
+                        return {&found->at("records").at("transforms"), GameplayFields};
+                    return {};
+                case Physics:
+                    return find("physics", "bodies", BodyFields);
+                case AchievedCharacterMotion:
+                    return find("characterMotion", "records", CharacterFields);
+                default:
+                    return {};
+            }
+        }
+
+        /** @brief Projects the bounded publication facts when no more specific changed operation is available. */
+        Json SummaryFor(const Json &frame, const AI::AiReplayBoundary boundary) {
+            const auto digest = [&](const char *section, std::initializer_list<const char *> revisions) -> Json {
+                const auto found = frame.find(section);
+                return found != frame.end() ? DigestFields(*found, revisions) : Json(nullptr);
+            };
+            switch (boundary) {
+                case SceneInput:
+                    return digest("sceneInput", {"revision"});
+                case PerceptionInput:
+                    if (const auto found = frame.find("perceptionInput"); found != frame.end())
+                        return PerceptionFields(*found);
+                    return nullptr;
+                case QueryPublication:
+                    return digest("queryPublication", {"revision"});
+                case BlackboardSync:
+                    return digest("blackboardSync", {"revision"});
+                case Decision: {
+                    const auto &decision = frame.at("decision");
+                    auto summary = SelectFields(decision, {"rootGraphId"}, {"outcome"});
+                    summary["blackboardRevision"] = std::to_string(ReadHeadlessReplayWord(decision.at("blackboard").at("revision")));
+                    return summary;
+                }
+                case Navigation:
+                    return digest("navigation", {"topology"});
+                case Gameplay:
+                    return digest("gameplay", {"revision"});
+                case Physics:
+                    return digest("physics", {"publicationRevision"});
+                case AchievedCharacterMotion:
+                    return digest("characterMotion", {});
+                case CanonicalAi:
+                    return digest("canonicalAi", {"sceneStructureRevision"});
+                default:
+                    return nullptr;
+            }
+        }
+
+        /** @brief Shared stable address, independent of timeline retention or wall time. */
+        Json EventAddress(const std::string_view tick, const std::string_view agent, const std::string_view boundary,
+                          const std::optional<std::size_t> ordinal) {
+            return {{"tick", tick}, {"agentId", agent}, {"boundary", boundary}, {"ordinal", ordinal ? Json(*ordinal) : Json(nullptr)}};
+        }
     }  // namespace
 
     HeadlessReplayTimeline::HeadlessReplayTimeline(const std::size_t limit) : limit_(limit) {}
 
-    void HeadlessReplayTimeline::Add(const std::string_view boundary, const std::size_t ordinal, Json fields) {
+    void HeadlessReplayTimeline::Add(const std::string_view boundary, const std::optional<std::size_t> ordinal, Json fields) {
         if (events_.size() >= limit_) {
             ++dropped_;
             return;
         }
-        events_.push_back(
-            {{"tick", tick_}, {"agentId", agent_}, {"boundary", boundary}, {"ordinal", ordinal}, {"operation", std::move(fields)}});
+        auto event = EventAddress(tick_, agent_, boundary, ordinal);
+        event["operation"] = std::move(fields);
+        events_.push_back(std::move(event));
     }
 
     /** @copydoc HeadlessReplayTimeline::Append */
     void HeadlessReplayTimeline::Append(const Json &frame, const std::uint64_t tick, const std::uint64_t agent) {
         tick_ = std::to_string(tick);
         agent_ = std::to_string(agent);
-        const auto appendRecords = [&](AI::AiReplayBoundary boundary, const char *section, const char *key, auto select) {
-            const auto found = frame.find(section);
-            if (found == frame.end())
-                return;
-            std::size_t ordinal{};
-            for (const auto &record : found->at(key))
-                Add(HeadlessReplayBoundaryNames[static_cast<std::size_t>(boundary)], ordinal++, select(record));
-        };
-
-        Add(HeadlessReplayBoundaryNames[static_cast<std::size_t>(SceneInput)], 0, DigestFields(frame.at("sceneInput"), {"revision"}));
-        if (const auto perception = frame.find("perceptionInput"); perception != frame.end())
-            Add(HeadlessReplayBoundaryNames[static_cast<std::size_t>(PerceptionInput)], 0, PerceptionFields(*perception));
-        appendRecords(QueryPublication, "queryPublication", "records", QueryFields);
-        appendRecords(BlackboardSync, "blackboardSync", "records", QueryFields);
-        appendRecords(Decision, "decision", "records", DecisionFields);
-        appendRecords(Navigation, "navigation", "results", NavigationFields);
-        if (const auto gameplay = frame.find("gameplay"); gameplay != frame.end())
-            Add(HeadlessReplayBoundaryNames[static_cast<std::size_t>(Gameplay)], 0, DigestFields(*gameplay, {"revision"}));
-        if (const auto physics = frame.find("physics"); physics != frame.end())
-            Add(HeadlessReplayBoundaryNames[static_cast<std::size_t>(Physics)], 0, DigestFields(*physics, {"publicationRevision"}));
-        appendRecords(AchievedCharacterMotion, "characterMotion", "records", CharacterFields);
-        Add(HeadlessReplayBoundaryNames[static_cast<std::size_t>(CanonicalAi)], 0,
-            DigestFields(frame.at("canonicalAi"), {"sceneStructureRevision"}));
+        for (std::size_t index = 0; index < HeadlessReplayBoundaryNames.size(); ++index) {
+            const auto boundary = static_cast<AI::AiReplayBoundary>(index);
+            const auto name = HeadlessReplayBoundaryNames[index];
+            auto summary = SummaryFor(frame, boundary);
+            if (!summary.is_null())
+                Add(name, std::nullopt, std::move(summary));
+            const auto records = RecordsFor(frame, boundary);
+            for (std::size_t ordinal = 0; ordinal < records.Size(); ++ordinal)
+                Add(name, ordinal, records.project(records.values->at(ordinal)));
+        }
     }
 
     /** @copydoc HeadlessReplayTimeline::Finish */
@@ -114,5 +195,28 @@ namespace Horo::Application::Internal {
                 {"eventLimit", limit_},
                 {"droppedEvents", dropped_},
                 {"events", std::move(events_)}};
+    }
+
+    /** @copydoc LocateHeadlessReplayDifference */
+    Json LocateHeadlessReplayDifference(const AI::AiReplayBoundary boundary, const std::uint64_t tick, const std::uint64_t agent,
+                                        const Json &recorded, const Json &replayed) {
+        const auto left = RecordsFor(recorded, boundary);
+        const auto right = RecordsFor(replayed, boundary);
+        const auto common = std::min(left.Size(), right.Size());
+        std::size_t ordinal{};
+        while (ordinal < common && left.values->at(ordinal) == right.values->at(ordinal))
+            ++ordinal;
+        const bool operationChanged = ordinal < std::max(left.Size(), right.Size());
+        auto address =
+            EventAddress(std::to_string(tick), std::to_string(agent), HeadlessReplayBoundaryNames[static_cast<std::size_t>(boundary)],
+                         operationChanged ? std::optional{ordinal} : std::nullopt);
+        const auto project = [&](const ReplayRecords &records, const Json &frame) {
+            if (!operationChanged)
+                return SummaryFor(frame, boundary);
+            return ordinal < records.Size() ? records.project(records.values->at(ordinal)) : Json(nullptr);
+        };
+        address["recorded"] = project(left, recorded);
+        address["replayed"] = project(right, replayed);
+        return address;
     }
 }  // namespace Horo::Application::Internal

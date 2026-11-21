@@ -22,7 +22,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] nlohmann::json Finish() &&;
 
     private:
-        void Add(std::string_view boundary, std::size_t ordinal, nlohmann::json fields);
+        void Add(std::string_view boundary, std::optional<std::size_t> ordinal, nlohmann::json fields);
 
         nlohmann::json events_ = nlohmann::json::array();
         std::size_t limit_{};
@@ -30,6 +30,10 @@ namespace Horo::Application::Internal {
         std::string tick_;
         std::string agent_;
     };
+
+    /** @brief Locates the first changed original record in a divergent boundary and returns only safe timeline coordinates. */
+    [[nodiscard]] nlohmann::json LocateHeadlessReplayDifference(AI::AiReplayBoundary boundary, std::uint64_t tick, std::uint64_t agent,
+                                                                const nlohmann::json &recorded, const nlohmann::json &replayed);
 
     /** @brief Internal sentinel for malformed portable evidence, with no input payload in its diagnostic. */
     struct InvalidHeadlessReplayEvidence final {};

@@ -247,12 +247,12 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Reads a bounded regular file, preserving the legacy one-tick representation. */
-        Result<std::vector<PortableReplay>> ReadReplay(const std::filesystem::path &path, HeadlessReplayTimeline *timeline = nullptr) {
+        Result<std::vector<PortableReplay>> ReadReplay(const std::filesystem::path &path, Json *source = nullptr) {
             using Outcome = Result<std::vector<PortableReplay>>;
             const auto bytes = NativeDurableFileSystem{}.ReadFileBounded(path, MaximumHeadlessReplayWindowBytes);
             if (bytes.HasError())
                 return Outcome::Failure(bytes.ErrorValue());
-            const auto file = Json::parse(bytes.Value(), [](int depth, Json::parse_event_t, Json &) {
+            auto file = Json::parse(bytes.Value(), [](int depth, Json::parse_event_t, Json &) {
                 if (depth > 18)
                     throw InvalidEvidence{};
                 return true;
@@ -261,8 +261,8 @@ namespace Horo::Application::Internal {
                 return Outcome::Failure(MakeError(AI::AIErrors::CanonicalSchemaUnsupported));
             if (file.at("version") == 1 && bytes.Value().size() <= MaximumHeadlessReplayEvidenceBytes) {
                 auto frame = ReadReplayFrame(file);
-                if (timeline)
-                    timeline->Append(file, frame.tick, frame.agent);
+                if (source)
+                    *source = std::move(file);
                 return Outcome::Success({std::move(frame)});
             }
             if (file.at("version") != 2)
@@ -277,10 +277,10 @@ namespace Horo::Application::Internal {
                 if (!result.empty() &&
                     (frame.agent != result.front().agent || frame.tick <= result.back().tick || frame.tick - result.back().tick != 1))
                     throw InvalidEvidence{};
-                if (timeline)
-                    timeline->Append(encoded, frame.tick, frame.agent);
                 result.push_back(std::move(frame));
             }
+            if (source)
+                *source = std::move(file);
             return Outcome::Success(std::move(result));
         }
 
@@ -333,25 +333,45 @@ namespace Horo::Application::Internal {
             const std::filesystem::path path{std::u8string{text.begin(), text.end()}};
             return std::filesystem::absolute(path).lexically_normal();
         }
+
+        /** @brief Borrows one source frame using the same admitted position as the numeric replay window. */
+        const Json &SourceFrame(const Json &source, const std::size_t position) {
+            return source.at("version") == 2 ? source.at("frames").at(position) : source;
+        }
+
+        /** @brief Compares both admitted inputs and optionally attaches a safe link into the timeline. */
+        Comparison CompareFiles(const std::filesystem::path &recorded, const std::filesystem::path &replayed, Json *location = nullptr) {
+            try {
+                Json recordedSource, replayedSource;
+                const auto baseline = ReadReplay(recorded, location ? &recordedSource : nullptr);
+                if (baseline.HasError())
+                    return Comparison::Failure(baseline.ErrorValue());
+                const auto candidate = ReadReplay(replayed, location ? &replayedSource : nullptr);
+                if (candidate.HasError())
+                    return Comparison::Failure(candidate.ErrorValue());
+                const auto result = ComparePortable(baseline.Value(), candidate.Value());
+                if (location && result.HasValue() && result.Value() && result.Value()->boundary) {
+                    const auto &difference = *result.Value();
+                    const auto &first = baseline.Value().front();
+                    const auto position = static_cast<std::size_t>(difference.tick - first.tick);
+                    *location =
+                        LocateHeadlessReplayDifference(*difference.boundary, difference.tick, first.agent,
+                                                       SourceFrame(recordedSource, position), SourceFrame(replayedSource, position));
+                }
+                return result;
+            } catch (const InvalidEvidence &) {
+                return Comparison::Failure(MakeError(AI::AIErrors::CanonicalStateInvalid));
+            } catch (const Json::exception &) {
+                return Comparison::Failure(MakeError(AI::AIErrors::CanonicalStateInvalid));
+            } catch (const std::bad_alloc &) {
+                return Comparison::Failure(MakeError(AI::AIErrors::DecisionAssetStorageUnavailable));
+            }
+        }
     }  // namespace
 
     /** @copydoc CompareHeadlessReplayArtifacts */
     Comparison CompareHeadlessReplayArtifacts(const std::filesystem::path &recorded, const std::filesystem::path &replayed) {
-        try {
-            const auto baseline = ReadReplay(recorded);
-            if (baseline.HasError())
-                return Comparison::Failure(baseline.ErrorValue());
-            const auto candidate = ReadReplay(replayed);
-            if (candidate.HasError())
-                return Comparison::Failure(candidate.ErrorValue());
-            return ComparePortable(baseline.Value(), candidate.Value());
-        } catch (const InvalidEvidence &) {
-            return Comparison::Failure(MakeError(AI::AIErrors::CanonicalStateInvalid));
-        } catch (const Json::exception &) {
-            return Comparison::Failure(MakeError(AI::AIErrors::CanonicalStateInvalid));
-        } catch (const std::bad_alloc &) {
-            return Comparison::Failure(MakeError(AI::AIErrors::DecisionAssetStorageUnavailable));
-        }
+        return CompareFiles(recorded, replayed);
     }
 
     /** @copydoc RunHeadlessReplayComparison */
@@ -361,7 +381,8 @@ namespace Horo::Application::Internal {
             return 2;
         }
         try {
-            const auto result = CompareHeadlessReplayArtifacts(InputPath(arguments[0]), InputPath(arguments[1]));
+            Json location;
+            const auto result = CompareFiles(InputPath(arguments[0]), InputPath(arguments[1]), &location);
             if (result.HasError()) {
                 err << result.ErrorValue().code.Value() << ": " << result.ErrorValue().message << '\n';
                 return 2;
@@ -376,6 +397,8 @@ namespace Horo::Application::Internal {
                     out << " (one recording has no matching tick)";
                 }
                 out << '\n';
+                if (!location.is_null())
+                    out << location.dump() << '\n';
                 return 1;
             }
             out << "Replay evidence matches within the recorded coverage.\n";
@@ -407,11 +430,15 @@ namespace Horo::Application::Internal {
         }
         try {
             HeadlessReplayTimeline timeline{limit};
-            const auto admitted = ReadReplay(InputPath(arguments[0]), &timeline);
+            Json source;
+            const auto admitted = ReadReplay(InputPath(arguments[0]), &source);
             if (admitted.HasError()) {
                 err << admitted.ErrorValue().code.Value() << ": could not read replay evidence.\n";
                 return 2;
             }
+            const auto &frames = admitted.Value();
+            for (std::size_t position = 0; position < frames.size(); ++position)
+                timeline.Append(SourceFrame(source, position), frames[position].tick, frames[position].agent);
             out << std::move(timeline).Finish().dump() << '\n';
             return out ? 0 : 2;
         } catch (const InvalidEvidence &) {

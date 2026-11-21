@@ -3437,6 +3437,11 @@ operation identity. The export includes bounded counts, stable identities and
 publication digests. It excludes raw Blackboard values, positions, paths and
 provider payloads. The event limit defaults to 512 and accepts 1 to 4096. The
 `droppedEvents` field counts every projected event beyond that limit.
+For a diverging boundary, the comparison also prints a JSON address with the
+tick, agent, boundary and first differing record ordinal. Its two redacted
+operation summaries identify the respective decision node, query, or movement
+recipient. When the evidence only identifies a publication or state hash, a
+null ordinal points to that boundary's summary row.
 
 ### Scene decision scheduling tiers
 

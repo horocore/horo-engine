@@ -276,10 +276,10 @@ namespace Horo::Application::PrefabAtomicTest {
                 return event.at("tick");
             }));
             const auto publication = std::ranges::find_if(events, [](const auto &event) {
-                return event.at("boundary") == "query-publication";
+                return event.at("boundary") == "query-publication" && !event.at("ordinal").is_null();
             });
             const auto sync = std::ranges::find_if(events, [](const auto &event) {
-                return event.at("boundary") == "blackboard-sync";
+                return event.at("boundary") == "blackboard-sync" && !event.at("ordinal").is_null();
             });
             REQUIRE(publication != events.end());
             REQUIRE(sync != events.end());
@@ -292,6 +292,20 @@ namespace Horo::Application::PrefabAtomicTest {
             const auto bounded = ExportReplayTimeline(file, "1");
             CHECK(bounded.at("droppedEvents") == events.size() - 1);
             CHECK(bounded.at("events") == nlohmann::json::array({events.front()}));
+        }
+
+        /** @brief Reads the terminal comparison's privacy-filtered navigation address after the human-readable line. */
+        nlohmann::json ReadDivergenceLocation(const std::filesystem::path &recorded, const std::filesystem::path &replayed) {
+            auto left = recorded.u8string();
+            auto right = replayed.u8string();
+            std::array<char *, 2> arguments{reinterpret_cast<char *>(left.data()), reinterpret_cast<char *>(right.data())};
+            std::ostringstream out, err;
+            CHECK(Internal::RunHeadlessReplayComparison(arguments, out, err) == 1);
+            CHECK(err.str().empty());
+            const auto text = out.str();
+            const auto newline = text.find('\n');
+            REQUIRE(newline != std::string::npos);
+            return nlohmann::json::parse(text.substr(newline + 1));
         }
 
         /** @brief Checks the real consecutive captures and locates a difference in the later boundary. */
@@ -321,12 +335,24 @@ namespace Horo::Application::PrefabAtomicTest {
                 changed << window;
                 REQUIRE(changed.good());
             };
-            const auto &decisions = encoded.at(0).at("decision").at("records");
+            auto &decisions = encoded.at(0).at("decision").at("records");
             REQUIRE_FALSE(decisions.empty());
-            encoded.at(0).at("decision").at("records").at(0)["privatePayload"] = "fixture-private-input";
+            auto &record = decisions.back();
+            const auto originalNode = record.at("nodeId");
+            record["nodeId"] = "999";
+            record["privatePayload"] = "fixture-private-input";
             writeCandidate();
             ExpectTimelineExport(candidate);
-            encoded.at(0).at("decision").at("records").at(0).erase("privatePayload");
+            const auto node = ReadDivergenceLocation(file, candidate);
+            CHECK(node.at("boundary") == "decision");
+            CHECK(node.at("tick") == "3");
+            CHECK(node.at("agentId") == encoded.at(0).at("agentId"));
+            CHECK(node.at("ordinal") == decisions.size() - 1);
+            CHECK(node.at("recorded").at("nodeId") == originalNode);
+            CHECK(node.at("replayed").at("nodeId") == "999");
+            CHECK_FALSE(node.at("replayed").contains("privatePayload"));
+            record["nodeId"] = originalNode;
+            record.erase("privatePayload");
             encoded.at(1).at("canonicalAi").at("digest") = FormatSha256(frames.back().sceneInput);
             writeCandidate();
             const auto different = Internal::CompareHeadlessReplayArtifacts(file, candidate);
@@ -334,6 +360,11 @@ namespace Horo::Application::PrefabAtomicTest {
             REQUIRE(different.Value());
             CHECK(different.Value()->tick == 4);
             CHECK(different.Value()->boundary == AI::AiReplayBoundary::CanonicalAi);
+            const auto state = ReadDivergenceLocation(file, candidate);
+            CHECK(state.at("tick") == "4");
+            CHECK(state.at("boundary") == "canonical-ai");
+            CHECK(state.at("ordinal").is_null());
+            CHECK(state.at("replayed").at("digest") == encoded.at(1).at("canonicalAi").at("digest"));
             encoded.at(1).at("tick") = "5";
             writeCandidate();
             CHECK(Internal::CompareHeadlessReplayArtifacts(file, candidate).HasError());
