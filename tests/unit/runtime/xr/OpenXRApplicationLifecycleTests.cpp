@@ -1363,6 +1363,7 @@ namespace Horo::Tests::OpenXRApplication {
             CHECK(preview.ReadPlaneCaptureState() == Tracking);
             CHECK(native.scans == 1);
             bool pendingScan = true;
+            bool contextRetired = false;
             SECTION("operator revokes after the next scan is queued") {
                 CHECK(sample(620'000'000).HasValue());
                 preview.RevokePlaneCapture();
@@ -1399,15 +1400,30 @@ namespace Horo::Tests::OpenXRApplication {
                 preview.RevokePlaneCapture();
                 pendingScan = false;
             }
+            SECTION("focus interruption retires plane observations even when the same event batch restores focus") {
+                REQUIRE(sample(620'000'000).HasValue());
+                const auto queries = geometry.calls;
+                fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
+                fixture.script.events.Push(XR_SESSION_STATE_FOCUSED);
+                RequireValue(fixture.play->PollEvents());
+                CHECK(preview.ReadPlaneCaptureState() == Unavailable);
+                CHECK_FALSE(native.hasContext);
+                CHECK(sample(630'000'000).HasError());
+                CHECK(sample(640'000'000).HasError());
+                CHECK(geometry.calls == queries);
+                contextRetired = true;
+            }
             CHECK(native.scans == 2);
             CHECK(fixture.play->QueryPlaneHits(ray).HasError());
             CHECK(fixture.play->ReadPlaneObservations().HasError());
-            native.failDestroy = true;
-            CHECK(fixture.play->PollEvents().HasError());
-            CHECK(native.hasContext);
-            CHECK(fixture.play->ReadPlaneObservations().HasError());
-            native.failDestroy = false;
-            RequireValue(fixture.play->PollEvents());
+            if (!contextRetired) {
+                native.failDestroy = true;
+                CHECK(fixture.play->PollEvents().HasError());
+                CHECK(native.hasContext);
+                CHECK(fixture.play->ReadPlaneObservations().HasError());
+                native.failDestroy = false;
+                RequireValue(fixture.play->PollEvents());
+            }
             CHECK(native.cancels == (pendingScan ? 1U : 0U));
             CHECK_FALSE(native.hasContext);
             CHECK(preview.ArmPlaneCapture().HasError());
