@@ -1301,7 +1301,7 @@ namespace Horo::Tests::OpenXRApplication {
 
             static XRAPI_ATTR XrResult XRAPI_CALL DestroySpace(XrSpace space) {
                 return space == OpenXR::NativeHandle<XrSpace>(902) ? OpenXR::Script::Record("app-anchor-space-destroy")
-                                                                    : OpenXRAction::ActionScript::DestroySpace(space);
+                                                                   : OpenXRAction::ActionScript::DestroySpace(space);
             }
 
             static XRAPI_ATTR XrResult XRAPI_CALL Locate(XrSpace space, XrSpace base, XrTime time, XrSpaceLocation *location) {
