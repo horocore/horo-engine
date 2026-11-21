@@ -2296,6 +2296,8 @@ then publishes committed state for variable-rate RenderExtraction.
      existing velocity pipeline once using prior Character feedback. The host commits the avoidance result and
      submits only that safe publication via `NavigationCharacterAdapter`. After Character commits the fixed step,
      the adapter returns the achieved displacement to the velocity pipeline for the next tick.
+     The application resolves a Character controller from the published Physics aggregate using the actual
+     Scene incarnation and the entity generation captured when that controller was created.
      The binding publishes Navigation admission errors, provider failures, arrival and cancellation to the original
      AI task. A superseded movement can never complete the replacement task or authorize its motion.
      For a behavior-tree node, the host binds the continuation captured during evaluation at intent dispatch.

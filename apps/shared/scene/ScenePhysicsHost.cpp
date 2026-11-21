@@ -18,6 +18,19 @@ namespace Horo::Application::Internal {
         using Attempt = Character::Detail::CharacterSceneTickAttempt;
         using QueryContext = Character::CharacterPhysicsQueryContext;
 
+        /** @brief Matches a current authored actor to the controller published with its native aggregate. */
+        Result<Character::CharacterControllerHandle> FindCharacterController(const Scope &scope, const Runtime::RuntimeEntityView &entity) {
+            using Controller = Result<Character::CharacterControllerHandle>;
+            const auto &component = entity.components->characterController;
+            if (!entity.authoredObject || !component || !component->enabled)
+                return Controller::Failure(MakeError(Physics::PhysicsErrors::HandleStale));
+            const auto binding = std::ranges::find_if(scope.characterBindings, [&](const auto &row) {
+                return row.owner == entity.entity && row.object == *entity.authoredObject && row.component == component->id;
+            });
+            return binding == scope.characterBindings.end() ? Controller::Failure(MakeError(Physics::PhysicsErrors::HandleStale))
+                                                            : Controller::Success(binding->handle);
+        }
+
         /** @brief Admits the same previous native publication for ordinary and staged Character ticks. */
         Result<QueryContext> PrepareCharacterQuery(const Scope &scope, Character::CharacterPhysicsQueryAdapter &adapter,
                                                    std::uint64_t tick) {
@@ -228,9 +241,10 @@ namespace Horo::Application::Internal {
     /** @brief Forwards the real candidate's metadata while retaining its sole Scene ownership. */
     class ScenePhysicsHost::Candidate final : public Runtime::SceneActivationCandidate {
     public:
-        Candidate(ScenePhysicsHost &host, std::unique_ptr<Runtime::SceneActivationCandidate> candidate) noexcept
+        Candidate(ScenePhysicsHost &host, std::unique_ptr<Runtime::SceneActivationCandidate> candidate,
+                  Runtime::RuntimeSceneView scene) noexcept
             : host_(host), candidate_(std::move(candidate)),
-              physics_(static_cast<Physics::PhysicsSceneActivationCandidate *>(candidate_.get())) {
+              physics_(static_cast<Physics::PhysicsSceneActivationCandidate *>(candidate_.get())), scene_(std::move(scene)) {
             host_.pending_ = physics_;
         }
 
@@ -260,13 +274,16 @@ namespace Horo::Application::Internal {
                 host_.pending_ = nullptr;
             candidate_->Publish();
             host_.published_ = physics_;
+            host_.publishedScene_ = scene_;
         }
 
         void Shutdown() noexcept override {
             // Replacement publishes the new root before retiring the old one. Old teardown
             // must never withdraw the replacement's observer.
-            if (host_.published_ == physics_)
+            if (host_.published_ == physics_) {
                 host_.published_ = nullptr;
+                host_.publishedScene_ = {};
+            }
             if (host_.pending_ == physics_)
                 host_.pending_ = nullptr;
             candidate_->Shutdown();
@@ -276,6 +293,7 @@ namespace Horo::Application::Internal {
         ScenePhysicsHost &host_;
         std::unique_ptr<Runtime::SceneActivationCandidate> candidate_;
         Physics::PhysicsSceneActivationCandidate *physics_;
+        Runtime::RuntimeSceneView scene_;
     };
 
     /** @brief Wraps only the concrete explicit participant constructed here; it cannot accept a foreign candidate type. */
@@ -319,7 +337,7 @@ namespace Horo::Application::Internal {
                 return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Failure(candidate.ErrorValue());
             try {
                 return Result<std::unique_ptr<Runtime::SceneActivationCandidate>>::Success(
-                    std::make_unique<Candidate>(host_, std::move(candidate).Value()));
+                    std::make_unique<Candidate>(host_, std::move(candidate).Value(), scene));
             } catch (const std::bad_alloc &) {
                 // Construction is load-time; explicit retirement precedes propagation if wrapping
                 // allocation fails. The real Physics candidate remains the unique native owner.
@@ -496,6 +514,22 @@ namespace Horo::Application::Internal {
         return Physics::Detail::PhysicsSceneHostAccess::Borrow(*published_);
     }
 
+    /** @copydoc ScenePhysicsHost::ResolveCharacterController */
+    Result<Character::CharacterControllerHandle> ScenePhysicsHost::ResolveCharacterController(const Runtime::RuntimeSceneView &scene,
+                                                                                              const Runtime::EntityRef actor) {
+        using Controller = Result<Character::CharacterControllerHandle>;
+        const auto borrowed = Borrow();
+        if (borrowed.HasError())
+            return Controller::Failure(borrowed.ErrorValue());
+        const auto &scope = borrowed.Value();
+        if (!scene.IsCurrent() || !scene.SameIncarnation(publishedScene_) || actor.runtime != scope.scene)
+            return Controller::Failure(MakeError(Physics::PhysicsErrors::QuerySnapshotStale));
+        const auto entity = scene.Get(actor);
+        if (entity.HasError())
+            return Controller::Failure(entity.ErrorValue());
+        return FindCharacterController(scope, entity.Value());
+    }
+
     /** @copydoc ScenePhysicsHost::ReadCharacterLocalTransform */
     Result<Math::Transform> ScenePhysicsHost::ReadCharacterLocalTransform(const Runtime::RuntimeSceneView &scene,
                                                                           const Runtime::RuntimeEntityView &entity,
@@ -505,20 +539,15 @@ namespace Horo::Application::Internal {
         if (borrowed.HasError())
             return Pose::Failure(borrowed.ErrorValue());
         const auto &scope = borrowed.Value();
-        if (!fixedAnimation_->HasCommittedPose(scope, scene, schedulerTick))
+        if (!scene.SameIncarnation(publishedScene_) || !fixedAnimation_->HasCommittedPose(scope, scene, schedulerTick))
             return Pose::Failure(MakeError(Physics::PhysicsErrors::QuerySnapshotStale));
         const auto actor = scene.Get(entity.entity);
         if (actor.HasError())
             return Pose::Failure(actor.ErrorValue());
-        const auto &controller = actor.Value().components->characterController;
-        if (!actor.Value().authoredObject || !controller || !controller->enabled)
-            return Pose::Failure(MakeError(Physics::PhysicsErrors::HandleStale));
-        const auto binding = std::ranges::find_if(scope.characterBindings, [&actor, &controller](const auto &row) {
-            return row.object == *actor.Value().authoredObject && row.component == controller->id;
-        });
-        if (binding == scope.characterBindings.end())
-            return Pose::Failure(MakeError(Physics::PhysicsErrors::HandleStale));
-        const auto collisionRoot = scope.character.ControllerTransform(binding->handle);
+        const auto controller = FindCharacterController(scope, actor.Value());
+        if (controller.HasError())
+            return Pose::Failure(controller.ErrorValue());
+        const auto collisionRoot = scope.character.ControllerTransform(controller.Value());
         if (collisionRoot.HasError())
             return Pose::Failure(collisionRoot.ErrorValue());
         return CharacterLocalPose(scene, actor.Value(), collisionRoot.Value());

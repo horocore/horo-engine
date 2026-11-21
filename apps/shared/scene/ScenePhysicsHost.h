@@ -86,6 +86,12 @@ namespace Horo::Application::Internal {
          * @pre Do not retain the scope in jobs, callbacks, modules or through Scene lifecycle operations.
          */
         [[nodiscard]] Result<Physics::Detail::PhysicsSceneHostScope> Borrow();
+        /** @brief Resolves the exact controller for one enabled actor in the published Scene.
+         * @param scene Current committed Scene view. @param actor Exact entity generation.
+         * @return Controller handle or the original scene, actor or native binding failure.
+         */
+        [[nodiscard]] Result<Character::CharacterControllerHandle> ResolveCharacterController(const Runtime::RuntimeSceneView &scene,
+                                                                                              Runtime::EntityRef actor);
         /** @brief Reads achieved world-space velocity from the selected controller's latest completed tick.
          * @param scene Exact published Scene incarnation. @param object Authored actor. @param component Its selected controller.
          * @return Velocity in metres per second or the original admission/snapshot error.
@@ -133,6 +139,7 @@ namespace Horo::Application::Internal {
         std::thread::id owner_{std::this_thread::get_id()};
         Participant *participant_{};
         Physics::PhysicsSceneActivationCandidate *published_{};
+        Runtime::RuntimeSceneView publishedScene_;
         Physics::PhysicsSceneActivationCandidate *pending_{};
         std::unique_ptr<AnimationFixedState> fixedAnimation_;
     };

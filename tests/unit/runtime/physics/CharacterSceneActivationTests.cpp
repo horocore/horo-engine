@@ -286,12 +286,26 @@ namespace Horo::Physics {
             REQUIRE(host.ReadCharacterVelocity(first.RuntimeId(), {1}, {7}).Value() == Math::Vec3{});
             REQUIRE(host.Borrow().Value().characterBindings.size() == 1);
             const auto controller = host.Borrow().Value().characterBindings.front().handle;
-            REQUIRE(host.Borrow()
-                        .Value()
-                        .character
-                        .QueueMovementCommand(
-                            {.controller = controller, .tick = 2, .sequence = 1, .desiredVelocityMetersPerSecond = Math::Vec3{2, 0, 0}})
-                        .HasValue());
+            const auto actor = first.Find({1});
+            REQUIRE(actor.has_value());
+            CHECK(host.Borrow().Value().characterBindings.front().owner == *actor);
+            const auto resolved = host.ResolveCharacterController(first, *actor);
+            REQUIRE(resolved.HasValue());
+            CHECK(resolved.Value() == controller);
+            Runtime::SceneDefinitionBuilder foreignDefinition{first.DefinitionId(), first.DefinitionRevision()};
+            foreignDefinition.Add({.object = {1}});
+            const auto foreignSource = std::move(foreignDefinition).Build();
+            REQUIRE(foreignSource.HasValue());
+            auto foreignScene = Runtime::RuntimeScene::Create(foreignSource.Value(), first.RuntimeId());
+            REQUIRE(foreignScene.HasValue());
+            Test::RequireError(host.ResolveCharacterController(foreignScene.Value()->View(), *actor), PhysicsErrors::QuerySnapshotStale);
+            REQUIRE(
+                host.Borrow()
+                    .Value()
+                    .character
+                    .QueueMovementCommand(
+                        {.controller = resolved.Value(), .tick = 2, .sequence = 1, .desiredVelocityMetersPerSecond = Math::Vec3{2, 0, 0}})
+                    .HasValue());
             RequireHostTick(host, "second tick");
             CHECK(host.Borrow().Value().physics.PublishedTick().completedTick == 2);
             CHECK(host.Borrow().Value().character.PublishedTick().completedTick == 2);
@@ -311,6 +325,10 @@ namespace Horo::Physics {
             CHECK(replacement.RuntimeId() == Runtime::SceneRuntimeId{102});
             REQUIRE(host.Borrow().HasValue());
             CHECK(host.Borrow().Value().scene == replacement.RuntimeId());
+            Test::RequireError(host.ResolveCharacterController(first, *actor), PhysicsErrors::QuerySnapshotStale);
+            const auto replacementActor = replacement.Find({1});
+            REQUIRE(replacementActor.has_value());
+            CHECK(host.ResolveCharacterController(replacement, *replacementActor).HasValue());
             CHECK(host.ReadCharacterVelocity(first.RuntimeId(), {1}, {7}).HasError());
             CHECK(host.Borrow().Value().character.ActiveControllerCount() == 1);
             CHECK(retained.Validate().HasError());
