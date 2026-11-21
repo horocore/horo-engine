@@ -261,6 +261,13 @@ namespace Horo::Editor {
         m_playSession.RefreshAgentInspection(scene && selected ? scene->Find(Runtime::SceneObjectId{selected->value}) : std::nullopt);
         const auto history = m_playSession.AgentInspectionHistory();
         m_viewModel.playAgentInspection.assign(history.begin(), history.end());
+        m_viewModel.playDecisionDebug = m_playSession.ReadDecisionDebugState();
+    }
+
+    /** @copydoc EditorWorkspaceController::SetPlayDecisionInspectorVisibility */
+    void EditorWorkspaceController::SetPlayDecisionInspectorVisibility(const std::optional<AI::AgentHandle> agent) {
+        m_playSession.SetDecisionDebugView(agent);
+        m_viewModel.playDecisionDebug = m_playSession.ReadDecisionDebugState();
     }
 
     /** @copydoc EditorWorkspaceController::ResolvePlayDecisionProblemObject */

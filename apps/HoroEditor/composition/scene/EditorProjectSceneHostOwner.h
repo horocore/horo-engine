@@ -490,6 +490,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         std::uint64_t AgentInspectionTick() const noexcept override;
         std::optional<Editor::EditorPlayAgentInspection> ReadAgentInspection(Runtime::EntityRef owner) const override;
         void SelectDecisionTraceOwner(std::optional<Runtime::EntityRef> owner) noexcept override;
+        void SetDecisionDebugView(std::optional<AI::AgentHandle> agent) override;
+        bool ApplyDecisionDebugCommand(const Editor::EditorPlayDecisionDebugCommand &command) override;
+        [[nodiscard]] std::optional<Editor::EditorPlayDecisionDebugState> ReadDecisionDebugState() const noexcept override;
         [[nodiscard]] std::optional<Editor::EditorPlayAgentNavigation> ReadAgentNavigation(Runtime::EntityRef owner) const;
 
         Result<std::shared_ptr<Gameplay::GameplayPrefabContext>> PrefabServices(const Gameplay::BehaviorRegistry &registry,
@@ -611,6 +614,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 decisionTickPending_ = false;
                 if (pendingDecisionTrace_)
                     committedDecisionTrace_ = std::move(pendingDecisionTrace_);
+                CommitDecisionDebugTick();
             }
         }
 
@@ -646,6 +650,17 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
     private:
         /** @brief Arms one bounded read-only sample for the current live editor selection. */
         [[nodiscard]] std::optional<AI::AgentHandle> ArmSelectedDecisionTrace(std::uint64_t tick);
+        /** @brief Resolves the selected entity's current live AI generation. */
+        [[nodiscard]] std::optional<AI::AgentHandle> SelectedDecisionAgent() const;
+        /** @brief Confirms that the exact cooked occurrence and node were visited in the supplied trace. */
+        [[nodiscard]] static bool HasDecisionBreakpoint(const AI::DecisionStepTrace &trace,
+                                                        const Editor::EditorPlayDecisionBreakpoint &breakpoint);
+        /** @brief Arms a breakpoint against the selected agent's currently published cooked trace. */
+        [[nodiscard]] bool SetDecisionBreakpoint(const Editor::EditorPlayDecisionDebugCommand &command);
+        /** @brief Evaluates and dispatches one Decision tick with its optional hold and trace. */
+        [[nodiscard]] Result<void> RunDecisionScheduler(AI::AiTaskScheduler &scheduler, std::uint64_t tick);
+        /** @brief Commits a consumed step or a visited breakpoint at the full fixed boundary. */
+        void CommitDecisionDebugTick() noexcept;
         /** @brief Detaches the exact observed trace after scheduler commit, before fixed publication. */
         void CaptureSelectedDecisionTrace(AI::AgentHandle agent, std::uint64_t tick);
 
@@ -718,6 +733,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         JobSystem *decisionJobs_{};
         std::unique_ptr<PlayPerception> playPerception_;
         std::vector<EditorPlayInspectionKey> inspectionKeys_;
+        std::optional<Editor::EditorPlayDecisionDebugState> decisionDebug_;
+        Sha256Digest decisionBreakpointPlan_{};
+        bool decisionDebugGranted_{};
         std::optional<Runtime::EntityRef> decisionTraceOwner_;
         std::uint64_t lastDecisionTraceTick_{};
         std::shared_ptr<const AI::DecisionStepTrace> pendingDecisionTrace_;

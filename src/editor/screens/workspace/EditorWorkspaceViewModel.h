@@ -198,6 +198,7 @@ namespace Horo::Editor {
         RedoScene,
         StartPlay,
         NavigatePlayDecisionProblem,
+        ControlPlayDecision,
         PausePlay,
         ResumePlay,
         StepPlay,
@@ -697,6 +698,8 @@ namespace Horo::Editor {
         std::optional<WorldLayerOutlinerIntent> worldLayerIntent;
         std::optional<DocumentInstanceId> documentInstance;
         std::optional<PlayDecisionNavigationRequest> playDecisionNavigation;
+        std::optional<AI::AgentHandle> visiblePlayDecisionInspector;
+        std::optional<EditorPlayDecisionDebugCommand> playDecisionDebugCommand;
         std::optional<DocumentInstanceId> documentMoveBefore;
         std::optional<PrefabDocumentFence> prefabFence;
         std::shared_ptr<const DocumentRecoveryRecord> prefabRecovery;
@@ -954,6 +957,7 @@ namespace Horo::Editor {
         std::string playError;
         std::optional<EditorPlayDecisionProblem> playDecisionProblem;
         std::vector<EditorPlayAgentInspection> playAgentInspection;
+        std::optional<EditorPlayDecisionDebugState> playDecisionDebug;
         bool playDecisionObjectAvailable{};
         float fps = 0.0F;
 

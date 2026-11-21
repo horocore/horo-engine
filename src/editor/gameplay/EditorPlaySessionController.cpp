@@ -791,6 +791,22 @@ namespace Horo::Editor {
         inspectionHistory_[inspectionCount_++] = std::move(*captured);
     }
 
+    /** @copydoc EditorPlaySessionController::SetDecisionDebugView */
+    void EditorPlaySessionController::SetDecisionDebugView(const std::optional<AI::AgentHandle> agent) {
+        if (sceneHost_)
+            sceneHost_->SetDecisionDebugView(agent);
+    }
+
+    /** @copydoc EditorPlaySessionController::ApplyDecisionDebugCommand */
+    bool EditorPlaySessionController::ApplyDecisionDebugCommand(const EditorPlayDecisionDebugCommand &command) {
+        return sceneHost_ && !fixedAttempt_ && sceneHost_->ApplyDecisionDebugCommand(command);
+    }
+
+    /** @copydoc EditorPlaySessionController::ReadDecisionDebugState */
+    std::optional<EditorPlayDecisionDebugState> EditorPlaySessionController::ReadDecisionDebugState() const noexcept {
+        return sceneHost_ ? sceneHost_->ReadDecisionDebugState() : std::nullopt;
+    }
+
     /** @copydoc EditorPlaySessionController::AgentInspectionHistory */
     std::span<const EditorPlayAgentInspection> EditorPlaySessionController::AgentInspectionHistory() const noexcept {
         return std::span{inspectionHistory_}.first(inspectionCount_);

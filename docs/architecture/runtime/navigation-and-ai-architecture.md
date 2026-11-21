@@ -3483,6 +3483,15 @@ The selected Play agent also gets a read-only Decision trace sample at the
 inspector's fixed-tick cadence. The host publishes it only after the full
 Play tick commits. The Game inspector shows active nodes, state-machine
 transitions, and any omitted record count from the same trace used for replay.
+Read-only inspection is available for cooked Decision Play sessions.
+`--play-ai-debug` grants the visible Game inspector control over its exact
+selected agent generation. Pause skips that agent's next decision slice
+without consuming the scheduler budget. Step permits a single ordinary slice,
+and resume clears the hold. One breakpoint targets a node in an exact cooked
+occurrence and plan. A matching committed visit holds the agent from the next
+fixed tick. Closing the inspector or changing the selected generation releases
+the hold and discards the breakpoint. Gameplay, Perception, and other agents
+continue on the normal fixed-tick schedule.
 
 ### Scene decision scheduling tiers
 

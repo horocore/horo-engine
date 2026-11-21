@@ -255,6 +255,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         EditorWorkspaceViewCommandData command;
         controller_->RefreshWorldDocumentProjection();
         GuiLive::Invoke<&EditorWorkspaceView::Draw>(context_.theme.liveReload, view_, controller_->ViewModel(), command, contentRegion);
+        controller_->SetPlayDecisionInspectorVisibility(command.visiblePlayDecisionInspector);
 
         if (command.command == None && !command.menuInvocation.has_value()) {
             sourceCommands_.RouteInput(input_.router, input_.context, *controller_, command);

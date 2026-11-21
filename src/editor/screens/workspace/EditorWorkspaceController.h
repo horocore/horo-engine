@@ -508,6 +508,8 @@ namespace Horo::Editor {
         }
 
         void ProcessCommand(const EditorWorkspaceViewCommandData &cmd);
+        /** @brief Releases Play debugger control when the inspector was absent from the current draw. */
+        void SetPlayDecisionInspectorVisibility(std::optional<AI::AgentHandle> agent);
         void UpdateFps(float fps);
 
         /** @brief Sets only the read-only package execution evidence accompanying the Decision catalog. */

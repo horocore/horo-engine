@@ -924,8 +924,12 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     bool rejectFixed = false;
     bool discloseKey = false;
     bool authorizeForeignSchema = false;
+    bool decisionDebug = false;
     using FailedCallback = EditorDecisionFixtureExecutor::FailedCallback;
     SECTION("Committed pause and step retain a consecutive local Decision clock") {}
+    SECTION("Approved agent debugging steps one slice and releases the breakpoint on view closure") {
+        decisionDebug = true;
+    }
     SECTION("An explicit schema-scoped inspector key reveals only its admitted value") {
         discloseKey = true;
     }
@@ -984,7 +988,8 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
                                                                                               {{controller, decisionId, {}}},
                                                                                               std::move(disclosure),
                                                                                               livePerception ? perceptionPath : "",
-                                                                                              Duration::FromMilliseconds(10)}});
+                                                                                              Duration::FromMilliseconds(10),
+                                                                                              decisionDebug}});
     const Editor::EditorPlaySceneFactory factory = [&](Runtime::SceneRuntimeId id, const Runtime::RuntimeSceneDefinition &definition) {
         return projectFactory(project.project.dir.path, id, definition);
     };
@@ -1070,6 +1075,50 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     CHECK(inspection.decisionTrace->Header().blackboard.agent == inspection.agent);
     CHECK(inspection.snapshot->agent == inspection.agent);
     CHECK(inspection.snapshot->decisionTick == 1);
+    using enum Editor::EditorPlayDecisionDebugAction;
+    const auto selectedAgent = inspection.agent;
+    CHECK_FALSE(play.ApplyDecisionDebugCommand({selectedAgent, Pause}));
+    play.SetDecisionDebugView(selectedAgent);
+    if (decisionDebug) {
+        REQUIRE(play.ReadDecisionDebugState());
+        auto stale = selectedAgent;
+        ++stale.slot.generation;
+        CHECK_FALSE(play.ApplyDecisionDebugCommand({stale, Pause}));
+        CHECK_FALSE(play.ApplyDecisionDebugCommand({selectedAgent, Step}));
+        REQUIRE(play.ApplyDecisionDebugCommand({selectedAgent, Pause}));
+        REQUIRE(tick().HasValue());
+        CHECK(providerState->checkTick == 1);
+        REQUIRE(play.ApplyDecisionDebugCommand({selectedAgent, Step}));
+        REQUIRE(tick().HasValue());
+        CHECK(providerState->checkTick == 3);
+        CHECK(play.ReadDecisionDebugState()->paused);
+        CHECK_FALSE(play.ReadDecisionDebugState()->stepPending);
+        REQUIRE(play.ReadDecisionDebugState()->trace);
+        CHECK(play.ReadDecisionDebugState()->trace->Header().tick == 3);
+        REQUIRE(tick().HasValue());
+        CHECK(providerState->checkTick == 3);
+        const Editor::EditorPlayDecisionBreakpoint target{graph.asset, Decisions::MakeIdentity<AI::DecisionNodeId>(3), 0};
+        auto foreignOccurrence = target;
+        ++foreignOccurrence.occurrence;
+        CHECK_FALSE(play.ApplyDecisionDebugCommand({selectedAgent, SetBreakpoint, foreignOccurrence}));
+        REQUIRE(play.ApplyDecisionDebugCommand({selectedAgent, SetBreakpoint, target}));
+        REQUIRE(play.ApplyDecisionDebugCommand({selectedAgent, Resume}));
+        REQUIRE(tick().HasValue());
+        CHECK(providerState->checkTick == 5);
+        CHECK(play.ReadDecisionDebugState()->paused);
+        REQUIRE(tick().HasValue());
+        CHECK(providerState->checkTick == 5);
+        play.SetDecisionDebugView(std::nullopt);
+        CHECK_FALSE(play.ReadDecisionDebugState());
+        CHECK_FALSE(play.ApplyDecisionDebugCommand({selectedAgent, Pause}));
+        REQUIRE(tick().HasValue());
+        CHECK(providerState->checkTick == 7);
+        play.Stop();
+        lifecycle.Shutdown();
+        return;
+    }
+    CHECK_FALSE(play.ReadDecisionDebugState());
+    CHECK_FALSE(play.ApplyDecisionDebugCommand({selectedAgent, Pause}));
     if (livePerception) {
         CHECK_FALSE(inspection.snapshot->perceptionFailure);
         REQUIRE(inspection.snapshot->stimuli.size() == 1);

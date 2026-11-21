@@ -360,6 +360,7 @@ namespace Horo::Editor {
             std::vector<Application::Internal::CookedDecisionSceneBinding> playDecisionBindings;
             std::vector<Application::Internal::EditorPlayInspectionKey> playInspectionKeys;
             std::string playPerceptionPolicy;
+            bool playDecisionDebug{};
             bool playDecisionSelectionValid{true};
             std::optional<Application::Internal::CommittedWorldSelection> playWorld;
             std::optional<Error> playWorldError;
@@ -984,6 +985,10 @@ namespace Horo::Editor {
                 }
                 continue;
             }
+            if (argument == "--play-ai-debug") {
+                opts.playDecisionDebug = true;
+                continue;
+            }
             if (argument == "--play-ai-perception-policy") {
                 if (index + 1 >= args.size() || !opts.playPerceptionPolicy.empty() || !*args[index + 1] ||
                     std::string_view{args[index + 1]}.starts_with("--")) {
@@ -1132,6 +1137,8 @@ namespace Horo::Editor {
                                      {"--play-ai-inspect-key", std::to_string(key.schema.Value()), std::to_string(key.key.Value())});
                 if (!options.playPerceptionPolicy.empty())
                     arguments.insert(arguments.end(), {"--play-ai-perception-policy", options.playPerceptionPolicy});
+                if (options.playDecisionDebug)
+                    arguments.emplace_back("--play-ai-debug");
             }
             std::vector<char *> nativeArguments;
             nativeArguments.reserve(arguments.size() + 1);
@@ -4143,7 +4150,8 @@ namespace Horo::Editor {
                 playPolicy.decisions.emplace(
                     Application::Internal::EditorPlayDecisionSelection{previewProjectRoot, *p.options.playDecisionScene,
                                                                        p.options.playDecisionBindings, p.options.playInspectionKeys,
-                                                                       p.options.playPerceptionPolicy, schedulerConfig.fixedStep});
+                                                                       p.options.playPerceptionPolicy, schedulerConfig.fixedStep,
+                                                                       p.options.playDecisionDebug});
             Application::Internal::ConfigureEditorPlaySavePolicy(playPolicy, p.background.jobs, p.operationServices.operationStore, clock,
                                                                  wallClock);
             playPolicy.xrHost = SelectedEditorPlayHost(p.presentation.composition);
@@ -4409,7 +4417,8 @@ namespace Horo::Editor {
             return false;
         }
         if (!options.playDecisionSelectionValid ||
-            ((!options.playInspectionKeys.empty() || !options.playPerceptionPolicy.empty()) && !options.playDecisionScene) ||
+            ((!options.playInspectionKeys.empty() || !options.playPerceptionPolicy.empty() || options.playDecisionDebug) &&
+             !options.playDecisionScene) ||
             options.playDecisionScene.has_value() != !options.playDecisionBindings.empty() ||
             (options.playDecisionScene &&
              (options.projectRoot.empty() || options.cookedRoot.empty() || options.playWorld || options.prefabGranted.value_or(false)))) {
@@ -4417,7 +4426,7 @@ namespace Horo::Editor {
                          "Use --play-ai-scene <Scene AssetId> and --play-ai-decision <controller id> <Decision AssetId> "
                          "with --project, --cooked-root and --cook-target. Optional --play-ai-inspect-key <schema id> <key id> "
                          "discloses one Blackboard key. --play-ai-perception-policy <project-relative settings file> enables native "
-                         "sensing.");
+                         "sensing. --play-ai-debug enables controls for the visible Play agent inspector.");
             return false;
         }
         if (!options.physicsMode || !options.prefabGranted.has_value() || !options.cookOptionsValid ||

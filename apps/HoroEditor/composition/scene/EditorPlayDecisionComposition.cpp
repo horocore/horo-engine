@@ -40,26 +40,120 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         if (std::this_thread::get_id() != ownerLane_ || decisionTraceOwner_ == owner)
             return;
         decisionTraceOwner_ = owner;
+        decisionDebug_.reset();
         committedDecisionTrace_.reset();
         pendingDecisionTrace_.reset();
     }
 
-    /** @copydoc ProjectPlaySceneHost::ArmSelectedDecisionTrace */
-    std::optional<AI::AgentHandle> ProjectPlaySceneHost::ArmSelectedDecisionTrace(const std::uint64_t tick) {
-        if (!decisionTraceOwner_ ||
-            (lastDecisionTraceTick_ != 0 && tick - lastDecisionTraceTick_ < Editor::EditorPlayAgentInspectionTickSpacing))
-            return std::nullopt;
-        lastDecisionTraceTick_ = tick;
-        const auto scene = scenes_->ActiveScene();
+    /** @copydoc ProjectPlaySceneHost::SelectedDecisionAgent */
+    std::optional<AI::AgentHandle> ProjectPlaySceneHost::SelectedDecisionAgent() const {
+        const auto scene = decisionTraceOwner_ && ai_ && scenes_ ? scenes_->ActiveScene() : std::nullopt;
         if (!scene)
             return std::nullopt;
         const auto entity = scene->Get(*decisionTraceOwner_);
         if (entity.HasError() || !entity.Value().components || !entity.Value().components->aiAgent)
             return std::nullopt;
         const auto handle = ai_->CapabilityAtSafePoint().ResolveAgent(entity.Value().components->aiAgent->agent);
-        if (handle.HasError() || ai_->ArmDecisionReplayAtSafePoint(handle.Value(), tick).HasError())
+        return handle.HasValue() ? std::optional{handle.Value()} : std::nullopt;
+    }
+
+    /** @copydoc Editor::EditorPlaySceneHost::SetDecisionDebugView */
+    void ProjectPlaySceneHost::SetDecisionDebugView(const std::optional<AI::AgentHandle> agent) {
+        if (!agent && std::this_thread::get_id() == ownerLane_) {
+            decisionDebug_.reset();
+            return;
+        }
+        if (AgentInspectionTick() == 0 || !decisionDebugGranted_)
+            return;
+        if (decisionDebug_ && agent == decisionDebug_->agent)
+            return;
+        decisionDebug_.reset();
+        if (agent && SelectedDecisionAgent() == agent)
+            decisionDebug_.emplace(Editor::EditorPlayDecisionDebugState{.agent = *agent});
+    }
+
+    /** @copydoc Editor::EditorPlaySceneHost::ReadDecisionDebugState */
+    std::optional<Editor::EditorPlayDecisionDebugState> ProjectPlaySceneHost::ReadDecisionDebugState() const noexcept {
+        if (AgentInspectionTick() == 0 || !decisionDebug_)
             return std::nullopt;
-        return handle.Value();
+        auto snapshot = *decisionDebug_;
+        if (committedDecisionTrace_ && committedDecisionTrace_->Header().blackboard.agent == snapshot.agent)
+            snapshot.trace = committedDecisionTrace_;
+        return snapshot;
+    }
+
+    /** @copydoc ProjectPlaySceneHost::HasDecisionBreakpoint */
+    bool ProjectPlaySceneHost::HasDecisionBreakpoint(const AI::DecisionStepTrace &trace,
+                                                     const Editor::EditorPlayDecisionBreakpoint &breakpoint) {
+        if (!breakpoint.graph.IsValid() || !breakpoint.node.IsValid())
+            return false;
+        return std::ranges::any_of(trace.Records(), [&](const AI::DecisionStepRecord &record) {
+            return record.kind != AI::DecisionStepRecordKind::UtilityScore && breakpoint.graph == record.occurrence.graph &&
+                   breakpoint.occurrence == record.occurrence.occurrence && breakpoint.node == record.node;
+        });
+    }
+
+    /** @copydoc ProjectPlaySceneHost::SetDecisionBreakpoint */
+    bool ProjectPlaySceneHost::SetDecisionBreakpoint(const Editor::EditorPlayDecisionDebugCommand &command) {
+        if (!command.breakpoint || !committedDecisionTrace_ || committedDecisionTrace_->Header().blackboard.agent != command.agent ||
+            !HasDecisionBreakpoint(*committedDecisionTrace_, *command.breakpoint))
+            return false;
+        decisionDebug_->breakpoint = command.breakpoint;
+        decisionBreakpointPlan_ = committedDecisionTrace_->Header().planDigest;
+        return true;
+    }
+
+    /** @copydoc Editor::EditorPlaySceneHost::ApplyDecisionDebugCommand */
+    bool ProjectPlaySceneHost::ApplyDecisionDebugCommand(const Editor::EditorPlayDecisionDebugCommand &command) {
+        if (AgentInspectionTick() == 0 || !decisionDebug_ || decisionDebug_->agent != command.agent ||
+            SelectedDecisionAgent() != command.agent)
+            return false;
+        auto &state = *decisionDebug_;
+        using enum Editor::EditorPlayDecisionDebugAction;
+        switch (command.action) {
+            case Step:
+                state.stepPending = state.paused;
+                return state.stepPending;
+            case Pause:
+            case Resume:
+                state.paused = command.action == Pause;
+                state.stepPending = false;
+                return true;
+            case SetBreakpoint:
+                return SetDecisionBreakpoint(command);
+            case ClearBreakpoint:
+                state.breakpoint.reset();
+                return true;
+        }
+        return false;
+    }
+
+    /** @copydoc ProjectPlaySceneHost::CommitDecisionDebugTick */
+    void ProjectPlaySceneHost::CommitDecisionDebugTick() noexcept {
+        if (!decisionDebug_)
+            return;
+        auto &state = *decisionDebug_;
+        state.stepPending = false;
+        if (!state.breakpoint || !committedDecisionTrace_ || committedDecisionTrace_->Header().tick != committedDecisionTick_)
+            return;
+        if (committedDecisionTrace_->Header().planDigest != decisionBreakpointPlan_) {
+            state.breakpoint.reset();
+            return;
+        }
+        if (HasDecisionBreakpoint(*committedDecisionTrace_, *state.breakpoint))
+            state.paused = true;
+    }
+
+    /** @copydoc ProjectPlaySceneHost::ArmSelectedDecisionTrace */
+    std::optional<AI::AgentHandle> ProjectPlaySceneHost::ArmSelectedDecisionTrace(const std::uint64_t tick) {
+        const bool debugSample = decisionDebug_ && (decisionDebug_->stepPending || decisionDebug_->breakpoint.has_value());
+        if (!debugSample && lastDecisionTraceTick_ != 0 && tick - lastDecisionTraceTick_ < Editor::EditorPlayAgentInspectionTickSpacing)
+            return std::nullopt;
+        const auto agent = SelectedDecisionAgent();
+        if (!agent || ai_->ArmDecisionReplayAtSafePoint(*agent, tick).HasError())
+            return std::nullopt;
+        lastDecisionTraceTick_ = tick;
+        return agent;
     }
 
     /** @copydoc ProjectPlaySceneHost::CaptureSelectedDecisionTrace */
@@ -173,9 +267,30 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         if (cancellation.IsCancellationRequested())
             return JobCancelled();
         auto admitted = RegisterPresentationParticipants(policy, AI::AiSceneCookedDecisionExecution{*decisionJobs_, {}, {}, {}});
-        if (admitted.HasValue())
+        if (admitted.HasValue()) {
             inspectionKeys_ = std::move(policy.decisions->inspectionKeys);
+            decisionDebugGranted_ = policy.decisions->decisionDebugGranted;
+        }
         return admitted;
+    }
+
+    /** @copydoc ProjectPlaySceneHost::RunDecisionScheduler */
+    Result<void> ProjectPlaySceneHost::RunDecisionScheduler(AI::AiTaskScheduler &scheduler, const std::uint64_t tick) {
+        if (decisionDebug_ && SelectedDecisionAgent() != decisionDebug_->agent)
+            decisionDebug_.reset();
+        const auto held =
+            decisionDebug_ && decisionDebug_->paused && !decisionDebug_->stepPending ? std::optional{decisionDebug_->agent} : std::nullopt;
+        const auto armed = held ? std::nullopt : ArmSelectedDecisionTrace(tick);
+        const auto evaluated = scheduler.EvaluateAtDecisionWithPausedAgent(tick, held.value_or(AI::AgentHandle{}));
+        const auto dispatched = evaluated.HasValue() ? scheduler.CommitAtIntentDispatch(tick) : evaluated;
+        if (dispatched.HasError()) {
+            if (armed)
+                ai_->DiscardDecisionReplayAtSafePoint(*armed, tick);
+            return Result<void>::Failure(dispatched.ErrorValue());
+        }
+        if (armed)
+            CaptureSelectedDecisionTrace(*armed, tick);
+        return Result<void>::Success();
     }
 
     /** @copydoc Editor::EditorPlaySceneHost::EvaluateDecisionBeforeGameplay */
@@ -194,19 +309,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         const auto tick = committedDecisionTick_ + 1;
         if (auto perception = PollDecisionPerception(tick, context.fixedDelta); perception.HasError())
             return Evaluation::Failure(perception.ErrorValue());
-        const auto armed = ArmSelectedDecisionTrace(tick);
-        if (const auto evaluated = scheduler.Value()->EvaluateAtDecision(tick); evaluated.HasError()) {
-            if (armed)
-                ai_->DiscardDecisionReplayAtSafePoint(*armed, tick);
-            return Evaluation::Failure(evaluated.ErrorValue());
-        }
-        if (const auto committed = scheduler.Value()->CommitAtIntentDispatch(tick); committed.HasError()) {
-            if (armed)
-                ai_->DiscardDecisionReplayAtSafePoint(*armed, tick);
-            return Evaluation::Failure(committed.ErrorValue());
-        }
-        if (armed)
-            CaptureSelectedDecisionTrace(*armed, tick);
+        if (auto decision = RunDecisionScheduler(*scheduler.Value(), tick); decision.HasError())
+            return Evaluation::Failure(decision.ErrorValue());
         decisionTickPending_ = true;
         return Evaluation::Success(true);
     }

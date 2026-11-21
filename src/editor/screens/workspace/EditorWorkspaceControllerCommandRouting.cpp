@@ -53,6 +53,11 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::DispatchWorkspaceCommand */
     void EditorWorkspaceController::DispatchWorkspaceCommand(const EditorWorkspaceViewCommandData &cmd) {
+        if (cmd.command == EditorWorkspaceViewCommand::ControlPlayDecision) {
+            if (cmd.playDecisionDebugCommand && m_playSession.ApplyDecisionDebugCommand(*cmd.playDecisionDebugCommand))
+                m_viewModel.playDecisionDebug = m_playSession.ReadDecisionDebugState();
+            return;
+        }
         if (cmd.command == EditorWorkspaceViewCommand::NavigatePlayDecisionProblem) {
             if (cmd.playDecisionNavigation)
                 NavigatePlayDecisionProblem(*cmd.playDecisionNavigation);

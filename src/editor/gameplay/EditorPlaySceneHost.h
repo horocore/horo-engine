@@ -113,6 +113,37 @@ namespace Horo::Editor {
         std::shared_ptr<const AI::DecisionStepTrace> decisionTrace;
     };
 
+    /** @brief A node in one exact cooked graph occurrence. */
+    struct EditorPlayDecisionBreakpoint final {
+        AI::DecisionGraphAssetId graph;
+        AI::DecisionNodeId node;
+        std::uint32_t occurrence{};
+        bool operator==(const EditorPlayDecisionBreakpoint &) const = default;
+    };
+
+    /** @brief Owner-lane commands scoped to the current Editor Play inspection view. */
+    enum class EditorPlayDecisionDebugAction : std::uint8_t {
+        Pause,
+        Step,
+        Resume,
+        SetBreakpoint,
+        ClearBreakpoint
+    };
+
+    struct EditorPlayDecisionDebugCommand final {
+        AI::AgentHandle agent;
+        EditorPlayDecisionDebugAction action{};
+        std::optional<EditorPlayDecisionBreakpoint> breakpoint;
+    };
+
+    struct EditorPlayDecisionDebugState final {
+        AI::AgentHandle agent;
+        bool paused{};
+        bool stepPending{};
+        std::optional<EditorPlayDecisionBreakpoint> breakpoint;
+        std::shared_ptr<const AI::DecisionStepTrace> trace;
+    };
+
     /** @brief Independent synchronous acquisitions from the current Project's existing provider owner. */
     struct EditorPlayDecisionProviderSource final {
         std::function<Result<std::shared_ptr<const AI::DecisionNodeGeneration>>()> decision;
@@ -165,6 +196,19 @@ namespace Horo::Editor {
 
         /** @brief Selects the entity generation eligible for read-only trace sampling. */
         virtual void SelectDecisionTraceOwner(std::optional<Runtime::EntityRef>) noexcept {}
+
+        /** @brief Admits a visible inspection lease and releases its control on closure or target change. */
+        virtual void SetDecisionDebugView(std::optional<AI::AgentHandle>) {}
+
+        /** @brief Applies a typed command to the approved view's exact live agent. */
+        virtual bool ApplyDecisionDebugCommand(const EditorPlayDecisionDebugCommand &) {
+            return false;
+        }
+
+        /** @brief Returns the visible lease's current control state when session policy grants it. */
+        [[nodiscard]] virtual std::optional<EditorPlayDecisionDebugState> ReadDecisionDebugState() const noexcept {
+            return std::nullopt;
+        }
 
         /** @brief Reports an explicit host-selected committed Decision configuration awaiting the project provider lease. */
         [[nodiscard]] virtual bool RequiresDecisionProviders() const noexcept {

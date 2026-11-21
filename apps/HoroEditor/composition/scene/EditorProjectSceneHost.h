@@ -42,6 +42,7 @@ namespace Horo::Application::Internal {
         std::vector<EditorPlayInspectionKey> inspectionKeys;
         std::string perceptionPolicy;
         Duration fixedStep{Duration::FromNanoseconds(16'666'667)};
+        bool decisionDebugGranted{};
     };
 
     /** @brief Application policy captured before workspace creation; no backend inference or fallback. */

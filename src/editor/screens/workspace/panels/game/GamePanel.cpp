@@ -133,14 +133,20 @@ namespace Horo::Editor {
     void GamePanel::DrawPanel(const ImVec2 &, const ImVec2 &size, const EditorWorkspaceViewModel &viewModel,
                               EditorWorkspaceViewCommandData &command, const EditorGuiContext &context) {
         ImGui::PushStyleVar(ImGuiStyleVar_WindowPadding, ImVec2(0, 0));
-        ImGui::BeginChild("##GameContent", size, false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
+        const bool visible =
+            ImGui::BeginChild("##GameContent", size, false, ImGuiWindowFlags_NoScrollbar | ImGuiWindowFlags_NoSavedSettings);
+        if (!visible) {
+            ImGui::EndChild();
+            ImGui::PopStyleVar();
+            return;
+        }
         if (viewModel.playViewSource != EditorPlayViewSource::AuthoredCamera) {
             const auto key = viewModel.playViewSource == EditorPlayViewSource::Simulator ? "simulator_preview" : "xr_mirror";
             ImGui::TextWrapped("%s", kTextScope.Text(context.localization, key).c_str());
         }
         DrawPausedInputMapping(viewModel, command, context);
         DrawDecisionProblem(viewModel, command, context);
-        DrawAgentInspection(viewModel, context);
+        DrawAgentInspection(viewModel, command, context);
         const auto origin = ImGui::GetCursorScreenPos();
         const float height = std::max(0.0F, ImGui::GetContentRegionAvail().y);
         RequestViewport(size.x, height);

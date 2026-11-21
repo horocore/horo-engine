@@ -178,6 +178,12 @@ namespace Horo::Editor {
 
         /** @brief Samples only the selected live Play entity at a bounded rate and drops stale selection data. */
         void RefreshAgentInspection(std::optional<Runtime::EntityRef> selection);
+        /** @brief Forwards visibility of the exact inspector generation to its session owner. */
+        void SetDecisionDebugView(std::optional<AI::AgentHandle> agent);
+        /** @brief Applies an owner-lane command between fixed attempts. */
+        [[nodiscard]] bool ApplyDecisionDebugCommand(const EditorPlayDecisionDebugCommand &command);
+        /** @brief Copies the live control state separately from the bounded inspection history. */
+        [[nodiscard]] std::optional<EditorPlayDecisionDebugState> ReadDecisionDebugState() const noexcept;
 
         /** @brief Borrows chronological detached snapshots until the next refresh or Play transition. */
         [[nodiscard]] std::span<const EditorPlayAgentInspection> AgentInspectionHistory() const noexcept;

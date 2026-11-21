@@ -227,7 +227,7 @@ namespace Horo::Editor::Tests {
             panel.DrawPanel({}, ImGui::GetContentRegionAvail(), model, command, gui.context);
             ImGui::End();
             gui.imgui.EndFrame();
-            return command.command;
+            return command;
         };
         const auto find = [](const std::string_view suffix) {
             for (auto *window : ImGui::GetCurrentContext()->Windows)
@@ -235,16 +235,38 @@ namespace Horo::Editor::Tests {
                     return window;
             return static_cast<ImGuiWindow *>(nullptr);
         };
-        CHECK(draw() == EditorWorkspaceViewCommand::None);
+        CHECK_FALSE(draw().visiblePlayDecisionInspector);
         const auto content = find("##GameContent");
         REQUIRE(content);
         CHECK_FALSE(find("##AgentInspection"));
         ImGui::FocusWindow(content);
         ImGui::ActivateItemByID(content->GetID(label.c_str()));
-        CHECK(draw() == EditorWorkspaceViewCommand::None);
-        REQUIRE(find("##AgentInspection"));
+        const auto opened = draw();
+        CHECK(opened.command == EditorWorkspaceViewCommand::None);
+        CHECK(opened.visiblePlayDecisionInspector == handle);
+        auto *inspector = find("##AgentInspection");
+        REQUIRE(inspector);
+
+        const auto &pauseLabel = GamePanel::kTextScope.Text(gui.localization, "ai_debug_pause");
+        ImGui::FocusWindow(inspector);
+        ImGui::ActivateItemByID(inspector->GetID(pauseLabel.c_str()));
+        CHECK_FALSE(draw().playDecisionDebugCommand);
+
+        model.playDecisionDebug = EditorPlayDecisionDebugState{.agent = handle};
+        static_cast<void>(draw());
+        ImGui::ActivateItemByID(inspector->GetID(pauseLabel.c_str()));
+        const auto pause = draw();
+        CHECK(pause.command == EditorWorkspaceViewCommand::ControlPlayDecision);
+        REQUIRE(pause.playDecisionDebugCommand);
+        CHECK(pause.playDecisionDebugCommand->action == EditorPlayDecisionDebugAction::Pause);
+        CHECK(pause.playDecisionDebugCommand->agent == handle);
+
+        ImGui::FocusWindow(content);
+        ImGui::ActivateItemByID(content->GetID(label.c_str()));
+        CHECK_FALSE(draw().visiblePlayDecisionInspector);
+        CHECK_FALSE(find("##AgentInspection"));
         model.playAgentInspection.clear();
-        CHECK(draw() == EditorWorkspaceViewCommand::None);
+        CHECK_FALSE(draw().visiblePlayDecisionInspector);
         CHECK_FALSE(find("##AgentInspection"));
     }
 }  // namespace Horo::Editor::Tests

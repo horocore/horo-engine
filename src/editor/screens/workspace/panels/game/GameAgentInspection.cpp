@@ -119,8 +119,38 @@ namespace Horo::Editor {
             return "ai_inspection_unavailable";
         }
 
+        /** @brief Routes a localized control to the current live generation through the workspace. */
+        void DebugButton(const char *key, const EditorPlayDecisionDebugState &state, const EditorPlayDecisionDebugAction action,
+                         EditorWorkspaceViewCommandData &command, const EditorGuiContext &context,
+                         const std::optional<EditorPlayDecisionBreakpoint> breakpoint = std::nullopt) {
+            const auto &label = GamePanel::kTextScope.Text(context.localization, key);
+            if (Ui::Button({.label = label.c_str(),
+                            .variant = Ui::ButtonVariant::Secondary,
+                            .font = context.theme.fonts.sans,
+                            .componentSize = Ui::ComponentSize::Small}) &&
+                command.command == EditorWorkspaceViewCommand::None) {
+                command.command = EditorWorkspaceViewCommand::ControlPlayDecision;
+                command.playDecisionDebugCommand = EditorPlayDecisionDebugCommand{state.agent, action, breakpoint};
+            }
+        }
+
+        /** @brief Draws only the commands available for the approved current view. */
+        void DrawDecisionDebug(const EditorPlayDecisionDebugState &state, EditorWorkspaceViewCommandData &command,
+                               const EditorGuiContext &context) {
+            using enum EditorPlayDecisionDebugAction;
+            if (state.paused) {
+                DebugButton("ai_debug_resume", state, Resume, command, context);
+                if (!state.stepPending)
+                    DebugButton("ai_debug_step", state, Step, command, context);
+            } else
+                DebugButton("ai_debug_pause", state, Pause, command, context);
+            if (state.breakpoint)
+                DebugButton("ai_debug_clear_breakpoint", state, ClearBreakpoint, command, context);
+        }
+
         /** @brief Draws redacted active nodes and committed transitions from one bounded observation. */
-        void DrawDecisionTrace(const AI::DecisionStepTrace &trace, const EditorGuiContext &context) {
+        void DrawDecisionTrace(const AI::DecisionStepTrace &trace, const EditorGuiContext &context,
+                               const EditorPlayDecisionDebugState *debug = nullptr, EditorWorkspaceViewCommandData *command = nullptr) {
             const auto text = [&](const std::string_view key) -> const std::string & {
                 return GamePanel::kTextScope.Text(context.localization, key);
             };
@@ -128,16 +158,27 @@ namespace Horo::Editor {
                 Ui::WrappedText(ImGui::GetContentRegionAvail().x, value, color, context.theme.fonts);
             };
             line(std::format("{} · {} {}", text("ai_inspection_trace"), text("ai_problem_tick"), trace.Header().tick), Theme::Muted());
-            for (const auto &record : trace.Records()) {
+            const auto records = trace.Records();
+            for (std::size_t index = 0; index < records.size(); ++index) {
+                const auto &record = records[index];
                 using enum AI::DecisionStepRecordKind;
                 if (record.kind == StateMachineTransition) {
                     line(std::format("{} {} · {} {} · {}", text("ai_problem_graph"), record.occurrence.graph.Value(),
                                      text("ai_inspection_transition"), record.node.Value(), record.transitionCount),
                          Theme::Muted());
-                } else if (record.kind == StateMachineStep || (record.kind == BehaviorNode && record.state == AI::AiTaskState::Running)) {
+                } else if (record.kind == StateMachineStep ||
+                           (record.kind == BehaviorNode && (debug || record.state == AI::AiTaskState::Running))) {
+                    const EditorPlayDecisionBreakpoint target{record.occurrence.graph, record.node, record.occurrence.occurrence};
+                    const bool armed = debug && debug->breakpoint == target;
                     line(std::format("{} {} · {} {} · {}", text("ai_problem_graph"), record.occurrence.graph.Value(),
                                      text("ai_problem_node"), record.node.Value(), text(TaskState(record.state))),
-                         Theme::Muted());
+                         armed ? Theme::Warn() : Theme::Muted());
+                    if (debug && command && !armed && target.node.IsValid()) {
+                        ImGui::PushID(static_cast<int>(index));
+                        DebugButton("ai_debug_set_breakpoint", *debug, EditorPlayDecisionDebugAction::SetBreakpoint, *command, context,
+                                    target);
+                        ImGui::PopID();
+                    }
                 }
             }
             if (trace.DroppedRecords() != 0)
@@ -179,13 +220,39 @@ namespace Horo::Editor {
                 line(std::format("{} {} · {} {} · {} {:.2f}", text("ai_inspection_perception"), memory.key.sense.Value(),
                                  text("ai_inspection_stimulus"), memory.key.stimulus.Value(), text("ai_inspection_age"), memory.ageSeconds),
                      Theme::Muted());
-            if (entry.decisionTrace)
-                DrawDecisionTrace(*entry.decisionTrace, context);
+        }
+
+        /** @brief Chooses an earlier retained snapshot and updates the comparison tick. */
+        const EditorPlayAgentInspection *ChooseComparison(const std::span<const EditorPlayAgentInspection> candidates,
+                                                          std::uint64_t &comparisonTick, const EditorGuiContext &context) {
+            if (candidates.empty()) {
+                comparisonTick = 0;
+                return nullptr;
+            }
+            const auto text = [&](std::string_view key) -> const std::string & {
+                return GamePanel::kTextScope.Text(context.localization, key);
+            };
+            const auto baseline = std::ranges::find(candidates, comparisonTick, &EditorPlayAgentInspection::tick);
+            int selected = baseline == candidates.end() ? 0 : static_cast<int>(baseline - candidates.begin()) + 1;
+            std::vector<std::string> labels;
+            labels.reserve(candidates.size() + 1);
+            labels.push_back(text("ai_inspection_compare"));
+            for (const auto &entry : candidates)
+                labels.push_back(std::format("{} {}", text("ai_problem_tick"), entry.tick));
+            const auto revisionLabel = [&](const int index) {
+                return labels[static_cast<std::size_t>(index)].c_str();
+            };
+            static_cast<void>(Ui::ComboControl("##AgentBaseline", &selected, static_cast<int>(labels.size()),
+                                               Ui::ComboItemSource{.label = revisionLabel}, context.theme.fonts));
+            const auto *entry = selected != 0 ? &candidates[static_cast<std::size_t>(selected - 1)] : nullptr;
+            comparisonTick = entry ? entry->tick : 0;
+            return entry;
         }
     }  // namespace
 
     /** @brief Displays and compares a bounded history for the selected Play agent. */
-    void GamePanel::DrawAgentInspection(const EditorWorkspaceViewModel &viewModel, const EditorGuiContext &context) {
+    void GamePanel::DrawAgentInspection(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &command,
+                                        const EditorGuiContext &context) {
         const auto &history = viewModel.playAgentInspection;
         if (history.empty() || !history.back().snapshot) {
             inspectedAgent_ = {};
@@ -212,26 +279,17 @@ namespace Horo::Editor {
             return;
 
         const auto &latest = *history.back().snapshot;
-        const auto candidates = std::span{history}.first(history.size() - 1);
-        const auto baseline = std::ranges::find(candidates, comparisonTick_, &EditorPlayAgentInspection::tick);
-        int selected = baseline == candidates.end() ? 0 : static_cast<int>(baseline - candidates.begin()) + 1;
         const auto availableHeight = ImGui::GetContentRegionAvail().y;
         if (availableHeight <= 1.0F)
             return;
         if (ImGui::BeginChild("##AgentInspection", {0, availableHeight * 0.45F}, ImGuiChildFlags_None, ImGuiWindowFlags_NoSavedSettings)) {
-            if (!candidates.empty()) {
-                std::vector<std::string> labels;
-                labels.reserve(candidates.size() + 1);
-                labels.push_back(text("ai_inspection_compare"));
-                for (const auto &entry : candidates)
-                    labels.push_back(std::format("{} {}", text("ai_problem_tick"), entry.tick));
-                const auto revisionLabel = [&](const int index) {
-                    return labels[static_cast<std::size_t>(index)].c_str();
-                };
-                static_cast<void>(Ui::ComboControl("##AgentBaseline", &selected, static_cast<int>(candidates.size()) + 1,
-                                                   Ui::ComboItemSource{.label = revisionLabel}, fonts));
-            }
-            comparisonTick_ = selected != 0 ? candidates[static_cast<std::size_t>(selected - 1)].tick : 0;
+            command.visiblePlayDecisionInspector = history.back().agent;
+            const auto *debug = viewModel.playDecisionDebug && viewModel.playDecisionDebug->agent == history.back().agent
+                                    ? &*viewModel.playDecisionDebug
+                                    : nullptr;
+            if (debug)
+                DrawDecisionDebug(*debug, command, context);
+            const auto *comparison = ChooseComparison(std::span{history}.first(history.size() - 1), comparisonTick_, context);
             static_cast<void>(
                 Ui::InputTextControl("##AgentKeyFilter", inspectionFilter_, 65, fonts, {.hint = text("ai_inspection_filter").c_str()}));
             Ui::WrappedText(ImGui::GetContentRegionAvail().x,
@@ -239,8 +297,8 @@ namespace Horo::Editor {
                                         latest.blackboardRevision),
                             Theme::Muted(), fonts);
             const AI::AiAgentInspectionSnapshot *other = nullptr;
-            if (selected != 0) {
-                const auto &entry = candidates[static_cast<std::size_t>(selected - 1)].snapshot;
+            if (comparison) {
+                const auto &entry = comparison->snapshot;
                 if (entry && entry->blackboard == latest.blackboard)
                     other = entry.get();
                 else
@@ -248,11 +306,11 @@ namespace Horo::Editor {
             }
             DrawBlackboard(latest, other, inspectionFilter_, context);
             DrawObservations(history.back(), context);
-            if (selected != 0) {
-                const auto &trace = candidates[static_cast<std::size_t>(selected - 1)].decisionTrace;
-                if (trace && trace != history.back().decisionTrace)
-                    DrawDecisionTrace(*trace, context);
-            }
+            const auto &latestTrace = debug ? debug->trace : history.back().decisionTrace;
+            if (latestTrace)
+                DrawDecisionTrace(*latestTrace, context, debug, &command);
+            if (comparison && comparison->decisionTrace && comparison->decisionTrace != latestTrace)
+                DrawDecisionTrace(*comparison->decisionTrace, context);
         }
         ImGui::EndChild();
     }
