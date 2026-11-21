@@ -1,6 +1,7 @@
 #include "HeadlessNavigationPathScope.h"
 
 #include "HeadlessNetworkServices.h"
+#include "Horo/Animation/AnimationErrors.h"
 #include "Horo/Navigation/NavigationDefinition.h"
 #include "ProjectSceneNavigationComposition.h"
 #include "SceneAiNavigationMotion.h"
@@ -110,7 +111,7 @@ namespace Horo::Application::Internal {
             samples_.reserve(selected.size());
             for (const auto &policy : selected) {
                 const auto entity = scene.Find(policy.object);
-                if (!entity || policy.principal == 0)
+                if (!entity || policy.principal == 0 || (policy.motionStartTrigger && !policy.motionStartTrigger->IsValid()))
                     return Result<void>::Failure(MakeError(Nav::NavigationErrors::AgentDescriptorInvalid));
                 const auto previous = callers.back().owner.Value();
                 if (previous == std::numeric_limits<std::uint64_t>::max())
@@ -127,7 +128,7 @@ namespace Horo::Application::Internal {
                     return existing.owner->Agent() == actor.Value()->Agent();
                 }))
                     return Result<void>::Failure(MakeError(Nav::NavigationErrors::AgentDescriptorInvalid));
-                actors.push_back({std::move(actor).Value(), {}});
+                actors.push_back({std::move(actor).Value(), {}, policy.motionStartTrigger});
                 callers.push_back(caller);
             }
             actors_ = std::move(actors);
@@ -169,7 +170,7 @@ namespace Horo::Application::Internal {
     Result<void> HeadlessNavigationPathScope::AdmitMotion(const Runtime::RuntimeSceneView &scene,
                                                           const HeadlessNavigationMotionPolicy &policy, AI::AiRuntimeCapability ai,
                                                           AI::AiTaskContinuation task, Nav::NavigationMovementRequest request,
-                                                          const std::uint64_t tick) {
+                                                          const std::uint64_t tick, Runtime::SceneAnimationRuntime *animation) {
         if (tick == 0 || tick != motionTick_ || scene.RuntimeId().value != activation_.scene.Value())
             return Result<void>::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
         const auto entity = ai.ResolveAgentOwner(task.Operation().agent);
@@ -183,14 +184,27 @@ namespace Horo::Application::Internal {
         });
         if (selected == actors_.end())
             return Result<void>::Failure(MakeError(Nav::NavigationErrors::AdmissionRejected));
+        if (selected->motionStartTrigger && !animation)
+            return Result<void>::Failure(MakeError(Animation::AnimationErrors::GraphAdmissionRejected));
         const auto target = request.entity;
         auto current = ObserveActor(scene, policy, *selected->owner, target);
         if (current.HasError())
             return Result<void>::Failure(std::move(current).ErrorValue());
         auto admitted = selected->owner->Admit(std::move(ai), std::move(task), std::move(request), current.Value());
-        if (admitted.HasValue())
-            selected->target = target;
-        return admitted;
+        if (admitted.HasError())
+            return admitted;
+        selected->target = target;
+        if (selected->motionStartTrigger) {
+            const auto trigger = animation->QueueTrigger(entity.Value(), *selected->motionStartTrigger);
+            if (!trigger.HasValue()) {
+                auto error = Animation::DescribeGraphInstanceFailure(trigger);
+                if (auto *motion = selected->owner->Motion())
+                    motion->Reject(std::move(error));
+                else
+                    return Result<void>::Failure(std::move(error));
+            }
+        }
+        return Result<void>::Success();
     }
 
     /** @copydoc HeadlessNavigationPathScope::SubmitMotion */

@@ -3,13 +3,15 @@
 /** @file HeadlessNavigationPathScope.h
  * @brief Private standalone Gameplay path grant over the installed immutable cooked provider.
  */
+#include "Horo/Animation/AnimationGraph.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Navigation/NavigationCrowdSnapshot.h"
 #include "Horo/Runtime/Scene/SceneIdentity.h"
 
 namespace Horo::Runtime {
     class RuntimeSceneView;
-}
+    class SceneAnimationRuntime;
+}  // namespace Horo::Runtime
 
 namespace Horo::AI {
     class AiRuntimeCapability;
@@ -52,7 +54,8 @@ namespace Horo::Application::Internal {
         /** @brief Resolves the exact AI task and its prepared Scene actor at decision intent dispatch. */
         [[nodiscard]] Result<void> AdmitMotion(const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy,
                                                AI::AiRuntimeCapability ai, AI::AiTaskContinuation task,
-                                               Navigation::NavigationMovementRequest request, std::uint64_t tick);
+                                               Navigation::NavigationMovementRequest request, std::uint64_t tick,
+                                               Runtime::SceneAnimationRuntime *animation);
         /** @brief Submits safe Navigation motion before the native Character step. */
         [[nodiscard]] Result<void> SubmitMotion(const Runtime::RuntimeSceneView &scene, const HeadlessNavigationMotionPolicy &policy);
         /** @brief Retains achieved motion after native publication, or discards an aborted attempt. */
@@ -71,6 +74,7 @@ namespace Horo::Application::Internal {
         struct Actor final {
             std::unique_ptr<SceneAiNavigationActor> owner;
             std::optional<Navigation::NavigationAgentOwner> target;
+            std::optional<Animation::GraphParameterId> motionStartTrigger;
         };
 
         [[nodiscard]] Result<Navigation::NavigationMovementObservation> ObserveActor(

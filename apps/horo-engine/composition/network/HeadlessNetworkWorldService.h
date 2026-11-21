@@ -546,7 +546,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                     return Result<void>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
                 const auto scene = world->scenes->ActiveScene();
                 return scene ? world->navigationPath->AdmitMotion(*scene, *policy, world->ai->CapabilityAtSafePoint(), task,
-                                                                  std::move(request), tick)
+                                                                  std::move(request), tick, world->animation.get())
                              : Result<void>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
             });
             if (motion.HasError())

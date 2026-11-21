@@ -5,6 +5,7 @@
 #include "HeadlessCookedDecisionAdmission.h"
 #include "HeadlessProjectScene.h"
 #include "Horo/AI/AITaskContinuation.h"
+#include "Horo/Animation/AnimationErrors.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Navigation/Backends/RecastDetourCrowdProvider.h"
 #include "Horo/Physics/PhysicsErrors.h"
@@ -308,6 +309,7 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                                         payload.Value()}};
             navigation.Publish(NavigationProductFixture::Input::Valid, NavigationProductFixture::Client::None, added,
                                [&](SceneSource::SceneSourceDocument &scene) {
+                scene.objects.front().localTransform.translation = {3, 0, 2};
                 auto &actor = scene.objects[2];
                 actor.localTransform.translation = {1, 0.495F, 1};
                 actor.components.characterController = character.source.objects[0].components.characterController;
@@ -323,8 +325,15 @@ namespace Horo::Application::CharacterSceneProductTest {
         }
     }  // namespace
 
-    TEST_CASE("Cooked standalone decision moves a real Character and observes arrival", "[ai][navigation][character][product]") {
+    TEST_CASE("Cooked standalone decision moves or follows through real Character feedback", "[ai][navigation][character][product]") {
         using namespace Navigation;
+        enum class Scenario {
+            MoveTo,
+            Follow,
+            MissingAnimation
+        };
+        const auto scenario = GENERATE(Scenario::MoveTo, Scenario::Follow, Scenario::MissingAnimation);
+        const bool follows = scenario == Scenario::Follow;
         NavigationProductFixture fixture;
         DecisionFixture::Fixture decision;
         decision.probe.succeedTick = std::numeric_limits<std::uint64_t>::max();
@@ -336,23 +345,29 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                             .blackboardSchema = decision.schema}};
         const auto decisionAsset = PublishDecisionMotionProject(fixture, decision, source, catalog.front());
         Math::Vec3 goal{3, 0, 2};
+        std::optional<NavigationAgentOwner> target;
+        bool targetVisible = true;
         bool staged{};
         auto dynamic = NavigationDynamicRegistry::Create().Value();
         Math::Vec3 position;
+        Math::Vec3 velocity;
         std::size_t captures{};
         auto policy = std::make_shared<Internal::HeadlessNavigationMotionPolicy>();
         NativeNavigationProductWorld product;
         decision.probe.onStart = [&] {
-            staged = Internal::StageHeadlessNavigationMotion(*product.physics, decision.probe.continuation,
-                                                             {.destination = goal,
-                                                              .acceptanceRadiusMeters = 0.2F,
-                                                              .timeoutTicks = 350,
-                                                              .query = {NavigationQueryKind::Path,
-                                                                        NavigationQualityLevel::Balanced,
-                                                                        {64, 16, 100}},
-                                                              .capabilityRevision = 3},
-                                                             product.tick)
-                         .HasValue();
+            staged =
+                Internal::StageHeadlessNavigationMotion(*product.physics, decision.probe.continuation,
+                                                        {.mode = follows ? NavigationMovementMode::Follow : NavigationMovementMode::MoveTo,
+                                                         .destination = goal,
+                                                         .entity = target,
+                                                         .acceptanceRadiusMeters = 0.2F,
+                                                         .timeoutTicks = 350,
+                                                         .query = {NavigationQueryKind::Path,
+                                                                   NavigationQualityLevel::Balanced,
+                                                                   {64, 16, 100}},
+                                                         .capabilityRevision = 3},
+                                                        product.tick)
+                    .HasValue();
         };
         policy->solver = CreateRecastDetourCrowdBackend().Value();
         policy->capture = [&](const auto &, const auto &active, const auto &agents, const auto samples, const std::uint64_t tick) {
@@ -360,10 +375,25 @@ namespace Horo::Application::CharacterSceneProductTest {
             if (captures++ == 0)
                 REQUIRE(dynamic.CommitAtSafePoint(active, tick).HasValue());
             position = samples.front().position;
+            velocity = samples.front().velocity;
             const std::array profiles{NavigationCrowdProfileFacts{.profile = agents.Agents().front().profile}};
             return BuildNavigationCrowdSnapshot(agents, dynamic.Snapshot().Value(), samples, profiles, {}, tick);
         };
-        const auto started = product.Start(fixture, NavigationGameplay(), {{{3}, 1}}, Physics::PhysicsRuntimeMode::Canonical,
+        policy->follow = [&](const Runtime::RuntimeSceneView &scene, const NavigationAgentOwner owner, const std::uint64_t) {
+            using Target = Result<std::optional<NavigationMovementTarget>>;
+            if (!targetVisible || owner.scene.Value() != scene.RuntimeId().value)
+                return Target::Success(std::nullopt);
+            const auto member = scene.Get({scene.RuntimeId(), {.index = owner.entityIndex, .generation = owner.entityGeneration}});
+            if (member.HasError())
+                return Target::Failure(member.ErrorValue());
+            auto location = member.Value().localTransform->translation;
+            location.y = goal.y;
+            return Target::Success(NavigationMovementTarget{owner, location, 1});
+        };
+        Internal::HeadlessNavigationActorPolicy actorPolicy{{3}, 1};
+        if (scenario == Scenario::MissingAnimation)
+            actorPolicy.motionStartTrigger = Animation::GraphParameterId::Create(2).Value();
+        const auto started = product.Start(fixture, NavigationGameplay(), {actorPolicy}, Physics::PhysicsRuntimeMode::Canonical,
                                            [&](auto &input, auto &assets) {
             input.aiControllers = catalog;
             input.cookedDecisions = std::make_shared<Internal::HeadlessCookedDecisionInput>(
@@ -384,19 +414,54 @@ namespace Horo::Application::CharacterSceneProductTest {
         const auto actor = scene->Find({3});
         REQUIRE(actor);
         goal.y = scene->Get(*actor).Value().localTransform->translation.y;
+        if (follows) {
+            const auto following = scene->Find({1});
+            REQUIRE(following);
+            target = NavigationAgentOwner{NavigationSceneRuntimeId::Create(scene->RuntimeId().value).Value(), following->entity.index,
+                                          following->entity.generation};
+        }
+        if (scenario == Scenario::MissingAnimation) {
+            product.RunFrame();
+            product.RunFrame();
+            CHECK(staged);
+            CHECK(captures == 0);
+            REQUIRE(decision.probe.cleanups == 1);
+            CHECK(decision.probe.lastTerminal == AI::AiTaskState::Failed);
+            REQUIRE(decision.probe.lastFailure);
+            CHECK(decision.probe.lastFailure->code.Value() == Animation::AnimationErrors::GraphAdmissionRejected.code.Value());
+            return;
+        }
+        const auto positionReached = [&] {
+            return std::hypot(position.x - goal.x, position.z - goal.z) <= 0.2F;
+        };
         for (std::size_t index = 0; index < 340 && decision.probe.cleanups == 0; ++index) {
             product.RunFrame();
+            if (follows && positionReached() && std::hypot(velocity.x, velocity.z) < 0.05F)
+                break;
             std::this_thread::yield();
         }
         CHECK(staged);
         CHECK(captures > 2);
+        REQUIRE(positionReached());
+        if (follows) {
+            REQUIRE(decision.probe.cleanups == 0);
+            product.RunFrame();
+            CHECK(decision.probe.cleanups == 0);
+            targetVisible = false;
+            product.RunFrame();
+            product.RunFrame();
+            REQUIRE(decision.probe.cleanups == 1);
+            CHECK(decision.probe.lastTerminal == AI::AiTaskState::Failed);
+            REQUIRE(decision.probe.lastFailure);
+            CHECK(decision.probe.lastFailure->code.Value() == NavigationErrors::InvalidHandle.code.Value());
+            return;
+        }
         REQUIRE(decision.probe.cleanups == 1);
         if (decision.probe.lastFailure)
             UNSCOPED_INFO(decision.probe.lastFailure->code.Value() + ": " + decision.probe.lastFailure->message);
         CAPTURE(goal.y, position.y);
         CHECK(decision.probe.lastTerminal == AI::AiTaskState::Succeeded);
         CHECK(decision.probe.aborts == 0);
-        CHECK(std::hypot(position.x - goal.x, position.z - goal.z) <= 0.2F);
     }
 #endif
 

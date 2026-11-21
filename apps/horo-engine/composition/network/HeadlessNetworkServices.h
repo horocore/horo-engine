@@ -138,6 +138,7 @@ namespace Horo::Application::Internal {
     struct HeadlessNavigationActorPolicy final {
         Runtime::SceneObjectId object;
         std::uint64_t principal{};
+        std::optional<Animation::GraphParameterId> motionStartTrigger; /**< Authored trigger when Navigation accepts a new task. */
     };
 
     /** @brief Explicit project-selected crowd authority, fixed envelope and live Follow observations. */
