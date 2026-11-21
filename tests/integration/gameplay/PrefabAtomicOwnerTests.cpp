@@ -1128,6 +1128,7 @@ namespace Horo::Application::PrefabAtomicTest {
             auto role = NetworkProjectRole::Standalone;
             std::optional<std::uint32_t> replayReferenceGeneration;
             bool selectNativePerception = false;
+            bool reactiveNativePerception = false;
             std::optional<AI::PerceptionSenseContract> nativeSense;
             bool prefabOnly = false;
             bool prefabQuery = false;
@@ -1264,6 +1265,10 @@ namespace Horo::Application::PrefabAtomicTest {
                 role = NetworkProjectRole::DedicatedServer;
                 prepareNative = true;
                 selectNativePerception = true;
+                SECTION("fixed cadence runs without declared watches") {}
+                SECTION("declared watches leave cooked tasks idle when observations stay stable") {
+                    reactiveNativePerception = true;
+                }
             }
             SECTION("actual terminal process publishes the selected cooked native decision and rejects the wrong artifact type") {
                 prepareNative = true;
@@ -1580,11 +1585,13 @@ namespace Horo::Application::PrefabAtomicTest {
                 constexpr std::uint32_t authoredListener = 91;
                 const auto sense = nativeSense->sense.identity.Value();
                 const auto units = nativeSense->workUnits + AI::PerceptionSenseGeneration::ValidationWorkUnits + 1;
-                const nlohmann::json endpoint{{"controller", controller.descriptor.controller.Value()},
-                                              {"listeners", {authoredListener}},
-                                              {"sources", {sense}},
-                                              {"layers", 1},
-                                              {"mask", 1}};
+                nlohmann::json endpoint{{"controller", controller.descriptor.controller.Value()},
+                                        {"listeners", {authoredListener}},
+                                        {"sources", {sense}},
+                                        {"layers", 1},
+                                        {"mask", 1}};
+                if (reactiveNativePerception)
+                    endpoint["decisionWatches"] = {{{"node", 2}, {"listener", authoredListener}}};
                 const nlohmann::json listener{{"id", authoredListener}, {"sense", sense}};
                 perception =
                     {{"schema", 2},
@@ -1789,6 +1796,12 @@ namespace Horo::Application::PrefabAtomicTest {
                     REQUIRE(memory.HasValue());
                     REQUIRE(memory.Value().count == 1);
                     CHECK(memory.Value().entries.front().lastKnownPosition == Math::WorldCoordinate64::FromMillimeters(1100, 200, -300));
+                    if (reactiveNativePerception) {
+                        CHECK((nativeProbe->decision == std::array<std::uint32_t, 3>{2, 0, 0}));
+                        REQUIRE(physics.Value()->RunFixedTick({2, Duration::FromNanoseconds(16'666'667), startup.Token()}).HasValue());
+                        CHECK(nativeProbe->module[1] == 4);
+                        CHECK((nativeProbe->decision == std::array<std::uint32_t, 3>{2, 0, 0}));
+                    }
                 } else if (nativeProbe && prefabQuery) {
                     RunSelectedQueryPrefab(*physics.Value(), *nativeProbe, prefabSource, startup.Token(), queryKey, limitedQueryWork);
                 } else if (nativeProbe && prefabOnly) {
@@ -1831,8 +1844,10 @@ namespace Horo::Application::PrefabAtomicTest {
                 const auto activeDecisions = selectNativePerception || (prefabOnly && !preserveInactive) ? 2u : 1u;
                 const auto tasks = modules == 0 || rollbackPrefab || prefabQuery ? 0u : activeDecisions;
                 CHECK(nativeProbe->module[3] == modules);
-                if (selectNativePerception)
-                    CHECK((nativeProbe->module == std::array<std::uint32_t, 4>{2, 2, 2, 1}));
+                if (selectNativePerception) {
+                    const auto senseEvaluations = reactiveNativePerception ? 4u : 2u;
+                    CHECK((nativeProbe->module == std::array<std::uint32_t, 4>{2, senseEvaluations, 2, 1}));
+                }
                 CHECK((nativeProbe->decision == std::array{tasks, tasks, tasks}));
                 REQUIRE(gameplay->moduleRetirements->Close().HasValue());
             }
