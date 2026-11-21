@@ -1081,9 +1081,9 @@ namespace {
               "[native][decision-cook][package]") {
         Fixture fixture;
         const auto editorMetadata = fixture.source.path / "assets/task.horo_bt.meta";
-        const auto layout = std::format(
-            R"({{"kind":"horo.decision.graph.layout","asset":"{}","version":1,"graph":2,"nodes":[[1,123.0,567.0]]}})",
-            fixture.child.ToString());
+        const auto layout =
+            std::format(R"({{"kind":"horo.decision.graph.layout","asset":"{}","version":1,"graph":2,"nodes":[[1,123.0,567.0]]}})",
+                        fixture.child.ToString());
         Files::WriteFile(editorMetadata, {reinterpret_cast<const std::uint8_t *>(layout.data()), layout.size()});
         REQUIRE(fixture.Cook().HasValue());
         const auto accepted = fixture.Current();
