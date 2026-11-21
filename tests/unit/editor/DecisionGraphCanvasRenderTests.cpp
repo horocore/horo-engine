@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <cmath>
 #include <cstdint>
 #include <fstream>
@@ -122,6 +123,29 @@ namespace Horo::Editor {
                 ImGui::Render();
             }
         };
+
+        /** @brief Runs the production Problems card and collects commands after rendering its frame. */
+        auto DrawProblemsFrame(const DecisionGraphWorkspaceDocument &document,
+                               std::span<const AI::DecisionAssetValidationDiagnostic> findings, const EditorGuiContext &context) {
+            ImGui::NewFrame();
+            ImGui::SetNextWindowPos({0, 0});
+            ImGui::SetNextWindowSize({480, 680});
+            ImGui::Begin("Decision Problems test", nullptr, ImGuiWindowFlags_NoSavedSettings);
+            EditorWorkspaceViewCommandData command;
+            const auto node = DrawDecisionProblems(document, findings, context, command);
+            ImGui::End();
+            ImGui::Render();
+            return std::pair{node, std::move(command)};
+        }
+
+        /** @brief Finds the active child window that owns native Problems button identities. */
+        ImGuiWindow *FindProblemsCard() {
+            for (auto *window : ImGui::GetCurrentContext()->Windows) {
+                if (window->Active && std::string_view{window->Name}.find("/##DecisionProblems_") != std::string_view::npos)
+                    return window;
+            }
+            return nullptr;
+        }
 
         /** @brief Captures the native tree limits using one legal root and proportional Sequence fan-out. */
         std::shared_ptr<const AI::DecisionGraphSource> MaximumTree() {
@@ -588,9 +612,13 @@ namespace Horo::Editor {
         CHECK_FALSE(fixture.labels.Used("workspace.decision_canvas.validation_issue"));
     }
 
-    TEST_CASE("Decision Problems pages findings and routes the exact activated target", "[unit][editor][decision][canvas]") {
+    TEST_CASE("Decision Problems pages findings and routes exact targets across display scales", "[unit][editor][decision][canvas]") {
         using namespace AI::DecisionGraphTestSupport;
+        const auto displayScale = GENERATE(1.0F, 1.25F, 2.0F);
+        CAPTURE(displayScale);
         CanvasFixture fixture;
+        Theme::ApplyUiScale(100, displayScale);
+        ImGui::GetIO().DisplayFramebufferScale = {displayScale, displayScale};
         const auto source = std::make_shared<const AI::DecisionGraphSource>(
             Tree(4, {TreeNode(1, AI::DecisionControlKind::Root), TreeNode(2, AI::DecisionControlKind::Task)}, {Edge(1, 1, 2)}));
         DecisionGraphWorkspaceDocument document;
@@ -607,24 +635,17 @@ namespace Horo::Editor {
         findings[7].target = {source->asset, Node(99), {}, {}};
 
         const auto draw = [&] {
-            ImGui::NewFrame();
-            ImGui::SetNextWindowPos({0, 0});
-            ImGui::SetNextWindowSize({480, 680});
-            ImGui::Begin("Decision Problems test", nullptr, ImGuiWindowFlags_NoSavedSettings);
-            EditorWorkspaceViewCommandData command;
-            const auto node = DrawDecisionProblems(document, findings, fixture.context, command);
-            ImGui::End();
-            ImGui::Render();
-            return std::pair{node, std::move(command)};
+            return DrawProblemsFrame(document, findings, fixture.context);
         };
         auto initial = draw();
+        const auto *drawData = ImGui::GetDrawData();
+        REQUIRE(drawData);
+        CHECK(drawData->TotalVtxCount > 0);
+        CHECK(drawData->FramebufferScale.x == displayScale);
+        CHECK(drawData->FramebufferScale.y == displayScale);
         CHECK(initial.second.command == EditorWorkspaceViewCommand::None);
         CHECK_FALSE(fixture.labels.Used("workspace.global_dock.build_output.row_status.fatal"));
-        ImGuiWindow *card{};
-        for (auto *window : ImGui::GetCurrentContext()->Windows) {
-            if (window->Active && std::string_view{window->Name}.find("/##DecisionProblems_") != std::string_view::npos)
-                card = window;
-        }
+        auto *card = FindProblemsCard();
         REQUIRE(card);
         ImGui::FocusWindow(card);
         const auto activate = [&](const char *key, int index) {
