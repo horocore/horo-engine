@@ -13,6 +13,7 @@ namespace Horo::Tests::OpenXRAction {
         std::uint32_t count{2};
         XrTime time{};
         XrSpace reference{};
+        float eyeHeight{};
         bool malformedFov{};
         bool staleAfterLocate{};
 
@@ -38,7 +39,7 @@ namespace Horo::Tests::OpenXRAction {
             *count = active->count;
             for (std::uint32_t index = 0; index < std::min(capacity, active->count); ++index) {
                 REQUIRE(views[index].type == XR_TYPE_VIEW);
-                views[index].pose = {{0, 0, 0, 1}, {index == 0 ? -0.032F : 0.032F, 0, 0}};
+                views[index].pose = {{0, 0, 0, 1}, {index == 0 ? -0.032F : 0.032F, active->eyeHeight, 0}};
                 views[index].fov = {-0.8F, 0.9F, 0.7F, -0.6F};
                 if (active->malformedFov)
                     views[index].fov.angleLeft = std::numeric_limits<float>::quiet_NaN();

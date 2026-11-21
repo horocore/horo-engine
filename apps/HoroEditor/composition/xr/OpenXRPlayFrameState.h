@@ -200,8 +200,8 @@ namespace Horo::Application::Internal {
             return compositor.ObservePacing(frame, now.Value());
         }
 
-        /** @brief Captures actual runtime views once for the current canonical native prediction. */
-        Result<void> LocateViews() {
+        /** @brief Captures the late presentation-only views for the exact begun prediction. */
+        Result<void> LocatePresentationViews() {
             const auto state = host.frames_.Snapshot();
             const auto time = host.clock_.PresentationTime(state.predictedDisplayTime);
             if (time.HasError())
@@ -228,20 +228,27 @@ namespace Horo::Application::Internal {
         static Result<bool> RetireImage(Render::RenderFrontend &frontend, XR::OpenXRInternal::OpenXRSwapchain &owner,
                                         std::span<Render::RenderTextureViewHandle> views);
 
-        /** @brief Zero-time acquires/imports the same native image and creates its bounded eye views before native admission. */
-        Result<bool> AcquireEyeImages() {
+        /** @brief Prepares one image and locates its presentation views after the last potentially deferred step. */
+        Result<bool> PrepareProjectionInputs() {
             using Output = Result<bool>;
             const auto state = host.frames_.Snapshot();
-            const auto imported = WaitAndImport(color, acquisition);
-            if (imported.HasError() || !imported.Value() || acquisitionRecorded)
-                return imported;
-            if (host.frames_.Acquire(state.frame, acquisition->image) != XR::XRFrameStatus::Ok)
+            if (acquisitionRecorded)
+                return Output::Success(true);
+            if (state.phase != XR::XRFramePhase::Begun || !state.renderAdmitted)
                 return Output::Failure(MakeError(XR::XRErrors::OperationIncompatible));
-            acquisitionRecorded = true;
+            const auto imported = WaitAndImport(color, acquisition);
+            if (imported.HasError() || !imported.Value())
+                return imported;
             if (auto ready =
                     PrepareEyeViews(host.composition_.frontend, *acquisition, allocation, Render::RenderTextureAspect::Color, eyeViews);
                 ready.HasError())
                 return Output::Failure(ready.ErrorValue());
+            // Keep the sole native view locate beside render binding, after the zero-time image retry path.
+            if (const auto located = LocatePresentationViews(); located.HasError())
+                return Output::Failure(located.ErrorValue());
+            if (host.frames_.Acquire(state.frame, acquisition->image) != XR::XRFrameStatus::Ok)
+                return Output::Failure(MakeError(XR::XRErrors::OperationIncompatible));
+            acquisitionRecorded = true;
             return Output::Success(true);
         }
 

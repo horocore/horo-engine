@@ -4024,6 +4024,70 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(fixture.script.events.ends == 1);
     }
 
+    TEST_CASE("OpenXR Play locates presentation poses only when the projection image is ready",
+              "[xr][application][play][frame][late-pose]") {
+        ApplicationFixture fixture{true};
+        auto scene = PublishPlay(fixture);
+        auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
+        REQUIRE(fixture.scheduler->AddParticipant(std::move(cutoff)).HasValue());
+        REQUIRE(fixture.scheduler->Startup().HasValue());
+        REQUIRE(fixture.scheduler->RunFrame().HasValue());
+        const auto inputRevision = fixture.play->ReadInspection().trackingRevision;
+        REQUIRE(inputRevision != 0);
+        auto &script = fixture.script;
+        const auto located = [&] {
+            return std::ranges::count(script.native.calls, "locate-views");
+        };
+        const auto previousLocations = located();
+        script.clock.sample = 1;
+        script.swapchain.timeout = true;
+        REQUIRE_FALSE(RequireValue(fixture.play->PrepareRenderFrame(1)));
+        CHECK(located() == previousLocations);
+        CHECK(script.frames.waits == 1);
+        CHECK(script.swapchain.releases == 0);
+
+        script.swapchain.timeout = false;
+        SECTION("the renderer and compositor use one late view pose at the original prediction") {
+            script.presentation.eyeHeight = 0.125F;
+            REQUIRE(RequireValue(fixture.play->PrepareRenderFrame(2)));
+            CHECK(located() == previousLocations + 1);
+            CHECK(script.presentation.time == script.frames.prediction);
+            auto frame = RequireValue(fixture.frontend->BeginFrame({2, {8, 8}}));
+            RequireValue(fixture.play->ExecuteRenderFrame(frame, {}));
+            RequireValue(frame.Present());
+            RequireValue(fixture.play->FinishGui(true));
+            fixture.vulkan->native.commandState.state.Complete();
+            RequireValue(fixture.play->ProgressRenderTail());
+            REQUIRE(script.frames.layers == 1);
+            REQUIRE(script.frames.views == 2);
+            CHECK(script.frames.encoded[0].pose.position.y == Catch::Approx(0.125F));
+            CHECK(script.frames.encoded[1].pose.position.y == Catch::Approx(0.125F));
+        }
+        SECTION("a malformed late pose drains the acquired image without publishing a projection") {
+            script.presentation.malformedFov = true;
+            const auto rejected = fixture.play->PrepareRenderFrame(2);
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == XR::XRErrors::ViewPlanInvalid.code.Value());
+            CHECK(located() == previousLocations + 1);
+            RequireValue(fixture.play->ProgressRenderTail());
+            CHECK(script.frames.layers == 0);
+        }
+        SECTION("an expired frame is retired without sampling obsolete views") {
+            script.clock.sample = 100'000'000;
+            REQUIRE_FALSE(RequireValue(fixture.play->PrepareRenderFrame(2)));
+            CHECK(located() == previousLocations);
+            CHECK(script.frames.layers == 0);
+        }
+        CHECK(script.frames.waits == 1);
+        CHECK(script.frames.ends == 1);
+        CHECK(script.swapchain.releases == 1);
+        CHECK(fixture.play->ReadInspection().trackingRevision == inputRevision);
+        CHECK(fixture.vulkan->native.commandState.state.waitCalls == 0);
+        fixture.scheduler->Shutdown();
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
+
     TEST_CASE("Real installed Play recovers a terminal native begin fault through repeated bounded Close",
               "[xr][application][play][frame][recovery]") {
         ApplicationFixture fixture{true};

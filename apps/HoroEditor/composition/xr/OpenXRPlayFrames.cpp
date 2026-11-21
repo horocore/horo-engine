@@ -614,11 +614,7 @@ namespace Horo::Application::Internal {
         }
         if (const auto pacing = render_->CheckDeadline(); pacing.HasError() || !pacing.Value())
             return pacing;
-        if (frames_.Snapshot().phase == XRFramePhase::Begun) {
-            if (auto located = render_->LocateViews(); located.HasError())
-                return render_->Fail(located.ErrorValue());
-        }
-        const auto acquired = render_->AcquireEyeImages();
+        const auto acquired = render_->PrepareProjectionInputs();
         if (acquired.HasError())
             return render_->Fail(acquired.ErrorValue());
         if (!acquired.Value())
