@@ -15,6 +15,7 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <format>
 #include <fstream>
@@ -641,14 +642,18 @@ TEST_CASE("Authoring preview ranks mixed path, distance and visibility evidence 
     REQUIRE(rebuilt.HasValue());
     REQUIRE(rebuilt.Value().status == Assets::AssetRegistryBuildStatus::Complete);
 
+    const auto outerSteps = GENERATE(1U, 4U);
+    const auto side = 2 * outerSteps + 1;
+    const auto expectedGenerated = side * side;
+    const auto expectedEvaluated = std::min<std::size_t>(expectedGenerated, EnvironmentQueryPreviewNavigation::MaximumPaths);
     const auto queryId = QueryId::Create(21).Value();
     const auto distance = QueryStageId::Create(23).Value();
     const auto visibility = QueryStageId::Create(24).Value();
     const auto path = QueryStageId::Create(25).Value();
     const auto lattice = CreateBuiltinLatticeQuery(queryId, QueryStageId::Create(22).Value(), QueryResultSchemaId::Create(26).Value(),
-                                                   "Mixed preview", {.stepMillimeters = 500, .outerSteps = 1}, 9);
+                                                   "Mixed preview", {.stepMillimeters = 500, .outerSteps = outerSteps}, 9);
     REQUIRE(lattice.HasValue());
-    const auto ranged = AddBuiltinPointDistanceTest(lattice.Value(), distance, {2000, true, 2});
+    const auto ranged = AddBuiltinPointDistanceTest(lattice.Value(), distance, {4000, true, 2});
     REQUIRE(ranged.HasValue());
     const auto occlusion = AddBuiltinPointVisibilityTest(ranged.Value(), visibility, {1});
     REQUIRE(occlusion.HasValue());
@@ -715,6 +720,8 @@ TEST_CASE("Authoring preview ranks mixed path, distance and visibility evidence 
     }
     REQUIRE(project.runtime.ActiveScene());
     REQUIRE(controller.ViewportScene().documentRevision == model.documentRevision);
+    const auto sceneRevision = model.documentRevision;
+    const auto structureRevision = project.runtime.ActiveScene()->StructuralRevision();
     Project::Open(controller, Project::Path);
     REQUIRE(model.environmentQueryDocuments.size() == 1);
     const auto &document = model.environmentQueryDocuments.front();
@@ -730,18 +737,23 @@ TEST_CASE("Authoring preview ranks mixed path, distance and visibility evidence 
     CHECK(pathPoints == rayPoints);
     REQUIRE(document.preview.snapshot);
     const auto &snapshot = *document.preview.snapshot;
-    CHECK(snapshot.generated == 9);
-    REQUIRE(snapshot.candidates.size() == 9);
+    CHECK(model.documentRevision == sceneRevision);
+    CHECK(project.runtime.ActiveScene()->StructuralRevision() == structureRevision);
+    CHECK(snapshot.generated == expectedGenerated);
+    CHECK(snapshot.evaluated == expectedEvaluated);
+    REQUIRE(snapshot.candidates.size() == expectedEvaluated);
+    REQUIRE(pathPoints.size() == expectedEvaluated);
+    CHECK(snapshot.candidates.back().index == expectedGenerated - 1);
     REQUIRE(snapshot.candidates.front().score);
     REQUIRE(snapshot.candidates.back().score);
     CHECK(snapshot.candidates.front().score->failedStage == path);
     CHECK(snapshot.candidates.back().score->failedStage == visibility);
     REQUIRE_FALSE(snapshot.winners.empty());
-    CHECK(snapshot.winners.front().itemIndex == 1);
+    CHECK(snapshot.winners.front().itemIndex == snapshot.candidates[1].index);
 
     request.action = EnvironmentQueryPreviewAction::FocusCandidate;
     request.previewEvidence = document.preview.snapshot;
-    request.candidate = 1;
+    request.candidate = snapshot.winners.front().itemIndex;
     const auto camera = model.viewportCamera.target;
     auto transform = model.objects.front().localTransform;
     transform.translation.x += 1;
