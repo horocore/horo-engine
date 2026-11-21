@@ -1919,7 +1919,7 @@ target_link_libraries(HoroAISaveIntegration PUBLIC HoroEngine::AISceneIntegratio
 add_library(HoroGameplayAiIntegration STATIC gameplay/GameplayAiContext.cpp gameplay/TacticalCover.cpp)
 add_library(HoroEngine::GameplayAiIntegration ALIAS HoroGameplayAiIntegration)
 target_compile_features(HoroGameplayAiIntegration PUBLIC cxx_std_20)
-target_link_libraries(HoroGameplayAiIntegration PUBLIC HoroEngine::GameplayApi HoroEngine::AISceneIntegration)
+target_link_libraries(HoroGameplayAiIntegration PUBLIC HoroEngine::GameplayApi HoroEngine::AISceneIntegration HoroEngine::GameplayAnimationApi)
 target_link_libraries(HoroGameplayModuleHost PRIVATE HoroEngine::GameplayAiIntegration)
 
 add_library(HoroAISightIntegration STATIC

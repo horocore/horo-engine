@@ -1,9 +1,11 @@
+#include "AiSceneTestSupport.h"
 #include "AllocationProbe.h"
 #include "AnimationActionTestFixtures.h"
 #include "AnimationClipNotifyTestFixtures.h"
 #include "AnimationGraphInstanceTestFixtures.h"
 #include "AnimationPoseCompositionTestFixtures.h"
 #include "AnimationStateGraphTestFixtures.h"
+#include "Horo/Gameplay/GameplayAiContext.h"
 #include "Horo/Gameplay/GameplayAnimationScene.h"
 #include "Horo/Gameplay/LuaBehavior.h"
 #include "animation/AnimationRuntimeFixture.h"
@@ -719,8 +721,8 @@ return horo.behavior {
         CHECK(observation.component->source == fixture.Binding().source);
     }
 
-    TEST_CASE("Scene queued transition trigger survives actual failed tick and commits once through real cooked Graph",
-              "[animation][scene][transition][rollback][native]") {
+    TEST_CASE("AI task transition trigger survives a failed tick and commits once through the real cooked Graph",
+              "[ai][animation][scene][transition][rollback][native]") {
         auto graph = Test::StateGraph::Data();
         auto &machine = Test::StateGraph::Machine(graph);
         machine.states.resize(2);
@@ -741,7 +743,29 @@ return horo.behavior {
         auto &owner = *fixture.forward->adapter;
         const auto before = fixture.Observation().component->currentPose;
         const auto trigger = Test::Id<GraphParameterId>(2);
-        REQUIRE(owner.QueueTrigger(fixture.entity, trigger).HasValue());
+        auto ai = AI::AiSceneRuntime::Create().Value();
+        const auto authored = AI::TestSupport::MakeFixture(1, 10, fixture.entity.runtime.value, fixture.entity.entity.index);
+        const auto aiScene = AI::TestSupport::Publish(ai, authored);
+        AI::AiCapabilityDescriptorRegistry tasks;
+        const auto taskId = AI::TestSupport::MakeIdentity<AI::TaskId>(55);
+        REQUIRE(tasks.Register({taskId}).HasValue());
+        const auto context = Test::Cook::Take(
+            Gameplay::GameplayAiContext::Create({"game.animation", true, true}, ai.CapabilityAtSafePoint(), tasks.Freeze()));
+        CancellationSource module;
+        const auto grant = Test::Cook::Take(
+            Gameplay::CreateGameplayAnimationContext(fixture.forward->adapter, fixture.entity.runtime, "game.animation", module.Token()));
+        const auto foreignGrant = Test::Cook::Take(
+            Gameplay::CreateGameplayAnimationContext(fixture.forward->adapter, fixture.entity.runtime, "game.other", module.Token()));
+        const auto agent = Test::Cook::Take(context->ResolveAgent(authored.agent.agent.agent));
+        const auto task = Test::Cook::Take(context->StartTask(agent, taskId));
+        const auto foreign = context->QueueTaskAnimationTrigger(agent, task, *foreignGrant, trigger);
+        REQUIRE(foreign.HasError());
+        CHECK(foreign.ErrorValue().code.Value() == AI::AIErrors::TaskContextInvalid.code.Value());
+        REQUIRE(context->QueueTaskAnimationTrigger(agent, task, *grant, trigger).HasValue());
+        REQUIRE(context->CompleteTask(agent, task).HasValue());
+        const auto retired = context->QueueTaskAnimationTrigger(agent, task, *grant, trigger);
+        REQUIRE(retired.HasError());
+        CHECK(retired.ErrorValue().code.Value() == AI::AIErrors::TaskTransitionInvalid.code.Value());
         fixture.peer->failUpdate = true;
         REQUIRE(fixture.Tick().HasError());
         CHECK(fixture.PoseX() == 10.0F);

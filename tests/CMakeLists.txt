@@ -1482,10 +1482,10 @@ add_executable(HoroSceneAnimationRuntimeTests
         support/AllocationProbe.cpp unit/runtime/animation/SceneAnimationRuntimeTests.cpp)
 target_compile_features(HoroSceneAnimationRuntimeTests PRIVATE cxx_std_20)
 target_include_directories(HoroSceneAnimationRuntimeTests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/support ${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/animation)
+        ${CMAKE_CURRENT_SOURCE_DIR}/support ${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/animation ${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/ai)
 target_link_libraries(HoroSceneAnimationRuntimeTests PRIVATE
         HoroEngine::GameplayAnimationScene HoroEngine::GameplayLua HoroEngine::AnimationSceneIntegration HoroEngine::AnimationAssetCook
-        HoroEngine::AnimationGraphSourceCodec
+        HoroEngine::AnimationGraphSourceCodec HoroEngine::GameplayAiIntegration
         HoroEngine::Runtime HoroEngine::Platform HoroEngine::PlatformImmutableFileStorage HoroEngine::Foundation Threads::Threads
         HoroScenePhysicsHost nlohmann_json::nlohmann_json)
 horo_register_catch_test(HoroSceneAnimationRuntimeTests LABELS "unit;animation;scene;headless")

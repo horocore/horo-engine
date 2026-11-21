@@ -28,7 +28,8 @@ def test_gameplay_ai_native_script_and_consumer_windows_closure() -> None:
 
 def test_gameplay_ai_dependency_policy_matches_only_the_real_downstream_edges() -> None:
     policy = (ROOT / "cmake/HoroDependencyPolicy.cmake").read_text(encoding="utf-8")
-    assert "TARGET HoroGameplayAiIntegration DEPENDENCIES HoroGameplayApi HoroAISceneIntegration)" in policy
+    ai = policy.split("TARGET HoroGameplayAiIntegration", 1)[1].split(")", 1)[0].split()
+    assert ai == ["DEPENDENCIES", "HoroGameplayApi", "HoroAISceneIntegration", "HoroGameplayAnimationApi"]
     assert "TARGET HoroGameplayAiScriptBridge DEPENDENCIES HoroGameplayAiIntegration HoroExtensions)" in policy
     host = policy.split("TARGET HoroGameplayModuleHost", 1)[1].split(")", 1)[0].split()
     assert host == ["DEPENDENCIES", "HoroGameplayRuntime", "HoroPlatform",

@@ -4,6 +4,7 @@
  */
 #include "Horo/AI/AIRuntimeCapability.h"
 #include "Horo/Gameplay/GameModule.h"
+#include "Horo/Gameplay/GameplayAnimationContext.h"
 
 #include <memory>
 #include <string>
@@ -67,6 +68,15 @@ namespace Horo::Gameplay {
         [[nodiscard]] Result<AI::TaskHandle> StartTask(AI::AgentHandle agent, AI::TaskId task) const;
         /** @brief Copies exact task facts. @param agent Exact agent. @param task Exact task. @return Owned facts or typed failure. */
         [[nodiscard]] Result<AI::AiCapabilityTaskSnapshot> InspectTask(AI::AgentHandle agent, AI::TaskHandle task) const;
+        /** @brief Queues an authored trigger for a running task's exact entity during owner intent dispatch.
+         * @param agent Exact AI agent. @param task Module-owned live execution.
+         * @param animation Canonical animation grant for the same module and Scene.
+         * @param trigger Graph-declared trigger identity.
+         * @return Original typed task, scope or Animation admission result. Animation commits the trigger with its fixed step.
+         */
+        [[nodiscard]] Result<void> QueueTaskAnimationTrigger(AI::AgentHandle agent, AI::TaskHandle task,
+                                                             const GameplayAnimationContext &animation,
+                                                             Animation::GraphParameterId trigger) const;
         /** @brief Cancels exact work. @param agent Exact agent. @param task Exact task. @return Shared lifecycle transition or failure. */
         [[nodiscard]] Result<AI::AiTaskTransitionDisposition> CancelTask(AI::AgentHandle agent, AI::TaskHandle task) const;
         /** @brief Completes exact work. @param agent Exact agent. @param task Exact task. @return Shared lifecycle transition or failure.

@@ -2286,6 +2286,10 @@ then publishes committed state for variable-rate RenderExtraction.
 4. **`SystemPhase::AiIntentDispatch` (Action/Navigation Intent Dispatch)**:
    - Translates decision outputs into typed intents. Navigation and steering commit in `NavIntentCommit`.
    - Combat actions and animation triggers enqueue as typed intents consumed later; they are not absorbed into `NavIntentCommit`.
+   - A gameplay AI task can dispatch an authored graph trigger through `GameplayAiContext::QueueTaskAnimationTrigger`.
+     Dispatch requires a live task owned by the module and an Animation grant for the same module and Scene. The
+     trigger targets the agent's exact entity generation. The Animation fixed step commits the graph transition
+     and publishes its state events to readers of the committed pose.
    - A host can hand an exact running AI task to `AiNavigationMovementTask` for MoveTo or Follow.
      The binding checks that Navigation and AI own the same Scene entity, then uses the existing movement controller.
      At `NavIntentCommit`, the host publishes query results and calls `PrepareSafeMotion`, which advances the
