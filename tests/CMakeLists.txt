@@ -3912,6 +3912,13 @@ add_library(HoroSourceDocumentPublicHeaderConsumer OBJECT support/SourceDocument
 target_compile_features(HoroSourceDocumentPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroSourceDocumentPublicHeaderConsumer PRIVATE HoroEngine::EditorServices)
 target_sources(HoroSourceFileOpenServiceTests PRIVATE $<TARGET_OBJECTS:HoroSourceDocumentPublicHeaderConsumer>)
+if (Python3_Interpreter_FOUND AND NOT CMAKE_CROSSCOMPILING)
+    add_test(NAME HoroSourceFileOpenServiceTests::InterruptionRecovery
+        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/python/source_save_interruption_fixture.py"
+            "$<TARGET_FILE:HoroSourceFileOpenServiceTests>" "$<TARGET_FILE_DIR:HoroSourceFileOpenServiceTests>")
+    set_tests_properties(HoroSourceFileOpenServiceTests::InterruptionRecovery PROPERTIES
+        LABELS "unit;editor;source;headless;ci-windows" TIMEOUT 60)
+endif ()
 add_executable(HoroProposedChangeSetTests
     unit/editor/ProposedChangeSetTests.cpp
     unit/editor/WorkspaceEditPlanTests.cpp)

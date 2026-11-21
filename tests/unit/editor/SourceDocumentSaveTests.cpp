@@ -6,6 +6,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <chrono>
+#include <cstdlib>
 #include <fstream>
 #include <functional>
 #include <stdexcept>
@@ -121,6 +122,62 @@ namespace {
         return {snapshot.Identity().instance, snapshot.Revision(), {}};
     }
 }  // namespace
+
+TEST_CASE("Source save interruption and restart subprocess", "[.][source-save-process]") {
+    const auto *mode = std::getenv("HORO_SOURCE_SAVE_TEST_PHASE");
+    REQUIRE(mode);
+    const std::string_view phase{mode};
+    const auto root = std::filesystem::current_path();
+    REQUIRE(std::filesystem::is_regular_file(root / "source-save-test-fixture"));
+    const std::filesystem::path source{u8"kaynak ü 日本.cpp"};
+    constexpr std::string_view editedBytes = "edited ü\r\n";
+    SourceFileOpenService open(root);
+    Files files;
+
+    if (phase == "restart-after") {
+        const auto reopened = open.Open({.path = source});
+        REQUIRE(reopened.HasValue());
+        REQUIRE(reopened.Value().sourceSnapshot);
+        const auto &snapshot = *reopened.Value().sourceSnapshot;
+        CHECK(snapshot.Text() == editedBytes);
+        CHECK(snapshot.DiskBase() == editedBytes);
+        CHECK_FALSE(snapshot.Dirty());
+        return;
+    }
+
+    const auto edited = OpenEdit(open, source);
+    REQUIRE(edited.DiskBase() == "base\n");
+    if (phase == "restart-before") {
+        const auto rejected = open.Documents().Save(Request(edited), files);
+        REQUIRE(rejected.HasError());
+        const auto current = open.Documents().Snapshot(edited.Identity().instance);
+        REQUIRE(current.HasValue());
+        CHECK(current.Value().SharesStateWith(edited));
+        CHECK(current.Value().Dirty());
+        return;
+    }
+
+    if (phase == "retry") {
+        const auto saved = open.Documents().Save(Request(edited), files);
+        REQUIRE(saved.HasValue());
+        CHECK(saved.Value().disposition == SourceSaveDisposition::Durable);
+        CHECK(saved.Value().snapshot.DiskBase() == editedBytes);
+        CHECK_FALSE(saved.Value().snapshot.Dirty());
+        return;
+    }
+
+    constexpr auto interrupt = [] {
+        std::_Exit(73);
+    };
+    if (phase == "before")
+        files.beforeReplace = interrupt;
+    else {
+        REQUIRE(phase == "after");
+        files.afterCommit = interrupt;
+    }
+    static_cast<void>(open.Documents().Save(Request(edited), files));
+    FAIL("The native save never reached the requested interruption point.");
+}
 
 TEST_CASE("Source save advances durable base while retained snapshots keep original bytes", "[source][save]") {
     Project project;
