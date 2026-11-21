@@ -218,6 +218,8 @@ namespace {
             "workspace.local_agent.patch_file_disk_changed",
             "workspace.local_agent.patch_file_destination_occupied",
             "workspace.local_agent.patch_file_overlap",
+            "workspace.local_agent.patch_file_rejected",
+            "workspace.local_agent.source_patch_reject",
         };
         RequireCatalogKeys(service, sourceEditingKeys);
         constexpr std::array documentKeys{"workspace.documents.close",         "workspace.documents.move_left",
@@ -939,6 +941,9 @@ TEST_CASE("Local model panel copy resolves in both shipped locales", "[unit][edi
                                "context_saved_file_unavailable",
                                "context_file_unavailable",
                                "context_file_select",
+                               "context_file_add",
+                               "context_file_remove",
+                               "context_files_preview",
                                "context_file_previous",
                                "context_file_next",
                                "context_range_offer",

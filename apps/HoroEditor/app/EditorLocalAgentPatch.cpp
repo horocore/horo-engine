@@ -1,6 +1,5 @@
 #include "EditorLocalAgentPatch.h"
 
-#include <array>
 #include <format>
 
 namespace Horo::Editor {
@@ -86,30 +85,32 @@ namespace Horo::Editor {
                                                                       const EditorLocalAgentPatchSource &offered,
                                                                       const std::string_view project, const std::uint64_t generation) {
         using namespace Proposals;
-        if (!offered.source.IsCurrent())
+        if (offered.sources.empty())
             return ReviewResult::Failure(MakeError(Errors::StaleBase));
         const auto reply = Extract(answer);
         if (reply.body.empty())
             return ReviewResult::Failure(MakeError(Errors::Malformed));
-        const auto path = offered.source.Identity().key.source;
-        auto policy = ProjectPolicy::Capture(std::string{project}, generation, {{path, false}});
+        std::vector<PathRule> rules;
+        std::vector<SourcePathObservation> observations;
+        for (const auto &source : offered.sources) {
+            const auto path = source.Identity().key.source;
+            rules.push_back({path, false});
+            observations.push_back({path, source});
+        }
+        auto policy = ProjectPolicy::Capture(std::string{project}, generation, std::move(rules));
         if (policy.HasError())
             return ReviewResult::Failure(policy.ErrorValue());
         const auto model = FormatSha256(ComputeSha256(std::as_bytes(std::span{offered.model})));
         ProposalIdentity identity{std::format("local.{}.{}", generation, offered.turn), offered.turn, {"ollama", model, "source-review"}};
-        const auto sources = std::span{&offered.source, 1};
+        const auto sources = std::span{offered.sources};
         auto proposal = reply.unified ? DecodeUnifiedPatch(reply.body, policy.Value(), std::move(identity), sources)
                                       : DecodeStructuredPatch(reply.body, policy.Value(), std::move(identity), sources);
         if (proposal.HasError())
             return ReviewResult::Failure(proposal.ErrorValue());
-        const auto files = proposal.Value().Files();
-        if (files.size() != 1 || !std::holds_alternative<EditFile>(files.front()))
-            return ReviewResult::Failure(MakeError(Errors::PolicyDenied));
-        const std::array observations{SourcePathObservation{path, offered.source}};
         auto plan = PlanWorkspaceEdits(proposal.Value(), policy.Value(), observations);
         if (plan.HasError())
             return ReviewResult::Failure(plan.ErrorValue());
         auto cards = DescribeEditorPatchFiles(proposal.Value());
-        return ReviewResult::Success({std::move(proposal).Value(), std::move(plan).Value(), std::move(cards)});
+        return ReviewResult::Success({std::move(proposal).Value(), std::move(plan).Value(), std::move(cards), {}});
     }
 }  // namespace Horo::Editor

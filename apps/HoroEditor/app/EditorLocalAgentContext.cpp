@@ -82,6 +82,50 @@ namespace Horo::Editor {
                                                        std::move(readers.isCurrent), range, buildOperation, historyReference});
     }
 
+    /** @copydoc EditorLocalAgentContext::PrepareOpenFiles */
+    Result<EditorLocalAgentContext> EditorLocalAgentContext::PrepareOpenFiles(std::vector<SourceDocumentSnapshot> sources,
+                                                                              std::string projectIdentity,
+                                                                              const std::uint64_t workspaceGeneration,
+                                                                              CancellationToken lifetime, const std::uint64_t requestId) {
+        using Output = Result<EditorLocalAgentContext>;
+        using namespace Agent;
+        if (sources.empty() || sources.size() > Security::AgentPolicyLimits{}.maximumContextItems)
+            return Output::Failure(MakeError(Application::CodeQueryErrors::Capacity));
+        auto project = ProjectContext(std::move(projectIdentity), workspaceGeneration, std::move(lifetime));
+        std::vector<AgentContextSelection> selected;
+        std::vector<Platform::ProjectReadTextSnapshot> texts;
+        for (const auto &source : sources) {
+            if (!source.IsCurrent())
+                return Output::Failure(MakeError(Application::CodeQueryErrors::Stale));
+            const auto identity = source.Identity();
+            const auto &path = identity.key.source.Value();
+            if (std::ranges::any_of(texts, [&](const auto &text) {
+                return text.path == path;
+            }))
+                return Output::Failure(MakeError(Application::CodeQueryErrors::Invalid));
+            const auto revision = std::format("source:{}:{}", identity.instance.Value(), source.Revision());
+            texts.push_back({project.projectIdentity, project.projectGeneration, path, revision, source.TextLease()});
+            selected.emplace_back(AgentContextTextRequest{AgentContextKind::File, path, revision, 0, 0});
+        }
+        const auto current = [sources](const AgentContextProvenance &) {
+            return std::ranges::all_of(sources, &SourceDocumentSnapshot::IsCurrent);
+        };
+        const AgentContextReaders readers{.existingText = [&texts](const std::string_view path, const Platform::ProjectReadContext &) {
+            using Reading = Result<std::optional<Platform::ProjectReadTextSnapshot>>;
+            const auto found = std::ranges::find(texts, path, &Platform::ProjectReadTextSnapshot::path);
+            return found == texts.end() ? Reading::Success(std::nullopt) : Reading::Success(*found);
+        }, .redact = RedactEvidence, .isCurrent = current};
+        auto policy = std::make_unique<Security::AgentPolicy>();
+        if (!policy->SetProjectTrust(false, project.projectGeneration))
+            return Output::Failure(MakeError(Application::CodeQueryErrors::Invalid));
+        auto preview = AgentContextPreview::Capture(selected, readers, project, Residence, requestId, project.projectGeneration);
+        if (preview.HasError())
+            return Output::Failure(preview.ErrorValue());
+        EditorLocalAgentContext context{{}, std::move(project), std::move(policy), std::move(preview).Value(), current, {}, {}, {}};
+        context.openFiles_ = std::move(sources);
+        return Output::Success(std::move(context));
+    }
+
     /** @copydoc EditorLocalAgentContext::PrepareBuildDiagnostics */
     Result<EditorLocalAgentContext> EditorLocalAgentContext::PrepareBuildDiagnostics(BuildOutputOperationTail tail,
                                                                                      Platform::ProjectReadContext project,
@@ -301,16 +345,32 @@ namespace Horo::Editor {
                std::chrono::steady_clock::now() < project_.deadline;
     }
 
-    /** @copydoc EditorLocalAgentContext::PatchSource */
-    SourceDocumentSnapshot EditorLocalAgentContext::PatchSource() const noexcept {
+    /** @copydoc EditorLocalAgentContext::PatchSources */
+    std::vector<SourceDocumentSnapshot> EditorLocalAgentContext::PatchSources() const {
         const auto items = Items();
-        if (selection_ || !source_.IsCurrent() || items.size() != 1 || items.front().provenance.kind != Agent::AgentContextKind::File)
+        const auto sources = openFiles_.empty() ? std::span{&source_, 1} : std::span{openFiles_};
+        if (selection_ || items.size() != sources.size())
             return {};
-        return items.front().candidate.text.ends_with(source_.Text()) ? source_ : SourceDocumentSnapshot{};
+        std::vector<SourceDocumentSnapshot> admitted;
+        for (std::size_t index = 0; index < sources.size(); ++index) {
+            const auto &item = items[index];
+            const auto &source = sources[index];
+            if (source.IsCurrent() && item.provenance.kind == Agent::AgentContextKind::File && item.candidate.text.ends_with(source.Text()))
+                admitted.push_back(source);
+        }
+        return admitted;
     }
 
     /** @copydoc EditorLocalAgentContext::MatchesOpenSource */
     bool EditorLocalAgentContext::MatchesOpenSource(const std::span<const SourceDocumentSnapshot> open) const noexcept {
+        if (!openFiles_.empty()) {
+            return !project_.cancellation.IsCancellationRequested() && std::chrono::steady_clock::now() < project_.deadline &&
+                   std::ranges::all_of(openFiles_, [&](const SourceDocumentSnapshot &selected) {
+                return selected.IsCurrent() && std::ranges::any_of(open, [&](const auto &snapshot) {
+                    return snapshot.SharesStateWith(selected);
+                });
+            });
+        }
         return std::ranges::any_of(open, [this](const auto &snapshot) {
             return Matches(snapshot);
         });

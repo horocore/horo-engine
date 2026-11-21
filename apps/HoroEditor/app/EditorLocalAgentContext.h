@@ -34,6 +34,12 @@ namespace Horo::Editor {
                                                                      std::uint64_t requestId,
                                                                      std::optional<SourceContextRange> selection = {});
 
+        /** @brief Captures explicitly selected open files in selection order for a single consent review. */
+        [[nodiscard]] static Result<EditorLocalAgentContext> PrepareOpenFiles(std::vector<SourceDocumentSnapshot> sources,
+                                                                              std::string projectIdentity,
+                                                                              std::uint64_t workspaceGeneration, CancellationToken lifetime,
+                                                                              std::uint64_t requestId);
+
         /** @brief Captures explicitly selected saved project text on a worker without opening a Source tab.
          * @param files Retained read-only authority for the current workspace.
          * @param path Exact portable project-relative path supplied by the user.
@@ -115,11 +121,11 @@ namespace Horo::Editor {
 
         /** @brief Reports whether the preview requires an already-open Source tab to stay present. */
         [[nodiscard]] bool RequiresOpenSource() const noexcept {
-            return source_.Revision() != 0;
+            return source_.Revision() != 0 || !openFiles_.empty();
         }
 
-        /** @brief Returns the exact whole, unredacted file offered to the model, or an inert lease. */
-        [[nodiscard]] SourceDocumentSnapshot PatchSource() const noexcept;
+        /** @brief Returns exact whole, unredacted files offered to the model. */
+        [[nodiscard]] std::vector<SourceDocumentSnapshot> PatchSources() const;
 
         /** @brief Checks the captured authority without accessing any editor or output owner. */
         [[nodiscard]] bool IsCurrent() const;
@@ -175,6 +181,7 @@ namespace Horo::Editor {
                                                                      Agent::AgentHistoryReference historyReference);
 
         SourceDocumentSnapshot source_;
+        std::vector<SourceDocumentSnapshot> openFiles_;
         Platform::ProjectReadContext project_;
         std::unique_ptr<Security::AgentPolicy> policy_;
         Agent::AgentContextPreview preview_;

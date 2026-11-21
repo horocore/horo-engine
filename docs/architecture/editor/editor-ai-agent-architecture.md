@@ -759,11 +759,14 @@ existing gutter and text decorations. It maps original byte coordinates to
 display coordinates and retains the exact source publication. Navigation
 only moves the caret. A newer source publication or a tentative widget edit
 retires the markers and reports a conflict until a new plan is selected.
-The local model panel offers review for a complete JSON change or unified
-diff returned to a turn that explicitly included the exact whole source.
-The completed reply shows the admitted project-relative file path. An explicit
-click queues the selected existing source tab through the workspace command
-lane. Reviews remain scoped to each tab.
+The local model panel offers review for a complete JSON change or unified diff
+returned to a turn with explicitly selected whole source files. The open-tab
+picker retains the exact selected snapshots across pages. One consent action
+covers all displayed redacted context. Proposal admission is limited to the
+unredacted file snapshots sent in that turn. Each completed-reply card shows
+the admitted path and queues the corresponding existing source tab through
+the workspace command lane. Reviews remain scoped to each tab. Rejecting a
+proposal records the choice against its digest and disables its chat actions.
 
 ## Backend Providers
 

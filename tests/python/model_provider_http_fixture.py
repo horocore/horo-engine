@@ -66,6 +66,7 @@ class Handler(BaseHTTPRequestHandler):
             "editor-dock-lifecycle": self.send_dock_lifecycle,
             "editor-project-lifecycle": self.send_project_lifecycle,
             "editor-inline-patch": self.send_inline_patch,
+            "editor-multi-inline-patch": self.send_multi_inline_patch,
         }.get(payload["model"])
         if not cloud and editor_chat:
             editor_chat(payload)
@@ -109,6 +110,22 @@ class Handler(BaseHTTPRequestHandler):
             return
         patch = "```diff\n--- a/code.cpp\n+++ b/code.cpp\n@@ -1 +1 @@\n-int value = 1;\n+int value = 2;\n```"
         frames = [{"message": {"content": patch}}, {"done": True}]
+        self.send_records([json.dumps(frame) + "\n" for frame in frames])
+
+    def send_multi_inline_patch(self, payload):
+        messages = payload.get("messages", [])
+        if (len(messages) != 3 or payload.get("tools") or self.headers.get("Authorization") is not None
+                or messages[-1] != {"role": "user", "content": "Propose two source edits"}
+                or not messages[0].get("content", "").endswith("\n\ntwo\n")
+                or not messages[1].get("content", "").endswith("\n\none\n")):
+            self.send_records(["{}"], status=400)
+            return
+        patch = {"version": 1, "files": [
+            {"kind": "edit", "path": "two_very_long_source_name_for_a_narrow_review_card_in_the_local_agent_panel.cpp",
+             "hunks": [{"offset": 0, "before": "two", "after": "new two"}]},
+            {"kind": "edit", "path": "one.cpp", "hunks": [{"offset": 0, "before": "one", "after": "new one"}]},
+        ]}
+        frames = [{"message": {"content": json.dumps(patch)}}, {"done": True}]
         self.send_records([json.dumps(frame) + "\n" for frame in frames])
 
     def send_dock_lifecycle(self, payload):

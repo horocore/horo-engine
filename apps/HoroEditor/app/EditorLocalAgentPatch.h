@@ -6,7 +6,7 @@
 namespace Horo::Editor {
     /** @brief Immutable evidence retained from a full source attachment to a local turn. */
     struct EditorLocalAgentPatchSource final {
-        SourceDocumentSnapshot source;
+        std::vector<SourceDocumentSnapshot> sources;
         std::string model;
         std::uint64_t turn{};
     };
@@ -37,6 +37,7 @@ namespace Horo::Editor {
         Proposals::ChangeSet proposal;
         Proposals::WorkspaceEditPlan plan;
         std::vector<EditorPatchFileCard> files;
+        std::optional<Proposals::ReviewRecord> decision;
     };
 
     /** @brief Reports whether a complete reply begins with a supported patch format. */

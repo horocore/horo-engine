@@ -1,3 +1,4 @@
+#include "../../../apps/HoroEditor/app/EditorLocalAgentContext.h"
 #include "../../../apps/HoroEditor/app/EditorLocalAgentPanel.h"
 #include "../../../apps/HoroEditor/app/EditorLocalAgentPatch.h"
 #include "../../support/OwnedTestDirectory.h"
@@ -355,7 +356,7 @@ namespace {
         project.Put("one\n");
         SourceDocumentService owner{project.directory};
         const auto source = owner.Open(project.Identity(), project.directory / "code.cpp").Value();
-        const EditorLocalAgentPatchSource offered{source, "example/model:latest", 1};
+        const EditorLocalAgentPatchSource offered{{source}, "example/model:latest", 1};
         const auto patch =
             R"({"version":1,"files":[{"kind":"edit","path":"code.cpp","hunks":[{"offset":0,"before":"one","after":"two"}]}]})";
         REQUIRE(PrepareEditorLocalPatchReview(patch, offered, "workspace", 1).HasValue());
@@ -364,7 +365,10 @@ namespace {
             R"({"version":1,"files":[{"kind":"edit","path":"other.cpp","hunks":[{"offset":0,"before":"one","after":"two"}]}]})";
         CHECK(PrepareEditorLocalPatchReview(foreign, offered, "workspace", 1).HasError());
         const auto remove = R"({"version":1,"files":[{"kind":"delete","path":"code.cpp"}]})";
-        CHECK(PrepareEditorLocalPatchReview(remove, offered, "workspace", 1).HasError());
+        const auto removal = PrepareEditorLocalPatchReview(remove, offered, "workspace", 1);
+        REQUIRE(removal.HasValue());
+        CHECK(removal.Value().files.front().kind == EditorPatchFileKind::Delete);
+        CHECK(SourceReviewOverlay::Capture(removal.Value().proposal, removal.Value().plan, 0).HasValue());
         CHECK(owner.Snapshot(source.Identity().instance).Value().SharesStateWith(source));
     }
 
@@ -396,5 +400,101 @@ namespace {
         CHECK(cards[2].removedBytes == 3);
         CHECK(cards[3].kind == EditorPatchFileKind::Rename);
         CHECK(cards[3].destination == path("src/target.cpp"));
+    }
+
+    TEST_CASE("An explicit file selection can plan and route two independent source edits", "[editor][agent][source]") {
+        TestSupport::SourceProject project;
+        project.Put("one\n", "one.cpp");
+        project.Put("two\n", "two.cpp");
+        SourceDocumentService owner{project.directory};
+        const auto one = owner.Open(project.Identity("one.cpp", 1), project.directory / "one.cpp").Value();
+        const auto two = owner.Open(project.Identity("two.cpp", 2), project.directory / "two.cpp").Value();
+        CancellationSource lifetime;
+        auto prepared = EditorLocalAgentContext::PrepareOpenFiles({two, one}, "workspace", 1, lifetime.Token(), 1);
+        REQUIRE(prepared.HasValue());
+        auto context = std::move(prepared).Value();
+        CHECK(context.Items()[0].provenance.origin == "two.cpp");
+        const std::array both{one, two};
+        CHECK(context.MatchesOpenSource(both));
+        CHECK_FALSE(context.MatchesOpenSource(std::span{&one, 1}));
+        REQUIRE(context.Approve());
+        const EditorLocalAgentPatchSource offered{context.PatchSources(), "model", 1};
+        REQUIRE(offered.sources.size() == 2);
+        const auto patch = R"({"version":1,"files":[
+            {"kind":"edit","path":"two.cpp","hunks":[{"offset":0,"before":"two","after":"new"}]},
+            {"kind":"edit","path":"one.cpp","hunks":[{"offset":0,"before":"one","after":"first"}]}]})";
+        const auto review = PrepareEditorLocalPatchReview(patch, offered, "workspace", 1);
+        REQUIRE(review.HasValue());
+        REQUIRE(review.Value().files.size() == 2);
+        CHECK(review.Value().files[0].path == one.Identity().key.source);
+        CHECK(review.Value().files[1].path == two.Identity().key.source);
+        const auto selected = SourceReviewOverlay::Capture(review.Value().proposal, review.Value().plan, 1);
+        REQUIRE(selected.HasValue());
+        CHECK(selected.Value().Source().SharesStateWith(two));
+        REQUIRE(owner.Edit(two.Identity().instance, {two.Revision(), 0, 3, "new"}).HasValue());
+        CHECK_FALSE(context.IsCurrent());
+        CHECK_FALSE(context.MatchesOpenSource(both));
+        CHECK(SourceReviewOverlay::Capture(review.Value().proposal, review.Value().plan, 1).HasError());
+        CHECK(SourceReviewOverlay::Capture(review.Value().proposal, review.Value().plan, 0).HasValue());
+    }
+
+    TEST_CASE("The file picker sends the selected sources and routes each returned card", "[.][chat-http]") {
+        const auto *endpoint = std::getenv("HORO_MODEL_TEST_ENDPOINT");
+        REQUIRE(endpoint);
+        TestSupport::SourceProject project;
+        constexpr auto longPath = "two_very_long_source_name_for_a_narrow_review_card_in_the_local_agent_panel.cpp";
+        project.Put("one\n", "one.cpp");
+        project.Put("two\n", longPath);
+        SourceDocumentService owner{project.directory};
+        const auto one = owner.Open(project.Identity("one.cpp", 1), project.directory / "one.cpp").Value();
+        const auto two = owner.Open(project.Identity(longPath, 2), project.directory / longPath).Value();
+        const std::array open{one, two};
+        std::vector<DocumentInstanceId> selections;
+        LocalAgentFixture fixture{"en-US", [&](PanelContext &context) {
+            context.openSourceSnapshots = [&]() -> std::span<const SourceDocumentSnapshot> {
+                return open;
+            };
+            context.requestSourceReview = [&](const Proposals::ChangeSet &proposal, const Proposals::WorkspaceEditPlan &plan,
+                                              const std::size_t operation, EditorWorkspaceViewCommandData &) {
+                const auto overlay = SourceReviewOverlay::Capture(proposal, plan, operation);
+                REQUIRE(overlay.HasValue());
+                selections.push_back(overlay.Value().Source().Identity().instance);
+                return true;
+            };
+        }};
+        fixture.Draw(420);
+        fixture.Enter("##Endpoint", endpoint);
+        fixture.Enter("##Model", "editor-multi-inline-patch");
+        fixture.Enter("##Prompt", "Propose two source edits");
+        fixture.Activate("###context_file_offer");
+        const auto select = [&](const ImGuiID seed, const char *id) {
+            ImGui::FocusWindow(fixture.ChatWindow());
+            ImGui::ActivateItemByID(ImHashStr(id, 0, seed));
+            fixture.Draw(420);
+        };
+        select(fixture.ChatWindow()->GetID("2"), "###context_file_add");
+        select(fixture.ChatWindow()->GetID("1"), "###context_file_add");
+        fixture.Activate("###context_files_preview");
+        REQUIRE(fixture.DrawnText().find(longPath) != std::string::npos);
+        fixture.Activate("###context_approve");
+        REQUIRE(Await([&] {
+            const auto response = fixture.DrawnText();
+            const auto first = response.find("Awaiting review");
+            return first != std::string::npos && response.find("Awaiting review", first + 1) != std::string::npos;
+        }));
+        fixture.Draw(350);
+        const auto narrow = fixture.Draw(350, true, true);
+        REQUIRE(fixture.ChatWindow());
+        CHECK(fixture.ChatWindow()->ContentSizeIdeal.x <= fixture.ChatWindow()->InnerRect.GetWidth());
+        CHECK(narrow.find(longPath) != std::string::npos);
+        select(fixture.ChatWindow()->GetID(1), "###source_patch_review");
+        select(fixture.ChatWindow()->GetID(0), "###source_patch_review");
+        CHECK(selections == std::vector{two.Identity().instance, one.Identity().instance});
+        fixture.Activate("###source_patch_reject");
+        CHECK(fixture.DrawnText().find("Rejected") != std::string::npos);
+        select(fixture.ChatWindow()->GetID(0), "###source_patch_review");
+        CHECK(selections.size() == 2);
+        CHECK(one.IsCurrent());
+        CHECK(two.IsCurrent());
     }
 }  // namespace
