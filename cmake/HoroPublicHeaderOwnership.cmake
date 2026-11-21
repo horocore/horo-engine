@@ -1135,6 +1135,7 @@ horo_configure_target_header_boundary(HoroXRApi PUBLIC_HEADERS
     Horo/XR/XRInteraction.h
     Horo/XR/XRLightEstimate.h
     Horo/XR/XRLightProjection.h
+    Horo/XR/XRLocomotionComfort.h
     Horo/XR/XRPassthrough.h
     Horo/XR/XRPlaneTracking.h
     Horo/XR/XRSpatialHitTest.h

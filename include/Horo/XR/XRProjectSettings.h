@@ -8,6 +8,7 @@
 #include "Horo/Foundation/Configuration.h"
 #include "Horo/XR/XRFeatureNegotiation.h"
 #include "Horo/XR/XRLoaderPreflight.h"
+#include "Horo/XR/XRLocomotionComfort.h"
 
 namespace Horo::XR {
     /** @brief Portable XR project-settings schema version, independent of the native API version. */
@@ -46,12 +47,14 @@ namespace Horo::XR {
         [[nodiscard]] XRFeatureProfile Profile() const noexcept;
         /** @brief Returns requested finite capacities. @return Immutable validated budget. */
         [[nodiscard]] const XRSystemLimits &Limits() const noexcept;
+        /** @brief Returns the immutable preferences for the admitted locomotion owner's profile. */
+        [[nodiscard]] const XRLocomotionComfortSettings &LocomotionComfort() const noexcept;
+        /** @brief Returns the authored inward Stage warning margin in metres. */
+        [[nodiscard]] float StageBoundaryWarningMeters() const noexcept;
         /** @brief Returns the minimum projected world-canvas span required in each eye.
          * @return Positive pixel count captured at project reopen.
          */
         [[nodiscard]] std::uint32_t WorldCanvasMinimumSpanPixels() const noexcept;
-        /** @brief Returns the immutable inward margin for advisory Stage classification, in meters. */
-        [[nodiscard]] float StageBoundaryWarningMeters() const noexcept;
         /** @brief Reports optional policy for the independent eye-pointing preview.
          * @return True when product policy permits requesting consent; this is never a grant. */
         [[nodiscard]] bool AllowsEyeGazePreview() const noexcept;
@@ -74,6 +77,7 @@ namespace Horo::XR {
         XRSystemLimits limits_{};
         std::uint32_t worldCanvasMinimumSpanPixels_{};
         float stageBoundaryWarningMeters_{0.30F};
+        XRLocomotionComfortSettings locomotionComfort_;
         std::array<XRFeatureRequest, static_cast<std::size_t>(XRCapability::Count)> features_{};
         std::size_t featureCount_{};
         bool planeCapturePreview_{};

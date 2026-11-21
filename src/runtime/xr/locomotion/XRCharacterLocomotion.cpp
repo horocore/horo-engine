@@ -106,7 +106,7 @@ namespace Horo::XR {
         }
 
         /** @brief Submits velocity and heading to the sole Character queue after applying the host speed limit. */
-        Submission Queue(const XRLocomotionIntent &intent, const XRLocomotionMotion &motion) const {
+        Submission Queue(const XRLocomotionIntent &intent, const XRLocomotionMotion &motion, std::uint64_t characterTick) const {
             if (!motion.velocityMetersPerSecond && !motion.heading)
                 return Reject<XRLocomotionAdmission>(XRErrors::OperationInvalid);
             if (motion.heading && !UnitHeading(*motion.heading))
@@ -119,7 +119,7 @@ namespace Horo::XR {
                     return Reject<XRLocomotionAdmission>(XRErrors::CapacityExceeded);
             }
             const Character::CharacterMovementRequest request{.controller = binding.controller,
-                                                              .tick = intent.tick,
+                                                              .tick = characterTick,
                                                               .sequence = intent.sequence,
                                                               .desiredVelocityMetersPerSecond = motion.velocityMetersPerSecond,
                                                               .desiredHeading = motion.heading};
@@ -129,7 +129,7 @@ namespace Horo::XR {
         }
 
         /** @brief Forwards a scoped destination for Character clearance and placement at its own safe point. */
-        Submission Queue(const XRLocomotionIntent &intent, const XRLocomotionTeleport &teleport) const {
+        Submission Queue(const XRLocomotionIntent &intent, const XRLocomotionTeleport &teleport, std::uint64_t characterTick) const {
             if (teleport.space.kind != XRSpaceKind::World || !MatchesSpace(teleport.space, intent.scope.tracking))
                 return Reject<XRLocomotionAdmission>(XRErrors::CoordinateSpaceIncompatible);
             if (teleport.destinationRevision == 0 || !Finite(teleport.position) || !UnitHeading(teleport.heading))
@@ -137,12 +137,12 @@ namespace Horo::XR {
             const auto owner = binding.teleport.lock();
             if (!owner)
                 return Reject<XRLocomotionAdmission>(XRErrors::OperationUnsupported);
-            const Character::CharacterTeleportRequest request{binding.controller, intent.tick, teleport.position, teleport.heading};
+            const Character::CharacterTeleportRequest request{binding.controller, characterTick, teleport.position, teleport.heading};
             return owner->QueueTeleport(intent, request, lifetime.Token());
         }
 
         /** @brief Forwards reference replacement only to the selected application calibration owner. */
-        Submission Queue(const XRLocomotionIntent &intent, const XRLocomotionRecenter &recenter) const {
+        Submission Queue(const XRLocomotionIntent &intent, const XRLocomotionRecenter &recenter, std::uint64_t) const {
             if (const auto kind = recenter.reference.kind;
                 (kind != XRSpaceKind::Local && kind != XRSpaceKind::Stage) || !MatchesSpace(recenter.reference, intent.scope.tracking))
                 return Reject<XRLocomotionAdmission>(XRErrors::CoordinateSpaceIncompatible);
@@ -151,11 +151,11 @@ namespace Horo::XR {
         }
 
         /** @brief Contains foreign owners and advances watermarks only after a command was copied. */
-        Submission Dispatch(const XRLocomotionIntent &intent) {
+        Submission Dispatch(const XRLocomotionIntent &intent, std::uint64_t characterTick) {
             const SubmissionScope scope{busy};
             try {
-                auto submitted = std::visit([this, &intent](const auto &operation) {
-                    return Queue(intent, operation);
+                auto submitted = std::visit([this, &intent, characterTick](const auto &operation) {
+                    return Queue(intent, operation, characterTick);
                 }, intent.operation);
                 if (submitted.HasValue() && submitted.Value() == XRLocomotionAdmission::Queued) {
                     lastTick = intent.tick;
@@ -195,12 +195,26 @@ namespace Horo::XR {
     /** @copydoc XRCharacterLocomotionAdapter::Create */
     Result<XRCharacterLocomotionAdapter> XRCharacterLocomotionAdapter::Create(XRCharacterLocomotionBinding binding,
                                                                               const Character::CharacterCapability &authority) {
+        if (binding.scheduler.BindingStatus() != Runtime::RuntimeDispatchStatus::Valid)
+            return Reject<XRCharacterLocomotionAdapter>(XRErrors::IdentityStale);
+        return CreateValidated(std::move(binding), authority);
+    }
+
+    /** @copydoc XRCharacterLocomotionAdapter::CreateForFixedStep */
+    Result<XRCharacterLocomotionAdapter> XRCharacterLocomotionAdapter::CreateForFixedStep(XRCharacterLocomotionBinding binding,
+                                                                                          const Character::CharacterCapability &authority,
+                                                                                          const Runtime::FixedStepContext &step) {
+        if (!MatchesDispatch(binding.scheduler, step, step.simulationTick) || step.cancellation.IsCancellationRequested())
+            return Reject<XRCharacterLocomotionAdapter>(XRErrors::IdentityStale);
+        return CreateValidated(std::move(binding), authority);
+    }
+
+    Result<XRCharacterLocomotionAdapter> XRCharacterLocomotionAdapter::CreateValidated(XRCharacterLocomotionBinding binding,
+                                                                                       const Character::CharacterCapability &authority) {
         using Outcome = Result<XRCharacterLocomotionAdapter>;
         if (!binding.session.IsValid() || binding.assignmentRevision == 0 || !std::isfinite(binding.maximumSpeedMetersPerSecond) ||
             binding.maximumSpeedMetersPerSecond < 0.0F)
             return Reject<XRCharacterLocomotionAdapter>(XRErrors::OperationInvalid);
-        if (binding.scheduler.BindingStatus() != Runtime::RuntimeDispatchStatus::Valid)
-            return Reject<XRCharacterLocomotionAdapter>(XRErrors::IdentityStale);
         if (auto controller = authority.ControllerDescriptor(binding.controller); controller.HasError())
             return Outcome::Failure(controller.ErrorValue());
         auto grant = authority.Derive();
@@ -216,7 +230,8 @@ namespace Horo::XR {
 
     /** @copydoc XRCharacterLocomotionAdapter::Submit */
     Submission XRCharacterLocomotionAdapter::Submit(const XRLocomotionIntent &intent, const XRTrackingSnapshot &tracking,
-                                                    std::uint64_t assignmentRevision, const Runtime::FixedStepContext &step) {
+                                                    std::uint64_t assignmentRevision, const Runtime::FixedStepContext &step,
+                                                    std::optional<std::uint64_t> characterTick) {
         const auto state = state_;
         if (!state || !MatchesDispatch(state->binding.scheduler, step, intent.tick))
             return Reject<XRLocomotionAdmission>(XRErrors::IdentityStale);
@@ -228,7 +243,59 @@ namespace Horo::XR {
             return Reject<XRLocomotionAdmission>(XRErrors::IdentityStale);
         if (auto live = state->ValidateScope(intent.scope, tracking, assignmentRevision); live.HasError())
             return Submission::Failure(live.ErrorValue());
-        return state->Dispatch(intent);
+        const auto target = characterTick.value_or(intent.tick);
+        if (target == 0)
+            return Reject<XRLocomotionAdmission>(XRErrors::OperationInvalid);
+        return state->Dispatch(intent, target);
+    }
+
+    XRLocomotionComfortHint::XRLocomotionComfortHint(XRLocomotionScope scope, Runtime::RuntimeDispatchSource scheduler,
+                                                     CancellationToken lifetime, const Runtime::FixedStepContext &step,
+                                                     float opacity) noexcept
+        : scope_(scope), scheduler_(std::move(scheduler)), lifetime_(std::move(lifetime)), tick_(step.simulationTick),
+          attempt_(step.attemptNumber), dispatchFrame_(step.frameNumber), duration_(step.fixedDelta), opacity_(opacity) {}
+
+    /** @copydoc XRLocomotionComfortHint::ReadForPresentation */
+    std::optional<float> XRLocomotionComfortHint::ReadForPresentation(const XRLocomotionScope &current,
+                                                                      const Runtime::FrameContext &frame) const noexcept {
+        if (scope_ != current || lifetime_.IsCancellationRequested() || frame.cancellation.IsCancellationRequested())
+            return std::nullopt;
+        Runtime::RuntimeDispatchFacts facts;
+        if (frame.dispatchEvidence.Read(scheduler_, Runtime::RuntimePhase::RenderExecution, facts) != Runtime::RuntimeDispatchStatus::Valid)
+            return std::nullopt;
+        if (facts.frame != frame.frameNumber || facts.committedTick != tick_ || facts.committedAttempt != attempt_ ||
+            facts.committedFrame != dispatchFrame_ || facts.committedDuration != duration_)
+            return std::nullopt;
+        return opacity_;
+    }
+
+    /** @copydoc XRCharacterLocomotionAdapter::SubmitFrame */
+    Result<XRLocomotionFrameAdmission> XRCharacterLocomotionAdapter::SubmitFrame(const XRLocomotionFrame &frame,
+                                                                                 const XRTrackingSnapshot &tracking,
+                                                                                 std::uint64_t assignmentRevision,
+                                                                                 const Runtime::FixedStepContext &step,
+                                                                                 std::optional<std::uint64_t> characterTick) {
+        using Outcome = Result<XRLocomotionFrameAdmission>;
+        const auto opacity = frame.vignetteOpacity;
+        if (!std::isfinite(opacity) || opacity < 0.0F || opacity > 1.0F)
+            return Reject<XRLocomotionFrameAdmission>(XRErrors::OperationInvalid);
+        if (!frame.intent)
+            return opacity == 0.0F ? Outcome::Success({}) : Reject<XRLocomotionFrameAdmission>(XRErrors::OperationInvalid);
+        if (opacity > 0.0F) {
+            const auto *motion = std::get_if<XRLocomotionMotion>(&frame.intent->operation);
+            if (!motion || !motion->velocityMetersPerSecond || *motion->velocityMetersPerSecond == Math::Vec3{})
+                return Reject<XRLocomotionFrameAdmission>(XRErrors::OperationInvalid);
+        }
+        const auto state = state_;
+        const auto admitted = Submit(*frame.intent, tracking, assignmentRevision, step, characterTick);
+        if (admitted.HasError())
+            return Outcome::Failure(admitted.ErrorValue());
+        XRLocomotionFrameAdmission admission{.command = admitted.Value()};
+        if (opacity > 0.0F && admitted.Value() == XRLocomotionAdmission::Queued) {
+            admission.comfort =
+                XRLocomotionComfortHint{frame.intent->scope, state->binding.scheduler, state->lifetime.Token(), step, opacity};
+        }
+        return Outcome::Success(std::move(admission));
     }
 
     /** @copydoc XRCharacterLocomotionAdapter::Shutdown */

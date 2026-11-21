@@ -2,6 +2,7 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <limits>
+#include <numbers>
 
 namespace Horo::XR {
     namespace {
@@ -83,7 +84,7 @@ namespace Horo::XR {
 
         TEST_CASE("XR settings defaults are inert and disabled", "[unit][xr][settings]") {
             const auto descriptors = XRProjectSettingDescriptors();
-            REQUIRE(descriptors.size() == 21);
+            REQUIRE(descriptors.size() == 26);
             for (const auto &descriptor : descriptors)
                 REQUIRE(descriptor.reloadPolicy == ReloadPolicy::ProjectReopen);
             const auto resolved = ResolveXRProjectSettings(Configuration());
@@ -94,6 +95,7 @@ namespace Horo::XR {
             CHECK_FALSE(resolved.Value().AllowsEyeGazePreview());
             CHECK_FALSE(resolved.Value().AllowsPlaneCapturePreview());
             CHECK(resolved.Value().WorldCanvasMinimumSpanPixels() == 1);
+            CHECK(resolved.Value().StageBoundaryWarningMeters() == 0.30F);
             const Evidence evidence;
             REQUIRE(AdmitXRProjectSettings(resolved.Value(), evidence.Admission()).ErrorValue().code.Value() ==
                     XRErrors::OperationUnavailable.code.Value());
@@ -112,6 +114,41 @@ namespace Horo::XR {
             const Evidence evidence;
             CHECK(AdmitXRProjectSettings(project, evidence.Admission(2)).HasError());
             CHECK(AdmitXRProjectSettings(overridden, evidence.Admission(2)).HasValue());
+        }
+
+        TEST_CASE("XR Stage warning margin is immutable and checked", "[unit][xr][settings][comfort]") {
+            ConfigurationResolutionRequest request;
+            Project(request, "xr.stage_boundary.warning_centimeters", std::int64_t{65});
+            const auto first = Enabled(request);
+            CHECK(first.StageBoundaryWarningMeters() == 0.65F);
+            request.invocation.try_emplace(SettingKey{"xr.stage_boundary.warning_centimeters"}, std::int64_t{-1},
+                                           SourceLocation{"cli", 1, 2});
+            CHECK(ResolveXRProjectSettings(Configuration(request)).HasError());
+            CHECK(first.StageBoundaryWarningMeters() == 0.65F);
+        }
+
+        TEST_CASE("XR locomotion comfort is copied from immutable project preference evidence", "[unit][xr][settings][comfort]") {
+            ConfigurationResolutionRequest request;
+            Project(request, "xr.locomotion.reduced_motion", true);
+            Project(request, "xr.locomotion.teleport_when_reduced", true);
+            Project(request, "xr.locomotion.maximum_vignette_percent", std::int64_t{40});
+            Project(request, "xr.locomotion.artificial_speed_cap_centimeters_per_second", std::int64_t{225});
+            Project(request, "xr.locomotion.snap_turn_degrees", std::int64_t{180});
+            const auto accepted = Enabled(request);
+            const auto &comfort = accepted.LocomotionComfort();
+            CHECK(comfort.reducedMotion);
+            CHECK(comfort.teleportWhenReduced);
+            CHECK(comfort.maximumVignetteOpacity == 0.4F);
+            CHECK(comfort.artificialSpeedCapMetersPerSecond == 2.25F);
+            CHECK(comfort.snapTurnAngleRadians == std::numbers::pi_v<float>);
+
+            request.invocation.try_emplace(SettingKey{"xr.locomotion.maximum_vignette_percent"}, std::int64_t{101},
+                                           SourceLocation{"cli", 7, 1});
+            const auto rejected = ResolveXRProjectSettings(Configuration(request));
+            REQUIRE(rejected.HasError());
+            REQUIRE_FALSE(rejected.ErrorValue().diagnostics.empty());
+            CHECK(rejected.ErrorValue().diagnostics.front().location.source == "cli");
+            CHECK(comfort.maximumVignetteOpacity == 0.4F);
         }
 
         TEST_CASE("XR settings capture a bounded advisory Stage warning margin", "[unit][xr][settings][comfort]") {

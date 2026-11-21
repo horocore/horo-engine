@@ -40,8 +40,31 @@ namespace Horo::XR {
             return Positive(speed) && Positive(shapeLimit) && trackingGap > 0;
         }
 
+        /** @brief Checks the complete immutable preference before it can change a live policy. */
+        bool ValidComfort(const XRLocomotionComfortSettings &comfort) noexcept {
+            return std::isfinite(comfort.maximumVignetteOpacity) && comfort.maximumVignetteOpacity >= 0.0F &&
+                   comfort.maximumVignetteOpacity <= 1.0F && std::isfinite(comfort.artificialSpeedCapMetersPerSecond) &&
+                   comfort.artificialSpeedCapMetersPerSecond >= 0.0F && std::isfinite(comfort.snapTurnAngleRadians) &&
+                   comfort.snapTurnAngleRadians >= 0.0F && comfort.snapTurnAngleRadians <= std::numbers::pi_v<float>;
+        }
+
+        /** @brief Applies finite overrides once to the validated profile copy. */
+        void ApplyComfortBounds(XRLocomotionProfile &profile) {
+            if (profile.turn && profile.comfort.snapTurnAngleRadians > 0.0F)
+                profile.turn->angleRadians = profile.comfort.snapTurnAngleRadians;
+            const auto cap = profile.comfort.artificialSpeedCapMetersPerSecond;
+            if (cap == 0.0F)
+                return;
+            if (auto *move = std::get_if<XRSmoothMove>(&profile.translation))
+                move->maximumSpeed = std::min(move->maximumSpeed, cap);
+            if (auto *move = std::get_if<XRArmSwingMove>(&profile.translation))
+                move->maximumSpeed = std::min(move->maximumSpeed, cap);
+        }
+
         /** @brief Admits profile settings before replacing previous valid state. */
         bool ValidProfile(const XRLocomotionProfile &profile) {
+            if (!ValidComfort(profile.comfort))
+                return false;
             if (profile.turn && !ValidTurn(*profile.turn))
                 return false;
             if (const auto *move = std::get_if<XRSmoothMove>(&profile.translation))
@@ -53,14 +76,30 @@ namespace Horo::XR {
             return !profile.translation.valueless_by_exception();
         }
 
+        /** @brief Fences optional pose source identities against the current tracking session. */
+        bool ValidPoseSources(const XRLocomotionSample &sample) noexcept {
+            const auto current = [&](const XRDeviceId &device) {
+                return device.IsValid() && device.session == sample.scope.tracking.session;
+            };
+            if (const auto &head = sample.headSource; head && (!sample.head || !current(*head)))
+                return false;
+            const auto &hands = sample.handSources;
+            return !hands ||
+                   (sample.leftHand && sample.rightHand && (*hands)[0] != (*hands)[1] && current((*hands)[0]) && current((*hands)[1]));
+        }
+
         /** @brief Checks committed action values and provided calibrated pose coordinates. */
         bool ValidSample(const XRLocomotionSample &sample) noexcept {
             const auto finite = [](const std::optional<Math::Vec3> &position) {
                 return !position || Math::IsFinite(*position);
             };
+            const auto validYaw = [](float yaw) {
+                return std::abs(yaw) <= std::numbers::pi_v<float>;
+            };
             return sample.fixedStepNanoseconds > 0 && UnitAxis(sample.move.x) && UnitAxis(sample.move.y) && UnitAxis(sample.turn) &&
-                   std::abs(sample.gameplayYawRadians) <= std::numbers::pi_v<float> && finite(sample.head) && finite(sample.leftHand) &&
-                   finite(sample.rightHand);
+                   validYaw(sample.gameplayYawRadians) && validYaw(sample.trackingYawRadians.value_or(0.0F)) &&
+                   validYaw(sample.trackingToGameplayYawRadians.value_or(0.0F)) && finite(sample.head) && finite(sample.leftHand) &&
+                   finite(sample.rightHand) && ValidPoseSources(sample);
         }
 
         /** @brief Turns off policy emission on focus, visibility or tracking loss. */
@@ -161,6 +200,7 @@ namespace Horo::XR {
                                                           std::weak_ptr<const IXRLocomotionDestinationOwner> destination) {
         if (!session.IsValid() || assignmentRevision == 0 || !ValidProfile(profile))
             return RejectPolicy<XRLocomotionPolicy>(XRErrors::OperationInvalid);
+        ApplyComfortBounds(profile);
         return Result<XRLocomotionPolicy>::Success({std::move(profile), session, player, assignmentRevision, std::move(destination)});
     }
 
@@ -170,6 +210,7 @@ namespace Horo::XR {
             return RejectPolicy<void>(XRErrors::OperationUnavailable);
         if (!ValidProfile(profile))
             return RejectPolicy<void>(XRErrors::OperationInvalid);
+        ApplyComfortBounds(profile);
         profile_ = std::move(profile);
         history_ = {};
         return Result<void>::Success();
@@ -178,7 +219,9 @@ namespace Horo::XR {
     /** @brief Resolves at most one teleport edge through the installed owner. */
     Result<std::optional<XRLocomotionTeleport>> XRLocomotionPolicy::SelectTeleport(const XRLocomotionSample &sample, History &next) const {
         using Destination = std::optional<XRLocomotionTeleport>;
-        if (!std::holds_alternative<XRTeleportMove>(profile_.translation))
+        const bool explicitTeleport = std::holds_alternative<XRTeleportMove>(profile_.translation);
+        const bool useTeleport = explicitTeleport || (profile_.comfort.reducedMotion && profile_.comfort.teleportWhenReduced);
+        if (!useTeleport)
             return Result<Destination>::Success({});
         if (!sample.teleportPressed) {
             next.teleportArmed = true;
@@ -188,7 +231,7 @@ namespace Horo::XR {
             return Result<Destination>::Success({});
         const auto owner = destination_.lock();
         if (!owner)
-            return RejectPolicy<Destination>(XRErrors::OperationUnsupported);
+            return explicitTeleport ? RejectPolicy<Destination>(XRErrors::OperationUnsupported) : Result<Destination>::Success({});
         auto result = owner->Resolve(sample);
         if (result.HasValue() && result.Value() && !ValidDestination(*result.Value(), sample.scope.tracking))
             return RejectPolicy<Destination>(XRErrors::CoordinateSpaceIncompatible);
@@ -219,15 +262,21 @@ namespace Horo::XR {
     std::optional<Math::Vec3> XRLocomotionPolicy::Velocity(const XRLocomotionSample &sample, const History &previous,
                                                            std::int64_t elapsed) const noexcept {
         if (const auto *policy = std::get_if<XRSmoothMove>(&profile_.translation)) {
+            if (profile_.comfort.reducedMotion)
+                return {};
             const auto heading = Math::Quaternion::FromAxisAngle(Up, sample.gameplayYawRadians);
             return SmoothVelocity(*policy, sample.move, heading);
         }
         const bool fresh = elapsed > 0 && elapsed <= profile_.maximumTrackingGapNanoseconds;
         if (const auto *policy = std::get_if<XRRoomScaleMove>(&profile_.translation)) {
-            return fresh && previous.head && sample.head ? RoomVelocity(*policy, *previous.head, *sample.head, sample.fixedStepNanoseconds)
-                                                         : Math::Vec3{};
+            if (!fresh || !previous.head || !sample.head || previous.headSource != sample.headSource)
+                return Math::Vec3{};
+            const auto physical = RoomVelocity(*policy, *previous.head, *sample.head, sample.fixedStepNanoseconds);
+            if (const auto yaw = sample.trackingToGameplayYawRadians)
+                return BoundVelocity(Math::Quaternion::FromAxisAngle(Up, *yaw).Rotate(physical), policy->maximumSpeed);
+            return physical;
         }
-        if (const auto *policy = std::get_if<XRArmSwingMove>(&profile_.translation))
+        if (const auto *policy = std::get_if<XRArmSwingMove>(&profile_.translation); policy && !profile_.comfort.reducedMotion)
             return fresh ? ArmVelocity(*policy, sample, previous, elapsed) : Math::Vec3{};
         return {};
     }
@@ -235,11 +284,15 @@ namespace Horo::XR {
     /** @brief Requires tracked positions from both hands before deriving paired movement. */
     Math::Vec3 XRLocomotionPolicy::ArmVelocity(const XRArmSwingMove &policy, const XRLocomotionSample &sample, const History &previous,
                                                std::int64_t elapsed) noexcept {
-        if (!previous.leftHand || !previous.rightHand || !sample.leftHand || !sample.rightHand)
+        if (!previous.leftHand || !previous.rightHand || !sample.leftHand || !sample.rightHand ||
+            previous.handSources != sample.handSources)
             return {};
-        const auto forward = Math::Quaternion::FromAxisAngle(Up, sample.gameplayYawRadians).Rotate({0.0F, 0.0F, -1.0F});
-        return SwingVelocity(policy, forward, ForeAft(*previous.leftHand, *sample.leftHand, forward),
-                             ForeAft(*previous.rightHand, *sample.rightHand, forward), elapsed);
+        constexpr Math::Vec3 forwardAxis{0.0F, 0.0F, -1.0F};
+        const auto forward = Math::Quaternion::FromAxisAngle(Up, sample.gameplayYawRadians).Rotate(forwardAxis);
+        const auto trackingForward =
+            Math::Quaternion::FromAxisAngle(Up, sample.trackingYawRadians.value_or(sample.gameplayYawRadians)).Rotate(forwardAxis);
+        return SwingVelocity(policy, forward, ForeAft(*previous.leftHand, *sample.leftHand, trackingForward),
+                             ForeAft(*previous.rightHand, *sample.rightHand, trackingForward), elapsed);
     }
 
     /** @brief Fences owner lifecycle, tick ordering, player assignment and the current publication. */
@@ -283,6 +336,8 @@ namespace Horo::XR {
             next.head = sample.head;
             next.leftHand = sample.leftHand;
             next.rightHand = sample.rightHand;
+            next.handSources = sample.handSources;
+            next.headSource = sample.headSource;
         }
         next.neutralRequired = false;
         history_ = std::move(next);
@@ -293,27 +348,55 @@ namespace Horo::XR {
     /** @copydoc XRLocomotionPolicy::Evaluate */
     Result<std::optional<XRLocomotionIntent>> XRLocomotionPolicy::Evaluate(const XRLocomotionSample &sample,
                                                                            const XRTrackingSnapshot &tracking) {
-        using Intent = std::optional<XRLocomotionIntent>;
+        using Intent = Result<std::optional<XRLocomotionIntent>>;
+        auto frame = EvaluateFrame(sample, tracking);
+        if (frame.HasError())
+            return Intent::Failure(frame.ErrorValue());
+        return Intent::Success(std::move(frame).Value().intent);
+    }
+
+    float XRLocomotionPolicy::VignetteOpacity(const XRLocomotionOperation &operation) const noexcept {
+        const auto &comfort = profile_.comfort;
+        const auto *motion = std::get_if<XRLocomotionMotion>(&operation);
+        if (comfort.reducedMotion || comfort.maximumVignetteOpacity == 0.0F || !motion || !motion->velocityMetersPerSecond)
+            return 0.0F;
+        float maximumSpeed{};
+        if (const auto *smooth = std::get_if<XRSmoothMove>(&profile_.translation))
+            maximumSpeed = smooth->maximumSpeed;
+        else if (const auto *swing = std::get_if<XRArmSwingMove>(&profile_.translation))
+            maximumSpeed = swing->maximumSpeed;
+        if (maximumSpeed == 0.0F)
+            return 0.0F;
+        const auto &velocity = *motion->velocityMetersPerSecond;
+        const double magnitude = std::hypot(static_cast<double>(velocity.x), static_cast<double>(velocity.z));
+        return comfort.maximumVignetteOpacity * static_cast<float>(std::min(magnitude / maximumSpeed, 1.0));
+    }
+
+    /** @copydoc XRLocomotionPolicy::EvaluateFrame */
+    Result<XRLocomotionFrame> XRLocomotionPolicy::EvaluateFrame(const XRLocomotionSample &sample, const XRTrackingSnapshot &tracking) {
+        using Frame = Result<XRLocomotionFrame>;
         if (auto valid = ValidateScope(sample, tracking); valid.HasError())
-            return Result<Intent>::Failure(valid.ErrorValue());
+            return Frame::Failure(valid.ErrorValue());
         if (!Available(tracking)) {
             history_ = {};
             tick_ = sample.tick;
             sequence_ = sample.sequence;
-            return Result<Intent>::Success({});
+            return Frame::Success({});
         }
         if (!ValidSample(sample))
-            return RejectPolicy<Intent>(XRErrors::OperationInvalid);
+            return RejectPolicy<XRLocomotionFrame>(XRErrors::OperationInvalid);
         auto next = SameReference(history_.cutoff, sample.scope.tracking) ? history_ : History{};
         auto operation = ResolveOperation(sample, next);
         if (stopped_)
-            return RejectPolicy<Intent>(XRErrors::OperationUnavailable);
+            return RejectPolicy<XRLocomotionFrame>(XRErrors::OperationUnavailable);
         if (operation.HasError())
-            return Result<Intent>::Failure(operation.ErrorValue());
+            return Frame::Failure(operation.ErrorValue());
         Commit(sample, next);
-        if (operation.Value())
-            return Result<Intent>::Success(XRLocomotionIntent{sample.scope, sample.tick, sample.sequence, *std::move(operation).Value()});
-        return Result<Intent>::Success({});
+        if (operation.Value()) {
+            const auto opacity = VignetteOpacity(*operation.Value());
+            return Frame::Success({XRLocomotionIntent{sample.scope, sample.tick, sample.sequence, *std::move(operation).Value()}, opacity});
+        }
+        return Frame::Success({});
     }
 
     /** @copydoc XRLocomotionPolicy::Shutdown */

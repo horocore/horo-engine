@@ -3,6 +3,9 @@
 /** @file XRLocomotionPolicy.h @brief Gameplay-owned XR locomotion policies over committed actions and calibrated tracking. */
 
 #include "Horo/XR/XRCharacterLocomotion.h"
+#include "Horo/XR/XRLocomotionComfort.h"
+
+#include <array>
 
 namespace Horo::XR {
     /** @brief Disables artificial translation independently of the turn policy. */
@@ -44,6 +47,7 @@ namespace Horo::XR {
         XRTranslationPolicy translation;
         std::optional<XRSnapTurn> turn;
         std::int64_t maximumTrackingGapNanoseconds{}; /**< Required when translation uses pose history. */
+        XRLocomotionComfortSettings comfort{};
     };
 
     /** @brief A committed host Input sample and tracking projections for the same cut. */
@@ -59,6 +63,10 @@ namespace Horo::XR {
         std::optional<Math::Vec3> head;      /**< Tracked head position before presentation-late sampling. */
         std::optional<Math::Vec3> leftHand;  /**< Tracked left hand position from the same cutoff. */
         std::optional<Math::Vec3> rightHand; /**< Tracked right hand position from the same cutoff. */
+        std::optional<float> trackingYawRadians;              /**< Physical analysis axis when gameplay has rotated the tracking rig. */
+        std::optional<std::array<XRDeviceId, 2>> handSources; /**< Exact left and right device generations when supplied. */
+        std::optional<XRDeviceId> headSource;                 /**< Generation of the independently sampled head. */
+        std::optional<float> trackingToGameplayYawRadians;    /**< Rotates physical room-scale deltas into gameplay World. */
     };
 
     /** @brief Gameplay navigation or physics owner that checks a teleport action against its live query cutoff. */
@@ -116,6 +124,13 @@ namespace Horo::XR {
         [[nodiscard]] Result<std::optional<XRLocomotionIntent>> Evaluate(const XRLocomotionSample &sample,
                                                                          const XRTrackingSnapshot &tracking);
 
+        /** @brief Evaluates the same owner tick, including the configured speed-scaled vignette.
+         * @param sample Exact committed input and tracking cutoff. @param tracking Live immutable tracking publication.
+         * @return Intent and presentation hint, or the same typed error as Evaluate.
+         * @details Neutral, inactive and reduced-motion frames produce zero opacity. Use one evaluation entry point per tick.
+         */
+        [[nodiscard]] Result<XRLocomotionFrame> EvaluateFrame(const XRLocomotionSample &sample, const XRTrackingSnapshot &tracking);
+
         /** @brief Clears history and permanently stops evaluating this binding. */
         void Shutdown() noexcept;
 
@@ -125,6 +140,8 @@ namespace Horo::XR {
             std::optional<Math::Vec3> head;
             std::optional<Math::Vec3> leftHand;
             std::optional<Math::Vec3> rightHand;
+            std::optional<std::array<XRDeviceId, 2>> handSources;
+            std::optional<XRDeviceId> headSource;
             bool snapArmed{};
             bool teleportArmed{};
             bool neutralRequired{true};
@@ -141,6 +158,7 @@ namespace Horo::XR {
         [[nodiscard]] Result<void> ValidateScope(const XRLocomotionSample &sample, const XRTrackingSnapshot &tracking) const;
         [[nodiscard]] Result<std::optional<XRLocomotionOperation>> ResolveOperation(const XRLocomotionSample &sample, History &next);
         void Commit(const XRLocomotionSample &sample, History &next);
+        [[nodiscard]] float VignetteOpacity(const XRLocomotionOperation &operation) const noexcept;
         XRLocomotionProfile profile_;
         XRSessionId session_;
         Input::PlayerId player_{};

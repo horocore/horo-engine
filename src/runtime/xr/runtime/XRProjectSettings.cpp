@@ -2,6 +2,7 @@
 
 #include <format>
 #include <limits>
+#include <numbers>
 #include <string_view>
 #include <utility>
 
@@ -11,6 +12,30 @@ namespace Horo::XR {
         constexpr std::int64_t DefaultWorldCanvasSpan = 1;
         constexpr std::string_view StageWarningKey = "xr.stage_boundary.warning_centimeters";
         constexpr std::int64_t DefaultStageWarningCentimeters = 30;
+
+        struct ComfortFlag final {
+            std::string_view key;
+            bool XRLocomotionComfortSettings::*output;
+        };
+
+        struct ComfortNumber final {
+            std::string_view key;
+            std::int64_t maximum;
+            double scale;
+            float XRLocomotionComfortSettings::*output;
+        };
+
+        constexpr std::array ComfortFlags{
+            ComfortFlag{"xr.locomotion.reduced_motion", &XRLocomotionComfortSettings::reducedMotion},
+            ComfortFlag{"xr.locomotion.teleport_when_reduced", &XRLocomotionComfortSettings::teleportWhenReduced},
+        };
+        constexpr std::array ComfortNumbers{
+            ComfortNumber{"xr.locomotion.maximum_vignette_percent", 100, 0.01, &XRLocomotionComfortSettings::maximumVignetteOpacity},
+            ComfortNumber{"xr.locomotion.artificial_speed_cap_centimeters_per_second", std::numeric_limits<std::uint16_t>::max(), 0.01,
+                          &XRLocomotionComfortSettings::artificialSpeedCapMetersPerSecond},
+            ComfortNumber{"xr.locomotion.snap_turn_degrees", 180, std::numbers::pi / 180.0,
+                          &XRLocomotionComfortSettings::snapTurnAngleRadians},
+        };
 
         struct FeatureSetting final {
             std::string_view key;
@@ -56,6 +81,30 @@ namespace Horo::XR {
                 return Result<std::int64_t>::Failure(Failure(source, key, XRErrors::OperationInvalid,
                                                              "Register the XR schema and supply an integer within the declared range."));
             return Result<std::int64_t>::Success(*value);
+        }
+
+        Result<XRLocomotionComfortSettings> ResolveLocomotionComfort(const ConfigurationSnapshot &source) {
+            using Resolved = Result<XRLocomotionComfortSettings>;
+            XRLocomotionComfortSettings comfort;
+            for (const auto &setting : ComfortFlags) {
+                const auto *entry = source.FindResolved(SettingKey{std::string(setting.key)});
+                if (!entry)
+                    continue;
+                const auto *flag = std::get_if<bool>(&entry->value);
+                if (!flag)
+                    return Resolved::Failure(
+                        Failure(source, setting.key, XRErrors::OperationInvalid, "Supply the locomotion preference as a boolean."));
+                comfort.*setting.output = *flag;
+            }
+            for (const auto &setting : ComfortNumbers) {
+                if (!source.FindResolved(SettingKey{std::string(setting.key)}))
+                    continue;
+                const auto value = Integer(source, setting.key, 0, setting.maximum);
+                if (value.HasError())
+                    return Resolved::Failure(value.ErrorValue());
+                comfort.*setting.output = static_cast<float>(static_cast<double>(value.Value()) * setting.scale);
+            }
+            return Resolved::Success(comfort);
         }
 
         /** @brief Validates one explicit extra-feature policy without publishing a partial settings object. */
@@ -165,6 +214,10 @@ namespace Horo::XR {
         add("xr.limits.devices", SettingValueType::Integer, std::int64_t{2});
         add(std::string(WorldCanvasSpanKey), SettingValueType::Integer, DefaultWorldCanvasSpan);
         add(std::string(StageWarningKey), SettingValueType::Integer, DefaultStageWarningCentimeters);
+        for (const auto &setting : ComfortFlags)
+            add(std::string(setting.key), SettingValueType::Boolean, false);
+        for (const auto &setting : ComfortNumbers)
+            add(std::string(setting.key), SettingValueType::Integer, std::int64_t{0});
         for (const auto &feature : FeatureSettings)
             add(std::string(feature.key), SettingValueType::Integer, std::int64_t{0});
         return descriptors;
@@ -198,14 +251,19 @@ namespace Horo::XR {
         return limits_;
     }
 
-    /** @copydoc XRProjectSettings::WorldCanvasMinimumSpanPixels */
-    std::uint32_t XRProjectSettings::WorldCanvasMinimumSpanPixels() const noexcept {
-        return worldCanvasMinimumSpanPixels_;
+    /** @copydoc XRProjectSettings::LocomotionComfort */
+    const XRLocomotionComfortSettings &XRProjectSettings::LocomotionComfort() const noexcept {
+        return locomotionComfort_;
     }
 
     /** @copydoc XRProjectSettings::StageBoundaryWarningMeters */
     float XRProjectSettings::StageBoundaryWarningMeters() const noexcept {
         return stageBoundaryWarningMeters_;
+    }
+
+    /** @copydoc XRProjectSettings::WorldCanvasMinimumSpanPixels */
+    std::uint32_t XRProjectSettings::WorldCanvasMinimumSpanPixels() const noexcept {
+        return worldCanvasMinimumSpanPixels_;
     }
 
     /** @copydoc XRProjectSettings::AllowsEyeGazePreview */
@@ -241,6 +299,16 @@ namespace Horo::XR {
             return Result<XRProjectSettings>::Failure(Failure(source, "xr.enabled", XRErrors::OperationInvalid,
                                                               "Register xr.enabled as a boolean before resolving project policy."));
         settings.enabled_ = *flag;
+        const auto comfort = ResolveLocomotionComfort(source);
+        if (comfort.HasError())
+            return Result<XRProjectSettings>::Failure(comfort.ErrorValue());
+        settings.locomotionComfort_ = comfort.Value();
+        if (source.FindResolved(SettingKey{std::string(StageWarningKey)})) {
+            const auto margin = Integer(source, StageWarningKey, 0, std::numeric_limits<std::uint16_t>::max());
+            if (margin.HasError())
+                return Result<XRProjectSettings>::Failure(margin.ErrorValue());
+            settings.stageBoundaryWarningMeters_ = static_cast<float>(margin.Value()) / 100.0F;
+        }
         const auto *planes = source.FindResolved(SettingKey{"xr.preview.spatial_planes"});
         if (planes) {
             const auto *allowCapture = std::get_if<bool>(&planes->value);
@@ -248,12 +316,6 @@ namespace Horo::XR {
                 return Result<XRProjectSettings>::Failure(Failure(source, "xr.preview.spatial_planes", XRErrors::OperationInvalid,
                                                                   "Register spatial preview policy as a boolean."));
             settings.planeCapturePreview_ = *allowCapture;
-        }
-        if (source.FindResolved(SettingKey{std::string(StageWarningKey)})) {
-            const auto margin = Integer(source, StageWarningKey, 0, std::numeric_limits<std::uint16_t>::max());
-            if (margin.HasError())
-                return Result<XRProjectSettings>::Failure(margin.ErrorValue());
-            settings.stageBoundaryWarningMeters_ = static_cast<float>(margin.Value()) / 100.0F;
         }
         const auto runtime = Integer(source, "xr.runtime_selection", 0, static_cast<std::int64_t>(XRRuntimeSelectionPolicy::Count) - 1);
         if (runtime.HasError())
