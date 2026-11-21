@@ -167,17 +167,28 @@ TEST_CASE("Local HTTP inference completes an approved editor MCP tool round with
 TEST_CASE("The editor local scene turn probes model tools and returns only the approved count", "[agent][model][http]") {
     const ModelProviderConfig config{.endpoint = Endpoint(), .timeout = std::chrono::seconds{2}};
     auto entropy = std::make_shared<Horo::Mcp::Test::Entropy>();
-    const auto result = RunApprovedLocalSceneTurn(config, Request("editor-approved-tool"), 7, 3, entropy, {});
+    std::vector<AgentToolActivity> activity;
+    const auto observe = [&](const AgentToolActivity event) {
+        activity.push_back(event);
+    };
+    const auto result = RunApprovedLocalSceneTurn(config, Request("editor-approved-tool"), 7, 3, entropy, {}, observe);
     REQUIRE(result.status == AgentTurnStatus::Completed);
     REQUIRE(result.messages.size() == 4);
     CHECK(result.messages[2].role == ModelRole::Tool);
     CHECK(result.messages[2].text == R"({"count":3})");
     CHECK(result.messages.back().text == "Three objects");
+    REQUIRE(activity.size() == 2);
+    CHECK(activity.front().ordinal == 1);
+    CHECK_FALSE(activity.front().outcome);
+    CHECK(activity.back().ordinal == 1);
+    CHECK(activity.back().outcome == AgentTurnStatus::Completed);
 
-    const auto unsupported = RunApprovedLocalSceneTurn(config, Request("normal"), 8, 4, entropy, {});
+    activity.clear();
+    const auto unsupported = RunApprovedLocalSceneTurn(config, Request("normal"), 8, 4, entropy, {}, observe);
     CHECK(unsupported.status == AgentTurnStatus::ProviderFailed);
     CHECK(unsupported.providerError == ModelErrorCode::UnsupportedCapability);
     CHECK(unsupported.messages.empty());
+    CHECK(activity.empty());
 }
 
 TEST_CASE("Local model discovery rejects malformed loopback authorities before transport", "[agent][model][http]") {

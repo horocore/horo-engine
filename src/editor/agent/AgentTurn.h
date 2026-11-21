@@ -75,6 +75,15 @@ namespace Horo::Agent {
     /** @brief Synchronous worker observer for accepted deltas from an inference with no tools. */
     using AgentTurnTextObserver = std::function<void(std::string_view)>;
 
+    /** @brief Lifecycle of an admitted tool dispatch, with no model name, arguments or result payload. */
+    struct AgentToolActivity final {
+        std::size_t ordinal{};
+        std::optional<AgentTurnStatus> outcome; /**< Empty immediately before dispatch, terminal when settled. */
+    };
+
+    /** @brief Synchronous worker observer for transient tool presentation. Exceptions are isolated from the turn. */
+    using AgentToolActivityObserver = std::function<void(AgentToolActivity)>;
+
     /** @brief Editor-owned admission for at most one active authoring turn.
      * @details The owner must outlive its worker. The atomic flag protects turn admission across host callers and
      * rejects reentrant entry without blocking the provider, tool adapters or editor thread.
@@ -90,11 +99,13 @@ namespace Horo::Agent {
          * @param cancellation Host-owned signal observed cooperatively by the provider and tools.
          * @param context Optional exact preview already confirmed by the user. Its policy must be owned by this calling lane.
          * @param observeText Optional ephemeral text observer. Requires a turn with no tool controller.
+         * @param observeTool Optional observer for the actual admitted tool dispatch and terminal outcome.
          * @return One terminal outcome. The tool controller retains authority to reject and cancel operations.
          */
         [[nodiscard]] AgentTurnResult Run(IModelProvider &provider, const IAgentTurnTools *tools, std::uint64_t turnId,
                                           ModelRequest request, const AgentTurnLimits &limits, std::stop_token cancellation = {},
-                                          const AgentTurnContext *context = nullptr, const AgentTurnTextObserver &observeText = {});
+                                          const AgentTurnContext *context = nullptr, const AgentTurnTextObserver &observeText = {},
+                                          const AgentToolActivityObserver &observeTool = {});
 
     private:
         std::atomic_flag active_{};

@@ -1002,6 +1002,9 @@ conversation storage or create a history checkpoint.
 Regenerate resubmits the last plain prompt to the same selected model and
 endpoint. The separate composer keeps its current draft. Context-bearing and
 tool turns require a new explicit selection and approval.
+The panel reports when the approved scene-count tool starts and how it settles.
+This transient status is emitted only for admitted dispatch and carries no tool
+arguments or result payload. The query can finish before the assistant response.
 
 ### Activity Bar Button
 

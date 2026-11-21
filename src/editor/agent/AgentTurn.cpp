@@ -146,8 +146,43 @@ namespace Horo::Agent {
             Detail::TurnStreamBudget remaining;
             const TurnStop &stop;
             std::uint64_t id;
+            const AgentToolActivityObserver &observeTool;
             std::size_t submitted{};
         };
+
+        /** @brief Delivers typed activity without allowing presentation failures to change the admission or operation. */
+        void ReportToolActivity(const AgentToolActivityObserver &observe, const AgentToolActivity activity) noexcept {
+            if (!observe)
+                return;
+            try {
+                observe(activity);
+            } catch (...) {
+                // Tool authority and completion are independent of presentation.
+            }
+        }
+
+        /** @brief Reports the exact already-admitted tool dispatch and one settled status. */
+        AgentTurnStatus DispatchTool(const IAgentTurnTools &tools, const ModelToolIntent &intent, TurnProgress &progress,
+                                     std::string &result) {
+            const auto ordinal = ++progress.submitted;
+            ReportToolActivity(progress.observeTool, {ordinal, {}});
+            if (const auto stopped = progress.stop.Status()) {
+                ReportToolActivity(progress.observeTool, {ordinal, *stopped});
+                return *stopped;
+            }
+            AgentTurnStatus state{ToolFailed};
+            try {
+                state = tools.Run(progress.id, ordinal, intent, progress.stop.Deadline(), progress.stop.Token(), result);
+            } catch (const std::bad_alloc &) {
+                ReportToolActivity(progress.observeTool, {ordinal, progress.stop.Status().value_or(ToolFailed)});
+                throw;
+            } catch (...) {
+                // Report the same terminal failure as ordinary tool settlement.
+            }
+            state = progress.stop.Status().value_or(state);
+            ReportToolActivity(progress.observeTool, {ordinal, state});
+            return state;
+        }
 
         /** @brief Appends the assistant intent round and related results only after successful dispatch. */
         AgentTurnStatus AppendToolRound(const IAgentTurnTools &tools, ModelRequest &request, ModelMessage message, TurnProgress &progress) {
@@ -163,8 +198,7 @@ namespace Horo::Agent {
                     if (const auto stopped = progress.stop.Status())
                         return *stopped;
                     std::string result;
-                    const auto state =
-                        tools.Run(progress.id, ++progress.submitted, intent, progress.stop.Deadline(), progress.stop.Token(), result);
+                    const auto state = DispatchTool(tools, intent, progress, result);
                     if (const auto stopped = progress.stop.Status())
                         return *stopped;
                     if (state != Completed)
@@ -189,7 +223,8 @@ namespace Horo::Agent {
     /** @copydoc AgentTurnRuntime::Run */
     AgentTurnResult AgentTurnRuntime::Run(IModelProvider &provider, const IAgentTurnTools *tools, const std::uint64_t turnId,
                                           ModelRequest request, const AgentTurnLimits &limits, const std::stop_token cancellation,
-                                          const AgentTurnContext *context, const AgentTurnTextObserver &observeText) {
+                                          const AgentTurnContext *context, const AgentTurnTextObserver &observeText,
+                                          const AgentToolActivityObserver &observeTool) {
         if (cancellation.stop_requested())
             return {Cancelled, {}};
         if (active_.test_and_set())
@@ -218,7 +253,7 @@ namespace Horo::Agent {
             TurnStop stop{limits.timeout, cancellation};
             std::uint32_t tokens = limits.maximumOutputTokens;
             const auto outputPerRound = request.maximumOutputTokens;
-            TurnProgress progress{remaining, stop, turnId};
+            TurnProgress progress{remaining, stop, turnId, observeTool};
             for (std::size_t round = 0; round < limits.maximumRounds && tokens > 0; ++round) {
                 if (const auto stopped = stop.Status())
                     return {*stopped, {}};

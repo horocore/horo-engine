@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <optional>
 #include <stop_token>
 #include <utility>
@@ -30,6 +31,57 @@ namespace Horo::Editor {
         using Reply = std::variant<ProviderDiscovery, AgentTurnResult, ContextReview>;
         using BackgroundTurn = AgentBackgroundTurn<Reply>;
 
+        enum class SceneQueryPhase {
+            Idle,
+            Running,
+            Succeeded,
+            Denied,
+            Cancelled,
+            TimedOut,
+            Failed
+        };
+        using SceneQueryProgress = std::atomic<SceneQueryPhase>;
+
+        /** @brief Projects only the settled tool status, with no provider content or MCP result bytes. */
+        SceneQueryPhase ScenePhase(const AgentToolActivity &activity) {
+            if (!activity.outcome)
+                return SceneQueryPhase::Running;
+            switch (*activity.outcome) {
+                case AgentTurnStatus::Completed:
+                    return SceneQueryPhase::Succeeded;
+                case AgentTurnStatus::ToolDenied:
+                    return SceneQueryPhase::Denied;
+                case AgentTurnStatus::Cancelled:
+                    return SceneQueryPhase::Cancelled;
+                case AgentTurnStatus::TimedOut:
+                    return SceneQueryPhase::TimedOut;
+                default:
+                    return SceneQueryPhase::Failed;
+            }
+        }
+
+        /** @brief Resolves host-authored tool copy for the latest observed phase. */
+        const char *ScenePhaseKey(const SceneQueryPhase phase) {
+            using enum SceneQueryPhase;
+            switch (phase) {
+                case Idle:
+                    return nullptr;
+                case Running:
+                    return "scene_query_running";
+                case Succeeded:
+                    return "scene_query_succeeded";
+                case Denied:
+                    return "scene_query_denied";
+                case Cancelled:
+                    return "scene_query_cancelled";
+                case TimedOut:
+                    return "scene_query_timeout";
+                case Failed:
+                    return "scene_query_failed";
+            }
+            return nullptr;
+        }
+
         /** @brief Admits a complete bounded clipboard string after an explicit user action. */
         std::string_view CaptureClipboardText() {
             const auto *clipboard = ImGui::GetClipboardText();
@@ -45,11 +97,15 @@ namespace Horo::Editor {
         /** @brief Runs one user-initiated discovery or inference on an isolated worker. */
         Reply RunLocalOperation(std::string endpoint, std::optional<ModelRequest> request, std::optional<std::size_t> sceneCount,
                                 std::optional<EditorLocalAgentContext> source, std::uint64_t turn,
-                                const std::shared_ptr<AgentHistoryLiveDraft> &draft, std::stop_token stop) {
+                                const std::shared_ptr<AgentHistoryLiveDraft> &draft, const std::shared_ptr<SceneQueryProgress> &sceneQuery,
+                                std::stop_token stop) {
             ModelProviderConfig config{.endpoint = std::move(endpoint)};
             if (request && sceneCount.has_value())
                 return RunApprovedLocalSceneTurn(std::move(config), std::move(*request), turn, *sceneCount,
-                                                 Platform::CreateNativeSecureRandomSource(), stop);
+                                                 Platform::CreateNativeSecureRandomSource(), stop,
+                                                 [&sceneQuery](const AgentToolActivity activity) {
+                    sceneQuery->store(ScenePhase(activity), std::memory_order_relaxed);
+                });
             auto provider = CreateOllamaModelProvider(std::move(config));
             if (!request)
                 return provider->Discover(stop);
@@ -178,6 +234,7 @@ namespace Horo::Editor {
                     background_->Cancel();
                 if (status_)
                     ImGui::TextWrapped("%s", LocalizedText(locale, status_).c_str());
+                DrawSceneQueryActivity(locale, fonts);
                 if (!response_.empty())
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, response_, Theme::Text(), fonts);
                 if (liveDraft_ && history_.HasRecovery() && background_->CanCancel() && Button(locale, "history_draft_offer", true))
@@ -226,6 +283,7 @@ namespace Horo::Editor {
                 contextLifetime_.reset();
                 contextPreview_.reset();
                 plainReplay_.reset();
+                sceneQuery_.reset();
                 activeSource_ = {};
                 activeSourceRange_ = {};
                 openSources_ = {};
@@ -244,6 +302,14 @@ namespace Horo::Editor {
             [[nodiscard]] bool Button(const ILocalizationService &locale, const char *key, bool enabled) const {
                 const auto label = LocalizedText(locale, key) + "##" + key;
                 return Ui::Button({.label = label.c_str(), .enabled = enabled});
+            }
+
+            /** @brief Presents the actual admitted scene query's phase in the current response. */
+            void DrawSceneQueryActivity(const ILocalizationService &locale, const Theme::Fonts &fonts) const {
+                if (!sceneQuery_)
+                    return;
+                if (const auto *key = ScenePhaseKey(sceneQuery_->load(std::memory_order_relaxed)))
+                    Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, key), Theme::Muted(), fonts);
             }
 
             void DrawProvider(const ILocalizationService &locale, const Theme::Fonts &fonts) {
@@ -687,12 +753,16 @@ namespace Horo::Editor {
                                      std::optional<EditorLocalAgentContext> source = {}) {
                 try {
                     auto draft = request && !sceneCount ? std::make_shared<AgentHistoryLiveDraft>() : nullptr;
+                    auto sceneQuery = sceneCount ? std::make_shared<SceneQueryProgress>(SceneQueryPhase::Idle) : nullptr;
                     BackgroundTurn::Operation task{[endpoint = endpoint_, request = std::move(request), sceneCount,
-                                                    source = std::move(source), turn = ++turn_, draft](std::stop_token stop) mutable {
-                        return RunLocalOperation(std::move(endpoint), std::move(request), sceneCount, std::move(source), turn, draft, stop);
+                                                    source = std::move(source), turn = ++turn_, draft,
+                                                    sceneQuery](std::stop_token stop) mutable {
+                        return RunLocalOperation(std::move(endpoint), std::move(request), sceneCount, std::move(source), turn, draft,
+                                                 sceneQuery, stop);
                     }};
                     if (background_->Start(std::move(task))) {
                         liveDraft_ = std::move(draft);
+                        sceneQuery_ = std::move(sceneQuery);
                         displayedDraftBytes_ = 0;
                         status_ = "working";
                         response_.clear();
@@ -839,6 +909,7 @@ namespace Horo::Editor {
             std::shared_ptr<BackgroundTurn> background_;
             EditorLocalAgentHistory history_;
             std::shared_ptr<AgentHistoryLiveDraft> liveDraft_;
+            std::shared_ptr<SceneQueryProgress> sceneQuery_;
             std::size_t displayedDraftBytes_{};
             std::optional<PlainReplay> plainReplay_;
             std::optional<std::string> submittedPrompt_;

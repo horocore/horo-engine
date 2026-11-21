@@ -199,11 +199,20 @@ namespace Horo::Agent {
         Bridge bridge{parent};
         auto expected = AgentTurnStatus::Cancelled;
         std::size_t expectedCalls = 1;
+        bool observerThrows{};
+        bool cancelAtStart{};
         SECTION("cancellation during admission stops before dispatch") {
             bridge.cancelDuringAdmission = true;
             expectedCalls = 0;
         }
         SECTION("cancellation during dispatch prevents further tools") {}
+        SECTION("presentation exceptions do not change tool settlement") {
+            observerThrows = true;
+        }
+        SECTION("cancellation after admission prevents bridge execution") {
+            cancelAtStart = true;
+            expectedCalls = 0;
+        }
         SECTION("a throwing bridge produces one tool failure") {
             bridge.failDuringDispatch = true;
             expected = AgentTurnStatus::ToolFailed;
@@ -214,11 +223,27 @@ namespace Horo::Agent {
             return Emit(sink, {Intent("first"), Intent("second"), {.kind = ModelEventKind::Completed}});
         };
         AgentTurnRuntime runtime;
-        const auto result = runtime.Run(model, &bridge, 51, Request(true), {}, parent.get_token());
+        std::vector<AgentToolActivity> activity;
+        const auto result =
+            runtime.Run(model, &bridge, 51, Request(true), {}, parent.get_token(), nullptr, {}, [&](const AgentToolActivity event) {
+            activity.push_back(event);
+            if (cancelAtStart && !event.outcome)
+                parent.request_stop();
+            if (observerThrows)
+                throw std::runtime_error("Presentation failed");
+        });
         CHECK(result.status == expected);
         CHECK(result.messages.empty());
         CHECK(bridge.calls == expectedCalls);
         CHECK(model.requests.size() == 1);
+        const bool observed = expectedCalls != 0 || cancelAtStart;
+        REQUIRE(activity.size() == (observed ? 2 : 0));
+        if (observed) {
+            CHECK(activity.front().ordinal == 1);
+            CHECK_FALSE(activity.front().outcome);
+            CHECK(activity.back().ordinal == 1);
+            CHECK(activity.back().outcome == expected);
+        }
     }
 
     TEST_CASE("Editor Agent deadline cancels the exact still queued authoring tool", "[agent][turn]") {
@@ -229,9 +254,16 @@ namespace Horo::Agent {
         };
         const AgentTurnMcp bridge{tools.adapter};
         AgentTurnRuntime runtime;
-        const auto result = runtime.Run(model, &bridge, 52, Request(true), AgentTurnLimits{.timeout = 30ms});
+        std::vector<AgentToolActivity> activity;
+        const auto result = runtime.Run(model, &bridge, 52, Request(true), AgentTurnLimits{.timeout = 30ms}, {}, nullptr, {},
+                                        [&](const AgentToolActivity event) {
+            activity.push_back(event);
+        });
         CHECK(result.status == AgentTurnStatus::TimedOut);
         CHECK(result.messages.empty());
+        REQUIRE(activity.size() == 2);
+        CHECK_FALSE(activity.front().outcome);
+        CHECK(activity.back().outcome == AgentTurnStatus::TimedOut);
         REQUIRE(tools.owner->Pump(Mcp::McpOwnerContext::Editor).HasValue());
         CHECK(tools.scene->calls == 0);
     }

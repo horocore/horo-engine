@@ -75,7 +75,7 @@ namespace Horo::Agent {
     /** @copydoc RunApprovedLocalSceneTurn */
     AgentTurnResult RunApprovedLocalSceneTurn(ModelProviderConfig config, ModelRequest request, std::uint64_t turnId,
                                               std::size_t objectCount, std::shared_ptr<Security::SecureRandomSource> entropy,
-                                              std::stop_token stop) {
+                                              std::stop_token stop, const AgentToolActivityObserver &observeTool) {
         if (!request.tools.empty() || turnId == 0)
             return {AgentTurnStatus::InvalidRequest};
         if (const auto supported = ConfirmOllamaModelTools(config, request.model, stop); !supported.Succeeded())
@@ -90,6 +90,6 @@ namespace Horo::Agent {
         request.tools.emplace_back(std::string{SceneToolName}, std::string{SceneToolDescription}, input.dump());
         auto provider = CreateOllamaModelProvider(std::move(config));
         AgentTurnRuntime runtime;
-        return runtime.Run(*provider, &bridge.Value(), turnId, std::move(request), {.maximumToolCalls = 1}, stop);
+        return runtime.Run(*provider, &bridge.Value(), turnId, std::move(request), {.maximumToolCalls = 1}, stop, nullptr, {}, observeTool);
     }
 }  // namespace Horo::Agent
