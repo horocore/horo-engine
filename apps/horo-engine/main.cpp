@@ -1,4 +1,5 @@
 #include "AnimationRuntimeIdentitySource.h"
+#include "HeadlessReplayArtifact.h"
 #include "NetworkProductLaunch.h"
 #include "OpenXRPackageProbe.h"
 #include "cli_host/CliHost.h"
@@ -22,6 +23,8 @@
 namespace {
     /** @brief Borrows invocation storage only for the synchronous CLI or existing network host call. */
     int RunProcess(const std::span<char *> argv, std::optional<Horo::Error> admissionFailure = {}) {
+        if (!admissionFailure && argv.size() >= 2 && std::string_view{argv[1]} == "--compare-ai-replay")
+            return Horo::Application::Internal::RunHeadlessReplayComparison(argv.subspan(2), std::cout, std::cerr);
         if (!admissionFailure && argv.size() >= 2 && std::string_view{argv[1]} == "--probe-xr-package")
             return Horo::Application::Internal::RunOpenXRPackageProbe(argv.subspan(2), std::cout, std::cerr);
         if (!admissionFailure && argv.size() >= 2 && std::string_view{argv[1]} == "--run-network-product") {

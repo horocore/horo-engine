@@ -16,7 +16,6 @@
 namespace Horo::Application::Internal {
     namespace {
         using Json = nlohmann::json;
-        constexpr std::size_t MaximumEvidenceBytes = 128U * 1024U;
         constexpr std::uint32_t SceneInputSchemaVersion = 1;
         constexpr std::uint32_t RigidBodyMotionSchemaVersion = 1;
         constexpr std::uint32_t CharacterMotionSchemaVersion = 1;
@@ -29,10 +28,7 @@ namespace Horo::Application::Internal {
 
         /** @brief Describes supported and omitted boundaries even when trace records were captured for diagnostics. */
         Json EncodeCoverage(const HeadlessDecisionReplayData &data, Json &recorded) {
-            constexpr auto names =
-                std::to_array<std::string_view>({"scene-input", "perception-input", "query-publication", "blackboard-sync", "decision",
-                                                 "navigation", "gameplay", "physics", "achieved-character-motion", "canonical-ai"});
-            static_assert(names.size() == AI::AiReplayBoundaryCount);
+            constexpr auto &names = HeadlessReplayBoundaryNames;
             const std::array
                 deterministic{true, false, false, false, true, false, false, data.physics.has_value(), data.characterMotion.has_value(),
                               true};
@@ -119,7 +115,7 @@ namespace Horo::Application::Internal {
             const auto &capture = data.evidence;
             if (!capture.trace || capture.trace->DroppedRecords() != 0 || !data.definition.IsValid() || !capture.subject.IsValid() ||
                 data.definitionRevision.value == 0 || data.sceneInput == Sha256Digest{} || data.canonicalRecord.empty() ||
-                data.canonicalRecord.size() > HeadlessDecisionReplay::CanonicalBudget)
+                data.canonicalRecord.size() > HeadlessDecisionReplay::CanonicalBudget || (data.characterMotion && !data.physics))
                 return Result<std::string>::Failure(MakeError(AI::AIErrors::CanonicalStateInvalid));
             const auto &header = capture.trace->Header();
             if (!header.MatchesObservation(header.planDigest, capture.tick, capture.blackboard, capture.blackboardRevision))
@@ -140,7 +136,9 @@ namespace Horo::Application::Internal {
                              {"sceneInput",
                               {{"revision", std::to_string(data.definitionRevision.value)}, {"digest", FormatSha256(data.sceneInput)}}},
                              {"canonicalAi",
-                              {{"recordVersion", AI::AiCanonicalReferenceRecordVersion}, {"digest", FormatSha256(canonicalDigest)}}},
+                              {{"recordVersion", AI::AiCanonicalReferenceRecordVersion},
+                               {"sceneStructureRevision", std::to_string(capture.sceneStructureRevision)},
+                               {"digest", FormatSha256(canonicalDigest)}}},
                              {"decision",
                               {{"traceVersion", header.version},
                                {"rootGraphId", std::to_string(header.root.Value())},
@@ -158,11 +156,12 @@ namespace Horo::Application::Internal {
                 if (data.characterMotion) {
                     auto motion = EncodeCharacterMotion(*data.characterMotion);
                     payload["characterMotion"] = {{"schemaVersion", CharacterMotionSchemaVersion},
+                                                  {"settingsDigest", FormatSha256(data.physics->characterSettings.digest)},
                                                   {"digest", FormatSha256(HashRecords(motion))},
                                                   {"records", std::move(motion)}};
                 }
                 auto text = payload.dump();
-                if (text.size() >= MaximumEvidenceBytes)
+                if (text.size() >= MaximumHeadlessReplayEvidenceBytes)
                     return Result<std::string>::Failure(MakeError(AI::AIErrors::DecisionAssetStorageUnavailable));
                 text.push_back('\n');
                 return Result<std::string>::Success(std::move(text));

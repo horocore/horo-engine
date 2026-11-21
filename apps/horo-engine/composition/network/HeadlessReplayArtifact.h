@@ -5,10 +5,17 @@
 #include "Horo/AI/AIReplayEvidence.h"
 
 #include <filesystem>
+#include <iosfwd>
 #include <string_view>
 
 namespace Horo::Application::Internal {
     struct HeadlessDecisionReplayData;
+
+    inline constexpr auto HeadlessReplayBoundaryNames =
+        std::to_array<std::string_view>({"scene-input", "perception-input", "query-publication", "blackboard-sync", "decision",
+                                         "navigation", "gameplay", "physics", "achieved-character-motion", "canonical-ai"});
+    static_assert(HeadlessReplayBoundaryNames.size() == AI::AiReplayBoundaryCount);
+    inline constexpr std::size_t MaximumHeadlessReplayEvidenceBytes = 128U * 1024U;
 
     /** @brief User-selected absolute directory name for one immutable evidence publication. */
     class HeadlessReplayOutput final {
@@ -43,4 +50,11 @@ namespace Horo::Application::Internal {
      */
     [[nodiscard]] Result<std::optional<AI::AiReplayDivergence>> CompareHeadlessReplayCaptures(const HeadlessDecisionReplayData &recorded,
                                                                                               const HeadlessDecisionReplayData &replayed);
+
+    /** @brief Compares two bounded portable evidence files without loading a project or running simulation. */
+    [[nodiscard]] Result<std::optional<AI::AiReplayDivergence>> CompareHeadlessReplayArtifacts(const std::filesystem::path &recorded,
+                                                                                               const std::filesystem::path &replayed);
+
+    /** @brief Terminal view of the first differing tick and boundary, or typed evidence failure. */
+    int RunHeadlessReplayComparison(std::span<char *> arguments, std::ostream &out, std::ostream &err);
 }  // namespace Horo::Application::Internal

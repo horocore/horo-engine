@@ -3376,9 +3376,18 @@ complete directory without replacing any existing entry. The version 1
 report carries the stable Scene and agent IDs, fixed tick, canonical AI
 digest and its record revision, and the semantic decision records from the
 original versioned trace. Stable 64-bit identifiers are decimal strings.
-Blackboard values and process-local handles stay out of the report. The
-report covers the decision and canonical AI boundaries. Input playback
-requires an additional input recording.
+Blackboard values and process-local handles stay out of the report. The report
+also records authored Scene input and the available native Physics and Character
+motion, with omitted boundaries listed in the manifest. Input playback requires
+an additional input recording.
+
+Use `horo-engine --compare-ai-replay <recorded evidence.json> <replayed evidence.json>`
+to compare two single-tick reports with matching coverage and content identities.
+The command reads bounded files without opening a project and prints the first
+differing boundary and its publication revisions. Exit code `0` indicates equality
+within the declared coverage, `1` indicates divergence, and `2` indicates invalid
+or incompatible evidence. Reports written before comparison metadata was added
+must be regenerated for this command.
 
 ### Scene decision scheduling tiers
 

@@ -13,6 +13,7 @@
 #include <fstream>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <sstream>
 #include <utility>
 
 namespace Horo::Application::PrefabAtomicTest {
@@ -52,6 +53,47 @@ namespace Horo::Application::PrefabAtomicTest {
         private:
             std::unique_ptr<Runtime::RuntimeLifecycleParticipant> next_;
         };
+
+        /** @brief Compares the producer's real artifact and verifies ordered divergence and corrupted evidence handling. */
+        void ExpectPortableComparison(const std::filesystem::path &file, nlohmann::json artifact) {
+            const auto same = Internal::CompareHeadlessReplayArtifacts(file, file);
+            INFO((same.HasError() ? same.ErrorValue().message : "evidence accepted"));
+            REQUIRE(same.HasValue());
+            CHECK_FALSE(same.Value());
+            if (!artifact.contains("characterMotion"))
+                return;
+
+            const auto candidate = file.parent_path() / "changed evidence.json";
+            const auto writeCandidate = [&] {
+                std::ofstream stream{candidate, std::ios::binary | std::ios::trunc};
+                REQUIRE(stream.is_open());
+                stream << artifact.dump();
+                stream.close();
+                REQUIRE(stream.good());
+            };
+            auto &physics = artifact.at("physics");
+            const auto baselineRevision = std::stoull(physics.at("publicationRevision").get<std::string>());
+            physics.at("publicationRevision") = std::to_string(baselineRevision + 1);
+            writeCandidate();
+            const auto different = Internal::CompareHeadlessReplayArtifacts(file, candidate);
+            REQUIRE(different.HasValue());
+            REQUIRE(different.Value());
+            CHECK(different.Value()->boundary == AI::AiReplayBoundary::Physics);
+            CHECK(different.Value()->tick == 1);
+            auto left = file.u8string();
+            auto right = candidate.u8string();
+            std::array<char *, 2> arguments{reinterpret_cast<char *>(left.data()), reinterpret_cast<char *>(right.data())};
+            std::ostringstream out, err;
+            CHECK(Internal::RunHeadlessReplayComparison(arguments, out, err) == 1);
+            CHECK(out.str().find("Divergence at tick 1 in physics") != std::string::npos);
+            CHECK(err.str().empty());
+
+            physics.at("bodies").at(0).at("activity") = 99;
+            writeCandidate();
+            const auto malformed = Internal::CompareHeadlessReplayArtifacts(file, candidate);
+            REQUIRE(malformed.HasError());
+            CHECK(malformed.ErrorValue().code.Value() == AI::AIErrors::CanonicalStateInvalid.code.Value());
+        }
 
         /** @brief Checks the actual detached report and protects the previously published bytes on a second invocation. */
         void ExpectReplayArtifact(const Internal::HeadlessReplayOutput &output, const Internal::HeadlessDecisionReplayData &data) {
@@ -118,6 +160,9 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(Internal::PublishHeadlessReplayArtifact(output, data, digest).HasError());
             std::ifstream retained{file, std::ios::binary};
             CHECK(nlohmann::json::parse(retained) == artifact);
+            stream.close();
+            retained.close();
+            ExpectPortableComparison(file, artifact);
         }
 
         /** @brief Verifies shared first-difference ordering using evidence from an actual committed fixed tick. */
