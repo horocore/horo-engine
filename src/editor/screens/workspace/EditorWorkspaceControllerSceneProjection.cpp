@@ -45,10 +45,41 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    /** @copydoc EditorWorkspaceController::CaptureAgentSceneSelection */
+    std::optional<AgentSceneSelectionSnapshot> EditorWorkspaceController::CaptureAgentSceneSelection() {
+        const auto &selection = m_selection.Current();
+        const auto documentRevision = m_document.Revision().value;
+        if (m_viewModel.projectRoot.empty() || m_viewModel.worldDocument || !m_document.State().IsValid() || !selection.revision.value ||
+            selection.objects.empty())
+            return std::nullopt;
+        if (!m_agentSceneSelectionLifetime)
+            m_agentSceneSelectionLifetime.emplace();
+        AgentSceneSelectionSnapshot snapshot{.documentEpoch = m_document.ReplacementEpoch(),
+                                             .documentRevision = documentRevision,
+                                             .selectionRevision = selection.revision.value,
+                                             .objectCount = std::min(selection.objects.size(), AgentSceneSelectionSnapshot::MaximumObjects),
+                                             .truncated = selection.objects.size() > AgentSceneSelectionSnapshot::MaximumObjects,
+                                             .lifetime = m_agentSceneSelectionLifetime->Token()};
+        for (std::size_t index = 0; index < snapshot.objectCount; ++index)
+            snapshot.objects[index] = selection.objects[index].value;
+        return snapshot;
+    }
+
+    /** @copydoc EditorWorkspaceController::InvalidateAgentSceneSelection */
+    void EditorWorkspaceController::InvalidateAgentSceneSelection() noexcept {
+        if (m_agentSceneSelectionLifetime) {
+            m_agentSceneSelectionLifetime->RequestCancellation();
+            m_agentSceneSelectionLifetime.reset();
+        }
+    }
+
     void EditorWorkspaceController::RefreshSceneProjections() {
         RefreshInspectorDocumentPort();
         ReconcileAudioPreview();
         const SceneDocumentSnapshot documentSnapshot = m_document.Snapshot();
+        if (m_viewModel.documentRevision != documentSnapshot.revision ||
+            m_viewModel.assetDropFence.replacementEpoch != m_document.ReplacementEpoch())
+            InvalidateAgentSceneSelection();
         m_viewModel.documentRevision = documentSnapshot.revision;
         m_viewModel.assetDropFence = {m_workspaceSession, documentSnapshot.revision, m_document.ReplacementEpoch()};
         m_viewModel.navigationScenePath =

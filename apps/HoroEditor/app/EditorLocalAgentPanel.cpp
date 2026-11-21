@@ -94,6 +94,7 @@ namespace Horo::Editor {
                 activeSource_ = context.activeSourceSnapshot;
                 activeSourceRange_ = context.activeSourceRange;
                 openSources_ = context.openSourceSnapshots;
+                captureSceneSelection_ = context.captureSceneSelection;
                 buildOutput_ = context.buildOutputQuery;
                 gameplayBuilds_ = context.gameplayBuilds;
                 if (context.projectFileRoot)
@@ -181,6 +182,7 @@ namespace Horo::Editor {
                 activeSource_ = {};
                 activeSourceRange_ = {};
                 openSources_ = {};
+                captureSceneSelection_ = {};
                 browsingSources_ = false;
                 buildOutput_ = nullptr;
                 gameplayBuilds_ = nullptr;
@@ -244,12 +246,34 @@ namespace Horo::Editor {
                 if (DrawSourceContextActions(locale, ready) || DrawBuildContextActions(locale, ready)) {
                     return;
                 }
+                const bool sceneAvailable = ready && captureSceneSelection_ && contextLifetime_ && !contextProject_.empty();
+                if (Button(locale, "context_scene_selection_offer", sceneAvailable)) {
+                    PrepareSceneSelectionReview();
+                    return;
+                }
                 const auto count = sceneCount_ ? sceneCount_() : std::nullopt;
                 if (count.has_value()) {
                     ImGui::Text("%s %zu", LocalizedText(locale, "scene_count").c_str(), *count);
                     if (Button(locale, "ask_with_scene_count", ready))
                         Send(count);
                 }
+            }
+
+            /** @brief Requests only the current bounded scene selection from the workspace owner. */
+            void PrepareSceneSelectionReview() {
+                const auto snapshot = captureSceneSelection_();
+                if (!snapshot) {
+                    status_ = "context_scene_selection_unavailable";
+                    return;
+                }
+                auto prepared = EditorLocalAgentContext::PrepareSceneSelection(*snapshot, contextProject_, contextGeneration_,
+                                                                               contextLifetime_->Token(), turn_ + 1);
+                if (prepared.HasError()) {
+                    status_ = "context_scene_selection_unavailable";
+                    return;
+                }
+                contextPreview_.emplace(std::move(prepared).Value());
+                status_ = nullptr;
             }
 
             /** @brief Offers the independent active-tab, active-range and open-file selections. */
@@ -403,7 +427,7 @@ namespace Horo::Editor {
 
             /** @brief Validates the active tab for source previews or the exact operation's witness for output. */
             bool ContextReviewCurrent() const {
-                if (contextPreview_->BuildOperation())
+                if (contextPreview_->BuildOperation() || contextPreview_->IsSceneSelection())
                     return contextPreview_->IsCurrent();
                 if (reviewingOpenSource_)
                     return contextPreview_->MatchesOpenSource(openSources_());
@@ -569,6 +593,7 @@ namespace Horo::Editor {
             std::string response_;
             std::vector<ModelDescriptor> models_;
             std::function<std::optional<std::size_t>()> sceneCount_;
+            std::function<std::optional<AgentSceneSelectionSnapshot>()> captureSceneSelection_;
             std::function<bool(SourceDocumentSnapshot &)> activeSource_;
             std::function<bool(SourceDocumentSnapshot &, SourceContextRange &)> activeSourceRange_;
             std::function<std::span<const SourceDocumentSnapshot>()> openSources_;

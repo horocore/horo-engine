@@ -151,6 +151,8 @@
     "workspace.local_agent.history_streaming": {"text": "Response pending"},
     "workspace.local_agent.context_offer": {"text": "Review active source"},
     "workspace.local_agent.context_file_offer": {"text": "Choose an open source file"},
+    "workspace.local_agent.context_scene_selection_offer": {"text": "Review selected scene objects"},
+    "workspace.local_agent.context_scene_selection_unavailable": {"text": "Select objects in the current scene to review their IDs."},
     "workspace.local_agent.context_file_empty": {"text": "Open a source file in the editor to review it here."},
     "workspace.local_agent.context_file_unavailable": {"text": "The selected source file could not be added to this request."},
     "workspace.local_agent.context_file_select": {"text": "Review this file"},

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Horo/Editor/AgentSceneSelectionSnapshot.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorSurfaceEventContext.h"
 #include "Horo/Editor/Localization/LocalizedGui.h"
@@ -93,6 +94,8 @@ namespace Horo::Editor {
          * @details Copy chosen snapshots before returning to the workspace. The borrow expires on the next model update.
          */
         std::function<std::span<const SourceDocumentSnapshot>()> openSourceSnapshots{};
+        /** @brief Captures bounded selected Scene object IDs on the workspace owner lane. */
+        std::function<std::optional<AgentSceneSelectionSnapshot>()> captureSceneSelection{};
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */

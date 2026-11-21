@@ -165,6 +165,10 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             .openSourceSnapshots = [this]() -> std::span<const SourceDocumentSnapshot> {
             return controller_->ViewModel().sourceDocuments;
         },
+            .captureSceneSelection =
+                [this] {
+            return controller_->CaptureAgentSceneSelection();
+        },
         };
         contributions_.panels.AttachAll(panelContext);
     }

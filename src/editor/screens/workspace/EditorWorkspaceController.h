@@ -8,6 +8,7 @@
 #include "Horo/Application/WorldBakeApplication.h"
 #include "Horo/Assets/AssetPreviewService.h"
 #include "Horo/Cinematic/CameraCutRuntime.h"
+#include "Horo/Editor/AgentSceneSelectionSnapshot.h"
 #include "Horo/Editor/AudioComponentPreview.h"
 #include "Horo/Editor/CollisionProjectSettingsSession.h"
 #include "Horo/Editor/EditorDataBus.h"
@@ -267,6 +268,9 @@ namespace Horo::Editor {
         [[nodiscard]] const EditorWorkspaceViewModel &ViewModel() const noexcept {
             return m_viewModel;
         }
+
+        /** @brief Captures the current ordinary Scene selection and its revocable revision on the owner lane. */
+        [[nodiscard]] std::optional<AgentSceneSelectionSnapshot> CaptureAgentSceneSelection();
 
         /** @brief Returns the captured native project root without reparsing presentation text.
          * @return Canonical/lexical root retained by this workspace owner. */
@@ -901,6 +905,7 @@ namespace Horo::Editor {
         std::optional<Error> m_initializationError;
         std::unique_ptr<SceneFileWatchService> m_sceneFileWatch;
         EditorWorkspaceViewModel m_viewModel;
+        std::optional<CancellationSource> m_agentSceneSelectionLifetime;
         EditorDataBus m_dataBus;
         NotificationService m_notifications{m_dataBus};
         std::unique_ptr<EditorEngineEventBridge> m_engineEventBridge;
@@ -1165,6 +1170,8 @@ namespace Horo::Editor {
                                     const std::vector<std::string> &displacedPanelIds);
         void MovePanelActivitySlot(const EditorWorkspaceViewCommandData &cmd);
         void RefreshSceneProjections();
+        /** @brief Revokes agent evidence before publishing a changed scene or selection projection. */
+        void InvalidateAgentSceneSelection() noexcept;
         /** @brief Rebinds the sole borrowed transaction port at canonical Scene projection refresh with a never-reused host epoch. */
         void RefreshInspectorDocumentPort();
         /** @brief Retires approvals before an actual project behavior catalog publication; epochs never wrap. */

@@ -4,6 +4,7 @@
 
 #include "AgentConversationStore.h"
 #include "AgentTurn.h"
+#include "Horo/Editor/AgentSceneSelectionSnapshot.h"
 #include "Horo/Editor/SourceDocumentService.h"
 #include "Horo/Foundation/BuildOutputStore.h"
 
@@ -35,6 +36,18 @@ namespace Horo::Editor {
         [[nodiscard]] static Result<EditorLocalAgentContext> PrepareBuildOutput(BuildOutputOperationTail tail, std::string projectIdentity,
                                                                                 std::uint64_t workspaceGeneration,
                                                                                 CancellationToken lifetime, std::uint64_t requestId);
+        /** @brief Prepares the selected Scene IDs and exact revision from the existing scene owner.
+         * @param selection Bounded snapshot and owner revocation witness.
+         * @param projectIdentity Exact committed project identity.
+         * @param workspaceGeneration Nonzero workspace attachment generation.
+         * @param lifetime Workspace revocation witness.
+         * @param requestId Exact next local turn.
+         * @return Owned review or typed rejection of stale/malformed input.
+         */
+        [[nodiscard]] static Result<EditorLocalAgentContext> PrepareSceneSelection(const AgentSceneSelectionSnapshot &selection,
+                                                                                   std::string projectIdentity,
+                                                                                   std::uint64_t workspaceGeneration,
+                                                                                   CancellationToken lifetime, std::uint64_t requestId);
 
         /** @brief Observe the exact bytes to present before asking for consent. */
         [[nodiscard]] std::span<const Agent::AgentContextPreviewItem> Items() const noexcept {
@@ -54,8 +67,13 @@ namespace Horo::Editor {
         }
 
         /** @brief Returns the numeric source occurrence for optional history review. */
-        [[nodiscard]] Agent::AgentHistoryReference HistoryReference() const noexcept {
-            return historyReference_;
+        [[nodiscard]] std::optional<Agent::AgentHistoryReference> HistoryReference() const noexcept {
+            return historyReference_.identity ? std::optional{historyReference_} : std::nullopt;
+        }
+
+        /** @brief Reports whether the review holds only ordinary Scene selection evidence. */
+        [[nodiscard]] bool IsSceneSelection() const noexcept {
+            return !Items().empty() && Items().front().provenance.kind == Agent::AgentContextKind::Selection;
         }
 
         /** @brief Reports the captured explicit selection, when reviewing a range. */

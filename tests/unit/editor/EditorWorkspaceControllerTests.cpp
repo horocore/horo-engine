@@ -208,6 +208,11 @@ namespace {
         REQUIRE((controller.ViewModel().primarySelection == object));
         REQUIRE((controller.ViewportScene().instances.front().presentation.tintStrength > 0.0F));
         REQUIRE((events.size() == 1 && events.back().kind == SelectionChangeKind::ObjectsChanged));
+        const auto evidence = controller.Controller().CaptureAgentSceneSelection();
+        REQUIRE(evidence);
+        REQUIRE(evidence->objectCount == 1);
+        CHECK(evidence->objects.front() == object.value);
+        CHECK_FALSE(evidence->lifetime.IsCancellationRequested());
 
         EditorWorkspaceViewCommandData remove;
         remove.command = EditorWorkspaceViewCommand::DeleteObject;
@@ -216,6 +221,8 @@ namespace {
         REQUIRE((controller.ViewModel().objects.empty()));
         REQUIRE((!controller.ViewModel().primarySelection.has_value()));
         REQUIRE((events.size() == 2 && events.back().kind == SelectionChangeKind::Cleared));
+        CHECK(evidence->lifetime.IsCancellationRequested());
+        CHECK_FALSE(controller.Controller().CaptureAgentSceneSelection());
 
         auto undo = SceneCommand(EditorWorkspaceViewCommand::UndoScene);
         controller.ProcessCommand(undo);

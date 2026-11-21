@@ -125,6 +125,35 @@ namespace Horo::Editor {
                        requestId, {}, {}, tail.operation, {AgentHistoryReferenceKind::BuildOutput, tail.operation, tail.lastSequence});
     }
 
+    /** @copydoc EditorLocalAgentContext::PrepareSceneSelection */
+    Result<EditorLocalAgentContext> EditorLocalAgentContext::PrepareSceneSelection(const AgentSceneSelectionSnapshot &selection,
+                                                                                   std::string projectIdentity,
+                                                                                   const std::uint64_t workspaceGeneration,
+                                                                                   CancellationToken lifetime,
+                                                                                   const std::uint64_t requestId) {
+        using Output = Result<EditorLocalAgentContext>;
+        using namespace Agent;
+        if (!selection.documentEpoch || !selection.selectionRevision || !selection.objectCount ||
+            selection.objectCount > selection.objects.size())
+            return Output::Failure(MakeError(Application::CodeQueryErrors::Invalid));
+        const auto objects = std::span{selection.objects}.first(selection.objectCount);
+        if (std::ranges::find(objects, 0) != objects.end())
+            return Output::Failure(MakeError(Application::CodeQueryErrors::Invalid));
+        const auto revision =
+            std::format("scene:{}:{}:{}", selection.documentEpoch, selection.documentRevision, selection.selectionRevision);
+        std::string text;
+        for (const auto id : objects)
+            text += std::format("Selected object ID {}\n", id);
+        const AgentContextSelection selected = AgentContextAttachment{AgentContextAttachmentKind::Selection, "scene selection", revision,
+                                                                      std::move(text), selection.truncated};
+        AgentContextReaders readers{.redact = RedactEvidence,
+                                    .isCurrent = [witness = selection.lifetime, revision](const AgentContextProvenance &item) {
+            return !witness.IsCancellationRequested() && item.kind == AgentContextKind::Selection && item.revision == revision;
+        }};
+        return Capture(selected, std::move(readers), ProjectContext(std::move(projectIdentity), workspaceGeneration, std::move(lifetime)),
+                       requestId, {}, {}, {}, {});
+    }
+
     /** @copydoc EditorLocalAgentContext::Matches */
     bool EditorLocalAgentContext::Matches(const SourceDocumentSnapshot &active) const noexcept {
         return source_.IsCurrent() && active.SharesStateWith(source_) && !project_.cancellation.IsCancellationRequested() &&

@@ -40,9 +40,11 @@ namespace Horo::Editor {
         auto prepared = EditorLocalAgentContext::Prepare(edited.Value(), "project", 2, lifetime.Token(), 77);
         REQUIRE(prepared.HasValue());
         auto context = std::move(prepared).Value();
-        CHECK(context.HistoryReference().kind == AgentHistoryReferenceKind::Document);
-        CHECK(context.HistoryReference().identity == identity.instance.Value());
-        CHECK(context.HistoryReference().revision == edited.Value().Revision());
+        const auto reference = context.HistoryReference();
+        REQUIRE(reference);
+        CHECK(reference->kind == AgentHistoryReferenceKind::Document);
+        CHECK(reference->identity == identity.instance.Value());
+        CHECK(reference->revision == edited.Value().Revision());
         REQUIRE(context.Items().size() == 1);
         const auto preview = context.Items().front().candidate.text;
         CHECK(preview.find("int visible;") != std::string::npos);
@@ -107,7 +109,8 @@ namespace Horo::Editor {
         const std::array tabs{first.Value(), chosen.Value()};
         REQUIRE(context.MatchesOpenSource(tabs));
         CHECK_FALSE(context.MatchesOpenSource(std::span{tabs}.first(1)));
-        CHECK(context.HistoryReference().identity == identity.instance.Value());
+        REQUIRE(context.HistoryReference());
+        CHECK(context.HistoryReference()->identity == identity.instance.Value());
         const auto &text = context.Items().front().candidate.text;
         CHECK(text.find("int requested;") != std::string::npos);
         CHECK(text.find("int foreground;") == std::string::npos);
@@ -121,6 +124,49 @@ namespace Horo::Editor {
         CHECK(runtime.Run(provider, nullptr, 7, request, {}, {}, &dispatch).status == AgentTurnStatus::ContextDenied);
         CHECK(provider.sent.empty());
         CHECK(owner.Snapshot(project.Identity().instance).Value().SharesStateWith(first.Value()));
+    }
+
+    TEST_CASE("An approved Scene selection sends only the bounded IDs while its owner remains current",
+              "[unit][agent][context][scene_selection]") {
+        using namespace Agent;
+        CancellationSource workspace;
+        CancellationSource scene;
+        const AgentSceneSelectionSnapshot selection{.documentEpoch = 2,
+                                                    .documentRevision = 0,
+                                                    .selectionRevision = 3,
+                                                    .objects = {42, 815},
+                                                    .objectCount = 2,
+                                                    .truncated = true,
+                                                    .lifetime = scene.Token()};
+        auto prepared = EditorLocalAgentContext::PrepareSceneSelection(selection, "project", 1, workspace.Token(), 9);
+        REQUIRE(prepared.HasValue());
+        auto context = std::move(prepared).Value();
+        CHECK(context.IsSceneSelection());
+        CHECK_FALSE(context.HistoryReference());
+        const auto &item = context.Items().front();
+        CHECK(item.provenance.truncated);
+        const auto approvedText = item.candidate.text;
+        CHECK(approvedText.find("Selected object ID 42\nSelected object ID 815") != std::string::npos);
+        REQUIRE(context.Approve());
+        bool revoked{};
+        SECTION("An exact lease supplies the approved bytes once") {}
+        SECTION("A changed scene or selection revokes the pending dispatch") {
+            scene.RequestCancellation();
+            revoked = true;
+        }
+        RecordingModel provider;
+        AgentTurnRuntime runtime;
+        const auto dispatch = context.Dispatch();
+        const ModelRequest request{.model = "local", .messages = {{.role = ModelRole::User, .text = "Review selected objects"}}};
+        const auto result = runtime.Run(provider, nullptr, 9, request, {}, {}, &dispatch);
+        if (revoked) {
+            CHECK(result.status == AgentTurnStatus::ContextDenied);
+            CHECK(provider.sent.empty());
+        } else {
+            REQUIRE(result.status == AgentTurnStatus::Completed);
+            REQUIRE(provider.sent.size() == 2);
+            CHECK(provider.sent.front().text == approvedText);
+        }
     }
 
     TEST_CASE("Local panel context refuses oversized and absent source snapshots", "[unit][agent][context][editor_source]") {
@@ -290,9 +336,11 @@ namespace Horo::Editor {
         REQUIRE(captured.HasValue());
         auto context = std::move(captured).Value();
         CHECK(context.BuildOperation() == selected);
-        CHECK(context.HistoryReference().kind == AgentHistoryReferenceKind::BuildOutput);
-        CHECK(context.HistoryReference().identity == selected);
-        CHECK(context.HistoryReference().revision == selectedRevision);
+        const auto reference = context.HistoryReference();
+        REQUIRE(reference);
+        CHECK(reference->kind == AgentHistoryReferenceKind::BuildOutput);
+        CHECK(reference->identity == selected);
+        CHECK(reference->revision == selectedRevision);
         REQUIRE(context.Items().size() == 1);
         const auto &item = context.Items().front();
         REQUIRE(item.provenance.kind == AgentContextKind::BuildOutput);

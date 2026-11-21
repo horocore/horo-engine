@@ -904,6 +904,8 @@ TEST_CASE("Local model panel copy resolves in both shipped locales", "[unit][edi
                                "history_streaming",
                                "context_offer",
                                "context_file_offer",
+                               "context_scene_selection_offer",
+                               "context_scene_selection_unavailable",
                                "context_file_empty",
                                "context_file_unavailable",
                                "context_file_select",

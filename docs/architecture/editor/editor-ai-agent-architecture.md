@@ -881,9 +881,13 @@ warnings and errors from that operation.
 Changes to the selected operation's output invalidate its approval. Other
 builds and process logs have no effect while the selected output is retained.
 
-Users can explicitly add context to a prompt:
+The workspace can also capture up to sixteen selected IDs from the current
+ordinary Scene for a separate local-model review. The capture identifies the
+scene and selection revisions. A scene edit, replacement, or selection change
+revokes its witness before the next dispatch. It stays out of conversation history.
 
-- **Selection**: "Use the selected object" — current selection is injected
+Other intended editor context surfaces include:
+
 - **Viewport**: "What's in front of the camera?" — viewport frustum snapshot
 - **Console**: "Check the last error" — recent console log entries
 - **File**: drag-and-drop a file reference into the chat input
