@@ -287,6 +287,13 @@ namespace Horo::XR::OpenXRInternal {
          */
         [[nodiscard]] Result<void> AdoptReprojection(const XRSessionId &session);
 
+        /** @brief Applies the runtime's fixed profile to an unissued stereo color allocation. */
+        [[nodiscard]] Result<bool> StageFixedProjection(const NativeSessionPreparation &session,
+                                                        const Render::RenderTextureDescriptor &texture, std::int64_t format,
+                                                        std::array<Render::FramebufferExtent, 2> eyes, PFN_xrGetInstanceProcAddr getProc);
+        /** @brief Imports the same staged allocation into the newly issued native session. */
+        [[nodiscard]] Result<void> AdoptFixedProjection(const XRSwapchainTargetId &target);
+
         /** @brief Acquires one runtime image; zero native work is allowed when an old acquisition remains open.
          * @return Success or typed failure; successful native acquisition always retains its release obligation. */
         [[nodiscard]] Result<void> Acquire();
@@ -413,6 +420,13 @@ namespace Horo::XR::OpenXRInternal {
         };
 
         std::optional<StagedReprojection> stagedReprojection_;
+
+        struct StagedFixedProjection final {
+            Render::RenderTextureDescriptor texture;
+            std::uint64_t incarnation{};
+        };
+
+        std::optional<StagedFixedProjection> stagedFixedProjection_;
         XRSwapchainTargetId lastTarget_{};
         XrSwapchain native_{XR_NULL_HANDLE};
         NativeSwapchainPhase phase_{NativeSwapchainPhase::Empty};

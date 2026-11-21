@@ -412,6 +412,32 @@ namespace Horo::Application::Internal {
         return Result<void>::Success();
     }
 
+    Result<void> OpenXRPlayHost::SceneState::StageFixedFoveation(OpenXRPlayHost &host, OpenXRProjectionDraft &draft) {
+        auto &state = draft.capabilities.states[static_cast<std::size_t>(XRCapability::FixedFoveation)];
+        if (state != XRCapabilityState::DependencyMissing)
+            return Result<void>::Success();
+        const auto graphics = host.composition_.session.BorrowPreparedGraphics();
+        if (graphics.HasError())
+            return Result<void>::Failure(graphics.ErrorValue());
+        const auto &prepared = graphics.Value();
+        const auto selected = PrepareSwapchainGraphics(host.composition_.viewport, prepared.binding);
+        if (selected.HasError())
+            return Result<void>::Failure(selected.ErrorValue());
+        const auto &[device, views] = selected.Value();
+        preparedColor = std::make_shared<ColorPair>(host, prepared.graphics, prepared.binding, device, views);
+        if (auto bound = preparedColor->images.Bind(preparedColor->owner); bound.HasError())
+            return bound;
+        const auto staged = preparedColor->owner.StageFixedProjection(prepared.session, draft.color, VK_FORMAT_R8G8B8A8_UNORM,
+                                                                      draft.recommended, host.getProc_);
+        if (staged.HasError())
+            return Result<void>::Failure(staged.ErrorValue());
+        if (staged.Value())
+            state = XRCapabilityState::Available;
+        else
+            preparedColor.reset();
+        return Result<void>::Success();
+    }
+
     /** @copydoc OpenXRPlayHost::PrepareFrameResources */
     Result<void> OpenXRPlayHost::PrepareFrameResources(const XRSessionId &candidate, const Render::RenderTextureDescriptor &color) {
         if (render_ || !candidate.IsValid() || frames_.Snapshot().phase != XRFramePhase::Idle)
@@ -426,12 +452,19 @@ namespace Horo::Application::Internal {
         if (selected.HasError())
             return Result<void>::Failure(selected.ErrorValue());
         const auto &[device, views] = selected.Value();
-        render_ = std::make_shared<FrameState>(*this, candidate, *graphics.Value(), *binding.Value(), device, views, color);
-        if (auto bound = render_->images.Bind(render_->color); bound.HasError())
-            return bound;
+        const bool stagedColor = static_cast<bool>(scene_->preparedColor);
+        auto storage =
+            stagedColor ? scene_->preparedColor : std::make_shared<ColorPair>(*this, *graphics.Value(), *binding.Value(), device, views);
+        if (!stagedColor)
+            if (auto bound = storage->images.Bind(storage->owner); bound.HasError())
+                return bound;
+        render_ = std::make_shared<FrameState>(*this, candidate, std::move(storage), color);
+        scene_->preparedColor.reset();
         // This is the single actual color allocation for this issued session. The session generation
         // fences its sole target slot; the swapchain owner independently issues every acquisition generation.
-        if (auto created = render_->color.Create({{candidate, {.index = 0, .generation = 1}}, color}, getProc_); created.HasError())
+        const XRSwapchainTargetId target{candidate, {.index = 0, .generation = 1}};
+        const auto created = stagedColor ? render_->color.AdoptFixedProjection(target) : render_->color.Create({target, color}, getProc_);
+        if (created.HasError())
             return created;
         if (scene_->projection->writer) {
             if (scene_->preparedWriter) {
@@ -746,8 +779,10 @@ namespace Horo::Application::Internal {
         if (revision.HasError())
             return Result<void>::Failure(revision.ErrorValue());
         const XRViewConfigurationId configuration{render_->session, {.index = 0, .generation = 1}};
-        const auto scale = render_->resolution.BeginFrame(frame.frame, !support.synthetic && !WantsMotionHistory(scene_->projection->plan),
-                                                          support.deviceIncarnation, support.capabilityRevision);
+        const auto fixed = scene_->projection->plan.Decision(XRCapability::FixedFoveation).state;
+        const bool adaptive = !support.synthetic && fixed != XRFeatureDecisionState::OptionalEnabled &&
+                              fixed != XRFeatureDecisionState::Required && !WantsMotionHistory(scene_->projection->plan);
+        const auto scale = render_->resolution.BeginFrame(frame.frame, adaptive, support.deviceIncarnation, support.capabilityRevision);
         auto plan = PlanStereoProjection(configuration, revision.Value(), frame.predictedDisplayTime, input_.origin, *render_->views,
                                          *scene_->projection, *render_->acquisition, render_->allocation, scale);
         if (plan.HasError())

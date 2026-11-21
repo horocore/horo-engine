@@ -456,6 +456,8 @@ namespace Horo::Application::Internal {
             return warmed;
         if (auto staged = StageWriter(host, draft); staged.HasError())
             return staged;
+        if (auto staged = StageFixedFoveation(host, draft); staged.HasError())
+            return staged;
         const auto *provider = preparedWriter && preparedWriter->preparedProvider ? &*preparedWriter->preparedProvider : nullptr;
         auto finalized = host.composition_.session.FinalizeProjection(std::move(draft), provider);
         if (finalized.HasError())
@@ -565,6 +567,11 @@ namespace Horo::Application::Internal {
                 if (const auto closed = writer->Close(host.composition_.frontend); closed.HasError() || !closed.Value())
                     return closed;
                 writer.reset();
+            }
+            if (auto &color = host.scene_->preparedColor) {
+                if (const auto closed = color->owner.Close(); closed.HasError() || !closed.Value())
+                    return closed;
+                color.reset();
             }
             const auto retained = host.composition_.session.RetainedSession();
             if (auto retired =

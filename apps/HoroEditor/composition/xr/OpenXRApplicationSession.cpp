@@ -88,6 +88,9 @@ namespace Horo::Application::Internal {
             constexpr std::array<std::string_view, 1> anchorDependencies{XR_MSFT_SPATIAL_ANCHOR_EXTENSION_NAME};
             const bool planePreview = settings.AllowsPlaneCapturePreview();
             const bool persistence = settings.AllowsSpatialAnchorPersistence();
+            const bool fixedFoveation = std::ranges::any_of(settings.Features(), [](const XRFeatureRequest &feature) {
+                return feature.capability == XRCapability::FixedFoveation && feature.kind == XRFeatureRequirementKind::Optional;
+            });
 
             struct Selection final {
                 NativeExtensionRequest request;
@@ -98,6 +101,7 @@ namespace Horo::Application::Internal {
                 Selection{{OpenXRPlatformTimeRoute().extension, true}, true},
                 Selection{{XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME}, true},
                 Selection{{XR_EXT_HAND_TRACKING_EXTENSION_NAME}, handsRequested},
+                Selection{{XR_HTC_FOVEATION_EXTENSION_NAME}, fixedFoveation},
                 Selection{{XR_ANDROID_LIGHT_ESTIMATION_EXTENSION_NAME}, lightEstimation},
                 Selection{{XR_MSFT_SPATIAL_ANCHOR_EXTENSION_NAME}, settings.AllowsSpatialAnchorPreview() || persistence},
                 Selection{{.name = XR_MSFT_SPATIAL_ANCHOR_PERSISTENCE_EXTENSION_NAME, .dependencies = anchorDependencies}, persistence},

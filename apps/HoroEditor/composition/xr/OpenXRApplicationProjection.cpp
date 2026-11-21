@@ -304,6 +304,11 @@ namespace Horo::Application::Internal {
                                      {},
                                      {},
                                      reprojection.Value().writer};
+        const auto foveation = native_->ReadExtensionAdmission(selection_.attempt, XR_HTC_FOVEATION_EXTENSION_NAME);
+        if (foveation.HasError())
+            return Outcome::Failure(foveation.ErrorValue());
+        if (targets.Value().stereo && targets.Value().exactImages && foveation.Value().state == NativeExtensionState::Enabled)
+            output.capabilities.states[static_cast<std::size_t>(XRCapability::FixedFoveation)] = XRCapabilityState::DependencyMissing;
         for (std::size_t eye = 0; eye < output.recommended.size(); ++eye) {
             output.recommended[eye] = {observed.primaryViews[eye].recommendedImageRectWidth,
                                        observed.primaryViews[eye].recommendedImageRectHeight};

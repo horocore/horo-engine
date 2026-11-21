@@ -321,6 +321,100 @@ namespace Horo::XR::OpenXRInternal {
         return Result<void>::Success();
     }
 
+    Result<bool> OpenXRSwapchain::StageFixedProjection(const NativeSessionPreparation &session,
+                                                       const Render::RenderTextureDescriptor &texture, const std::int64_t format,
+                                                       const std::array<Render::FramebufferExtent, 2> eyes,
+                                                       PFN_xrGetInstanceProcAddr getProc) {
+        using Staged = Result<bool>;
+        if (auto thread = CheckThread(); thread.HasError())
+            return Staged::Failure(thread.ErrorValue());
+        if (!getProc || native_ != XR_NULL_HANDLE || phase_ != NativeSwapchainPhase::Empty || !texture.IsValid() ||
+            texture.layerCount != eyes.size() || texture.sampleCount != 1 || texture.mipCount != 1 ||
+            texture.dimension != Render::RenderTextureDimension::TwoD)
+            return Staged::Failure(MakeError(XRErrors::OperationIncompatible));
+        const auto extension = session_->ReadExtensionAdmission(session.activeAttempt, XR_HTC_FOVEATION_EXTENSION_NAME);
+        if (extension.HasError())
+            return Staged::Failure(extension.ErrorValue());
+        if (extension.Value().state != NativeExtensionState::Enabled)
+            return Staged::Success(false);
+        const auto owner = session_->BorrowPreparedSession(session);
+        if (owner.HasError())
+            return Staged::Failure(owner.ErrorValue());
+        const auto &native = owner.Value();
+        PFN_xrApplyFoveationHTC apply{};
+        if (auto route = Load(getProc, native.instance, "xrApplyFoveationHTC", apply); route.HasError())
+            return Staged::Success(false);
+        if (auto resolved = Resolve(getProc, native.instance); resolved.HasError())
+            return Staged::Failure(resolved.ErrorValue());
+        std::array<XrSwapchainSubImage, 2> subImages{};
+        for (std::uint32_t eye = 0; eye < eyes.size(); ++eye) {
+            const auto extent = eyes[eye];
+            constexpr auto maximum = static_cast<std::uint32_t>(std::numeric_limits<std::int32_t>::max());
+            if (!extent.IsValid() || extent.width > texture.extent.width || extent.height > texture.extent.height ||
+                extent.width > maximum || extent.height > maximum)
+                return Staged::Failure(MakeError(XRErrors::ExternalTargetInvalid));
+            subImages[eye].imageRect.extent = {static_cast<std::int32_t>(extent.width), static_cast<std::int32_t>(extent.height)};
+            subImages[eye].imageArrayIndex = eye;
+        }
+        const auto formats = ReadRuntimeFormats(native.session);
+        if (formats.HasError())
+            return Staged::Failure(formats.ErrorValue());
+        const auto offered = std::span{formats.Value().entries}.first(formats.Value().count);
+        if (std::ranges::find(offered, format) == offered.end())
+            return Staged::Success(false);
+        closing_ = false;
+        lost_ = false;
+        if (auto allocated = CreateAllocation(native.session, texture, NativeSwapchainRole::Color, format); allocated.HasError())
+            return Staged::Failure(allocated.ErrorValue());
+        for (auto &view : subImages)
+            view.swapchain = native_;
+        const XrFoveationApplyInfoHTC info{XR_TYPE_FOVEATION_APPLY_INFO_HTC, nullptr, XR_FOVEATION_MODE_FIXED_HTC,
+                                           static_cast<std::uint32_t>(subImages.size()), subImages.data()};
+        const auto applied = apply(native.session, &info);
+        if (applied != XR_SUCCESS) {
+            const auto closed = Close();
+            if (closed.HasError())
+                return Staged::Failure(closed.ErrorValue());
+            if (!closed.Value() || applied == XR_SESSION_LOSS_PENDING || applied == XR_ERROR_SESSION_LOST ||
+                applied == XR_ERROR_INSTANCE_LOST)
+                return Staged::Failure(NativeFailure("apply fixed foveation", applied));
+            return Staged::Success(false);
+        }
+        const auto current = session_->BorrowPreparedSession(session);
+        if (current.HasError() || current.Value().incarnation != native.incarnation)
+            return Staged::Failure(MakeError(XRErrors::IdentityStale));
+        stagedFixedProjection_.emplace(texture, native.incarnation);
+        phase_ = NativeSwapchainPhase::Prepared;
+        return Staged::Success(true);
+    }
+
+    Result<void> OpenXRSwapchain::AdoptFixedProjection(const XRSwapchainTargetId &target) {
+        if (auto thread = CheckThread(); thread.HasError())
+            return thread;
+        if (!target.IsValid() || phase_ != NativeSwapchainPhase::Prepared || !stagedFixedProjection_ || closing_ || lost_)
+            return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
+        const auto owner = session_->Borrow(target.session);
+        if (owner.HasError())
+            return Result<void>::Failure(owner.ErrorValue());
+        if (owner.Value().incarnation != stagedFixedProjection_->incarnation)
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+
+        // HTC modifies peripheral density inside the runtime. The renderer still imports ordinary stereo color views.
+        const NativeSwapchainRequest request{target, stagedFixedProjection_->texture};
+        request_ = request;
+        lastTarget_ = target;
+        if (auto device = images_->Validate(request); device.HasError())
+            return device;
+        const OpenXRSwapchainImageEnumeration enumeration{native_, dispatch_.enumerate};
+        if (auto images = images_->Enumerate(request, count_, enumeration); images.HasError())
+            return images;
+        if (auto current = session_->Validate(target.session); current.HasError())
+            return current;
+        stagedFixedProjection_.reset();
+        phase_ = NativeSwapchainPhase::Available;
+        return Result<void>::Success();
+    }
+
     /** @copydoc OpenXRSwapchain::AdmitCreate */
     Result<NativeSessionBorrow> OpenXRSwapchain::AdmitCreate(const NativeSwapchainRequest &request) const {
         using Outcome = Result<NativeSessionBorrow>;
@@ -498,6 +592,7 @@ namespace Horo::XR::OpenXRInternal {
         }
         count_ = 0;
         stagedReprojection_.reset();
+        stagedFixedProjection_.reset();
         phase_ = NativeSwapchainPhase::Empty;
         return Result<bool>::Success(true);
     }

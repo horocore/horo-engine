@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <catch2/generators/catch_generators.hpp>
 #include <thread>
 
 namespace Horo::Tests::OpenXR {
@@ -97,6 +98,91 @@ namespace Horo::Tests::OpenXR {
             }
         };
     }  // namespace
+
+    TEST_CASE("OpenXR fixed foveation publishes only the exact successfully prepared stereo color allocation",
+              "[unit][xr][native][swapchain][foveation]") {
+        enum class Runtime {
+            Unavailable,
+            MissingDispatch,
+            Refuses,
+            LosesSession,
+            Supports
+        };
+        const auto runtime = GENERATE(Runtime::Unavailable, Runtime::MissingDispatch, Runtime::Refuses, Runtime::LosesSession, Runtime::Supports);
+        Fixture fixture;
+        SwapchainScript script;
+        ImagePort images;
+        OpenXRSwapchain swapchain{fixture.owner, images};
+        const std::array extensions{std::string_view{XR_HTC_FOVEATION_EXTENSION_NAME}};
+        if (runtime != Runtime::Unavailable) {
+            fixture.script.extraExtensions = extensions;
+            fixture.script.extensionCount += static_cast<std::uint32_t>(extensions.size());
+        }
+        if (runtime == Runtime::MissingDispatch)
+            fixture.script.absent = "xrApplyFoveationHTC";
+        if (runtime == Runtime::Refuses || runtime == Runtime::LosesSession)
+            script.fail = "foveation";
+        if (runtime == Runtime::LosesSession)
+            script.failure = XR_ERROR_SESSION_LOST;
+        const auto &preflight = fixture.preflight;
+        const std::array requested{NativeExtensionRequest{extensions.front()}};
+        const NativeDiscoveryRequest discovery{.selection = {.contractVersion = preflight.ContractVersion(),
+                                                             .attempt = preflight.Attempt(),
+                                                             .backend = preflight.Backend(),
+                                                             .installRecord = preflight.InstallRecord(),
+                                                             .productProfile = preflight.ProductProfile(),
+                                                             .admittedLoaderVersions = {{1, 0, 0}, {1, 1, 63}}},
+                                               .requestedApi = preflight.LoaderApiVersion(),
+                                               .extensions = requested};
+        const NativeSessionPreparation preparation{preflight, preflight.Attempt()};
+        REQUIRE(fixture.owner.PrepareDiscovery(discovery).HasValue());
+        REQUIRE(fixture.owner.PrepareSession(preparation).HasValue());
+        const auto native = fixture.owner.BorrowPreparedSession(preparation);
+        REQUIRE(native.HasValue());
+        const Render::RenderTextureDescriptor color{.extent = {800, 600},
+                                                    .format = Render::RenderTextureFormat::Rgba8Unorm,
+                                                    .layerCount = 2,
+                                                    .usage = Render::RenderTextureUsage::RenderAttachment};
+        const std::array eyes{Render::FramebufferExtent{800, 540}, Render::FramebufferExtent{760, 600}};
+        const auto staged = swapchain.StageFixedProjection(preparation, color, 37, eyes, &SwapchainScript::GetProc);
+        if (runtime == Runtime::LosesSession) {
+            REQUIRE(staged.HasError());
+            CHECK(swapchain.Acquire().HasError());
+            CHECK(script.creates == 1);
+            CHECK(script.destroys == 1);
+            REQUIRE(swapchain.Close().Value());
+            REQUIRE(fixture.owner.Close().HasValue());
+            return;
+        }
+        REQUIRE(staged.HasValue());
+        CHECK(staged.Value() == (runtime == Runtime::Supports));
+        CHECK(swapchain.Acquire().HasError());
+        auto request = fixture.Request();
+        request.extensions = requested;
+        REQUIRE(fixture.owner.Activate(request).HasValue());
+        const XRSwapchainTargetId target{request.candidate, {.index = 0, .generation = 1}};
+        if (staged.Value()) {
+            CHECK(script.fixedFoveationSession == native.Value().session);
+            CHECK(script.creates == 1);
+            for (std::size_t eye = 0; eye < eyes.size(); ++eye) {
+                const auto &subImage = script.fixedProjection[eye];
+                CHECK(subImage.swapchain == NativeHandle<XrSwapchain>(1));
+                CHECK(subImage.imageArrayIndex == eye);
+                CHECK(subImage.imageRect.extent.width == static_cast<std::int32_t>(eyes[eye].width));
+                CHECK(subImage.imageRect.extent.height == static_cast<std::int32_t>(eyes[eye].height));
+            }
+            REQUIRE(swapchain.AdoptFixedProjection(target).HasValue());
+            CHECK(script.creates == 1);
+            CHECK(swapchain.AdoptFixedProjection(target).HasError());
+        } else {
+            CHECK(script.creates == script.destroys);
+            CHECK(swapchain.AdoptFixedProjection(target).HasError());
+            REQUIRE(swapchain.Create({target, color}, &SwapchainScript::GetProc).HasValue());
+        }
+        REQUIRE(swapchain.Close().Value());
+        CHECK(script.creates == script.destroys);
+        REQUIRE(fixture.owner.Close().HasValue());
+    }
 
     TEST_CASE("OpenXR compositor borrow requires latest completed release and fences replacement", "[unit][xr][native][swapchain]") {
         SwapchainFixture f;

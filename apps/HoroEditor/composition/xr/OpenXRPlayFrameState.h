@@ -63,6 +63,17 @@ namespace Horo::Application::Internal {
         Result<bool> Close(Render::RenderFrontend &frontend, std::optional<XR::XRSessionId> lostSession = {});
     };
 
+    struct OpenXRPlayHost::ColorPair final {
+        XR::OpenXRInternal::OpenXRVulkanSwapchainImages images;
+        XR::OpenXRInternal::OpenXRSwapchain owner;
+
+        ColorPair(OpenXRPlayHost &host, XR::OpenXRInternal::OpenXRSelectedVulkanBinding &graphics,
+                  const XrGraphicsBindingVulkanKHR &binding, const Render::Detail::VulkanEditorDevice &device,
+                  Render::Detail::VulkanExternalViewDispatch viewDispatch)
+            : images(host.composition_.frontend, graphics, binding, device.graphicsIdentity, viewDispatch),
+              owner(host.native_, images, host.composition_.metrics.swapchain) {}
+    };
+
     /** @brief Candidate-owned physical image/compositor children of the SAME selected native and render owners.
      * @details Native failures keep this storage retained by the App. Scene Shutdown may revoke its typed
      * publication, but cannot drop these children, outgoing native dependencies or queued image leases.
@@ -71,8 +82,9 @@ namespace Horo::Application::Internal {
     struct OpenXRPlayHost::FrameState final : XR::OpenXRInternal::IOpenXRCompositionSpace {
         OpenXRPlayHost &host;
         const XR::XRSessionId session;
-        XR::OpenXRInternal::OpenXRVulkanSwapchainImages images;
-        XR::OpenXRInternal::OpenXRSwapchain color;
+        std::shared_ptr<ColorPair> colorStorage;
+        XR::OpenXRInternal::OpenXRVulkanSwapchainImages &images;
+        XR::OpenXRInternal::OpenXRSwapchain &color;
         XR::OpenXRInternal::OpenXRFrameCompositor compositor;
         XR::OpenXRInternal::NativeProjectionResolution resolution;
 
@@ -107,13 +119,10 @@ namespace Horo::Application::Internal {
         bool completionTimingObserved{};
         bool vignetteBound{};
 
-        FrameState(OpenXRPlayHost &owner, const XR::XRSessionId &candidate, XR::OpenXRInternal::OpenXRSelectedVulkanBinding &graphics,
-                   const XrGraphicsBindingVulkanKHR &binding, const Render::Detail::VulkanEditorDevice &device,
-                   Render::Detail::VulkanExternalViewDispatch viewDispatch, const Render::RenderTextureDescriptor &descriptor)
-            : host(owner), session(candidate),
-              images(owner.composition_.frontend, graphics, binding, device.graphicsIdentity, viewDispatch),
-              color(owner.native_, images, owner.composition_.metrics.swapchain), compositor(owner.native_, owner.frames_, *this),
-              allocation(descriptor) {}
+        FrameState(OpenXRPlayHost &owner, const XR::XRSessionId &candidate, std::shared_ptr<ColorPair> storage,
+                   const Render::RenderTextureDescriptor &descriptor)
+            : host(owner), session(candidate), colorStorage(std::move(storage)), images(colorStorage->images), color(colorStorage->owner),
+              compositor(owner.native_, owner.frames_, *this), allocation(descriptor) {}
 
         /** @brief Preserves the original frame failure while retaining any failed canonical abort debt. */
         Result<bool> Fail(const Error &error) {

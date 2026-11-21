@@ -522,6 +522,7 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<void> AdmitReferenceReplacement() const;
         struct FrameState;
+        struct ColorPair;
         struct WriterPair;
         /** @brief Drives one cold activation/retirement step on the actual native event cutoff. */
         void ProgressPassthrough();
@@ -652,6 +653,7 @@ namespace Horo::Application::Internal {
             std::optional<OpenXRApplicationProjection> projection;
             std::optional<Editor::EditorVulkanXrViewportAccess::PreparedTargets> prewarmedRenderer;
             std::shared_ptr<WriterPair> preparedWriter; /**< Owns the unpublished pair, including any failed native cleanup prefix. */
+            std::shared_ptr<ColorPair> preparedColor;   /**< Exact cold fixed-foveation allocation through adoption or retirement. */
             XR::XRReferenceSpaceSnapshot references;    /**< Same cold native preparation as this Scene candidate. */
             XR::XRCoordinateSpace worldReference;       /**< Exact calibrated native World child from the same candidate. */
             std::optional<XR::OpenXRInternal::NativeReferenceCalibrationObservation> mountedCalibration;
@@ -673,6 +675,7 @@ namespace Horo::Application::Internal {
             [[nodiscard]] Result<void> PrewarmRenderer(OpenXRPlayHost &host, OpenXRProjectionDraft &draft);
             /** @brief Stages both auxiliary images on the exact native preparation following real viewport admission. */
             [[nodiscard]] Result<void> StageWriter(OpenXRPlayHost &host, OpenXRProjectionDraft &draft);
+            [[nodiscard]] Result<void> StageFixedFoveation(OpenXRPlayHost &host, OpenXRProjectionDraft &draft);
             /** @brief Prepares the existing normal graph, or checks the already warmed graph in the canonical stage. */
             [[nodiscard]] Result<void> PrepareRenderer(OpenXRPlayHost &host, const XR::XRFeaturePlan &plan);
             /** @brief Seals mounted placement only after the exact native relation and origin lease agree. */

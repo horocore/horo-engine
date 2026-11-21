@@ -32,6 +32,8 @@ namespace Horo::Tests::OpenXR {
         bool timeout{};
         XrSwapchain timeoutSwapchain{XR_NULL_HANDLE};
         XrSwapchainCreateInfo created{};
+        std::array<XrSwapchainSubImage, 2> fixedProjection{};
+        XrSession fixedFoveationSession{XR_NULL_HANDLE};
 
         SwapchainScript() {
             active = this;
@@ -109,6 +111,18 @@ namespace Horo::Tests::OpenXR {
             return result;
         }
 
+        static XRAPI_ATTR XrResult XRAPI_CALL ApplyFixedFoveation(XrSession session, const XrFoveationApplyInfoHTC *info) {
+            REQUIRE(info);
+            CHECK(info->type == XR_TYPE_FOVEATION_APPLY_INFO_HTC);
+            CHECK(info->next == nullptr);
+            CHECK(info->mode == XR_FOVEATION_MODE_FIXED_HTC);
+            REQUIRE(info->subImageCount == active->fixedProjection.size());
+            REQUIRE(info->subImages);
+            std::copy_n(info->subImages, info->subImageCount, active->fixedProjection.begin());
+            active->fixedFoveationSession = session;
+            return Record("foveation");
+        }
+
         static XRAPI_ATTR XrResult XRAPI_CALL GetProc(XrInstance instance, const char *name, PFN_xrVoidFunction *function) {
             if (Script::active->absent == name)
                 return XR_ERROR_FUNCTION_UNSUPPORTED;
@@ -124,7 +138,8 @@ namespace Horo::Tests::OpenXR {
                                      Entry{"xrEnumerateSwapchainImages", std::bit_cast<PFN_xrVoidFunction>(&Images)},
                                      Entry{"xrAcquireSwapchainImage", std::bit_cast<PFN_xrVoidFunction>(&Acquire)},
                                      Entry{"xrWaitSwapchainImage", std::bit_cast<PFN_xrVoidFunction>(&Wait)},
-                                     Entry{"xrReleaseSwapchainImage", std::bit_cast<PFN_xrVoidFunction>(&Release)}};
+                                     Entry{"xrReleaseSwapchainImage", std::bit_cast<PFN_xrVoidFunction>(&Release)},
+                                     Entry{"xrApplyFoveationHTC", std::bit_cast<PFN_xrVoidFunction>(&ApplyFixedFoveation)}};
             const auto entry = std::ranges::find(entries, std::string_view{name}, &Entry::name);
             if (entry == entries.end())
                 return Script::GetProc(instance, name, function);
