@@ -11,7 +11,7 @@ namespace Horo {
 namespace Horo::Editor {
     class IWorkspacePanel;
 
-    /** @brief Panel and its owner-lane pump, including while the dock is hidden. */
+    /** @brief Editor ownership of model work and panel publication, including while the dock is hidden. */
     struct EditorLocalAgentPanelHost final {
         std::shared_ptr<IWorkspacePanel> panel;
         std::function<void()> poll;

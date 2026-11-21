@@ -1,5 +1,6 @@
 #include "EditorLocalAgentPanel.h"
 
+#include "AgentBackgroundTurn.h"
 #include "AgentLocalSceneTurn.h"
 #include "AgentTurn.h"
 #include "EditorLocalAgentContext.h"
@@ -12,11 +13,8 @@
 
 #include <algorithm>
 #include <array>
-#include <chrono>
-#include <future>
 #include <optional>
 #include <stop_token>
-#include <thread>
 #include <utility>
 #include <variant>
 
@@ -24,6 +22,7 @@ namespace Horo::Editor {
     namespace {
         using namespace Agent;
         using Reply = std::variant<ProviderDiscovery, AgentTurnResult>;
+        using BackgroundTurn = AgentBackgroundTurn<Reply>;
 
         /** @brief Runs one user-initiated discovery or inference on an isolated worker. */
         Reply RunLocalOperation(std::string endpoint, std::optional<ModelRequest> request, std::optional<std::size_t> sceneCount,
@@ -57,15 +56,14 @@ namespace Horo::Editor {
             return "failed";
         }
 
-        /** @brief Owns one optional asynchronous request; workspace callbacks remain on the editor lane. */
+        /** @brief Presents and reviews results from the editor-owned background operation. */
         class LocalAgentPanel final : public IWorkspacePanel {
         public:
-            LocalAgentPanel(const JobSystem &jobs, DurableFileSystem &files)
-                : IWorkspacePanel("workspace.local_agent"), history_(jobs, files) {}
+            LocalAgentPanel(const JobSystem &jobs, DurableFileSystem &files, std::shared_ptr<BackgroundTurn> background)
+                : IWorkspacePanel("workspace.local_agent"), background_(std::move(background)), history_(jobs, files) {}
 
             ~LocalAgentPanel() override {
                 RevokeContext();
-                worker_.request_stop();
             }
 
             std::string GetId() const override {
@@ -87,6 +85,7 @@ namespace Horo::Editor {
             void OnAttach(PanelContext &context) override {
                 sceneCount_ = context.sceneObjectCount;
                 RevokeContext();
+                background_->Abandon();
                 activeSource_ = context.activeSourceSnapshot;
                 activeSourceRange_ = context.activeSourceRange;
                 buildOutput_ = context.buildOutputQuery;
@@ -101,8 +100,7 @@ namespace Horo::Editor {
             }
 
             void OnDetach() override {
-                worker_.request_stop();
-                discard_ = true;
+                background_->Abandon();
                 prompt_.clear();
                 response_.clear();
                 sceneCount_ = {};
@@ -144,8 +142,8 @@ namespace Horo::Editor {
                 static_cast<void>(Ui::InputTextControl("##Prompt", prompt_, 4096, fonts));
                 ImGui::EndDisabled();
                 DrawSendActions(locale);
-                if (Busy() && Button(locale, "stop", !worker_.get_stop_token().stop_requested()))
-                    worker_.request_stop();
+                if (Busy() && Button(locale, "stop", background_->CanCancel()))
+                    background_->Cancel();
                 if (status_)
                     ImGui::TextWrapped("%s", LocalizedText(locale, status_).c_str());
                 if (!response_.empty())
@@ -156,7 +154,7 @@ namespace Horo::Editor {
 
         private:
             [[nodiscard]] bool Busy() const {
-                return reply_.valid();
+                return background_->Busy();
             }
 
             void RevokeContext() noexcept {
@@ -187,7 +185,7 @@ namespace Horo::Editor {
                     status_ = nullptr;
                 }
                 if (Button(locale, "discover", !Busy() && !endpoint_.empty()))
-                    Start(std::nullopt);
+                    static_cast<void>(Start(std::nullopt));
                 ImGui::TextUnformatted(LocalizedText(locale, "model").c_str());
                 if (Ui::InputTextControl("##Model", model_, 256, fonts))
                     selection_ = -1;
@@ -341,53 +339,63 @@ namespace Horo::Editor {
                 history_.ClearReview();
                 submittedPrompt_ = recoverable || sceneCount.has_value() || source ? std::nullopt : std::optional{prompt_};
                 submittedProject_ = history_.Project();
-                Start(std::move(request), sceneCount, std::move(source));
-                if (recoverable && !Busy())
+                if (!Start(std::move(request), sceneCount, std::move(source)) && recoverable)
                     history_.FinishRecovery(AgentHistoryMessageState::Failed);
             }
 
-            void Start(std::optional<ModelRequest> request, std::optional<std::size_t> sceneCount = {},
-                       std::optional<EditorLocalAgentContext> source = {}) {
+            [[nodiscard]] bool Start(std::optional<ModelRequest> request, std::optional<std::size_t> sceneCount = {},
+                                     std::optional<EditorLocalAgentContext> source = {}) {
                 try {
-                    std::packaged_task<Reply(std::stop_token)> task{[endpoint = endpoint_, request = std::move(request), sceneCount,
-                                                                     source = std::move(source),
-                                                                     turn = ++turn_](std::stop_token stop) mutable {
+                    BackgroundTurn::Operation task{[endpoint = endpoint_, request = std::move(request), sceneCount,
+                                                    source = std::move(source), turn = ++turn_](std::stop_token stop) mutable {
                         return RunLocalOperation(std::move(endpoint), std::move(request), sceneCount, std::move(source), turn, stop);
                     }};
-                    auto pending = task.get_future();
-                    worker_ = std::jthread{[task = std::move(task)](std::stop_token stop) mutable {
-                        task(stop);
-                    }};
-                    reply_ = std::move(pending);
-                    discard_ = false;
-                    status_ = "working";
-                    response_.clear();
+                    if (background_->Start(std::move(task))) {
+                        status_ = "working";
+                        response_.clear();
+                        return true;
+                    }
                 } catch (const std::bad_alloc &) {
-                    status_ = "failed";
-                } catch (const std::system_error &) {
-                    status_ = "failed";
+                    // Preparing the value-only worker request may allocate.
                 }
+                status_ = "failed";
+                submittedPrompt_.reset();
+                return false;
             }
 
             void PollReply() {
-                if (!Busy() || reply_.wait_for(std::chrono::seconds::zero()) != std::future_status::ready)
+                auto completion = background_->Poll();
+                if (!completion)
                     return;
-                try {
-                    auto reply = reply_.get();
-                    if (discard_)
-                        status_ = nullptr;
-                    else if (worker_.get_stop_token().stop_requested()) {
-                        status_ = "cancelled";
-                        history_.FinishRecovery(AgentHistoryMessageState::Cancelled);
-                    } else
-                        std::visit([this](auto &result) {
-                            Adopt(result);
-                        }, reply);
-                } catch (const std::exception &) {
-                    status_ = discard_ ? nullptr : "failed";
-                    history_.FinishRecovery(AgentHistoryMessageState::Failed);
+                if (completion->state != BackgroundTurn::CompletionState::Abandoned) {
+                    try {
+                        AdoptCompletion(*completion);
+                    } catch (const std::exception &) {
+                        FailTurn();
+                    }
                 }
                 submittedPrompt_.reset();
+            }
+
+            void AdoptCompletion(BackgroundTurn::Completion &completion) {
+                using State = BackgroundTurn::CompletionState;
+                if (completion.state == State::Cancelled) {
+                    status_ = "cancelled";
+                    history_.FinishRecovery(AgentHistoryMessageState::Cancelled);
+                    return;
+                }
+                if (completion.state == State::Failed) {
+                    FailTurn();
+                    return;
+                }
+                std::visit([this](auto &result) {
+                    Adopt(result);
+                }, *completion.reply);
+            }
+
+            void FailTurn() {
+                status_ = "failed";
+                history_.FinishRecovery(AgentHistoryMessageState::Failed);
             }
 
             void Adopt(ProviderDiscovery &discovery) {
@@ -439,25 +447,28 @@ namespace Horo::Editor {
             std::uint64_t contextGeneration_{};
             std::optional<CancellationSource> contextLifetime_;
             std::optional<EditorLocalAgentContext> contextPreview_;
+            std::shared_ptr<BackgroundTurn> background_;
             EditorLocalAgentHistory history_;
             std::optional<std::string> submittedPrompt_;
             AgentHistoryProjectRevision submittedProject_;
             int selection_{-1};
             const char *status_{};
             std::uint64_t turn_{};
-            bool discard_{};
             bool awaitingCheckpoint_{};
-            std::jthread worker_;
-            std::future<Reply> reply_;
         };
     }  // namespace
 
     /** @copydoc MakeEditorLocalAgentPanel */
     EditorLocalAgentPanelHost MakeEditorLocalAgentPanel(const JobSystem &jobs, DurableFileSystem &files) {
-        auto panel = std::make_shared<LocalAgentPanel>(jobs, files);
-        return {panel, [owner = std::weak_ptr{panel}] {
-            if (const auto current = owner.lock())
+        auto background = std::make_shared<BackgroundTurn>();
+        auto panel = std::make_shared<LocalAgentPanel>(jobs, files, background);
+        return {panel, [background = std::move(background), owner = std::weak_ptr{panel}] {
+            if (const auto current = owner.lock()) {
                 current->Poll();
+            } else {
+                background->Abandon();
+                static_cast<void>(background->Poll());
+            }
         }};
     }
 }  // namespace Horo::Editor

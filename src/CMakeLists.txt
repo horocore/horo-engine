@@ -221,6 +221,7 @@ set(_horo_agent_turn_headers "${CMAKE_CURRENT_BINARY_DIR}/editor_agent_turn_head
 file(MAKE_DIRECTORY "${_horo_agent_turn_headers}")
 configure_file(editor/agent/AgentTurn.h "${_horo_agent_turn_headers}/AgentTurn.h" COPYONLY)
 configure_file(editor/agent/AgentContext.h "${_horo_agent_turn_headers}/AgentContext.h" COPYONLY)
+configure_file(editor/agent/AgentBackgroundTurn.h "${_horo_agent_turn_headers}/AgentBackgroundTurn.h" COPYONLY)
 target_include_directories(HoroEditorAgentTurnInternal INTERFACE "${_horo_agent_turn_headers}")
 target_link_libraries(HoroEditorAgentTurnInternal PUBLIC HoroEngine::ModelProvider HoroEngine::ProjectCodeQuery HoroEngine::Security)
 

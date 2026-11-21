@@ -342,6 +342,7 @@ set_tests_properties(HoroModelProviderContractTests PROPERTIES LABELS "unit;agen
 add_executable(HoroEditorAgentTurnTests
     unit/editor/AgentTurnTests.cpp
     unit/editor/AgentContextTests.cpp
+    unit/editor/AgentBackgroundTurnTests.cpp
     unit/editor/EditorLocalAgentContextTests.cpp
     "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorLocalAgentContext.cpp")
 target_include_directories(HoroEditorAgentTurnTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/unit/mcp")

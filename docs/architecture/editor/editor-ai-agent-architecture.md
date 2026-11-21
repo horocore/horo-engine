@@ -834,8 +834,9 @@ remain ephemeral.
 The Local Model panel opens the committed project's history on the editor I/O
 lane. After a plain text exchange, the panel shows the exact redacted prompt
 and response before offering a save. Approval writes both messages as a single
-project-scoped operation. The editor continues to poll history and turn
-completion while the panel is hidden.
+project-scoped operation. The editor owns the background model operation and
+continues to poll history and turn completion while the panel is hidden.
+Detaching the workspace cancels the operation and discards late replies.
 
 The panel also offers recovery for an explicitly approved plain-text request.
 It commits the reviewed, redacted prompt and an empty response checkpoint on
