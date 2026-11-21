@@ -80,7 +80,7 @@ namespace Horo::XR {
 
         struct Fixture final {
             Resources resources;
-            XRSessionLifecycle lifecycle{resources};
+            std::shared_ptr<XRSessionLifecycle> lifecycle{std::make_shared<XRSessionLifecycle>(resources)};
             std::shared_ptr<XRSpatialAnchors> anchors{std::make_shared<XRSpatialAnchors>(lifecycle)};
             XRAnchorScope live;
             XRAnchorStoreScope scope{Take(XRAnchorStoreProvider::FromBytes({1U})), Take(XRAnchorStorePartition::FromBytes({2U})), 1, 7};
@@ -90,7 +90,7 @@ namespace Horo::XR {
             std::shared_ptr<XRAnchorPersistence> owner;
             SaveParticipantRegistrySnapshot registry;
 
-            explicit Fixture(const std::uint64_t runtime = 1) : live(Activate(lifecycle, *anchors, runtime)) {
+            explicit Fixture(const std::uint64_t runtime = 1) : live(Activate(*lifecycle, *anchors, runtime)) {
                 owner = Take(XRAnchorPersistence::Bind(participant, record, anchors, live, scope, store));
                 CanonicalStateParticipantRegistry bindings;
                 REQUIRE(bindings.Register(owner->Descriptor(), owner).HasValue());
@@ -245,9 +245,17 @@ namespace Horo::XR {
         }
         SECTION("shutdown invalidates the gate and durable reads") {
             REQUIRE(transaction.Prepare().HasValue());
-            fixture.lifecycle.Shutdown();
+            fixture.lifecycle->Shutdown();
             RequireFailureIdentity(transaction.Activate(fixture.Evidence(), *staged.publication), XRErrors::IdentityStale);
             RequireFailureIdentity(fixture.owner->Read(), XRErrors::IdentityStale);
+        }
+        SECTION("session destruction invalidates a retained registry and prepared restore") {
+            REQUIRE(transaction.Prepare().HasValue());
+            fixture.lifecycle.reset();
+            REQUIRE(fixture.anchors);
+            RequireFailureIdentity(transaction.Activate(fixture.Evidence(), *staged.publication), XRErrors::IdentityStale);
+            RequireFailureIdentity(fixture.owner->Read(), XRErrors::IdentityStale);
+            RequireFailureIdentity(fixture.owner->StageRestore(bytes), XRErrors::IdentityStale);
         }
     }
 }  // namespace Horo::XR

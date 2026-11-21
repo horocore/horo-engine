@@ -9,7 +9,9 @@
 #include "Horo/XR/XRSpacePose.h"
 
 #include <array>
+#include <memory>
 #include <optional>
+#include <thread>
 
 namespace Horo::XR {
     struct XRAnchorProviderTag;
@@ -111,7 +113,7 @@ namespace Horo::XR {
     };
 
     /** @brief The selected XRRuntime owner for live spatial anchors on the canonical session control lane.
-     * @details One application-owned instance borrows the canonical lifecycle, which must outlive it. The host calls
+     * @details One application-owned instance observes the canonical lifecycle without retaining it. The host calls
      * Activate only from an actual admitted provider and purpose grant. It withdraws before retiring the provider or
      * changing privacy, runtime, reference space or origin. No observer may write Scene directly. Methods do not call
      * native APIs, perform I/O or allocate on success. This owner retains only one current observation per live slot.
@@ -120,8 +122,8 @@ namespace Horo::XR {
     public:
         static constexpr std::size_t MaximumAnchors = 64;
 
-        /** @brief Borrows the canonical session authority. @param lifecycle Must outlive the anchor owner. */
-        explicit XRSpatialAnchors(const XRSessionLifecycle &lifecycle) noexcept;
+        /** @brief Observes the exact canonical session authority. @param lifecycle Shared by the host on the session control lane. */
+        explicit XRSpatialAnchors(const std::shared_ptr<const XRSessionLifecycle> &lifecycle) noexcept;
         XRSpatialAnchors(const XRSpatialAnchors &) = delete;
         XRSpatialAnchors &operator=(const XRSpatialAnchors &) = delete;
 
@@ -170,10 +172,13 @@ namespace Horo::XR {
             XRAnchorObservation observation;
         };
 
+        [[nodiscard]] Result<std::shared_ptr<const XRSessionLifecycle>> ResolveLifecycle() const;
+
         [[nodiscard]] Result<void> CheckScope(const XRAnchorScope &scope) const;
         [[nodiscard]] Result<std::size_t> Find(const XRAnchorScope &scope, const XRSpatialAnchorId &id) const;
 
-        const XRSessionLifecycle &lifecycle_;
+        std::weak_ptr<const XRSessionLifecycle> lifecycle_;
+        const std::thread::id owner_;
         XRAnchorScope scope_;
         XRAnchorLimits limits_;
         std::uint64_t continuity_{};

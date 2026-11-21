@@ -1012,8 +1012,10 @@ grant to an exact session, target reference space, and World-origin revision. On
 fresh localized observations carry a pose. Locating, limited, lost, or expired
 observations carry no pose, and explicit access revocation denies reads. A focus or
 session continuity change rejects even results for a restarted native session with
-the same ID. The host withdraws the scope before releasing native resources or changing
-access, space, or origin. A Scene adapter must re-read the live anchor at its own safe
+the same ID. The anchor registry observes the exact host-owned session lifecycle.
+Destroying that lifecycle revokes both live anchor access and staged Save publication,
+even if the anchor registry remains alive. The host withdraws the scope before
+releasing native resources or changing access, space, or origin. A Scene adapter must re-read the live anchor at its own safe
 point before using that pose. The portable contract introduces no provider support
 or migration of existing consumers.
 

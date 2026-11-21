@@ -88,8 +88,8 @@ namespace Horo::XR {
     };
 
     /** @brief XR-owned adapter for one optional protected anchor record on the canonical Save owner lane.
-     * @details The application binds one participant per durable anchor record. It retains the active
-     * XR lifecycle for every operation and routes only protected local saves. The store never returns raw
+     * @details The application binds one participant per durable anchor record. Operations validate the active
+     * XR lifecycle and route only protected local saves. The store never returns raw
      * persistence tokens or cached poses. Capture and restore are lifecycle work, outside frame polling.
      */
     class XRAnchorPersistence final : public Runtime::ICanonicalStateAdapter, public std::enable_shared_from_this<XRAnchorPersistence> {
@@ -100,7 +100,7 @@ namespace Horo::XR {
         /** @brief Binds the exact live scope and qualified protected local provider.
          * @param participant Stable canonical Save owner for this one optional record.
          * @param record Stable canonical Save record identity.
-         * @param anchors Shared owner that pins the live anchor registry and its borrowed lifecycle.
+         * @param anchors Host-owned live anchor registry observed by the participant.
          * @param liveScope Exact focused live session, space and grant.
          * @param storeScope Exact trusted protected partition and access revision.
          * @param store Host-selected protected local store. Absent provider fails closed.

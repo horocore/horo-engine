@@ -61,15 +61,31 @@ namespace Horo::XR {
     }  // namespace
 
     /** @copydoc XRSpatialAnchors::XRSpatialAnchors */
-    XRSpatialAnchors::XRSpatialAnchors(const XRSessionLifecycle &lifecycle) noexcept : lifecycle_(lifecycle) {}
+    XRSpatialAnchors::XRSpatialAnchors(const std::shared_ptr<const XRSessionLifecycle> &lifecycle) noexcept
+        : lifecycle_(lifecycle), owner_(lifecycle ? lifecycle->owner_ : std::this_thread::get_id()) {}
+
+    Result<std::shared_ptr<const XRSessionLifecycle>> XRSpatialAnchors::ResolveLifecycle() const {
+        using Lifecycle = Result<std::shared_ptr<const XRSessionLifecycle>>;
+        // A foreign lane must not temporarily own the last reference to a control-thread resource.
+        if (owner_ != std::this_thread::get_id())
+            return Lifecycle::Failure(MakeError(XRSessionErrors::WrongThread));
+        auto lifecycle = lifecycle_.lock();
+        if (!lifecycle)
+            return Lifecycle::Failure(MakeError(XRErrors::IdentityStale));
+        return Lifecycle::Success(std::move(lifecycle));
+    }
 
     /** @copydoc XRSpatialAnchors::Activate */
     Result<void> XRSpatialAnchors::Activate(const XRAnchorScope &scope, const XRAnchorLimits &limits, const XRCapabilityState support) {
-        if (const auto owner = lifecycle_.Admit(scope.space.id.session, true); owner.HasError())
+        const auto live = ResolveLifecycle();
+        if (live.HasError())
+            return Result<void>::Failure(live.ErrorValue());
+        const auto &lifecycle = *live.Value();
+        if (const auto owner = lifecycle.Admit(scope.space.id.session, true); owner.HasError())
             return owner;
         if (!ValidScope(scope) || limits.maximumAnchors == 0 || limits.maximumSampleAge <= Duration{})
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
-        if (limits.maximumAnchors > MaximumAnchors || lifecycle_.trackingContinuity_ == 0)
+        if (limits.maximumAnchors > MaximumAnchors || lifecycle.trackingContinuity_ == 0)
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
         if (scope.grant <= scope_.grant)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
@@ -79,7 +95,7 @@ namespace Horo::XR {
         slots_ = {};
         scope_ = scope;
         limits_ = limits;
-        continuity_ = lifecycle_.trackingContinuity_;
+        continuity_ = lifecycle.trackingContinuity_;
         lastSlotGeneration_ = 0;
         withdrawal_.reset();
         return Result<void>::Success();
@@ -147,8 +163,9 @@ namespace Horo::XR {
 
     /** @copydoc XRSpatialAnchors::Withdraw */
     Result<void> XRSpatialAnchors::Withdraw(const XRAnchorScope &scope, const XRAnchorWithdrawal reason) {
-        if (!lifecycle_.IsOwnerThread())
-            return Result<void>::Failure(MakeError(XRSessionErrors::WrongThread));
+        const auto live = ResolveLifecycle();
+        if (live.HasError())
+            return Result<void>::Failure(live.ErrorValue());
         if (!ValidScope(scope) || (reason != XRAnchorWithdrawal::ProviderStopped && reason != XRAnchorWithdrawal::AccessRevoked))
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
         if (scope != scope_)
@@ -161,18 +178,20 @@ namespace Horo::XR {
 
     /** @brief Checks the canonical control lane and every retained producer and consent generation. */
     Result<void> XRSpatialAnchors::CheckScope(const XRAnchorScope &scope) const {
-        if (!lifecycle_.IsOwnerThread())
-            return Result<void>::Failure(MakeError(XRSessionErrors::WrongThread));
+        const auto live = ResolveLifecycle();
+        if (live.HasError())
+            return Result<void>::Failure(live.ErrorValue());
+        const auto &lifecycle = *live.Value();
         if (!ValidScope(scope))
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
         if (!scope_.grant.IsValid())
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
-        if (scope != scope_ || continuity_ != lifecycle_.trackingContinuity_)
+        if (scope != scope_ || continuity_ != lifecycle.trackingContinuity_)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         if (withdrawal_)
             return Result<void>::Failure(
                 MakeError(*withdrawal_ == XRAnchorWithdrawal::AccessRevoked ? XRErrors::PermissionDenied : XRErrors::OperationUnavailable));
-        return lifecycle_.Admit(scope.space.id.session, true);
+        return lifecycle.Admit(scope.space.id.session, true);
     }
 
     /** @brief Checks opaque slot incarnation after canonical owner validation, before indexing any data. */

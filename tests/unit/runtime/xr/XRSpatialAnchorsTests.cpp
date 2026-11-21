@@ -30,7 +30,7 @@ namespace Horo::XR {
 
         struct Fixture final {
             Resources resources;
-            XRSessionLifecycle lifecycle{resources};
+            std::shared_ptr<XRSessionLifecycle> lifecycle{std::make_shared<XRSessionLifecycle>(resources)};
             XRSpatialAnchors anchors{lifecycle};
             XRSessionId session{ActivateSession(1)};
 
@@ -44,7 +44,7 @@ namespace Horo::XR {
                 const auto negotiation = NegotiateXRFeatures(snapshot, snapshot.System(), snapshot.Revision(),
                                                              {.profile = XRFeatureProfile::Projection1_0, .requestedLimits = limits});
                 REQUIRE(negotiation.plan);
-                const auto active = Value(lifecycle.Activate(snapshot, snapshot.System(), snapshot.Revision(), *negotiation.plan));
+                const auto active = Value(lifecycle->Activate(snapshot, snapshot.System(), snapshot.Revision(), *negotiation.plan));
                 Focus(active);
                 return active;
             }
@@ -56,7 +56,7 @@ namespace Horo::XR {
             }
 
             void Event(const XRSessionId active, const XRSessionEvent event) {
-                REQUIRE(lifecycle.ApplyEvent(active, event).HasValue());
+                REQUIRE(lifecycle->ApplyEvent(active, event).HasValue());
             }
 
             XRAnchorScope Scope(const std::uint64_t grant = 1, const std::uint64_t origin = 1, const std::uint64_t provider = 1) const {
@@ -196,8 +196,21 @@ namespace Horo::XR {
         const auto replacement = fixture.Scope(3, 1, 2);
         REQUIRE(fixture.anchors.Activate(replacement, Limits, XRCapabilityState::Available).HasValue());
         const auto replacedId = Value(fixture.anchors.Create(replacement, At(50)));
-        fixture.lifecycle.Shutdown();
+        fixture.lifecycle->Shutdown();
         RequireFailureIdentity(fixture.anchors.Read(replacement, replacedId, At(64)), XRErrors::IdentityStale);
         REQUIRE(fixture.anchors.Withdraw(replacement, XRAnchorWithdrawal::ProviderStopped).HasValue());
+    }
+
+    TEST_CASE("XR anchors lose authority when the canonical session owner is destroyed", "[xr][anchors]") {
+        Fixture fixture;
+        const auto scope = fixture.Scope();
+        REQUIRE(fixture.anchors.Activate(scope, Limits, XRCapabilityState::Available).HasValue());
+        const auto id = Value(fixture.anchors.Create(scope, At(50)));
+        REQUIRE(fixture.anchors.Publish(scope, id, Localized(60)).HasValue());
+
+        fixture.lifecycle.reset();
+        RequireFailureIdentity(fixture.anchors.Read(scope, id, At(61)), XRErrors::IdentityStale);
+        RequireFailureIdentity(fixture.anchors.Publish(scope, id, Localized(62)), XRErrors::IdentityStale);
+        RequireFailureIdentity(fixture.anchors.Activate(fixture.Scope(2), Limits, XRCapabilityState::Available), XRErrors::IdentityStale);
     }
 }  // namespace Horo::XR
