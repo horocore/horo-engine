@@ -12,6 +12,7 @@ namespace Horo::AI {
     class QueryExecution;
     struct QueryExecutionInputs;
     struct QueryExecutionSettings;
+
     /** @brief Captured Navigation-owned samples in provider order, paired with their exact coordinate frame. */
     struct QueryNavigationSurfaceSource final {
         const Navigation::NavigationSamplePositionResult &samples;
