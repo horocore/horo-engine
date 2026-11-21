@@ -45,6 +45,48 @@ namespace Horo::Application::Internal {
             return actor.components && actor.components->animation &&
                    actor.components->animation->rootMotion == Animation::RootMotionPolicy::RequestCharacterMovement;
         }
+
+        /** @brief Accumulates the captured authored ancestors from the immediate parent outward. */
+        Result<Math::Mat4> CharacterParentMatrix(const Runtime::RuntimeSceneView &scene, std::optional<Runtime::EntityRef> parent) {
+            using Matrix = Result<Math::Mat4>;
+            auto world = Math::Mat4::Identity();
+            auto remaining = scene.SlotCount();
+            while (parent) {
+                if (remaining-- == 0)
+                    return Matrix::Failure(MakeError(Physics::PhysicsErrors::QuerySnapshotStale));
+                const auto ancestor = scene.Get(*parent);
+                if (ancestor.HasError())
+                    return Matrix::Failure(ancestor.ErrorValue());
+                const auto matrix = ancestor.Value().localTransform->TryToMatrix();
+                if (matrix.HasError())
+                    return Matrix::Failure(matrix.ErrorValue());
+                world = Math::Multiply(matrix.Value(), world);
+                parent = ancestor.Value().parent;
+            }
+            return Matrix::Success(world);
+        }
+
+        /** @brief Converts committed Character world coordinates without taking ownership of local scale. */
+        Result<Math::Transform> CharacterLocalPose(const Runtime::RuntimeSceneView &scene, const Runtime::RuntimeEntityView &actor,
+                                                   const Character::CharacterTransformPublication &collisionRoot) {
+            using Pose = Result<Math::Transform>;
+            if (!actor.parent)
+                return Pose::Success({collisionRoot.position, collisionRoot.heading, actor.localTransform->scale});
+            const auto matrix = CharacterParentMatrix(scene, actor.parent);
+            if (matrix.HasError())
+                return Pose::Failure(matrix.ErrorValue());
+            const auto inverse = Math::TryInverseAffine(matrix.Value());
+            if (inverse.HasError())
+                return Pose::Failure(inverse.ErrorValue());
+            const auto parent = Math::TryDecomposeAffineTRS(matrix.Value());
+            if (parent.HasError())
+                return Pose::Failure(parent.ErrorValue());
+            const auto position = Math::TryTransformPoint(inverse.Value(), collisionRoot.position);
+            if (position.HasError())
+                return Pose::Failure(position.ErrorValue());
+            return Pose::Success(
+                {position.Value(), (parent.Value().rotation.Inverse() * collisionRoot.heading).Normalized(), actor.localTransform->scale});
+        }
     }  // namespace
 
     /** @brief Bounded per-host input/receipt storage and the exact native attempt retained by the scheduler. */
@@ -66,9 +108,16 @@ namespace Horo::Application::Internal {
             NativeStep step{NativeStep::Pending};
         };
 
+        struct Committed final {
+            Runtime::SceneRuntimeId scene;
+            std::uint64_t localTick{};
+            std::uint64_t schedulerTick{};
+        };
+
         std::vector<Character::Detail::CharacterSceneRootMotion> roots;
         std::vector<Receipt> receipts;
         std::optional<Pending> pending;
+        std::optional<Committed> committed;
         std::optional<Runtime::SceneRuntimeId> failedScene;
 
         explicit AnimationFixedState(std::size_t capacity) {
@@ -79,6 +128,13 @@ namespace Horo::Application::Internal {
         /** @brief Excludes overlap with a pending tick or an irreversible failed native step. */
         bool MayStart(Runtime::SceneRuntimeId scene) const noexcept {
             return !pending && failedScene != scene;
+        }
+
+        /** @brief Matches the requested scheduler tick and both native publications to the same authority. */
+        bool HasCommittedPose(const Scope &scope, const Runtime::RuntimeSceneView &scene, const std::uint64_t tick) const noexcept {
+            return committed && scene.IsCurrent() && committed->scene == scope.scene && scene.RuntimeId() == scope.scene &&
+                   committed->schedulerTick == tick && scope.character.PublishedTick().completedTick == committed->localTick &&
+                   scope.physics.PublishedTick().completedTick == committed->localTick;
         }
 
         /** @brief Copies current root requests only from entities with a resident controller. */
@@ -409,6 +465,7 @@ namespace Horo::Application::Internal {
             scope.HasError() || pending.scene != scope.Value().scene)
             std::terminate();
         FixedAccess::Commit(scope.Value().character, pending.attempt);
+        fixedAnimation_->committed = AnimationFixedState::Committed{pending.scene, pending.attempt.tick, context.simulationTick};
         fixedAnimation_->pending.reset();
     }
 
@@ -437,6 +494,34 @@ namespace Horo::Application::Internal {
             return Result<Physics::Detail::PhysicsSceneHostScope>::Failure(
                 MakeError(Physics::PhysicsErrors::InvalidState, "No Scene-owned Physics aggregate is published."));
         return Physics::Detail::PhysicsSceneHostAccess::Borrow(*published_);
+    }
+
+    /** @copydoc ScenePhysicsHost::ReadCharacterLocalTransform */
+    Result<Math::Transform> ScenePhysicsHost::ReadCharacterLocalTransform(const Runtime::RuntimeSceneView &scene,
+                                                                          const Runtime::RuntimeEntityView &entity,
+                                                                          const std::uint64_t schedulerTick) {
+        using Pose = Result<Math::Transform>;
+        const auto borrowed = Borrow();
+        if (borrowed.HasError())
+            return Pose::Failure(borrowed.ErrorValue());
+        const auto &scope = borrowed.Value();
+        if (!fixedAnimation_->HasCommittedPose(scope, scene, schedulerTick))
+            return Pose::Failure(MakeError(Physics::PhysicsErrors::QuerySnapshotStale));
+        const auto actor = scene.Get(entity.entity);
+        if (actor.HasError())
+            return Pose::Failure(actor.ErrorValue());
+        const auto &controller = actor.Value().components->characterController;
+        if (!actor.Value().authoredObject || !controller || !controller->enabled)
+            return Pose::Failure(MakeError(Physics::PhysicsErrors::HandleStale));
+        const auto binding = std::ranges::find_if(scope.characterBindings, [&actor, &controller](const auto &row) {
+            return row.object == *actor.Value().authoredObject && row.component == controller->id;
+        });
+        if (binding == scope.characterBindings.end())
+            return Pose::Failure(MakeError(Physics::PhysicsErrors::HandleStale));
+        const auto collisionRoot = scope.character.ControllerTransform(binding->handle);
+        if (collisionRoot.HasError())
+            return Pose::Failure(collisionRoot.ErrorValue());
+        return CharacterLocalPose(scene, actor.Value(), collisionRoot.Value());
     }
 
     /** @copydoc ScenePhysicsHost::ReadCharacterVelocity */

@@ -428,6 +428,25 @@ namespace Horo::Application::Internal {
             });
         }
 
+        /** @brief Routes opted-in Character transforms through the same committed Scene and scheduler proof as the snapshot. */
+        Net::SceneReplicationTransformSource SelectCharacterRootTransform(const std::shared_ptr<WorldRecord> &record) {
+            return [owner = std::weak_ptr{record}](const Runtime::RuntimeSceneView &scene, const Runtime::RuntimeEntityView &entity,
+                                                   const std::uint64_t tick) {
+                using Pose = Result<std::optional<Math::Transform>>;
+                if (const auto &components = *entity.components;
+                    !components.characterController || !components.characterController->enabled || !components.animation ||
+                    components.animation->rootMotion != Animation::RootMotionPolicy::RequestCharacterMovement)
+                    return Pose::Success(std::nullopt);
+                const auto scoped = owner.lock();
+                if (!scoped || scoped->closeRequested)
+                    return Pose::Failure(MakeError(Net::ReplicationCaptureErrors::Stale));
+                const auto projected = scoped->native.ReadCharacterLocalTransform(scene, entity, tick);
+                if (projected.HasError())
+                    return Pose::Failure(projected.ErrorValue());
+                return Pose::Success(projected.Value());
+            };
+        }
+
         /** @brief Admits the real Character owner only for schemas declaring world-space velocity. */
         Net::SceneReplicationVelocitySource SelectCharacterVelocity(const std::shared_ptr<WorldRecord> &record,
                                                                     std::span<const Net::SceneReplicationFieldBinding> fields) {
@@ -925,10 +944,13 @@ namespace Horo::Application::Internal {
         auto action = SelectAnimationAction(record_, selection->action);
         if (action.HasError())
             return Result<void>::Failure(action.ErrorValue());
-        auto source = Network::SceneReplicationCommitSource::CreateObserved(request_.scene, owners_->fixed->Source(), selection->schema,
-                                                                            selection->version, selection->fields, record_,
-                                                                            SelectCharacterVelocity(record_, selection->fields),
-                                                                            std::move(action).Value());
+        auto source =
+            Network::SceneReplicationCommitSource::CreateObservedWithSources(request_.scene, owners_->fixed->Source(), selection->schema,
+                                                                             selection->version, selection->fields, record_,
+                                                                             {.velocity =
+                                                                                  SelectCharacterVelocity(record_, selection->fields),
+                                                                              .action = std::move(action).Value(),
+                                                                              .transform = SelectCharacterRootTransform(record_)});
         if (source.HasError())
             return Result<void>::Failure(std::move(source).ErrorValue());
         record_->publicTransforms = std::move(source).Value();

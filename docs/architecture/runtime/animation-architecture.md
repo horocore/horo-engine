@@ -831,6 +831,12 @@ fails preparation. The remainder runs from the applied pose to the requested
 endpoint. Feedback joins the pose at the same commit fence, and
 abort discards the request and every staged response.
 
+When public Scene replication selects a root-motion Character, the authority
+reads its committed collision-root position and heading through the same
+scheduler tick used to capture the network snapshot. It expresses that pose in
+the Scene parent's coordinate frame and keeps the authored local scale. The
+replication field schema still determines which axes may be sent.
+
 Rules:
 
 - root motion is optional per clip

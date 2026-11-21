@@ -50,6 +50,20 @@ namespace Horo::Network {
             }
             return true;
         }
+
+        /** @brief Canonicalizes rotation only for schemas that transmit it. */
+        Result<Math::Transform> NormalizeCapturedTransform(Math::Transform value, std::span<const SceneReplicationFieldBinding> fields) {
+            using Pose = Result<Math::Transform>;
+            if (std::ranges::none_of(fields, [](const auto &field) {
+                return field.property >= SceneReplicationProperty::RotationX && field.property <= SceneReplicationProperty::RotationW;
+            }))
+                return Pose::Success(value);
+            const auto rotation = value.rotation.TryNormalized();
+            if (rotation.HasError())
+                return Pose::Failure(rotation.ErrorValue());
+            value.rotation = rotation.Value();
+            return Pose::Success(value);
+        }
     }  // namespace
 
     /** @copydoc SceneReplicationCommitSource::SceneReplicationCommitSource */
@@ -62,7 +76,8 @@ namespace Horo::Network {
                                                                Runtime::RuntimeDispatchSource dispatch, ReplicationSchemaId schema,
                                                                ReplicationSchemaVersion version,
                                                                std::vector<SceneReplicationFieldBinding> fields,
-                                                               std::weak_ptr<const void> sceneOwner, PresentationSources sources)
+                                                               std::weak_ptr<const void> sceneOwner,
+                                                               SceneReplicationObservationSources sources)
         : expectedScene_(scene), dispatch_(std::move(dispatch)), schema_(schema), version_(version), fields_(std::move(fields)),
           sceneOwner_(std::move(sceneOwner)), sources_(std::move(sources)) {}
 
@@ -87,19 +102,27 @@ namespace Horo::Network {
         Runtime::SceneRuntimeId scene, Runtime::RuntimeDispatchSource dispatch, ReplicationSchemaId schema,
         ReplicationSchemaVersion version, const std::span<const SceneReplicationFieldBinding> fields, std::weak_ptr<const void> sceneOwner,
         SceneReplicationVelocitySource velocity, SceneReplicationActionSource action) {
+        return CreateObservedWithSources(scene, std::move(dispatch), schema, version, fields, std::move(sceneOwner),
+                                         {.velocity = std::move(velocity), .action = std::move(action)});
+    }
+
+    /** @copydoc SceneReplicationCommitSource::CreateObservedWithSources */
+    Result<std::shared_ptr<SceneReplicationCommitSource>> SceneReplicationCommitSource::CreateObservedWithSources(
+        Runtime::SceneRuntimeId scene, Runtime::RuntimeDispatchSource dispatch, ReplicationSchemaId schema,
+        ReplicationSchemaVersion version, const std::span<const SceneReplicationFieldBinding> fields, std::weak_ptr<const void> sceneOwner,
+        SceneReplicationObservationSources sources) {
         using Source = Result<std::shared_ptr<SceneReplicationCommitSource>>;
         if (!scene.IsValid() || !dispatch.IsValid() || !schema.IsValid() || !version.IsValid() || sceneOwner.expired())
             return Source::Failure(MakeError(ReplicationCaptureErrors::Invalid));
         try {
-            auto bindings = CaptureBindings(fields, static_cast<bool>(velocity), static_cast<bool>(action));
+            auto bindings = CaptureBindings(fields, static_cast<bool>(sources.velocity), static_cast<bool>(sources.action));
             if (bindings.HasError())
                 return Source::Failure(std::move(bindings).ErrorValue());
             if (!UniqueObservedAxes(bindings.Value()))
                 return Source::Failure(MakeError(ReplicationCaptureErrors::Invalid));
-            return Source::Success(
-                std::make_shared<SceneReplicationCommitSource>(ConstructionKey{}, scene, std::move(dispatch), schema, version,
-                                                               std::move(bindings).Value(), std::move(sceneOwner),
-                                                               PresentationSources{std::move(velocity), std::move(action)}));
+            return Source::Success(std::make_shared<SceneReplicationCommitSource>(ConstructionKey{}, scene, std::move(dispatch), schema,
+                                                                                  version, std::move(bindings).Value(),
+                                                                                  std::move(sceneOwner), std::move(sources)));
         } catch (const std::bad_alloc &) {
             return Source::Failure(MakeError(ReplicationCaptureErrors::Capacity));
         }
@@ -190,15 +213,10 @@ namespace Horo::Network {
         const auto entity = committed_.Get(*reading_);
         if (entity.HasError())
             return Result<void>::Failure(entity.ErrorValue());
-        auto transform = *entity.Value().localTransform;
-        if (std::ranges::any_of(fields_, [](const auto &field) {
-            return field.property >= SceneReplicationProperty::RotationX && field.property <= SceneReplicationProperty::RotationW;
-        })) {
-            const auto rotation = transform.rotation.TryNormalized();
-            if (rotation.HasError())
-                return Result<void>::Failure(rotation.ErrorValue());
-            transform.rotation = rotation.Value();
-        }
+        const auto sampled = SampleTransform(read, entity.Value());
+        if (sampled.HasError())
+            return Result<void>::Failure(sampled.ErrorValue());
+        auto transform = sampled.Value();
         const auto presentation = SamplePresentation(read, entity.Value());
         if (presentation.HasError())
             return Result<void>::Failure(presentation.ErrorValue());
@@ -215,6 +233,24 @@ namespace Horo::Network {
                 return written;
         }
         return Result<void>::Success();
+    }
+
+    /** @copydoc SceneReplicationCommitSource::SampleTransform */
+    Result<Math::Transform> SceneReplicationCommitSource::SampleTransform(const ReplicationCommittedRead &read,
+                                                                          const Runtime::RuntimeEntityView &entity) const {
+        using Output = Result<Math::Transform>;
+        const auto authored = *entity.localTransform;
+        if (!sources_.transform || std::ranges::none_of(fields_, [](const auto &field) {
+            return field.property <= SceneReplicationProperty::RotationW;
+        }))
+            return NormalizeCapturedTransform(authored, fields_);
+        const auto sampled = sources_.transform(committed_, entity, read.simulationTick);
+        if (sampled.HasError())
+            return Output::Failure(sampled.ErrorValue());
+        const auto value = sampled.Value().value_or(authored);
+        if (!IsCurrent(read) || !Math::IsFinite(value.translation))
+            return Output::Failure(MakeError(ReplicationCaptureErrors::Invalid));
+        return NormalizeCapturedTransform(value, fields_);
     }
 
     /** @copydoc SceneReplicationCommitSource::SamplePresentation */

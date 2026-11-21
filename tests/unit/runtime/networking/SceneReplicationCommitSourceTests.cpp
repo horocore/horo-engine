@@ -127,10 +127,14 @@ namespace Horo::Network {
             ObservedSceneFixture() : ObservedSceneFixture(TransformBindings(), {}) {}
 
             ObservedSceneFixture(std::span<const SceneReplicationFieldBinding> fields, SceneReplicationVelocitySource velocity,
-                                 SceneReplicationActionSource action = {}) {
-                auto selected = SceneReplicationCommitSource::CreateObserved(scene.scene->View().RuntimeId(), runtime->DispatchSource(),
-                                                                             mapping.provenance.schema, mapping.provenance.schemaVersion,
-                                                                             fields, owner, std::move(velocity), std::move(action));
+                                 SceneReplicationActionSource action = {}, SceneReplicationTransformSource transform = {}) {
+                auto selected =
+                    SceneReplicationCommitSource::CreateObservedWithSources(scene.scene->View().RuntimeId(), runtime->DispatchSource(),
+                                                                            mapping.provenance.schema, mapping.provenance.schemaVersion,
+                                                                            fields, owner,
+                                                                            {.velocity = std::move(velocity),
+                                                                             .action = std::move(action),
+                                                                             .transform = std::move(transform)});
                 REQUIRE(selected.HasValue());
                 source = std::move(selected).Value();
                 auto participant = std::make_unique<ObservedScene>(scene, source);
@@ -237,6 +241,47 @@ namespace Horo::Network {
         const auto read = fixture.Open();
         REQUIRE(read.HasError());
         CHECK(read.ErrorValue().code.Value() == ReplicationCaptureErrors::Uncommitted.code.Value());
+    }
+
+    TEST_CASE("Observed Scene capture publishes the adjacent owner's transform at the admitted scheduler tick",
+              "[network][capture][scene]") {
+        using Projection = Result<std::optional<Math::Transform>>;
+        std::optional<Math::Transform> projected{Math::Transform{.translation = {12.0F, 14.0F, 16.0F}}};
+        std::uint64_t sampledTick{};
+        ObservedSceneFixture fixture{TransformBindings(),
+                                     {},
+                                     {},
+                                     [&projected, &sampledTick](const Runtime::RuntimeSceneView &scene,
+                                                                const Runtime::RuntimeEntityView &entity, const std::uint64_t tick) {
+            CHECK(scene.IsCurrent());
+            CHECK(scene.RuntimeId() == entity.entity.runtime);
+            CHECK(entity.entity == Object().entity);
+            sampledTick = tick;
+            return Projection::Success(projected);
+        }};
+        REQUIRE(fixture.Step().HasValue());
+        const std::array targets{ReplicationCaptureTarget{fixture.mapping, fixture.source}};
+        auto capture = ReplicationStateCapture::Prepare(fixture.Open().Value(), fixture.scene.registry, targets).Value();
+        const auto sample = [&] {
+            const auto captured =
+                fixture.source->CaptureAfterCommit(fixture.scene.lifecycle, *capture, Runtime::RuntimePhase::NetworkFlush);
+            REQUIRE(captured.HasValue());
+            return captured.Value();
+        };
+        REQUIRE(sample().published == 1);
+        const auto first = capture->Latest(fixture.mapping.object).Value();
+        CHECK(first->SimulationTick() == sampledTick);
+        CHECK(std::get<double>(first->Fields()[0].value) == 12.0);
+        CHECK(fixture.scene.scene->View().Get(fixture.mapping.entity).Value().localTransform->translation.x == 3.0F);
+
+        REQUIRE(fixture.Step().HasValue());
+        projected->translation.x = std::numeric_limits<float>::infinity();
+        CHECK(sample().failed == 1);
+        CHECK(capture->Latest(fixture.mapping.object).Value() == first);
+        projected.reset();
+        REQUIRE(fixture.Step().HasValue());
+        REQUIRE(sample().published == 1);
+        CHECK(std::get<double>(capture->Latest(fixture.mapping.object).Value()->Fields()[0].value) == 3.0);
     }
 
     TEST_CASE("Application-owned Scene capture reads its exact committed fixed tick and mapped schema", "[network][capture][scene]") {

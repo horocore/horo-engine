@@ -92,6 +92,14 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<Math::Vec3> ReadCharacterVelocity(Runtime::SceneRuntimeId scene, Runtime::SceneObjectId object,
                                                                Runtime::PhysicsComponentId component);
+        /** @brief Copies the Character-owned collision root in the Scene's local transform convention.
+         * @param scene Exact committed Scene view. @param entity Its bound Character actor.
+         * @param schedulerTick Exact committed tick being published by the caller.
+         * @return Local position and heading with authored scale, or a typed stale/conversion failure.
+         */
+        [[nodiscard]] Result<Math::Transform> ReadCharacterLocalTransform(const Runtime::RuntimeSceneView &scene,
+                                                                          const Runtime::RuntimeEntityView &entity,
+                                                                          std::uint64_t schedulerTick);
         /** @brief Returns only the actual published Physics candidate's issued state target. */
         [[nodiscard]] Result<Physics::Detail::PhysicsSceneStateTarget> PublishedStateTarget();
         /** @brief Returns only the exact actual pending candidate for this receiving Scene; no Scene-ID-only authority. */
