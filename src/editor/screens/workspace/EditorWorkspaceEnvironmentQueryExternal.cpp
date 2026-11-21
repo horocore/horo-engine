@@ -64,7 +64,7 @@ namespace Horo::Editor {
             return conflict();
 
         const auto stage = [&](AI::EnvironmentQueryAsset asset) -> Result<EnvironmentQueryState> {
-            auto settings = AI::ReadBuiltinPointQuerySettings(asset, *m_querySchema);
+            auto settings = EnvironmentQueryWorkspaceSource::ReadEditableSettings(asset, *m_querySchema);
             if (settings.HasError())
                 return Result<EnvironmentQueryState>::Failure(settings.ErrorValue());
             const auto bytes = AI::EnvironmentQuerySourceCodec::Encode(asset);

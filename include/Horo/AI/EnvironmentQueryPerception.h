@@ -8,12 +8,6 @@
 #include "Horo/AI/EnvironmentQueryExecution.h"
 
 namespace Horo::AI {
-    /** @brief Captured policy for which observations may contribute to the test. */
-    enum class QueryPerceptionMatch : std::uint8_t {
-        Remembered,
-        CurrentlySensed,
-    };
-
     /** @brief Exact query stage, perception publication and filter. */
     struct QueryPerceptionTest final {
         QueryStageId stage;
@@ -52,6 +46,21 @@ namespace Horo::AI {
     [[nodiscard]] Result<EnvironmentQueryAsset> CreateBuiltinPerceptionQuery(QueryId query, QueryStageId generator, QueryStageId test,
                                                                              QueryResultSchemaId result, std::string displayName,
                                                                              QueryPerceptionMatch match, std::uint32_t maximumResults);
+
+    /** @brief Reads editable settings only when the native Perception source shape is validated.
+     * @param source Exact authored source. @param registry Installed descriptor registry.
+     * @return Typed settings or a descriptor/source error.
+     */
+    [[nodiscard]] Result<BuiltinPerceptionQuerySettings> ReadBuiltinPerceptionQuerySettings(const EnvironmentQueryAsset &source,
+                                                                                            const QuerySchemaRegistry &registry);
+
+    /** @brief Replaces native Perception settings while preserving the authored source and stage identities.
+     * @param source Exact authored source. @param registry Installed descriptors. @param settings Proposed values.
+     * @return Detached validated replacement or a typed source error.
+     */
+    [[nodiscard]] Result<EnvironmentQueryAsset> EditBuiltinPerceptionQuerySettings(const EnvironmentQueryAsset &source,
+                                                                                   const QuerySchemaRegistry &registry,
+                                                                                   BuiltinPerceptionQuerySettings settings);
 
     /** @brief Identifies a plan selecting the native perceived-entity generator. */
     [[nodiscard]] bool UsesBuiltinPerceptionQuery(const EnvironmentQueryPlan &plan) noexcept;

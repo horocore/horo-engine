@@ -332,7 +332,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             });
             if (query != model.environmentQueryDocuments.end()) {
                 using enum EnvironmentQueryEditAction;
-                if (query->settings) {
+                if (query->settings || query->perception) {
                     const auto operation = action == EditorMenuAction::Undo ? Undo : action == EditorMenuAction::Redo ? Redo : Save;
                     controller->ProcessCommand(MakeEnvironmentQueryEditCommand(*query, operation));
                 }

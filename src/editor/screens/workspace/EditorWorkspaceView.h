@@ -176,6 +176,7 @@ namespace Horo::Editor {
             std::uint64_t inner{};
             std::uint64_t maximum{};
             bool annulus{};
+            bool currentlySensed{};
             AI::QueryContextId center;
             std::vector<Distance> distances;
             std::uint64_t newDistanceRadius{};
@@ -190,6 +191,12 @@ namespace Horo::Editor {
         mutable EnvironmentQueryFields m_environmentQueryFields;
         /** @brief Draws the existing distance stages and returns the identity selected for removal. */
         [[nodiscard]] std::optional<AI::QueryStageId> DrawEnvironmentQueryDistanceStages(EnvironmentQueryFields &fields) const;
+        /** @brief Draws typed Perception controls against the current document revision. */
+        void DrawPerceptionQuerySettings(const EnvironmentQueryWorkspaceDocument &document,
+                                         EditorWorkspaceViewCommandData &outCommand) const;
+        /** @brief Draws revision-fenced save and history commands shared by editable query kinds. */
+        void DrawEnvironmentQueryHistory(const EnvironmentQueryWorkspaceDocument &document,
+                                         EditorWorkspaceViewCommandData &outCommand) const;
         /** @brief Draws typed settings and emits a single revision-fenced edit/history action. */
         void DrawEnvironmentQuerySettings(const EnvironmentQueryWorkspaceDocument &document,
                                           EditorWorkspaceViewCommandData &outCommand) const;

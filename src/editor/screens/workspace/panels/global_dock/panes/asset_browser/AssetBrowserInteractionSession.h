@@ -30,6 +30,8 @@ namespace Horo::Editor {
         int outerSteps{1};
         int innerSteps{};
         int maximumResults{9};
+        bool perceivedActors{};
+        bool currentlySensed{true};
         bool annulus{};
         bool distance{};
         int radiusMillimeters{1500};

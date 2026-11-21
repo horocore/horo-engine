@@ -210,6 +210,41 @@ namespace Horo::AI {
                                                                            match == QueryPerceptionMatch::CurrentlySensed}}}}});
     }
 
+    /** @copydoc ReadBuiltinPerceptionQuerySettings */
+    Result<BuiltinPerceptionQuerySettings> ReadBuiltinPerceptionQuerySettings(const EnvironmentQueryAsset &source,
+                                                                              const QuerySchemaRegistry &registry) {
+        using Settings = Result<BuiltinPerceptionQuerySettings>;
+        const auto plan = EnvironmentQueryPlan::Compile(source, registry);
+        if (plan.HasError())
+            return Settings::Failure(plan.ErrorValue());
+        const auto match = CaptureMatch(plan.Value(), registry);
+        if (match.HasError())
+            return Settings::Failure(match.ErrorValue());
+        return Settings::Success({match.Value(), source.ResultSchema().maximumResults});
+    }
+
+    /** @copydoc EditBuiltinPerceptionQuerySettings */
+    Result<EnvironmentQueryAsset> EditBuiltinPerceptionQuerySettings(const EnvironmentQueryAsset &source,
+                                                                     const QuerySchemaRegistry &registry,
+                                                                     BuiltinPerceptionQuerySettings settings) {
+        using Edited = Result<EnvironmentQueryAsset>;
+        const auto previous = ReadBuiltinPerceptionQuerySettings(source, registry);
+        if (previous.HasError())
+            return Edited::Failure(previous.ErrorValue());
+        if (settings.match > QueryPerceptionMatch::CurrentlySensed)
+            return Edited::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+        QueryAssetSource edited{.id = source.Id(),
+                                .displayName = source.DisplayName(),
+                                .result = source.ResultSchema(),
+                                .stages = {source.Stages().begin(), source.Stages().end()}};
+        edited.result.maximumResults = settings.maximumResults;
+        const auto test = std::ranges::find(edited.stages, QueryStageKind::Test, &QueryAssetStage::kind);
+        const auto property =
+            std::ranges::find(test->properties, QueryPropertyId::Create(CurrentlySensed).Value(), &QueryPropertyValue::id);
+        property->value = settings.match == QueryPerceptionMatch::CurrentlySensed;
+        return EnvironmentQueryAsset::Capture(edited);
+    }
+
     /** @copydoc UsesBuiltinPerceptionQuery */
     bool UsesBuiltinPerceptionQuery(const EnvironmentQueryPlan &plan) noexcept {
         const auto stages = plan.Stages();

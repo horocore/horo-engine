@@ -35,6 +35,7 @@
 #include "editor/renderer/xr/EditorXrSceneGeometry.h"
 #include "editor/screens/workspace/DecisionGraphDocumentHistory.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
+#include "editor/screens/workspace/EnvironmentQueryWorkspaceSource.h"
 #include "editor/screens/workspace/PCGPreviewWorkspace.h"
 #include "editor/screens/workspace/prefab/PrefabApplyTransaction.h"
 #include "editor/screens/workspace/prefab/PrefabDocumentSession.h"
@@ -837,7 +838,7 @@ namespace Horo::Editor {
         /** @brief Immutable semantic root retained by both history and the active Query draft. */
         struct EnvironmentQueryState final {
             std::shared_ptr<const AI::EnvironmentQueryAsset> source;
-            AI::BuiltinPointQuerySettings settings;
+            EditableEnvironmentQuerySettings settings;
             Sha256Digest digest;
             std::size_t bytes{};
         };
@@ -1614,6 +1615,10 @@ namespace Horo::Editor {
                                       Assets::AssetId newId);
         /** @brief Validates the browser request and attempts to create an initial authored EQS source. */
         void CreateContentBrowserEnvironmentQuery(const EnvironmentQueryCreationRequest &request);
+        /** @brief Builds the selected native query shape before any durable publication. */
+        [[nodiscard]] Result<AI::EnvironmentQueryAsset> CreateInitialEnvironmentQuerySource(const EnvironmentQueryCreationRequest &request,
+                                                                                            AI::QueryId id, AI::QueryStageId stage,
+                                                                                            AI::QueryResultSchemaId result) const;
         /** @brief Creates and opens one registered query using the installed typed provider's authoring factory. */
         void PublishInitialEnvironmentQuery(const std::filesystem::path &destination, const EnvironmentQueryCreationRequest &request,
                                             Assets::AssetId newId);

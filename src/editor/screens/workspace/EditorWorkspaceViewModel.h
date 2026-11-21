@@ -359,13 +359,14 @@ namespace Horo::Editor {
         std::uint32_t column{};
     };
 
-    /** @brief Confirmed initial source creation, with an explicitly selected directory and typed lattice parameters. */
+    /** @brief Confirmed creation with an explicit directory and typed native query options. */
     struct EnvironmentQueryCreationRequest final {
         std::string directory;
         std::string name;
         AI::QueryPointLattice lattice;
         std::uint32_t maximumResults{};
         std::optional<AI::QueryPointDistanceTest> distance;
+        std::optional<AI::QueryPerceptionMatch> perception; /**< Present for an Actor Perception query. */
     };
 
     /** @brief Result of checking a saved query against the application's current descriptor registry. */
@@ -444,6 +445,7 @@ namespace Horo::Editor {
         std::optional<AI::BuiltinPointQuerySettings> settings;
         EnvironmentQueryDistanceStageChange stageChange;
         std::shared_ptr<const DocumentRecoveryRecord> recovery;
+        std::optional<AI::BuiltinPerceptionQuerySettings> perception;
     };
 
     /** @brief An immutable, registered Environment Query source in a normal workspace document. */
@@ -455,6 +457,7 @@ namespace Horo::Editor {
         QueryDescriptorAvailability descriptors{QueryDescriptorAvailability::RegistryUnavailable};
         EnvironmentQueryPreviewView preview;
         std::optional<AI::BuiltinPointQuerySettings> settings;
+        std::optional<AI::BuiltinPerceptionQuerySettings> perception;
         std::uint64_t revision{1};
         bool dirty{};
         bool canUndo{};

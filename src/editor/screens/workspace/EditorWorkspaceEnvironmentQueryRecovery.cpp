@@ -87,7 +87,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::InspectEnvironmentQueryRecovery */
     void EditorWorkspaceController::InspectEnvironmentQueryRecovery(EnvironmentQueryWorkspaceDocument &document) const {
-        if (!document.settings || !m_mutations || !m_durableFiles || !m_workspaceSession.IsValid())
+        if ((!document.settings && !document.perception) || !m_mutations || !m_durableFiles || !m_workspaceSession.IsValid())
             return;
         DocumentRecoveryService recovery(ProjectRoot(), *m_mutations, *m_durableFiles);
         auto observed = recovery.Inspect(document.asset, document.identity.key);
@@ -130,7 +130,7 @@ namespace Horo::Editor {
             return Result<void>::Failure(decoded.ErrorValue());
         if (decoded.Value().Id() != document.query->Id() || decoded.Value().ResultSchema().id != document.query->ResultSchema().id)
             return conflict();
-        auto settings = AI::ReadBuiltinPointQuerySettings(decoded.Value(), *m_querySchema);
+        auto settings = EnvironmentQueryWorkspaceSource::ReadEditableSettings(decoded.Value(), *m_querySchema);
         if (settings.HasError())
             return Result<void>::Failure(settings.ErrorValue());
         const auto digest = ComputeSha256(bytes);

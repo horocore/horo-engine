@@ -1,6 +1,7 @@
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryExecution.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
+#include "Horo/AI/EnvironmentQueryPerception.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Editor/DocumentRecoveryService.h"
@@ -994,6 +995,61 @@ TEST_CASE("Environment Query New creates the first registered source from explic
     draft.innerSteps = 1;
 
     constexpr auto path = "assets/First lattice.horo_eqs";
+    SECTION("Perception creation and history publish the exact cooked actor query") {
+        draft.perceivedActors = true;
+        draft.currentlySensed = false;
+        draft.stepMillimeters = 0;
+        const auto command = AssetBrowserInteractionSession::ConfirmCreateQuery(draft);
+        REQUIRE(command);
+        controller.ProcessCommand(*command);
+        REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
+        const auto &documents = controller.ViewModel().environmentQueryDocuments;
+        REQUIRE(documents.size() == 1);
+        const auto &document = documents.front();
+        REQUIRE(document.perception);
+        CHECK_FALSE(document.settings);
+        CHECK(document.perception->match == QueryPerceptionMatch::Remembered);
+        CHECK(document.perception->maximumResults == 7);
+        const auto original = document.query;
+        using enum EnvironmentQueryEditAction;
+        auto apply = MakeEnvironmentQueryEditCommand(document, Apply);
+        apply.environmentQueryEdit->perception = BuiltinPerceptionQuerySettings{QueryPerceptionMatch::CurrentlySensed, 3};
+        controller.ProcessCommand(apply);
+        REQUIRE_FALSE(document.diagnostic);
+        CHECK(document.dirty);
+        CHECK(document.perception->match == QueryPerceptionMatch::CurrentlySensed);
+        CHECK(document.perception->maximumResults == 3);
+        const auto edited = document.query;
+        controller.ProcessCommand(apply);
+        REQUIRE(document.diagnostic);
+        CHECK(document.query == edited);
+        controller.ProcessCommand(MakeEnvironmentQueryEditCommand(document, Undo));
+        CHECK(document.query == original);
+        controller.ProcessCommand(MakeEnvironmentQueryEditCommand(document, Redo));
+        CHECK(document.query == edited);
+        controller.ProcessCommand(MakeEnvironmentQueryEditCommand(document, Save));
+        REQUIRE_FALSE(document.diagnostic);
+        REQUIRE_FALSE(document.dirty);
+        controller.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = document.identity.instance});
+        REQUIRE(documents.empty());
+        Project::Open(controller, path);
+        REQUIRE(documents.size() == 1);
+        const auto &saved = *documents.front().query;
+        CHECK(saved.Id() == original->Id());
+        CHECK(saved.ResultSchema().id == original->ResultSchema().id);
+        REQUIRE(saved.Stages().size() == original->Stages().size());
+        for (std::size_t index = 0; index < saved.Stages().size(); ++index)
+            CHECK(saved.Stages()[index].id == original->Stages()[index].id);
+        const auto encoded = EnvironmentQueryCookedCodec::Encode(saved, registry.Value());
+        REQUIRE(encoded.HasValue());
+        const auto plan = EnvironmentQueryCookedCodec::Decode(encoded.Value(), registry.Value());
+        REQUIRE(plan.HasValue());
+        CHECK(UsesBuiltinPerceptionQuery(plan.Value()));
+        CHECK(plan.Value().ResultSchema().maximumResults == 3);
+        REQUIRE(documents.front().perception);
+        CHECK(documents.front().perception->match == QueryPerceptionMatch::CurrentlySensed);
+    }
     SECTION("the New route validates explicit distance settings before publishing the registered stage") {
         draft.distance = true;
         draft.radiusMillimeters = 0;

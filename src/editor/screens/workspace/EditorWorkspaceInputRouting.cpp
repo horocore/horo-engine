@@ -79,7 +79,7 @@ namespace Horo::Editor {
         });
         if (query != model.environmentQueryDocuments.end()) {
             using enum EnvironmentQueryEditAction;
-            if (!query->settings)
+            if (!query->settings && !query->perception)
                 return;
             if (router.ReadAction(context, Input::ActionId{kActionSave}).pressed)
                 command = MakeEnvironmentQueryEditCommand(*query, Save);

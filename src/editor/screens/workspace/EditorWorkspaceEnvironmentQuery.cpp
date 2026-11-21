@@ -2,6 +2,7 @@
 #include "EnvironmentQueryWorkspaceSource.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryExecution.h"
+#include "Horo/AI/EnvironmentQueryPerception.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Application/ProjectAssetImportCommitter.h"
 #include "Horo/Assets/AssetCookInputSnapshot.h"
@@ -617,6 +618,29 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc EditorWorkspaceController::CreateInitialEnvironmentQuerySource */
+    Result<AI::EnvironmentQueryAsset> EditorWorkspaceController::CreateInitialEnvironmentQuerySource(
+        const EnvironmentQueryCreationRequest &request, AI::QueryId id, AI::QueryStageId stage, AI::QueryResultSchemaId result) const {
+        using Source = Result<AI::EnvironmentQueryAsset>;
+        if (request.perception && request.distance)
+            return Source::Failure(MakeError(AI::AIErrors::EnvironmentQuerySchemaInvalid));
+        if (request.perception || request.distance) {
+            const auto test = AuthoredAiSources::Issue<AI::QueryStageId>(std::set{stage});
+            if (test.HasError())
+                return Source::Failure(test.ErrorValue());
+            if (request.perception)
+                return AI::CreateBuiltinPerceptionQuery(id, stage, test.Value(), result, request.name, *request.perception,
+                                                        request.maximumResults);
+            auto lattice = m_latticeQueryFactory(id, stage, result, request.name, request.lattice, request.maximumResults);
+            if (lattice.HasError())
+                return lattice;
+            if (lattice.Value().Stages().size() != 1)
+                return Source::Failure(MakeError(AI::AIErrors::EnvironmentQuerySchemaInvalid));
+            return AI::AddBuiltinPointDistanceTest(lattice.Value(), test.Value(), *request.distance);
+        }
+        return m_latticeQueryFactory(id, stage, result, request.name, request.lattice, request.maximumResults);
+    }
+
     /** @copydoc EditorWorkspaceController::PublishInitialEnvironmentQuery */
     void EditorWorkspaceController::PublishInitialEnvironmentQuery(const std::filesystem::path &destination,
                                                                    const EnvironmentQueryCreationRequest &request, Assets::AssetId newId) {
@@ -631,24 +655,12 @@ namespace Horo::Editor {
             const auto result = AuthoredAiSources::Issue<AI::QueryResultSchemaId>();
             if (!newId.IsValid() || path.HasError() || type.HasError() || id.HasError() || stage.HasError() || result.HasError())
                 return;
-            auto source =
-                m_latticeQueryFactory(id.Value(), stage.Value(), result.Value(), request.name, request.lattice, request.maximumResults);
+            const auto source = CreateInitialEnvironmentQuerySource(request, id.Value(), stage.Value(), result.Value());
+            const auto stageCount = request.perception || request.distance ? 2U : 1U;
             if (source.HasError() || source.Value().Id() != id.Value() || source.Value().ResultSchema().id != result.Value() ||
-                source.Value().Stages().size() != 1 || source.Value().Stages().front().id != stage.Value() ||
-                DescriptorAvailability(source.Value(), m_querySchema) != QueryDescriptorAvailability::Validated)
+                source.Value().Stages().size() != stageCount || source.Value().Stages().front().id != stage.Value() ||
+                !EnvironmentQueryWorkspaceSource::ReadEditableSettings(source.Value(), *m_querySchema).HasValue())
                 return;
-            if (request.distance) {
-                const auto test = AuthoredAiSources::Issue<AI::QueryStageId>(std::set{stage.Value()});
-                if (test.HasError())
-                    return;
-                auto withTest = AI::AddBuiltinPointDistanceTest(source.Value(), test.Value(), *request.distance);
-                if (withTest.HasError())
-                    return;
-                const auto plan = AI::EnvironmentQueryPlan::Compile(withTest.Value(), *m_querySchema);
-                if (plan.HasError() || !AI::BuiltinPointDistanceQuery::Capture(plan.Value().Stages().back(), *m_querySchema).HasValue())
-                    return;
-                source = std::move(withTest);
-            }
             const auto encoded = EnvironmentQuerySourceCodec::Encode(source.Value());
             if (encoded.HasError())
                 return;
@@ -724,6 +736,55 @@ namespace Horo::Editor {
         return remove;
     }
 
+    /** @copydoc EditorWorkspaceView::DrawEnvironmentQueryHistory */
+    void EditorWorkspaceView::DrawEnvironmentQueryHistory(const EnvironmentQueryWorkspaceDocument &document,
+                                                          EditorWorkspaceViewCommandData &outCommand) const {
+        using enum EnvironmentQueryEditAction;
+        const auto button = [&](std::string_view key, bool enabled) {
+            return Ui::Button(
+                {.label = m_context.localization.Get("editor", key).c_str(), .enabled = enabled, .font = m_context.theme.fonts.sans});
+        };
+        if (button("workspace.decision_graph.edit_save", document.dirty))
+            outCommand = MakeEnvironmentQueryEditCommand(document, Save);
+        if (button("workspace.decision_graph.edit_undo", document.canUndo))
+            outCommand = MakeEnvironmentQueryEditCommand(document, Undo);
+        if (button("workspace.decision_graph.edit_redo", document.canRedo))
+            outCommand = MakeEnvironmentQueryEditCommand(document, Redo);
+    }
+
+    /** @copydoc EditorWorkspaceView::DrawPerceptionQuerySettings */
+    void EditorWorkspaceView::DrawPerceptionQuerySettings(const EnvironmentQueryWorkspaceDocument &document,
+                                                          EditorWorkspaceViewCommandData &outCommand) const {
+        using AI::QueryPerceptionMatch;
+        const auto text = [&](std::string_view key) {
+            return m_context.localization.Get("editor", key);
+        };
+        const auto &fonts = m_context.theme.fonts;
+        auto &fields = m_environmentQueryFields;
+        const EnvironmentQueryDocumentFence fence{document.identity.instance, document.revision};
+        if (fields.fence != fence) {
+            fields = {.fence = fence,
+                      .maximum = document.perception->maximumResults,
+                      .currentlySensed = document.perception->match == QueryPerceptionMatch::CurrentlySensed,
+                      .widgetId = std::format("##EqsSettings/{}/{}", fence.instance.Value(), fence.revision)};
+        }
+        ImGui::PushID(fields.widgetId.c_str());
+        static_cast<void>(
+            Ui::DrawUnsignedPropRow(text("workspace.environment_query.create_limit").c_str(), "##limit", fields.maximum, fonts));
+        static_cast<void>(
+            Ui::CheckboxControl(text("workspace.environment_query.currently_sensed").c_str(), &fields.currentlySensed, fonts));
+        const bool valid = fields.maximum > 0 && fields.maximum <= AI::EnvironmentQuerySchemaLimits::MaximumResults;
+        if (Ui::Button({.label = text("workspace.environment_query.edit_apply").c_str(), .enabled = valid, .font = fonts.sans})) {
+            outCommand = MakeEnvironmentQueryEditCommand(document, EnvironmentQueryEditAction::Apply);
+            outCommand.environmentQueryEdit->perception =
+                AI::BuiltinPerceptionQuerySettings{fields.currentlySensed ? QueryPerceptionMatch::CurrentlySensed
+                                                                          : QueryPerceptionMatch::Remembered,
+                                                   static_cast<std::uint32_t>(fields.maximum)};
+        }
+        DrawEnvironmentQueryHistory(document, outCommand);
+        ImGui::PopID();
+    }
+
     /** @copydoc EditorWorkspaceView::DrawEnvironmentQuerySettings */
     void EditorWorkspaceView::DrawEnvironmentQuerySettings(const EnvironmentQueryWorkspaceDocument &document,
                                                            EditorWorkspaceViewCommandData &outCommand) const {
@@ -780,12 +841,7 @@ namespace Horo::Editor {
                 change = AI::QueryPointDistanceTest{static_cast<std::uint32_t>(fields.newDistanceRadius)};
             outCommand = MakeEnvironmentQueryEditCommand(document, Apply, valid ? std::optional{fields.Capture()} : std::nullopt, change);
         }
-        if (button("workspace.decision_graph.edit_save", document.dirty))
-            outCommand = MakeEnvironmentQueryEditCommand(document, Save);
-        if (button("workspace.decision_graph.edit_undo", document.canUndo))
-            outCommand = MakeEnvironmentQueryEditCommand(document, Undo);
-        if (button("workspace.decision_graph.edit_redo", document.canRedo))
-            outCommand = MakeEnvironmentQueryEditCommand(document, Redo);
+        DrawEnvironmentQueryHistory(document, outCommand);
         ImGui::PopID();
     }
 
@@ -806,10 +862,12 @@ namespace Horo::Editor {
         const auto &query = *opened->query;
         if (!query.DisplayName().empty())
             label(query.DisplayName(), Theme::Text());
-        if (!opened->settings)
-            label(text("workspace.environment_query.read_only"), Theme::Muted());
-        else
+        if (opened->perception)
+            DrawPerceptionQuerySettings(*opened, outCommand);
+        else if (opened->settings)
             DrawEnvironmentQuerySettings(*opened, outCommand);
+        else
+            label(text("workspace.environment_query.read_only"), Theme::Muted());
         if (opened->diagnostic)
             label(text(opened->conflict ? "workspace.environment_query.edit_conflict" : "workspace.environment_query.edit_refused"),
                   Theme::Warn());
@@ -843,6 +901,11 @@ namespace Horo::Editor {
         for (const auto &stage : query.Stages()) {
             const auto stageType = text(StageLabel(stage.kind));
             label(std::format("{} / {} ({})", stageType, stage.displayName, stage.id.Value()), Theme::Text());
+        }
+
+        if (opened->perception) {
+            label(text("workspace.environment_query.perception_preview"), Theme::Muted());
+            return true;
         }
 
         using enum EnvironmentQueryPreviewStatus;

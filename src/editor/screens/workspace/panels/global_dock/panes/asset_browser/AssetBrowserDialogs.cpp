@@ -686,17 +686,26 @@ namespace Horo::Editor {
                     Ui::FieldLabel(text(label).c_str(), fonts);
                     Ui::InputIntControl(identity, &value, fonts);
                 };
-                integer("##NewQueryStep", "workspace.environment_query.create_step", draft.stepMillimeters);
-                integer("##NewQueryOuter", "workspace.environment_query.create_outer", draft.outerSteps);
-                static_cast<void>(Ui::CheckboxControl(text("workspace.environment_query.create_annulus").c_str(), &draft.annulus, fonts));
-                if (draft.annulus)
-                    integer("##NewQueryInner", "workspace.environment_query.create_inner", draft.innerSteps);
+                static_cast<void>(
+                    Ui::CheckboxControl(text("workspace.environment_query.perceived_actors").c_str(), &draft.perceivedActors, fonts));
                 integer("##NewQueryMaximum", "workspace.environment_query.create_limit", draft.maximumResults);
-                static_cast<void>(Ui::CheckboxControl(text("workspace.environment_query.create_distance").c_str(), &draft.distance, fonts));
-                if (draft.distance) {
-                    integer("##NewQueryRadius", "workspace.environment_query.create_radius", draft.radiusMillimeters);
+                if (draft.perceivedActors) {
                     static_cast<void>(
-                        Ui::CheckboxControl(text("workspace.environment_query.create_prefer_nearer").c_str(), &draft.preferNearer, fonts));
+                        Ui::CheckboxControl(text("workspace.environment_query.currently_sensed").c_str(), &draft.currentlySensed, fonts));
+                } else {
+                    integer("##NewQueryStep", "workspace.environment_query.create_step", draft.stepMillimeters);
+                    integer("##NewQueryOuter", "workspace.environment_query.create_outer", draft.outerSteps);
+                    static_cast<void>(
+                        Ui::CheckboxControl(text("workspace.environment_query.create_annulus").c_str(), &draft.annulus, fonts));
+                    if (draft.annulus)
+                        integer("##NewQueryInner", "workspace.environment_query.create_inner", draft.innerSteps);
+                    static_cast<void>(
+                        Ui::CheckboxControl(text("workspace.environment_query.create_distance").c_str(), &draft.distance, fonts));
+                    if (draft.distance) {
+                        integer("##NewQueryRadius", "workspace.environment_query.create_radius", draft.radiusMillimeters);
+                        static_cast<void>(Ui::CheckboxControl(text("workspace.environment_query.create_prefer_nearer").c_str(),
+                                                              &draft.preferNearer, fonts));
+                    }
                 }
                 ImGui::Dummy({0.0F, 12.0F});
                 if (Ui::Button({.label = AssetBrowserPane::kTextScope.Text(context.localization, "action.cancel").c_str(),

@@ -157,11 +157,13 @@ namespace Horo::Editor {
 
     /** @copydoc AssetBrowserInteractionSession::CanConfirmCreateQuery */
     bool AssetBrowserInteractionSession::CanConfirmCreateQuery(const EnvironmentQueryCreationDraft &draft) noexcept {
-        return !draft.directory.empty() && draft.name.front() != char{} && draft.stepMillimeters > 0 && draft.outerSteps >= 0 &&
-               draft.outerSteps <= static_cast<int>(AI::MaximumQueryLatticeOuterSteps) && draft.maximumResults > 0 &&
-               draft.maximumResults <= static_cast<int>(AI::EnvironmentQuerySchemaLimits::MaximumResults) &&
-               (!draft.annulus || (draft.innerSteps >= 0 && draft.innerSteps <= draft.outerSteps)) &&
-               (!draft.distance || draft.radiusMillimeters > 0);
+        if (draft.directory.empty() || draft.name.front() == char{} || draft.maximumResults <= 0 ||
+            draft.maximumResults > static_cast<int>(AI::EnvironmentQuerySchemaLimits::MaximumResults))
+            return false;
+        return draft.perceivedActors || (draft.stepMillimeters > 0 && draft.outerSteps >= 0 &&
+                                         draft.outerSteps <= static_cast<int>(AI::MaximumQueryLatticeOuterSteps) &&
+                                         (!draft.annulus || (draft.innerSteps >= 0 && draft.innerSteps <= draft.outerSteps)) &&
+                                         (!draft.distance || draft.radiusMillimeters > 0));
     }
 
     /** @copydoc AssetBrowserInteractionSession::ConfirmCreateQuery */
@@ -171,20 +173,19 @@ namespace Horo::Editor {
             return {};
         EditorWorkspaceViewCommandData command;
         command.command = EditorWorkspaceViewCommand::CreateEnvironmentQuery;
-        command.newEnvironmentQuery =
-            EnvironmentQueryCreationRequest{.directory = draft.directory,
-                                            .name = {draft.name.begin(), std::ranges::find(draft.name, char{})},
-                                            .lattice = {.stepMillimeters = static_cast<std::uint32_t>(draft.stepMillimeters),
-                                                        .outerSteps = static_cast<std::uint32_t>(draft.outerSteps),
-                                                        .innerSteps = draft.annulus
-                                                                          ? std::optional{static_cast<std::uint32_t>(draft.innerSteps)}
-                                                                          : std::nullopt},
-                                            .maximumResults = static_cast<std::uint32_t>(draft.maximumResults),
-                                            .distance = draft.distance
-                                                            ? std::optional{AI::QueryPointDistanceTest{static_cast<std::uint32_t>(
-                                                                                                           draft.radiusMillimeters),
-                                                                                                       draft.preferNearer}}
-                                                            : std::nullopt};
+        EnvironmentQueryCreationRequest request{.directory = draft.directory,
+                                                .name = {draft.name.begin(), std::ranges::find(draft.name, char{})},
+                                                .maximumResults = static_cast<std::uint32_t>(draft.maximumResults)};
+        if (draft.perceivedActors) {
+            request.perception = draft.currentlySensed ? AI::QueryPerceptionMatch::CurrentlySensed : AI::QueryPerceptionMatch::Remembered;
+        } else {
+            request.lattice = {.stepMillimeters = static_cast<std::uint32_t>(draft.stepMillimeters),
+                               .outerSteps = static_cast<std::uint32_t>(draft.outerSteps),
+                               .innerSteps = draft.annulus ? std::optional{static_cast<std::uint32_t>(draft.innerSteps)} : std::nullopt};
+            if (draft.distance)
+                request.distance = AI::QueryPointDistanceTest{static_cast<std::uint32_t>(draft.radiusMillimeters), draft.preferNearer};
+        }
+        command.newEnvironmentQuery = std::move(request);
         return command;
     }
 

@@ -52,4 +52,15 @@ namespace Horo::AI {
     /** @brief Pure initial-source factory installed by the application with the matching provider registry. */
     using LatticeQueryAuthoringFactory = Result<EnvironmentQueryAsset> (*)(QueryId, QueryStageId, QueryResultSchemaId, std::string,
                                                                            const QueryPointLattice &, std::uint32_t);
+    /** @brief Which captured Perception observations can become scored actors. */
+    enum class QueryPerceptionMatch : std::uint8_t {
+        Remembered,
+        CurrentlySensed,
+    };
+
+    /** @brief Editable native Perception query policy. */
+    struct BuiltinPerceptionQuerySettings final {
+        QueryPerceptionMatch match{QueryPerceptionMatch::CurrentlySensed};
+        std::uint32_t maximumResults{8};
+    };
 }  // namespace Horo::AI

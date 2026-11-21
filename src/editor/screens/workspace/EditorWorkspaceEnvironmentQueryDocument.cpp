@@ -2,6 +2,7 @@
 #include "EnvironmentQueryWorkspaceSource.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
+#include "Horo/AI/EnvironmentQueryPerception.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Foundation/Logging/Logger.h"
@@ -16,6 +17,30 @@
 namespace Horo::Editor {
     namespace EnvironmentQueryWorkspaceSource {
         using AI::EnvironmentQuerySourceCodec;
+
+        /** @copydoc ReadEditableSettings */
+        Result<EditableEnvironmentQuerySettings> ReadEditableSettings(const AI::EnvironmentQueryAsset &query,
+                                                                      const AI::QuerySchemaRegistry &registry) {
+            using Settings = Result<EditableEnvironmentQuerySettings>;
+            const auto *item = registry.Find(query.ResultSchema().itemType);
+            if (item && item->kind == AI::QueryItemKind::Actor) {
+                auto perception = AI::ReadBuiltinPerceptionQuerySettings(query, registry);
+                return perception.HasValue() ? Settings::Success(std::move(perception).Value())
+                                             : Settings::Failure(std::move(perception).ErrorValue());
+            }
+            auto point = AI::ReadBuiltinPointQuerySettings(query, registry);
+            return point.HasValue() ? Settings::Success(std::move(point).Value()) : Settings::Failure(std::move(point).ErrorValue());
+        }
+
+        /** @copydoc SetEditableSettings */
+        void SetEditableSettings(EnvironmentQueryWorkspaceDocument &document, const EditableEnvironmentQuerySettings &settings) {
+            document.settings.reset();
+            document.perception.reset();
+            if (const auto *point = std::get_if<AI::BuiltinPointQuerySettings>(&settings))
+                document.settings = *point;
+            else
+                document.perception = std::get<AI::BuiltinPerceptionQuerySettings>(settings);
+        }
 
         /** @copydoc CaptureQuerySource */
         Result<Assets::AssetCookInputSnapshot> CaptureQuerySource(const std::filesystem::path &root,
@@ -76,23 +101,26 @@ namespace Horo::Editor {
         /** @brief Source and settings captured together before preparing the document history entry. */
         struct QueryDraftEdit final {
             AI::EnvironmentQueryAsset source;
-            AI::BuiltinPointQuerySettings settings;
+            EditableEnvironmentQuerySettings settings;
         };
 
         /** @brief Validates value edits and a possible structural change as a single detached transaction. */
         Result<QueryDraftEdit> PrepareQueryDraftEdit(const AI::EnvironmentQueryAsset &source, const AI::QuerySchemaRegistry &registry,
-                                                     const AI::BuiltinPointQuerySettings &settings,
-                                                     const EnvironmentQueryDistanceStageChange &change) {
+                                                     const EnvironmentQueryEditRequest &request) {
             using Prepared = Result<QueryDraftEdit>;
-            auto edited = AI::EditBuiltinPointQuerySettings(source, registry, settings);
+            const bool changesStages = !std::holds_alternative<std::monostate>(request.stageChange);
+            if (request.settings.has_value() == request.perception.has_value() || (request.perception && changesStages))
+                return Prepared::Failure(MakeError(AI::AIErrors::EnvironmentQuerySchemaInvalid));
+            auto edited = request.perception ? AI::EditBuiltinPerceptionQuerySettings(source, registry, *request.perception)
+                                             : AI::EditBuiltinPointQuerySettings(source, registry, *request.settings);
             if (edited.HasError())
                 return Prepared::Failure(edited.ErrorValue());
-            if (!std::holds_alternative<std::monostate>(change)) {
-                edited = ChangeDistanceStages(edited.Value(), change);
+            if (changesStages) {
+                edited = ChangeDistanceStages(edited.Value(), request.stageChange);
                 if (edited.HasError())
                     return Prepared::Failure(edited.ErrorValue());
             }
-            auto projected = AI::ReadBuiltinPointQuerySettings(edited.Value(), registry);
+            auto projected = EnvironmentQueryWorkspaceSource::ReadEditableSettings(edited.Value(), registry);
             if (projected.HasError())
                 return Prepared::Failure(projected.ErrorValue());
             return Prepared::Success({std::move(edited).Value(), std::move(projected).Value()});
@@ -156,13 +184,13 @@ namespace Horo::Editor {
         candidate.descriptors = DescriptorAvailability(*candidate.query, m_querySchema);
         decltype(m_environmentQueryDrafts) prepared;
         if (m_querySchema && m_mutations && m_durableFiles) {
-            const auto settings = AI::ReadBuiltinPointQuerySettings(*candidate.query, *m_querySchema);
+            const auto settings = EnvironmentQueryWorkspaceSource::ReadEditableSettings(*candidate.query, *m_querySchema);
             const auto bytes = EnvironmentQuerySourceCodec::Encode(*candidate.query);
             const auto sidecar = CaptureQuerySidecar(ProjectRoot(), *record);
             if (settings.HasValue() && bytes.HasValue() && sidecar.HasValue() && sidecar.Value().exists &&
                 captured.Value().VerifyUnchanged().HasValue()) {
                 const auto digest = ComputeSha256(std::as_bytes(std::span{bytes.Value()}));
-                candidate.settings = settings.Value();
+                EnvironmentQueryWorkspaceSource::SetEditableSettings(candidate, settings.Value());
                 const EnvironmentQueryState baseline{candidate.query, settings.Value(), digest, bytes.Value().size()};
                 prepared.try_emplace(candidate.identity.instance,
                                      EnvironmentQueryDraft{baseline, candidate.query, digest, sidecar.Value().digest, source.bytes.size()});
@@ -284,7 +312,7 @@ namespace Horo::Editor {
             document.preview = {};
         }
         document.query = draft.current.source;
-        document.settings = draft.current.settings;
+        EnvironmentQueryWorkspaceSource::SetEditableSettings(document, draft.current.settings);
         document.dirty = draft.current.digest != draft.saved;
         document.canUndo = draft.history.UndoCount() != 0;
         document.canRedo = draft.history.RedoCount() != 0;
@@ -309,9 +337,9 @@ namespace Horo::Editor {
             draft.current = redo ? entry->after : entry->before;
             draft.history.DidReplay(redo);
         } else {
-            if (request.action != Apply || !request.settings || !m_querySchema)
+            if (request.action != Apply || !m_querySchema)
                 return Edit::Failure(MakeError(AI::AIErrors::EnvironmentQuerySchemaInvalid));
-            auto prepared = PrepareQueryDraftEdit(*draft.current.source, *m_querySchema, *request.settings, request.stageChange);
+            auto prepared = PrepareQueryDraftEdit(*draft.current.source, *m_querySchema, request);
             if (prepared.HasError())
                 return Edit::Failure(prepared.ErrorValue());
             auto candidate = std::move(prepared).Value();
@@ -380,7 +408,7 @@ namespace Horo::Editor {
                 !sidecar.Value().exists || sidecar.Value().digest != draft.sidecar)
                 return failed(MakeError(Assets::AssetSourceErrors::Conflict));
 
-            const auto validated = AI::ReadBuiltinPointQuerySettings(*draft.current.source, *m_querySchema);
+            const auto validated = EnvironmentQueryWorkspaceSource::ReadEditableSettings(*draft.current.source, *m_querySchema);
             if (validated.HasError())
                 return failed(validated.ErrorValue());
             const auto encoded = EnvironmentQuerySourceCodec::Encode(*draft.current.source);
@@ -414,7 +442,7 @@ namespace Horo::Editor {
     std::vector<EnvironmentQueryDocumentFence> EditorWorkspaceController::EnvironmentQueryRevisions() const {
         std::vector<EnvironmentQueryDocumentFence> revisions;
         for (const auto &document : m_viewModel.environmentQueryDocuments) {
-            if (document.settings)
+            if (document.settings || document.perception)
                 revisions.push_back({document.identity.instance, document.revision});
         }
         return revisions;
