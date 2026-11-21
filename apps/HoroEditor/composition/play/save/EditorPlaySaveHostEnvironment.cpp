@@ -64,7 +64,8 @@ namespace Horo::Application::Internal {
     /** @copydoc MakeEditorPlaySaveFactory */
     Result<EditorPlaySaveFactory> MakeEditorPlaySaveFactory(JobSystem &jobs, OperationStore &operations, Clock &clock, WallClock &wallClock,
                                                             const ProcessService &processes, Runtime::SaveRootPlatform platform,
-                                                            std::shared_ptr<Security::SecureRandomSource> entropy) {
+                                                            std::shared_ptr<Security::SecureRandomSource> entropy,
+                                                            std::optional<EditorPlaySaveSupplement> supplement) {
         using Outcome = Result<EditorPlaySaveFactory>;
         // Explicit Editor PIE product policy; deliberately disjoint from every game's
         // production ProductStorageId.
@@ -75,13 +76,13 @@ namespace Horo::Application::Internal {
         if (root.HasError())
             return Outcome::Failure(root.ErrorValue());
         return Outcome::Success(
-            [&jobs, &operations, &clock, &wallClock, root = std::move(root).Value(),
-             entropy = std::move(entropy)](SaveProjectId project, RuntimeSceneService &scenes, const RuntimeSceneDefinition &definition,
-                                           std::vector<Editor::PlaySaveGameplayBinding> bindings,
-                                           std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner,
-                                           std::shared_ptr<PlaySavePrefabServices> prefabs,
-                                           std::shared_ptr<PlaySavePhysicsServices> physics,
-                                           std::shared_ptr<PlaySaveAiServices> ai) -> Result<std::unique_ptr<EditorPlaySaveHost>> {
+            [&jobs, &operations, &clock, &wallClock, root = std::move(root).Value(), entropy = std::move(entropy),
+             supplement =
+                 std::move(supplement)](SaveProjectId project, RuntimeSceneService &scenes, const RuntimeSceneDefinition &definition,
+                                        std::vector<Editor::PlaySaveGameplayBinding> bindings,
+                                        std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner,
+                                        std::shared_ptr<PlaySavePrefabServices> prefabs, std::shared_ptr<PlaySavePhysicsServices> physics,
+                                        std::shared_ptr<PlaySaveAiServices> ai) -> Result<std::unique_ptr<EditorPlaySaveHost>> {
             using Host = Result<std::unique_ptr<EditorPlaySaveHost>>;
             auto scope = Scope(root, entropy, project);
             if (scope.HasError())
@@ -105,7 +106,8 @@ namespace Horo::Application::Internal {
                                                                 : std::nullopt,
                                                         std::move(aiDescriptor));
             auto live = std::make_shared<const std::vector<Editor::PlaySaveGameplayBinding>>(std::move(bindings));
-            return EditorPlaySaveHost::Create(scenes, {jobs, operations, clock, wallClock, std::move(scope).Value(), std::move(ai)},
+            return EditorPlaySaveHost::Create(scenes,
+                                              {jobs, operations, clock, wallClock, std::move(scope).Value(), std::move(ai), supplement},
                                               std::move(schema), std::move(live), std::move(behaviorOwner), std::move(prefabs),
                                               std::move(physics));
         });

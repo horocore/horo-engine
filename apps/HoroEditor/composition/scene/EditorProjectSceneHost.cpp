@@ -110,7 +110,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc ConfigureEditorPlaySavePolicy */
     void ConfigureEditorPlaySavePolicy(EditorProjectScenePolicy &policy, JobSystem &jobs, OperationStore &operations, Clock &clock,
-                                       WallClock &wallClock) {
+                                       WallClock &wallClock, std::optional<EditorPlaySaveSupplement> supplement) {
         if (policy.physicsMode == Physics::PhysicsRuntimeMode::Canonical && !policy.physicsSettings) {
             auto settings = ProductPhysicsSaveWorldSettings();
             if (settings.HasError()) {
@@ -119,7 +119,7 @@ namespace Horo::Application::Internal {
             }
             policy.physicsSettings.emplace(std::move(settings).Value());
         }
-        auto factory = MakeNativeEditorPlaySaveFactory(jobs, operations, clock, wallClock);
+        auto factory = MakeNativeEditorPlaySaveFactory(jobs, operations, clock, wallClock, std::move(supplement));
         if (factory.HasError()) {
             policy.saveError = factory.ErrorValue();
             return;

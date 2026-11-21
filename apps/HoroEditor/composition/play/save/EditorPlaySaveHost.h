@@ -14,6 +14,20 @@
 namespace Horo::Application::Internal {
     class PlaySaveAiServices;
 
+    struct EditorPlaySupplementRestore final {
+        std::unique_ptr<Runtime::IStagedRestoreParticipant> participant;
+        Runtime::IStagedRestoreFinalPublicationCheck *check{};
+    };
+
+    /** @brief Fixed descriptor and owner-only preparation for an optional subsystem record. */
+    struct EditorPlaySaveSupplement final {
+        Runtime::CanonicalStateParticipantDescriptor descriptor;
+        std::function<Result<std::shared_ptr<const Runtime::ICanonicalStateAdapter>>(Runtime::SaveWorldId, Security::SecureRandomSource &)>
+            prepareCapture;
+        std::function<Result<EditorPlaySupplementRestore>(Runtime::SaveWorldId, std::span<const std::byte>)> stageRestore;
+        std::function<void()> restorePublished;
+    };
+
     /** @brief Actual process services and immutable scope selected before activation; every service outlives settlement. */
     struct EditorPlaySaveEnvironment final {
         JobSystem &jobs;
@@ -22,6 +36,7 @@ namespace Horo::Application::Internal {
         WallClock &wallClock;
         PlaySaveStorageConfig storage;
         std::shared_ptr<PlaySaveAiServices> ai;
+        std::optional<EditorPlaySaveSupplement> supplement;
     };
 
     class PlaySavePrefabServices;
@@ -83,12 +98,14 @@ namespace Horo::Application::Internal {
     [[nodiscard]] Result<EditorPlaySaveFactory> MakeEditorPlaySaveFactory(JobSystem &jobs, OperationStore &operations, Clock &clock,
                                                                           WallClock &wallClock, const ProcessService &processes,
                                                                           Runtime::SaveRootPlatform platform,
-                                                                          std::shared_ptr<Security::SecureRandomSource> entropy);
+                                                                          std::shared_ptr<Security::SecureRandomSource> entropy,
+                                                                          std::optional<EditorPlaySaveSupplement> supplement = {});
     /** @brief Selects real native entropy and the compiled OS convention at the explicit application composition boundary.
      * @param jobs Actual application scheduler. @param operations Actual process diagnostics authority.
      * @param clock Host monotonic clock. @param wallClock Host UTC clock.
      * @return Native sandbox factory or original typed root/configuration failure; no production namespace is selected.
      */
     [[nodiscard]] Result<EditorPlaySaveFactory> MakeNativeEditorPlaySaveFactory(JobSystem &jobs, OperationStore &operations, Clock &clock,
-                                                                                WallClock &wallClock);
+                                                                                WallClock &wallClock,
+                                                                                std::optional<EditorPlaySaveSupplement> supplement = {});
 }  // namespace Horo::Application::Internal

@@ -81,7 +81,7 @@ namespace Horo::Application::Internal {
     /** @brief Selects the native user-state root and real entropy explicitly at application startup; preserves original errors for Manager.
      */
     void ConfigureEditorPlaySavePolicy(EditorProjectScenePolicy &policy, JobSystem &jobs, OperationStore &operations, Clock &clock,
-                                       WallClock &wallClock);
+                                       WallClock &wallClock, std::optional<EditorPlaySaveSupplement> supplement = {});
 
     /** @brief Keeps captured resources alive while RuntimeHost owns and schedules the sole preview Scene service.
      * @details Declare this bundle before RuntimeHost. Moving scenes into RuntimeHost transfers only its

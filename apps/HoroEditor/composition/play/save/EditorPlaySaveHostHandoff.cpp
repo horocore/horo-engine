@@ -59,8 +59,8 @@ namespace Horo::Application::Internal {
                 // The real bundle already owns registry/context/entities; receipts own
                 // their actual admitted native/source leases.
                 control_->packet.reset();
-                control_->source.reset();  // Actual receipts now own all admitted native
-                                           // preparation/source leases.
+                if (!control_->source->HasSupplement())
+                    control_->source.reset();
                 return Outcome::Success(std::optional{std::move(ready)});
             }
 
@@ -176,8 +176,11 @@ namespace Horo::Application::Internal {
             /** @copydoc SceneAggregateRestore::Commit */
             Result<void> Commit(IStagedRestoreAggregatePublication &transfer) override {
                 const auto committed = bundle_->Commit(transfer);
-                if (committed.HasValue())
+                if (committed.HasValue()) {
                     state_->published = true;
+                    if (control_->source)
+                        control_->source->SupplementPublished();
+                }
                 return committed;
             }
 
@@ -316,7 +319,7 @@ namespace Horo::Application::Internal {
                                                    .entities = decoded.identities,
                                                    .maximumEntities = 16'384,
                                                    .maximumComponentBytes = PlaySaveMaximumPayloadBytes,
-                                                   .finalPublicationCheck = source_->PhysicsFinalCheck(),
+                                                   .finalPublicationCheck = source_->FinalCheck(),
                                                    .dynamicEntities = control->dynamic};
         if (decoded.prefabs)
             for (const auto &instance : decoded.prefabs->instances)

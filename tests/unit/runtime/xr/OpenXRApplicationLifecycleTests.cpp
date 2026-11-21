@@ -2,6 +2,8 @@
 #include "Horo/Runtime/Render/NullBackendModule.h"
 #include "Horo/Runtime/Render/RenderOriginScene.h"
 #include "Horo/Runtime/RuntimeHost.h"
+#include "Horo/Runtime/Save/SaveCaptureSnapshot.h"
+#include "Horo/Security/SecureMemory.h"
 #include "Horo/XR/XRAnchorPersistence.h"
 #include "Horo/XR/XRSessionErrors.h"
 #include "OpenXRApplicationSession.h"
@@ -1286,7 +1288,17 @@ namespace Horo::Tests::OpenXRApplication {
     }
 
     namespace {
+        class AnchorTestEntropy final : public Security::SecureRandomSource {
+        public:
+            Result<void> Fill(std::span<std::byte> bytes) override {
+                std::ranges::fill(bytes, std::byte{7});
+                return Result<void>::Success();
+            }
+        };
+
         struct ApplicationAnchorScript final {
+            static inline std::optional<XrSpatialAnchorPersistenceNameMSFT> stored;
+
             static XRAPI_ATTR XrResult XRAPI_CALL Create(XrSession, const XrSpatialAnchorCreateInfoMSFT *info, XrSpatialAnchorMSFT *out) {
                 CHECK(info->space != XR_NULL_HANDLE);
                 CHECK(info->pose.position.x == 0.0F);
@@ -1294,8 +1306,8 @@ namespace Horo::Tests::OpenXRApplication {
                 return OpenXR::Script::Record("app-anchor-create");
             }
 
-            static XRAPI_ATTR XrResult XRAPI_CALL CreateSpace(XrSession, const XrSpatialAnchorSpaceCreateInfoMSFT *, XrSpace *out) {
-                *out = OpenXR::NativeHandle<XrSpace>(902);
+            static XRAPI_ATTR XrResult XRAPI_CALL CreateSpace(XrSession, const XrSpatialAnchorSpaceCreateInfoMSFT *info, XrSpace *out) {
+                *out = OpenXR::NativeHandle<XrSpace>(info->anchor == OpenXR::NativeHandle<XrSpatialAnchorMSFT>(901) ? 902 : 905);
                 return OpenXR::Script::Record("app-anchor-space");
             }
 
@@ -1304,12 +1316,13 @@ namespace Horo::Tests::OpenXRApplication {
             }
 
             static XRAPI_ATTR XrResult XRAPI_CALL DestroySpace(XrSpace space) {
-                return space == OpenXR::NativeHandle<XrSpace>(902) ? OpenXR::Script::Record("app-anchor-space-destroy")
-                                                                   : OpenXRAction::ActionScript::DestroySpace(space);
+                if (space == OpenXR::NativeHandle<XrSpace>(902) || space == OpenXR::NativeHandle<XrSpace>(905))
+                    return OpenXR::Script::Record("app-anchor-space-destroy");
+                return OpenXRAction::ActionScript::DestroySpace(space);
             }
 
             static XRAPI_ATTR XrResult XRAPI_CALL Locate(XrSpace space, XrSpace base, XrTime time, XrSpaceLocation *location) {
-                if (space != OpenXR::NativeHandle<XrSpace>(902))
+                if (space != OpenXR::NativeHandle<XrSpace>(902) && space != OpenXR::NativeHandle<XrSpace>(905))
                     return OpenXRAction::ActionScript::LocateSpace(space, base, time, location);
                 location->locationFlags = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
                                           XR_SPACE_LOCATION_POSITION_TRACKED_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
@@ -1326,18 +1339,28 @@ namespace Horo::Tests::OpenXRApplication {
                 return OpenXR::Script::Record("app-anchor-store-close");
             }
 
-            static XRAPI_ATTR XrResult XRAPI_CALL Persist(XrSpatialAnchorStoreConnectionMSFT, const XrSpatialAnchorPersistenceInfoMSFT *) {
-                return XR_ERROR_FUNCTION_UNSUPPORTED;
+            static XRAPI_ATTR XrResult XRAPI_CALL Persist(XrSpatialAnchorStoreConnectionMSFT,
+                                                          const XrSpatialAnchorPersistenceInfoMSFT *info) {
+                CHECK(std::string_view{info->spatialAnchorPersistenceName.name}.starts_with("horo-a1-"));
+                CHECK(info->spatialAnchor != XR_NULL_HANDLE);
+                stored = info->spatialAnchorPersistenceName;
+                return OpenXR::Script::Record("app-anchor-store-persist");
             }
 
-            static XRAPI_ATTR XrResult XRAPI_CALL Enumerate(XrSpatialAnchorStoreConnectionMSFT, uint32_t, uint32_t *,
-                                                            XrSpatialAnchorPersistenceNameMSFT *) {
-                return XR_ERROR_FUNCTION_UNSUPPORTED;
+            static XRAPI_ATTR XrResult XRAPI_CALL Enumerate(XrSpatialAnchorStoreConnectionMSFT, uint32_t capacity, uint32_t *count,
+                                                            XrSpatialAnchorPersistenceNameMSFT *entries) {
+                *count = stored ? 1 : 0;
+                if (stored && capacity != 0)
+                    entries[0] = *stored;
+                return XR_SUCCESS;
             }
 
-            static XRAPI_ATTR XrResult XRAPI_CALL Restore(XrSession, const XrSpatialAnchorFromPersistedAnchorCreateInfoMSFT *,
-                                                          XrSpatialAnchorMSFT *) {
-                return XR_ERROR_FUNCTION_UNSUPPORTED;
+            static XRAPI_ATTR XrResult XRAPI_CALL Restore(XrSession, const XrSpatialAnchorFromPersistedAnchorCreateInfoMSFT *info,
+                                                          XrSpatialAnchorMSFT *out) {
+                REQUIRE(stored);
+                CHECK(std::string_view{info->spatialAnchorPersistenceName.name} == std::string_view{stored->name});
+                *out = OpenXR::NativeHandle<XrSpatialAnchorMSFT>(904);
+                return OpenXR::Script::Record("app-anchor-store-restore");
             }
 
             static XRAPI_ATTR XrResult XRAPI_CALL Remove(XrSpatialAnchorStoreConnectionMSFT, const XrSpatialAnchorPersistenceNameMSFT *) {
@@ -1434,6 +1457,7 @@ namespace Horo::Tests::OpenXRApplication {
         fixture.script.native.extraExtensions = extensions;
         fixture.script.native.extensionCount += static_cast<std::uint32_t>(extensions.size());
         fixture.script.census.extraProc = &ApplicationAnchorScript::Resolve;
+        ApplicationAnchorScript::stored.reset();
         fixture.CreatePlay();
         auto &preview = *fixture.play->SpatialAnchorPreview();
         auto &storage = *fixture.play->AnchorStorageConsent();
@@ -1455,26 +1479,71 @@ namespace Horo::Tests::OpenXRApplication {
         REQUIRE(observed->result);
         RequireValue(*observed->result);
 
-        const XR::XRAnchorStoreScope scope{RequireValue(XR::XRAnchorStoreProvider::Parse("56d28334-8431-4782-978b-3d26459b567f")),
-                                           RequireValue(XR::XRAnchorStorePartition::FromBytes({4})), 1, 1};
-        const auto clock = +[]() noexcept -> std::uint64_t {
-            return 60;
-        };
+        const auto world = RequireValue(Runtime::SaveWorldId::FromBytes({4}));
+        AnchorTestEntropy entropy;
         CHECK(storage.ReadAnchorStorageState() == (storageRequested ? Granted : Unavailable));
         CHECK(std::ranges::count(fixture.script.native.calls, "app-anchor-store-open") == 0);
-        const auto admitted = fixture.session->BindSpatialAnchorSave(scope, clock);
-        REQUIRE(admitted.HasValue() == storageRequested);
+        CHECK_FALSE(RequireValue(fixture.session->PrepareSpatialAnchorCapture(world, entropy)));
+        fixture.script.clock.sample = 220'000'000;
+        RequireValue(fixture.scheduler->RunFrame());
+        REQUIRE(observed->result);
+        RequireValue(*observed->result);
+        const auto captured = RequireValue(fixture.session->PrepareSpatialAnchorCapture(world, entropy));
+        CHECK(static_cast<bool>(captured) == storageRequested);
         CHECK(std::ranges::count(fixture.script.native.calls, "app-anchor-store-open") == (storageRequested ? 1 : 0));
         if (storageRequested) {
-            CHECK(admitted.Value().participant->Read().HasValue());
+            CHECK(RequireValue(fixture.session->PrepareSpatialAnchorCapture(world, entropy)) == captured);
+            CHECK(std::ranges::count(fixture.script.native.calls, "app-anchor-store-persist") == 1);
+            using namespace Runtime;
+            CanonicalStateParticipantRegistry registry;
+            const auto descriptor = fixture.session->SpatialAnchorSaveDescriptor();
+            RequireValue(registry.Register(descriptor, captured));
+            auto participants = RequireValue(registry.Snapshot());
+            const auto identity = RequireValue(CapturedStateId::FromBytes({9}));
+            auto capture = RequireValue(RuntimeSaveCaptureBuilder::Create({identity, {1}, 2, 3, participants.Generation()}, participants));
+            RequireValue(capture.CaptureParticipants());
+            const auto snapshot = RequireValue(capture.Seal());
+            REQUIRE(snapshot.Records().size() == 1);
+            CHECK(snapshot.Records().front().ByteLength() == 72);
+
+            auto staged = RequireValue(fixture.session->StageSpatialAnchorRestore(world, snapshot.Records().front().Segment(0)));
+            std::vector<std::unique_ptr<IStagedRestoreParticipant>> receipts;
+            receipts.push_back(std::move(staged.participant));
+            auto operation =
+                RequireValue(CreateSaveOperation({.operation = 1, .kind = SaveOperationKind::Load, .maximumCompletionCallbacks = 2}));
+            const StagedRestoreContext context{1, participants.Generation(), 2, 3, 1};
+            auto transaction =
+                RequireValue(StagedRestoreTransaction::Create(context, std::move(operation), participants, std::move(receipts)));
+            RequireValue(transaction.Prepare());
+            fixture.session->RelocalizeRestoredAnchor();
+            CHECK(std::ranges::count(fixture.script.native.calls, "app-anchor-store-restore") == 0);
+
+            class Publication final : public IStagedRestoreAggregatePublication {
+            public:
+                explicit Publication(IStagedRestoreFinalPublicationCheck &check) noexcept : check_(check) {}
+
+                Result<void> ValidateAndArm() override {
+                    return check_.ValidateAndArm();
+                }
+
+                void PublishPrepared() noexcept override {}
+
+            private:
+                IStagedRestoreFinalPublicationCheck &check_;
+            } publication{*staged.check};
+
+            RequireValue(transaction.Activate({participants.Generation(), 2, 3}, publication));
+            fixture.session->RelocalizeRestoredAnchor();
+            CHECK(std::ranges::count(fixture.script.native.calls, "app-anchor-store-restore") == 1);
+
             storage.RevokeAnchorStorage();
-            CHECK(admitted.Value().participant->Read().HasError());
+            CHECK_FALSE(RequireValue(fixture.session->PrepareSpatialAnchorCapture(world, entropy)));
             CHECK(storage.ReadAnchorStorageState() == Unavailable);
         }
         RequireValue(fixture.play->ProgressRenderTail());
         CHECK(std::ranges::count(fixture.script.native.calls, "app-anchor-store-close") == (storageRequested ? 1 : 0));
         if (previewRequested) {
-            CHECK(preview.ReadSpatialAnchorState() == Editor::EditorXrSpatialAnchorState::Locating);
+            CHECK(preview.ReadSpatialAnchorState() == Editor::EditorXrSpatialAnchorState::Localized);
             preview.RevokeSpatialAnchor();
             RequireValue(fixture.play->ProgressRenderTail());
         }

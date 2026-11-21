@@ -217,14 +217,18 @@ namespace Horo::XR {
 
     /** @copydoc XRAnchorPersistence::Descriptor */
     CanonicalStateParticipantDescriptor XRAnchorPersistence::Descriptor() const {
-        return {requirement_.participant,
-                requirement_.schemaVersion,
-                requirement_.scope,
+        return Describe(requirement_.participant, record_);
+    }
+
+    CanonicalStateParticipantDescriptor XRAnchorPersistence::Describe(SaveParticipantId participant, SaveRecordId record) {
+        return {std::move(participant),
+                ParticipantSchemaVersion::Create(SchemaVersion).Value(),
+                SaveParticipantScope::PersistentWorld,
                 SaveParticipantRole::Capture | SaveParticipantRole::Restore,
                 false,
                 {RecordBytes, 1, 1},
                 {},
-                {record_}};
+                {record}};
     }
 
     /** @copydoc XRAnchorPersistence::RecordLocalized */

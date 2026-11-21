@@ -4243,8 +4243,25 @@ namespace Horo::Editor {
                                                                        p.options.playDecisionBindings, p.options.playInspectionKeys,
                                                                        p.options.playPerceptionPolicy, schedulerConfig.fixedStep,
                                                                        p.options.playDecisionDebug});
+            std::optional<Application::Internal::EditorPlaySaveSupplement> playSaveSupplement;
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+            if (auto *xr = p.presentation.composition.xrSession) {
+                playSaveSupplement.emplace(xr->SpatialAnchorSaveDescriptor(), [xr](auto world, auto &entropy) {
+                    return xr->PrepareSpatialAnchorCapture(world, entropy);
+                }, [xr](auto world, auto record) -> Result<Application::Internal::EditorPlaySupplementRestore> {
+                    auto staged = xr->StageSpatialAnchorRestore(world, record);
+                    if (staged.HasError())
+                        return Result<Application::Internal::EditorPlaySupplementRestore>::Failure(staged.ErrorValue());
+                    auto receipt = std::move(staged).Value();
+                    return Result<Application::Internal::EditorPlaySupplementRestore>::Success(
+                        {std::move(receipt.participant), receipt.check});
+                }, [xr] {
+                    xr->RelocalizeRestoredAnchor();
+                });
+            }
+#endif
             Application::Internal::ConfigureEditorPlaySavePolicy(playPolicy, p.background.jobs, p.operationServices.operationStore, clock,
-                                                                 wallClock);
+                                                                 wallClock, std::move(playSaveSupplement));
             playPolicy.xrHost = SelectedEditorPlayHost(p.presentation.composition);
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
             if (auto *xr = p.presentation.composition.xrPlay.get(); xr && playPolicy.xrHost == xr && xr->AuthoredLocomotion()) {

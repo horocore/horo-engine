@@ -2,6 +2,8 @@
 /** @file OpenXRApplicationSession.h
  * @brief Non-installed application owner of the verified selected runtime and same-device startup transaction.
  */
+#include "Horo/Runtime/Save/SaveParticipantRegistry.h"
+#include "Horo/Runtime/Save/SaveRestoreTransaction.h"
 #include "Horo/XR/XRInputProjection.h"
 #include "Horo/XR/XRInteraction.h"
 #include "Horo/XR/XRProjectSettings.h"
@@ -13,6 +15,10 @@
 #include "OpenXRSwapchain.h"
 
 #include <functional>
+
+namespace Horo::Security {
+    class SecureRandomSource;
+}
 
 namespace Horo::XR {
     struct XRAnchorStoreScope;
@@ -178,6 +184,11 @@ namespace Horo::Application::Internal {
         std::shared_ptr<XR::OpenXRInternal::OpenXRProtectedAnchorStore> store;
     };
 
+    struct OpenXRApplicationAnchorRestore final {
+        std::unique_ptr<Runtime::IStagedRestoreParticipant> participant;
+        Runtime::IStagedRestoreFinalPublicationCheck *check{};
+    };
+
     /** @brief Application-owned native preparation, retained beside its selected renderer through explicit retirement.
      * @details This is the actual composition fence, not a second session/frame authority. Native discovery observes facts;
      * canonical XRSessionLifecycle alone issues a Horo session candidate after complete feature negotiation.
@@ -306,6 +317,13 @@ namespace Horo::Application::Internal {
         /** @brief Binds optional canonical Save on the owner lane after a distinct, revocable store grant. */
         [[nodiscard]] Result<OpenXRApplicationAnchorSave> BindSpatialAnchorSave(const XR::XRAnchorStoreScope &storeScope,
                                                                                 std::uint64_t (*unixSeconds)() noexcept);
+        [[nodiscard]] static Runtime::CanonicalStateParticipantDescriptor SpatialAnchorSaveDescriptor();
+        /** @brief Prepares one protected reference for the current sandbox on an admitted Save request. */
+        [[nodiscard]] Result<std::shared_ptr<const Runtime::ICanonicalStateAdapter>> PrepareSpatialAnchorCapture(
+            Runtime::SaveWorldId world, Security::SecureRandomSource &entropy);
+        [[nodiscard]] Result<OpenXRApplicationAnchorRestore> StageSpatialAnchorRestore(Runtime::SaveWorldId world,
+                                                                                       std::span<const std::byte> record);
+        void RelocalizeRestoredAnchor() noexcept;
         /** @brief Reports whether the installed platform and negotiated extension support the next-Play request. */
         [[nodiscard]] bool MayArmPassthrough() const;
         /** @brief Checks the installed platform's current permission for the exact Play scope, without native I/O. */
@@ -491,6 +509,9 @@ namespace Horo::Application::Internal {
         /** @brief Advances one async operation after canonical tracking publication. @param tracking Current Input evidence. */
         void AdvancePlaneCapture(const XR::XRTrackingSnapshot &tracking);
         void AdvanceSpatialAnchor(const XR::XRTrackingSnapshot &tracking);
+        [[nodiscard]] Result<OpenXRApplicationAnchorSave> AcquireSpatialAnchorSave(Runtime::SaveWorldId world);
+        void ProgressRestoredAnchor(XrSpace world, XR::XRRuntimeTime now);
+        [[nodiscard]] Result<void> RetireRestoredAnchor();
         [[nodiscard]] Result<void> StartSpatialAnchor(const XR::XRCoordinateSpace &space, XrSpace world, XR::XRRuntimeTime now);
         /** @brief Starts the one authorized native capture in the current calibrated space.
          * @param session Current XR session identity.
@@ -630,6 +651,10 @@ namespace Horo::Application::Internal {
             bool preview{};
             bool storeOpen{};
             std::optional<CancellationSource> storeGrant;
+            std::optional<OpenXRApplicationAnchorSave> save;
+            std::optional<Runtime::SaveWorldId> saveWorld;
+            bool recorded{};
+            std::optional<XR::XRSpatialAnchorId> restored;
         } spatialAnchor_;
 
         InputPreparation input_;

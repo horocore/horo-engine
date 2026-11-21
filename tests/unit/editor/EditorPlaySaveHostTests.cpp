@@ -110,6 +110,78 @@ namespace {
                 .projectBuildId = config.projectBuildId};
     }
 
+    class SupplementalCapture final : public ICanonicalStateAdapter {
+    public:
+        explicit SupplementalCapture(SaveRecordId record) noexcept : record_(record) {}
+
+        Result<CanonicalCaptureDisposition> Capture(const CanonicalCaptureContext &, ICanonicalCaptureSink &sink) const override {
+            constexpr std::array data{std::byte{0x47}};
+            const auto written = sink.WriteCopied(record_, data);
+            return written.HasError() ? Result<CanonicalCaptureDisposition>::Failure(written.ErrorValue())
+                                      : Result<CanonicalCaptureDisposition>::Success(CanonicalCaptureDisposition::Captured);
+        }
+
+    private:
+        SaveRecordId record_;
+    };
+
+    class SupplementalRestore final : public IStagedRestoreParticipant,
+                                      public ICanonicalRestorePreparedState,
+                                      public IStagedRestoreFinalPublicationCheck {
+    public:
+        SupplementalRestore(const CanonicalStateParticipantDescriptor &descriptor, bool &live, bool reject)
+            : requirement_{descriptor.participant, descriptor.schemaVersion, descriptor.scope}, live_(live), reject_(reject) {}
+
+        const StagedRestoreParticipantRequirement &Requirement() const noexcept override {
+            return requirement_;
+        }
+
+        Result<void> Decode(const StagedRestoreContext &) override {
+            return Result<void>::Success();
+        }
+
+        Result<void> Validate(const StagedRestoreContext &) override {
+            return Result<void>::Success();
+        }
+
+        Result<void> Instantiate(const StagedRestoreContext &) override {
+            return Result<void>::Success();
+        }
+
+        const ICanonicalRestorePreparedState *PreparedState() const noexcept override {
+            return this;
+        }
+
+        Result<void> ApplyState(const ICanonicalRestoreDependencyLookup &) override {
+            return Result<void>::Success();
+        }
+
+        Result<void> FixupReferences(const ICanonicalRestoreDependencyLookup &) override {
+            return Result<void>::Success();
+        }
+
+        Result<void> ValidateAndArm() override {
+            if (reject_)
+                return Result<void>::Failure(MakeError(SaveErrors::RestoreActivationStale));
+            armed_ = true;
+            return Result<void>::Success();
+        }
+
+        void PublishPrepared() noexcept override {
+            live_ = armed_;
+        }
+
+        void RollbackPrepared() noexcept override {
+            armed_ = false;
+        }
+
+    private:
+        StagedRestoreParticipantRequirement requirement_;
+        bool &live_;
+        bool reject_;
+        bool armed_{};
+    };
+
     /** @brief Allows a fixture to seed an older archive before the live host claims its namespace. */
     enum class HostStartup {
         Immediate,
@@ -164,7 +236,7 @@ namespace {
         }
 
         /** @brief Opens the product's exclusive slot namespace after any fixture seeding is complete. */
-        void OpenHost(bool failOpen = false) {
+        void OpenHost(bool failOpen = false, std::optional<EditorPlaySaveSupplement> supplement = {}) {
             auto config = Storage(directory.Path());
             if (failOpen) {
                 blockedRoot = config.root.CanonicalPath();
@@ -173,8 +245,8 @@ namespace {
                 REQUIRE(blocker.good());
                 blocker << "Fixture-owned file blocks the real namespace root.";
             }
-            host = Value(
-                EditorPlaySaveHost::Create(scenes, {jobs, operations, clock, wall, std::move(config), ai}, schema, {}, behaviorOwner));
+            host = Value(EditorPlaySaveHost::Create(scenes, {jobs, operations, clock, wall, std::move(config), ai, std::move(supplement)},
+                                                    schema, {}, behaviorOwner));
             if (!failOpen)
                 Ready();
         }
@@ -341,6 +413,60 @@ TEST_CASE("Play sandbox saves current real Scene and loads it through the sole "
     CHECK(entity.localTransform->translation.x == 7);
     CHECK(Value(SceneCook::EncodeCookedSceneDefinition(f.schema->baseline)) == authoringBytes);
     CHECK(f.schema->baseline.Revision() == SceneDefinitionRevision{3});
+}
+
+TEST_CASE("Play Save captures an optional subsystem and gates its publication with the restored Scene", "[editor][play][save][host]") {
+    Fixture f{false, false, false, HostStartup::Deferred};
+    const auto record = Test::Id<SaveRecordId>(90);
+    const CanonicalStateParticipantDescriptor descriptor{Value(SaveParticipantId::Parse("horo.test.supplement")),
+                                                         Value(ParticipantSchemaVersion::Create(1)),
+                                                         SaveParticipantScope::PersistentWorld,
+                                                         SaveParticipantRole::Capture | SaveParticipantRole::Restore,
+                                                         false,
+                                                         {1, 1, 1},
+                                                         {},
+                                                         {record}};
+    bool prepared = false;
+    bool live = false;
+    bool postCommit = false;
+    bool reject = false;
+    f.OpenHost(false, EditorPlaySaveSupplement{descriptor, [&](SaveWorldId world, Security::SecureRandomSource &) {
+        REQUIRE(world.IsValid());
+        prepared = true;
+        return Result<std::shared_ptr<const ICanonicalStateAdapter>>::Success(std::make_shared<SupplementalCapture>(record));
+    }, [&](SaveWorldId world, std::span<const std::byte> bytes) {
+        REQUIRE(world.IsValid());
+        REQUIRE(bytes.size() == 1);
+        CHECK(bytes.front() == std::byte{0x47});
+        auto receipt = std::make_unique<SupplementalRestore>(descriptor, live, reject);
+        auto *check = receipt.get();
+        return Result<EditorPlaySupplementRestore>::Success({std::move(receipt), check});
+    }, [&] {
+        postCommit = live;
+    }});
+    CHECK_FALSE(prepared);
+    REQUIRE(f.host->Request({.kind = Editor::PlaySaveCommandKind::SaveNew}).HasValue());
+    f.Ready();
+    REQUIRE(prepared);
+    auto page = f.Page();
+    REQUIRE(page.rows.size() == 1);
+    const auto command = Value(f.host->Snapshot()->manager->Command(SaveManagerCommandKind::Load, page.rows.front().slot));
+    const auto original = f.scenes.ActiveScene()->RuntimeId();
+    SECTION("accepted publication transfers the supplement before notifying its owner") {
+        REQUIRE(f.host->Request({.kind = Editor::PlaySaveCommandKind::Load, .selection = command}).HasValue());
+        f.Ready();
+        CHECK(f.scenes.ActiveScene()->RuntimeId() != original);
+        CHECK(live);
+        CHECK(postCommit);
+    }
+    SECTION("rejected publication keeps both former owners") {
+        reject = true;
+        REQUIRE(f.host->Request({.kind = Editor::PlaySaveCommandKind::Load, .selection = command}).HasValue());
+        REQUIRE(f.Rejected()->error);
+        CHECK(f.scenes.ActiveScene()->RuntimeId() == original);
+        CHECK_FALSE(live);
+        CHECK_FALSE(postCommit);
+    }
 }
 
 TEST_CASE("Play sandbox rejects stale slot consent and does not replace "

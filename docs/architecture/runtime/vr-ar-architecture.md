@@ -1042,6 +1042,11 @@ or the live anchor scope is revoked.
 XR Setup offers a separate one-use storage grant for the next Play session.
 The operator can revoke storage during Play and keep an independently granted
 live preview.
+Editor Play Save prepares the optional anchor record before canonical capture.
+A localized World anchor gets a protected lookup scoped to the Play sandbox
+world with a one-day expiry. Repeated saves in that scope reuse the lookup.
+Load stages the record under the Scene restore transaction. The provider may
+start a new localization only after the Scene and anchor record commit.
 
 `HoroXRAnchorSaveIntegration` provides the separate optional local durability
 lane. The selected host binds one canonical Save participant per durable anchor

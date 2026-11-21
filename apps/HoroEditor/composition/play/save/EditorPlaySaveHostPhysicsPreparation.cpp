@@ -55,21 +55,38 @@ namespace Horo::Application::Internal {
         return Result<void>::Success();
     }
 
+    Result<void> EditorPlaySaveHost::State::PrepareCaptureSources() const {
+        if (physics) {
+            auto current = CurrentIdentities();
+            if (current.HasError())
+                return Result<void>::Failure(current.ErrorValue());
+            if (const auto state = physics->PrepareCapture(current.Value()); state.HasError())
+                return state;
+        }
+        if (supplementCapture) {
+            supplementCapture->Use({});
+            auto adapter = environment.supplement->prepareCapture(environment.storage.world, *environment.storage.entropy);
+            if (adapter.HasError())
+                return Result<void>::Failure(adapter.ErrorValue());
+            supplementCapture->Use(std::move(adapter).Value());
+        }
+        return Result<void>::Success();
+    }
+
     /** @copydoc EditorPlaySaveHost::State::CapturePreparation */
     std::shared_ptr<Runtime::IRuntimeSaveCapturePreparation> EditorPlaySaveHost::State::CapturePreparation() const {
-        if (!physics)
+        if (!physics && !supplementCapture)
             return {};
         return std::make_shared<PhysicsCapturePreparation>([this]() {
             if (retiring || suspending || std::this_thread::get_id() != owner)
                 return Result<void>::Failure(MakeError(Runtime::SaveErrors::LifecycleUnavailable));
-            auto current = CurrentIdentities();
-            if (current.HasError())
-                return Result<void>::Failure(current.ErrorValue());
-            return physics->PrepareCapture(current.Value());
+            return PrepareCaptureSources();
         }, [this]() {
             using Outcome = Result<Runtime::RuntimeSaveCapturePreparationEvidence>;
             if (retiring || suspending || std::this_thread::get_id() != owner)
                 return Outcome::Failure(MakeError(Runtime::SaveErrors::LifecycleUnavailable));
+            if (!physics)
+                return Outcome::Success({authority->Generation(), Provenance(), true});
             auto ready = physics->CaptureReady();
             if (ready.HasError())
                 return Outcome::Failure(ready.ErrorValue());

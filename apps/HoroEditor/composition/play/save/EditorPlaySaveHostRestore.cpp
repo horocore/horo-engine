@@ -90,10 +90,12 @@ namespace Horo::Application::Internal {
                                                  std::shared_ptr<const std::vector<Editor::PlaySaveGameplayBinding>> liveBindings,
                                                  std::shared_ptr<Gameplay::BehaviorRuntimeSceneOwner> behaviorOwner,
                                                  std::shared_ptr<Gameplay::BehaviorLifecyclePersistenceAdapter> lifecycle,
-                                                 std::shared_ptr<PlaySavePhysicsServices> physics)
+                                                 std::shared_ptr<PlaySavePhysicsServices> physics,
+                                                 std::optional<EditorPlaySaveSupplement> supplement, Runtime::SaveWorldId world)
         : storage_(std::move(storage)), schema_(std::move(schema)), selection_(std::move(selection)),
           liveBindings_(std::move(liveBindings)), behaviorOwner_(std::move(behaviorOwner)), lifecycle_(std::move(lifecycle)),
-          physics_(std::move(physics)), physicsFence_(physics_ ? std::make_shared<PlaySavePhysicsRestoreFence>() : nullptr) {}
+          physics_(std::move(physics)), physicsFence_(physics_ ? std::make_shared<PlaySavePhysicsRestoreFence>() : nullptr),
+          finalCheck_(std::make_shared<PlaySaveFinalCheck>(physicsFence_)), supplement_(std::move(supplement)), world_(world) {}
 
     /** @copydoc PlaySaveRestoreSource::Stage */
     Result<Runtime::RuntimeSaveRestoreStaging> PlaySaveRestoreSource::Stage(const Runtime::StagedRestoreContext &context,
@@ -181,7 +183,36 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(lifecycle.ErrorValue());
         if (const auto physics = StagePhysics(staging, archive, participants, candidateScene, identities); physics.HasError())
             return Outcome::Failure(physics.ErrorValue());
+        if (const auto supplemental = StageSupplement(staging, *archive); supplemental.HasError())
+            return Outcome::Failure(supplemental.ErrorValue());
         return Outcome::Success(std::move(staging));
+    }
+
+    Result<void> PlaySaveRestoreSource::StageSupplement(Runtime::RuntimeSaveRestoreStaging &staging,
+                                                        const Runtime::ValidatedSaveArchive &archive) const {
+        if (!supplement_)
+            return Result<void>::Success();
+        const auto bytes = archive.SelectChunk(supplement_->descriptor.ownedRecords.front());
+        if (bytes.HasError())
+            return Result<void>::Failure(bytes.ErrorValue());
+        const auto record = bytes.Value() ? std::span<const std::byte>{*bytes.Value()} : std::span<const std::byte>{};
+        auto receipt = supplement_->stageRestore(world_, record);
+        if (receipt.HasError())
+            return Result<void>::Failure(receipt.ErrorValue());
+        auto value = std::move(receipt).Value();
+        if (!value.participant)
+            return Result<void>::Success();
+        if (!value.check)
+            return Result<void>::Failure(MakeError(Runtime::SaveErrors::ParticipantAdapterMissing));
+        staging.participants.push_back(std::move(value.participant));
+        finalCheck_->AddSupplement(*value.check);
+        stagedSupplement_ = true;
+        return Result<void>::Success();
+    }
+
+    void PlaySaveRestoreSource::SupplementPublished() noexcept {
+        if (stagedSupplement_ && supplement_->restorePublished)
+            supplement_->restorePublished();
     }
 
     /** @copydoc PlaySaveRestoreSource::PreparedScene */

@@ -144,6 +144,16 @@ namespace Horo::Application::Internal {
         }
         if (const auto physical = RegisterPhysicsCapture(); physical.HasError())
             return physical;
+        if (environment.supplement) {
+            const auto &supplement = *environment.supplement;
+            if (!supplement.prepareCapture || !supplement.stageRestore || supplement.descriptor.required ||
+                supplement.descriptor.ownedRecords.size() != 1)
+                return Result<void>::Failure(MakeError(SaveErrors::CompositionUnsupported));
+            supplementCapture = std::make_shared<PlaySaveSupplementCapture>();
+            const auto registered = registry.Register(environment.supplement->descriptor, supplementCapture);
+            if (registered.HasError())
+                return Result<void>::Failure(registered.ErrorValue());
+        }
         if (!environment.ai)
             return Result<void>::Success();
         auto bound = environment.ai->BindCapture([scene = &scenes, values = schema, prefabs = prefabs](const RuntimeSceneView &) {
@@ -267,7 +277,7 @@ namespace Horo::Application::Internal {
             if (!command.selection)
                 return Result<void>::Failure(MakeError(SaveErrors::CompositionUnsupported));
             auto source = std::make_shared<PlaySaveRestoreSource>(storage, schema, *command.selection, liveBindings, behaviorOwner,
-                                                                  lifecycle, physics);
+                                                                  lifecycle, physics, environment.supplement, environment.storage.world);
             auto preparedHandoff =
                 std::make_shared<PlaySaveSceneHandoff>(scenes, source, authority, std::make_shared<PlaySaveSceneHandoffState>(),
                                                        environment.storage.world, prefabs, environment.ai);

@@ -116,6 +116,8 @@ namespace Horo::XR {
          * @return One optional canonical Save record with its finite schema limits.
          */
         [[nodiscard]] Runtime::CanonicalStateParticipantDescriptor Descriptor() const;
+        [[nodiscard]] static Runtime::CanonicalStateParticipantDescriptor Describe(Runtime::SaveParticipantId participant,
+                                                                                   Runtime::SaveRecordId record);
 
         /** @brief Selects an already protected reference for one exact currently localized live identity.
          * @param id Live anchor whose protected reference the store already owns.
