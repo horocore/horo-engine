@@ -5945,6 +5945,10 @@ add_executable(HoroRuntimeSceneCellPayloadTests
 target_compile_features(HoroRuntimeSceneCellPayloadTests PRIVATE cxx_std_20)
 target_include_directories(HoroRuntimeSceneCellPayloadTests PRIVATE ${PROJECT_SOURCE_DIR}/src/runtime/scene)
 target_link_libraries(HoroRuntimeSceneCellPayloadTests PRIVATE HoroEngine::AISceneIntegration HoroEngine::SceneCellPayload)
+target_compile_definitions(HoroRuntimeSceneCellPayloadTests PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
+if(HORO_BUILD_PHYSICS_NATIVE)
+    target_link_libraries(HoroRuntimeSceneCellPayloadTests PRIVATE HoroEngine::AISightIntegration)
+endif()
 horo_register_catch_test(HoroRuntimeSceneCellPayloadTests LABELS "unit;scene;world_streaming;headless")
 target_sources(HoroSceneCellPayloadPublicHeaderConsumer PRIVATE support/SceneCellPayloadPublicHeaderConsumer.cpp)
 add_executable(HoroRuntimeSavedSceneBootstrapTests

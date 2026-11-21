@@ -5,6 +5,10 @@
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Runtime/Scene/RuntimeSceneCellPayload.h"
 
+#if HORO_TEST_PHYSICS_NATIVE
+#include "../ai/PerceptionSightTestSupport.h"
+#endif
+
 #include <algorithm>
 #include <catch2/catch_test_macros.hpp>
 
@@ -369,6 +373,75 @@ namespace Horo::Runtime {
         REQUIRE(reacquired.Value().count == 1);
         CHECK(reacquired.Value().candidates[0].entity == newSource);
     }
+
+#if HORO_TEST_PHYSICS_NATIVE
+    TEST_CASE("Cell unload invalidates queued sight rays before the source is reattached",
+              "[scene][cell_attachment][lifecycle][ai][sight]") {
+        Counts counts;
+        RuntimeSceneService service;
+        Activate(service);
+        const auto cell = Payload();
+        const auto request = Request(service, cell);
+        Attach(service, cell, request, Owner(cell, request, counts));
+
+        const auto initialScene = *service.ActiveScene();
+        const auto root = initialScene.Find({100});
+        const auto oldSource = initialScene.Find({11});
+        REQUIRE(root);
+        REQUIRE(oldSource);
+        const auto sense = AI::SenseTypeIds::Sight;
+        const AI::PerceptionSpatialListener listener{.entity = *root, .senses = {sense}, .senseCount = 1};
+        AI::PerceptionSpatialBroadphase broadphase;
+        AI::SightTest::SightWorld physics;
+        AI::PerceptionSight sight;
+        const auto queueSight = [&](const EntityRef source, const std::uint64_t revision) {
+            const auto scene = *service.ActiveScene();
+            const AI::PerceptionSpatialSource candidate{.entity = source,
+                                                        .position = Math::WorldCoordinate64::FromMillimeters(0, 0, -10'000),
+                                                        .layers = 1,
+                                                        .senses = {sense},
+                                                        .senseCount = 1};
+            const auto spatial = broadphase.Publish(scene, revision, std::span{&listener, 1}, std::span{&candidate, 1});
+            REQUIRE(spatial.HasValue());
+            const auto frame = physics.CurrentFrame(*root);
+            AI::PerceptionSightBudget budget{.simulationTick = physics.tick, .remainingRaycasts = 1};
+            const auto queued = sight.Begin(scene, *spatial.Value(), physics.capability, frame, {}, budget);
+            REQUIRE(queued.HasValue());
+            REQUIRE(queued.Value().pending);
+            REQUIRE(budget.remainingRaycasts == 0);
+            return AI::SightTest::Publication(physics.capability, frame);
+        };
+        const auto oldPublication = queueSight(*oldSource, 1);
+
+        REQUIRE(QueueRuntimeSceneCellDetachment(service, cell.Identity(), request, Owner(cell, request, counts)).HasValue());
+        Commit(service);
+        REQUIRE_FALSE(service.TakeOperationError());
+        const auto cancelled = sight.Poll(*service.ActiveScene(), 1, oldPublication);
+        REQUIRE(cancelled.HasValue());
+        CHECK_FALSE(cancelled.Value().pending);
+        REQUIRE(cancelled.Value().count == 1);
+        CHECK(cancelled.Value().observations[0].source == *oldSource);
+        CHECK(cancelled.Value().observations[0].evidence == AI::PerceptionSightEvidence::Stale);
+        CHECK_FALSE(cancelled.Value().observations[0].visible);
+        REQUIRE(physics.world->ProcessQueryBatch().HasValue());
+
+        auto reload = request;
+        reload.fence.generation = IdentityFrom<W::StreamingGeneration>(2);
+        Attach(service, cell, reload, Owner(cell, reload, counts));
+        const auto newSource = service.ActiveScene()->Find({11});
+        REQUIRE(newSource);
+        REQUIRE(newSource != oldSource);
+        physics.Advance();
+        const auto newPublication = queueSight(*newSource, 2);
+        REQUIRE(physics.world->ProcessQueryBatch().HasValue());
+        const auto reacquired = sight.Poll(*service.ActiveScene(), 2, newPublication);
+        REQUIRE(reacquired.HasValue());
+        CHECK_FALSE(reacquired.Value().pending);
+        REQUIRE(reacquired.Value().count == 1);
+        CHECK(reacquired.Value().observations[0].source == *newSource);
+        CHECK(reacquired.Value().observations[0].visible);
+    }
+#endif
 
     TEST_CASE("Cell cancellation and stale provider barrier preserve canonical storage", "[scene][cell_attachment][rollback]") {
         Counts counts;
