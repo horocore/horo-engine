@@ -601,11 +601,11 @@ namespace Horo::Tests::OpenXRApplication {
         auto input = std::make_unique<AppInputSample>(*fixture.play);
         const auto *observed = input.get();
         input->onFixed = [&](const Runtime::FixedStepContext &step) {
-            RequireValue(fixture.play->TickAuthoredCharacter(runtime, character.controller, *character.world, step.simulationTick, step));
+            RequireValue(StageTestLocomotion(*fixture.play, runtime, character.controller, *character.world, step));
             RequireValue(character.world->AdvanceFixedTick(FixedTick(step.simulationTick)));
         };
         input->onCommit = [&](const Runtime::FixedStepContext &step) noexcept {
-            fixture.play->CommitAuthoredCharacter(runtime, *character.world, step);
+            PublishTestLocomotion(*fixture.play, runtime, character.controller, *character.world, step);
         };
         input->onRender = [&](const Runtime::FrameContext &frame) {
             fixture.Project(frame.frameNumber, nullptr, nullptr, {}, &frame);

@@ -3826,7 +3826,13 @@ namespace Horo::Editor {
                 const auto &state = *static_cast<const SceneTeleportContext *>(opaque);
                 return state.physics.QueueTeleport(state.scene, state.step, request, lifetime);
             }};
-            return xr.TickAuthoredCharacter(scene.RuntimeId(), controller.Value(), scope.character, previous + 1, step, &teleport);
+            const auto pose = scope.character.ControllerTransform(controller.Value());
+            if (pose.HasError())
+                return Result<void>::Failure(pose.ErrorValue());
+            const Application::Internal::OpenXRPlayCharacterStep character{pose.Value(), previous + 1, &scope.character, [](void *owner) {
+                return static_cast<Character::CharacterWorld *>(owner)->IssueCapability();
+            }};
+            return xr.TickAuthoredCharacter(scene.RuntimeId(), character, step, &teleport);
         }
 #endif
 
@@ -4248,8 +4254,14 @@ namespace Horo::Editor {
                 };
                 playPolicy.commitXrLocomotion = [xr](Application::Internal::ScenePhysicsHost &physics,
                                                      const Runtime::FixedStepContext &step) noexcept {
-                    if (auto scope = physics.Borrow(); scope.HasValue())
-                        xr->CommitAuthoredCharacter(scope.Value().scene, scope.Value().character, step);
+                    auto borrowed = physics.Borrow();
+                    if (borrowed.HasError())
+                        return;
+                    const auto &scope = borrowed.Value();
+                    if (const auto controller = xr->AwaitedCharacterPublication(scope.scene, step)) {
+                        if (const auto pose = scope.character.ControllerTransform(*controller); pose.HasValue())
+                            xr->CommitAuthoredCharacter(scope.scene, pose.Value(), step);
+                    }
                 };
                 playPolicy.cancelXrLocomotion = [xr]() noexcept {
                     xr->CancelAuthoredLocomotion();

@@ -519,8 +519,8 @@ namespace Horo::Application::Internal {
     }  // namespace
 
     Result<void> OpenXRPlayHost::BindAuthoredCharacter(const OpenXRPlayLocomotionEvidence &evidence,
-                                                       Character::CharacterControllerHandle controller, Character::CharacterWorld &world,
-                                                       const Runtime::FixedStepContext &step) {
+                                                       const OpenXRPlayCharacterStep &character, const Runtime::FixedStepContext &step) {
+        const auto controller = character.pose.controller;
         const auto &scope = evidence.scope;
         if (authoredCharacter_ && authoredCharacter_->scene == scope.scene && authoredCharacter_->session == scope.cutoff.session &&
             authoredCharacter_->player == scope.player && authoredCharacter_->assignment == evidence.assignmentRevision &&
@@ -535,7 +535,7 @@ namespace Horo::Application::Internal {
                                                  evidence.assignmentRevision, teleport);
         if (policy.HasError())
             return Result<void>::Failure(policy.ErrorValue());
-        auto authority = world.IssueCapability();
+        auto authority = character.issue(character.owner);
         if (authority.HasError())
             return Result<void>::Failure(authority.ErrorValue());
         const XRCharacterLocomotionBinding binding{composition_.dispatch,
@@ -555,8 +555,7 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc OpenXRPlayHost::TickAuthoredCharacter */
-    Result<void> OpenXRPlayHost::TickAuthoredCharacter(Runtime::SceneRuntimeId scene, Character::CharacterControllerHandle controller,
-                                                       Character::CharacterWorld &world, std::uint64_t characterTick,
+    Result<void> OpenXRPlayHost::TickAuthoredCharacter(Runtime::SceneRuntimeId scene, const OpenXRPlayCharacterStep &character,
                                                        const Runtime::FixedStepContext &step, const OpenXRPlayTeleportStep *teleport) {
         if (auto lane = Lane(); lane.HasError())
             return lane;
@@ -575,26 +574,27 @@ namespace Horo::Application::Internal {
         const auto evidence = ReadLocomotionEvidence(scope, step);
         if (evidence.HasError())
             return Result<void>::Failure(evidence.ErrorValue());
-        const auto pose = world.ControllerTransform(controller);
-        if (pose.HasError())
-            return Result<void>::Failure(pose.ErrorValue());
-        const float yaw = YawAroundWorldUp(pose.Value().heading);
+        const auto &pose = character.pose;
+        if (!pose.controller.IsValid() || !character.owner || !character.issue || character.targetTick == 0 ||
+            pose.sourceTick != character.targetTick - 1)
+            return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
+        const float yaw = YawAroundWorldUp(pose.heading);
 
-        if (auto bound = BindAuthoredCharacter(evidence.Value(), controller, world, step); bound.HasError())
+        if (auto bound = BindAuthoredCharacter(evidence.Value(), character, step); bound.HasError())
             return bound;
         const auto sample = ReadAuthoredLocomotionSample(evidence.Value(), yaw, step.fixedDelta);
-        if (const auto submitted = SubmitAuthoredSample(sample, evidence.Value(), step, characterTick, teleport, pose.Value().heading);
+        if (const auto submitted = SubmitAuthoredSample(sample, evidence.Value(), step, character.targetTick, teleport, pose.heading);
             submitted.HasError())
             return submitted;
 
         auto &placement = scene_->locomotion;
-        if (!placement || placement->initial.controller != controller)
-            placement.emplace(AuthoredCharacterPlacement{pose.Value()});
-        placement->pending.emplace(step.dispatchEvidence, characterTick);
+        if (!placement || placement->initial.controller != pose.controller)
+            placement.emplace(AuthoredCharacterPlacement{pose});
+        placement->pending.emplace(step.dispatchEvidence, character.targetTick);
         if (std::holds_alternative<OpenXRRoomScaleBinding>(AuthoredLocomotion()->translation)) {
             const auto worldFromPhysical = placement->worldPlacement.value_or(Math::Transform{});
             const auto pivot =
-                sample.head ? worldFromPhysical.rotation.Rotate(*sample.head) + worldFromPhysical.translation : pose.Value().position;
+                sample.head ? worldFromPhysical.rotation.Rotate(*sample.head) + worldFromPhysical.translation : pose.position;
             placement->pending->roomScaleTurn.emplace(pivot, yaw);
         }
         return Result<void>::Success();
@@ -610,23 +610,29 @@ namespace Horo::Application::Internal {
                facts.committedFrame == step.frameNumber && facts.committedDuration == step.fixedDelta;
     }
 
+    /** @copydoc OpenXRPlayHost::AwaitedCharacterPublication */
+    std::optional<Character::CharacterControllerHandle> OpenXRPlayHost::AwaitedCharacterPublication(
+        Runtime::SceneRuntimeId scene, const Runtime::FixedStepContext &step) const noexcept {
+        if (std::this_thread::get_id() != lane_ || !scene_ || scene_->scene != scene || !scene_->locomotion)
+            return std::nullopt;
+        const auto &placement = *scene_->locomotion;
+        return placement.pending && IsCommittedPlacement(*placement.pending, step) ? std::optional{placement.initial.controller}
+                                                                                   : std::nullopt;
+    }
+
     /** @copydoc OpenXRPlayHost::CommitAuthoredCharacter */
-    void OpenXRPlayHost::CommitAuthoredCharacter(Runtime::SceneRuntimeId scene, Character::CharacterWorld &world,
+    void OpenXRPlayHost::CommitAuthoredCharacter(Runtime::SceneRuntimeId scene, const Character::CharacterTransformPublication &pose,
                                                  const Runtime::FixedStepContext &step) noexcept {
-        if (!scene_ || scene_->scene != scene || !scene_->locomotion)
+        if (AwaitedCharacterPublication(scene, step) != pose.controller)
             return;
         auto &placement = *scene_->locomotion;
-        if (!placement.pending || !IsCommittedPlacement(*placement.pending, step) ||
-            world.PublishedTick().completedTick != placement.pending->characterTick)
-            return;
-        const auto pose = world.ControllerTransform(placement.initial.controller);
-        if (pose.HasError() || pose.Value().sourceTick != placement.pending->characterTick)
+        if (pose.sourceTick != placement.pending->characterTick)
             return;
         const auto roomScaleTurn = placement.pending->roomScaleTurn;
         placement.pending.reset();
         if (roomScaleTurn) {
             // The headset already physically moved. Only a committed turn changes its placement, around the tracked head.
-            const auto yaw = YawAroundWorldUp(pose.Value().heading);
+            const auto yaw = YawAroundWorldUp(pose.heading);
             const auto turn = std::remainder(yaw - roomScaleTurn->previousYawRadians, 2.0F * std::numbers::pi_v<float>);
             if (std::abs(turn) > 0.000001F) {
                 const auto rotation = Math::Quaternion::FromAxisAngle({0.0F, 1.0F, 0.0F}, turn);
@@ -638,7 +644,7 @@ namespace Horo::Application::Internal {
             return;
         }
         const auto &initial = placement.initial;
-        const auto &current = pose.Value();
+        const auto &current = pose;
         if (current.position == initial.position && current.heading == initial.heading) {
             placement.worldPlacement.reset();
             return;

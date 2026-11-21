@@ -142,6 +142,17 @@ namespace Horo::Application::Internal {
         Result<void> (*stage)(void *, const Character::CharacterTeleportRequest &, const CancellationToken &){};
     };
 
+    /** @brief One fixed-step Character publication and a lazily issued command capability.
+     * @details The Scene owner reads the committed pose. The synchronous issuance callback is called only when the binding
+     * changes and is never retained. XR consumes the copied pose and the opaque command capability.
+     */
+    struct OpenXRPlayCharacterStep final {
+        Character::CharacterTransformPublication pose;
+        std::uint64_t targetTick{};
+        void *owner{};
+        Result<Character::CharacterCapability> (*issue)(void *){};
+    };
+
     /** @brief Same-cutoff device ray and held-state evidence. The consumer owns edges, capture, and cancellation. */
     struct OpenXRPlayControllerPointerSample final {
         Math::Ray ray;
@@ -397,13 +408,15 @@ namespace Horo::Application::Internal {
          * @return Installed opt-in settings, or null. No input assignment or actor grant is inferred. */
         [[nodiscard]] const OpenXRLocomotionBinding *AuthoredLocomotion() const noexcept;
 
-        /** @brief Stages the signed XR actions for the selected Character in the current Play Scene. */
-        [[nodiscard]] Result<void> TickAuthoredCharacter(Runtime::SceneRuntimeId scene, Character::CharacterControllerHandle controller,
-                                                         Character::CharacterWorld &world, std::uint64_t characterTick,
+        /** @brief Stages the signed XR actions using the Scene owner's last committed Character publication. */
+        [[nodiscard]] Result<void> TickAuthoredCharacter(Runtime::SceneRuntimeId scene, const OpenXRPlayCharacterStep &character,
                                                          const Runtime::FixedStepContext &step,
                                                          const OpenXRPlayTeleportStep *teleport = nullptr);
-        /** @brief Publishes the Character placement for the successful native and scheduler fixed attempt. */
-        void CommitAuthoredCharacter(Runtime::SceneRuntimeId scene, Character::CharacterWorld &world,
+        /** @brief Identifies the Character publication the Scene owner must read after this exact scheduler commit. */
+        [[nodiscard]] std::optional<Character::CharacterControllerHandle> AwaitedCharacterPublication(
+            Runtime::SceneRuntimeId scene, const Runtime::FixedStepContext &step) const noexcept;
+        /** @brief Applies the publication from the committed Character attempt to XR presentation placement. */
+        void CommitAuthoredCharacter(Runtime::SceneRuntimeId scene, const Character::CharacterTransformPublication &pose,
                                      const Runtime::FixedStepContext &step) noexcept;
         /** @brief Revokes pending authored motion and withdraws the current comfort hint. */
         void CancelAuthoredLocomotion() noexcept;
@@ -552,8 +565,7 @@ namespace Horo::Application::Internal {
         };
 
         [[nodiscard]] Result<void> BindAuthoredCharacter(const OpenXRPlayLocomotionEvidence &evidence,
-                                                         Character::CharacterControllerHandle controller, Character::CharacterWorld &world,
-                                                         const Runtime::FixedStepContext &step);
+                                                         const OpenXRPlayCharacterStep &character, const Runtime::FixedStepContext &step);
         [[nodiscard]] Result<void> SubmitAuthoredSample(const XR::XRLocomotionSample &sample, const OpenXRPlayLocomotionEvidence &evidence,
                                                         const Runtime::FixedStepContext &step, std::uint64_t characterTick,
                                                         const OpenXRPlayTeleportStep *teleport, Math::Quaternion heading);

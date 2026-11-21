@@ -1020,6 +1020,22 @@ namespace Horo::Tests::OpenXRApplication {
             Input::RawInputSnapshot raw_;
         };
 
+        Result<void> StageTestLocomotion(Host::OpenXRPlayHost &play, Runtime::SceneRuntimeId scene,
+                                         Character::CharacterControllerHandle controller, Character::CharacterWorld &world,
+                                         const Runtime::FixedStepContext &step, const Host::OpenXRPlayTeleportStep *teleport = nullptr) {
+            const Host::OpenXRPlayCharacterStep input{RequireValue(world.ControllerTransform(controller)), step.simulationTick, &world,
+                                                      [](void *owner) {
+                return static_cast<Character::CharacterWorld *>(owner)->IssueCapability();
+            }};
+            return play.TickAuthoredCharacter(scene, input, step, teleport);
+        }
+
+        void PublishTestLocomotion(Host::OpenXRPlayHost &play, Runtime::SceneRuntimeId scene,
+                                   Character::CharacterControllerHandle controller, Character::CharacterWorld &world,
+                                   const Runtime::FixedStepContext &step) {
+            play.CommitAuthoredCharacter(scene, RequireValue(world.ControllerTransform(controller)), step);
+        }
+
         std::unique_ptr<Runtime::SceneActivationCandidate> ActivatePlay(auto &fixture, const std::optional<Input::PlayerId> player) {
             REQUIRE(fixture.play);
             REQUIRE(fixture.play->SetPlayState(Editor::EditorPlayState::Playing).HasValue());
@@ -2495,20 +2511,19 @@ namespace Horo::Tests::OpenXRApplication {
             CAPTURE(step.simulationTick);
             {
                 INFO("stage the XR Character command");
-                RequireValue(
-                    fixture.play->TickAuthoredCharacter(runtime, character.controller, *character.world, step.simulationTick, step));
+                RequireValue(StageTestLocomotion(*fixture.play, runtime, character.controller, *character.world, step));
             }
             {
                 INFO("advance the Character owner");
                 RequireValue(character.world->AdvanceFixedTick(FixedTick(step.simulationTick, movement.Observer())));
             }
-            fixture.play->CommitAuthoredCharacter(runtime, *character.world, step);
+            PublishTestLocomotion(*fixture.play, runtime, character.controller, *character.world, step);
         };
         observed->onCommit = [&](const Runtime::FixedStepContext &step) noexcept {
             auto forged = step;
             ++forged.attemptNumber;
-            fixture.play->CommitAuthoredCharacter(runtime, *character.world, forged);
-            fixture.play->CommitAuthoredCharacter(runtime, *character.world, step);
+            PublishTestLocomotion(*fixture.play, runtime, character.controller, *character.world, forged);
+            PublishTestLocomotion(*fixture.play, runtime, character.controller, *character.world, step);
         };
         RequireValue(fixture.scheduler->AddParticipant(std::move(input)));
         RequireValue(fixture.scheduler->Startup());
@@ -2681,8 +2696,7 @@ namespace Horo::Tests::OpenXRApplication {
         auto *observed = input.get();
         observed->onFixed = [&](const Runtime::FixedStepContext &step) {
             const auto old = RequireValue(character.world->ControllerTransform(character.controller));
-            RequireValue(
-                fixture.play->TickAuthoredCharacter(runtime, character.controller, *character.world, step.simulationTick, step, &teleport));
+            RequireValue(StageTestLocomotion(*fixture.play, runtime, character.controller, *character.world, step, &teleport));
             RequireValue(FixedAccess::Stage(*character.world, {step.simulationTick, step.attemptNumber},
                                             {.delta = step.fixedDelta,
                                              .query = clearance.Context(character.world->Descriptor(), step.simulationTick),
@@ -2691,7 +2705,7 @@ namespace Horo::Tests::OpenXRApplication {
         };
         observed->onCommit = [&](const Runtime::FixedStepContext &step) noexcept {
             FixedAccess::Commit(*character.world, {step.simulationTick, step.attemptNumber});
-            fixture.play->CommitAuthoredCharacter(runtime, *character.world, step);
+            PublishTestLocomotion(*fixture.play, runtime, character.controller, *character.world, step);
         };
         RequireValue(fixture.scheduler->AddParticipant(std::move(input)));
         RequireValue(fixture.scheduler->Startup());
