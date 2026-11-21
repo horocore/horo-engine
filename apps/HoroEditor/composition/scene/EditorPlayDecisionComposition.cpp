@@ -1,11 +1,40 @@
 #include "EditorProjectSceneHostOwner.h"
 #include "Horo/AI/AIErrors.h"
+#include "Horo/Application/ProjectAiSettings.h"
 
 #include <algorithm>
 #include <array>
 #include <new>
 
 namespace Horo::Application::Internal::EditorProjectSceneDetail {
+    namespace {
+        /** @brief Authoritative scheduler settings and the effective development grant for one Play startup. */
+        struct EditorDecisionPolicy final {
+            AI::AiTaskSchedulerSettings scheduler;
+            bool debugGranted{};
+        };
+
+        /** @brief Resolves the selected project's policy before any provider admission. */
+        Result<EditorDecisionPolicy> CaptureEditorDecisionPolicy(const EditorPlayDecisionSelection &selection) {
+            using Policy = Result<EditorDecisionPolicy>;
+            const auto source = LoadProjectSourceDocument(selection.projectRoot);
+            if (source.HasError())
+                return Policy::Failure(source.ErrorValue());
+            const auto resolved = ResolveProjectAiSettings(source.Value());
+            if (resolved.HasError())
+                return Policy::Failure(resolved.ErrorValue());
+            if (!resolved.Value())
+                return Policy::Success({{}, selection.decisionDebugGranted});
+            const auto &settings = *resolved.Value();
+            if (settings.Scheduler().mode != AI::AiSchedulingMode::Deterministic)
+                return Policy::Failure(
+                    MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Editor Decision Play requires a deterministic project AI scheduler."));
+            return Policy::Success(
+                {settings.Scheduler(), selection.decisionDebugGranted &&
+                                           settings.AllowsDebug(AiProjectRuntimeKind::Development, AiProjectDebugOperation::LiveMutation)});
+        }
+    }  // namespace
+
     /** @copydoc Editor::EditorPlaySceneHost::ReadDecisionProblem */
     std::optional<Editor::EditorPlayDecisionProblem> ProjectPlaySceneHost::ReadDecisionProblem() const {
         const auto scene = scenes_ ? scenes_->ActiveScene() : std::nullopt;
@@ -244,6 +273,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             return JobCancelled();
         auto policy = std::move(*pendingDecisionPolicy_);
         pendingDecisionPolicy_.reset();
+        const auto settings = CaptureEditorDecisionPolicy(*policy.decisions);
+        if (settings.HasError())
+            return Result<void>::Failure(settings.ErrorValue());
         auto cooked = resources_.assets_->DecodeScene(policy.decisions->scene);
         if (cooked.HasError())
             return Result<void>::Failure(cooked.ErrorValue());
@@ -266,10 +298,12 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             return perception;
         if (cancellation.IsCancellationRequested())
             return JobCancelled();
-        auto admitted = RegisterPresentationParticipants(policy, AI::AiSceneCookedDecisionExecution{*decisionJobs_, {}, {}, {}});
+        auto admitted =
+            RegisterPresentationParticipants(policy,
+                                             AI::AiSceneCookedDecisionExecution{*decisionJobs_, settings.Value().scheduler, {}, {}});
         if (admitted.HasValue()) {
             inspectionKeys_ = std::move(policy.decisions->inspectionKeys);
-            decisionDebugGranted_ = policy.decisions->decisionDebugGranted;
+            decisionDebugGranted_ = settings.Value().debugGranted;
         }
         return admitted;
     }

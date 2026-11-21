@@ -566,13 +566,14 @@ target_link_libraries(HoroProjectMigrations PUBLIC HoroEngine::Application
 add_dependencies(HoroProjectMigrations HoroProjectMigrationCatalog)
 
 add_library(HoroProjectSettings STATIC application/project/ProjectNetworkSettings.cpp
+        application/project/ProjectAiSettings.cpp
         application/project/NavigationProjectSettingsStore.cpp
         application/project/NavigationProjectSettings.cpp
         application/project/NavigationProjectSettingsCodec.cpp)
 add_library(HoroEngine::ProjectSettings ALIAS HoroProjectSettings)
 target_compile_features(HoroProjectSettings PUBLIC cxx_std_20)
 target_link_libraries(HoroProjectSettings PRIVATE nlohmann_json::nlohmann_json)
-target_link_libraries(HoroProjectSettings PUBLIC HoroEngine::Application HoroEngine::NetworkApi HoroEngine::NavigationApi HoroEngine::Assets)
+target_link_libraries(HoroProjectSettings PUBLIC HoroEngine::Application HoroEngine::NetworkApi HoroEngine::NavigationApi HoroEngine::Assets HoroEngine::AI)
 
 add_library(HoroSaveApi STATIC
         runtime/save/SaveErrors.cpp

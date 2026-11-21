@@ -265,11 +265,18 @@ namespace Horo::AI {
         jobs_ = std::move(service).Value();
     }
 
+    /** @copydoc AiTaskScheduler::ValidateSettings */
+    Result<void> AiTaskScheduler::ValidateSettings(const AiTaskSchedulerSettings &settings) {
+        return Valid(settings) ? Result<void>::Success() : Result<void>::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
+    }
+
     /** @copydoc AiTaskScheduler::Create */
     Result<std::unique_ptr<AiTaskScheduler>> AiTaskScheduler::Create(JobSystem &jobs, const AiRuntimeIncarnation incarnation,
                                                                      const AiTaskSchedulerSettings &settings) {
-        if (!incarnation.IsValid() || !Valid(settings))
+        if (!incarnation.IsValid())
             return Result<std::unique_ptr<AiTaskScheduler>>::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
+        if (const auto validated = ValidateSettings(settings); validated.HasError())
+            return Result<std::unique_ptr<AiTaskScheduler>>::Failure(validated.ErrorValue());
         try {
             return Result<std::unique_ptr<AiTaskScheduler>>::Success(
                 std::make_unique<AiTaskScheduler>(ConstructionKey{}, jobs, incarnation, settings));

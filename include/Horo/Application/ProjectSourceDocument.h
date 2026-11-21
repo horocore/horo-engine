@@ -18,6 +18,7 @@ namespace Horo::Application {
         std::optional<std::string>
             platformServicesSettingsSource;            /**< Project policy JSON value; no host profile or private provider state. */
         std::optional<Sha256Digest> sourceFingerprint; /**< SHA-256 of the exact decoded input; absent for manually assembled candidates. */
+        std::optional<std::string> aiSettingsSource;   /**< Project-authored gameplay AI policy JSON value. */
     };
 
     /** @brief Decodes bounded project source without I/O, migration, service discovery or policy defaults.

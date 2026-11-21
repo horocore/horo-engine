@@ -255,6 +255,7 @@ horo_configure_target_header_boundary(HoroApplication PUBLIC_HEADERS
     Horo/Release/ReleaseVersion.h
 )
 horo_configure_target_header_boundary(HoroProjectSettings PUBLIC_HEADERS
+    Horo/Application/ProjectAiSettings.h
     Horo/Application/NavigationProjectSettings.h
     Horo/Application/NavigationProjectSettingsStore.h
     Horo/Application/ProjectNetworkSettings.h

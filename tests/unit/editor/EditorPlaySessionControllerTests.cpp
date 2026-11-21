@@ -20,6 +20,8 @@
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <fstream>
+#include <iterator>
 #include <memory>
 #include <thread>
 #include <utility>
@@ -925,10 +927,24 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     bool discloseKey = false;
     bool authorizeForeignSchema = false;
     bool decisionDebug = false;
+    bool projectDisallowsDebug = false;
     using FailedCallback = EditorDecisionFixtureExecutor::FailedCallback;
     SECTION("Committed pause and step retain a consecutive local Decision clock") {}
     SECTION("Approved agent debugging steps one slice and releases the breakpoint on view closure") {
         decisionDebug = true;
+    }
+    SECTION("Authored development permissions keep an explicitly requested debugger read-only") {
+        projectDisallowsDebug = true;
+        std::ifstream input{project.project.dir.path / ".horo/project.json", std::ios::binary};
+        REQUIRE(input.is_open());
+        std::string metadata{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+        input.close();
+        constexpr std::string_view backend = R"("renderBackend":"opengl")";
+        const auto insertion = metadata.find(backend);
+        REQUIRE(insertion != std::string::npos);
+        metadata.insert(insertion + backend.size(),
+                        R"(,"ai":{"schemaVersion":1,"scheduler":{"evaluationsPerTick":1},"development":{"liveMutation":false}})");
+        project.WriteText(".horo/project.json", metadata);
     }
     SECTION("An explicit schema-scoped inspector key reveals only its admitted value") {
         discloseKey = true;
@@ -989,7 +1005,7 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
                                                                                               std::move(disclosure),
                                                                                               livePerception ? perceptionPath : "",
                                                                                               Duration::FromMilliseconds(10),
-                                                                                              decisionDebug}});
+                                                                                              decisionDebug || projectDisallowsDebug}});
     const Editor::EditorPlaySceneFactory factory = [&](Runtime::SceneRuntimeId id, const Runtime::RuntimeSceneDefinition &definition) {
         return projectFactory(project.project.dir.path, id, definition);
     };

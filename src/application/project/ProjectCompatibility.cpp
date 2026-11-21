@@ -363,9 +363,12 @@ namespace Horo::Application {
         std::optional<std::string> platformSettings;
         if (const auto &settings = parsed.Value()["settings"]; settings.contains("platformServices"))
             platformSettings = settings["platformServices"].dump();
-        return Result<ProjectSourceDocument>::Success({std::move(metadata).Value(), std::move(network), std::move(platformSalt),
-                                                       std::move(platformSettings),
-                                                       ComputeSha256(std::as_bytes(std::span{contents.data(), contents.size()}))});
+        std::optional<std::string> aiSettings;
+        if (const auto &settings = parsed.Value()["settings"]; settings.contains("ai"))
+            aiSettings = settings["ai"].dump();
+        return Result<ProjectSourceDocument>::Success(
+            {std::move(metadata).Value(), std::move(network), std::move(platformSalt), std::move(platformSettings),
+             ComputeSha256(std::as_bytes(std::span{contents.data(), contents.size()})), std::move(aiSettings)});
     }
 
     /** @copydoc LoadProjectSourceDocument */

@@ -3493,6 +3493,32 @@ fixed tick. Closing the inspector or changing the selected generation releases
 the hold and discards the breakpoint. Gameplay, Perception, and other agents
 continue on the normal fixed-tick schedule.
 
+### Project AI settings
+
+The canonical project document can declare `settings.ai` with
+`schemaVersion: 1`. The application resolves it through
+`HoroEngine::ProjectSettings` and validates scheduler budgets with the same
+validator used to create a Scene scheduler. Projects that omit `settings.ai`
+continue to use the host's defaults. Renderer selection and editor-local
+visualization preferences stay outside the AI policy.
+
+The optional `scheduler` object accepts `maximumAgents`,
+`evaluationsPerTick`, `workUnitsPerTick`, `commandsPerTick`,
+`workerSubmissionsPerTick`, `pendingWorkers`, and `starvationTicks`.
+Omitted limits retain the runtime defaults. The `mode` accepts
+`deterministic` or `bestEffort`. Best-effort may provide a
+`simulationProfile` with increasing `fullDistanceMillimeters`,
+`reducedDistanceMillimeters`, and `suspensionDistanceMillimeters`, plus
+`reducedIntervalTicks` greater than one and a positive `demotionDelayTicks`.
+Editor Decision Play requires deterministic timing and rejects an incompatible
+project profile before admitting the Scene's Decision providers.
+
+The optional `development` object declares boolean `liveMutation` and
+`replayCapture` permissions. Both default to false in an authored AI policy.
+Editor Play requires both the project permission and the explicit
+`--play-ai-debug` request for live mutation when an AI policy is present.
+The permission check denies both operations for a packaged execution profile.
+
 ### Scene decision scheduling tiers
 
 Hosts can compose an `AiDecisionSimulationProfile` through

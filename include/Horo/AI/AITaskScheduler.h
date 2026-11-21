@@ -282,6 +282,11 @@ namespace Horo::AI {
         /** @brief Allocates validated finite storage. @param key Factory authority. @param jobs Borrowed process jobs.
          * @param incarnation Exact scene incarnation. @param settings Validated project limits. */
         AiTaskScheduler(ConstructionKey, JobSystem &jobs, AiRuntimeIncarnation incarnation, const AiTaskSchedulerSettings &settings);
+        /** @brief Validates the same scheduler settings used for runtime creation without creating jobs or Scene state.
+         * @param settings Candidate finite project limits.
+         * @return Success or the typed scheduler policy error.
+         */
+        [[nodiscard]] static Result<void> ValidateSettings(const AiTaskSchedulerSettings &settings);
         /** @brief Composes without creating threads. @param jobs Borrowed process jobs. @param incarnation Scene identity.
          * @param settings Finite validated limits. @return Owned scheduler or typed admission/storage failure. */
         [[nodiscard]] static Result<std::unique_ptr<AiTaskScheduler>> Create(JobSystem &jobs, AiRuntimeIncarnation incarnation,

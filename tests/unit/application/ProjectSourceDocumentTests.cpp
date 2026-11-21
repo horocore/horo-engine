@@ -1,5 +1,7 @@
 #include "../runtime/networking/NetworkProjectSettingsTestSupport.h"
 #include "../runtime/networking/ReplicationDescriptorTestSupport.h"
+#include "Horo/AI/AIErrors.h"
+#include "Horo/Application/ProjectAiSettings.h"
 #include "Horo/Application/ProjectNetworkSettings.h"
 
 #include <nlohmann/json.hpp>
@@ -44,6 +46,74 @@ namespace {
         const auto resolved = ResolveProjectNetworkSettings(captured.Value());
         REQUIRE(resolved.HasValue());
         REQUIRE_FALSE(resolved.Value().has_value());
+    }
+
+    TEST_CASE("Project AI policy keeps gameplay budgets independent of rendering and gates packaged debug",
+              "[unit][application][source-profile][ai]") {
+        auto document = RegisteredSource();
+        const auto absent = DecodeProjectSourceDocument(document.dump());
+        REQUIRE(absent.HasValue());
+        REQUIRE(ResolveProjectAiSettings(absent.Value()).Value() == std::nullopt);
+        document["settings"]["ai"] = Json::parse(R"({
+            "schemaVersion": 1,
+            "scheduler": {
+                "mode": "bestEffort",
+                "maximumAgents": 64,
+                "evaluationsPerTick": 12,
+                "workUnitsPerTick": 512,
+                "simulationProfile": {
+                    "fullDistanceMillimeters": 5000,
+                    "reducedDistanceMillimeters": 10000,
+                    "suspensionDistanceMillimeters": 20000,
+                    "reducedIntervalTicks": 4,
+                    "demotionDelayTicks": 8
+                }
+            },
+            "development": {"liveMutation": true, "replayCapture": true}
+        })");
+        for (const auto *backend : {"null", "vulkan", "opengl"}) {
+            document["settings"]["renderBackend"] = backend;
+            const auto source = DecodeProjectSourceDocument(document.dump());
+            REQUIRE(source.HasValue());
+            const auto resolved = ResolveProjectAiSettings(source.Value());
+            REQUIRE(resolved.HasValue());
+            REQUIRE(resolved.Value());
+            const auto &policy = *resolved.Value();
+            CHECK(policy.Scheduler().mode == AI::AiSchedulingMode::BestEffort);
+            CHECK(policy.Scheduler().maximumAgents == 64);
+            CHECK(policy.Scheduler().evaluationsPerTick == 12);
+            CHECK(policy.Scheduler().workUnitsPerTick == 512);
+            REQUIRE(policy.Scheduler().simulationProfile);
+            CHECK(policy.Scheduler().simulationProfile->reducedIntervalTicks == 4);
+            for (const auto operation : {AiProjectDebugOperation::LiveMutation, AiProjectDebugOperation::ReplayCapture}) {
+                CHECK(policy.AllowsDebug(AiProjectRuntimeKind::Development, operation));
+                CHECK_FALSE(policy.AllowsDebug(AiProjectRuntimeKind::Packaged, operation));
+            }
+        }
+    }
+
+    TEST_CASE("Project AI rejects invalid canonical settings before activation", "[unit][application][source-profile][ai]") {
+        const std::array invalid{
+            R"({"schemaVersion":2})",
+            R"({"schemaVersion":1,"scheduler":{"maximumAgents":8,"evaluationsPerTick":9}})",
+            R"({"schemaVersion":1,"scheduler":{"pendingWorkers":-1}})",
+            R"({"schemaVersion":1,"scheduler":{"workUnitsPerTick":12.5}})",
+            R"({"schemaVersion":1,"scheduler":{"mode":"bestEffort","simulationProfile":{}}})",
+            R"({"schemaVersion":1,"scheduler":{"simulationProfile":{"fullDistanceMillimeters":1,"reducedDistanceMillimeters":2,"suspensionDistanceMillimeters":3,"reducedIntervalTicks":4,"demotionDelayTicks":1}}})",
+            R"({"schemaVersion":1,"scheduler":{"renderBackend":"vulkan"}})",
+            R"({"schemaVersion":1,"development":{"liveMutation":"true"}})",
+            R"({"schemaVersion":1,"visualization":{"inspectAgent":4}})",
+        };
+        for (const auto *policy : invalid) {
+            INFO(policy);
+            auto document = RegisteredSource();
+            document["settings"]["ai"] = Json::parse(policy);
+            const auto source = DecodeProjectSourceDocument(document.dump());
+            REQUIRE(source.HasValue());
+            const auto rejected = ResolveProjectAiSettings(source.Value());
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == AI::AIErrors::SchedulerPolicyInvalid.code.Value());
+        }
     }
 
     TEST_CASE("Project source accessor carries bounded authored inventory through sole Network codec",
