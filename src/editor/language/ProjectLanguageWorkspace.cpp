@@ -2,6 +2,7 @@
 
 #include "Horo/Editor/SourceFileOpenService.h"
 #include "LspDocumentSync.h"
+#include "LspProcess.h"
 
 #include <algorithm>
 #include <array>

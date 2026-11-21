@@ -112,6 +112,7 @@ namespace Horo::Editor {
                 m_gameplayBuildSession.reset();
                 m_playAfterGameplayBuild = false;
                 RefreshGameplayRegistry();
+                PrepareSourceLanguage();
                 if (startPlay)
                     BeginPlaySession();
                 break;

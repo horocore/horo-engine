@@ -133,6 +133,9 @@ if(HORO_BUILD_EDITOR_GUI)
     target_compile_features(HoroEditor PRIVATE cxx_std_20)
     set_property(SOURCE HoroEditor/app/HoroEditorApp.cpp
         APPEND PROPERTY COMPILE_DEFINITIONS HORO_SOURCE_REVISION="${HORO_SOURCE_REVISION}")
+    # The desktop composition exceeds the standard COFF section limit in MSVC Debug.
+    set_property(SOURCE HoroEditor/app/HoroEditorApp.cpp
+        APPEND PROPERTY COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:MSVC>:/bigobj>")
     target_link_libraries(HoroEditor PRIVATE HoroNativeNavigationBakeHost HoroEngine::PlatformProjectIo)
     target_link_libraries(HoroEditor PRIVATE HoroEngine::RuntimeConsole HoroEditorConsoleLaunchInternal HoroEditorRuntimeConsoleViewInternal)
 

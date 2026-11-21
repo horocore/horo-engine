@@ -2,11 +2,14 @@
 #include "ClangdProvider.h"
 #include "Horo/Application/GameplayBuildService.h"
 #include "Horo/Editor/SourceFileOpenService.h"
+#include "Horo/Platform/ExternalProcess.h"
 
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdlib>
+#include <nlohmann/json.hpp>
+#include <thread>
 
 namespace {
     using namespace Horo;
@@ -112,14 +115,15 @@ namespace {
         CHECK(PrepareClangdProvider(sources, settings).HasValue());
     }
 
-    TEST_CASE("Installed Clangd resolves a cross-file definition using the configured include directory", "[integration][clangd]") {
+    TEST_CASE("Installed Clangd publishes versioned diagnostics and resolves a cross-file definition", "[integration][clangd]") {
         const auto *installed = std::getenv("HORO_TEST_CLANGD");
         if (!installed)
             SKIP("Set HORO_TEST_CLANGD to the installed host executable.");
         TestSupport::SourceProject project;
         std::filesystem::create_directory(project.directory / "include");
         project.Put("inline int horo_fixture_symbol() { return 37; }\n", "include/gameplay_api.hpp");
-        constexpr std::string_view code = "#include \"gameplay_api.hpp\"\nint gameplay() { return horo_fixture_symbol(); }\n";
+        constexpr std::string_view code =
+            "#include \"gameplay_api.hpp\"\nint gameplay() { return horo_fixture_symbol(); }\nint broken = missing_fixture_symbol;\n";
         project.Put(code, "gameplay.cpp");
         const auto sourcePath = Utf8(project.directory / "gameplay.cpp");
         const auto commands = nlohmann::json::array({{{"directory", Utf8(project.directory)},
@@ -137,19 +141,31 @@ namespace {
         auto workspace = ProjectLanguageWorkspace::Create(runner, sources, std::span{&provider.Value(), 1});
         REQUIRE(workspace.HasValue());
         auto &owner = *workspace.Value();
+        bool diagnosed = false;
+        bool navigated = false;
+        const auto observe = [&](const auto now) {
+            for (const auto &event : owner.Poll(documents, now)) {
+                if (const auto *diagnostics = std::get_if<LanguageDiagnostics>(&event.payload)) {
+                    diagnosed |= event.context.source.SharesStateWith(documents.front()) &&
+                                 std::ranges::any_of(diagnostics->items, [&](const auto &item) {
+                        return item.severity == LanguageSeverity::Error && item.span.start == code.find("missing_fixture_symbol");
+                    });
+                }
+                if (const auto *navigation = std::get_if<LanguageNavigation>(&event.payload)) {
+                    navigated |= std::ranges::any_of(navigation->targets, [](const auto &target) {
+                        return target.source.Value() == "include/gameplay_api.hpp";
+                    });
+                }
+            }
+        };
         REQUIRE(Await([&](const auto now) {
-            static_cast<void>(owner.Poll(documents, now));
+            observe(now);
             return owner.Request(documents.front(), SourceLanguageRequestKind::Definition, {.offset = code.find("horo_fixture_symbol")})
                 .HasValue();
         }));
         REQUIRE(Await([&](const auto now) {
-            for (const auto &event : owner.Poll(documents, now)) {
-                if (const auto *navigation = std::get_if<LanguageNavigation>(&event.payload))
-                    return std::ranges::any_of(navigation->targets, [](const auto &target) {
-                        return target.source.Value() == "include/gameplay_api.hpp";
-                    });
-            }
-            return false;
+            observe(now);
+            return diagnosed && navigated;
         }));
         owner.Shutdown(ProjectLanguageWorkspace::Clock::now());
         REQUIRE(Await([&](const auto now) {

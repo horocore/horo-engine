@@ -3530,6 +3530,7 @@
     "workspace.source_open.unsupported": {"text": "This file type is not supported by the embedded editor."},
     "workspace.source_open.unsafe": {"text": "The source path is outside the project's safe boundary."},
     "workspace.source_open.unavailable": {"text": "No source editor route is available in this editor composition."},
+    "workspace.source_language.unavailable": {"text": "C++ language features are unavailable. Install Clangd and generate compile_commands.json, or see the editor log for details."},
     "workspace.global_dock.operations.search": {
       "text": "Search operations..."
     },

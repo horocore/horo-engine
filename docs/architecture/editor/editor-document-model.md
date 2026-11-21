@@ -256,6 +256,13 @@ keeps project-defined Clangd configuration disabled and does not enable
 query-driver execution. Missing tools or metadata produce a typed availability
 failure while the ordinary source editor remains usable.
 
+The desktop host reads `HORO_CLANGD_EXECUTABLE` and
+`HORO_CLANGD_COMPILE_COMMANDS` from its environment. Without an executable
+override, it searches absolute entries in the inherited `PATH`. Each
+project workspace owns its own provider. A successful gameplay build
+retries initial admission if its compile database was missing. Diagnostics
+are displayed only on the exact source publication that received them.
+
 ### Source Save Publication (EDT-003.5)
 
 `SourceDocumentService::Save` captures one exact current revision on the owner thread.

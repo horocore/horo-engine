@@ -5,6 +5,7 @@
 #include "Horo/Editor/ProjectCreationService.h"
 #include "Horo/Editor/SourceFileOpenService.h"
 #include "SourceEditorSession.h"
+#include "editor/language/LspResultProjection.h"
 #include "editor/project_model/RendererAvailability.h"
 #include "helpers/editor_ui/HeadlessEditorGuiFixture.h"
 #include "support/OwnedTestDirectory.h"
@@ -126,6 +127,12 @@ TEST_CASE("Rejected route leave retains source views and failed destination entr
     REQUIRE(original);
     const auto identity = original->widget.Identity();
     CHECK(original->widget.HasHighlight(fixture.state.source.Revision()));
+    const auto oldDiagnostics = std::make_shared<const Language::LanguageResult>(
+        Language::LanguageResult{.context = {.source = fixture.state.source},
+                                 .payload = Language::LanguageDiagnostics{
+                                     {{.span = {0, 1}, .severity = Language::LanguageSeverity::Error, .message = "Example error"}}}});
+    original->PublishDiagnostics(fixture.state.source, oldDiagnostics);
+    CHECK(original->diagnostics == oldDiagnostics);
     REQUIRE(original->widget.Select({1, 3}));
     fixture.state.views.Presented(instance);
     fixture.state.deny = true;
@@ -144,6 +151,8 @@ TEST_CASE("Rejected route leave retains source views and failed destination entr
     REQUIRE(rolledBack);
     CHECK(rolledBack->widget.Identity().value > identity.value);
     CHECK(rolledBack->widget.HasHighlight(fixture.state.source.Revision()));
+    rolledBack->PublishDiagnostics(fixture.state.source, oldDiagnostics);
+    CHECK_FALSE(rolledBack->diagnostics);
     CHECK(rolledBack->widget.Selection() == SourceWidgetSelection{0, 0});
     CHECK(fixture.state.views.NeedsFocus(instance));
 }

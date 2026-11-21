@@ -31,6 +31,7 @@
 #include "editor/document/SceneFileWatchService.h"
 #include "editor/gameplay/EditorPlaySessionController.h"
 #include "editor/gameplay/ProjectGameplayRegistry.h"
+#include "editor/language/ClangdProvider.h"
 #include "editor/project_model/EditorSelectionModel.h"
 #include "editor/project_model/EditorViewportModel.h"
 #include "editor/renderer/xr/EditorXrSceneGeometry.h"
@@ -560,6 +561,10 @@ namespace Horo::Editor {
          * @param elapsedSeconds Host update delta. @param delaySeconds Zero disables source saves.
          */
         void UpdateSourceAutosave(float elapsedSeconds, int delaySeconds);
+        /** @brief Binds the host runner and trusted settings to this project's source owner. */
+        void BindSourceLanguage(IExternalProcessRunner &runner, Language::ClangdSettings settings);
+        /** @brief Pumps bounded language results on the workspace owner lane. */
+        void UpdateSourceLanguage();
         /** @brief Publishes a terminal Project usage review only for its original document and registry revision. */
         void UpdateBlackboardUsageReview();
         /** @brief Polls one bounded read-only EQS job and invalidates evidence from a retired authored Scene. */
@@ -765,6 +770,9 @@ namespace Horo::Editor {
         Assets::AssetRegistryRevision m_terrainCookRegistry;
         std::filesystem::path m_projectRoot;
         SourceFileOpenService m_sourceOpenService;
+        IExternalProcessRunner *m_sourceLanguageRunner{};
+        Language::ClangdSettings m_clangdSettings;
+        std::unique_ptr<Language::ProjectLanguageWorkspace> m_sourceLanguage;
         PCGGraphDocumentService m_pcgDocuments;
         std::vector<std::unique_ptr<PrefabDocumentSession>> m_prefabDocuments;
         std::optional<DocumentInstanceId> m_activePrefabDocument;
@@ -1247,6 +1255,8 @@ namespace Horo::Editor {
         bool ProcessWorkspaceDocumentCommand(const EditorWorkspaceViewCommandData &command);
         /** @brief Refreshes source presentation and dirty flags without disk I/O or document mutation. */
         void RefreshSourceDocumentProjection();
+        /** @brief Admits a language provider once its compiler metadata is available. */
+        void PrepareSourceLanguage();
         /** @brief Refreshes changed canvas projections outside GUI draw work. */
         void RefreshUiCanvasProjection();
         /** @brief Routes revision-fenced hierarchy and persistence operations to the canonical canvas owner. */

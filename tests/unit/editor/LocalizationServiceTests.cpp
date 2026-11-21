@@ -333,6 +333,7 @@ namespace {
         RequireCatalogKeys(service, globalDockKeys);
         RequireDocumentCatalogKeys(service);
         RequireCatalogKeys(service, contentBrowserKeys);
+        RequireCatalogKeys(service, std::array{"workspace.source_language.unavailable"});
         RequireCatalogKeys(service, recoveryKeys);
         RequireCatalogKeys(service, prefabOverrideKeys);
         RequireCatalogKeys(service, projectLoadingKeys);

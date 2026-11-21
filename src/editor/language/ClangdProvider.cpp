@@ -6,7 +6,9 @@
 
 #include <algorithm>
 #include <array>
+#include <cstdlib>
 #include <new>
+#include <ranges>
 
 namespace Horo::Editor::Language {
     namespace {
@@ -122,6 +124,37 @@ namespace Horo::Editor::Language {
         }
     }  // namespace
 
+    /** @copydoc CaptureClangdHostSettings */
+    ClangdSettings CaptureClangdHostSettings() {
+#ifdef _WIN32
+        const auto *executable = _wgetenv(L"HORO_CLANGD_EXECUTABLE");
+        const auto *database = _wgetenv(L"HORO_CLANGD_COMPILE_COMMANDS");
+        const auto *path = _wgetenv(L"PATH");
+        constexpr auto separator = L';';
+#else
+        const auto *executable = std::getenv("HORO_CLANGD_EXECUTABLE");
+        const auto *database = std::getenv("HORO_CLANGD_COMPILE_COMMANDS");
+        const auto *path = std::getenv("PATH");
+        constexpr auto separator = ':';
+#endif
+        ClangdSettings settings;
+        if (executable && *executable)
+            settings.executable = executable;
+        if (database && *database)
+            settings.compileCommands = database;
+        if (path) {
+            using StringView = std::basic_string_view<std::filesystem::path::value_type>;
+            for (const auto part : StringView{path} | std::views::split(separator)) {
+                auto directory = std::filesystem::path{part.begin(), part.end()};
+                if (directory.is_absolute())
+                    settings.searchDirectories.push_back(std::move(directory));
+                if (settings.searchDirectories.size() == MaximumSearchDirectories)
+                    break;
+            }
+        }
+        return settings;
+    }
+
     /** @copydoc PrepareClangdProvider */
     Result<ProjectLanguageProvider> PrepareClangdProvider(const SourceFileOpenService &sources, const ClangdSettings &settings) {
         using Output = Result<ProjectLanguageProvider>;
@@ -133,7 +166,7 @@ namespace Horo::Editor::Language {
             const auto commands = ResolveCompileCommands(root, settings);
             if (commands.empty())
                 return Output::Failure(MakeError(DatabaseUnavailable));
-            return Output::Success({.id = "clangd",
+            return Output::Success({.id = ClangdProviderId,
                                     .languageId = "cpp",
                                     .extensions = sources.Policy().nativeSourceExtensions,
                                     .executable = std::move(clangd),

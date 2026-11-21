@@ -25,6 +25,7 @@
 #include "Horo/Runtime/Input.h"
 #include "Horo/Runtime/Render/RenderScene.h"
 #include "editor/document/SceneDocument.h"
+#include "editor/language/LspResultProjection.h"
 #include "editor/project_model/EditorTransformTool.h"
 #include "editor/project_model/EditorViewportModel.h"
 #include "editor/screens/workspace/AssetSceneDrop.h"
@@ -42,6 +43,7 @@
 #include "editor/ui/UiCanvasPreview.h"
 
 #include <filesystem>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -1103,6 +1105,8 @@ namespace Horo::Editor {
         std::vector<PCGPaletteEntry> pcgPalette;
         PCG::PCGNodeCatalogSnapshot pcgSchemas;
         std::vector<SourceDocumentSnapshot> sourceDocuments;
+        std::map<DocumentInstanceId, std::shared_ptr<const Language::LanguageResult>> sourceLanguageDiagnostics;
+        bool sourceLanguageUnavailable{}; /**< Native source editing remains available. */
         std::vector<UiCanvasWorkspaceDocument> uiCanvasDocuments;
         std::vector<std::shared_ptr<const TerrainDocumentHost>> terrainDocuments;
         std::shared_ptr<const TerrainDocumentHost> terrainPaletteDocument;

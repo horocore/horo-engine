@@ -4465,6 +4465,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerPlay.cpp
             editor/screens/workspace/EditorWorkspaceControllerCommandRouting.cpp
             editor/screens/workspace/EditorWorkspaceControllerSourcePersistence.cpp
+            editor/screens/workspace/EditorWorkspaceControllerSourceLanguage.cpp
             editor/screens/workspace/EditorWorkspaceControllerCommands.cpp
             editor/screens/workspace/EditorWorkspaceControllerComponentCommands.cpp
             editor/screens/workspace/EditorWorkspaceControllerInspectorContributions.cpp

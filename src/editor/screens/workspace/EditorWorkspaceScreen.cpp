@@ -163,6 +163,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             const auto preferences = settings_.Snapshot();
             controller_->UpdateAutosave(dt, preferences.settings.autoSaveIntervalMinutes);
             controller_->UpdateSourceAutosave(dt, preferences.settings.codeEditor.autoSaveDelaySeconds);
+            controller_->UpdateSourceLanguage();
             controller_->UpdateExternalSceneWatch(dt);
             controller_->UpdateGameplaySources(dt);
             if (projectServices_.assetRegistry != nullptr) {

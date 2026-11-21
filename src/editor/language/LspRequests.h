@@ -4,17 +4,11 @@
 
 #include "Horo/Editor/SourceLanguageSession.h"
 #include "LspProtocol.h"
+#include "LspSourceQuery.h"
 
 #include <bitset>
 
 namespace Horo::Editor::Language {
-    /** @brief Position or selection in the exact immutable source snapshot being queried. */
-    struct LspSourceQuery final {
-        std::size_t offset{};
-        std::size_t length{};      /**< Optional selection extent for code actions. */
-        bool includeDeclaration{}; /**< Reference lookup option. */
-    };
-
     inline constexpr auto LspFeatureCount = static_cast<std::size_t>(SourceLanguageRequestKind::CodeActions) + 1;
     using LspFeatures = std::bitset<LspFeatureCount>;
 

@@ -5,6 +5,8 @@
 #include "ProjectLanguageWorkspace.h"
 
 namespace Horo::Editor::Language {
+    inline constexpr auto ClangdProviderId = "clangd";
+
     /** @brief Trusted host inputs for Clangd resolution, independent of project-authored settings. */
     struct ClangdSettings final {
         std::optional<std::filesystem::path> executable;
@@ -12,6 +14,9 @@ namespace Horo::Editor::Language {
         std::vector<std::filesystem::path> searchDirectories;
         bool backgroundIndex{true};
     };
+
+    /** @brief Captures process-level Clangd choices and native host executable search paths. */
+    [[nodiscard]] ClangdSettings CaptureClangdHostSettings();
 
     /** @brief Resolves a native Clangd executable and compilation database before creating a language provider.
      * @param sources Project source owner supplying the canonical root and native suffix policy.

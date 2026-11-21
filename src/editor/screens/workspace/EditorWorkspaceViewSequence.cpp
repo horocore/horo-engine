@@ -238,6 +238,12 @@ namespace Horo::Editor {
         }
         auto &widget = presentation->widget;
         presentation->Publish(source);
+        const auto diagnostics = viewModel.sourceLanguageDiagnostics.find(instance);
+        presentation->PublishDiagnostics(source, diagnostics == viewModel.sourceLanguageDiagnostics.end() ? nullptr : diagnostics->second);
+        if (viewModel.sourceLanguageUnavailable && ClassifySourceLanguage(source.Identity().key.source.Value()) == SourceLanguage::Cpp) {
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, m_context.localization.Get("editor", "workspace.source_language.unavailable"),
+                            Theme::ConsoleWarning(), m_context.theme.fonts);
+        }
         if (viewModel.sourceEditingResult && viewModel.sourceEditingResult->HasValue())
             static_cast<void>(widget.Restore(viewModel.sourceEditingResult->Value()));
         auto toolIntent = presentation->tools.Draw(widget, source, history, viewModel.sourceEditingResult, m_context);

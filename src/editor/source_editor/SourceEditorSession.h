@@ -10,6 +10,10 @@
 #include <map>
 
 namespace Horo::Editor {
+    namespace Language {
+        struct LanguageResult;
+    }
+
     /** @brief One independent source presentation; no document or language authority. */
     struct SourceEditorView final {
         explicit SourceEditorView(SourceEditingViewId identity) : widget(identity) {}
@@ -18,11 +22,14 @@ namespace Horo::Editor {
          * @param source Current authoritative source publication.
          */
         void Publish(const SourceDocumentSnapshot &source);
+        /** @brief Presents diagnostics for the exact source publication, or clears retired decorations. */
+        void PublishDiagnostics(const SourceDocumentSnapshot &source, std::shared_ptr<const Language::LanguageResult> result);
 
         SourceEditorWidget widget;
         SourceEditorTools tools;
         SourceSyntaxCache syntax;
         std::shared_ptr<const SourceReviewOverlay> pendingReview;
+        std::shared_ptr<const Language::LanguageResult> diagnostics;
     };
 
     /** @brief Project-owner-scoped presentations with a monotonic host-lifetime identity allocator. */

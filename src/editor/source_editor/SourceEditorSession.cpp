@@ -1,10 +1,26 @@
 #include "SourceEditorSession.h"
 
 #include "SourceReviewOverlay.h"
+#include "editor/language/LspResultProjection.h"
 
 #include <algorithm>
 
 namespace Horo::Editor {
+    namespace {
+        /** @brief Projects severity using the source widget's supported marker styles. */
+        SourceWidgetDecorationKind DiagnosticStyle(const Language::LanguageSeverity severity) {
+            using enum Language::LanguageSeverity;
+            switch (severity) {
+                case Error:
+                    return SourceWidgetDecorationKind::Error;
+                case Warning:
+                    return SourceWidgetDecorationKind::Warning;
+                default:
+                    return SourceWidgetDecorationKind::Information;
+            }
+        }
+    }  // namespace
+
     /** @copydoc SourceEditorView::Publish */
     void SourceEditorView::Publish(const SourceDocumentSnapshot &source) {
         widget.Publish(source);
@@ -15,6 +31,26 @@ namespace Horo::Editor {
         }
         if (syntax.Publish(source) || !widget.HasHighlight(source.Revision()))
             static_cast<void>(widget.Highlight(source.Revision(), syntax.Syntax()));
+    }
+
+    /** @copydoc SourceEditorView::PublishDiagnostics */
+    void SourceEditorView::PublishDiagnostics(const SourceDocumentSnapshot &source,
+                                              std::shared_ptr<const Language::LanguageResult> result) {
+        if (result && (!result->context.source.IsCurrent() || !source.SharesStateWith(result->context.source)))
+            result.reset();
+        if (result == diagnostics)
+            return;
+        std::vector<SourceWidgetDecoration> markers;
+        if (result) {
+            if (const auto *published = std::get_if<Language::LanguageDiagnostics>(&result->payload)) {
+                markers.reserve(published->items.size());
+                for (const auto &diagnostic : published->items)
+                    markers.push_back(
+                        {diagnostic.span.start, diagnostic.span.end, DiagnosticStyle(diagnostic.severity), diagnostic.message});
+            }
+        }
+        if (widget.Decorate(source.Revision(), markers))
+            diagnostics = std::move(result);
     }
 
     /** @copydoc SourceEditorSession::Acquire */

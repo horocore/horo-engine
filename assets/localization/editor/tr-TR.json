@@ -3530,6 +3530,7 @@
     "workspace.source_open.unsupported": {"text": "Bu dosya türü gömülü düzenleyici tarafından desteklenmiyor."},
     "workspace.source_open.unsafe": {"text": "Kaynak yolu projenin güvenli sınırı dışında."},
     "workspace.source_open.unavailable": {"text": "Bu düzenleyici bileşiminde kullanılabilir kaynak düzenleyici rotası yok."},
+    "workspace.source_language.unavailable": {"text": "C++ dil özellikleri kullanılamıyor. Clangd kurup compile_commands.json dosyasını oluşturun veya ayrıntılar için editör günlüğüne bakın."},
     "workspace.global_dock.operations.search": {
       "text": "İşlemlerde ara..."
     },

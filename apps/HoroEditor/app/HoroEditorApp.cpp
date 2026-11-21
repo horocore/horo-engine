@@ -4458,6 +4458,7 @@ namespace Horo::Editor {
             screenHost.Services().Register<ProjectMutationCoordinator>(mutationCoordinator);
             screenHost.Services().Register<DurableFileSystem>(durableFiles);
             screenHost.Services().Register<Application::GameplayBuildService>(gameplayBuildService);
+            screenHost.Services().Register<IExternalProcessRunner>(externalProcesses);
             screenHost.Services().Register<Application::GameplayBuildEnvironment>(gameplayBuildEnvironment);
             screenHost.Services().Register<ProjectOpenService>(projectOpenService);
             screenHost.Services().Register<RecentProjectInspectionService>(recentProjectInspection);

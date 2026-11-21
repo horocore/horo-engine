@@ -2,11 +2,17 @@
 
 /** @file ProjectLanguageWorkspace.h @brief Project-level routing and ownership of approved language servers. */
 
-#include "LspProcess.h"
+#include "LspResultProjection.h"
+#include "LspSourceQuery.h"
 
+#include <chrono>
 #include <filesystem>
 #include <memory>
 #include <span>
+
+namespace Horo {
+    class IExternalProcessRunner;
+}
 
 namespace Horo::Editor {
     class SourceFileOpenService;
@@ -37,7 +43,7 @@ namespace Horo::Editor::Language {
      */
     class ProjectLanguageWorkspace final {
     public:
-        using Clock = LspProcess::Clock;
+        using Clock = std::chrono::steady_clock;
 
         /** @brief Validates provider ownership and constructs the project URI without starting a process. */
         [[nodiscard]] static Result<std::unique_ptr<ProjectLanguageWorkspace>> Create(IExternalProcessRunner &runner,

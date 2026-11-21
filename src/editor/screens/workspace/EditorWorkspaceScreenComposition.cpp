@@ -15,6 +15,7 @@
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/Paths.h"
+#include "Horo/Platform/ExternalProcess.h"
 #include "Horo/Prefab/PrefabErrors.h"
 #include "Horo/Prefab/PrefabValueOverrides.h"
 #include "PCGPreviewWorkspace.h"
@@ -337,6 +338,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             controller_.reset();
             return Result<void>::Failure(error);
         }
+        if (auto *runner = services_.TryGet<IExternalProcessRunner>())
+            controller_->BindSourceLanguage(*runner, Language::CaptureClangdHostSettings());
         controller_->SelectMountedWorldPlay(services_.TryGetConst<EditorMountedWorldPlaySelected>() != nullptr);
         RevokeSimulatorArtifacts();
         simulatorArtifacts_ = std::move(simulatorArtifacts);

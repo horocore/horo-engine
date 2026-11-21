@@ -1,11 +1,13 @@
 #include "../../support/SourceDocumentTestProject.h"
 #include "Horo/Editor/SourceFileOpenService.h"
+#include "Horo/Platform/ExternalProcess.h"
 #include "Horo/Platform/PlatformErrors.h"
 #include "ProjectLanguageWorkspace.h"
 
 #include <array>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
+#include <thread>
 
 namespace {
     using namespace Horo;
