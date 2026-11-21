@@ -716,6 +716,19 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(fixture.script.native.liveSessions == 0);
         REQUIRE(fixture.session->ValidateDeviceQualification(admitted).HasValue());
 
+        SECTION("a cancelled replacement keeps the last qualified result current") {
+            const auto created = std::ranges::count(fixture.script.native.calls, "session");
+            const auto request = RequireValue(fixture.play->RequestSetupTest());
+            CHECK(fixture.play->ReadSetup().test == Queued);
+            REQUIRE(fixture.play->ReadDeviceQualificationPreflight().HasValue());
+            fixture.play->CancelSetupTest(request);
+            fixture.play->PumpSetupTest();
+            CHECK(fixture.play->ReadSetup().test == Cancelled);
+            CHECK(std::ranges::count(fixture.script.native.calls, "session") == created);
+            const auto retained = RequireValue(fixture.play->ReadDeviceQualificationPreflight());
+            CHECK(fixture.session->ValidateDeviceQualification(retained).HasValue());
+            CHECK(fixture.session->ValidateDeviceQualification(admitted).HasValue());
+        }
         SECTION("a changed native device invalidates the retained report") {
             fixture.graphics.deviceIdentity = 9;
             const auto stale = fixture.play->ReadDeviceQualificationPreflight();

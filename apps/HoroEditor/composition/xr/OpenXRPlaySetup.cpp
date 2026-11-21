@@ -689,9 +689,9 @@ namespace Horo::Application::Internal {
             return Request::Failure(MakeError(XR::XRErrors::OperationUnavailable));
         if (lastSetupTest_ == std::numeric_limits<std::uint64_t>::max())
             return Request::Failure(MakeError(XR::XRErrors::CapacityExceeded));
-        setupPreflight_.reset();
         queuedSetupTest_ = {++lastSetupTest_};
         setup_.test = Editor::EditorXrSetupTestState::Queued;
+        setup_.issue = setupCleanupPending_ ? Editor::EditorXrSetupIssue::Cleanup : Editor::EditorXrSetupIssue::None;
         return Request::Success(queuedSetupTest_);
     }
 
@@ -713,6 +713,8 @@ namespace Horo::Application::Internal {
             setup_.issue = Editor::EditorXrSetupIssue::Busy;
             return;
         }
+        // Only a started replacement invalidates the previous qualification.
+        setupPreflight_.reset();
         const Operation operation{*this};
         if (setupCleanupPending_) {
             const auto cleaned = composition_.session.RetirePreparation();
