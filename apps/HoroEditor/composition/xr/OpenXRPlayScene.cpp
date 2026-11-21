@@ -496,7 +496,7 @@ namespace Horo::Application::Internal {
     Result<void> OpenXRPlayHost::SceneState::CalibrateMounted(const OpenXRPlayHost &host, const Math::Transform &placement) {
         if (auto current = geometry->ValidateSource(); current.HasError())
             return current;
-        const auto now = host.clock_.ReferenceCalibrationNow();
+        const auto now = host.clock_.RuntimeNow();
         if (now.HasError())
             return Result<void>::Failure(now.ErrorValue());
         const auto sample = host.composition_.session.ObserveReferenceCalibration(references.local, worldReference, now.Value());

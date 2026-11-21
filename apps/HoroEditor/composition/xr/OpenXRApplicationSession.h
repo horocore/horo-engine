@@ -348,8 +348,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] XR::XRCapabilityState EyeGazeAvailability() const noexcept;
         /** @brief Clears the current purpose grant and sample without invoking the native runtime. */
         void RevokeEyeGaze() noexcept;
-        /** @return Current consented gaze for the exact immutable cutoff, or empty after loss or replacement. */
-        [[nodiscard]] std::optional<XR::XRPoseSample> ReadEyeGaze(const XR::XRTrackingSnapshot &snapshot) const noexcept;
+        /** @return Fresh consented gaze for the exact cutoff and same-instance clock sample, or empty after expiry, loss or replacement. */
+        [[nodiscard]] std::optional<XR::XRPoseSample> ReadEyeGaze(const XR::XRTrackingSnapshot &snapshot, XR::XRRuntimeTime now) const noexcept;
         /** @brief Binds the same prepared native children/Input reservation during canonical resource preparation.
          * @param candidate Actual candidate issued by XRSessionLifecycle and already activated on the SAME native session.
          * @param coordinator Candidate's sole canonical binding publication/revision owner.

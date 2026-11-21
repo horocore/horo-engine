@@ -381,8 +381,14 @@ namespace Horo::Application::Internal {
         if (std::this_thread::get_id() != lane_ || closing_ || busy_ || eventsPending_ || !input_.admitted ||
             input_.play != Editor::EditorPlayState::Playing || !sessions_->Snapshot().admitsActions)
             return std::nullopt;
+        if (composition_.session.EyeGazeAvailability() != XR::XRCapabilityState::Available)
+            return std::nullopt;
+        const auto now = clock_.RuntimeNow();
         const auto *snapshot = tracking_.Current();
-        return snapshot ? composition_.session.ReadEyeGaze(*snapshot) : std::nullopt;
+        if (now.HasError() || !snapshot || closing_ || eventsPending_ || input_.play != Editor::EditorPlayState::Playing ||
+            !sessions_->Snapshot().admitsActions)
+            return std::nullopt;
+        return composition_.session.ReadEyeGaze(*snapshot, now.Value());
     }
 
     /** @copydoc OpenXRPlayHost::ReadPlaneObservations */

@@ -8,6 +8,7 @@
 
 namespace Horo::Application::Internal {
     namespace {
+        constexpr auto MaximumEyeGazeAge = Duration::FromMilliseconds(50);
         constexpr XR::XRPlaneLimits PlaneCapturePolicy{XR::XRPlaneSnapshot::MaximumPlanes, Duration::FromMilliseconds(250),
                                                        Duration::FromMilliseconds(1500)};
 
@@ -341,8 +342,7 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
         std::optional<XRPoseSample> gaze;
         if (input_.gazeAllowed) {
-            constexpr auto maximumGazeAge = Duration::FromMilliseconds(50);
-            auto observed = input_.native->SampleConsentedGaze(state.session, time.Value(), maximumGazeAge, input_.gazeAllowed);
+            auto observed = input_.native->SampleConsentedGaze(state.session, time.Value(), MaximumEyeGazeAge, input_.gazeAllowed);
             if (auto current = Current(); current.HasError())
                 return current;
             if (!bindingsCurrent())
@@ -709,10 +709,13 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc OpenXRApplicationSession::ReadEyeGaze */
-    std::optional<XRPoseSample> OpenXRApplicationSession::ReadEyeGaze(const XRTrackingSnapshot &snapshot) const noexcept {
+    std::optional<XRPoseSample> OpenXRApplicationSession::ReadEyeGaze(const XRTrackingSnapshot &snapshot, const XRRuntimeTime now) const noexcept {
         if (std::this_thread::get_id() != lane_ || !input_.gazeAllowed || !input_.gaze || input_.gazeRevision != snapshot.Revision() ||
             input_.gaze->Session() != snapshot.Session() || snapshot.Focus() != XRTrackingFocusState::Focused ||
             snapshot.State() != XRTrackingState::Active)
+            return std::nullopt;
+        const auto observed = input_.gaze->Time().runtimeSample;
+        if (now < observed || now.Nanoseconds() - observed.Nanoseconds() > MaximumEyeGazeAge.ToNanoseconds())
             return std::nullopt;
         return input_.gaze;
     }

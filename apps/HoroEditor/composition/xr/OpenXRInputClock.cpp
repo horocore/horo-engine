@@ -199,8 +199,8 @@ namespace Horo::Application::Internal {
         return XR::XRRenderPredictionTime::Create(sample.Value().Nanoseconds());
     }
 
-    /** @copydoc OpenXRInputClock::ReferenceCalibrationNow */
-    Result<XR::XRRuntimeTime> OpenXRInputClock::ReferenceCalibrationNow() const {
+    /** @copydoc OpenXRInputClock::RuntimeNow */
+    Result<XR::XRRuntimeTime> OpenXRInputClock::RuntimeNow() const {
         return PresentationSample();
     }
 

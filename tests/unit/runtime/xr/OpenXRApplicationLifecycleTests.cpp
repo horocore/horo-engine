@@ -1827,6 +1827,23 @@ namespace Horo::Tests::OpenXRApplication {
             if (source.locationReads == 0)
                 FAIL("Consented gaze did not reach the native owner.");
             const auto reads = source.locationReads;
+            SECTION("a retained sample expires between Input cutoffs without polling the eye tracker") {
+                const auto revision = fixture.play->ReadInspection().trackingRevision;
+                fixture.script.clock.sample = source.sampleTime + 50'000'000;
+                CHECK(fixture.play->ReadEyeGaze().has_value());
+                ++fixture.script.clock.sample;
+                CHECK_FALSE(fixture.play->ReadEyeGaze());
+                CHECK(preview.ReadEyeGazeState() == WaitingForSample);
+                CHECK(fixture.play->ReadInspection().trackingRevision == revision);
+                CHECK(source.locationReads == reads);
+                source.sampleTime = fixture.script.clock.sample;
+                REQUIRE(sample());
+                fixture.script.clock.result = XR_ERROR_RUNTIME_FAILURE;
+                CHECK_FALSE(fixture.play->ReadEyeGaze());
+                fixture.script.clock.result = XR_SUCCESS;
+                fixture.script.clock.sample = source.sampleTime - 1;
+                CHECK_FALSE(fixture.play->ReadEyeGaze());
+            }
             SECTION("focus interruption revokes even when the same event batch restores focus") {
                 fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
                 fixture.script.events.Push(XR_SESSION_STATE_FOCUSED);
