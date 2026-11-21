@@ -1076,7 +1076,8 @@ namespace Horo::Application::Internal {
                 host.RevokeEventAdmission();
                 return Output::Failure(observed.ErrorValue());
             }
-            static_cast<void>(host.ApplyEventObservation(observed.Value()));
+            if (const auto applied = host.ApplyEventObservation(observed.Value()); applied.HasError())
+                return Output::Failure(applied.ErrorValue());
         }
         const bool lost = host.sessions_.Snapshot().state == XRSessionState::Lost;
         if (!lost && host.eventsPending_)

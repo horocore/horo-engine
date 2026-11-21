@@ -1809,6 +1809,23 @@ namespace Horo::Tests::OpenXRApplication {
             CHECK(native.stops == 1);
             CHECK(fixture.script.native.liveSessions == 0);
         }
+        SECTION("retirement reports the first event failure and retries outstanding native cleanup") {
+            fixture.play->PumpHapticPreview();
+            REQUIRE(preview.ReadHapticPreview(request) == Submitted);
+            scene->Shutdown();
+            fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
+            native.stopResult = XR_ERROR_RUNTIME_FAILURE;
+            const auto failed = fixture.play->PollEvents();
+            native.stopResult = XR_SUCCESS;
+            REQUIRE(failed.HasError());
+            CHECK(failed.ErrorValue().message.find("stop vibration") != std::string::npos);
+            CHECK(native.stops == 1);
+            CHECK(fixture.script.native.liveSessions == 1);
+            CHECK_FALSE(fixture.play->UsesXrScene());
+            RequireValue(fixture.play->PollEvents());
+            CHECK(native.stops == 2);
+            CHECK(fixture.script.native.liveSessions == 0);
+        }
         fixture.scheduler->Shutdown();
         scene->Shutdown();
         REQUIRE(RequireValue(fixture.ClosePlay()));
