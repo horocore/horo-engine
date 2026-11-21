@@ -3463,7 +3463,12 @@ the previous history. In the Game panel, AI agent inspector shows the selected
 agent's task, failures, stimulus ages, and typed Blackboard rows. Rows can be
 filtered by key identity or type. Comparing with a retained tick highlights
 changed disclosed values from the same Blackboard generation. The Play host
-uses the default redacted Blackboard view.
+uses the default redacted Blackboard view. Pass
+`--play-ai-inspect-key <schema-id> <key-id>` for each explicitly approved
+key in the selected cooked Play Scene. The selection is carried across editor
+restarts only within the same project. Navigation registration shows the
+selected entity's live profile, filter, and enabled state when the host has
+admitted Navigation.
 
 ### Scene decision scheduling tiers
 

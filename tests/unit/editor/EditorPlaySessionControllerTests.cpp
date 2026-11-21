@@ -905,8 +905,16 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
 
     bool changed = false;
     bool rejectFixed = false;
+    bool discloseKey = false;
+    bool authorizeForeignSchema = false;
     using FailedCallback = EditorDecisionFixtureExecutor::FailedCallback;
     SECTION("Committed pause and step retain a consecutive local Decision clock") {}
+    SECTION("An explicit schema-scoped inspector key reveals only its admitted value") {
+        discloseKey = true;
+    }
+    SECTION("An inspector key from another schema leaves this Blackboard redacted") {
+        authorizeForeignSchema = true;
+    }
     SECTION("Start errors reach Problems on the first committed tick") {
         providerState->failure = FailedCallback::Start;
     }
@@ -922,11 +930,19 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     if (changed)
         source.objects.front().localTransform.translation.x = 3;
 
+    REQUIRE_FALSE(inputs.schema->Keys().empty());
+    const auto &disclosed = inputs.schema->Keys().front();
+    std::vector<EditorPlayInspectionKey> disclosure;
+    if (discloseKey)
+        disclosure.push_back({inputs.schema->Identity(), disclosed.key});
+    if (authorizeForeignSchema)
+        disclosure.push_back({Decisions::MakeIdentity<AI::BlackboardSchemaId>(inputs.schema->Identity().Value() + 1), disclosed.key});
     const auto projectFactory =
         MakeEditorProjectSceneFactory(project.jobs, {.cooked = SceneCookSelection{project.cooked.path, target},
                                                      .decisions = EditorPlayDecisionSelection{project.project.dir.path,
                                                                                               project.sceneId,
-                                                                                              {{controller, decisionId, {}}}}});
+                                                                                              {{controller, decisionId, {}}},
+                                                                                              std::move(disclosure)}});
     const Editor::EditorPlaySceneFactory factory = [&](Runtime::SceneRuntimeId id, const Runtime::RuntimeSceneDefinition &definition) {
         return projectFactory(project.project.dir.path, id, definition);
     };
@@ -1004,8 +1020,15 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     REQUIRE(inspection.snapshot);
     CHECK(inspection.snapshot->agent == inspection.agent);
     CHECK(inspection.snapshot->decisionTick == 1);
-    for (const auto &key : inspection.snapshot->keys)
-        CHECK(key.status == AI::AiInspectionValueStatus::Redacted);
+    for (const auto &key : inspection.snapshot->keys) {
+        if (discloseKey && key.key == disclosed.key) {
+            CHECK(key.status == (disclosed.defaultValue ? AI::AiInspectionValueStatus::Present : AI::AiInspectionValueStatus::Unset));
+            CHECK(key.value == disclosed.defaultValue);
+        } else {
+            CHECK(key.status == AI::AiInspectionValueStatus::Redacted);
+            CHECK_FALSE(key.value);
+        }
+    }
     if (providerState->failure == FailedCallback::Start) {
         verifyProblem(1);
         play.Stop();

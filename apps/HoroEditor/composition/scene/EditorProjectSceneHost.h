@@ -27,11 +27,19 @@ namespace Horo::Application::Internal {
         std::optional<EditorMountedWorldViewportSelection> viewport;
     };
 
+    /** @brief One explicitly disclosed Blackboard key in the selected cooked Play Scene. */
+    struct EditorPlayInspectionKey final {
+        AI::BlackboardSchemaId schema;
+        AI::BlackboardKeyId key;
+        bool operator==(const EditorPlayInspectionKey &) const noexcept = default;
+    };
+
     /** @brief Play-only exact project, committed Scene and initial controller artifact choices. */
     struct EditorPlayDecisionSelection final {
         std::filesystem::path projectRoot;
         Assets::AssetId scene;
         std::vector<CookedDecisionSceneBinding> controllers;
+        std::vector<EditorPlayInspectionKey> inspectionKeys;
     };
 
     /** @brief Application policy captured before workspace creation; no backend inference or fallback. */

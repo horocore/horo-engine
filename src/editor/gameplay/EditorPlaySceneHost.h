@@ -93,12 +93,20 @@ namespace Horo::Editor {
         AI::DecisionNodeId node;                  /**< Cooked source node within graph, when available. */
     };
 
+    /** @brief Copied Navigation registration for the exact selected Play entity. */
+    struct EditorPlayAgentNavigation final {
+        std::uint64_t profile{};
+        std::uint64_t filter{};
+        bool enabled{};
+    };
+
     /** @brief Play-committed identity and immutable copied inspection data. */
     struct EditorPlayAgentInspection final {
         Runtime::EntityRef owner;
         AI::AgentHandle agent;
         std::uint64_t tick{};
         std::shared_ptr<const AI::AiAgentInspectionSnapshot> snapshot;
+        std::optional<EditorPlayAgentNavigation> navigation;
     };
 
     /** @brief Synchronous acquisition from the current Project's existing provider owner. */

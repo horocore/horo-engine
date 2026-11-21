@@ -217,7 +217,7 @@ namespace Horo::Editor::Tests {
                                       AI::BlackboardValueCardinality::Scalar,
                                       AI::AiInspectionValueStatus::Redacted,
                                       {}});
-            model.playAgentInspection.push_back({{}, handle, tick, std::move(snapshot)});
+            model.playAgentInspection.push_back({{}, handle, tick, std::move(snapshot), EditorPlayAgentNavigation{7, 8, true}});
         }
         const auto draw = [&] {
             EditorWorkspaceViewCommandData command;

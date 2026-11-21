@@ -120,7 +120,8 @@ namespace Horo::Editor {
         }
 
         /** @brief Shows copied lifecycle and memory metadata without reading live runtime state. */
-        void DrawObservations(const AI::AiAgentInspectionSnapshot &snapshot, const EditorGuiContext &context) {
+        void DrawObservations(const EditorPlayAgentInspection &entry, const EditorGuiContext &context) {
+            const auto &snapshot = *entry.snapshot;
             const auto text = [&](const std::string_view key) -> const std::string & {
                 return GamePanel::kTextScope.Text(context.localization, key);
             };
@@ -137,6 +138,11 @@ namespace Horo::Editor {
                 line(std::format("{} · {}", text("ai_problem"), snapshot.decisionFailure->code.Value()), Theme::Warn());
             if (snapshot.perceptionFailure)
                 line(std::format("{} · {}", text("ai_inspection_perception"), snapshot.perceptionFailure->code.Value()), Theme::Warn());
+            if (const auto &navigation = entry.navigation)
+                line(std::format("{} · {} {} · {} {} · {}", text("ai_inspection_navigation"), text("ai_inspection_profile"),
+                                 navigation->profile, text("ai_inspection_navigation_filter"), navigation->filter,
+                                 text(navigation->enabled ? "ai_inspection_navigation_enabled" : "ai_inspection_navigation_disabled")),
+                     Theme::Muted());
             for (const auto &memory : snapshot.stimuli)
                 line(std::format("{} {} · {} {} · {} {:.2f}", text("ai_inspection_perception"), memory.key.sense.Value(),
                                  text("ai_inspection_stimulus"), memory.key.stimulus.Value(), text("ai_inspection_age"), memory.ageSeconds),
@@ -207,7 +213,7 @@ namespace Horo::Editor {
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("ai_inspection_incompatible"), Theme::Warn(), fonts);
             }
             DrawBlackboard(latest, other, inspectionFilter_, context);
-            DrawObservations(latest, context);
+            DrawObservations(history.back(), context);
         }
         ImGui::EndChild();
     }

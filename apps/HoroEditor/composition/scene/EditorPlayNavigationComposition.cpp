@@ -4,6 +4,22 @@
 #include "Horo/Scene/CookedSceneDefinition.h"
 
 namespace Horo::Application::Internal::EditorProjectSceneDetail {
+    /** @brief Reads the configured Navigation registry for only the exact selected entity generation. */
+    std::optional<Editor::EditorPlayAgentNavigation> ProjectPlaySceneHost::ReadAgentNavigation(const Runtime::EntityRef owner) const {
+        if (!navigation_)
+            return std::nullopt;
+        const auto binding = navigation_->agents.ActiveBinding();
+        if (binding.HasError() || binding.Value().scene.Value() != owner.runtime.value)
+            return std::nullopt;
+        const auto handle = navigation_->agents.FindOwner({binding.Value().scene, owner.entity.index, owner.entity.generation});
+        if (!handle)
+            return std::nullopt;
+        const auto record = navigation_->agents.Find(*handle);
+        if (record.HasError())
+            return std::nullopt;
+        return Editor::EditorPlayAgentNavigation{record.Value().profile.Value(), record.Value().filter.Value(), record.Value().enabled};
+    }
+
     namespace {
         /** @brief Re-encodes the active projection with the committed identity so unrelated live revisions cannot admit its topology. */
         [[nodiscard]] Result<std::vector<std::uint8_t>> EncodePlayProjection(const Runtime::RuntimeSceneDefinition &live,

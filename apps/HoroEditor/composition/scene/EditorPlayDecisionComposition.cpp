@@ -2,6 +2,7 @@
 #include "Horo/AI/AIErrors.h"
 
 #include <algorithm>
+#include <array>
 #include <new>
 
 namespace Horo::Application::Internal::EditorProjectSceneDetail {
@@ -41,17 +42,25 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         if (!scene || owner.runtime != scene->RuntimeId())
             return std::nullopt;
         const auto entity = scene->Get(owner);
-        if (entity.HasError() || !entity.Value().components || !entity.Value().components->aiAgent)
+        if (entity.HasError() || !entity.Value().components || !entity.Value().components->aiAgent ||
+            !entity.Value().components->aiController)
             return std::nullopt;
-        const auto handle = ai_->CapabilityAtSafePoint().ResolveAgent(entity.Value().components->aiAgent->agent);
+        const auto &components = *entity.Value().components;
+        const auto handle = ai_->CapabilityAtSafePoint().ResolveAgent(components.aiAgent->agent);
         if (handle.HasError())
             return std::nullopt;
         try {
-            auto snapshot = ai_->CaptureAgentInspectionAtSafePoint(*scene, handle.Value(), {});
+            std::array<AI::BlackboardKeyId, AI::MaximumBlackboardKeys> keys{};
+            std::size_t count{};
+            for (const auto &disclosed : inspectionKeys_)
+                if (disclosed.schema == components.aiController->blackboardSchema)
+                    keys[count++] = disclosed.key;
+            auto snapshot = ai_->CaptureAgentInspectionAtSafePoint(*scene, handle.Value(), std::span{keys}.first(count));
             if (snapshot.HasError() || snapshot.Value().owner != owner || snapshot.Value().decisionTick != tick)
                 return std::nullopt;
             return Editor::EditorPlayAgentInspection{owner, handle.Value(), tick,
-                                                     std::make_shared<const AI::AiAgentInspectionSnapshot>(std::move(snapshot).Value())};
+                                                     std::make_shared<const AI::AiAgentInspectionSnapshot>(std::move(snapshot).Value()),
+                                                     ReadAgentNavigation(owner)};
         } catch (const std::bad_alloc &) {
             return std::nullopt;
         }
@@ -75,6 +84,11 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 MakeError(InvalidProjectScene,
                           "Decision Play requires an exact committed project Scene and initial controller selections."));
         }
+        if (selection.inspectionKeys.size() > AI::MaximumBlackboardKeys ||
+            std::ranges::any_of(selection.inspectionKeys, [](const auto &key) {
+            return !key.schema.IsValid() || !key.key.IsValid();
+        }))
+            return Result<void>::Failure(MakeError(AI::AIErrors::BlackboardSchemaInvalid));
         pendingDecisionPolicy_.emplace(policy);
         decisionJobs_ = &jobs;
         return Result<void>::Success();
@@ -110,7 +124,10 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         policy.aiControllers = std::move(selected).Value();
         if (cancellation.IsCancellationRequested())
             return JobCancelled();
-        return RegisterPresentationParticipants(policy, AI::AiSceneCookedDecisionExecution{*decisionJobs_, {}, {}, {}});
+        auto admitted = RegisterPresentationParticipants(policy, AI::AiSceneCookedDecisionExecution{*decisionJobs_, {}, {}, {}});
+        if (admitted.HasValue())
+            inspectionKeys_ = std::move(policy.decisions->inspectionKeys);
+        return admitted;
     }
 
     /** @copydoc Editor::EditorPlaySceneHost::EvaluateDecisionBeforeGameplay */

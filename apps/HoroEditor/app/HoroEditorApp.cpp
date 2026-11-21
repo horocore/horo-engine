@@ -358,6 +358,7 @@ namespace Horo::Editor {
             std::optional<Assets::AssetId> playNavigationScene;
             std::optional<Assets::AssetId> playDecisionScene;
             std::vector<Application::Internal::CookedDecisionSceneBinding> playDecisionBindings;
+            std::vector<Application::Internal::EditorPlayInspectionKey> playInspectionKeys;
             bool playDecisionSelectionValid{true};
             std::optional<Application::Internal::CommittedWorldSelection> playWorld;
             std::optional<Error> playWorldError;
@@ -930,6 +931,29 @@ namespace Horo::Editor {
         return true;
     }
 
+    /** @brief Admits one explicit schema-scoped Blackboard disclosure for the same cooked Play project. */
+    [[nodiscard]] static bool ReadEditorPlayInspectionKey(std::span<char *> args, std::size_t &index, EditorGuiOptions &options) {
+        if (args.size() - index <= 2 || options.playInspectionKeys.size() >= AI::MaximumBlackboardKeys)
+            return false;
+        const auto decimal = [](const std::string_view text, std::uint64_t &value) {
+            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+            return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size();
+        };
+        std::uint64_t schemaId{}, keyId{};
+        if (!decimal(args[index + 1], schemaId) || !decimal(args[index + 2], keyId))
+            return false;
+        const auto schema = AI::BlackboardSchemaId::Create(schemaId);
+        const auto key = AI::BlackboardKeyId::Create(keyId);
+        if (schema.HasError() || key.HasError())
+            return false;
+        const Application::Internal::EditorPlayInspectionKey selected{schema.Value(), key.Value()};
+        if (std::ranges::find(options.playInspectionKeys, selected) != options.playInspectionKeys.end())
+            return false;
+        options.playInspectionKeys.push_back(selected);
+        index += 2;
+        return true;
+    }
+
     [[nodiscard]] static EditorGuiOptions ParseOptions(const std::span<char *> args) noexcept {
         using enum PendingEditorOption;
         EditorGuiOptions opts;
@@ -947,6 +971,13 @@ namespace Horo::Editor {
                 continue;
             if (argument == "--play-ai-decision") {
                 if (!ReadEditorPlayDecision(args, index, opts)) {
+                    opts.playDecisionSelectionValid = false;
+                    break;
+                }
+                continue;
+            }
+            if (argument == "--play-ai-inspect-key") {
+                if (!ReadEditorPlayInspectionKey(args, index, opts)) {
                     opts.playDecisionSelectionValid = false;
                     break;
                 }
@@ -1086,6 +1117,9 @@ namespace Horo::Editor {
                 for (const auto &binding : options.playDecisionBindings)
                     arguments.insert(arguments.end(),
                                      {"--play-ai-decision", std::to_string(binding.controller.Value()), binding.artifact.ToString()});
+                for (const auto &key : options.playInspectionKeys)
+                    arguments.insert(arguments.end(),
+                                     {"--play-ai-inspect-key", std::to_string(key.schema.Value()), std::to_string(key.key.Value())});
             }
             std::vector<char *> nativeArguments;
             nativeArguments.reserve(arguments.size() + 1);
@@ -4094,9 +4128,9 @@ namespace Horo::Editor {
             }
             playPolicy.aiSettings.missingController = AI::AiMissingControllerPolicy::Reject;
             if (p.options.playDecisionScene)
-                playPolicy.decisions.emplace(Application::Internal::EditorPlayDecisionSelection{previewProjectRoot,
-                                                                                                *p.options.playDecisionScene,
-                                                                                                p.options.playDecisionBindings});
+                playPolicy.decisions.emplace(
+                    Application::Internal::EditorPlayDecisionSelection{previewProjectRoot, *p.options.playDecisionScene,
+                                                                       p.options.playDecisionBindings, p.options.playInspectionKeys});
             Application::Internal::ConfigureEditorPlaySavePolicy(playPolicy, p.background.jobs, p.operationServices.operationStore, clock,
                                                                  wallClock);
             playPolicy.xrHost = SelectedEditorPlayHost(p.presentation.composition);
@@ -4361,12 +4395,14 @@ namespace Horo::Editor {
                          "--play-navigation-scene requires an exact Scene AssetId, --project, --cooked-root and --cook-target.");
             return false;
         }
-        if (!options.playDecisionSelectionValid || options.playDecisionScene.has_value() != !options.playDecisionBindings.empty() ||
+        if (!options.playDecisionSelectionValid || (!options.playInspectionKeys.empty() && !options.playDecisionScene) ||
+            options.playDecisionScene.has_value() != !options.playDecisionBindings.empty() ||
             (options.playDecisionScene &&
              (options.projectRoot.empty() || options.cookedRoot.empty() || options.playWorld || options.prefabGranted.value_or(false)))) {
             LOG_CRITICAL("editor.runtime",
                          "Use --play-ai-scene <Scene AssetId> and --play-ai-decision <controller id> <Decision AssetId> "
-                         "with --project, --cooked-root and --cook-target. This selection admits initial Scene controllers only.");
+                         "with --project, --cooked-root and --cook-target. Optional --play-ai-inspect-key <schema id> <key id> "
+                         "discloses one Blackboard key in the selected Play scene.");
             return false;
         }
         if (!options.physicsMode || !options.prefabGranted.has_value() || !options.cookOptionsValid ||

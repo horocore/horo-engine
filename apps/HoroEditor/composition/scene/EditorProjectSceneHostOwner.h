@@ -479,6 +479,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
 
         std::uint64_t AgentInspectionTick() const noexcept override;
         std::optional<Editor::EditorPlayAgentInspection> ReadAgentInspection(Runtime::EntityRef owner) const override;
+        [[nodiscard]] std::optional<Editor::EditorPlayAgentNavigation> ReadAgentNavigation(Runtime::EntityRef owner) const;
 
         Result<std::shared_ptr<Gameplay::GameplayPrefabContext>> PrefabServices(const Gameplay::BehaviorRegistry &registry,
                                                                                 const Gameplay::ComponentRegistry &components) override {
@@ -682,6 +683,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                                                             const EditorProjectScenePolicy &policy);
         std::optional<EditorProjectScenePolicy> pendingDecisionPolicy_;
         JobSystem *decisionJobs_{};
+        std::vector<EditorPlayInspectionKey> inspectionKeys_;
         std::uint64_t committedDecisionTick_{};
         bool decisionTickPending_{};
         std::shared_ptr<PlaySaveAiServices> aiSave_;
