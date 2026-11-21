@@ -5,6 +5,145 @@
 #include <string>
 
 namespace Horo::Tests::OpenXR {
+    namespace {
+        struct AnchorResources final : IXRSessionResources {
+            Result<void> Prepare(XRSessionPreparation, const XRSessionId &, const XRFeaturePlan &) override {
+                return Result<void>::Success();
+            }
+
+            void Release(XRSessionPreparation, const XRSessionId &) noexcept override {}
+        };
+
+        struct AnchorScript final {
+            static XRAPI_ATTR XrResult XRAPI_CALL Create(XrSession, const XrSpatialAnchorCreateInfoMSFT *info, XrSpatialAnchorMSFT *out) {
+                REQUIRE(info->time == 10);
+                REQUIRE(info->space == NativeHandle<XrSpace>(11));
+                const auto result = Script::Record("anchor");
+                if (result == XR_SUCCESS)
+                    *out = NativeHandle<XrSpatialAnchorMSFT>(21);
+                return result;
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL CreateSpace(XrSession, const XrSpatialAnchorSpaceCreateInfoMSFT *info, XrSpace *out) {
+                REQUIRE(info->anchor == NativeHandle<XrSpatialAnchorMSFT>(21));
+                const auto result = Script::Record("anchor-space");
+                *out = NativeHandle<XrSpace>(result == XR_SUCCESS ? 12 : 99);
+                return result;
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Destroy(XrSpatialAnchorMSFT anchor) {
+                REQUIRE(anchor == NativeHandle<XrSpatialAnchorMSFT>(21));
+                return Script::Record("destroy-anchor");
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL DestroySpace(XrSpace space) {
+                REQUIRE(space == NativeHandle<XrSpace>(12));
+                return Script::Record("destroy-anchor-space");
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Locate(XrSpace space, XrSpace world, XrTime, XrSpaceLocation *location) {
+                REQUIRE(space == NativeHandle<XrSpace>(12));
+                REQUIRE(world == NativeHandle<XrSpace>(11));
+                location->locationFlags = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
+                                          XR_SPACE_LOCATION_POSITION_TRACKED_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
+                location->pose = {{0, 0, 0, 1}, {1, 2, 3}};
+                return Script::Record("locate-anchor");
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Resolve(XrInstance, const char *name, PFN_xrVoidFunction *out) {
+                const std::array symbols{std::pair{"xrCreateSpatialAnchorMSFT", reinterpret_cast<PFN_xrVoidFunction>(&Create)},
+                                         std::pair{"xrCreateSpatialAnchorSpaceMSFT", reinterpret_cast<PFN_xrVoidFunction>(&CreateSpace)},
+                                         std::pair{"xrDestroySpatialAnchorMSFT", reinterpret_cast<PFN_xrVoidFunction>(&Destroy)},
+                                         std::pair{"xrDestroySpace", reinterpret_cast<PFN_xrVoidFunction>(&DestroySpace)},
+                                         std::pair{"xrLocateSpace", reinterpret_cast<PFN_xrVoidFunction>(&Locate)}};
+                const auto found = std::ranges::find_if(symbols, [name](const auto &entry) {
+                    return std::string_view{entry.first} == name;
+                });
+                if (found == symbols.end())
+                    return XR_ERROR_FUNCTION_UNSUPPORTED;
+                *out = found->second;
+                return XR_SUCCESS;
+            }
+        };
+    }  // namespace
+
+    TEST_CASE("OpenXR native anchors are grant scoped and retire before the session", "[unit][xr][native][anchors]") {
+        Fixture fixture;
+        AnchorResources resources;
+        const auto lifecycle = std::make_shared<XRSessionLifecycle>(resources);
+        const auto active =
+            lifecycle->Activate(fixture.capabilities, fixture.capabilities.System(), fixture.capabilities.Revision(), fixture.plan);
+        REQUIRE(active.HasValue());
+        for (const auto event : {XRSessionEvent::Started, XRSessionEvent::BecameVisible, XRSessionEvent::BecameFocused})
+            REQUIRE(lifecycle->ApplyEvent(active.Value(), event).HasValue());
+        auto request = fixture.Request();
+        request.candidate = active.Value();
+        constexpr std::array advertised{std::string_view{XR_MSFT_SPATIAL_ANCHOR_EXTENSION_NAME}};
+        fixture.script.extraExtensions = advertised;
+        fixture.script.extensionCount = 2;
+        fixture.script.resolveExtra = AnchorScript::Resolve;
+        const std::array extensions{NativeExtensionRequest{advertised.front()}};
+        bool requested = true;
+        SECTION("advertisement alone grants no native access") {
+            requested = false;
+        }
+        SECTION("selected anchor route") {}
+        if (requested)
+            request.extensions = extensions;
+        REQUIRE(fixture.owner.Create(request).HasValue());
+        const XRAnchorScope scope{.space = {.id = {request.candidate, {0, 1}},
+                                            .kind = XRSpaceKind::World,
+                                            .worldOriginRevision = IdentityValue<XRWorldOriginRevision>(1)},
+                                  .provider = IdentityValue<XRAnchorProviderGeneration>(1),
+                                  .grant = IdentityValue<XRAnchorGrant>(1)};
+        const auto world = NativeHandle<XrSpace>(11);
+        const auto publication = std::make_shared<XRSpatialAnchors>(lifecycle);
+        const auto start = fixture.owner.StartSpatialAnchors(scope, world, {1, Duration::FromNanoseconds(20)}, publication);
+        if (!requested) {
+            RequireFailureIdentity(start, XRErrors::OperationUnsupported);
+            REQUIRE(fixture.owner.Close().HasValue());
+            return;
+        }
+        REQUIRE(start.HasValue());
+        const auto createdAt = XRRuntimeTime::Create(10).Value();
+        fixture.script.fail = "anchor-space";
+        REQUIRE(fixture.owner.CreateSpatialAnchor(scope, world, {}, createdAt).HasError());
+        CHECK(fixture.script.calls.back() == "destroy-anchor");
+        fixture.script.fail = {};
+        const auto anchor = fixture.owner.CreateSpatialAnchor(scope, world, {}, createdAt);
+        REQUIRE(anchor.HasValue());
+        RequireFailureIdentity(fixture.owner.CreateSpatialAnchor(scope, world, {}, createdAt), XRErrors::CapacityExceeded);
+        const auto observedAt = XRRuntimeTime::Create(20).Value();
+        RequireFailureIdentity(fixture.owner.SampleSpatialAnchor(scope, NativeHandle<XrSpace>(99), anchor.Value(), observedAt),
+                               XRErrors::IdentityStale);
+        REQUIRE(fixture.owner.SampleSpatialAnchor(scope, world, anchor.Value(), observedAt).HasValue());
+        const auto located = publication->Read(scope, anchor.Value(), observedAt);
+        REQUIRE(located.HasValue());
+        REQUIRE(located.Value().Observation().pose);
+        REQUIRE(fixture.owner.RetireSpatialAnchor(scope, world, anchor.Value()).HasValue());
+        RequireFailureIdentity(publication->Read(scope, anchor.Value(), observedAt), XRErrors::IdentityStale);
+        const auto replacement = fixture.owner.CreateSpatialAnchor(scope, world, {}, createdAt);
+        REQUIRE(replacement.HasValue());
+        CHECK(replacement.Value() != anchor.Value());
+        REQUIRE(fixture.owner.SampleSpatialAnchor(scope, world, replacement.Value(), observedAt).HasValue());
+        const auto revokedAt = XRRuntimeTime::Create(21).Value();
+        fixture.script.fail = "locate-anchor";
+        fixture.script.failureResult = XR_ERROR_PERMISSION_INSUFFICIENT;
+        RequireFailureIdentity(fixture.owner.SampleSpatialAnchor(scope, world, replacement.Value(), revokedAt), XRErrors::PermissionDenied);
+        RequireFailureIdentity(publication->Read(scope, replacement.Value(), revokedAt), XRErrors::PermissionDenied);
+        fixture.script.fail = "destroy-anchor-space";
+        fixture.script.failureResult = XR_ERROR_RUNTIME_FAILURE;
+        RequireFailureIdentity(fixture.owner.Close(), XRErrors::OperationUnavailable);
+        CHECK(fixture.script.liveSessions == 1);
+        fixture.script.fail = {};
+        REQUIRE(fixture.owner.Close().HasValue());
+        const auto end = fixture.script.calls.end();
+        REQUIRE(fixture.script.calls.size() >= 5);
+        CHECK(*(end - 5) == "destroy-anchor-space");
+        CHECK(*(end - 4) == "destroy-anchor");
+        CHECK(*(end - 3) == "destroy-session");
+    }
+
     TEST_CASE("OpenXR native transaction publishes only complete ownership and retires in reverse order", "[unit][xr][native]") {
         Fixture fixture;
         const auto request = fixture.Request();

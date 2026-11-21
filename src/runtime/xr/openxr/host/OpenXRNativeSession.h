@@ -7,6 +7,7 @@
 #include "Horo/XR/XRLightEstimate.h"
 #include "Horo/XR/XRLoaderPreflight.h"
 #include "Horo/XR/XRPassthrough.h"
+#include "Horo/XR/XRSpatialAnchors.h"
 #include "OpenXRHostBindings.h"
 #include "OpenXRNativeCensus.h"
 
@@ -389,6 +390,20 @@ namespace Horo::XR::OpenXRInternal {
          */
         [[nodiscard]] Result<NativeSessionBorrow> Borrow(const XRSessionId &session) const;
 
+        /** @brief Opens an enabled native anchor route for an explicitly granted World scope. */
+        [[nodiscard]] Result<void> StartSpatialAnchors(const XRAnchorScope &scope, XrSpace world, const XRAnchorLimits &limits,
+                                                       const std::shared_ptr<XRSpatialAnchors> &publication);
+        /** @brief Creates one native anchor and its portable ID on the control lane. */
+        [[nodiscard]] Result<XRSpatialAnchorId> CreateSpatialAnchor(const XRAnchorScope &scope, XrSpace world, const XRAnchorPose &pose,
+                                                                    XRRuntimeTime now);
+        /** @brief Locates at most one anchor in the original World and publishes its bounded observation. */
+        [[nodiscard]] Result<void> SampleSpatialAnchor(const XRAnchorScope &scope, XrSpace world, const XRSpatialAnchorId &id,
+                                                       XRRuntimeTime now);
+        /** @brief Invalidates one portable ID before releasing its native children. */
+        [[nodiscard]] Result<void> RetireSpatialAnchor(const XRAnchorScope &scope, XrSpace world, const XRSpatialAnchorId &id);
+        /** @brief Revokes portable access and destroys native children, retaining cleanup debt on failure. */
+        [[nodiscard]] Result<void> StopSpatialAnchors(const XRAnchorScope &scope, XRAnchorWithdrawal reason);
+
         /** @brief Creates an estimator on the exact enabled session after separate app and OS approval.
          * @param scope Already consented purpose and calibrated World scope. @param limits Explicit cadence and expiry.
          * @return Success, or typed capability, permission, identity, resource or validation failure.
@@ -499,6 +514,8 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> DestroySession();
         /** @brief Revokes evidence and retires the light child, retaining failed native retirement for retry. */
         [[nodiscard]] Result<void> RetireLightEstimation();
+        [[nodiscard]] Result<void> RetireSpatialAnchors(XRAnchorWithdrawal reason);
+        [[nodiscard]] Result<std::shared_ptr<XRSpatialAnchors>> BorrowAnchorPublication(const XRAnchorScope &scope, XrSpace world) const;
 
         /** @brief Passes an otherwise unhandled OpenXR event to the linked passthrough provider.
          * @param buffer Exact native event borrowed during the owner-lane poll. */
@@ -616,6 +633,34 @@ namespace Horo::XR::OpenXRInternal {
         LightEstimator light_;
         XRLightEstimateGrant lastLightGrant_;
         mutable bool lightCall_{}; /**< Rejects teardown or reentrant use while a native light operation borrows the owner. */
+
+        struct SpatialAnchors final {
+            struct Slot final {
+                XRSpatialAnchorId id;
+                XrSpatialAnchorMSFT anchor{XR_NULL_HANDLE};
+                XrSpace space{XR_NULL_HANDLE};
+                XRRuntimeTime lastSample;
+            };
+
+            std::weak_ptr<XRSpatialAnchors> publication;
+            XRAnchorScope scope;
+            XrSpace world{XR_NULL_HANDLE};
+            PFN_xrCreateSpatialAnchorMSFT create{};
+            PFN_xrCreateSpatialAnchorSpaceMSFT createSpace{};
+            PFN_xrDestroySpatialAnchorMSFT destroy{};
+            PFN_xrDestroySpace destroySpace{};
+            PFN_xrLocateSpace locate{};
+            std::array<Slot, XRSpatialAnchors::MaximumAnchors> slots{};
+            std::uint32_t maximumAnchors{};
+            bool admitted{};
+
+            [[nodiscard]] bool Resolve(const NativeSessionBorrow &native, PFN_xrGetInstanceProcAddr getProc);
+            [[nodiscard]] Result<void> Release(Slot &slot);
+            void Withdraw(XRAnchorWithdrawal reason);
+        } anchors_;
+
+        XRAnchorGrant lastAnchorGrant_;
+        bool anchorCall_{};
 
         struct Passthrough final {
             XRPassthroughScope scope;

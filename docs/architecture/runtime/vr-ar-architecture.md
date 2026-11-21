@@ -1019,6 +1019,14 @@ releasing native resources or changing access, space, or origin. A Scene adapter
 point before using that pose. The portable contract introduces no provider support
 or migration of existing consumers.
 
+The OpenXR host can select the optional `XR_MSFT_spatial_anchor` route during
+extension admission. The native session owns the anchor and child space for
+each portable ID. It locates one anchor per explicit sample call in the
+original World space. Permission loss withdraws the portable publication
+before native retirement. Anchor spaces and handles retire before the session,
+with failed cleanup retained for retry. The application must supply a current
+focused grant and retire the grant before replacing its World space.
+
 `HoroXRAnchorSaveIntegration` provides the separate optional local durability
 lane. The selected host binds one canonical Save participant per durable anchor
 record and supplies the exact current XR scope plus a protected local store.
