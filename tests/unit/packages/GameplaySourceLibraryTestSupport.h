@@ -76,7 +76,7 @@ namespace Horo::Tests::GameplayLibraries {
 
     /** @brief Owns actual portable intent, generated lock, immutable archive and a durably installed graph. */
     struct Fixture final {
-        Horo::Tests::Packages::TemporaryDirectory temporary{"horo gameplay library spaces"};
+        Horo::Tests::Packages::TemporaryDirectory temporary{"horo libs"};
         std::filesystem::path root{std::filesystem::canonical(temporary.Path())};
         NativeDurableFileSystem files;
         HoroPackageId id{Parse<HoroPackageId>("com.example.math")};
