@@ -1,6 +1,7 @@
 #include "HeadlessReplayArtifact.h"
 
 #include "HeadlessNetworkServices.h"
+#include "HeadlessReplayManifest.h"
 #include "Horo/AI/AIReplayEvidence.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Foundation/Utf8.h"
@@ -30,22 +31,16 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Describes supported and omitted boundaries even when trace records were captured for diagnostics. */
-        Json EncodeCoverage(const HeadlessDecisionReplayData &data, Json &recorded) {
-            constexpr auto &names = HeadlessReplayBoundaryNames;
-            const std::array
-                deterministic{true,  data.perception.has_value(), data.queries.has_value(), data.queries.has_value(),         true,
-                              false, data.gameplay.has_value(),   data.physics.has_value(), data.characterMotion.has_value(), true};
-            static_assert(deterministic.size() == names.size());
-            auto boundaries = Json::object();
-            for (std::size_t index = 0; index < names.size(); ++index) {
-                const bool navigation = index == static_cast<std::size_t>(AI::AiReplayBoundary::Navigation) && data.navigation.has_value();
-                boundaries[std::string{names[index]}] = navigation             ? "nondeterministic"
-                                                        : deterministic[index] ? "deterministic"
-                                                                               : "omitted";
-                if (deterministic[index] || navigation)
-                    recorded.push_back(names[index]);
-            }
-            return {{"version", AI::AiReplayManifest::CurrentVersion}, {"boundaries", std::move(boundaries)}};
+        HeadlessReplayManifestJson EncodeCoverage(const HeadlessDecisionReplayData &data) {
+            using enum AI::AiReplayCoverage;
+            const auto observed = [](const bool available) {
+                return available ? Deterministic : Omitted;
+            };
+            return EncodeHeadlessReplayManifest({Deterministic, observed(data.perception.has_value()), observed(data.queries.has_value()),
+                                                 observed(data.queries.has_value()), Deterministic,
+                                                 data.navigation ? Nondeterministic : Omitted, observed(data.gameplay.has_value()),
+                                                 observed(data.physics.has_value()), observed(data.characterMotion.has_value()),
+                                                 Deterministic});
         }
 
         /** @brief Keeps the actual best-effort terminal outcomes visible for diagnosis. */
@@ -129,7 +124,6 @@ namespace Horo::Application::Internal {
         /** @brief Declares the exact observed phase and the omitted opaque state. */
         Json EncodeGameplay(const HeadlessReplayGameplay &gameplay) {
             auto records = EncodeGameplayRecords(gameplay);
-            auto omissions = Json::array({"private-module-state", "external-gameplay-inputs", "deferred-scene-publication"});
             return {{"schemaVersion", GameplaySchemaVersion},
                     {"scope", "fixed-transform-submissions"},
                     {"source", gameplay.profile.native ? "native" : "lua"},
@@ -137,7 +131,6 @@ namespace Horo::Application::Internal {
                     {"revision", std::to_string(gameplay.profile.revision)},
                     {"profile", FormatSha256(gameplay.profile.digest)},
                     {"digest", FormatSha256(HashRecords(records))},
-                    {"omissions", std::move(omissions)},
                     {"records", std::move(records)}};
         }
 
@@ -185,7 +178,6 @@ namespace Horo::Application::Internal {
             const auto &configuration = physics.configuration;
             return {{"schemaVersion", RigidBodyMotionSchemaVersion},
                     {"scope", "authored-rigid-body-motion"},
-                    {"omissions", {"solver-internal-state", "external-physics-inputs"}},
                     {"physicsTick", std::to_string(physics.publication.completedTick)},
                     {"publicationRevision", std::to_string(physics.publication.publicationRevision)},
                     {"settingsDigest", FormatSha256(configuration.settings.digest)},
@@ -233,15 +225,14 @@ namespace Horo::Application::Internal {
                 auto records = Json::array();
                 for (const auto &record : capture.trace->Records())
                     records.push_back(EncodeRecord(record));
-                auto recorded = Json::array();
-                auto coverage = EncodeCoverage(data, recorded);
+                auto coverage = EncodeCoverage(data);
                 Json payload{{"format", "horo-ai-replay-evidence"},
                              {"version", 1},
                              {"sceneDefinitionId", std::to_string(data.definition.value)},
                              {"agentId", std::to_string(capture.subject.Value())},
                              {"tick", std::to_string(capture.tick)},
-                             {"recordedBoundaries", std::move(recorded)},
-                             {"manifest", std::move(coverage)},
+                             {"recordedBoundaries", std::move(coverage.recordedBoundaries)},
+                             {"manifest", std::move(coverage.manifest)},
                              {"sceneInput",
                               {{"schemaVersion", HeadlessSceneInputSchemaVersion},
                                {"revision", std::to_string(data.definitionRevision.value)},
@@ -275,7 +266,6 @@ namespace Horo::Application::Internal {
                 if (const auto &perception = data.perception)
                     payload["perceptionInput"] = {{"schemaVersion", PerceptionInputSchemaVersion},
                                                   {"scope", "spatial-publication"},
-                                                  {"omissions", {"provider-output", "provider-internal-state"}},
                                                   {"revision", std::to_string(perception->revision)},
                                                   {"digest", FormatSha256(perception->digest)},
                                                   {"sourceCount", perception->sourceCount},

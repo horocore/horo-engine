@@ -117,6 +117,13 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(differentImage.ErrorValue().code.Value() == AI::AIErrors::CanonicalSchemaUnsupported.code.Value());
             gameplay.at("sourceDigest") = originalImage;
 
+            auto &omissions = artifact.at("manifest").at("omittedInputsAndState");
+            const auto originalPhysicsOmissions = omissions.at("physics");
+            omissions.erase("physics");
+            writeCandidate();
+            CHECK(Internal::CompareHeadlessReplayArtifacts(file, candidate).HasError());
+            omissions["physics"] = originalPhysicsOmissions;
+
             physics.at("bodies").at(0).at("activity") = 99;
             writeCandidate();
             const auto malformed = Internal::CompareHeadlessReplayArtifacts(file, candidate);
@@ -141,12 +148,19 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(artifact.at("agentId") == std::to_string(data.evidence.subject.Value()));
             CHECK(artifact.at("canonicalAi").at("digest") == FormatSha256(digest));
             CHECK(artifact.at("canonicalAi").at("recordVersion") == AI::AiCanonicalReferenceRecordVersion);
-            const auto &coverage = artifact.at("manifest").at("boundaries");
+            const auto &manifest = artifact.at("manifest");
+            const auto &coverage = manifest.at("boundaries");
+            const auto &omissions = manifest.at("omittedInputsAndState");
+            CHECK(manifest.at("version") == 2);
+            CHECK(manifest.at("nondeterministicProviders").empty());
+            CHECK(omissions.at("scene-input") == nlohmann::json::array({"streamed-cell-content", "runtime-structural-group-content"}));
+            CHECK(omissions.at("physics") == nlohmann::json::array({"solver-internal-state", "external-physics-inputs"}));
             CHECK(coverage.at("scene-input") == "deterministic");
             CHECK(coverage.at("decision") == "deterministic");
             CHECK(coverage.at("canonical-ai") == "deterministic");
             CHECK(coverage.at("perception-input") == (data.perception ? "deterministic" : "omitted"));
             if (const auto &perception = data.perception) {
+                CHECK(omissions.at("perception-input") == nlohmann::json::array({"provider-output", "provider-internal-state"}));
                 const auto &input = artifact.at("perceptionInput");
                 CHECK(input.at("scope") == "spatial-publication");
                 CHECK(input.at("sourceCount") == 1);
@@ -180,6 +194,8 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(coverage.at("navigation") == "omitted");
             CHECK(coverage.at("gameplay") == (data.gameplay ? "deterministic" : "omitted"));
             if (const auto &gameplay = data.gameplay) {
+                CHECK(omissions.at("gameplay") ==
+                      nlohmann::json::array({"private-module-state", "external-gameplay-inputs", "deferred-scene-publication"}));
                 const auto &section = artifact.at("gameplay");
                 CHECK(section.at("source") == "native");
                 CHECK(section.at("schemaVersion") == 2);

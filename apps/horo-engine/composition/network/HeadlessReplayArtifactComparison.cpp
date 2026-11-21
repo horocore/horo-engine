@@ -1,4 +1,5 @@
 #include "HeadlessReplayArtifact.h"
+#include "HeadlessReplayManifest.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Foundation/Utf8.h"
@@ -69,24 +70,12 @@ namespace Horo::Application::Internal {
 
         /** @brief Requires the format's recorded coverage to match exactly the sections supplied. */
         void ValidateCoverage(const Json &file, const PortableReplay &replay) {
-            const auto &manifest = file.at("manifest");
-            const auto &coverage = manifest.at("boundaries");
-            if (manifest.at("version") != AI::AiReplayManifest::CurrentVersion || !coverage.is_object() ||
-                coverage.size() != HeadlessReplayBoundaryNames.size())
-                throw InvalidEvidence{};
-            auto recorded = Json::array();
-            for (std::size_t index = 0; index < HeadlessReplayBoundaryNames.size(); ++index) {
-                const auto name = HeadlessReplayBoundaryNames[index];
-                const auto mode = replay.boundaries[index].profile.coverage;
-                const auto expected = mode == AI::AiReplayCoverage::Nondeterministic ? "nondeterministic"
-                                      : mode == AI::AiReplayCoverage::Deterministic  ? "deterministic"
-                                                                                     : "omitted";
-                if (coverage.at(name) != expected)
-                    throw InvalidEvidence{};
-                if (mode != AI::AiReplayCoverage::Omitted)
-                    recorded.push_back(name);
-            }
-            if (file.at("recordedBoundaries") != recorded)
+            HeadlessReplayCoverage coverage;
+            std::ranges::transform(replay.boundaries, coverage.begin(), [](const PortableBoundary &boundary) {
+                return boundary.profile.coverage;
+            });
+            const auto expected = EncodeHeadlessReplayManifest(coverage);
+            if (file.at("manifest") != expected.manifest || file.at("recordedBoundaries") != expected.recordedBoundaries)
                 throw InvalidEvidence{};
         }
 

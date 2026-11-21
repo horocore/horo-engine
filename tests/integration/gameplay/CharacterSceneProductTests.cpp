@@ -551,6 +551,10 @@ namespace Horo::Application::CharacterSceneProductTest {
         };
         const auto root = fixture.project.project.dir.path;
         const auto recorded = publish(root / "nav-recorded", data);
+        std::ifstream evidence{recorded, std::ios::binary};
+        REQUIRE(evidence.is_open());
+        const std::string evidenceText{std::istreambuf_iterator<char>{evidence}, {}};
+        CHECK(evidenceText.find(R"("nondeterministicProviders":{"navigation":["native-navigation-path-worker"]})") != std::string::npos);
         const auto differing = publish(root / "nav-differing", changed);
         const auto artifactComparison = Internal::CompareHeadlessReplayArtifacts(recorded, differing);
         REQUIRE(artifactComparison.HasValue());
