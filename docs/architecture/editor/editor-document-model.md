@@ -193,6 +193,12 @@ reply. A monotonic deadline bounds initialization, shutdown, and the final
 process exit. The transport owner retires failed connections and gives a new
 connection fresh handshake state.
 
+The connection admits source work only after its initialized notification has
+entered the transport queue. Malformed streams, transport refusal, expiry, and
+shutdown retire the exact source session before further feature dispatch. The
+transport only queues owned frames on the editor lane. Its process and callbacks
+are owned by the host.
+
 ### Source Save Publication (EDT-003.5)
 
 `SourceDocumentService::Save` captures one exact current revision on the owner thread.

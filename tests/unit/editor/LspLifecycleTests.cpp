@@ -90,7 +90,11 @@ TEST_CASE("LSP lifecycle isolates handshake responses from server calls and late
     REQUIRE(lifecycle.Start({}, std::nullopt, Now).HasValue());
     const auto unrelatedCall = Receive(lifecycle, R"({"jsonrpc":"2.0","id":-1,"method":"window/showMessageRequest"})");
     REQUIRE(unrelatedCall.HasValue());
-    CHECK_FALSE(unrelatedCall.Value().handled);
+    CHECK(unrelatedCall.Value().handled);
+    REQUIRE(unrelatedCall.Value().outgoing.has_value());
+    const auto decline = ReadFrame(*unrelatedCall.Value().outgoing);
+    CHECK(decline.envelope.Get().at("id") == -1);
+    CHECK(decline.envelope.Get().at("result").is_null());
     const auto unexpectedShutdown = Receive(lifecycle, ShutdownResponse);
     REQUIRE(unexpectedShutdown.HasValue());
     CHECK(unexpectedShutdown.Value().handled);

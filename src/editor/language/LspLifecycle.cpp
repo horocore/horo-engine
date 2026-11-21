@@ -62,6 +62,16 @@ namespace Horo::Editor::Language {
                 return Result<LspLifecycleDispatch>::Failure(MakeError(InvalidParameters));
             }
         }
+
+        /** @brief Declines the one startup prompt a server may issue before feature dispatch is ready. */
+        Result<LspLifecycleDispatch> DeclineStartupPrompt(const LspMessage &message) {
+            try {
+                const auto &id = message.envelope.Get().at("id");
+                return Result<LspLifecycleDispatch>::Success({true, Frame({{"jsonrpc", "2.0"}, {"id", id}, {"result", nullptr}})});
+            } catch (const std::bad_alloc &) {
+                return Result<LspLifecycleDispatch>::Failure(MakeError(InvalidParameters));
+            }
+        }
     }  // namespace
 
     /** @copydoc LspLifecycle::Start */
@@ -104,6 +114,9 @@ namespace Horo::Editor::Language {
     Result<LspLifecycleDispatch> LspLifecycle::Receive(const LspMessage &message, const Clock::time_point now) {
         if (Expire(now))
             return Result<LspLifecycleDispatch>::Failure(MakeError(HandshakeTimeout));
+        if (state_ == LspLifecycleState::Initializing && message.kind == LspMessageKind::Request &&
+            message.envelope.Get().at("method") == "window/showMessageRequest")
+            return DeclineStartupPrompt(message);
         if (IsResponseTo(message, InitializeId)) {
             if (state_ == LspLifecycleState::Initializing)
                 return HandleInitialize(message);

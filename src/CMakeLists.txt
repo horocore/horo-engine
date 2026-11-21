@@ -4037,6 +4037,7 @@ add_library(HoroEditorServices STATIC
         editor/SourceFileOpenService.cpp
         editor/SourceDocumentService.cpp
         editor/SourceLanguageSession.cpp
+        editor/language/LspConnection.cpp
         editor/proposals/ProposedChangeSet.cpp
         editor/proposals/ProposedChangeSetCodec.cpp
         editor/proposals/ProposedUnifiedPatch.cpp
