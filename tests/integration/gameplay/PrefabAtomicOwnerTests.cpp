@@ -1005,11 +1005,8 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(probe.factories == taskCount);
         }
 
-        /** @brief Writes only the project metadata and sidecars needed to admit a committed scene in the real executable. */
-        void WriteDecisionProductSources(const std::filesystem::path &root, std::span<const Assets::AssetRecord> records,
-                                         const nlohmann::json &ai = {}) {
-            std::filesystem::create_directories(root / ".horo");
-            std::filesystem::create_directories(root / "assets");
+        /** @brief Writes the configured project policy before opening the real executable. */
+        void WriteDecisionProductMetadata(const std::filesystem::path &root, const nlohmann::json &ai) {
             std::ofstream metadata{root / ".horo/project.json"};
             auto sourceSettings = nlohmann::json::parse(
                 R"({"horoVersion":"0.0.1","persistentContract":"sha256:0101010101010101010101010101010101010101010101010101010101010101","projectId":"p1","name":"Test","projectVersion":"0.1.0","createdAt":"2026-07-18T00:00:00Z","settings":{"renderBackend":"opengl"}})");
@@ -1017,6 +1014,14 @@ namespace Horo::Application::PrefabAtomicTest {
                 sourceSettings["settings"]["ai"] = ai;
             metadata << sourceSettings;
             REQUIRE(metadata.good());
+        }
+
+        /** @brief Writes the metadata and sidecars needed to admit a committed Scene. */
+        void WriteDecisionProductSources(const std::filesystem::path &root, std::span<const Assets::AssetRecord> records,
+                                         const nlohmann::json &ai = {}) {
+            std::filesystem::create_directories(root / ".horo");
+            std::filesystem::create_directories(root / "assets");
+            WriteDecisionProductMetadata(root, ai);
             for (const auto &record : records) {
                 std::ofstream source{root / record.sourcePath.String()};
                 source << "Cooked fixture source";
@@ -1256,6 +1261,12 @@ namespace Horo::Application::PrefabAtomicTest {
                 prepareNative = true;
                 runTerminal = true;
                 selectNativePerception = true;
+            }
+            SECTION("terminal applies explicit scheduler mode to authored Perception watches") {
+                prepareNative = true;
+                runTerminal = true;
+                selectNativePerception = true;
+                reactiveNativePerception = true;
             }
             SECTION("selected prepared image freezes inert Perception before and binds one real native provider after startup") {
                 prepareNative = true;
@@ -1622,6 +1633,8 @@ namespace Horo::Application::PrefabAtomicTest {
                 nlohmann::json ai;
                 if (selectNativePerception)
                     ai = {{"schemaVersion", 1}, {"perception", {{"maximumWorkUnitsPerTick", perception["native"]["workUnitsPerTick"]}}}};
+                if (reactiveNativePerception)
+                    ai["scheduler"]["mode"] = "bestEffort";
                 WriteDecisionProductSources(project.path, records, ai);
                 DecisionProductTerminalOptions options{.prefab = prefabOnly ? std::optional{prefabId} : std::nullopt};
                 if (selectNativePerception) {
@@ -1634,6 +1647,14 @@ namespace Horo::Application::PrefabAtomicTest {
                     write();
                     ExpectDecisionProductExit(0, project.path, directory.path, target, sceneId, *gameplay, controller.descriptor.controller,
                                               artifactId, options);
+                    if (reactiveNativePerception) {
+                        ai["scheduler"]["mode"] = "deterministic";
+                        WriteDecisionProductMetadata(project.path, ai);
+                        options.refusal = "must match the authored Perception watches";
+                        ExpectDecisionProductExit(3, project.path, directory.path, target, sceneId, *gameplay, controller.descriptor.controller,
+                                                  artifactId, options);
+                        return;
+                    }
                     const auto admittedBudget = perception["native"]["workUnitsPerTick"];
                     perception["native"]["workUnitsPerTick"] = admittedBudget.get<std::size_t>() + 1;
                     write();

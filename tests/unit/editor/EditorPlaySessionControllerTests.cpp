@@ -781,6 +781,7 @@ namespace {
 
         struct State final {
             std::atomic_bool admitted{true};
+            AI::AiTaskContinuation continuation;
             std::uint64_t startTick{}, resumeTick{}, checkTick{};
             unsigned factories{};
             FailedCallback failure{FailedCallback::Condition};
@@ -791,6 +792,7 @@ namespace {
         Result<AI::AiTaskState> Start(const AI::BehaviorTreeEvaluationContext &context,
                                       const AI::AiTaskOperationContext &) noexcept override {
             state_.startTick = context.tick;
+            state_.continuation = context.continuation;
             if (state_.failure == FailedCallback::Start)
                 return Result<AI::AiTaskState>::Failure(MakeError(AI::AIErrors::TaskFailureInvalid));
             return Result<AI::AiTaskState>::Success(AI::AiTaskState::Running);
@@ -867,8 +869,16 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     constexpr auto scenePath = "assets/level.horo";
     constexpr auto perceptionPath = "play-perception.json";
     bool livePerception = false;
+    std::optional<AI::AiSchedulingMode> watchedScheduler;
     SECTION("Prepared native sensing reaches the selected agent's committed inspection memory") {
         livePerception = true;
+        SECTION("Fixed scheduling retains the existing inspection contract") {}
+        SECTION("Authored best-effort scheduling wakes only when a watched decision has work") {
+            watchedScheduler = AI::AiSchedulingMode::BestEffort;
+        }
+        SECTION("An explicit deterministic scheduler rejects authored reactive watches") {
+            watchedScheduler = AI::AiSchedulingMode::Deterministic;
+        }
     }
     SceneSource::SceneSourceDocument source;
     source.objects.push_back({.id = {7},
@@ -935,6 +945,8 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     }
     SECTION("Authored development permissions keep an explicitly requested debugger read-only") {
         projectDisallowsDebug = true;
+    }
+    if (projectDisallowsDebug || watchedScheduler) {
         std::ifstream input{project.project.dir.path / ".horo/project.json", std::ios::binary};
         REQUIRE(input.is_open());
         std::string metadata{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
@@ -942,8 +954,13 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
         constexpr std::string_view backend = R"("renderBackend":"opengl")";
         const auto insertion = metadata.find(backend);
         REQUIRE(insertion != std::string::npos);
-        metadata.insert(insertion + backend.size(),
-                        R"(,"ai":{"schemaVersion":1,"scheduler":{"evaluationsPerTick":1},"development":{"liveMutation":false}})");
+        const auto scheduler = watchedScheduler == AI::AiSchedulingMode::BestEffort
+                                   ? R"("mode":"bestEffort")"
+                                   : R"("mode":"deterministic")";
+        const auto evaluations = watchedScheduler ? 2 : 1;
+        metadata.insert(insertion + backend.size(), std::string{R"(,"ai":{"schemaVersion":1,"scheduler":{)"} + scheduler +
+                            R"(,"evaluationsPerTick":)" + std::to_string(evaluations) +
+                            R"(},"development":{"liveMutation":false}})");
         project.WriteText(".horo/project.json", metadata);
     }
     SECTION("An explicit schema-scoped inspector key reveals only its admitted value") {
@@ -990,11 +1007,12 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
         const auto &contract = senses->Contracts().front();
         const auto sense = std::to_string(contract.sense.identity.Value());
         const auto units = (contract.workUnits + AI::PerceptionSenseGeneration::ValidationWorkUnits + 1) * 3;
+        const auto watches = watchedScheduler ? R"(,"decisionWatches":[{"node":3,"listener":91}])" : "";
         project.WriteText(perceptionPath,
                           "{\"schema\":2,\"sceneAsset\":\"" + project.sceneId.ToString() +
                               "\",\"sceneRevision\":1,\"worldOriginMillimeters\":[0,0,0],\"controllers\":[{\"controller\":" +
                               std::to_string(controller.Value()) + ",\"listeners\":[91],\"sources\":[" + sense +
-                              "],\"layers\":1,\"mask\":1}],\"native\":{\"listeners\":[{\"id\":91,\"sense\":" + sense +
+                              "],\"layers\":1,\"mask\":1" + watches + "}],\"native\":{\"listeners\":[{\"id\":91,\"sense\":" + sense +
                               "}],\"radiusMillimeters\":4000,\"visibleLayers\":1,\"workUnitsPerTick\":" + std::to_string(units) + "}}");
     }
     const auto projectFactory =
@@ -1025,6 +1043,14 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     }, .perception = [&] {
         return Result<std::shared_ptr<const AI::PerceptionSenseGeneration>>::Success(senses);
     }});
+    if (watchedScheduler == AI::AiSchedulingMode::Deterministic) {
+        REQUIRE(started.HasError());
+        const auto &failure = AI::AIErrors::SchedulerPolicyInvalid;
+        CHECK(ErrorChainContains(started.ErrorValue(), failure.domain, failure.code));
+        CHECK(providerState->factories == 0);
+        CHECK_FALSE(play.SceneView());
+        return;
+    }
     if (changed) {
         REQUIRE(started.HasError());
         CHECK(providerState->factories == 0);
@@ -1085,10 +1111,12 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     CHECK(inspection.owner == entity);
     CHECK(inspection.tick == 1);
     REQUIRE(inspection.snapshot);
-    REQUIRE(inspection.decisionTrace);
-    CHECK(inspection.decisionTrace->Header().tick == 1);
-    CHECK(inspection.decisionTrace->Header().root == graph.asset);
-    CHECK(inspection.decisionTrace->Header().blackboard.agent == inspection.agent);
+    if (!watchedScheduler) {
+        REQUIRE(inspection.decisionTrace);
+        CHECK(inspection.decisionTrace->Header().tick == 1);
+        CHECK(inspection.decisionTrace->Header().root == graph.asset);
+        CHECK(inspection.decisionTrace->Header().blackboard.agent == inspection.agent);
+    }
     CHECK(inspection.snapshot->agent == inspection.agent);
     CHECK(inspection.snapshot->decisionTick == 1);
     using enum Editor::EditorPlayDecisionDebugAction;
@@ -1146,6 +1174,15 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
         CHECK(stimulus.lastSensedTick == 1);
         CHECK(stimulus.ageSeconds == 0);
         CHECK(stimulus.sensed);
+        if (watchedScheduler) {
+            REQUIRE(tick().HasValue());
+            CHECK(providerState->checkTick == 1);
+            CHECK(providerState->resumeTick == 0);
+            REQUIRE(providerState->continuation.NotifyEvent() == AI::AiTaskPublicationDisposition::Accepted);
+            REQUIRE(tick().HasValue());
+            CHECK(providerState->checkTick == 3);
+            CHECK(providerState->resumeTick == 3);
+        }
         play.Stop();
         lifecycle.Shutdown();
         return;
