@@ -9,6 +9,7 @@
 #include "Horo/AI/PerceptionSenseProvider.h"
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayErrors.h"
+#include "Horo/Navigation/NavigationErrors.h"
 #include "Horo/Runtime/RuntimeHost.h"
 #include "Horo/Runtime/Scene/PrimitiveMesh.h"
 #include "Horo/Scene/CookedSceneDefinition.h"
@@ -1311,6 +1312,10 @@ TEST_CASE("Editor authoring EQS evaluates a committed NavMesh without starting P
     REQUIRE(scene);
     const auto querier = scene->Find(Runtime::SceneObjectId{fixture.source.objects.back().id.value});
     REQUIRE(querier);
+    const auto initial = scene->Get(*querier);
+    REQUIRE(initial.HasValue());
+    const auto localTransform = *initial.Value().localTransform;
+    const auto structure = scene->StructuralRevision();
     const auto start = Math::WorldCoordinate64::FromMillimeters(1000, 0, 1000);
     const auto stage = AI::QueryStageId::Create(1).Value();
     const auto captured =
@@ -1331,6 +1336,18 @@ TEST_CASE("Editor authoring EQS evaluates a committed NavMesh without starting P
     CHECK(*results.Value()[0].metric > 0.0);
     CHECK(results.Value()[1].filter == false);
     CHECK(scene->IsCurrent());
+    CHECK(scene->StructuralRevision() == structure);
+    const auto after = scene->Get(*querier);
+    REQUIRE(after.HasValue());
+    CHECK(after.Value().localTransform->translation == localTransform.translation);
+    CHECK_FALSE(preview.owners->ReadAgentInspection(*querier));
+
+    CancellationSource cancelled;
+    cancelled.RequestCancellation();
+    const auto stopped = captured.Value()(points, cancelled.Token());
+    REQUIRE(stopped.HasError());
+    CHECK(ErrorChainContains(stopped.ErrorValue(), Navigation::NavigationErrors::QueryCancelled.domain,
+                             Navigation::NavigationErrors::QueryCancelled.code));
 
     auto edit = fixture.source.objects;
     edit.back().localTransform.translation.x += 1.0F;
@@ -1338,6 +1355,25 @@ TEST_CASE("Editor authoring EQS evaluates a committed NavMesh without starting P
     REQUIRE(stale.HasValue());
     CHECK(
         preview.queryPreviewNavigation.capture({root, fixture.project.sceneId, stale.Value(), *scene, *querier, start, stage}).HasError());
+    const std::array gameplaySource{SceneSource::SceneObjectSnapshot{.id = fixture.source.objects.back().id, .name = "Play actor"}};
+    const auto gameplayDefinition = SceneSource::ConvertSceneSourceToRuntime({gameplaySource, {}}, {1}, {1});
+    REQUIRE(gameplayDefinition.HasValue());
+    Runtime::RuntimeSceneService play{Editor::EditorFirstPlayScene};
+    REQUIRE(play.Startup(cancellation).HasValue());
+    REQUIRE(play.QueuePreparation(gameplayDefinition.Value()).HasValue());
+    REQUIRE(play.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, {1, {}, 0.0, 0, {}, false, cancellation}).HasValue());
+    const auto gameplay = play.ActiveScene();
+    REQUIRE(gameplay);
+    REQUIRE(gameplay->RuntimeId() == Editor::EditorFirstPlayScene);
+    const auto playQuerier = gameplay->Find(Runtime::SceneObjectId{fixture.source.objects.back().id.value});
+    REQUIRE(playQuerier);
+    const auto foreign =
+        preview.queryPreviewNavigation.capture({root, fixture.project.sceneId, gameplayDefinition.Value(), *gameplay, *playQuerier, start, stage});
+    REQUIRE(foreign.HasError());
+    CHECK(ErrorChainContains(foreign.ErrorValue(), Navigation::NavigationErrors::StaleSnapshot.domain,
+                             Navigation::NavigationErrors::StaleSnapshot.code));
+    CHECK(foreign.ErrorValue().message == "Navigation preview requires an ordinary Editor authoring Scene.");
+    play.Shutdown();
     preview.scenes->Shutdown();
 }
 

@@ -145,6 +145,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             }
 
             PathSamples operator()(std::span<const Math::WorldCoordinate64> points, const CancellationToken &cancel) const {
+                if (cancel.IsCancellationRequested())
+                    return PathSamples::Failure(MakeError(Navigation::NavigationErrors::QueryCancelled));
                 if (points.size() > PreviewNavigation::MaximumPaths)
                     return PathSamples::Failure(MakeError(Navigation::NavigationErrors::CapacityExceeded));
                 if (points.empty())
@@ -185,6 +187,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         std::error_code error;
         if (!std::filesystem::equivalent(previewRoot, request.root, error) || error)
             return Captured::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
+        if (request.scene.RuntimeId().value >= Editor::EditorPrefabStageNamespace)
+            return Captured::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot,
+                                               "Navigation preview requires an ordinary Editor authoring Scene."));
         if (!request.scene.IsCurrent() || request.scene.DefinitionId() != request.definition.Id() ||
             request.scene.DefinitionRevision() != request.definition.Revision())
             return Captured::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
