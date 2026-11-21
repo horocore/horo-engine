@@ -319,7 +319,7 @@ namespace Horo::Editor {
         /** @brief Executes the explicit close decision only for its captured Decision document revision. */
         [[nodiscard]] Result<bool> ResolveDecisionGraphClose(DecisionGraphDocumentFence fence, SourceCloseDecision decision);
         /** @brief Clears this workspace's checkpoints for an explicit discard-and-leave action. */
-        [[nodiscard]] Result<void> DiscardDecisionGraphAutosaves();
+        [[nodiscard]] Result<void> DiscardAiDocumentAutosaves();
         /** @brief Saves or discards one exact authored Query revision through the shared close modal. */
         [[nodiscard]] Result<bool> ResolveEnvironmentQueryClose(EnvironmentQueryDocumentFence fence, SourceCloseDecision decision);
         /** @brief Captures every editable Query revision for the shared workspace leave fence. */
@@ -614,9 +614,9 @@ namespace Horo::Editor {
         };
 
         std::map<DocumentInstanceId, DecisionGraphDraft> m_decisionGraphDrafts;
-        float m_decisionRecoverySeconds{};
-        void UpdateDecisionRecovery(float elapsedSeconds, int intervalMinutes);
-        void FlushDecisionRecovery();
+        float m_aiRecoverySeconds{};
+        void UpdateAiDocumentRecovery(float elapsedSeconds, int intervalMinutes);
+        void FlushAiDocumentRecovery();
         void InspectDecisionRecovery(DecisionGraphWorkspaceDocument &document);
         void ProcessDecisionRecovery(const EditorWorkspaceViewCommandData &command);
         void ProcessDecisionExternalChange(const DecisionExternalRequest &request);
@@ -637,20 +637,21 @@ namespace Horo::Editor {
         Result<void> SaveDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
                                             bool saveReferenceParticipant = false);
         /** @brief Joins an accepted recovery writer before its borrowed project services retire. */
-        void JoinDecisionGraphRecovery(std::optional<DocumentInstanceId> instance = {});
+        void JoinAiDocumentRecovery(std::optional<DocumentInstanceId> instance = {});
         /** @brief Observes terminal recovery and acknowledges the exact published revision. */
-        void ObserveDecisionGraphRecovery();
-        void StartQueuedDecisionRecovery();
+        void ObserveAiDocumentRecovery();
+        void StartQueuedAiDocumentRecovery();
 
-        struct DecisionRecoveryWork final {
-            DecisionGraphDocumentFence fence;
+        struct AiDocumentRecoveryWork final {
+            DocumentInstanceId instance;
+            std::uint64_t revision;
             JobHandle job;
             std::shared_ptr<const DocumentRecoveryRecord> acceptedCheckpoint;
         };
 
-        std::optional<DecisionRecoveryWork> m_decisionGraphRecovery;
-        std::vector<DocumentInstanceId> m_decisionRecoveryQueue;
-        bool m_decisionAutosaveDiscarded{};
+        std::optional<AiDocumentRecoveryWork> m_aiDocumentRecovery;
+        std::vector<DocumentInstanceId> m_aiRecoveryQueue;
+        bool m_aiAutosaveDiscarded{};
         /** @brief Projects structured Decision findings into the workspace's Build Output. */
         void PublishDecisionGraphDiagnostics(const Error &error) const;
         /** @brief Obtains the project metadata generation for the supported authoring family. */
@@ -849,8 +850,26 @@ namespace Horo::Editor {
             Sha256Digest sidecar;
             std::size_t acceptedBytes{};
             SemanticDocumentHistory<EnvironmentQueryHistoryEntry> history{};
+            std::uint64_t recoveryRevision{};
+            bool recoveryAttempted{};
+            std::shared_ptr<const DocumentRecoveryRecord> acceptedRecovery;
         };
 
+        /** @brief Stages an exact Query recovery candidate for an explicit user decision. */
+        void InspectEnvironmentQueryRecovery(EnvironmentQueryWorkspaceDocument &document) const;
+        /** @brief Installs an accepted compatible Query checkpoint as a dirty draft. */
+        Result<void> RestoreEnvironmentQueryRecovery(EnvironmentQueryWorkspaceDocument &document, EnvironmentQueryDraft &draft);
+        /** @brief Publishes a durable registered Query source while owning the mutation lease. */
+        Result<void> PublishEnvironmentQueryDraft(EnvironmentQueryWorkspaceDocument &document, EnvironmentQueryDraft &draft);
+        /** @brief Removes only a Query checkpoint accepted or captured by this draft. */
+        Result<void> ClearEnvironmentQueryRecovery(const EnvironmentQueryWorkspaceDocument &document, EnvironmentQueryDraft &draft);
+        /** @brief Applies an exact restore or discard action for the candidate the user reviewed. */
+        Result<void> ResolveEnvironmentQueryRecovery(EnvironmentQueryWorkspaceDocument &document, EnvironmentQueryDraft &draft,
+                                                     const EnvironmentQueryEditRequest &request);
+        /** @brief Schedules immutable Query checkpoint input on the shared workspace recovery lane. */
+        void StartQueuedEnvironmentQueryRecovery(DocumentInstanceId instance);
+        /** @brief Checkpoints the latest dirty Query revisions at a workspace lifecycle boundary. */
+        void FlushEnvironmentQueryRecovery();
         std::map<DocumentInstanceId, EnvironmentQueryDraft> m_environmentQueryDrafts;
         CollisionInventoryEvidence *m_collisionInventory{};
         CollisionActivationEvidence *m_collisionActivation{};

@@ -4,6 +4,7 @@
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Assets/AssetSourcePublication.h"
+#include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Foundation/PathUtils.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
@@ -22,6 +23,16 @@ namespace Horo::Editor {
             const Assets::AssetCookLimits limits{.maximumSourceBytes = EnvironmentQuerySourceCodec::MaximumBytes, .maximumAssets = 1};
             return Assets::AssetCookInputSnapshot::CaptureSelected(root, registry, std::span{&source, 1}, limits,
                                                                    EnvironmentQuerySourceCodec::MaximumBytes);
+        }
+
+        /** @copydoc CaptureQuerySidecar */
+        Result<Assets::AssetSourceIdentity> CaptureQuerySidecar(const std::filesystem::path &root, const Assets::AssetRecord &record) {
+            constexpr std::size_t MaximumIdentitySidecarBytes = 1U << 20U;
+            const auto captured =
+                Assets::CaptureAssetSource(root, Foundation::Paths::Resolve(root, record.metadataPath), MaximumIdentitySidecarBytes);
+            if (captured.HasError())
+                return Result<Assets::AssetSourceIdentity>::Failure(captured.ErrorValue());
+            return Result<Assets::AssetSourceIdentity>::Success(captured.Value().identity);
         }
 
         /** @copydoc RegisteredQueryDocument */
@@ -43,19 +54,10 @@ namespace Horo::Editor {
 
     namespace {
         using AI::EnvironmentQuerySourceCodec;
+        using EnvironmentQueryWorkspaceSource::CaptureQuerySidecar;
         using EnvironmentQueryWorkspaceSource::CaptureQuerySource;
         using EnvironmentQueryWorkspaceSource::DescriptorAvailability;
         using EnvironmentQueryWorkspaceSource::RegisteredQueryDocument;
-
-        /** @brief Captures raw registered sidecar bytes using the normal identity-sidecar ceiling. */
-        Result<Assets::AssetSourceIdentity> CaptureQuerySidecar(const std::filesystem::path &root, const Assets::AssetRecord &record) {
-            constexpr std::size_t MaximumIdentitySidecarBytes = 1U << 20U;
-            const auto captured =
-                Assets::CaptureAssetSource(root, Foundation::Paths::Resolve(root, record.metadataPath), MaximumIdentitySidecarBytes);
-            if (captured.HasError())
-                return Result<Assets::AssetSourceIdentity>::Failure(captured.ErrorValue());
-            return Result<Assets::AssetSourceIdentity>::Success(captured.Value().identity);
-        }
 
         /** @brief Applies one typed structural edit to a detached, already validated query. */
         Result<AI::EnvironmentQueryAsset> ChangeDistanceStages(const AI::EnvironmentQueryAsset &source,
@@ -184,6 +186,19 @@ namespace Horo::Editor {
             fail("workspace.source_open.unavailable");
             return;
         }
+        if (existing != documents.end()) {
+            const auto draft = m_environmentQueryDrafts.find(existing->identity.instance);
+            if (draft != m_environmentQueryDrafts.end()) {
+                if (const auto cleared = ClearEnvironmentQueryRecovery(*existing, draft->second); cleared.HasError()) {
+                    existing->diagnostic = cleared.ErrorValue();
+                    if (existing->identity.instance != opened.identity.instance)
+                        static_cast<void>(host.CloseDocument(opened.identity.instance));
+                    fail("workspace.environment_query.edit_refused");
+                    return;
+                }
+            }
+        }
+        InspectEnvironmentQueryRecovery(candidate);
         if (existing != documents.end())
             m_environmentQueryDrafts.erase(existing->identity.instance);
         m_environmentQueryDrafts.merge(prepared);
@@ -210,6 +225,15 @@ namespace Horo::Editor {
         });
         if (opened == documents.end())
             return false;
+        if (!opened->dirty) {
+            const auto draft = m_environmentQueryDrafts.find(instance);
+            if (draft != m_environmentQueryDrafts.end()) {
+                if (const auto cleared = ClearEnvironmentQueryRecovery(*opened, draft->second); cleared.HasError()) {
+                    opened->diagnostic = cleared.ErrorValue();
+                    return true;
+                }
+            }
+        }
         if (m_viewModel.workspacePanelHost.CloseDocument(instance).HasValue()) {
             if (m_environmentQueryPreviewWork && m_environmentQueryPreviewWork->instance == instance)
                 StopEnvironmentQueryPreview();
@@ -241,6 +265,8 @@ namespace Horo::Editor {
         } else if (decision != SourceCloseDecision::Discard) {
             return Closed::Failure(MakeError(AI::AIErrors::EnvironmentQuerySchemaInvalid));
         }
+        if (const auto cleared = ClearEnvironmentQueryRecovery(*document, draft->second); cleared.HasError())
+            return Closed::Failure(cleared.ErrorValue());
         const auto closed = m_viewModel.workspacePanelHost.CloseDocument(fence.instance, WorkspaceDocumentClosePolicy::DiscardChanges);
         if (closed.HasError())
             return Closed::Failure(closed.ErrorValue());
@@ -313,6 +339,18 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::SaveEnvironmentQueryDraft */
     Result<void> EditorWorkspaceController::SaveEnvironmentQueryDraft(EnvironmentQueryWorkspaceDocument &document,
                                                                       EnvironmentQueryDraft &draft) {
+        JoinAiDocumentRecovery();
+        auto saved = PublishEnvironmentQueryDraft(document, draft);
+        if (saved.HasValue()) {
+            if (auto cleared = ClearEnvironmentQueryRecovery(document, draft); cleared.HasError())
+                LOG_ERROR("editor.ai_recovery", "Saved Query recovery cleanup failed: %s", cleared.ErrorValue().message.c_str());
+        }
+        return saved;
+    }
+
+    /** @copydoc EditorWorkspaceController::PublishEnvironmentQueryDraft */
+    Result<void> EditorWorkspaceController::PublishEnvironmentQueryDraft(EnvironmentQueryWorkspaceDocument &document,
+                                                                         EnvironmentQueryDraft &draft) {
         try {
             using Saved = Result<void>;
             const auto failed = [&](const Error &error) {
@@ -437,7 +475,10 @@ namespace Horo::Editor {
                 ReloadExternalEnvironmentQuery(*document, request.fence);
                 return true;
             }
-            const auto edited = ApplyEnvironmentQueryEdit(*document, draft->second, request);
+            using enum EnvironmentQueryEditAction;
+            const auto edited = request.action == RestoreRecovery || request.action == DiscardRecovery
+                                    ? ResolveEnvironmentQueryRecovery(*document, draft->second, request)
+                                    : ApplyEnvironmentQueryEdit(*document, draft->second, request);
             document->diagnostic = edited.HasError() ? std::optional{edited.ErrorValue()} : std::nullopt;
         } catch (const std::bad_alloc &) {
             document->diagnostic = MakeError(Assets::AssetSourceErrors::Limit);

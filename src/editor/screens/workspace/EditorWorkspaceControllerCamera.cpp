@@ -59,7 +59,7 @@ namespace Horo::Editor {
         StopBlackboardUsageReview();
         StopEnvironmentQueryPreview();
         static_cast<void>(DrainUiCanvasRecovery());
-        JoinDecisionGraphRecovery();
+        JoinAiDocumentRecovery();
         static_cast<void>(DrainPrefabRecovery());
         StopPrefabExternalWatch();
         static_cast<void>(ShutdownTerrainDocuments(true));

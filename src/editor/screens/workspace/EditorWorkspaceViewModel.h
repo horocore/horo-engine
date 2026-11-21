@@ -425,7 +425,9 @@ namespace Horo::Editor {
         Undo,
         Redo,
         Save,
-        ReloadExternal
+        ReloadExternal,
+        RestoreRecovery,
+        DiscardRecovery
     };
 
     /** @brief An optional structural edit: append a typed test or remove one exact stage. */
@@ -437,6 +439,7 @@ namespace Horo::Editor {
         EnvironmentQueryEditAction action{EnvironmentQueryEditAction::Apply};
         std::optional<AI::BuiltinPointQuerySettings> settings;
         EnvironmentQueryDistanceStageChange stageChange;
+        std::shared_ptr<const DocumentRecoveryRecord> recovery;
     };
 
     /** @brief An immutable, registered Environment Query source in a normal workspace document. */
@@ -454,6 +457,7 @@ namespace Horo::Editor {
         bool canRedo{};
         bool conflict{};
         std::optional<Error> diagnostic;
+        std::shared_ptr<const DocumentRecoveryRecord> recovery;
     };
 
     /** @brief Workspace-owned source lease and separate transient presentation state. */
@@ -869,8 +873,11 @@ namespace Horo::Editor {
                                                                           std::optional<AI::BuiltinPointQuerySettings> settings = {},
                                                                           EnvironmentQueryDistanceStageChange stageChange = {}) {
         return {.command = EditorWorkspaceViewCommand::EditEnvironmentQuery,
-                .environmentQueryEdit =
-                    EnvironmentQueryEditRequest{{document.identity.instance, document.revision}, action, std::move(settings), stageChange}};
+                .environmentQueryEdit = EnvironmentQueryEditRequest{{document.identity.instance, document.revision},
+                                                                    action,
+                                                                    std::move(settings),
+                                                                    stageChange,
+                                                                    document.recovery}};
     }
 
     /** @brief Routes the shared Decision save/undo/redo action to the focused family. */

@@ -205,60 +205,70 @@ namespace Horo::Editor {
         }
     }  // namespace
 
-    void EditorWorkspaceController::ObserveDecisionGraphRecovery() {
-        if (!m_decisionGraphRecovery)
+    void EditorWorkspaceController::ObserveAiDocumentRecovery() {
+        if (!m_aiDocumentRecovery)
             return;
-        const auto terminal = m_decisionGraphRecovery->job.Snapshot();
+        const auto terminal = m_aiDocumentRecovery->job.Snapshot();
         if (!terminal || !terminal->terminalResult)
             return;
-        auto work = std::move(*m_decisionGraphRecovery);
-        m_decisionGraphRecovery.reset();
+        auto work = std::move(*m_aiDocumentRecovery);
+        m_aiDocumentRecovery.reset();
         if (terminal->state != JobState::Succeeded) {
             if (terminal->state != JobState::Cancelled && terminal->terminalResult->error)
                 LOG_ERROR("editor.decision_recovery", "Decision recovery checkpoint failed: %s",
                           terminal->terminalResult->error->message.c_str());
             return;
         }
-        const auto draft = m_decisionGraphDrafts.find(work.fence.instance);
-        if (draft == m_decisionGraphDrafts.end())
-            return;
-        draft->second.recoveryRevision = std::max(draft->second.recoveryRevision, work.fence.revision);
-        if (draft->second.acceptedRecovery == work.acceptedCheckpoint)
-            draft->second.acceptedRecovery.reset();
+        const auto acknowledge = [&](auto &draft) {
+            draft.recoveryRevision = std::max(draft.recoveryRevision, work.revision);
+            if (draft.acceptedRecovery == work.acceptedCheckpoint)
+                draft.acceptedRecovery.reset();
+        };
+        if (const auto draft = m_decisionGraphDrafts.find(work.instance); draft != m_decisionGraphDrafts.end())
+            acknowledge(draft->second);
+        else if (const auto query = m_environmentQueryDrafts.find(work.instance); query != m_environmentQueryDrafts.end())
+            acknowledge(query->second);
     }
 
-    void EditorWorkspaceController::JoinDecisionGraphRecovery(const std::optional<DocumentInstanceId> instance) {
-        if (!m_decisionGraphRecovery || (instance && m_decisionGraphRecovery->fence.instance != *instance))
+    void EditorWorkspaceController::JoinAiDocumentRecovery(const std::optional<DocumentInstanceId> instance) {
+        if (!m_aiDocumentRecovery || (instance && m_aiDocumentRecovery->instance != *instance))
             return;
-        static_cast<void>(m_decisionGraphRecovery->job.Wait());
-        ObserveDecisionGraphRecovery();
+        static_cast<void>(m_aiDocumentRecovery->job.Wait());
+        ObserveAiDocumentRecovery();
     }
 
-    void EditorWorkspaceController::UpdateDecisionRecovery(const float elapsedSeconds, const int intervalMinutes) {
-        ObserveDecisionGraphRecovery();
-        if (m_decisionAutosaveDiscarded || !m_mutations || !m_durableFiles || !m_workspaceSession.IsValid() || intervalMinutes <= 0 ||
+    void EditorWorkspaceController::UpdateAiDocumentRecovery(const float elapsedSeconds, const int intervalMinutes) {
+        ObserveAiDocumentRecovery();
+        if (m_aiAutosaveDiscarded || !m_mutations || !m_durableFiles || !m_workspaceSession.IsValid() || intervalMinutes <= 0 ||
             !std::isfinite(elapsedSeconds) || elapsedSeconds <= 0)
             return;
-        m_decisionRecoverySeconds += elapsedSeconds;
-        const bool due = m_decisionRecoverySeconds >= static_cast<float>(intervalMinutes) * 60.0F;
+        m_aiRecoverySeconds += elapsedSeconds;
+        const bool due = m_aiRecoverySeconds >= static_cast<float>(intervalMinutes) * 60.0F;
         if (!m_sourceRecoveryJobs) {
             if (due)
-                FlushDecisionRecovery();
+                FlushAiDocumentRecovery();
             return;
         }
-        if (due && m_decisionRecoveryQueue.empty()) {
-            m_decisionRecoverySeconds = 0;
+        if (due && m_aiRecoveryQueue.empty()) {
+            m_aiRecoverySeconds = 0;
             for (const auto &document : m_viewModel.decisionGraphDocuments)
                 if (document.dirty)
-                    m_decisionRecoveryQueue.push_back(document.identity.instance);
+                    m_aiRecoveryQueue.push_back(document.identity.instance);
+            for (const auto &document : m_viewModel.environmentQueryDocuments)
+                if (document.dirty)
+                    m_aiRecoveryQueue.push_back(document.identity.instance);
         }
-        if (!m_decisionGraphRecovery && !m_decisionRecoveryQueue.empty())
-            StartQueuedDecisionRecovery();
+        if (!m_aiDocumentRecovery && !m_aiRecoveryQueue.empty())
+            StartQueuedAiDocumentRecovery();
     }
 
-    void EditorWorkspaceController::StartQueuedDecisionRecovery() {
-        const auto instance = m_decisionRecoveryQueue.back();
-        m_decisionRecoveryQueue.pop_back();
+    void EditorWorkspaceController::StartQueuedAiDocumentRecovery() {
+        const auto instance = m_aiRecoveryQueue.back();
+        m_aiRecoveryQueue.pop_back();
+        if (m_environmentQueryDrafts.contains(instance)) {
+            StartQueuedEnvironmentQueryRecovery(instance);
+            return;
+        }
         const auto &documents = m_viewModel.decisionGraphDocuments;
         const auto document = std::ranges::find_if(documents, [instance](const auto &entry) {
             return entry.identity.instance == instance;
@@ -280,15 +290,15 @@ namespace Horo::Editor {
             return;
         }
         draft->second.recoveryAttempted = true;
-        m_decisionGraphRecovery.emplace(
-            DecisionRecoveryWork{{instance, capture.revision}, std::move(submitted).Value(), capture.acceptedCheckpoint});
+        m_aiDocumentRecovery.emplace(
+            AiDocumentRecoveryWork{instance, capture.revision, std::move(submitted).Value(), capture.acceptedCheckpoint});
     }
 
-    void EditorWorkspaceController::FlushDecisionRecovery() {
-        JoinDecisionGraphRecovery();
-        m_decisionRecoveryQueue.clear();
-        m_decisionRecoverySeconds = 0;
-        if (m_decisionAutosaveDiscarded || !m_mutations || !m_durableFiles || !m_workspaceSession.IsValid())
+    void EditorWorkspaceController::FlushAiDocumentRecovery() {
+        JoinAiDocumentRecovery();
+        m_aiRecoveryQueue.clear();
+        m_aiRecoverySeconds = 0;
+        if (m_aiAutosaveDiscarded || !m_mutations || !m_durableFiles || !m_workspaceSession.IsValid())
             return;
         for (auto &document : m_viewModel.decisionGraphDocuments) {
             const auto draft = m_decisionGraphDrafts.find(document.identity.instance);
@@ -299,10 +309,11 @@ namespace Horo::Editor {
             if (result.HasError())
                 LOG_ERROR("editor.decision_recovery", "Decision recovery checkpoint failed: %s", result.ErrorValue().message.c_str());
         }
+        FlushEnvironmentQueryRecovery();
     }
 
-    Result<void> EditorWorkspaceController::DiscardDecisionGraphAutosaves() {
-        JoinDecisionGraphRecovery();
+    Result<void> EditorWorkspaceController::DiscardAiDocumentAutosaves() {
+        JoinAiDocumentRecovery();
         for (const auto &document : m_viewModel.decisionGraphDocuments) {
             const auto draft = m_decisionGraphDrafts.find(document.identity.instance);
             if (draft != m_decisionGraphDrafts.end()) {
@@ -310,8 +321,15 @@ namespace Horo::Editor {
                     return cleared;
             }
         }
-        m_decisionRecoveryQueue.clear();
-        m_decisionAutosaveDiscarded = true;
+        for (const auto &document : m_viewModel.environmentQueryDocuments) {
+            const auto draft = m_environmentQueryDrafts.find(document.identity.instance);
+            if (draft != m_environmentQueryDrafts.end()) {
+                if (auto cleared = ClearEnvironmentQueryRecovery(document, draft->second); cleared.HasError())
+                    return cleared;
+            }
+        }
+        m_aiRecoveryQueue.clear();
+        m_aiAutosaveDiscarded = true;
         return Result<void>::Success();
     }
 
@@ -359,7 +377,7 @@ namespace Horo::Editor {
         if (document == documents.end() || document->recovery != command.decisionGraphRecovery)
             return;
         try {
-            JoinDecisionGraphRecovery(fence.instance);
+            JoinAiDocumentRecovery(fence.instance);
             const auto draft = m_decisionGraphDrafts.find(fence.instance);
             DocumentRecoveryService recovery(ProjectRoot(), *m_mutations, *m_durableFiles, RecoveryLimits);
             const auto result = [&]() -> Result<void> {
@@ -424,7 +442,7 @@ namespace Horo::Editor {
     Result<void> EditorWorkspaceController::DiscardOwnedDecisionRecovery(const DecisionGraphWorkspaceDocument &document,
                                                                          DecisionGraphDraft &draft) {
         using Discarded = Result<void>;
-        JoinDecisionGraphRecovery(document.identity.instance);
+        JoinAiDocumentRecovery(document.identity.instance);
         if (!draft.recoveryAttempted && !draft.acceptedRecovery)
             return Discarded::Success();
         DocumentRecoveryService recovery(ProjectRoot(), *m_mutations, *m_durableFiles, RecoveryLimits);

@@ -813,6 +813,19 @@ namespace Horo::Editor {
         if (opened->diagnostic)
             label(text(opened->conflict ? "workspace.environment_query.edit_conflict" : "workspace.environment_query.edit_refused"),
                   Theme::Warn());
+        if (opened->recovery) {
+            using enum EnvironmentQueryEditAction;
+            const bool restore = Ui::Button({.label = text("workspace.decision_graph.restore_recovery").c_str(),
+                                             .enabled = !opened->dirty && !opened->conflict,
+                                             .font = m_context.theme.fonts.sans});
+            ImGui::SameLine();
+            const bool discard =
+                Ui::Button({.label = text("workspace.decision_graph.discard_recovery").c_str(), .font = m_context.theme.fonts.sans});
+            if (restore || discard) {
+                outCommand = MakeEnvironmentQueryEditCommand(*opened, restore ? RestoreRecovery : DiscardRecovery);
+                return true;
+            }
+        }
         if (opened->conflict &&
             Ui::Button({.label = text("workspace.decision_graph.reload_external").c_str(), .font = m_context.theme.fonts.sans})) {
             outCommand = MakeEnvironmentQueryEditCommand(*opened, EnvironmentQueryEditAction::ReloadExternal);

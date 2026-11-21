@@ -1895,7 +1895,7 @@ namespace Horo::Editor {
                                                                    bool saveReferenceParticipant) {
         if (!saveReferenceParticipant && HasPendingBlackboardReferenceEdit(document.identity.instance))
             return Result<void>::Failure(MakeError(BlackboardDocumentErrors::ReferenceResolutionRequired));
-        JoinDecisionGraphRecovery();
+        JoinAiDocumentRecovery();
         auto saved = PublishDecisionGraphDraft(document, draft);
         if (saved.HasValue())
             DiscardDecisionRecoveryAfterSave(document, draft);

@@ -662,6 +662,13 @@ Environment Query drafts use the same explicit reload action. The editor
 keeps the draft and its history until the registered external query and its
 metadata stage successfully as an editable replacement.
 
+Query autosave captures the authored Query into the shared AI document recovery
+queue. Each checkpoint records the accepted source bytes and metadata digest.
+Restoring requires both identities to match current disk state and starts a
+dirty draft with an empty history. Explicit discard removes only the reviewed
+checkpoint, and a durable save clears only the checkpoint owned by or accepted
+by the draft.
+
 Decision graph autosave sends immutable graph and layout snapshots to the
 shared background recovery writer. The checkpoint records both accepted
 disk identities and never writes the registered source or layout. A

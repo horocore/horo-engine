@@ -3,6 +3,7 @@
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Assets/AssetSourcePublication.h"
+#include "Horo/Editor/DocumentRecoveryService.h"
 #include "OwnedTestDirectory.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/WorkspacePathText.h"
@@ -567,6 +568,112 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
     controller.UpdateEnvironmentQueryPreview();
     CHECK(document.preview.status == Stale);
     CHECK_FALSE(document.preview.snapshot);
+}
+
+TEST_CASE("Environment Query checkpoints recover only over the same registered source and metadata", "[unit][editor][eqs][workspace]") {
+    Project project;
+    const auto schema = CaptureBuiltinQuerySchema();
+    REQUIRE(schema.HasValue());
+    const auto source =
+        CreateBuiltinLatticeQuery(QueryId::Create(14).Value(), QueryStageId::Create(41).Value(), QueryResultSchemaId::Create(8).Value(),
+                                  "Recoverable points", {.stepMillimeters = 500, .outerSteps = 3}, 9);
+    REQUIRE(source.HasValue());
+    project.WriteAsset(source.Value());
+    JobSystem jobs({.ioWorkerCount = 1});
+    const auto dependencies = [&](std::uint8_t owner) {
+        return EditorWorkspaceDependencies{.assets = {.mutableAssetRegistry = &project.registry},
+                                           .world = {.documentSessionOwner = Assets::AssetId::FromBytes({owner})},
+                                           .mutations = &project.mutations,
+                                           .durableFiles = &project.files,
+                                           .jobs = &jobs,
+                                           .querySchema = &schema.Value()};
+    };
+    const auto disk = [&] {
+        return Assets::CaptureAssetSource(project.root, project.root / Project::Path, EnvironmentQuerySourceCodec::MaximumBytes);
+    };
+    const auto saved = disk();
+    REQUIRE(saved.HasValue());
+
+    using enum EnvironmentQueryEditAction;
+    {
+        EditorWorkspaceController writer(project.root, project.runtime, project.registry.Snapshot(), dependencies(31));
+        Project::Open(writer, Project::Path);
+        REQUIRE(writer.ViewModel().environmentQueryDocuments.size() == 1);
+        const auto &query = writer.ViewModel().environmentQueryDocuments.front();
+        REQUIRE(query.settings);
+        auto changed = *query.settings;
+        changed.lattice.stepMillimeters = 800;
+        writer.ProcessCommand(MakeEnvironmentQueryEditCommand(query, Apply, changed));
+        REQUIRE(query.dirty);
+        writer.UpdateAutosave(60.0F, 1);
+    }
+
+    REQUIRE(disk().Value().identity == saved.Value().identity);
+
+    EditorWorkspaceController reopened(project.root, project.runtime, project.registry.Snapshot(), dependencies(32));
+    Project::Open(reopened, Project::Path);
+    REQUIRE(reopened.ViewModel().environmentQueryDocuments.size() == 1);
+    const auto &query = reopened.ViewModel().environmentQueryDocuments.front();
+    REQUIRE(query.recovery);
+    const auto inspected = query.recovery;
+    REQUIRE(inspected->acceptedSource == saved.Value().identity);
+    DocumentRecoveryService service(project.root, project.mutations, project.files);
+    const auto restore = [&] {
+        reopened.ProcessCommand(MakeEnvironmentQueryEditCommand(query, RestoreRecovery));
+    };
+
+    SECTION("restore leaves canonical bytes untouched until explicit save") {
+        restore();
+        REQUIRE_FALSE(query.diagnostic);
+        REQUIRE(query.dirty);
+        CHECK_FALSE(query.recovery);
+        CHECK_FALSE(query.canUndo);
+        CHECK_FALSE(query.canRedo);
+        CHECK(query.settings->lattice.stepMillimeters == 800);
+        CHECK(disk().Value().identity == saved.Value().identity);
+        reopened.FlushAutosave();
+        REQUIRE(service.Inspect(query.asset, query.identity.key).Value());
+        reopened.ProcessCommand(MakeEnvironmentQueryEditCommand(query, Save));
+        REQUIRE_FALSE(query.diagnostic);
+        CHECK_FALSE(query.dirty);
+        CHECK(disk().Value().identity != saved.Value().identity);
+        CHECK_FALSE(service.Inspect(query.asset, query.identity.key).Value());
+    }
+    SECTION("a sidecar change preserves both the canonical asset and the checkpoint") {
+        {
+            std::ofstream metadata(project.root / (std::string{Project::Path} + ".horo"), std::ios::binary | std::ios::app);
+            metadata << '\n';
+            REQUIRE(static_cast<bool>(metadata));
+        }
+        restore();
+        REQUIRE(query.diagnostic);
+        CHECK(query.recovery == inspected);
+        CHECK_FALSE(query.dirty);
+        CHECK(query.settings->lattice.stepMillimeters == 500);
+        CHECK(disk().Value().identity == saved.Value().identity);
+        CHECK(service.Inspect(query.asset, query.identity.key).Value() == *inspected);
+        reopened.ProcessCommand(MakeEnvironmentQueryEditCommand(query, DiscardRecovery));
+        CHECK_FALSE(query.recovery);
+        CHECK_FALSE(service.Inspect(query.asset, query.identity.key).Value());
+    }
+    SECTION("a newer canonical Query is preserved when its checkpoint is declined") {
+        const auto external =
+            CreateBuiltinLatticeQuery(QueryId::Create(14).Value(), QueryStageId::Create(41).Value(), QueryResultSchemaId::Create(8).Value(),
+                                      "External points", {.stepMillimeters = 900, .outerSteps = 3}, 9);
+        REQUIRE(external.HasValue());
+        project.WriteAsset(external.Value());
+        const auto newer = disk();
+        REQUIRE(newer.HasValue());
+        REQUIRE(newer.Value().identity != saved.Value().identity);
+        restore();
+        REQUIRE(query.diagnostic);
+        CHECK(query.recovery == inspected);
+        CHECK_FALSE(query.dirty);
+        CHECK(disk().Value().identity == newer.Value().identity);
+        reopened.ProcessCommand(MakeEnvironmentQueryEditCommand(query, DiscardRecovery));
+        CHECK_FALSE(query.recovery);
+        CHECK(disk().Value().identity == newer.Value().identity);
+    }
 }
 
 TEST_CASE("Registered Query settings use shared history and tracked source publication", "[unit][editor][eqs][workspace]") {

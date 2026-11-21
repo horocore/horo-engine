@@ -3,6 +3,7 @@
 /** @file EnvironmentQueryWorkspaceSource.h @brief Private saved Query source admission used by the editor document and preview. */
 
 #include "Horo/Assets/AssetCookInputSnapshot.h"
+#include "Horo/Assets/AssetSourcePublication.h"
 
 #include <cstdint>
 
@@ -20,6 +21,9 @@ namespace Horo::Editor {
         [[nodiscard]] Result<Assets::AssetCookInputSnapshot> CaptureQuerySource(const std::filesystem::path &root,
                                                                                 const Assets::AssetRegistrySnapshot &registry,
                                                                                 Assets::AssetId source);
+        /** @brief Captures the exact registered identity sidecar using the source metadata limit. */
+        [[nodiscard]] Result<Assets::AssetSourceIdentity> CaptureQuerySidecar(const std::filesystem::path &root,
+                                                                              const Assets::AssetRecord &record);
         /** @brief Checks the document's exact stable asset, registered path and source type. */
         [[nodiscard]] bool RegisteredQueryDocument(const EnvironmentQueryWorkspaceDocument &document,
                                                    const Assets::AssetRegistrySnapshot &registry);

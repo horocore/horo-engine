@@ -97,8 +97,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return Result<LeaveDecision>::Failure(graphs.ErrorValue());
         if (const auto canvases = controller_->ShutdownUiCanvasDocuments(true); canvases.HasError())
             return Result<LeaveDecision>::Failure(canvases.ErrorValue());
-        if (const auto decisions = controller_->DiscardDecisionGraphAutosaves(); decisions.HasError())
-            return Result<LeaveDecision>::Failure(decisions.ErrorValue());
+        if (const auto ai = controller_->DiscardAiDocumentAutosaves(); ai.HasError())
+            return Result<LeaveDecision>::Failure(ai.ErrorValue());
         return Result<LeaveDecision>::Success({.disposition = Allow, .requirement = std::nullopt});
     }
 
