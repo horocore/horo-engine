@@ -2,7 +2,7 @@
 
 import os
 from pathlib import Path
-import subprocess
+import subprocess  # nosec B404
 import sys
 from tempfile import TemporaryDirectory
 
@@ -10,7 +10,7 @@ from tempfile import TemporaryDirectory
 def run_probe(binary: Path, project: Path, phase: str, expected_exit: int = 0) -> None:
     environment = {**os.environ, "HORO_SOURCE_SAVE_TEST_PHASE": phase}
     # CTest supplies the validated binary in its configured test output directory.
-    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit, python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
+    # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit
     completed = subprocess.run(  # nosec B603
         [str(binary), "[source-save-process]"],
         cwd=project,

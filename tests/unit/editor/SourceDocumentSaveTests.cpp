@@ -121,6 +121,21 @@ namespace {
     SourceSaveRequest Request(const SourceDocumentSnapshot &snapshot) {
         return {snapshot.Identity().instance, snapshot.Revision(), {}};
     }
+
+    /** @brief Stops the child at the selected native publication boundary without running save cleanup. */
+    void InterruptSave(SourceFileOpenService &open, Files &files, const SourceDocumentSnapshot &edited, const std::string_view phase) {
+        constexpr auto interrupt = [] {
+            std::_Exit(73);
+        };
+        if (phase == "before")
+            files.beforeReplace = interrupt;
+        else {
+            REQUIRE(phase == "after");
+            files.afterCommit = interrupt;
+        }
+        static_cast<void>(open.Documents().Save(Request(edited), files));
+        FAIL("The native save never reached the requested interruption point.");
+    }
 }  // namespace
 
 TEST_CASE("Source save interruption and restart subprocess", "[.][source-save-process]") {
@@ -166,17 +181,7 @@ TEST_CASE("Source save interruption and restart subprocess", "[.][source-save-pr
         return;
     }
 
-    constexpr auto interrupt = [] {
-        std::_Exit(73);
-    };
-    if (phase == "before")
-        files.beforeReplace = interrupt;
-    else {
-        REQUIRE(phase == "after");
-        files.afterCommit = interrupt;
-    }
-    static_cast<void>(open.Documents().Save(Request(edited), files));
-    FAIL("The native save never reached the requested interruption point.");
+    InterruptSave(open, files, edited, phase);
 }
 
 TEST_CASE("Source save advances durable base while retained snapshots keep original bytes", "[source][save]") {
