@@ -44,7 +44,18 @@ namespace Horo::Editor {
                                 std::format("{} {} · {} {}", text("ai_problem_graph"), problem->graph.Value(), text("ai_problem_node"),
                                             problem->node.Value()),
                                 Theme::Muted(), fonts);
+                if (Ui::Button({.label = text("ai_problem_open_graph").c_str(),
+                                .variant = Ui::ButtonVariant::Secondary,
+                                .font = fonts.sans,
+                                .componentSize = Ui::ComponentSize::Small}) &&
+                    command.command == EditorWorkspaceViewCommand::None) {
+                    command.command = EditorWorkspaceViewCommand::NavigatePlayDecisionGraphProblem;
+                    command.playDecisionGraphNavigation =
+                        PlayDecisionGraphNavigationRequest{problem->scene, problem->tick, problem->agent, problem->graph, problem->node};
+                }
             }
+            if (viewModel.playDecisionGraphUnavailable)
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("ai_problem_graph_unavailable"), Theme::Muted(), fonts);
             if (!problem->entity || !viewModel.playDecisionObjectAvailable) {
                 Ui::WrappedText(ImGui::GetContentRegionAvail().x, text("ai_problem_object_unavailable"), Theme::Muted(), fonts);
                 return;

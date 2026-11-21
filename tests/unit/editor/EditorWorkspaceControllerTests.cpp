@@ -1,6 +1,10 @@
+#include "DecisionGraphCompilerTestSupport.h"
 #include "EditorWorkspaceControllerFilesystemTestSupport.h"
 #include "EditorWorkspaceControllerPolicyTestSupport.h"
+#include "Horo/AI/DecisionPlanCodec.h"
+#include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Assets/MeshEditorPayload.h"
+#include "Horo/Foundation/BuildOutputStore.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "OwnedTestDirectory.h"
 #include "ProjectReplicationTestSupport.h"
@@ -35,8 +39,9 @@ namespace {
     /** @brief Reports a typed failure for a live clone entity through the workspace's normal Play host port. */
     class DecisionNavigationTestHost final : public EditorPlaySceneHost {
     public:
-        DecisionNavigationTestHost(Runtime::SceneRuntimeId scene, SceneObjectId object, AI::AgentId agent)
-            : scenes_(scene), object_(object), agent_(agent) {}
+        DecisionNavigationTestHost(Runtime::SceneRuntimeId scene, SceneObjectId object, AI::AgentId agent,
+                                   AI::DecisionGraphAssetId graph, AI::DecisionNodeId node)
+            : scenes_(scene), object_(object), agent_(agent), graph_(graph), node_(node) {}
 
         Runtime::RuntimeSceneService &Scenes() noexcept override {
             return scenes_;
@@ -59,13 +64,17 @@ namespace {
                                              agent_,
                                              EditorPlayDecisionPhase::Evaluate,
                                              MakeError(Gameplay::GameplayErrors::PhysicsUnavailable),
-                                             scene->Find(Runtime::SceneObjectId{object_.value})};
+                                             scene->Find(Runtime::SceneObjectId{object_.value}),
+                                             graph_,
+                                             node_};
         }
 
     private:
         Runtime::RuntimeSceneService scenes_;
         SceneObjectId object_;
         AI::AgentId agent_;
+        AI::DecisionGraphAssetId graph_;
+        AI::DecisionNodeId node_;
     };
 
     /** @brief Verify Partial Delete Undo Redo. */
@@ -431,15 +440,56 @@ namespace {
         REQUIRE(fingerprint.HasValue());
         REQUIRE(SaveProjectScene(project.Path(), scenePath, document, fingerprint.Value(), false, mutations, files).HasValue());
 
+        {
+            auto sidecar = scenePath;
+            sidecar += ".horo";
+            std::ofstream stream(sidecar, std::ios::binary);
+            stream << nlohmann::json{{"schemaVersion", 1},
+                                     {"assetId", Assets::AssetId::FromBytes({0x60}).ToString()},
+                                     {"assetType", "core.scene"}}.dump();
+            REQUIRE(stream.good());
+        }
+        using namespace AI::DecisionGraphTestSupport;
+        const auto graph = TerminalMachine(701);
+        const auto node = std::get<AI::StateMachineAssetDescriptor>(graph.body).states.front().id;
+        const auto graphAsset = Assets::AssetId::FromBytes({0x61});
+        const auto graphBytes = AI::DecisionPlanCodec::EncodeSource(std::span{&graph, 1}, graph.asset);
+        REQUIRE(graphBytes.HasValue());
+        const auto writeGraph = [&](std::string_view name, Assets::AssetId asset) {
+            const auto path = "assets/" + std::string{name} + ".horo_sm";
+            std::ofstream source(project.Path() / path, std::ios::binary);
+            source.write(reinterpret_cast<const char *>(graphBytes.Value().data()),
+                         static_cast<std::streamsize>(graphBytes.Value().size()));
+            REQUIRE(source.good());
+            std::ofstream sidecar(project.Path() / (path + ".horo"), std::ios::binary);
+            sidecar << nlohmann::json{{"schemaVersion", 1},
+                                      {"assetId", asset.ToString()},
+                                      {"assetType", Application::DecisionStateMachineSourceType}}.dump();
+            REQUIRE(sidecar.good());
+        };
+        writeGraph("runtime", graphAsset);
+        Assets::AssetRegistry registry;
+        const auto rebuild = [&] {
+            const auto rebuilt = Assets::RebuildAssetRegistry(registry, project.Path(), Assets::AssetRegistryOpenMode::ReadOnly);
+            REQUIRE(rebuilt.HasValue());
+            for (const auto &diagnostic : rebuilt.Value().diagnostics)
+                UNSCOPED_INFO(diagnostic.projectPath.value_or("") << ": " << diagnostic.error.code.Value());
+            REQUIRE(rebuilt.Value().status == Assets::AssetRegistryBuildStatus::Complete);
+            REQUIRE(registry.Snapshot().Find(graphAsset));
+        };
+        rebuild();
         CancellationSource cancellation;
         Runtime::RuntimeSceneService preview;
         REQUIRE(preview.Startup(cancellation.Token()).HasValue());
+        BuildOutputStore diagnostics{8};
         EditorWorkspaceDependencies dependencies;
+        dependencies.sourceNavigation.diagnosticOutput = &diagnostics;
+        dependencies.assets.mutableAssetRegistry = &registry;
         dependencies.gameplay.sceneFactory = [=](Runtime::SceneRuntimeId scene, const Runtime::RuntimeSceneDefinition &) {
             return Result<std::unique_ptr<EditorPlaySceneHost>>::Success(
-                std::make_unique<DecisionNavigationTestHost>(scene, original, agent));
+                std::make_unique<DecisionNavigationTestHost>(scene, original, agent, graph.asset, node));
         };
-        EditorWorkspaceController workspace{project.Path(), preview, {}, dependencies};
+        EditorWorkspaceController workspace{project.Path(), preview, registry.Snapshot(), dependencies};
         REQUIRE_FALSE(workspace.InitializationError());
 
         const auto play = [&] {
@@ -453,6 +503,28 @@ namespace {
         };
         const auto first = play();
         REQUIRE(first.entity);
+        workspace.UpdatePlayPresentation(0.0F);
+        const auto emitted = diagnostics.SnapshotIfChanged(0);
+        REQUIRE(emitted);
+        REQUIRE(emitted->records.size() == 1);
+        CHECK(emitted->records.front().stage == "ai.decision_play");
+        CHECK(emitted->records.front().code.Value() == first.error.code.Value());
+        CHECK_FALSE(emitted->records.front().source);
+        EditorWorkspaceViewCommandData graphNavigation{
+            .command = EditorWorkspaceViewCommand::NavigatePlayDecisionGraphProblem,
+            .playDecisionGraphNavigation = PlayDecisionGraphNavigationRequest{first.scene, first.tick, first.agent, first.graph, Node(999)}};
+        workspace.ProcessCommand(graphNavigation);
+        CHECK(workspace.ViewModel().decisionGraphDocuments.empty());
+        graphNavigation.playDecisionGraphNavigation->node = node;
+        workspace.ProcessCommand(graphNavigation);
+        REQUIRE(workspace.ViewModel().decisionGraphDocuments.size() == 1);
+        const auto &opened = workspace.ViewModel().decisionGraphDocuments.front();
+        CHECK(opened.asset == graphAsset);
+        REQUIRE(workspace.ViewModel().playDecisionGraphFocus);
+        CHECK(workspace.ViewModel().playDecisionGraphFocus->fence.instance == opened.identity.instance);
+        CHECK(workspace.ViewModel().playDecisionGraphFocus->fence.revision == opened.revision);
+        CHECK(workspace.ViewModel().playDecisionGraphFocus->node == node);
+        CHECK_FALSE(workspace.ViewModel().playDecisionGraphUnavailable);
         const auto previousSelection = workspace.ViewModel().primarySelection;
         EditorWorkspaceViewCommandData navigate{.command = EditorWorkspaceViewCommand::NavigatePlayDecisionProblem,
                                                 .playDecisionNavigation =
@@ -468,6 +540,14 @@ namespace {
         CHECK_FALSE(workspace.ViewModel().playDecisionProblem);
         const auto second = play();
         CHECK(second.scene != first.scene);
+        workspace.ProcessCommand(graphNavigation);
+        CHECK_FALSE(workspace.ViewModel().playDecisionGraphFocus);
+        writeGraph("duplicate", Assets::AssetId::FromBytes({0x62}));
+        rebuild();
+        graphNavigation.playDecisionGraphNavigation->scene = second.scene;
+        workspace.ProcessCommand(graphNavigation);
+        CHECK_FALSE(workspace.ViewModel().playDecisionGraphFocus);
+        CHECK(workspace.ViewModel().playDecisionGraphUnavailable);
         workspace.ProcessCommand({.command = EditorWorkspaceViewCommand::SelectObject,
                                   .objectSelection = ObjectSelectionRequest{.objects = {SceneObjectId{1}}, .primary = SceneObjectId{1}}});
         const auto beforeStaleNavigation = workspace.ViewModel().primarySelection;

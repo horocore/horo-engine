@@ -2868,6 +2868,8 @@
     "workspace.game.ai_problem_node": {"text": "Node"},
     "workspace.game.ai_problem_tick": {"text": "Tick"},
     "workspace.game.ai_problem_object_unavailable": {"text": "The original scene object is unavailable."},
+    "workspace.game.ai_problem_open_graph": {"text": "Open graph at node"},
+    "workspace.game.ai_problem_graph_unavailable": {"text": "The reported graph or node is missing, ambiguous, or changed on disk."},
     "workspace.game.ai_problem_select_object": {"text": "Select original object"},
     "workspace.game.ai_inspection_title": {"text": "AI agent inspector"},
     "workspace.game.ai_inspection_compare": {"text": "Compare with an earlier tick"},

@@ -249,6 +249,7 @@ namespace Horo::Editor {
 
         mutable StateMachineSelection m_stateMachineSelection;
         mutable DecisionGraphCanvas m_decisionGraphCanvas;
+        mutable std::uint64_t m_playDecisionGraphFocusSeen{};
         /** @brief Routes neutral canvas selection and link gestures to the ordinary document owner and controls. */
         void ApplyDecisionCanvasInteraction(const DecisionGraphWorkspaceDocument &document, const DecisionCanvasInteraction &interaction,
                                             EditorWorkspaceViewCommandData &outCommand) const;

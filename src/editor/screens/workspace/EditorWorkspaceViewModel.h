@@ -201,6 +201,7 @@ namespace Horo::Editor {
         RedoScene,
         StartPlay,
         NavigatePlayDecisionProblem,
+        NavigatePlayDecisionGraphProblem,
         ControlPlayDecision,
         PausePlay,
         ResumePlay,
@@ -757,6 +758,21 @@ namespace Horo::Editor {
         Runtime::EntityRef entity;
     };
 
+    /** @brief Exact runtime report and semantic source target selected from the Game panel. */
+    struct PlayDecisionGraphNavigationRequest final {
+        Runtime::SceneRuntimeId scene;
+        std::uint64_t tick{};
+        AI::AgentId agent;
+        AI::DecisionGraphAssetId graph;
+        AI::DecisionNodeId node;
+    };
+
+    struct PlayDecisionGraphFocus final {
+        DecisionGraphDocumentFence fence;
+        AI::DecisionNodeId node;
+        std::uint64_t request{};
+    };
+
     struct EditorWorkspaceViewCommandData {  // NOSONAR(cpp:S1820) Command payload variant container
         EditorWorkspaceViewCommand command = EditorWorkspaceViewCommand::None;
         std::optional<GyroscopeBindingEditRequest> gyroscopeBinding;
@@ -768,6 +784,7 @@ namespace Horo::Editor {
         std::optional<WorldLayerOutlinerIntent> worldLayerIntent;
         std::optional<DocumentInstanceId> documentInstance;
         std::optional<PlayDecisionNavigationRequest> playDecisionNavigation;
+        std::optional<PlayDecisionGraphNavigationRequest> playDecisionGraphNavigation;
         std::optional<AI::AgentHandle> visiblePlayDecisionInspector;
         std::optional<EditorPlayDecisionDebugCommand> playDecisionDebugCommand;
         std::optional<DocumentInstanceId> documentMoveBefore;
@@ -1046,6 +1063,8 @@ namespace Horo::Editor {
         bool simulatorPreviewAvailable{}; /**< Actual current consumed simulator view; false forbids stale texture display. */
         std::string playError;
         std::optional<EditorPlayDecisionProblem> playDecisionProblem;
+        std::optional<PlayDecisionGraphFocus> playDecisionGraphFocus;
+        bool playDecisionGraphUnavailable{};
         std::vector<EditorPlayAgentInspection> playAgentInspection;
         DocumentInstanceId playQueryDocument;
         EditorPlayQueryInspection playQueryInspection;

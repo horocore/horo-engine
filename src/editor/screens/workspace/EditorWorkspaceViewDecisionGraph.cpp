@@ -1182,6 +1182,12 @@ namespace Horo::Editor {
                 label(std::format("{} · {}", finding.code.Value(), finding.message), Theme::Text());
             }
         }
+        if (const auto &focus = viewModel.playDecisionGraphFocus;
+            focus && focus->request != m_playDecisionGraphFocusSeen && focus->fence.instance == opened->identity.instance &&
+            focus->fence.revision == opened->revision) {
+            m_decisionGraphCanvas.RequestFocus(focus->fence, focus->node);
+            m_playDecisionGraphFocusSeen = focus->request;
+        }
         if (opened->validation) {
             const auto node = DrawDecisionProblems(*opened, opened->validation->Diagnostics(), m_context, outCommand);
             if (node.IsValid())

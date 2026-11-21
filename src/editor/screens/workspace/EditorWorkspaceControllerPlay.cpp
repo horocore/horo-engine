@@ -1,4 +1,5 @@
 #include "EditorPlayXrHost.h"
+#include "Horo/Foundation/BuildOutputStore.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "WorkspacePathText.h"
 #include "editor/document/RuntimeSceneConversion.h"
@@ -298,14 +299,26 @@ namespace Horo::Editor {
         const bool playing = m_viewModel.playState == EditorPlayState::Playing || m_viewModel.playState == EditorPlayState::Paused;
         if (!playing || !scene || !scene->IsCurrent()) {
             problem.reset();
+            m_viewModel.playDecisionGraphFocus.reset();
+            m_viewModel.playDecisionGraphUnavailable = false;
             m_viewModel.playDecisionObjectAvailable = false;
             return;
         }
         if (problem && problem->scene != scene->RuntimeId())
             problem.reset();
         if (auto captured = m_playSession.ReadDecisionProblem(); captured && captured->scene == scene->RuntimeId() && captured->tick > 0 &&
-                                                                 captured->agent.IsValid() && (!problem || captured->tick > problem->tick))
+                                                                 captured->agent.IsValid() && (!problem || captured->tick > problem->tick)) {
             problem = std::move(captured);
+            m_viewModel.playDecisionGraphFocus.reset();
+            m_viewModel.playDecisionGraphUnavailable = false;
+            if (m_diagnosticOutput) {
+                const auto &error = problem->error;
+                m_diagnosticOutput->Append({.severity = DiagnosticSeverityForError(error.severity).value_or(DiagnosticSeverity::Note),
+                                            .stage = "ai.decision_play",
+                                            .code = DiagnosticCode{error.code.Value()},
+                                            .message = error.message});
+            }
+        }
         m_viewModel.playDecisionObjectAvailable = problem && ResolvePlayDecisionProblemObject(*problem).has_value();
     }
 

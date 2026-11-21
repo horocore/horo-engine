@@ -2109,6 +2109,84 @@ namespace Horo::Editor {
         }
     }
 
+    namespace {
+        struct PlayDecisionSource final {
+            Assets::AssetId asset;
+            Sha256Digest digest;
+        };
+
+        std::optional<PlayDecisionSource> FindPlayDecisionSource(const std::filesystem::path &root,
+                                                                 const Assets::AssetRegistrySnapshot &registry,
+                                                                 const PlayDecisionGraphNavigationRequest &request) {
+            std::optional<PlayDecisionSource> matched;
+            for (const auto type : DecisionTypes) {
+                const auto captured = AuthoredAiSources::Capture(root, registry, type, AI::DecisionCodecLimits{}.maximumBytes);
+                if (captured.HasError())
+                    return std::nullopt;
+                for (const auto &source : captured.Value().Sources()) {
+                    const auto graph = Application::DecodeRegisteredDecisionGraphSource(source);
+                    if (graph.HasError() || graph.Value().asset != request.graph)
+                        continue;
+                    if (matched)
+                        return std::nullopt;
+                    const auto canvas = ProjectDecisionCanvas(graph.Value(), {}, false);
+                    if (std::ranges::find(canvas.nodes, request.node, &GraphNodeView::id) == canvas.nodes.end())
+                        return std::nullopt;
+                    matched.emplace(source.record.id, source.sourceDigest);
+                }
+                if (captured.Value().VerifyUnchanged().HasError())
+                    return std::nullopt;
+            }
+            return matched;
+        }
+    }  // namespace
+
+    void EditorWorkspaceController::NavigatePlayDecisionGraphProblem(const PlayDecisionGraphNavigationRequest &request) {
+        const auto &problem = m_viewModel.playDecisionProblem;
+        const auto scene = m_playSession.SceneView();
+        const auto state = m_playSession.State();
+        if ((state != EditorPlaySessionState::Playing && state != EditorPlaySessionState::Paused) ||
+            !problem || !scene || !scene->IsCurrent() || scene->RuntimeId() != request.scene || problem->scene != request.scene ||
+            request.tick != problem->tick || request.agent != problem->agent || request.graph != problem->graph ||
+            request.node != problem->node || !request.graph.IsValid() || !request.node.IsValid())
+            return;
+        m_viewModel.playDecisionGraphFocus.reset();
+        m_viewModel.playDecisionGraphUnavailable = true;
+        if (m_mutableAssetRegistry)
+            RefreshAssets(m_mutableAssetRegistry->Snapshot());
+        const auto matched = FindPlayDecisionSource(ProjectRoot(), m_assetRegistry, request);
+        if (!matched || m_playDecisionGraphFocusSequence == std::numeric_limits<std::uint64_t>::max())
+            return;
+        const auto *record = m_assetRegistry.Find(matched->asset);
+        if (!record)
+            return;
+        auto &host = m_viewModel.workspacePanelHost;
+        const auto previous = host.ActiveDocument();
+        const auto &graphs = m_viewModel.decisionGraphDocuments;
+        const auto findDocument = [&] {
+            return std::ranges::find(graphs, matched->asset, &DecisionGraphWorkspaceDocument::asset);
+        };
+        const auto current = [&](const DecisionGraphWorkspaceDocument &document) {
+            return document.source == matched->digest && document.graph && document.graph->asset == request.graph &&
+                   !document.dirty && !document.conflict;
+        };
+        if (const auto found = findDocument(); found != graphs.end() && !current(*found))
+            return;
+        OpenSourceFile({.path = Foundation::Paths::Resolve(ProjectRoot(), record->sourcePath),
+                        .origin = SourceOpenOrigin::DiagnosticNavigation,
+                        .mode = SourceOpenMode::EmbeddedOnly});
+        const auto found = findDocument();
+        if (!m_viewModel.contentBrowserOperationError.empty() || found == graphs.end() ||
+            host.ActiveDocument() != found->identity.instance || !current(*found)) {
+            if (previous)
+                static_cast<void>(host.FocusDocument(*previous));
+            return;
+        }
+        m_viewModel.playDecisionGraphFocus = {{found->identity.instance, found->revision}, request.node,
+                                               ++m_playDecisionGraphFocusSequence};
+        m_viewModel.playDecisionGraphUnavailable = false;
+    }
+
     /** @copydoc EditorWorkspaceController::OpenDecisionDiagnosticKey */
     void EditorWorkspaceController::OpenDecisionDiagnosticKey(const DecisionDiagnosticKeyRequest &request) {
         auto &host = m_viewModel.workspacePanelHost;

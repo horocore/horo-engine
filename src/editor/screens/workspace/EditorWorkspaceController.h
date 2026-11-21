@@ -1349,6 +1349,8 @@ namespace Horo::Editor {
         [[nodiscard]] std::optional<SceneObjectId> ResolvePlayDecisionProblemObject(const EditorPlayDecisionProblem &problem) const;
         /** @brief Revalidates the visible problem and its entity before changing selection. */
         void NavigatePlayDecisionProblem(const PlayDecisionNavigationRequest &request);
+        void NavigatePlayDecisionGraphProblem(const PlayDecisionGraphNavigationRequest &request);
+        std::uint64_t m_playDecisionGraphFocusSequence{};
         [[nodiscard]] EditorViewportCamera ResolvePlayViewportCamera(const Runtime::RuntimeSceneView &runtimeView) const;
         void ExtractPlayViewportScene();
         /** @brief Clear unavailable simulated evidence before publishing another viewport revision. */

@@ -2868,6 +2868,8 @@
     "workspace.game.ai_problem_node": {"text": "Düğüm"},
     "workspace.game.ai_problem_tick": {"text": "Simülasyon adımı"},
     "workspace.game.ai_problem_object_unavailable": {"text": "Kaynak sahne nesnesi artık kullanılamıyor."},
+    "workspace.game.ai_problem_open_graph": {"text": "Grafiği düğümde aç"},
+    "workspace.game.ai_problem_graph_unavailable": {"text": "Bildirilen grafik veya düğüm bulunamadı, birden fazla kaynağa ait ya da diskte değişmiş."},
     "workspace.game.ai_problem_select_object": {"text": "Kaynak nesneyi seç"},
     "workspace.game.ai_inspection_title": {"text": "AI ajan denetleyicisi"},
     "workspace.game.ai_inspection_compare": {"text": "Önceki bir simülasyon adımıyla karşılaştır"},
