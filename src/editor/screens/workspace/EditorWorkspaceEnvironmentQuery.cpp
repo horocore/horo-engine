@@ -780,8 +780,7 @@ namespace Horo::Editor {
             return value > 0 && value <= std::numeric_limits<std::uint32_t>::max();
         };
         return positiveUint32(step) && outer <= AI::MaximumQueryLatticeOuterSteps && (!annulus || inner <= outer) && maximum > 0 &&
-               maximum <= AI::EnvironmentQuerySchemaLimits::MaximumResults &&
-               (!navigation || IsPathScoringValid()) &&
+               maximum <= AI::EnvironmentQuerySchemaLimits::MaximumResults && (!navigation || IsPathScoringValid()) &&
                std::ranges::all_of(distances, [positiveUint32](const Distance &distance) {
             return positiveUint32(distance.radius) && positiveUint32(distance.weight);
         });
@@ -856,7 +855,8 @@ namespace Horo::Editor {
             if (button("workspace.environment_query.remove_navigation"))
                 return fields.navigation->stage;
         } else {
-            if (button("workspace.environment_query.add_navigation", fields.providerRoom && fields.IsValid() && fields.IsPathScoringValid()))
+            if (button("workspace.environment_query.add_navigation",
+                       fields.providerRoom && fields.IsValid() && fields.IsPathScoringValid()))
                 return EnvironmentQueryNavigationStageAddition{fields.preferPathCost ? std::optional{fields.pathCostCeiling} : std::nullopt,
                                                                fields.preferPathCost ? static_cast<std::uint32_t>(fields.pathCostWeight)
                                                                                      : 1};
