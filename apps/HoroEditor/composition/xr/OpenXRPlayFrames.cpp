@@ -132,6 +132,80 @@ namespace Horo::Application::Internal {
         }
     }  // namespace
 
+    namespace {
+        std::optional<Math::Vec2> EyeFoveationCenter(const XrView &view, const Math::Vec3 direction) {
+            const auto &orientation = view.pose.orientation;
+            const auto eye = Math::Quaternion{orientation.x, orientation.y, orientation.z, orientation.w}.TryNormalized();
+            if (eye.HasError())
+                return std::nullopt;
+            const auto ray = eye.Value().Inverse().Rotate(direction);
+            if (!Math::IsFinite(ray) || ray.z >= -0.0001F)
+                return std::nullopt;
+            const auto &fov = view.fov;
+            const auto center = [&](const float axis, const float low, const float high) {
+                return std::clamp(2.0F * (axis / -ray.z - low) / (high - low) - 1.0F, -1.0F, 1.0F);
+            };
+            return Math::Vec2{center(ray.x, std::tan(fov.angleLeft), std::tan(fov.angleRight)),
+                             center(ray.y, std::tan(fov.angleDown), std::tan(fov.angleUp))};
+        }
+
+        std::optional<std::array<Math::Vec2, 2>> GazeFoveationCenters(const XRPoseSample &gaze, const NativePresentationViews &views) {
+            constexpr XrViewStateFlags tracked = XR_VIEW_STATE_ORIENTATION_TRACKED_BIT | XR_VIEW_STATE_POSITION_TRACKED_BIT;
+            const auto &orientation = gaze.Components().orientation;
+            const auto gap = gaze.Time().runtimeSample.Nanoseconds() - views.referenceToWorld.time.runtimeSample.Nanoseconds();
+            if (std::abs(gap) > Duration::FromMilliseconds(50).ToNanoseconds() || gaze.Target() != views.reference || views.count != 2 || (views.flags & tracked) != tracked ||
+                orientation.validity != XRPoseComponentValidity::Tracked || !orientation.value)
+                return std::nullopt;
+            const auto direction = orientation.value->Rotate({0, 0, -1});
+            const auto left = EyeFoveationCenter(views.views[0], direction);
+            const auto right = EyeFoveationCenter(views.views[1], direction);
+            if (!left || !right)
+                return std::nullopt;
+            return std::array{*left, *right};
+        }
+    }  // namespace
+
+    std::optional<XRPoseSample> OpenXRPlayHost::FrameState::RenderingGaze() const {
+        if (!host.scene_ || !host.scene_->gazeRenderingConsent || host.eventsPending_ ||
+            host.input_.play != Editor::EditorPlayState::Playing || !host.sessions_->Snapshot().admitsActions)
+            return std::nullopt;
+        const auto now = host.clock_.RuntimeNow();
+        const auto *snapshot = host.tracking_.Current();
+        return now.HasValue() && snapshot && host.scene_ && host.scene_->gazeRenderingConsent && !host.eventsPending_ &&
+                       host.sessions_->Snapshot().admitsActions && snapshot->Session() == session
+                   ? host.composition_.session.ReadEyeGaze(*snapshot, now.Value())
+                   : std::nullopt;
+    }
+
+    bool OpenXRPlayHost::FrameState::GazeProfileCurrent() const {
+        if (!gazeProfileSample)
+            return true;
+        const auto now = RenderingGaze();
+        return now && now->Time().runtimeSample == *gazeProfileSample;
+    }
+
+    Result<void> OpenXRPlayHost::FrameState::UpdateGazeProfile() {
+        const auto decision = host.scene_->projection->plan.Decision(XRCapability::FixedFoveation).state;
+        if (decision != XRFeatureDecisionState::OptionalEnabled && decision != XRFeatureDecisionState::Required)
+            return Result<void>::Success();
+        if (!gazeProfileUnsupported && lastProjectedViews) {
+            const auto gaze = RenderingGaze();
+            if (const auto centers = gaze ? GazeFoveationCenters(*gaze, *lastProjectedViews) : std::nullopt; centers) {
+                if (auto apply = color.SetProjectionFoveation(centers); apply.HasValue()) {
+                    gazeProfileSample = gaze->Time().runtimeSample;
+                    if (GazeProfileCurrent())
+                        return apply;
+                } else {
+                    gazeProfileUnsupported = true;
+                }
+            }
+        }
+        auto restored = color.SetProjectionFoveation(std::nullopt);
+        if (restored.HasValue())
+            gazeProfileSample.reset();
+        return restored;
+    }
+
     /** @copydoc OpenXRPlayHost::FrameState::WaitAndImport */
     Result<bool> OpenXRPlayHost::FrameState::WaitAndImport(OpenXRSwapchain &owner, std::optional<NativeSwapchainAcquisition> &image) {
         using enum NativeSwapchainPhase;
@@ -608,12 +682,21 @@ namespace Horo::Application::Internal {
             return Output::Failure(admittedCanvas.ErrorValue());
         if (state.phase == XRFramePhase::Idle) {
             render_->coverageFrame.reset();
+            if (auto profile = render_->UpdateGazeProfile(); profile.HasError())
+                return Output::Failure(profile.ErrorValue());
             const auto started = render_->StartPrediction();
             if (started.HasError() || !started.Value())
                 return started;
         }
         if (const auto pacing = render_->CheckDeadline(); pacing.HasError() || !pacing.Value())
             return pacing;
+        if (!render_->GazeProfileCurrent()) {
+            if (auto aborted = AbortRenderFrame(); aborted.HasError())
+                return Output::Failure(aborted.ErrorValue());
+            if (auto tail = ProgressTail(); tail.HasError())
+                return Output::Failure(tail.ErrorValue());
+            return Output::Success(false);
+        }
         const auto acquired = render_->PrepareProjectionInputs();
         if (acquired.HasError())
             return render_->Fail(acquired.ErrorValue());
@@ -864,6 +947,8 @@ namespace Horo::Application::Internal {
         if (!UsesXrScene() || !render_ || !render_->plan || !render_->acquisition || render_->encoded)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         const Operation operation{*this};
+        if (!render_->GazeProfileCurrent())
+            return AbortRenderFrame();
         if (!FrameLightingAuthorized())
             return AbortForLostFrameLighting();
         auto executed =
@@ -942,6 +1027,8 @@ namespace Horo::Application::Internal {
         if (!render_ || render_->guiFinished || frames_.Snapshot().phase == XRFramePhase::Idle || (accepted && !render_->encoded))
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
         const Operation operation{*this};
+        if (accepted && !render_->GazeProfileCurrent())
+            return AbortRenderFrame();
         if (accepted && !FrameLightingAuthorized())
             return AbortForLostFrameLighting();
         render_->guiFinished = true;
@@ -974,6 +1061,9 @@ namespace Horo::Application::Internal {
         if (scene_ && scene_->retiring) {
             auto aborted = AbortRenderFrame();
             if (aborted.HasError())
+                return aborted;
+        } else if (render_->rendered && !render_->GazeProfileCurrent()) {
+            if (auto aborted = AbortRenderFrame(); aborted.HasError())
                 return aborted;
         } else if (render_->rendered && !FrameLightingAuthorized()) {
             if (auto aborted = AbortForLostFrameLighting(); aborted.HasError())
@@ -1008,8 +1098,11 @@ namespace Horo::Application::Internal {
         if (ended.HasError())
             return ended;
         const bool projected = hasProjection && render_->rendered;
-        if (projected)
+        if (projected) {
+            if (scene_ && scene_->gazeRenderingConsent)
+                render_->lastProjectedViews = render_->views;
             composition_.metrics.RecordAcceptedProjectionComfort(render_->vignetteBound);
+        }
         render_->CompleteMotion(projected);
         if (render_->writer && render_->writer->nativeSubmitted) {
             render_->writer->nativePair.reset();

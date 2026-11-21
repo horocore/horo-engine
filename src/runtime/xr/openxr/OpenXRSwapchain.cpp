@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <format>
 #include <limits>
 
@@ -383,6 +384,8 @@ namespace Horo::XR::OpenXRInternal {
         const auto current = session_->BorrowPreparedSession(session);
         if (current.HasError() || current.Value().incarnation != native.incarnation)
             return Staged::Failure(MakeError(XRErrors::IdentityStale));
+        applyFoveation_ = apply;
+        foveationExtents_ = eyes;
         stagedFixedProjection_.emplace(texture, native.incarnation);
         phase_ = NativeSwapchainPhase::Prepared;
         return Staged::Success(true);
@@ -413,6 +416,48 @@ namespace Horo::XR::OpenXRInternal {
         stagedFixedProjection_.reset();
         phase_ = NativeSwapchainPhase::Available;
         return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRSwapchain::SetProjectionFoveation */
+    Result<void> OpenXRSwapchain::SetProjectionFoveation(const std::optional<std::array<Math::Vec2, 2>> &centers) {
+        using Outcome = Result<void>;
+        if (auto current = CheckCurrent(); current.HasError())
+            return current;
+        if (phase_ != NativeSwapchainPhase::Available || !applyFoveation_)
+            return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
+        if (!centers && !gazeProfileApplied_)
+            return Outcome::Success();
+        if (centers && !std::ranges::all_of(*centers, [](const auto &point) {
+                return std::abs(point.x) <= 1.0F && std::abs(point.y) <= 1.0F;
+            }))
+            return Outcome::Failure(MakeError(XRErrors::OperationInvalid));
+        const auto owner = session_->Borrow(request_.target.session);
+        if (owner.HasError())
+            return Outcome::Failure(owner.ErrorValue());
+        std::array<XrSwapchainSubImage, 2> subImages{};
+        std::array<XrFoveationConfigurationHTC, 2> configurations{};
+        for (std::uint32_t eye = 0; eye < subImages.size(); ++eye) {
+            const auto &extent = foveationExtents_[eye];
+            subImages[eye] = {native_, {{0, 0}, {static_cast<std::int32_t>(extent.width), static_cast<std::int32_t>(extent.height)}}, eye};
+            if (centers) {
+                const auto &point = (*centers)[eye];
+                configurations[eye] = {XR_FOVEATION_LEVEL_LOW_HTC, 40.0F, {point.x, point.y}};
+            }
+        }
+        const auto count = static_cast<std::uint32_t>(subImages.size());
+        const XrFoveationCustomModeInfoHTC custom{XR_TYPE_FOVEATION_CUSTOM_MODE_INFO_HTC, nullptr, count, configurations.data()};
+        const XrFoveationApplyInfoHTC info{XR_TYPE_FOVEATION_APPLY_INFO_HTC, centers ? &custom : nullptr,
+                                           centers ? XR_FOVEATION_MODE_CUSTOM_HTC : XR_FOVEATION_MODE_FIXED_HTC,
+                                           count, subImages.data()};
+        // A failed native update may have changed runtime state. Keep rollback debt until fixed is positively restored.
+        gazeProfileApplied_ = gazeProfileApplied_ || centers.has_value();
+        const auto applied = applyFoveation_(owner.Value().session, &info);
+        if (applied != XR_SUCCESS)
+            return Outcome::Failure(NativeFailure("update gaze foveation", applied));
+        if (auto current = CheckCurrent(); current.HasError())
+            return current;
+        gazeProfileApplied_ = centers.has_value();
+        return Outcome::Success();
     }
 
     /** @copydoc OpenXRSwapchain::AdmitCreate */
@@ -593,6 +638,9 @@ namespace Horo::XR::OpenXRInternal {
         count_ = 0;
         stagedReprojection_.reset();
         stagedFixedProjection_.reset();
+        applyFoveation_ = nullptr;
+        foveationExtents_ = {};
+        gazeProfileApplied_ = false;
         phase_ = NativeSwapchainPhase::Empty;
         return Result<bool>::Success(true);
     }

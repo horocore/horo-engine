@@ -286,9 +286,12 @@ namespace Horo::Application::Internal {
 
         [[nodiscard]] Editor::EditorXrEyeGazeState ReadEyeGazeState() const noexcept override;
         [[nodiscard]] Result<void> ArmEyeGaze() override;
+        [[nodiscard]] bool CanArmEyeGazeRendering() const noexcept override;
+        [[nodiscard]] Result<void> ArmEyeGazeRendering() override;
         void RevokeEyeGaze() noexcept override;
         /** @return Only the exact current Play pointing sample, gated by the focused cutoff and consent. */
         [[nodiscard]] std::optional<XR::XRPoseSample> ReadEyeGaze() const noexcept;
+
         /** @return Live authorized geometry for the current calibrated Play cutoff or typed unavailability. */
         [[nodiscard]] Result<XR::XRPlaneSnapshot> ReadPlaneObservations() const;
         /** @brief Starts environment estimation after the app issues a separate consent grant for the current World.
@@ -651,6 +654,7 @@ namespace Horo::Application::Internal {
             std::optional<AuthoredCharacterPlacement> locomotion;
             std::optional<SceneGeometry> geometry;
             std::optional<OpenXRApplicationProjection> projection;
+            bool gazeRenderingConsent{};
             std::optional<Editor::EditorVulkanXrViewportAccess::PreparedTargets> prewarmedRenderer;
             std::shared_ptr<WriterPair> preparedWriter; /**< Owns the unpublished pair, including any failed native cleanup prefix. */
             std::shared_ptr<ColorPair> preparedColor;   /**< Exact cold fixed-foveation allocation through adoption or retirement. */
@@ -788,6 +792,7 @@ namespace Horo::Application::Internal {
         bool planesArmed_{}; /**< One-use Setup consent, consumed by an actual Play preparation. */
         bool spatialAnchorArmed_{};
         bool anchorStorageArmed_{};
+        bool gazeRenderingArmed_{};
         bool gazeArmed_{}; /**< In-memory grant consumed by one actual Play preparation. */
         std::uint64_t nextPassthroughGrant_{};
         std::optional<XR::XRPassthroughGrant> passthroughArmed_;

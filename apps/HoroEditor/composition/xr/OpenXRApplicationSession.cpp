@@ -195,6 +195,15 @@ namespace Horo::Application::Internal {
         return settings_.AllowsEyeGazePreview() && system_ && system_->eyeGazeProvider == XRCapabilityState::Available;
     }
 
+    bool OpenXRApplicationSession::MayArmEyeGazeRendering() const {
+        if (!MayArmEyeGaze() || !std::ranges::any_of(settings_.Features(), [](const auto &feature) {
+                return feature.capability == XRCapability::FixedFoveation && feature.kind == XRFeatureRequirementKind::Optional;
+            }))
+            return false;
+        const auto route = native_->ReadExtensionAdmission(selection_.attempt, XR_HTC_FOVEATION_EXTENSION_NAME);
+        return route.HasValue() && route.Value().state == NativeExtensionState::Enabled;
+    }
+
     /** @copydoc OpenXRApplicationSession::EyeGazeAvailability */
     XRCapabilityState OpenXRApplicationSession::EyeGazeAvailability() const noexcept {
         const auto observed = system_ ? system_->eyeGazeProvider : XRCapabilityState::Unsupported;

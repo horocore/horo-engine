@@ -25,6 +25,7 @@
 #include <bit>
 #include <catch2/catch_approx.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <cmath>
 #include <functional>
 #include <thread>
 #include <type_traits>
@@ -153,7 +154,7 @@ namespace Horo::Tests::OpenXRApplication {
                                         const bool planePreview = false,
                                         std::shared_ptr<const Host::IOpenXRPassthroughPermission> passthrough = {},
                                         const XR::IXRHandGesturePolicy *handGestures = nullptr, const bool anchorPreview = false,
-                                        const bool anchorPersistence = false)
+                                        const bool anchorPersistence = false, const bool fixedFoveation = false)
                 : product{HORO_TEST_OPENXR_LOADER, std::move(controllerBindings)} {
                 ConfigurationResolutionRequest request;
                 request.invocation.emplace(SettingKey{"xr.enabled"}, ConfigurationInputValue{true, std::nullopt});
@@ -169,6 +170,14 @@ namespace Horo::Tests::OpenXRApplication {
                     script.native.gazeExtension = true;
                     ++script.native.extensionCount;
                     script.census.gazeSupport = XR_TRUE;
+                }
+                if (fixedFoveation) {
+                    request.invocation.emplace(
+                        SettingKey{"xr.features.fixed_foveation"},
+                        ConfigurationInputValue{static_cast<std::int64_t>(XR::XRProjectFeaturePolicy::OptionalProjection), std::nullopt});
+                    static constexpr std::array extra{std::string_view{XR_HTC_FOVEATION_EXTENSION_NAME}};
+                    script.native.extraExtensions = extra;
+                    ++script.native.extensionCount;
                 }
                 if (depth != XR::XRProjectFeaturePolicy::Unrequested) {
                     request.invocation.emplace(SettingKey{"xr.features.depth_composition"},
@@ -1890,6 +1899,60 @@ namespace Horo::Tests::OpenXRApplication {
         scene->Shutdown();
         REQUIRE(RequireValue(fixture.ClosePlay()));
         CHECK_FALSE(fixture.play->ReadEyeGaze());
+    }
+
+    TEST_CASE("OpenXR gaze rendering uses an explicit Play grant and restores the fixed profile",
+              "[xr][application][play][gaze][foveation]") {
+        using enum XR::XRProjectFeaturePolicy;
+        ApplicationFixture fixture{true, 6, Unrequested, Unrequested, Unrequested, false, std::nullopt, OptionalDisable,
+                                   false, {}, nullptr, false, false, true};
+        fixture.CreatePlay();
+        auto &preview = *fixture.play->EyeGazePreview();
+        REQUIRE(preview.CanArmEyeGazeRendering());
+        const auto renderingGrant = GENERATE(false, true);
+        RequireValue(renderingGrant ? preview.ArmEyeGazeRendering() : preview.ArmEyeGaze());
+        auto scene = ActivatePlay(fixture, std::nullopt);
+        auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
+        RequireValue(fixture.scheduler->AddParticipant(std::move(cutoff)));
+        RequireValue(fixture.scheduler->Startup());
+        auto &script = fixture.script;
+        auto &modes = script.swapchain.foveationModes;
+        REQUIRE(modes == std::vector{XR_FOVEATION_MODE_FIXED_HTC});
+        script.clock.sample = 1;
+        script.actions.gaze.sampleTime = 1;
+        RequireValue(fixture.scheduler->RunFrame());
+        REQUIRE(fixture.play->ReadEyeGaze());
+        const auto project = [&](std::uint64_t number) {
+            REQUIRE(RequireValue(fixture.play->PrepareRenderFrame(number)));
+            auto frame = RequireValue(fixture.frontend->BeginFrame({number, {8, 8}}));
+            RequireValue(fixture.play->ExecuteRenderFrame(frame, {}));
+            RequireValue(frame.Present());
+            RequireValue(fixture.play->FinishGui(true));
+            fixture.vulkan->native.commandState.state.Complete();
+            RequireValue(fixture.play->ProgressRenderTail());
+            REQUIRE(script.frames.layers == 1);
+        };
+        project(1);
+        script.frames.prediction += 1'000'000;
+        project(2);
+        if (renderingGrant) {
+            REQUIRE((modes == std::vector{XR_FOVEATION_MODE_FIXED_HTC, XR_FOVEATION_MODE_CUSTOM_HTC}));
+            for (const auto &eye : script.swapchain.gazeConfigurations) {
+                CHECK(eye.focalCenterOffset.x != 0.0F);
+                CHECK(std::abs(eye.focalCenterOffset.x) <= 1.0F);
+            }
+        } else {
+            CHECK(modes == std::vector{XR_FOVEATION_MODE_FIXED_HTC});
+        }
+        preview.RevokeEyeGaze();
+        script.frames.prediction += 1'000'000;
+        project(3);
+        CHECK(modes.back() == XR_FOVEATION_MODE_FIXED_HTC);
+        CHECK(modes.size() == (renderingGrant ? 3 : 1));
+        CHECK(fixture.vulkan->native.commandState.state.waitCalls == 0);
+        fixture.scheduler->Shutdown();
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
     }
 
     TEST_CASE("XR inspection bounds action metadata and ignores action payload values", "[xr][application][inspection]") {

@@ -294,6 +294,9 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Imports the same staged allocation into the newly issued native session. */
         [[nodiscard]] Result<void> AdoptFixedProjection(const XRSwapchainTargetId &target);
 
+        /** @brief Updates the idle stereo color profile, or restores fixed foveation when no gaze centers are authorized. */
+        [[nodiscard]] Result<void> SetProjectionFoveation(const std::optional<std::array<Math::Vec2, 2>> &centers);
+
         /** @brief Acquires one runtime image; zero native work is allowed when an old acquisition remains open.
          * @return Success or typed failure; successful native acquisition always retains its release obligation. */
         [[nodiscard]] Result<void> Acquire();
@@ -427,6 +430,9 @@ namespace Horo::XR::OpenXRInternal {
         };
 
         std::optional<StagedFixedProjection> stagedFixedProjection_;
+        PFN_xrApplyFoveationHTC applyFoveation_{};
+        std::array<Render::FramebufferExtent, 2> foveationExtents_{};
+        bool gazeProfileApplied_{};
         XRSwapchainTargetId lastTarget_{};
         XrSwapchain native_{XR_NULL_HANDLE};
         NativeSwapchainPhase phase_{NativeSwapchainPhase::Empty};

@@ -3970,6 +3970,7 @@
     "workspace.xr_setup.planes_waiting": {"text": "Waiting for current surface observations."},
     "workspace.xr_setup.planes_tracking": {"text": "Plane capture is active for this XR Play session."},
     "workspace.xr_setup.planes_rejected": {"text": "Plane capture permission could not be applied."},
+    "workspace.xr_setup.gaze_render_allow": {"text": "Allow eye pointing and gaze-based rendering for next Play"},
     "workspace.xr_setup.gaze_scope": {"text": "Allow eye pointing in the next XR Play session. The preview uses only the current sample and does not record eye data."},
     "workspace.xr_setup.gaze_allow": {"text": "Allow eye pointing for next Play"},
     "workspace.xr_setup.gaze_armed": {"text": "Eye pointing is allowed for the next XR Play session."},

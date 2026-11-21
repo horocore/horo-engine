@@ -109,6 +109,13 @@ namespace Horo::Application::Internal {
         std::optional<Editor::EditorVulkanXrViewportAccess::CoverageReduction> reduction;
         std::optional<XR::XRObservedReprojectionHistory> synthesisHistory;
         std::optional<XR::OpenXRInternal::NativePresentationViews> views;
+        std::optional<XR::OpenXRInternal::NativePresentationViews> lastProjectedViews;
+        std::optional<XR::XRRuntimeTime> gazeProfileSample;
+        bool gazeProfileUnsupported{};
+
+        [[nodiscard]] std::optional<XR::XRPoseSample> RenderingGaze() const;
+        [[nodiscard]] bool GazeProfileCurrent() const;
+        [[nodiscard]] Result<void> UpdateGazeProfile();
         std::optional<Editor::EditorVulkanXrViewportAccess::ProjectionSubmission> encoded;
         std::uint64_t hostFrameNumber{}; /**< Exact successful bind receipt, not another frame issuer. */
         bool canvasBound{};

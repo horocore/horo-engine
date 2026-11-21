@@ -672,6 +672,20 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XR::XRErrors::OperationUnavailable));
         if (!composition_.session.MayArmEyeGaze())
             return Result<void>::Failure(MakeError(XR::XRErrors::OperationUnsupported));
+        gazeRenderingArmed_ = false;
+        gazeArmed_ = true;
+        return Result<void>::Success();
+    }
+
+    bool OpenXRPlayHost::CanArmEyeGazeRendering() const noexcept {
+        return std::this_thread::get_id() == lane_ && !closing_ && !busy_ && SetupIdle() &&
+               composition_.session.MayArmEyeGazeRendering();
+    }
+
+    Result<void> OpenXRPlayHost::ArmEyeGazeRendering() {
+        if (!CanArmEyeGazeRendering())
+            return Result<void>::Failure(MakeError(XR::XRErrors::OperationUnsupported));
+        gazeRenderingArmed_ = true;
         gazeArmed_ = true;
         return Result<void>::Success();
     }
@@ -681,6 +695,9 @@ namespace Horo::Application::Internal {
         if (std::this_thread::get_id() != lane_)
             return;
         gazeArmed_ = false;
+        gazeRenderingArmed_ = false;
+        if (scene_)
+            scene_->gazeRenderingConsent = false;
         composition_.session.RevokeEyeGaze();
     }
 

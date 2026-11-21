@@ -344,6 +344,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<XR::XRPlaneSnapshot> ReadPlaneObservations(const XR::XRTrackingSnapshot &tracking) const;
         /** @return Whether both signed host policy and observed hardware permit arming the optional gaze preview. */
         [[nodiscard]] bool MayArmEyeGaze() const noexcept;
+        [[nodiscard]] bool MayArmEyeGazeRendering() const;
         /** @return Current supported/denied gaze availability, without exposing any pose. */
         [[nodiscard]] XR::XRCapabilityState EyeGazeAvailability() const noexcept;
         /** @brief Clears the current purpose grant and sample without invoking the native runtime. */

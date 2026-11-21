@@ -432,6 +432,7 @@ namespace Horo::Application::Internal {
         const bool anchorConsent = std::exchange(host.spatialAnchorArmed_, false);
         const bool anchorStorageConsent = std::exchange(host.anchorStorageArmed_, false);
         const bool gazeConsent = std::exchange(host.gazeArmed_, false);
+        gazeRenderingConsent = std::exchange(host.gazeRenderingArmed_, false) && gazeConsent;
         passthroughGrant = std::exchange(host.passthroughArmed_, std::nullopt);
         if (auto prepared = host.composition_.session.PrepareInput(*host.input_.port, *host.input_.router, *host.composition_.bindings,
                                                                    tracking, gazeConsent);

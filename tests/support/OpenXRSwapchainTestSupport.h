@@ -34,6 +34,9 @@ namespace Horo::Tests::OpenXR {
         XrSwapchainCreateInfo created{};
         std::array<XrSwapchainSubImage, 2> fixedProjection{};
         XrSession fixedFoveationSession{XR_NULL_HANDLE};
+        std::vector<XrFoveationModeHTC> foveationModes;
+        bool rejectGazeProfile{};
+        std::array<XrFoveationConfigurationHTC, 2> gazeConfigurations{};
 
         SwapchainScript() {
             active = this;
@@ -114,12 +117,24 @@ namespace Horo::Tests::OpenXR {
         static XRAPI_ATTR XrResult XRAPI_CALL ApplyFixedFoveation(XrSession session, const XrFoveationApplyInfoHTC *info) {
             REQUIRE(info);
             CHECK(info->type == XR_TYPE_FOVEATION_APPLY_INFO_HTC);
-            CHECK(info->next == nullptr);
-            CHECK(info->mode == XR_FOVEATION_MODE_FIXED_HTC);
+            active->foveationModes.push_back(info->mode);
+            if (info->mode == XR_FOVEATION_MODE_CUSTOM_HTC) {
+                const auto *custom = static_cast<const XrFoveationCustomModeInfoHTC *>(info->next);
+                REQUIRE(custom);
+                CHECK(custom->type == XR_TYPE_FOVEATION_CUSTOM_MODE_INFO_HTC);
+                REQUIRE(custom->configCount == active->gazeConfigurations.size());
+                REQUIRE(custom->configs);
+                std::copy_n(custom->configs, custom->configCount, active->gazeConfigurations.begin());
+            } else {
+                CHECK(info->next == nullptr);
+                CHECK(info->mode == XR_FOVEATION_MODE_FIXED_HTC);
+            }
             REQUIRE(info->subImageCount == active->fixedProjection.size());
             REQUIRE(info->subImages);
             std::copy_n(info->subImages, info->subImageCount, active->fixedProjection.begin());
             active->fixedFoveationSession = session;
+            if (info->mode == XR_FOVEATION_MODE_CUSTOM_HTC && active->rejectGazeProfile)
+                return XR_ERROR_FEATURE_UNSUPPORTED;
             return Record("foveation");
         }
 

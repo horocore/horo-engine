@@ -175,6 +175,26 @@ namespace Horo::Tests::OpenXR {
             REQUIRE(swapchain.AdoptFixedProjection(target).HasValue());
             CHECK(script.creates == 1);
             CHECK(swapchain.AdoptFixedProjection(target).HasError());
+            const std::array invalid{Math::Vec2{2.0F, 0.0F}, Math::Vec2{}};
+            CHECK(swapchain.SetProjectionFoveation(invalid).HasError());
+            REQUIRE(script.foveationModes.size() == 1);
+            const std::array centers{Math::Vec2{-0.5F, 0.3F}, Math::Vec2{0.5F, -0.3F}};
+            REQUIRE(swapchain.SetProjectionFoveation(centers).HasValue());
+            CHECK(script.foveationModes.back() == XR_FOVEATION_MODE_CUSTOM_HTC);
+            REQUIRE(swapchain.Acquire().HasValue());
+            CHECK(swapchain.SetProjectionFoveation(std::nullopt).HasError());
+            CHECK(script.foveationModes.size() == 2);
+            REQUIRE(swapchain.Wait(0).Value());
+            REQUIRE(swapchain.PollRelease().Value());
+            REQUIRE(swapchain.SetProjectionFoveation(std::nullopt).HasValue());
+            CHECK(script.foveationModes.back() == XR_FOVEATION_MODE_FIXED_HTC);
+            REQUIRE(swapchain.SetProjectionFoveation(std::nullopt).HasValue());
+            CHECK(script.foveationModes.size() == 3);
+            script.rejectGazeProfile = true;
+            CHECK(swapchain.SetProjectionFoveation(centers).HasError());
+            REQUIRE(swapchain.SetProjectionFoveation(std::nullopt).HasValue());
+            CHECK(script.foveationModes.size() == 5);
+            CHECK(script.foveationModes.back() == XR_FOVEATION_MODE_FIXED_HTC);
         } else {
             CHECK(script.creates == script.destroys);
             CHECK(swapchain.AdoptFixedProjection(target).HasError());

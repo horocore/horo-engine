@@ -340,6 +340,12 @@ namespace Horo::Editor {
                 gazeRejected_ = false;
             }
         }
+        if (canArm && preview.CanArmEyeGazeRendering() &&
+            Ui::Button({.label = Text("gaze_render_allow").c_str(),
+                        .variant = Ui::ButtonVariant::Secondary,
+                        .font = fonts.sans,
+                        .style = {.width = Ui::StyleWidth::FillAvailable}}))
+            gazeRejected_ = preview.ArmEyeGazeRendering().HasError();
     }
 
     /** @copydoc XrSetupModal::DrawPlaneCapturePreview */
