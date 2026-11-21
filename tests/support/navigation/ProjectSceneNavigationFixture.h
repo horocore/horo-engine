@@ -164,7 +164,7 @@ namespace Horo::Application::CharacterSceneProductTest {
 
     private:
         static Result<Runtime::RuntimeSceneDefinition> WithRequiredAsset(const Runtime::RuntimeSceneDefinition &scene,
-                                                                        const Runtime::SceneAssetDependency &dependency) {
+                                                                         const Runtime::SceneAssetDependency &dependency) {
             Runtime::SceneDefinitionBuilder builder{scene.Id(), scene.Revision()};
             for (const auto &entity : scene.Entities())
                 builder.Add(entity);
