@@ -5,7 +5,7 @@
  */
 
 #include "Horo/AI/AIRuntimeCapability.h"
-#include "Horo/Navigation/NavigationMovement.h"
+#include "Horo/Navigation/NavigationVelocityPipeline.h"
 
 namespace Horo::AI {
     /** @brief Owner-lane binding between an admitted AI execution and one MoveTo or Follow operation.
@@ -40,6 +40,19 @@ namespace Horo::AI {
         [[nodiscard]] Result<std::optional<Navigation::NavigationMovementIntent>> Advance(
             const Navigation::NavigationMovementObservation &current);
 
+        /** @brief Advance the task through the safe velocity pipeline at NavIntentCommit.
+         * @param pipeline Existing pipeline for this binding's movement owner.
+         * @param current Committed observation without caller-supplied Character feedback.
+         * @param snapshot Same-tick immutable crowd capture.
+         * @param request Authored avoidance limits for the admitted agent.
+         * @return Work for the selected avoidance solver, empty for a retired task, or the original typed error.
+         * @details Use this in place of Advance when Character feeds achieved displacement back through the pipeline.
+         * Only the safe publication produced by the pipeline may be submitted to Character.
+         */
+        [[nodiscard]] Result<std::optional<Navigation::NavigationVelocityWork>> PrepareSafeMotion(
+            Navigation::NavigationVelocityPipeline &pipeline, const Navigation::NavigationMovementObservation &current,
+            const Navigation::NavigationCrowdSnapshot &snapshot, Navigation::NavigationAvoidanceRequest request);
+
         /** @brief Cancels the operation and its exact AI execution.
          * @return Original AI lifecycle transition or typed owner/identity failure.
          */
@@ -48,6 +61,8 @@ namespace Horo::AI {
     private:
         AiNavigationMovementTask(AiRuntimeCapability ai, AgentHandle agent, TaskHandle task,
                                  Navigation::NavigationMovementController &movement) noexcept;
+        /** @brief Admit advancement only for the exact active execution and operation. */
+        [[nodiscard]] Result<bool> CanAdvance();
         /** @brief Publishes original Navigation error as the canonical AI terminal cause. */
         [[nodiscard]] Error RecordFailure(AiTaskFailureKind kind, Error cause);
         /** @brief Projects terminal Navigation state into the existing AI task lifecycle. */

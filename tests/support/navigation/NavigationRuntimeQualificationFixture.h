@@ -310,6 +310,14 @@ namespace Horo::Navigation::Qualification {
 
         /** @brief Runs real owner phases and proves neither query nor safe-velocity admission mutates the Character root. */
         Result<NavigationVelocityPublication> Advance(const std::uint64_t tick) {
+            return AdvanceWith(tick, [this](const auto &current, const auto &capture, const auto &request) {
+                return velocity->Prepare(current, capture, request);
+            });
+        }
+
+        /** @brief Runs the same owner phases with a caller-provided mechanism for advancing the movement owner. */
+        template <typename PrepareWork>
+        Result<NavigationVelocityPublication> AdvanceWith(const std::uint64_t tick, PrepareWork prepareWork) {
             const auto before = character->ControllerTransform(controller).Value();
             CommitQueries(tick);
             RequireSameRoot(before);
@@ -321,7 +329,8 @@ namespace Horo::Navigation::Qualification {
             }();
             const auto current = Now(tick);
             const auto work =
-                velocity->Prepare(current, capture, {.maximumAccelerationMetersPerSecondSquared = 20, .stepSeconds = StepSeconds});
+                prepareWork(current, capture,
+                            NavigationAvoidanceRequest{.maximumAccelerationMetersPerSecondSquared = 20, .stepSeconds = StepSeconds});
             RequireSameRoot(before);
             if (work.HasError())
                 return Result<NavigationVelocityPublication>::Failure(work.ErrorValue());

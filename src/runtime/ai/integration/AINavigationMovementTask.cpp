@@ -85,23 +85,33 @@ namespace Horo::AI {
         return StartResult::Success(std::move(binding));
     }
 
-    /** @copydoc AiNavigationMovementTask::Advance */
-    Update AiNavigationMovementTask::Advance(const N::NavigationMovementObservation &current) {
+    /** @copydoc AiNavigationMovementTask::CanAdvance */
+    Result<bool> AiNavigationMovementTask::CanAdvance() {
         if (!movement_ || owner_ != std::this_thread::get_id())
-            return Update::Failure(MakeError(AIErrors::RuntimeUnavailable));
+            return Result<bool>::Failure(MakeError(AIErrors::RuntimeUnavailable));
         const auto task = ai_.InspectTask(agent_, task_);
         if (task.HasError()) {
             CancelMotion();
-            return Update::Failure(task.ErrorValue());
+            return Result<bool>::Failure(task.ErrorValue());
         }
         if (task.Value().state != AiTaskState::Running) {
             CancelMotion();
-            return Update::Success(std::nullopt);
+            return Result<bool>::Success(false);
         }
         if (movement_->Status().id != operation_) {
             const auto cancelled = ai_.CancelTask(agent_, task_, AiTaskCancellationReason::Superseded);
-            return cancelled.HasValue() ? Update::Success(std::nullopt) : Update::Failure(cancelled.ErrorValue());
+            return cancelled.HasValue() ? Result<bool>::Success(false) : Result<bool>::Failure(cancelled.ErrorValue());
         }
+        return Result<bool>::Success(true);
+    }
+
+    /** @copydoc AiNavigationMovementTask::Advance */
+    Update AiNavigationMovementTask::Advance(const N::NavigationMovementObservation &current) {
+        const auto active = CanAdvance();
+        if (active.HasError())
+            return Update::Failure(active.ErrorValue());
+        if (!active.Value())
+            return Update::Success(std::nullopt);
 
         auto intent = movement_->Update(current);
         if (intent.HasError())
@@ -109,6 +119,28 @@ namespace Horo::AI {
         if (auto outcome = ResolveOutcome(); outcome.HasError())
             return Update::Failure(std::move(outcome).ErrorValue());
         return Update::Success(std::move(intent).Value());
+    }
+
+    /** @copydoc AiNavigationMovementTask::PrepareSafeMotion */
+    Result<std::optional<N::NavigationVelocityWork>> AiNavigationMovementTask::PrepareSafeMotion(
+        N::NavigationVelocityPipeline &pipeline, const N::NavigationMovementObservation &current,
+        const N::NavigationCrowdSnapshot &snapshot, N::NavigationAvoidanceRequest request) {
+        using Return = Result<std::optional<N::NavigationVelocityWork>>;
+        const auto active = CanAdvance();
+        if (active.HasError())
+            return Return::Failure(active.ErrorValue());
+        if (!active.Value())
+            return Return::Success(std::nullopt);
+        if (!pipeline.UsesMovement(*movement_))
+            return Return::Failure(MakeError(AIErrors::TaskContextInvalid));
+        auto work = pipeline.Prepare(current, snapshot, request);
+        if (work.HasError())
+            return Return::Failure(RecordFailure(AiTaskFailureKind::Execution, std::move(work).ErrorValue()));
+        if (auto outcome = ResolveOutcome(); outcome.HasError()) {
+            (void)pipeline.CancelPending(work.Value());
+            return Return::Failure(std::move(outcome).ErrorValue());
+        }
+        return Return::Success(std::move(work).Value());
     }
 
     /** @copydoc AiNavigationMovementTask::Cancel */

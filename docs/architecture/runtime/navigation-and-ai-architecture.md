@@ -2288,8 +2288,10 @@ then publishes committed state for variable-rate RenderExtraction.
    - Combat actions and animation triggers enqueue as typed intents consumed later; they are not absorbed into `NavIntentCommit`.
    - A host can hand an exact running AI task to `AiNavigationMovementTask` for MoveTo or Follow.
      The binding checks that Navigation and AI own the same Scene entity, then uses the existing movement controller.
-     At `NavIntentCommit`, the host publishes query results, advances the task and sends its intent through the
-     selected safe-motion path. Character supplies achieved displacement for the next observation.
+     At `NavIntentCommit`, the host publishes query results and calls `PrepareSafeMotion`, which advances the
+     existing velocity pipeline once using prior Character feedback. The host commits the avoidance result and
+     submits only that safe publication via `NavigationCharacterAdapter`. After Character commits the fixed step,
+     the adapter returns the achieved displacement to the velocity pipeline for the next tick.
      The binding publishes Navigation admission errors, provider failures, arrival and cancellation to the original
      AI task. A superseded movement can never complete the replacement task or authorize its motion.
 5. **`SystemPhase::Gameplay` (Behavior Script Step & Locomotion)**:
