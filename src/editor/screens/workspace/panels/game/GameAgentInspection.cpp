@@ -119,6 +119,31 @@ namespace Horo::Editor {
             return "ai_inspection_unavailable";
         }
 
+        /** @brief Draws redacted active nodes and committed transitions from one bounded observation. */
+        void DrawDecisionTrace(const AI::DecisionStepTrace &trace, const EditorGuiContext &context) {
+            const auto text = [&](const std::string_view key) -> const std::string & {
+                return GamePanel::kTextScope.Text(context.localization, key);
+            };
+            const auto line = [&](const std::string &value, const ImVec4 color) {
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, value, color, context.theme.fonts);
+            };
+            line(std::format("{} · {} {}", text("ai_inspection_trace"), text("ai_problem_tick"), trace.Header().tick), Theme::Muted());
+            for (const auto &record : trace.Records()) {
+                using enum AI::DecisionStepRecordKind;
+                if (record.kind == StateMachineTransition) {
+                    line(std::format("{} {} · {} {} · {}", text("ai_problem_graph"), record.occurrence.graph.Value(),
+                                     text("ai_inspection_transition"), record.node.Value(), record.transitionCount),
+                         Theme::Muted());
+                } else if (record.kind == StateMachineStep || (record.kind == BehaviorNode && record.state == AI::AiTaskState::Running)) {
+                    line(std::format("{} {} · {} {} · {}", text("ai_problem_graph"), record.occurrence.graph.Value(),
+                                     text("ai_problem_node"), record.node.Value(), text(TaskState(record.state))),
+                         Theme::Muted());
+                }
+            }
+            if (trace.DroppedRecords() != 0)
+                line(std::format("{} {}", text("ai_inspection_trace_overflow"), trace.DroppedRecords()), Theme::Warn());
+        }
+
         /** @brief Shows copied lifecycle and memory metadata without reading live runtime state. */
         void DrawObservations(const EditorPlayAgentInspection &entry, const EditorGuiContext &context) {
             const auto &snapshot = *entry.snapshot;
@@ -154,6 +179,8 @@ namespace Horo::Editor {
                 line(std::format("{} {} · {} {} · {} {:.2f}", text("ai_inspection_perception"), memory.key.sense.Value(),
                                  text("ai_inspection_stimulus"), memory.key.stimulus.Value(), text("ai_inspection_age"), memory.ageSeconds),
                      Theme::Muted());
+            if (entry.decisionTrace)
+                DrawDecisionTrace(*entry.decisionTrace, context);
         }
     }  // namespace
 
@@ -221,6 +248,11 @@ namespace Horo::Editor {
             }
             DrawBlackboard(latest, other, inspectionFilter_, context);
             DrawObservations(history.back(), context);
+            if (selected != 0) {
+                const auto &trace = candidates[static_cast<std::size_t>(selected - 1)].decisionTrace;
+                if (trace && trace != history.back().decisionTrace)
+                    DrawDecisionTrace(*trace, context);
+            }
         }
         ImGui::EndChild();
     }

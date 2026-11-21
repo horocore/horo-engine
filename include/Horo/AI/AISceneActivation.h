@@ -236,6 +236,7 @@ namespace Horo::AI {
 
     namespace Detail {
         struct AiSceneRuntimeState;
+        struct SceneDecisionReplayPending;
         struct SceneRestoreInput;
         struct PerceptionGroupPublication;
         struct AgentRuntimeState;
@@ -605,6 +606,16 @@ namespace Horo::AI {
          * decisions, scheduler state and detached evidence. */
         void DiscardDecisionReplayAtSafePoint(AgentHandle agent, std::uint64_t tick) const noexcept;
 
+        /** @brief Detaches the exact selected agent's bounded trace after scheduler commit.
+         * @param scene Current Scene on its owner lane. @param agent Exact armed agent generation.
+         * @param tick Exact completed Decision tick.
+         * @return Immutable trace including its overflow count, or a typed stale/phase error.
+         * @details Consumes the arm only on success and does not capture canonical agent state.
+         */
+        [[nodiscard]] Result<std::shared_ptr<const DecisionStepTrace>> TakeDecisionTraceAtSafePoint(const Runtime::RuntimeSceneView &scene,
+                                                                                                    AgentHandle agent,
+                                                                                                    std::uint64_t tick) const;
+
         /** @brief Detaches the actual armed decision trace and canonical base-agent population after committed simulation.
          * @param scene Current committed Scene after the host completed its fixed tick.
          * @param tick Exact armed tick with completed AI intent dispatch.
@@ -668,6 +679,10 @@ namespace Horo::AI {
     private:
         friend class AiSceneActivationCandidate;
         friend class Detail::AiSceneStructuralParticipant;
+
+        /** @brief Validates the one exact observed trace without consuming it. */
+        [[nodiscard]] Result<Detail::SceneDecisionReplayPending *> FindDecisionTraceAtSafePoint(const Runtime::RuntimeSceneView &scene,
+                                                                                                std::uint64_t tick) const;
 
         /** @brief Reads the exact selected cooked executor on the established Scene safe point. */
         [[nodiscard]] std::size_t CopyCookedDecisionTasks(AgentHandle agent, const std::shared_ptr<const CookedDecisionPlan> &plan,

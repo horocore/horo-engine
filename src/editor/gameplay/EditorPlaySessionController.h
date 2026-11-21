@@ -173,7 +173,7 @@ namespace Horo::Editor {
         [[nodiscard]] std::optional<Runtime::RuntimeSceneView> SceneView() const noexcept;
         /** @brief Reads the selected ready host's completed Decision problem. */
         [[nodiscard]] std::optional<EditorPlayDecisionProblem> ReadDecisionProblem() const;
-        static constexpr std::uint64_t AgentInspectionTickSpacing = 4;
+        static constexpr std::uint64_t AgentInspectionTickSpacing = EditorPlayAgentInspectionTickSpacing;
         static constexpr std::size_t AgentInspectionHistoryLimit = 8;
 
         /** @brief Samples only the selected live Play entity at a bounded rate and drops stale selection data. */

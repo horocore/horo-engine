@@ -530,7 +530,10 @@ namespace {
                                           "workspace.game.ai_inspection_age",
                                           "workspace.game.ai_inspection_navigation",
                                           "workspace.game.ai_inspection_navigation_disabled",
-                                          "workspace.game.ai_inspection_omitted_tasks"};
+                                          "workspace.game.ai_inspection_omitted_tasks",
+                                          "workspace.game.ai_inspection_trace",
+                                          "workspace.game.ai_inspection_transition",
+                                          "workspace.game.ai_inspection_trace_overflow"};
         for (const auto locale : {"en-US", "tr-TR"}) {
             Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{locale}};
             Horo::Editor::LocalizationError error;

@@ -489,6 +489,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
 
         std::uint64_t AgentInspectionTick() const noexcept override;
         std::optional<Editor::EditorPlayAgentInspection> ReadAgentInspection(Runtime::EntityRef owner) const override;
+        void SelectDecisionTraceOwner(std::optional<Runtime::EntityRef> owner) noexcept override;
         [[nodiscard]] std::optional<Editor::EditorPlayAgentNavigation> ReadAgentNavigation(Runtime::EntityRef owner) const;
 
         Result<std::shared_ptr<Gameplay::GameplayPrefabContext>> PrefabServices(const Gameplay::BehaviorRegistry &registry,
@@ -608,6 +609,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             if (decisionTickPending_) {
                 ++committedDecisionTick_;
                 decisionTickPending_ = false;
+                if (pendingDecisionTrace_)
+                    committedDecisionTrace_ = std::move(pendingDecisionTrace_);
             }
         }
 
@@ -616,6 +619,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             if (animation_)
                 animation_->AbortFixedUpdate(context);
             decisionTickPending_ = false;
+            pendingDecisionTrace_.reset();
         }
 
         void Shutdown() noexcept override {
@@ -640,6 +644,11 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         }
 
     private:
+        /** @brief Arms one bounded read-only sample for the current live editor selection. */
+        [[nodiscard]] std::optional<AI::AgentHandle> ArmSelectedDecisionTrace(std::uint64_t tick);
+        /** @brief Detaches the exact observed trace after scheduler commit, before fixed publication. */
+        void CaptureSelectedDecisionTrace(AI::AgentHandle agent, std::uint64_t tick);
+
         /** @brief Owns Play's exact sensing generation and spatial publication for the Scene lifetime. */
         struct PlayPerception final {
             AI::PerceptionSpatialBroadphase spatial;
@@ -709,6 +718,10 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         JobSystem *decisionJobs_{};
         std::unique_ptr<PlayPerception> playPerception_;
         std::vector<EditorPlayInspectionKey> inspectionKeys_;
+        std::optional<Runtime::EntityRef> decisionTraceOwner_;
+        std::uint64_t lastDecisionTraceTick_{};
+        std::shared_ptr<const AI::DecisionStepTrace> pendingDecisionTrace_;
+        std::shared_ptr<const AI::DecisionStepTrace> committedDecisionTrace_;
         std::uint64_t committedDecisionTick_{};
         bool decisionTickPending_{};
         std::shared_ptr<PlaySaveAiServices> aiSave_;

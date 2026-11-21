@@ -143,35 +143,64 @@ namespace Horo::AI {
             pending.reset();
     }
 
+    /** @copydoc AiSceneRuntime::FindDecisionTraceAtSafePoint */
+    Result<Detail::SceneDecisionReplayPending *> AiSceneRuntime::FindDecisionTraceAtSafePoint(const Runtime::RuntimeSceneView &scene,
+                                                                                              const std::uint64_t tick) const {
+        using Pending = Result<Detail::SceneDecisionReplayPending *>;
+        if (auto valid = CapabilityAtSafePoint().ValidateAtSafePoint(); valid.HasError())
+            return Pending::Failure(valid.ErrorValue());
+        const auto state = active_;
+        auto *scheduler = state->scheduler.get();
+        const auto *report = scheduler ? scheduler->CompletedReportAtSafePoint() : nullptr;
+        if (!report || report->tick != tick)
+            return Pending::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
+        if (!scene.IsCurrent() || scene.RuntimeId() != state->binding.scene || !state->decisionReplay ||
+            state->decisionReplay->tick != tick || !state->decisionReplay->observed ||
+            state->decisionReplay->schedulerRevision != scheduler->populationRevision_)
+            return Pending::Failure(MakeError(AIErrors::CanonicalRestoreStale));
+        auto &pending = *state->decisionReplay;
+        const auto &observed = *pending.observed;
+        const auto selected = DecisionAgent(*state, pending.agent);
+        if (selected.HasError() || selected.Value()->cookedPlan != pending.plan ||
+            selected.Value()->blackboard->Binding() != observed.blackboard)
+            return Pending::Failure(MakeError(AIErrors::CanonicalStateInvalid));
+        return Pending::Success(&pending);
+    }
+
+    /** @copydoc AiSceneRuntime::TakeDecisionTraceAtSafePoint */
+    Result<std::shared_ptr<const DecisionStepTrace>> AiSceneRuntime::TakeDecisionTraceAtSafePoint(const Runtime::RuntimeSceneView &scene,
+                                                                                                  const AgentHandle agent,
+                                                                                                  const std::uint64_t tick) const {
+        using Trace = Result<std::shared_ptr<const DecisionStepTrace>>;
+        const auto found = FindDecisionTraceAtSafePoint(scene, tick);
+        if (found.HasError())
+            return Trace::Failure(found.ErrorValue());
+        if (found.Value()->agent != agent)
+            return Trace::Failure(MakeError(AIErrors::HandleInvalid));
+        auto trace = std::move(found.Value()->trace);
+        active_->decisionReplay.reset();
+        return Trace::Success(std::move(trace));
+    }
+
     /** @copydoc AiSceneRuntime::CaptureDecisionReplayAtSafePoint */
     Result<AiSceneDecisionReplayCapture> AiSceneRuntime::CaptureDecisionReplayAtSafePoint(const Runtime::RuntimeSceneView scene,
                                                                                           const std::uint64_t tick,
                                                                                           const std::size_t maximumCanonicalBytes) const {
         using Capture = Result<AiSceneDecisionReplayCapture>;
-        if (auto valid = CapabilityAtSafePoint().ValidateAtSafePoint(); valid.HasError())
-            return Capture::Failure(valid.ErrorValue());
-        const auto state = active_;
-        auto *scheduler = state->scheduler.get();
-        const auto *report = scheduler ? scheduler->CompletedReportAtSafePoint() : nullptr;
-        if (!report || report->tick != tick)
-            return Capture::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
-        if (!scene.IsCurrent() || scene.RuntimeId() != state->binding.scene || !state->decisionReplay ||
-            state->decisionReplay->tick != tick || !state->decisionReplay->observed ||
-            state->decisionReplay->schedulerRevision != scheduler->populationRevision_)
-            return Capture::Failure(MakeError(AIErrors::CanonicalRestoreStale));
-        auto &pending = *state->decisionReplay;
-        const auto &observed = *pending.observed;
-        const auto selected = DecisionAgent(*state, pending.agent);
-        if (selected.HasError() || selected.Value()->cookedPlan != pending.plan ||
-            selected.Value()->blackboard->Binding() != observed.blackboard || pending.trace->DroppedRecords() != 0)
+        const auto found = FindDecisionTraceAtSafePoint(scene, tick);
+        if (found.HasError())
+            return Capture::Failure(found.ErrorValue());
+        auto &pending = *found.Value();
+        if (pending.trace->DroppedRecords() != 0)
             return Capture::Failure(MakeError(AIErrors::CanonicalStateInvalid));
+        const auto &observed = *pending.observed;
         auto canonical = CaptureCanonicalState(scene, maximumCanonicalBytes);
         if (canonical.HasError())
             return Capture::Failure(canonical.ErrorValue());
         AiSceneDecisionReplayCapture capture{scene.RuntimeId(),        scene.StructuralRevision(),  tick,
                                              observed.subject,         observed.blackboard,         observed.blackboardRevision,
                                              std::move(pending.trace), std::move(canonical).Value()};
-        state->decisionReplay.reset();
+        active_->decisionReplay.reset();
         return Capture::Success(std::move(capture));
     }
 

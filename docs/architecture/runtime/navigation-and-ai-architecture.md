@@ -3479,6 +3479,10 @@ must identify the exact committed Scene and admitted native sense generation.
 Sensing runs before Decision using the Play fixed quantum. The inspector reads
 memory after the completed tick and exposes ages and identities without
 sensed coordinates or provider payloads.
+The selected Play agent also gets a read-only Decision trace sample at the
+inspector's fixed-tick cadence. The host publishes it only after the full
+Play tick commits. The Game inspector shows active nodes, state-machine
+transitions, and any omitted record count from the same trace used for replay.
 
 ### Scene decision scheduling tiers
 

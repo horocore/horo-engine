@@ -23,6 +23,7 @@ namespace Horo::Gameplay {
 
 namespace Horo::AI {
     struct AiAgentInspectionSnapshot;
+    class DecisionStepTrace;
     class DecisionNodeGeneration;
     class PerceptionSenseGeneration;
 }  // namespace Horo::AI
@@ -37,6 +38,7 @@ namespace Horo::Editor {
     inline constexpr std::uint64_t EditorPlaySceneNamespace = 0x8000000000000000ULL;
     /** @brief First Play identity; the divider itself is never issued. */
     inline constexpr Runtime::SceneRuntimeId EditorFirstPlayScene{EditorPlaySceneNamespace + 1};
+    inline constexpr std::uint64_t EditorPlayAgentInspectionTickSpacing = 4;
 
     /** @brief Actual application-owned peer lifecycle, independent of editor draft/publication policy. */
     enum class EditorScenePhysicsState : std::uint8_t {
@@ -108,6 +110,7 @@ namespace Horo::Editor {
         std::uint64_t tick{};
         std::shared_ptr<const AI::AiAgentInspectionSnapshot> snapshot;
         std::optional<EditorPlayAgentNavigation> navigation;
+        std::shared_ptr<const AI::DecisionStepTrace> decisionTrace;
     };
 
     /** @brief Independent synchronous acquisitions from the current Project's existing provider owner. */
@@ -159,6 +162,9 @@ namespace Horo::Editor {
         [[nodiscard]] virtual std::optional<EditorPlayAgentInspection> ReadAgentInspection(Runtime::EntityRef) const {
             return std::nullopt;
         }
+
+        /** @brief Selects the entity generation eligible for read-only trace sampling. */
+        virtual void SelectDecisionTraceOwner(std::optional<Runtime::EntityRef>) noexcept {}
 
         /** @brief Reports an explicit host-selected committed Decision configuration awaiting the project provider lease. */
         [[nodiscard]] virtual bool RequiresDecisionProviders() const noexcept {

@@ -754,16 +754,21 @@ namespace Horo::Editor {
 
     /** @copydoc EditorPlaySessionController::RefreshAgentInspection */
     void EditorPlaySessionController::RefreshAgentInspection(const std::optional<Runtime::EntityRef> selection) {
+        if (fixedAttempt_)
+            return;
         const auto scene = SceneView();
-        if (fixedAttempt_ || !scene || (state_ != EditorPlaySessionState::Playing && state_ != EditorPlaySessionState::Paused) ||
-            !selection || !scene->Get(*selection).HasValue()) {
+        if (!scene || (state_ != EditorPlaySessionState::Playing && state_ != EditorPlaySessionState::Paused) || !selection ||
+            !scene->Get(*selection).HasValue()) {
             ClearAgentInspection();
             inspectedOwner_.reset();
+            if (sceneHost_)
+                sceneHost_->SelectDecisionTraceOwner(std::nullopt);
             return;
         }
         if (inspectedOwner_ != selection) {
             ClearAgentInspection();
             inspectedOwner_ = selection;
+            sceneHost_->SelectDecisionTraceOwner(selection);
         }
         const auto tick = sceneHost_->AgentInspectionTick();
         if (tick == 0 ||

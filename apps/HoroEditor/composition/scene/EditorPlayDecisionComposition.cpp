@@ -35,6 +35,45 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         return ai_ && !sceneClosed_ && !decisionTickPending_ && std::this_thread::get_id() == ownerLane_ ? committedDecisionTick_ : 0;
     }
 
+    /** @copydoc Editor::EditorPlaySceneHost::SelectDecisionTraceOwner */
+    void ProjectPlaySceneHost::SelectDecisionTraceOwner(const std::optional<Runtime::EntityRef> owner) noexcept {
+        if (std::this_thread::get_id() != ownerLane_ || decisionTraceOwner_ == owner)
+            return;
+        decisionTraceOwner_ = owner;
+        committedDecisionTrace_.reset();
+        pendingDecisionTrace_.reset();
+    }
+
+    /** @copydoc ProjectPlaySceneHost::ArmSelectedDecisionTrace */
+    std::optional<AI::AgentHandle> ProjectPlaySceneHost::ArmSelectedDecisionTrace(const std::uint64_t tick) {
+        if (!decisionTraceOwner_ ||
+            (lastDecisionTraceTick_ != 0 && tick - lastDecisionTraceTick_ < Editor::EditorPlayAgentInspectionTickSpacing))
+            return std::nullopt;
+        lastDecisionTraceTick_ = tick;
+        const auto scene = scenes_->ActiveScene();
+        if (!scene)
+            return std::nullopt;
+        const auto entity = scene->Get(*decisionTraceOwner_);
+        if (entity.HasError() || !entity.Value().components || !entity.Value().components->aiAgent)
+            return std::nullopt;
+        const auto handle = ai_->CapabilityAtSafePoint().ResolveAgent(entity.Value().components->aiAgent->agent);
+        if (handle.HasError() || ai_->ArmDecisionReplayAtSafePoint(handle.Value(), tick).HasError())
+            return std::nullopt;
+        return handle.Value();
+    }
+
+    /** @copydoc ProjectPlaySceneHost::CaptureSelectedDecisionTrace */
+    void ProjectPlaySceneHost::CaptureSelectedDecisionTrace(const AI::AgentHandle agent, const std::uint64_t tick) {
+        if (const auto scene = scenes_->ActiveScene()) {
+            auto trace = ai_->TakeDecisionTraceAtSafePoint(*scene, agent, tick);
+            if (trace.HasValue()) {
+                pendingDecisionTrace_ = std::move(trace).Value();
+                return;
+            }
+        }
+        ai_->DiscardDecisionReplayAtSafePoint(agent, tick);
+    }
+
     /** @copydoc Editor::EditorPlaySceneHost::ReadAgentInspection */
     std::optional<Editor::EditorPlayAgentInspection> ProjectPlaySceneHost::ReadAgentInspection(const Runtime::EntityRef owner) const {
         const auto tick = AgentInspectionTick();
@@ -58,9 +97,15 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             auto snapshot = ai_->CaptureAgentInspectionAtSafePoint(*scene, handle.Value(), std::span{keys}.first(count));
             if (snapshot.HasError() || snapshot.Value().owner != owner || snapshot.Value().decisionTick != tick)
                 return std::nullopt;
-            return Editor::EditorPlayAgentInspection{owner, handle.Value(), tick,
+            return Editor::EditorPlayAgentInspection{owner,
+                                                     handle.Value(),
+                                                     tick,
                                                      std::make_shared<const AI::AiAgentInspectionSnapshot>(std::move(snapshot).Value()),
-                                                     ReadAgentNavigation(owner)};
+                                                     ReadAgentNavigation(owner),
+                                                     committedDecisionTrace_ && decisionTraceOwner_ == owner &&
+                                                             committedDecisionTrace_->Header().blackboard.agent == handle.Value()
+                                                         ? committedDecisionTrace_
+                                                         : nullptr};
         } catch (const std::bad_alloc &) {
             return std::nullopt;
         }
@@ -149,10 +194,19 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         const auto tick = committedDecisionTick_ + 1;
         if (auto perception = PollDecisionPerception(tick, context.fixedDelta); perception.HasError())
             return Evaluation::Failure(perception.ErrorValue());
-        if (const auto evaluated = scheduler.Value()->EvaluateAtDecision(tick); evaluated.HasError())
+        const auto armed = ArmSelectedDecisionTrace(tick);
+        if (const auto evaluated = scheduler.Value()->EvaluateAtDecision(tick); evaluated.HasError()) {
+            if (armed)
+                ai_->DiscardDecisionReplayAtSafePoint(*armed, tick);
             return Evaluation::Failure(evaluated.ErrorValue());
-        if (const auto committed = scheduler.Value()->CommitAtIntentDispatch(tick); committed.HasError())
+        }
+        if (const auto committed = scheduler.Value()->CommitAtIntentDispatch(tick); committed.HasError()) {
+            if (armed)
+                ai_->DiscardDecisionReplayAtSafePoint(*armed, tick);
             return Evaluation::Failure(committed.ErrorValue());
+        }
+        if (armed)
+            CaptureSelectedDecisionTrace(*armed, tick);
         decisionTickPending_ = true;
         return Evaluation::Success(true);
     }

@@ -1024,6 +1024,8 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     REQUIRE(play.SceneView());
     const auto entity = play.SceneView()->Find({7});
     REQUIRE(entity);
+    play.RefreshAgentInspection(entity);
+    CHECK(play.AgentInspectionHistory().empty());
     CHECK(play.QuiesceForReload().HasError());
     Runtime::RuntimeLifecycle lifecycle;
     REQUIRE(lifecycle.AddParticipant(std::make_unique<PlayFixedParticipant>(play)).HasValue());
@@ -1062,6 +1064,10 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     CHECK(inspection.owner == entity);
     CHECK(inspection.tick == 1);
     REQUIRE(inspection.snapshot);
+    REQUIRE(inspection.decisionTrace);
+    CHECK(inspection.decisionTrace->Header().tick == 1);
+    CHECK(inspection.decisionTrace->Header().root == graph.asset);
+    CHECK(inspection.decisionTrace->Header().blackboard.agent == inspection.agent);
     CHECK(inspection.snapshot->agent == inspection.agent);
     CHECK(inspection.snapshot->decisionTick == 1);
     if (livePerception) {
