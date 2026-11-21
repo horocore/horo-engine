@@ -171,7 +171,7 @@ namespace Horo::AI {
     /** @brief Lowerable per-agent frequency, work, command and worker-admission policy. */
     struct AiAgentSchedulePolicy final {
         AiTaskPriority priority{AiTaskPriority::Normal};
-        std::uint64_t intervalTicks{1}; /**< Deterministic mode requires one; best-effort misses coalesce without catch-up. */
+        std::uint64_t intervalTicks{1}; /**< Deterministic mode requires one. In best effort, zero disables periodic polling. */
         std::size_t workUnitsPerTick{64};
         std::size_t commandsPerTick{16};
         std::size_t workerSubmissionsPerTick{1};

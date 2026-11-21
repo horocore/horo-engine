@@ -2,6 +2,7 @@
 #include "BehaviorTreeAsyncTestSupport.h"
 #include "Horo/AI/AITaskScheduler.h"
 
+#include <catch2/generators/catch_generators.hpp>
 #include <limits>
 #include <semaphore>
 #include <thread>
@@ -259,6 +260,48 @@ namespace Horo::AI {
             CHECK(probe->intents == 1);
             REQUIRE(h.scheduler->CommitAtIntentDispatch(1).HasValue());
             CHECK(probe->committed == 2);  // An exhausted tick cannot borrow the next tick's command allowance.
+        }
+
+        TEST_CASE("Event-only AI decisions stay idle until woken and retain bounded unfinished work", "[unit][ai][scheduler]") {
+            const bool reduced = GENERATE(false, true);
+            AiTaskSchedulerSettings settings{.workUnitsPerTick = 3, .commandsPerTick = 3, .mode = AiSchedulingMode::BestEffort};
+            if (reduced)
+                settings.simulationProfile = AiDecisionSimulationProfile{10, 20, 30, 3, 1};
+            Harness h(settings);
+            auto reactive = h.Register(0, {.intervalTicks = 0, .workUnitsPerTick = 3, .commandsPerTick = 3});
+            if (reduced)
+                REQUIRE(h.scheduler->SetRelevanceAtSafePoint(h.Handle(0), {.anchorDistanceMillimeters = 15}).HasValue());
+            const auto runTick = [&](const std::uint64_t tick) {
+                const auto result = h.scheduler->EvaluateAtDecision(tick);
+                REQUIRE(result.HasValue());
+                REQUIRE(h.scheduler->CommitAtIntentDispatch(tick).HasValue());
+                return result.Value();
+            };
+
+            CHECK(runTick(1).evaluated == 1);
+            CHECK(reactive->reasons.activation);
+            CHECK_FALSE(reactive->reasons.polling);
+            for (std::uint64_t tick = 2; tick <= 20; ++tick) {
+                const auto idle = runTick(tick);
+                CHECK(idle.evaluated == 0);
+                CHECK(idle.workUnits == 0);
+            }
+
+            reactive->remaining = 4;
+            REQUIRE(h.scheduler->Wake(h.Handle(0), {.blackboard = true}).HasValue());
+            REQUIRE(h.scheduler->Wake(h.Handle(0), {.perception = true, .task = true}).HasValue());
+            const auto admitted = runTick(21);
+            CHECK(admitted.evaluated == 1);
+            CHECK(admitted.workUnits == 3);
+            CHECK(reactive->reasons.blackboard);
+            CHECK(reactive->reasons.perception);
+            CHECK(reactive->reasons.task);
+            CHECK_FALSE(reactive->reasons.polling);
+            CHECK(reactive->remaining == 1);
+            CHECK(runTick(22).evaluated == 1);
+            CHECK(reactive->reasons.explicitRequest);
+            CHECK(reactive->remaining == 0);
+            CHECK(runTick(23).evaluated == 0);
         }
 
         TEST_CASE("AI starvation promotion gives bounded service under sustained urgent traffic", "[unit][ai][scheduler]") {

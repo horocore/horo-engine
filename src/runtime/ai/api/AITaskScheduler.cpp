@@ -309,7 +309,7 @@ namespace Horo::AI {
         const auto &policy = registration.policy;
         return registration.agent.IsValid() && registration.agent.incarnation == incarnation_ && registration.identity.IsValid() &&
                registration.image && registration.executor && !registration.cancellation.IsCancellationRequested() &&
-               policy.priority < AiTaskPriority::Count && policy.intervalTicks != 0 &&
+               policy.priority < AiTaskPriority::Count &&
                (settings_.mode != AiSchedulingMode::Deterministic || policy.intervalTicks == 1) && policy.workUnitsPerTick > 0 &&
                policy.workUnitsPerTick <= settings_.workUnitsPerTick && policy.commandsPerTick > 0 &&
                policy.commandsPerTick <= settings_.commandsPerTick && policy.workerSubmissionsPerTick > 0 &&
@@ -328,7 +328,7 @@ namespace Horo::AI {
     /** @copydoc AiTaskScheduler::Install */
     void AiTaskScheduler::Install(const std::size_t slot, Entry entry) noexcept {
         entry.waitingSince = report_.tick == 0 ? 1 : report_.tick;
-        entry.nextTick = entry.waitingSince;
+        entry.nextTick = entry.policy.intervalTicks == 0 ? 0 : entry.waitingSince;
         entries_[slot] = std::move(entry);
         activeByHandle_.insert(HandlePosition(entries_[slot].agent), slot);
         if (populationRevision_ != std::numeric_limits<std::uint64_t>::max())
@@ -489,11 +489,14 @@ namespace Horo::AI {
 
     /** @copydoc AiTaskScheduler::PeriodicInterval */
     std::uint64_t AiTaskScheduler::PeriodicInterval(const Entry &entry) const noexcept {
+        const auto cadence = entry.policy.intervalTicks;
+        if (cadence == 0)
+            return 0;
         switch (entry.tier) {
             case AiSimulationTier::Full:
-                return entry.policy.intervalTicks;
+                return cadence;
             case AiSimulationTier::Reduced:
-                return std::max(entry.policy.intervalTicks, settings_.simulationProfile->reducedIntervalTicks);
+                return std::max(cadence, settings_.simulationProfile->reducedIntervalTicks);
             case AiSimulationTier::EventOnly:
             case AiSimulationTier::Suspended:
                 return 0;
@@ -600,7 +603,7 @@ namespace Horo::AI {
                     entry.waitingSince = entry.nextTick;
                 entry.pending.polling = true;
             }
-            if (!settings_.simulationProfile || entry.pending.Any() || entry.intents)
+            if (entry.pending.Any() || entry.intents)
                 order_.push_back(i);
         }
         std::ranges::sort(order_, [this](const auto lhs, const auto rhs) {
@@ -670,11 +673,13 @@ namespace Horo::AI {
         entry.intents = true;
         entry.intentSince = tick;
         const auto outcome = evaluated.Value();
-        if (budget.Exhausted() || outcome == AiSliceOutcome::BudgetExhausted)
+        const bool exhausted = budget.Exhausted() || outcome == AiSliceOutcome::BudgetExhausted;
+        if (exhausted)
             ++report_.exhausted;
-        if (outcome != AiSliceOutcome::Complete || budget.Exhausted()) {
+        if (outcome != AiSliceOutcome::Complete || exhausted) {
             ++report_.yielded;
-            if (!settings_.simulationProfile) {
+            const bool retry = entry.policy.intervalTicks == 0 ? exhausted : !settings_.simulationProfile;
+            if (retry) {
                 entry.pending.explicitRequest = true;
                 entry.waitingSince = tick;
             }
