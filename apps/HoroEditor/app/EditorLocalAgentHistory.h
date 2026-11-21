@@ -21,7 +21,8 @@ namespace Horo::Editor {
         /** @brief Returns the current project identity for a newly submitted plain text turn. */
         [[nodiscard]] Agent::AgentHistoryProjectRevision Project() const noexcept;
         /** @brief Prepares the exact redacted pair for a subsequent explicit save. */
-        void Review(Agent::AgentHistoryProjectRevision project, std::string_view prompt, std::string_view answer);
+        void Review(Agent::AgentHistoryProjectRevision project, std::string_view prompt, std::string_view answer,
+                    Agent::AgentHistoryUsage usage);
         /** @brief Removes the previous unsaved review before a new request. */
         void ClearReview() noexcept;
         /** @brief Checks whether an explicitly reviewed recoverable ask can be offered. */
@@ -33,7 +34,7 @@ namespace Horo::Editor {
         /** @brief Reports whether a durable prompt still owns a recoverable response. */
         [[nodiscard]] bool HasRecovery() const noexcept;
         /** @brief Prepares the visible terminal answer for a second, independent approval. */
-        void ReviewRecoveryAnswer(std::string_view answer);
+        void ReviewRecoveryAnswer(std::string_view answer, Agent::AgentHistoryUsage usage);
         /** @brief Settles a failed, cancelled or skipped response with no output payload. */
         void FinishRecovery(Agent::AgentHistoryMessageState state);
         /** @brief Presents approved storage and bounded conversation management on the editor lane. */
@@ -69,6 +70,8 @@ namespace Horo::Editor {
         [[nodiscard]] bool Queue(const Result<Agent::AgentHistoryOperationId> &operation, Action action, std::uint64_t checkpointTime = 0);
         void DrawRecovery(const ILocalizationService &locale, const Agent::AgentHistorySessionView &view);
         void DrawReview(const ILocalizationService &locale, const Agent::AgentHistorySessionView &view);
+        /** @brief Displays present, bounded counts beside the text whose save the user approves. */
+        void DrawTokenUsage(const ILocalizationService &locale, Agent::AgentHistoryUsage usage) const;
         void DrawManager(const EditorGuiContext &context, const Agent::AgentHistorySessionView &view);
         void DrawActions(const EditorGuiContext &context, const Agent::AgentHistorySessionView &view,
                          const Agent::AgentConversation &conversation);

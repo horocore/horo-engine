@@ -51,8 +51,13 @@ namespace Horo::Agent {
 
     /** @brief Counts retained for display without raw provider metadata. */
     struct AgentHistoryUsage final {
+        static constexpr std::uint32_t MaximumTokenCount = 1'000'000;
         std::uint32_t inputTokens{};
         std::uint32_t outputTokens{};
+
+        /** @brief Admits each reported count independently and omits absent or oversized counts. */
+        [[nodiscard]] static AgentHistoryUsage FromReported(std::optional<std::uint64_t> input,
+                                                            std::optional<std::uint64_t> output) noexcept;
     };
 
     /** @brief Visible prompt and optional existing conversation. A new conversation needs a filtered title. */

@@ -14,7 +14,7 @@ namespace Horo::Agent {
         constexpr std::size_t MaximumSnapshotBytes = 8U << 20U;
         constexpr std::size_t DatabaseOverhead = 64U << 10U;
         constexpr std::size_t MaximumTitleBytes = AgentHistoryLimits::MaximumTitleBytes;
-        constexpr std::uint32_t MaximumTokenCount = 1'000'000;
+        constexpr auto MaximumTokenCount = AgentHistoryUsage::MaximumTokenCount;
         constexpr int HistoryApplication = 0x48414948;  // HAIH
         constexpr int HistoryVersion = 1;
         constexpr auto HistoryPath = ".horo/local/agent/conversations.sqlite";
@@ -355,6 +355,16 @@ namespace Horo::Agent {
         const ErrorCodeDescriptor Unavailable = HistoryError("editor.agent.history.unavailable", "Conversation history is unavailable.");
         const ErrorCodeDescriptor Busy = HistoryError("editor.agent.history.busy", "A history operation is still pending.");
     }  // namespace AgentHistoryErrors
+
+    /** @copydoc AgentHistoryUsage::FromReported */
+    AgentHistoryUsage AgentHistoryUsage::FromReported(const std::optional<std::uint64_t> input,
+                                                      const std::optional<std::uint64_t> output) noexcept {
+        const auto count = [](const std::optional<std::uint64_t> value) -> std::uint32_t {
+            const auto reported = value.value_or(0);
+            return reported <= MaximumTokenCount ? static_cast<std::uint32_t>(reported) : 0U;
+        };
+        return {count(input), count(output)};
+    }
 
     struct AgentConversationStore::State final {
         DurableFileSystem &files;

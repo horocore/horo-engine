@@ -130,10 +130,11 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorLocalAgentHistory::Review */
-    void EditorLocalAgentHistory::Review(AgentHistoryProjectRevision project, std::string_view prompt, std::string_view answer) {
+    void EditorLocalAgentHistory::Review(AgentHistoryProjectRevision project, std::string_view prompt, std::string_view answer,
+                                         const AgentHistoryUsage usage) {
         if (project != Project())
             return;
-        auto prepared = AgentHistoryExchangeReview::Prepare(project, prompt, answer);
+        auto prepared = AgentHistoryExchangeReview::Prepare(project, prompt, answer, usage);
         if (prepared.HasValue())
             review_.emplace(std::move(prepared).Value());
     }
@@ -173,10 +174,10 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorLocalAgentHistory::ReviewRecoveryAnswer */
-    void EditorLocalAgentHistory::ReviewRecoveryAnswer(std::string_view answer) {
+    void EditorLocalAgentHistory::ReviewRecoveryAnswer(std::string_view answer, const AgentHistoryUsage usage) {
         if (!recovery_)
             return;
-        auto prepared = AgentHistoryAnswerReview::Prepare(recovery_->binding, answer);
+        auto prepared = AgentHistoryAnswerReview::Prepare(recovery_->binding, answer, usage);
         if (prepared.HasError()) {
             FinishRecovery(AgentHistoryMessageState::Incomplete);
             return;
@@ -235,6 +236,7 @@ namespace Horo::Editor {
             return;
         ImGui::TextWrapped("%s", LocalizedText(locale, "history_recovery_answer").c_str());
         DrawText(recovery_->answer->Answer());
+        DrawTokenUsage(locale, recovery_->answer->Usage());
         if (Button(locale, "history_save", enabled))
             static_cast<void>(Queue(recovery_->answer->SaveApproved(history_, std::max(recovery_->checkpointTime, WallSeconds())),
                                     Action::FinishRecovery));
@@ -243,12 +245,21 @@ namespace Horo::Editor {
             FinishRecovery(AgentHistoryMessageState::Incomplete);
     }
 
+    /** @copydoc EditorLocalAgentHistory::DrawTokenUsage */
+    void EditorLocalAgentHistory::DrawTokenUsage(const ILocalizationService &locale, const AgentHistoryUsage usage) const {
+        if (usage.inputTokens != 0)
+            DrawText(LocalizedText(locale, "history_input_tokens") + " " + std::to_string(usage.inputTokens));
+        if (usage.outputTokens != 0)
+            DrawText(LocalizedText(locale, "history_output_tokens") + " " + std::to_string(usage.outputTokens));
+    }
+
     void EditorLocalAgentHistory::DrawReview(const ILocalizationService &locale, const AgentHistorySessionView &view) {
         if (!review_)
             return;
         ImGui::TextUnformatted(LocalizedText(locale, "history_review").c_str());
         DrawText(review_->Prompt());
         DrawText(review_->Response());
+        DrawTokenUsage(locale, review_->Usage());
         if (Button(locale, "history_save", Available(view) && !pending_) &&
             Queue(review_->SaveApproved(history_, LocalizedText(locale, "history_title"), WallSeconds()), Action::Save))
             review_.reset();
@@ -292,6 +303,7 @@ namespace Horo::Editor {
             if (const auto key = ResponseStateKey(message.state))
                 ImGui::TextUnformatted(LocalizedText(locale, key).c_str());
             DrawText(message.text);
+            DrawTokenUsage(locale, message.usage);
         }
     }
 

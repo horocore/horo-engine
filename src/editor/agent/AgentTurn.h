@@ -37,6 +37,7 @@ namespace Horo::Agent {
         std::vector<ModelMessage> messages;
         std::optional<ModelErrorCode> providerError{};             /**< Structured provider failure without response text or credentials. */
         std::optional<Security::AgentPolicyReason> contextError{}; /**< Structured pre-dispatch context denial. */
+        std::optional<ModelUsage> finalUsage{};                    /**< Provider-reported counts for the final successful inference only. */
     };
 
     /** @brief Optional consented evidence borrowed on the synchronous turn caller's Security policy owner lane. */

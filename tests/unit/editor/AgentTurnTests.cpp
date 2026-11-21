@@ -54,8 +54,11 @@ namespace Horo::Agent {
         Model model;
         model.action = [](const std::size_t round, const ModelEventSink &sink, std::stop_token) {
             if (round == 1)
-                return Emit(sink, {Intent("inspect-1"), {.kind = ModelEventKind::Completed}});
-            return Emit(sink, {{.kind = ModelEventKind::TextDelta, .text = "Three objects"}, {.kind = ModelEventKind::Completed}});
+                return Emit(sink,
+                            {Intent("inspect-1"), {.kind = ModelEventKind::Usage, .usage = {8, 3}}, {.kind = ModelEventKind::Completed}});
+            return Emit(sink, {{.kind = ModelEventKind::TextDelta, .text = "Three objects"},
+                               {.kind = ModelEventKind::Usage, .usage = {24, 2}},
+                               {.kind = ModelEventKind::Completed}});
         };
         const auto result = tools.Run(model, Request(true));
         REQUIRE(result.status == AgentTurnStatus::Completed);
@@ -65,6 +68,9 @@ namespace Horo::Agent {
         CHECK(model.requests.back().messages.back().toolCallId == "inspect-1");
         CHECK(model.requests.back().messages.back().text == R"({"count":3})");
         CHECK(result.messages.back().text == "Three objects");
+        REQUIRE(result.finalUsage);
+        CHECK(result.finalUsage->inputTokens == 24);
+        CHECK(result.finalUsage->outputTokens == 2);
     }
 
     TEST_CASE("Editor Agent discards malformed sibling intents before making any tool visible", "[agent][turn]") {
@@ -81,6 +87,7 @@ namespace Horo::Agent {
         const auto result = tools.Run(model, Request(true));
         CHECK(result.status == AgentTurnStatus::InvalidModelResponse);
         CHECK(result.messages.empty());
+        CHECK_FALSE(result.finalUsage);
         CHECK(tools.scene->calls == 0);
     }
 

@@ -109,6 +109,8 @@
     "workspace.local_agent.empty_response": {"text": "The local model returned an empty response."},
     "workspace.local_agent.history_review": {"text": "Review redacted text before saving"},
     "workspace.local_agent.history_save": {"text": "Save this exchange"},
+    "workspace.local_agent.history_input_tokens": {"text": "Input tokens"},
+    "workspace.local_agent.history_output_tokens": {"text": "Output tokens"},
     "workspace.local_agent.history_saving": {"text": "Saving to project history…"},
     "workspace.local_agent.history_saved": {"text": "Saved to project history."},
     "workspace.local_agent.history_write_error": {"text": "The history operation could not be completed."},

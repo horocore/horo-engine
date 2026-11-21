@@ -421,10 +421,12 @@ namespace Horo::Editor {
                 if (result.status == AgentTurnStatus::Completed && !result.messages.empty()) {
                     response_ = std::move(result.messages.back().text);
                     status_ = response_.empty() ? "empty_response" : nullptr;
+                    const auto reported = result.finalUsage.value_or(ModelUsage{});
+                    const auto usage = AgentHistoryUsage::FromReported(reported.inputTokens, reported.outputTokens);
                     if (history_.HasRecovery())
-                        history_.ReviewRecoveryAnswer(response_);
+                        history_.ReviewRecoveryAnswer(response_, usage);
                     else if (!response_.empty() && submittedPrompt_)
-                        history_.Review(submittedProject_, *submittedPrompt_, response_);
+                        history_.Review(submittedProject_, *submittedPrompt_, response_, usage);
                     return;
                 }
                 status_ = result.status == AgentTurnStatus::TimedOut ? "timeout" : FailureKey(result.providerError);

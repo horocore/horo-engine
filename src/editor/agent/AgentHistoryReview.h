@@ -49,20 +49,27 @@ namespace Horo::Agent {
     class AgentHistoryAnswerReview final {
     public:
         /** @brief Prepare only the visible answer for explicit approval and exact checkpoint replacement. */
-        [[nodiscard]] static Result<AgentHistoryAnswerReview> Prepare(AgentHistoryRecoveryTurn recovery, std::string_view answer);
+        [[nodiscard]] static Result<AgentHistoryAnswerReview> Prepare(AgentHistoryRecoveryTurn recovery, std::string_view answer,
+                                                                      AgentHistoryUsage usage = {});
 
         /** @brief Borrow the exact redacted answer to show before approval. */
         [[nodiscard]] std::string_view Answer() const noexcept {
             return answer_;
         }
 
+        /** @brief Returns the bounded numeric metadata to show before saving this answer. */
+        [[nodiscard]] AgentHistoryUsage Usage() const noexcept {
+            return usage_;
+        }
+
         /** @brief Queue completion of the exact checkpoint after the user approves this answer. */
         [[nodiscard]] Result<AgentHistoryOperationId> SaveApproved(AgentHistorySession &history, std::uint64_t now) const;
 
     private:
-        AgentHistoryAnswerReview(AgentHistoryRecoveryTurn recovery, std::string answer);
+        AgentHistoryAnswerReview(AgentHistoryRecoveryTurn recovery, std::string answer, AgentHistoryUsage usage);
         AgentHistoryRecoveryTurn recovery_;
         std::string answer_;
+        AgentHistoryUsage usage_;
     };
 
     /** @brief Immutable sanitized display pair for one exact plain local chat exchange. */
@@ -72,10 +79,11 @@ namespace Horo::Agent {
          * @param project Exact history project selection captured with the exchange.
          * @param prompt Visible prompt from a plain local text request.
          * @param response Visible terminal assistant response.
+         * @param usage Optional provider-reported numeric metadata for review.
          * @return Sanitized pair or typed invalid, capacity, or unsupported-text error.
          */
         [[nodiscard]] static Result<AgentHistoryExchangeReview> Prepare(AgentHistoryProjectRevision project, std::string_view prompt,
-                                                                        std::string_view response);
+                                                                        std::string_view response, AgentHistoryUsage usage = {});
 
         /** @brief Borrow the exact sanitized prompt for presentation. */
         [[nodiscard]] std::string_view Prompt() const noexcept {
@@ -85,6 +93,11 @@ namespace Horo::Agent {
         /** @brief Borrow the exact sanitized answer for presentation. */
         [[nodiscard]] std::string_view Response() const noexcept {
             return response_;
+        }
+
+        /** @brief Returns the bounded numeric metadata to show with the sanitized display pair. */
+        [[nodiscard]] AgentHistoryUsage Usage() const noexcept {
+            return usage_;
         }
 
         /** @brief Queue the exact preview after the user approves saving it.
@@ -97,9 +110,10 @@ namespace Horo::Agent {
                                                                    std::uint64_t now) const;
 
     private:
-        AgentHistoryExchangeReview(AgentHistoryProjectRevision project, std::string prompt, std::string response);
+        AgentHistoryExchangeReview(AgentHistoryProjectRevision project, std::string prompt, std::string response, AgentHistoryUsage usage);
         AgentHistoryProjectRevision project_;
         std::string prompt_;
         std::string response_;
+        AgentHistoryUsage usage_;
     };
 }  // namespace Horo::Agent

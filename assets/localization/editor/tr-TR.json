@@ -109,6 +109,8 @@
     "workspace.local_agent.empty_response": {"text": "Yerel model boş yanıt döndürdü."},
     "workspace.local_agent.history_review": {"text": "Kaydetmeden önce hassas bilgilerden arındırılmış metni inceleyin"},
     "workspace.local_agent.history_save": {"text": "Bu yazışmayı kaydet"},
+    "workspace.local_agent.history_input_tokens": {"text": "Girdi token sayısı"},
+    "workspace.local_agent.history_output_tokens": {"text": "Çıktı token sayısı"},
     "workspace.local_agent.history_saving": {"text": "Proje geçmişine kaydediliyor…"},
     "workspace.local_agent.history_saved": {"text": "Proje geçmişine kaydedildi."},
     "workspace.local_agent.history_write_error": {"text": "Geçmiş işlemi tamamlanamadı."},

@@ -193,18 +193,19 @@ namespace Horo::Agent {
         return history.BeginTurn(project_, {.title = title, .userText = prompt_, .now = now});
     }
 
-    AgentHistoryAnswerReview::AgentHistoryAnswerReview(AgentHistoryRecoveryTurn recovery, std::string answer)
-        : recovery_(recovery), answer_(std::move(answer)) {}
+    AgentHistoryAnswerReview::AgentHistoryAnswerReview(AgentHistoryRecoveryTurn recovery, std::string answer, AgentHistoryUsage usage)
+        : recovery_(recovery), answer_(std::move(answer)), usage_(usage) {}
 
     /** @copydoc AgentHistoryAnswerReview::Prepare */
-    Result<AgentHistoryAnswerReview> AgentHistoryAnswerReview::Prepare(AgentHistoryRecoveryTurn recovery, std::string_view answer) {
+    Result<AgentHistoryAnswerReview> AgentHistoryAnswerReview::Prepare(AgentHistoryRecoveryTurn recovery, std::string_view answer,
+                                                                       const AgentHistoryUsage usage) {
         using Output = Result<AgentHistoryAnswerReview>;
         if (recovery.project.value == 0 || recovery.turn.conversation.value == 0 || recovery.turn.response.value == 0)
             return Output::Failure(MakeError(AgentHistoryErrors::Invalid));
         auto text = PrepareHistoryText(AgentHistoryTextKind::AssistantMessage, answer);
         if (text.HasError())
             return Output::Failure(std::move(text).ErrorValue());
-        return Output::Success(AgentHistoryAnswerReview{recovery, std::move(text).Value()});
+        return Output::Success(AgentHistoryAnswerReview{recovery, std::move(text).Value(), usage});
     }
 
     /** @copydoc AgentHistoryAnswerReview::SaveApproved */
@@ -213,15 +214,18 @@ namespace Horo::Agent {
                                                       .response = recovery_.turn.response,
                                                       .state = AgentHistoryMessageState::Complete,
                                                       .visibleText = answer_,
+                                                      .usage = usage_,
                                                       .now = now});
     }
 
-    AgentHistoryExchangeReview::AgentHistoryExchangeReview(AgentHistoryProjectRevision project, std::string prompt, std::string response)
-        : project_(project), prompt_(std::move(prompt)), response_(std::move(response)) {}
+    AgentHistoryExchangeReview::AgentHistoryExchangeReview(AgentHistoryProjectRevision project, std::string prompt, std::string response,
+                                                           AgentHistoryUsage usage)
+        : project_(project), prompt_(std::move(prompt)), response_(std::move(response)), usage_(usage) {}
 
     /** @copydoc AgentHistoryExchangeReview::Prepare */
     Result<AgentHistoryExchangeReview> AgentHistoryExchangeReview::Prepare(const AgentHistoryProjectRevision project,
-                                                                           const std::string_view prompt, const std::string_view response) {
+                                                                           const std::string_view prompt, const std::string_view response,
+                                                                           const AgentHistoryUsage usage) {
         using Output = Result<AgentHistoryExchangeReview>;
         if (project.value == 0)
             return Output::Failure(MakeError(AgentHistoryErrors::Invalid));
@@ -231,12 +235,12 @@ namespace Horo::Agent {
         auto assistant = PrepareHistoryText(AgentHistoryTextKind::AssistantMessage, response);
         if (assistant.HasError())
             return Output::Failure(std::move(assistant).ErrorValue());
-        return Output::Success(AgentHistoryExchangeReview{project, std::move(user).Value(), std::move(assistant).Value()});
+        return Output::Success(AgentHistoryExchangeReview{project, std::move(user).Value(), std::move(assistant).Value(), usage});
     }
 
     /** @copydoc AgentHistoryExchangeReview::SaveApproved */
     Result<AgentHistoryOperationId> AgentHistoryExchangeReview::SaveApproved(AgentHistorySession &history, const std::string_view title,
                                                                              const std::uint64_t now) const {
-        return history.RecordCompleted(project_, {.title = title, .userText = prompt_, .now = now}, {response_, {}});
+        return history.RecordCompleted(project_, {.title = title, .userText = prompt_, .now = now}, {response_, usage_});
     }
 }  // namespace Horo::Agent

@@ -882,6 +882,8 @@ TEST_CASE("Local model panel copy resolves in both shipped locales", "[unit][edi
                                "history_recovery_prompt",
                                "history_recovery_start",
                                "history_recovery_answer",
+                               "history_input_tokens",
+                               "history_output_tokens",
                                "history_recovery_keep_incomplete",
                                "history_incomplete",
                                "history_streaming",

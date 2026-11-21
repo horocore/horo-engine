@@ -240,7 +240,7 @@ namespace Horo::Agent {
                         request.messages.erase(firstContext, firstContext + contextCount);
                     }
                     request.messages.push_back(std::move(message));
-                    return {Completed, std::move(request.messages)};
+                    return {.status = Completed, .messages = std::move(request.messages), .finalUsage = stream.Usage()};
                 }
                 if (!tools)
                     return {ToolDenied, {}};

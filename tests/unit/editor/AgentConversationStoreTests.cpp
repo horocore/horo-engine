@@ -471,7 +471,8 @@ namespace Horo::Agent {
         constexpr auto prompt = "Keep this question.\nExample: Api-Key=example-value\nAfter the header.";
         constexpr auto response = "Summary.\nAuthorization: Bearer synthetic-value\n-----BEGIN PRIVATE KEY-----\nprivate fixture line\n"
                                   "-----END PRIVATE KEY-----\nProject answer.";
-        const auto review = AgentHistoryExchangeReview::Prepare(session.View().project, prompt, response);
+        const auto review =
+            AgentHistoryExchangeReview::Prepare(session.View().project, prompt, response, AgentHistoryUsage::FromReported(100, 19));
         REQUIRE(review.HasValue());
         CHECK(review.Value().Prompt() == "Keep this question.\n[redacted]\nAfter the header.");
         CHECK(review.Value().Response() == "Summary.\n[redacted]\n[redacted]\nProject answer.");
@@ -489,6 +490,8 @@ namespace Horo::Agent {
         CHECK(messages.front().text == review.Value().Prompt());
         CHECK(messages.back().text == review.Value().Response());
         CHECK(messages.back().state == MessageState::Complete);
+        CHECK(messages.back().usage.inputTokens == 100);
+        CHECK(messages.back().usage.outputTokens == 19);
         CHECK(messages.front().references.empty());
         CHECK(messages.back().references.empty());
         const auto image = project.Image();
@@ -669,7 +672,9 @@ namespace Horo::Agent {
         const auto checkpoint = project.Image();
         CHECK_FALSE(Contains(checkpoint, "prompt-secret"));
 
-        const auto answer = AgentHistoryAnswerReview::Prepare(recovery, "Visible answer.\nAuthorization: Bearer response-secret");
+        const auto answer =
+            AgentHistoryAnswerReview::Prepare(recovery, "Visible answer.\nAuthorization: Bearer response-secret",
+                                              AgentHistoryUsage::FromReported(AgentHistoryUsage::MaximumTokenCount + 1, 12));
         REQUIRE(answer.HasValue());
         CHECK(answer.Value().Answer() == "Visible answer.\n[redacted]");
         CHECK(project.Image() == checkpoint);
@@ -693,6 +698,8 @@ namespace Horo::Agent {
         CHECK(conversation.messages.back().id == recovery.turn.response);
         CHECK(conversation.messages.back().state == (approved ? MessageState::Complete : MessageState::Incomplete));
         CHECK(conversation.messages.back().text == (approved ? answer.Value().Answer() : std::string_view{}));
+        CHECK(conversation.messages.back().usage.inputTokens == 0);
+        CHECK(conversation.messages.back().usage.outputTokens == (approved ? 12 : 0));
         const auto image = project.Image();
         CHECK_FALSE(Contains(image, "response-secret"));
         CHECK(Contains(image, "Visible answer.") == approved);
