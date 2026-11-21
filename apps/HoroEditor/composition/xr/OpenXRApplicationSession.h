@@ -349,7 +349,8 @@ namespace Horo::Application::Internal {
         /** @brief Clears the current purpose grant and sample without invoking the native runtime. */
         void RevokeEyeGaze() noexcept;
         /** @return Fresh consented gaze for the exact cutoff and same-instance clock sample, or empty after expiry, loss or replacement. */
-        [[nodiscard]] std::optional<XR::XRPoseSample> ReadEyeGaze(const XR::XRTrackingSnapshot &snapshot, XR::XRRuntimeTime now) const noexcept;
+        [[nodiscard]] std::optional<XR::XRPoseSample> ReadEyeGaze(const XR::XRTrackingSnapshot &snapshot,
+                                                                  XR::XRRuntimeTime now) const noexcept;
         /** @brief Binds the same prepared native children/Input reservation during canonical resource preparation.
          * @param candidate Actual candidate issued by XRSessionLifecycle and already activated on the SAME native session.
          * @param coordinator Candidate's sole canonical binding publication/revision owner.

@@ -709,7 +709,8 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc OpenXRApplicationSession::ReadEyeGaze */
-    std::optional<XRPoseSample> OpenXRApplicationSession::ReadEyeGaze(const XRTrackingSnapshot &snapshot, const XRRuntimeTime now) const noexcept {
+    std::optional<XRPoseSample> OpenXRApplicationSession::ReadEyeGaze(const XRTrackingSnapshot &snapshot,
+                                                                      const XRRuntimeTime now) const noexcept {
         if (std::this_thread::get_id() != lane_ || !input_.gazeAllowed || !input_.gaze || input_.gazeRevision != snapshot.Revision() ||
             input_.gaze->Session() != snapshot.Session() || snapshot.Focus() != XRTrackingFocusState::Focused ||
             snapshot.State() != XRTrackingState::Active)
