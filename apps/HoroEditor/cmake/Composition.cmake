@@ -119,7 +119,7 @@ if(HORO_BUILD_XR_OPENXR AND HORO_BUILD_RENDER_VULKAN AND TARGET HoroEditorVulkan
     target_link_libraries(HoroOpenXRApplicationHost
         PUBLIC HoroOpenXRApplicationClock HoroEditorPlayXrHostInterface HoroEditorXrSceneInternal HoroXRRuntimeHostInterface HoroEngine::RuntimeScene HoroOpenXRProductHost HoroOpenXRApplicationBindings HoroXROpenXRHostInterface HoroXROpenXRVulkanHostInterface HoroRenderVulkanHostInterface HoroEngine::XRRuntime HoroEngine::Runtime
             HoroEditorVulkanXrHostInterface HoroEngine::XRCharacterLocomotion HoroEngine::GameplayApi
-        PRIVATE HoroEngine::XROpenXR HoroXROpenXRVulkan HoroEngine::RenderFrontend HoroEngine::SceneRenderExtraction)
+        PRIVATE HoroEngine::XROpenXR HoroXROpenXRVulkan HoroXROpenXRAnchorSaveHost HoroEngine::RenderFrontend HoroEngine::SceneRenderExtraction)
 endif()
 
 # Pure App-owned package admission is shared by runtime loading and offline production.

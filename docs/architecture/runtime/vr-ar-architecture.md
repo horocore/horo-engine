@@ -1035,6 +1035,10 @@ The project can separately offer protected storage through
 `xr.persistence.spatial_anchors`, which defaults to false. OpenXR discovery requests
 the storage extension and its live anchor dependency under that policy. Opening
 the store still requires a separate current operator grant.
+The Editor XR session owner binds the optional World anchor Save participant on
+its control thread after the live anchor scope exists. The adapter observes
+the same calibrated World scope and loses access when the separate store grant
+or the live anchor scope is revoked.
 
 `HoroXRAnchorSaveIntegration` provides the separate optional local durability
 lane. The selected host binds one canonical Save participant per durable anchor

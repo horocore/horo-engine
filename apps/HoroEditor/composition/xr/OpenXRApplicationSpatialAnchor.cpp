@@ -1,4 +1,5 @@
 #include "OpenXRApplicationSession.h"
+#include "OpenXRProtectedAnchorStore.h"
 
 #include <limits>
 #include <new>
@@ -36,6 +37,40 @@ namespace Horo::Application::Internal {
         ++spatialAnchor_.grant;
         spatialAnchor_.allowed = true;
         return Result<void>::Success();
+    }
+
+    Result<OpenXRApplicationAnchorSave> OpenXRApplicationSession::BindSpatialAnchorSave(const XRAnchorStoreScope &storeScope,
+                                                                                        const CancellationSource &consent,
+                                                                                        std::uint64_t (*unixSeconds)() noexcept) {
+        using Outcome = Result<OpenXRApplicationAnchorSave>;
+        if (const auto current = Current(); current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        if (!settings_.AllowsSpatialAnchorPersistence())
+            return Outcome::Failure(MakeError(XRErrors::OperationUnsupported));
+        if (!native_ || !spatialAnchor_.allowed || !spatialAnchor_.scope || !spatialAnchor_.publication)
+            return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
+
+        const auto live = *spatialAnchor_.scope;
+        const auto world = BorrowWorldSpace(live.space);
+        if (world.HasError())
+            return Outcome::Failure(world.ErrorValue());
+        if (!native_ || !spatialAnchor_.allowed || spatialAnchor_.scope != live || !spatialAnchor_.publication)
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+
+        const auto owner = native_;
+        const auto anchors = spatialAnchor_.publication;
+        auto store = OpenXRProtectedAnchorStore::Open(owner, live, world.Value(), storeScope, consent, unixSeconds);
+        if (store.HasError())
+            return Outcome::Failure(store.ErrorValue());
+        const auto participant = Runtime::SaveParticipantId::Parse("horo.xr.world_anchor");
+        constexpr std::string_view recordUuid = "17a778c9-686f-42fd-888c-d29b57aaf104";
+        const auto record = Runtime::SaveRecordId::Parse(recordUuid);
+        auto adapter = XRAnchorPersistence::Bind(participant.Value(), record.Value(), anchors, live, storeScope, store.Value());
+        if (adapter.HasError()) {
+            const auto closed = owner->CloseSpatialAnchorStore(live);
+            return Outcome::Failure(closed.HasError() ? closed.ErrorValue() : adapter.ErrorValue());
+        }
+        return Outcome::Success({std::move(adapter).Value(), std::move(store).Value()});
     }
 
     void OpenXRApplicationSession::RevokeSpatialAnchor() noexcept {

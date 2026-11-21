@@ -14,6 +14,15 @@
 
 #include <functional>
 
+namespace Horo::XR {
+    struct XRAnchorStoreScope;
+    class XRAnchorPersistence;
+}  // namespace Horo::XR
+
+namespace Horo::XR::OpenXRInternal {
+    class OpenXRProtectedAnchorStore;
+}
+
 namespace Horo::XR::RuntimeInternal {
     class XRTrackingPublication;
 }
@@ -163,6 +172,12 @@ namespace Horo::Application::Internal {
         std::uint64_t revision_;
     };
 
+    /** @brief The durable Save participant and the cold native operations tied to one store connection. */
+    struct OpenXRApplicationAnchorSave final {
+        std::shared_ptr<XR::XRAnchorPersistence> participant;
+        std::shared_ptr<XR::OpenXRInternal::OpenXRProtectedAnchorStore> store;
+    };
+
     /** @brief Application-owned native preparation, retained beside its selected renderer through explicit retirement.
      * @details This is the actual composition fence, not a second session/frame authority. Native discovery observes facts;
      * canonical XRSessionLifecycle alone issues a Horo session candidate after complete feature negotiation.
@@ -283,6 +298,10 @@ namespace Horo::Application::Internal {
         void RevokeSpatialAnchor() noexcept;
         [[nodiscard]] Result<void> ProgressSpatialAnchorRetirement();
         [[nodiscard]] XR::XRCapabilityState ReadSpatialAnchorState() const noexcept;
+        /** @brief Binds optional canonical Save on the owner lane after a distinct, revocable store grant. */
+        [[nodiscard]] Result<OpenXRApplicationAnchorSave> BindSpatialAnchorSave(const XR::XRAnchorStoreScope &storeScope,
+                                                                                const CancellationSource &consent,
+                                                                                std::uint64_t (*unixSeconds)() noexcept);
         /** @brief Reports whether the installed platform and negotiated extension support the next-Play request. */
         [[nodiscard]] bool MayArmPassthrough() const;
         /** @brief Checks the installed platform's current permission for the exact Play scope, without native I/O. */
@@ -543,7 +562,7 @@ namespace Horo::Application::Internal {
         const std::thread::id lane_{std::this_thread::get_id()};
         XR::OpenXRInternal::OpenXRSelectedVulkanBinding graphics_;
         std::shared_ptr<const OpenXRLoaderLease> loader_;
-        std::unique_ptr<XR::OpenXRInternal::OpenXRNativeSession> native_;
+        std::shared_ptr<XR::OpenXRInternal::OpenXRNativeSession> native_;
         std::optional<XR::XRLoaderPreflightSnapshot> preflight_;
         std::optional<XR::OpenXRInternal::NativeSystemCensus> system_;
         PFN_xrGetInstanceProcAddr getProc_{}; /**< Same successful installed-instance resolver, retained through session retirement. */

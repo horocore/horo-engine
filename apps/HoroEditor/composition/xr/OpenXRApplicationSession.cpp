@@ -70,7 +70,7 @@ namespace Horo::Application::Internal {
         if (lease.HasError())
             return Result<void>::Failure(lease.ErrorValue());
         loader_ = std::move(lease).Value();
-        native_ = std::make_unique<OpenXRNativeSession>(loader_->Library(), graphics_, *this);
+        native_ = std::make_shared<OpenXRNativeSession>(loader_->Library(), graphics_, *this);
         return DiscoverRuntime();
     }
 
