@@ -1263,11 +1263,18 @@ namespace Horo::AI {
             const auto firstStage = MakeIdentity<QueryStageId>(18);
             const auto secondStage = MakeIdentity<QueryStageId>(16);
             const QueryGeneratorProvenance provenance{plan.Stages().front().id, fixture.generator.id, fixture.generator.origin.provider, 1};
-            std::array tests{
-                PreparedPointQueryTest{provenance, {.stage = secondStage, .score = QueryScoreRange{}}, 1, 2, 1,
-                                       std::make_unique<ExecutionSource>(generator)},
-                PreparedPointQueryTest{provenance, {.stage = firstStage, .score = QueryScoreRange{}}, 1, 2, 1,
-                                       std::make_unique<ExecutionSource>(other)}};
+            std::array tests{PreparedPointQueryTest{provenance,
+                                                    {.stage = secondStage, .score = QueryScoreRange{}},
+                                                    1,
+                                                    2,
+                                                    1,
+                                                    std::make_unique<ExecutionSource>(generator)},
+                             PreparedPointQueryTest{provenance,
+                                                    {.stage = firstStage, .score = QueryScoreRange{}},
+                                                    1,
+                                                    2,
+                                                    1,
+                                                    std::make_unique<ExecutionSource>(other)}};
             const QueryExecutionInputs inputs{{AiRuntimeIncarnation::Create(7).Value(), {1, 1}}, contexts.Value()};
             auto query = AdmitPreparedPointQuery(plan, registry, inputs, {0, 10, 2, 1, 1, false, {2, true}}, tests);
             REQUIRE(query.HasValue());
