@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Horo/Editor/SourceDocumentService.h"
+#include "Horo/Foundation/Platform.h"
 
 #include <atomic>
 #include <string>
@@ -126,6 +127,15 @@ namespace Horo::Editor {
             std::size_t bytes{};
         };
 
+        /** @brief A rename's new root and leased native operands, staged without changing the record. */
+        struct StagedRename final {
+            StagedBatchEdit edit;
+            const RenameRequest *request;
+            std::filesystem::path destination;
+            ExclusiveFileLock sourceLease;
+            ExclusiveFileLock destinationLease;
+        };
+
         struct StagedBatchUndo final {
             Record *record;
             std::shared_ptr<const Detail::SourceDocumentRoot> next;
@@ -194,6 +204,23 @@ namespace Horo::Editor {
         [[nodiscard]] SourceEditBatch MakeBatchReceipt(std::span<const StagedBatchEdit> edits) const;
         /** @brief Publishes already verified edit roots and their history without allocation. */
         void PublishStagedEdits(std::span<StagedBatchEdit> edits) const noexcept;
+        /** @brief Prepares rekey, buffer and history without applying any mutation. */
+        [[nodiscard]] Result<StagedRename> StageRename(const RenameRequest &request, CancellationToken cancellation,
+                                                       std::size_t reservedBytes);
+        /** @brief Stages the group's renames beside its text edits and leases both ends of every move. */
+        [[nodiscard]] Result<std::vector<StagedRename>> StageRenames(std::span<const RenameRequest> renames, const StagedBatch &batch,
+                                                                     DurableFileSystem &files, CancellationToken cancellation);
+        /** @brief Acquires source and destination publication leases for a staged rename. */
+        [[nodiscard]] Result<void> LockRename(StagedRename &rename, DurableFileSystem &files, CancellationToken cancellation) const;
+        /** @brief Rechecks leased operands and preserves native visibility on every failure path. */
+        [[nodiscard]] const ErrorCodeDescriptor *TryMoveRename(const StagedRename &rename, DurableFileSystem &files,
+                                                               AtomicFileReplacementReceipt &receipt,
+                                                               CancellationToken cancellation) const noexcept;
+        /** @brief Moves a group under its leases and restores visible moves in reverse order on failure. */
+        [[nodiscard]] Result<void> MoveRenames(std::span<StagedRename> renames, DurableFileSystem &files, CancellationToken cancellation,
+                                               const SourceBatchDiskEvidence &evidence, const StagedBatch *edits = nullptr) const;
+        /** @brief Publishes rekeys after every physical move has reached durability. */
+        void PublishRenames(std::span<StagedRename> renames) const noexcept;
         /** @brief Reserves disk read scratch alongside the staged text, then verifies every original disk base. */
         [[nodiscard]] Result<void> VerifyBatchBases(const StagedBatch &batch, CancellationToken cancellation) const;
         /** @brief Verifies the exact ordered worker evidence and current metadata before publishing. */

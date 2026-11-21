@@ -281,7 +281,7 @@ namespace {
             auto candidate = std::move(prepared).Value();
             REQUIRE(candidate.ObserveDisk(project.directory, files).HasValue());
             project.Put("other", "second.cpp");
-            REQUIRE(candidate.CommitDrafts(open, files).HasError());
+            REQUIRE(candidate.CommitFileGroup(open, files).HasError());
             CHECK(source.IsCurrent());
             CHECK_FALSE(open.DocumentRegistry().Find({DocumentKind::Source, first}));
             CHECK_FALSE(open.DocumentRegistry().Find({DocumentKind::Source, second}));
@@ -664,6 +664,104 @@ namespace {
             std::ifstream original(project.directory / "code.cpp", std::ios::binary);
             CHECK((std::string{std::istreambuf_iterator<char>{original}, {}} == "another source"));
         }
+    }
+
+    TEST_CASE("Reviewed renames publish with edits and roll back a later move failure", "[editor][source][review][rename]") {
+        struct Files final : TestSupport::NativePublicationFiles {
+            bool failSecond{};
+            int moves{};
+
+            Result<void> MoveFileNoReplaceTracked(const std::filesystem::path &from, const std::filesystem::path &to,
+                                                  AtomicFileReplacementReceipt &receipt) override {
+                auto moved = native.MoveFileNoReplaceTracked(from, to, receipt);
+                if (++moves == 2 && failSecond && receipt.WasCommitted())
+                    return Result<void>::Failure(MakeError(SourceDocumentErrors::ReadFailed));
+                return moved;
+            }
+        } files;
+
+        TestSupport::SourceProject project;
+        project.Put("alpha", "a.cpp");
+        project.Put("beta", "b.cpp");
+        project.Put("base", "edit.cpp");
+        SourceFileOpenService open{project.directory};
+        const auto a = *open.Open({.path = "a.cpp"}).Value().sourceSnapshot;
+        const auto b = *open.Open({.path = "b.cpp"}).Value().sourceSnapshot;
+        const auto edit = *open.Open({.path = "edit.cpp"}).Value().sourceSnapshot;
+        const auto aPath = SourceDocumentId::Parse("new-a.cpp").Value();
+        const auto bPath = SourceDocumentId::Parse("new-b.cpp").Value();
+        const auto draft = SourceDocumentId::Parse("draft.cpp").Value();
+        const auto policy = ProjectPolicy::Capture("workspace", 1,
+                                                   {{a.Identity().key.source, false},
+                                                    {b.Identity().key.source, false},
+                                                    {edit.Identity().key.source, false},
+                                                    {aPath, false},
+                                                    {bPath, false},
+                                                    {draft, false}})
+                                .Value();
+        const auto proposal = ChangeSet::Capture(policy, {"rename-group",
+                                                          1,
+                                                          {"provider", "model", "request"},
+                                                          {RenameFile{FileBase::Capture(a).Value(), aPath, {{0, "alpha", "reviewed"}}},
+                                                           RenameFile{FileBase::Capture(b).Value(), bPath, {}}, CreateFile{draft, "draft"},
+                                                           EditFile{FileBase::Capture(edit).Value(), {{0, "base", "edited"}}}}})
+                                  .Value();
+        const std::array observed{SourcePathObservation{a.Identity().key.source, a},
+                                  SourcePathObservation{b.Identity().key.source, b},
+                                  SourcePathObservation{edit.Identity().key.source, edit},
+                                  SourcePathObservation{aPath, SourcePathState::Absent},
+                                  SourcePathObservation{bPath, SourcePathState::Absent},
+                                  SourcePathObservation{draft, SourcePathState::Absent}};
+        const auto plan = std::make_shared<const WorkspaceEditPlan>(PlanWorkspaceEdits(proposal, policy, observed).Value());
+        ReviewDecisions decisions{proposal};
+        REQUIRE(decisions.Decide(*plan, {}, ReviewChoice::Accept).HasValue());
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
+        ProjectMutationCoordinator mutations{files};
+        SourceReviewTransactions reviews;
+        WorkspacePanelHost host;
+        host.AttachDocumentIdentityRegistry(open.DocumentRegistry());
+        REQUIRE(host.OpenDocument(a.Identity().key).HasValue());
+        CancellationSource lifetime;
+        EditorWorkspaceViewCommandData command;
+        REQUIRE(QueueSourceReviewApplication("workspace", decisions, policy, plan, lifetime.Token(), command));
+        REQUIRE(reviews.Process(command, open.Documents(), &jobs, project.directory, &files, &open));
+        SECTION("The second visible move cannot confirm durability") {
+            files.failSecond = true;
+        }
+        SECTION("Every move reaches durability") {}
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (reviews.Status().feedback == SourceTransactionFeedback::Preparing && std::chrono::steady_clock::now() < deadline) {
+            static_cast<void>(reviews.Poll(open.Documents(), &files, &open, &host, &mutations));
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+        host.RefreshDocuments();
+        if (files.failSecond) {
+            CHECK(reviews.Status().feedback == SourceTransactionFeedback::Conflict);
+            CHECK(files.moves == 4);
+            CHECK(a.IsCurrent());
+            CHECK(b.IsCurrent());
+            CHECK(edit.IsCurrent());
+            CHECK(open.DocumentRegistry().IsCurrent(a.Identity()));
+            CHECK(open.DocumentRegistry().IsCurrent(b.Identity()));
+            CHECK_FALSE(open.DocumentRegistry().Find({DocumentKind::Source, draft}));
+            CHECK(std::filesystem::is_regular_file(project.directory / "a.cpp"));
+            CHECK(std::filesystem::is_regular_file(project.directory / "b.cpp"));
+            CHECK_FALSE(std::filesystem::exists(project.directory / "new-a.cpp"));
+            CHECK_FALSE(std::filesystem::exists(project.directory / "new-b.cpp"));
+            return;
+        }
+        REQUIRE(reviews.Status().feedback == SourceTransactionFeedback::Applied);
+        CHECK(files.moves == 2);
+        CHECK(open.DocumentRegistry().Find(a.Identity().instance)->key.source == aPath);
+        CHECK(open.DocumentRegistry().Find(b.Identity().instance)->key.source == bPath);
+        CHECK(host.DocumentTabs().front().identity.key.source == aPath);
+        const auto renamed = open.Documents().Snapshot(a.Identity().instance).Value();
+        CHECK(renamed.Text() == "reviewed");
+        CHECK(renamed.DiskBase() == "alpha");
+        CHECK(open.Documents().Snapshot(edit.Identity().instance).Value().Text() == "edited");
+        CHECK_FALSE(std::filesystem::exists(project.directory / "draft.cpp"));
+        CHECK(std::filesystem::is_regular_file(project.directory / "new-a.cpp"));
+        CHECK(std::filesystem::is_regular_file(project.directory / "new-b.cpp"));
     }
 
     TEST_CASE("Overlapping review applications and group undo produce deterministic revisions", "[editor][source][review][concurrency]") {

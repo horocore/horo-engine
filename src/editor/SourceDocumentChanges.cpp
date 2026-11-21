@@ -357,17 +357,43 @@ namespace Horo::Editor {
         return Output::Success(std::move(staged));
     }
 
-    /** @copydoc SourceDocumentService::PublishWithDrafts */
-    Result<SourceDraftBatch> SourceDocumentService::PublishWithDrafts(const std::span<const SourceBatchEdit> edits,
-                                                                      const SourceBatchDiskEvidence &evidence,
-                                                                      const DurableFileSystem &files, const CancellationToken cancellation,
-                                                                      const std::span<const DraftRequest> drafts) {
-        using Output = Result<SourceDraftBatch>;
+    /** @copydoc SourceDocumentService::Storage::StageRenames */
+    Result<std::vector<SourceDocumentService::Storage::StagedRename>> SourceDocumentService::Storage::StageRenames(
+        const std::span<const RenameRequest> renames, const StagedBatch &batch, DurableFileSystem &files,
+        const CancellationToken cancellation) {
+        using Moves = std::vector<StagedRename>;
+        using Output = Result<Moves>;
+        Moves moves;
+        moves.reserve(renames.size());
+        auto reservedBytes = batch.bytes;
+        for (const auto &rename : renames) {
+            auto staged = StageRename(rename, cancellation, reservedBytes);
+            if (staged.HasError())
+                return Output::Failure(staged.ErrorValue());
+            auto &move = moves.emplace_back(std::move(staged).Value());
+            const auto &edit = move.edit;
+            if (std::ranges::find(batch.items, edit.record, &StagedBatchEdit::record) != batch.items.end())
+                return Failure<Moves>(SourceDocumentErrors::Invalid);
+            if (edit.history && edit.next->text != edit.record->root->base)
+                reservedBytes += edit.next->text->bytes.size();
+            if (const auto lease = LockRename(move, files, cancellation); lease.HasError())
+                return Output::Failure(lease.ErrorValue());
+        }
+        return Output::Success(std::move(moves));
+    }
+
+    /** @copydoc SourceDocumentService::PublishReviewGroup */
+    Result<SourceFileReviewBatch> SourceDocumentService::PublishReviewGroup(const std::span<const SourceBatchEdit> edits,
+                                                                            const SourceBatchDiskEvidence &evidence,
+                                                                            DurableFileSystem &files, const CancellationToken cancellation,
+                                                                            const std::span<const DraftRequest> drafts,
+                                                                            const std::span<const RenameRequest> renames) {
+        using Output = Result<SourceFileReviewBatch>;
         try {
             if (const auto access = CheckAccess(); access.HasError())
                 return Output::Failure(access.ErrorValue());
-            if (drafts.empty())
-                return Failure<SourceDraftBatch>(SourceDocumentErrors::Invalid);
+            if (drafts.empty() && renames.empty())
+                return Failure<SourceFileReviewBatch>(SourceDocumentErrors::Invalid);
             Detail::SourcePublicationGuard guard{storage_->saving};
             auto prepared = storage_->StageDrafts(drafts, cancellation);
             if (prepared.HasError())
@@ -385,22 +411,35 @@ namespace Horo::Editor {
             if (stage.HasError())
                 return Output::Failure(stage.ErrorValue());
             auto batch = std::move(stage).Value();
+            auto stagedMoves = storage_->StageRenames(renames, batch, files, cancellation);
+            if (stagedMoves.HasError())
+                return Output::Failure(stagedMoves.ErrorValue());
+            auto moves = std::move(stagedMoves).Value();
+            std::vector<SourceDocumentSnapshot> movedSources;
+            movedSources.reserve(moves.size());
+            for (const auto &move : moves)
+                movedSources.push_back(SourceDocumentSnapshot{move.edit.next});
             static_assert(std::is_nothrow_move_constructible_v<Output>);
-            auto result = Output::Success({storage_->MakeBatchReceipt(batch.items), std::move(opened)});
+            auto result = Output::Success({storage_->MakeBatchReceipt(batch.items), std::move(opened), std::move(movedSources)});
             if (!edits.empty()) {
                 const auto disk = storage_->VerifyBatchEvidence(batch, evidence, files, cancellation);
                 if (disk.HasError())
                     return Output::Failure(disk.ErrorValue());
             }
             if (cancellation.IsCancellationRequested())
-                return Failure<SourceDraftBatch>(SourceDocumentErrors::Cancelled);
+                return Failure<SourceFileReviewBatch>(SourceDocumentErrors::Cancelled);
+            if (!moves.empty()) {
+                if (const auto moved = storage_->MoveRenames(moves, files, cancellation, evidence, &batch); moved.HasError())
+                    return Output::Failure(moved.ErrorValue());
+            }
             storage_->PublishStagedEdits(batch.items);
+            storage_->PublishRenames(moves);
             static_assert(std::is_nothrow_move_constructible_v<Storage::Record>);
             for (auto &record : newRecords)
                 storage_->records.push_back(std::move(record));
             return result;
         } catch (const std::bad_alloc &) {
-            return Failure<SourceDraftBatch>(SourceDocumentErrors::TooLarge);
+            return Failure<SourceFileReviewBatch>(SourceDocumentErrors::TooLarge);
         }
     }
 

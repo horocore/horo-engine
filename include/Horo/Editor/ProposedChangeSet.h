@@ -365,6 +365,7 @@ namespace Horo::Editor::Proposals {
         SourceEditBatch batch;
         std::shared_ptr<const SourceReviewAudit> audit;
         std::vector<SourceDocumentSnapshot> drafts;
+        std::vector<SourceDocumentSnapshot> renames;
     };
 
     /** @brief One accepted creation and its logical initial source revision, detached from the editor owner. */
@@ -417,12 +418,13 @@ namespace Horo::Editor::Proposals {
          */
         [[nodiscard]] Result<SourceReviewApplied> CommitObserved(SourceDocumentService &documents, const DurableFileSystem &files,
                                                                  CancellationToken cancellation = {}) const;
-        /** @brief Applies accepted text and draft creations through the registry owner as one group.
+        /** @brief Applies accepted text, draft creations and renames as one group.
          * @param open Source document and routing owner. @param files Worker filesystem authority.
          * @param cancellation Current workspace admission. @return Complete group or a conflict without publication.
+         * @pre The caller holds project mutation authority if the group contains renames.
          */
-        [[nodiscard]] Result<SourceReviewApplied> CommitDrafts(SourceFileOpenService &open, const DurableFileSystem &files,
-                                                               CancellationToken cancellation = {}) const;
+        [[nodiscard]] Result<SourceReviewApplied> CommitFileGroup(SourceFileOpenService &open, DurableFileSystem &files,
+                                                                  CancellationToken cancellation = {}) const;
 
         /** @brief Views accepted text operations in canonical proposal order. */
         [[nodiscard]] std::span<const PreparedSourceTextEdit> TextEdits() const noexcept {

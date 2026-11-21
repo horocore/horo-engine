@@ -89,7 +89,7 @@ namespace Horo::Editor {
         /** @brief Directs an exact unchanged draft undo through the owning document registry. */
         void UndoDraft(const SourceDocumentSnapshot &receipt, SourceFileOpenService *open, const CancellationToken &lifetime);
         /** @brief Reverts the exact edit and draft receipt together. */
-        void UndoDraftGroup(const std::shared_ptr<const SourceDraftBatch> &receipt, SourceFileOpenService *open,
+        void UndoDraftGroup(const std::shared_ptr<const SourceFileReviewBatch> &receipt, SourceFileOpenService *open,
                             const CancellationToken &lifetime);
         /** @brief Restores the current review's owned Trash payload without overwriting an existing file. */
         void UndoDelete(const SourceDocumentSnapshot &receipt, SourceFileOpenService *open, DurableFileSystem *files,
@@ -118,7 +118,7 @@ namespace Horo::Editor {
                                  const ProjectMutationCoordinator *mutations, const CancellationToken &lifetime);
         SourceEditBatch batch_;
         SourceDocumentSnapshot draft_;
-        std::shared_ptr<const SourceDraftBatch> draftGroup_;
+        std::shared_ptr<const SourceFileReviewBatch> fileGroup_;
         SourceDocumentSnapshot renamed_;
         SourceDocumentSnapshot beforeRename_;
 

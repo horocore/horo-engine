@@ -241,10 +241,11 @@ namespace Horo::Editor {
         std::shared_ptr<const Data> data_;
     };
 
-    /** @brief Receipt for edits and unsaved creations published in one source transaction. */
-    struct SourceDraftBatch final {
+    /** @brief Receipt for edits, unsaved creations and renamed sources published together. */
+    struct SourceFileReviewBatch final {
         SourceEditBatch edits;
         std::vector<SourceDocumentSnapshot> drafts;
+        std::vector<SourceDocumentSnapshot> renames;
     };
 
     /** @brief One history publication plus originating view metadata.
@@ -405,13 +406,23 @@ namespace Horo::Editor {
             std::string_view text;
         };
 
+        /** @brief A prepared rekey with exact source, replacement buffer and worker disk evidence. */
+        struct RenameRequest final {
+            SourceDocumentSnapshot from;
+            DocumentIdentity to;
+            std::filesystem::path destination;
+            std::string_view text;
+            const SourceBatchDiskEvidence &disk;
+        };
+
         /** @brief Stages and atomically publishes one text-only edit batch. */
         [[nodiscard]] Result<SourceEditBatch> PublishBatch(std::span<const SourceBatchEdit> edits, const SourceBatchDiskEvidence *evidence,
                                                            const DurableFileSystem *files, CancellationToken cancellation);
         /** @brief Prepares all roots and disk checks before publishing edits and drafts together. */
-        [[nodiscard]] Result<SourceDraftBatch> PublishWithDrafts(std::span<const SourceBatchEdit> edits,
-                                                                 const SourceBatchDiskEvidence &evidence, const DurableFileSystem &files,
-                                                                 CancellationToken cancellation, std::span<const DraftRequest> drafts);
+        [[nodiscard]] Result<SourceFileReviewBatch> PublishReviewGroup(std::span<const SourceBatchEdit> edits,
+                                                                       const SourceBatchDiskEvidence &evidence, DurableFileSystem &files,
+                                                                       CancellationToken cancellation, std::span<const DraftRequest> drafts,
+                                                                       std::span<const RenameRequest> renames);
         /** @brief Replays edit history and retires unchanged drafts only after validating the complete receipt. */
         [[nodiscard]] Result<std::vector<SourceDocumentSnapshot>> UndoWithDrafts(const SourceEditBatch &batch,
                                                                                  std::span<const SourceDocumentSnapshot> drafts,
@@ -424,22 +435,14 @@ namespace Horo::Editor {
         [[nodiscard]] Result<SourceSaveResult> SaveTo(const SourceSaveRequest &request, DurableFileSystem &files, DocumentIdentity identity,
                                                       std::filesystem::path path, CancellationToken cancellation);
 
-        /** @brief An admitted rekey and its exact replacement buffer. */
-        struct RenameRequest final {
-            SourceDocumentSnapshot from;
-            DocumentIdentity to;
-            std::filesystem::path destination;
-            std::string text;
-        };
-
         /** @brief Moves the exact saved source, then publishes its new identity and history without allocation.
          * @param request Current source, reserved destination identity and reviewed text.
-         * @param evidence Worker-observed disk base. @param files Native filesystem authority.
+         * @param files Native filesystem authority.
          * @param cancellation Cooperative observer. @return Rekeyed snapshot or typed failure.
          * @pre The caller retains project mutation authority for both paths.
          */
-        [[nodiscard]] Result<SourceDocumentSnapshot> RenameReviewed(RenameRequest request, const SourceBatchDiskEvidence &evidence,
-                                                                    DurableFileSystem &files, CancellationToken cancellation);
+        [[nodiscard]] Result<SourceDocumentSnapshot> RenameReviewed(const RenameRequest &request, DurableFileSystem &files,
+                                                                    CancellationToken cancellation);
         /** @brief Checks owner-thread lifecycle before accessing service storage. */
         [[nodiscard]] Result<void> CheckAccess() const;
         struct Storage;

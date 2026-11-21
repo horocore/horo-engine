@@ -596,43 +596,51 @@ namespace Horo::Editor::Proposals {
             const auto items = batch.Items();
             for (std::size_t index = 0; index < items.size(); ++index)
                 audit->revisions[index].after = items[index].snapshot.Revision();
-            return Output::Success({std::move(batch), std::move(audit), {}});
+            return Output::Success({std::move(batch), std::move(audit), {}, {}});
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(Errors::Bounds));
         }
     }
 
-    /** @copydoc PreparedSourceReview::CommitDrafts */
-    Result<SourceReviewApplied> PreparedSourceReview::CommitDrafts(SourceFileOpenService &open, const DurableFileSystem &files,
-                                                                   const CancellationToken cancellation) const {
+    /** @copydoc PreparedSourceReview::CommitFileGroup */
+    Result<SourceReviewApplied> PreparedSourceReview::CommitFileGroup(SourceFileOpenService &open, DurableFileSystem &files,
+                                                                      const CancellationToken cancellation) const {
         using Output = Result<SourceReviewApplied>;
         try {
             if (files_.empty() || !audit_)
                 return Output::Failure(MakeError(Errors::Invalid));
             std::vector<SourceReviewDraft> drafts;
+            std::vector<SourceReviewRename> renames;
             drafts.reserve(files_.size());
+            renames.reserve(files_.size());
             for (const auto &operation : files_) {
-                const auto *creation = std::get_if<PreparedSourceCreate>(&operation);
-                if (!creation)
+                const SourceDocumentId *destination{};
+                if (const auto *creation = std::get_if<PreparedSourceCreate>(&operation)) {
+                    destination = &creation->file.path;
+                    drafts.push_back({*destination, creation->file.text});
+                } else if (const auto *rename = std::get_if<PreparedSourceRename>(&operation)) {
+                    destination = &rename->destination;
+                    renames.push_back({rename->source, *destination, rename->text, rename->disk});
+                } else {
                     return Output::Failure(MakeError(Errors::Invalid));
-                if (ObserveSourceDestination(creation->file.path, open.ProjectRoot(), files, cancellation) != SourcePathState::Absent)
+                }
+                if (ObserveSourceDestination(*destination, open.ProjectRoot(), files, cancellation) != SourcePathState::Absent)
                     return Output::Failure(
                         MakeError(cancellation.IsCancellationRequested() ? SourceDocumentErrors::Cancelled : Errors::StaleBase));
-                drafts.push_back({creation->file.path, creation->file.text});
             }
             const auto edits = BatchInputs();
             auto audit = std::make_shared<SourceReviewAudit>(*audit_);
-            auto published = open.PublishReviewedDrafts(edits, drafts, disk_, files, cancellation);
+            auto published = open.PublishReviewedGroup(edits, drafts, renames, disk_, files, cancellation);
             if (published.HasError())
                 return Output::Failure(std::move(published).ErrorValue());
             auto result = std::move(published).Value();
             const auto items = result.edits.Items();
             std::size_t edit{};
             for (auto &revision : audit->revisions) {
-                if (revision.before)
+                if (revision.before && !revision.after)
                     revision.after = items[edit++].snapshot.Revision();
             }
-            return Output::Success({std::move(result.edits), std::move(audit), std::move(result.drafts)});
+            return Output::Success({std::move(result.edits), std::move(audit), std::move(result.drafts), std::move(result.renames)});
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(Errors::Bounds));
         }

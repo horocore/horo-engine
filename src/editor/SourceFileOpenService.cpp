@@ -545,8 +545,8 @@ namespace Horo::Editor {
             if (const auto retargeted = registry.RetargetSource(identity.instance, renamed.key); retargeted.HasError())
                 return Output::Failure(retargeted.ErrorValue());
             RegistryPublication guard{publishing_};
-            auto moved = sourceDocuments_.RenameReviewed({source, std::move(renamed), std::move(path), std::move(text)}, evidence, files,
-                                                         cancellation);
+            auto moved =
+                sourceDocuments_.RenameReviewed({source, std::move(renamed), std::move(path), text, evidence}, files, cancellation);
             if (moved.HasValue())
                 *documentRegistry_ = std::move(registry);
             return moved;
@@ -555,18 +555,19 @@ namespace Horo::Editor {
         }
     }
 
-    /** @copydoc SourceFileOpenService::PublishReviewedDrafts */
-    Result<SourceDraftBatch> SourceFileOpenService::PublishReviewedDrafts(const std::span<const SourceBatchEdit> edits,
-                                                                          const std::span<const SourceReviewDraft> drafts,
-                                                                          const SourceBatchDiskEvidence &evidence,
-                                                                          const DurableFileSystem &files,
-                                                                          const CancellationToken cancellation) {
-        using Output = Result<SourceDraftBatch>;
+    /** @copydoc SourceFileOpenService::PublishReviewedGroup */
+    Result<SourceFileReviewBatch> SourceFileOpenService::PublishReviewedGroup(const std::span<const SourceBatchEdit> edits,
+                                                                              const std::span<const SourceReviewDraft> drafts,
+                                                                              const std::span<const SourceReviewRename> renames,
+                                                                              const SourceBatchDiskEvidence &evidence,
+                                                                              DurableFileSystem &files,
+                                                                              const CancellationToken cancellation) {
+        using Output = Result<SourceFileReviewBatch>;
         try {
             if (publishing_)
                 return Output::Failure(MakeError(SourceDocumentErrors::Busy));
-            if (!projectRootValid_ || !policy_.embeddedEditorAvailable || drafts.empty() ||
-                drafts.size() > SourceDocumentLimits{}.maximumDocuments)
+            if (!projectRootValid_ || !policy_.embeddedEditorAvailable || drafts.size() > SourceDocumentLimits{}.maximumDocuments ||
+                renames.size() > SourceDocumentLimits{}.maximumDocuments)
                 return Output::Failure(MakeError(SourceOpenErrors::Unsafe));
             auto registry = *documentRegistry_;
             std::vector<SourceDocumentService::DraftRequest> staged;
@@ -585,8 +586,24 @@ namespace Horo::Editor {
                     return Output::Failure(MakeError(SourceDocumentErrors::SaveConflict));
                 staged.push_back({std::move(opened).Value().identity, std::move(path), draft.text});
             }
+            std::vector<SourceDocumentService::RenameRequest> moves;
+            moves.reserve(renames.size());
+            for (const auto &rename : renames) {
+                const auto source = rename.source.Identity();
+                const auto &name = rename.destination.Value();
+                if (!rename.destination.IsValid() || !registry.IsCurrent(source) ||
+                    LowercaseAscii(source.key.source.Value()) == LowercaseAscii(name))
+                    return Output::Failure(MakeError(SourceDocumentErrors::SaveConflict));
+                auto path = projectRoot_ / std::u8string{name.begin(), name.end()};
+                if (const auto admitted = AdmitSaveDestination(*this, path); admitted.HasError())
+                    return Output::Failure(admitted.ErrorValue());
+                DocumentIdentity destination{{DocumentKind::Source, rename.destination}, source.instance};
+                if (const auto retarget = registry.RetargetSource(source.instance, destination.key); retarget.HasError())
+                    return Output::Failure(retarget.ErrorValue());
+                moves.push_back({rename.source, std::move(destination), std::move(path), rename.text, rename.disk});
+            }
             RegistryPublication guard{publishing_};
-            auto result = sourceDocuments_.PublishWithDrafts(edits, evidence, files, cancellation, staged);
+            auto result = sourceDocuments_.PublishReviewGroup(edits, evidence, files, cancellation, staged, moves);
             if (result.HasValue())
                 *documentRegistry_ = std::move(registry);
             return result;
@@ -596,12 +613,12 @@ namespace Horo::Editor {
     }
 
     /** @copydoc SourceFileOpenService::UndoReviewedDrafts */
-    Result<void> SourceFileOpenService::UndoReviewedDrafts(const SourceDraftBatch &receipt, const CancellationToken cancellation) {
+    Result<void> SourceFileOpenService::UndoReviewedDrafts(const SourceFileReviewBatch &receipt, const CancellationToken cancellation) {
         using Output = Result<void>;
         try {
             if (publishing_)
                 return Output::Failure(MakeError(SourceDocumentErrors::Busy));
-            if (receipt.drafts.empty())
+            if (receipt.drafts.empty() || !receipt.renames.empty())
                 return Output::Failure(MakeError(SourceDocumentErrors::Invalid));
             auto registry = *documentRegistry_;
             for (const auto &draft : receipt.drafts) {

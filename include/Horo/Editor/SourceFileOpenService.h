@@ -143,6 +143,14 @@ namespace Horo::Editor {
         std::string_view text;
     };
 
+    /** @brief One approved physical rename with borrowed text and disk evidence. */
+    struct SourceReviewRename final {
+        SourceDocumentSnapshot source;
+        SourceDocumentId destination;
+        std::string_view text;
+        const SourceBatchDiskEvidence &disk;
+    };
+
     /**
      * @brief Classifies and routes project source files through one containment boundary.
      * @details The service resolves relative and absolute inputs to a canonical project
@@ -251,20 +259,23 @@ namespace Horo::Editor {
                                                                     const SourceDocumentId &destination, std::string text,
                                                                     const SourceBatchDiskEvidence &evidence, DurableFileSystem &files,
                                                                     CancellationToken cancellation = {});
-        /** @brief Publishes reviewed text and unsaved drafts under one source and registry transaction.
+        /** @brief Publishes reviewed text, drafts and renames under one source and registry transaction.
          * @param edits Exact current source edits. @param drafts Unique project-relative draft destinations.
+         * @param renames Admitted physical moves with unique source and destination paths.
          * @param evidence Worker-observed edit bases. @param files Filesystem authority used to observe the bases.
          * @param cancellation Cooperative observer. @return Complete group receipt or typed refusal.
+         * @pre The caller holds project mutation authority if renames are present.
          */
-        [[nodiscard]] Result<SourceDraftBatch> PublishReviewedDrafts(std::span<const SourceBatchEdit> edits,
-                                                                     std::span<const SourceReviewDraft> drafts,
-                                                                     const SourceBatchDiskEvidence &evidence,
-                                                                     const DurableFileSystem &files, CancellationToken cancellation = {});
+        [[nodiscard]] Result<SourceFileReviewBatch> PublishReviewedGroup(std::span<const SourceBatchEdit> edits,
+                                                                         std::span<const SourceReviewDraft> drafts,
+                                                                         std::span<const SourceReviewRename> renames,
+                                                                         const SourceBatchDiskEvidence &evidence, DurableFileSystem &files,
+                                                                         CancellationToken cancellation = {});
         /** @brief Replays edits and closes unchanged unsaved drafts from the same group.
          * @param receipt Exact live group. @param cancellation Cooperative observer.
          * @return Success or a refusal preserving all document and registry state.
          */
-        [[nodiscard]] Result<void> UndoReviewedDrafts(const SourceDraftBatch &receipt, CancellationToken cancellation = {});
+        [[nodiscard]] Result<void> UndoReviewedDrafts(const SourceFileReviewBatch &receipt, CancellationToken cancellation = {});
         /** @brief Applies the explicit close choice; a failed or unconfirmed save keeps the session open.
          * @param request Exact source revision and optional save overwrite consent. @param decision Explicit host choice.
          * @param files Host filesystem. @return True only after text and routing ownership close together; false for Cancel.
