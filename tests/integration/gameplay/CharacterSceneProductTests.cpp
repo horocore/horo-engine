@@ -950,7 +950,8 @@ namespace Horo::Application::CharacterSceneProductTest {
 
     TEST_CASE("Headless project AI settings supply scheduler budgets and gate development replay", "[scene][ai][product]") {
         Fixture fixture;
-        fixture.project.WriteProjectMetadata(R"({"schemaVersion":1,"scheduler":{"maximumAgents":16,"evaluationsPerTick":4}})");
+        fixture.project.WriteProjectMetadata(
+            R"({"schemaVersion":1,"scheduler":{"maximumAgents":16,"evaluationsPerTick":4},"query":{"maximumWorkUnitsPerTick":2048}})");
         const auto selector = "cooked:" + fixture.project.sceneId.ToString();
         const Internal::HeadlessProjectSceneOptions options{.projectRoot = fixture.project.project.dir.path,
                                                             .scene = selector,
@@ -960,6 +961,7 @@ namespace Horo::Application::CharacterSceneProductTest {
         REQUIRE(prepared.HasValue());
         CHECK(prepared.Value()->decisionScheduler.maximumAgents == 16);
         CHECK(prepared.Value()->decisionScheduler.evaluationsPerTick == 4);
+        CHECK(prepared.Value()->queryWorkUnitsLimit == 2048);
         CHECK_FALSE(prepared.Value()->developmentReplayAllowed);
 
         const auto gameplay = NavigationGameplay();

@@ -23,6 +23,7 @@ namespace Horo::Application::Internal {
         std::optional<AI::AiSceneCookedDecisionExecution> execution; /**< Explicit authority scheduler; empty only admits assets. */
         HeadlessDecisionProvider provider{HeadlessDecisionProvider::Captured};
         std::shared_ptr<const AI::QuerySchemaRegistry> querySchema; /**< Explicit host descriptors for committed query artifacts. */
+        std::size_t queryWorkUnitsLimit{AI::AiTaskSchedulerSettings::HardWorkUnits};
     };
 
     /** @brief Builds an immutable staged descriptor catalog from authenticated plans and the exact compiler environment.

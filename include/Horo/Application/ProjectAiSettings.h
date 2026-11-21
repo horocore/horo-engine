@@ -32,6 +32,11 @@ namespace Horo::Application {
             return perceptionWorkUnitsLimit_;
         }
 
+        /** @brief Returns the total work units available to environment queries in one authoritative tick. */
+        [[nodiscard]] std::size_t QueryWorkUnitsLimit() const noexcept {
+            return queryWorkUnitsLimit_;
+        }
+
         /** @brief Checks the authored operation permission for a host-selected execution profile.
          * @param profile Exact execution profile supplied by the host.
          * @param operation Explicit operation requested by the application.
@@ -42,12 +47,14 @@ namespace Horo::Application {
     private:
         friend Result<std::optional<ProjectAiSettings>> ResolveProjectAiSettings(const ProjectSourceDocument &);
 
-        ProjectAiSettings(AI::AiTaskSchedulerSettings scheduler, std::size_t perceptionWorkUnitsLimit, bool mutation, bool capture)
-            : scheduler_(std::move(scheduler)), perceptionWorkUnitsLimit_(perceptionWorkUnitsLimit), mutation_(mutation),
-              capture_(capture) {}
+        ProjectAiSettings(AI::AiTaskSchedulerSettings scheduler, std::size_t perceptionWorkUnitsLimit, std::size_t queryWorkUnitsLimit,
+                          bool mutation, bool capture)
+            : scheduler_(std::move(scheduler)), perceptionWorkUnitsLimit_(perceptionWorkUnitsLimit),
+              queryWorkUnitsLimit_(queryWorkUnitsLimit), mutation_(mutation), capture_(capture) {}
 
         AI::AiTaskSchedulerSettings scheduler_;
         std::size_t perceptionWorkUnitsLimit_;
+        std::size_t queryWorkUnitsLimit_;
         bool mutation_{};
         bool capture_{};
     };

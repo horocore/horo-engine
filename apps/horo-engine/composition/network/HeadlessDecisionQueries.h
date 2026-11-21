@@ -12,7 +12,7 @@ namespace Horo::Application::Internal {
         /** @brief Freezes the matching query plans and allocates bounded phase state before Scene activation. */
         [[nodiscard]] static Result<std::shared_ptr<HeadlessDecisionQueries>> Create(
             HeadlessQueryPlanCatalog plans, std::shared_ptr<const AI::QuerySchemaRegistry> registry,
-            const AI::AiTaskSchedulerSettings &settings);
+            const AI::AiTaskSchedulerSettings &settings, std::size_t workUnitsLimit);
 
         /** @copydoc AI::IDecisionQueryTaskBinder::BindQueryTask */
         [[nodiscard]] Result<std::unique_ptr<AI::IBehaviorTreeExecutor>> BindQueryTask(
@@ -26,7 +26,7 @@ namespace Horo::Application::Internal {
         void ArmReplay(AI::AgentHandle agent, std::uint64_t tick) noexcept;
         /** @brief Returns the one observed publication prefix after the query's ordinary owner phases finish. */
         [[nodiscard]] Result<std::span<const AI::DecisionQueryPublication>> ReadReplay(std::uint64_t tick) const;
-        /** @brief Identifies the verified cooked query inventory in stable query ID order. */
+        /** @brief Identifies the cooked query inventory in stable query ID order and its effective work budget. */
         [[nodiscard]] Sha256Digest ReplayProfile() const noexcept;
 
     private:
@@ -58,6 +58,7 @@ namespace Horo::Application::Internal {
         std::vector<std::weak_ptr<AI::DecisionQueryTask>> tasks_;
         std::vector<AgentBudget> budgets_;
         std::size_t maximumActive_{};
+        std::size_t workUnitsLimit_{};
         std::size_t cursor_{};
         TickScope *scope_{};
         AI::AgentHandle replayAgent_;

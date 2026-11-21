@@ -515,7 +515,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 catalog = record_->admittedControllers;
                 if (OwnsCookedDecisionExecution() && !queries.empty()) {
                     auto driver = HeadlessDecisionQueries::Create(std::move(queries), input.cookedDecisions->querySchema,
-                                                                  input.cookedDecisions->execution->scheduler);
+                                                                  input.cookedDecisions->execution->scheduler,
+                                                                  input.cookedDecisions->queryWorkUnitsLimit);
                     if (driver.HasError())
                         return Result<void>::Failure(driver.ErrorValue());
                     record_->decisionQueries = std::move(driver).Value();

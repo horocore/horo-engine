@@ -314,6 +314,35 @@ namespace Horo::Application::Internal {
             return worlds;
         }
 
+        /** @brief Admits the project's requested Decision and replay services before composing a live world. */
+        Result<void> PrepareProductDecisions(HeadlessSceneActivationInput &input, const ProductLaunch &launch,
+                                             HeadlessProjectSceneResources &resources) {
+            if (launch.decisionReplay && !resources.developmentReplayAllowed)
+                return Result<void>::Failure(
+                    MakeError(AI::AIErrors::CapabilityUnavailable, "Project AI policy does not grant development replay capture."));
+            input.decisionReplay = launch.decisionReplay;
+            if (launch.cookedDecisionBindings.empty())
+                return Result<void>::Success();
+            if (!resources.committed)
+                return Result<void>::Failure(
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI decisions require the selected committed Scene generation."));
+            if (resources.decisionScheduler.mode != AI::AiSchedulingMode::Deterministic)
+                return Result<void>::Failure(
+                    MakeError(AI::AIErrors::SchedulerPolicyInvalid, "This product launch requires a deterministic AI scheduler."));
+            auto querySchema = AI::CaptureBuiltinQuerySchema();
+            if (querySchema.HasError())
+                return Result<void>::Failure(querySchema.ErrorValue());
+            input.cookedDecisions = std::make_shared<const HeadlessCookedDecisionInput>(
+                HeadlessCookedDecisionInput{.committed = *resources.committed,
+                                            .bindings = launch.cookedDecisionBindings,
+                                            .execution =
+                                                AI::AiSceneCookedDecisionExecution{resources.jobs, resources.decisionScheduler, {}},
+                                            .provider = HeadlessDecisionProvider::SelectedNativeGameplay,
+                                            .querySchema = std::make_shared<const AI::QuerySchemaRegistry>(std::move(querySchema).Value()),
+                                            .queryWorkUnitsLimit = resources.queryWorkUnitsLimit});
+            return Result<void>::Success();
+        }
+
         /** @brief Owns complete project admission policy while binding the explicitly selected world services. */
         [[nodiscard]] Result<NetworkProductComposition> ComposeProductWorldServices(
             std::shared_ptr<const Runtime::RuntimeSceneDefinition> scene, const ProductLaunch &launch,
@@ -355,35 +384,14 @@ namespace Horo::Application::Internal {
                                                                                              *launch.sceneInput.world)
                                                                                        : nullptr,
                                                .worldJobs = &resources->jobs};
-            if (launch.decisionReplay && !resources->developmentReplayAllowed)
-                return Result<NetworkProductComposition>::Failure(
-                    MakeError(AI::AIErrors::CapabilityUnavailable, "Project AI policy does not grant development replay capture."));
-            input.decisionReplay = launch.decisionReplay;
+            if (const auto decisions = PrepareProductDecisions(input, launch, *resources); decisions.HasError())
+                return Result<NetworkProductComposition>::Failure(decisions.ErrorValue());
             if (launch.role == Net::NetworkProjectRole::DedicatedServer)
                 input.animationParallel.emplace(resources->jobs, Duration::FromMilliseconds(50));
             if (initialState) {
                 input.replicatedSceneObjects = initialState->authoredObjects;
                 input.publicTransforms = initialState->transforms;
                 input.initialSceneState = std::move(initialHost);
-            }
-            if (!launch.cookedDecisionBindings.empty()) {
-                if (!resources->committed)
-                    return Result<NetworkProductComposition>::Failure(
-                        MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI decisions require the selected committed Scene generation."));
-                if (resources->decisionScheduler.mode != AI::AiSchedulingMode::Deterministic)
-                    return Result<NetworkProductComposition>::Failure(
-                        MakeError(AI::AIErrors::SchedulerPolicyInvalid, "This product launch requires a deterministic AI scheduler."));
-                auto querySchema = AI::CaptureBuiltinQuerySchema();
-                if (querySchema.HasError())
-                    return Result<NetworkProductComposition>::Failure(querySchema.ErrorValue());
-                input.cookedDecisions = std::make_shared<const HeadlessCookedDecisionInput>(
-                    HeadlessCookedDecisionInput{.committed = *resources->committed,
-                                                .bindings = launch.cookedDecisionBindings,
-                                                .execution =
-                                                    AI::AiSceneCookedDecisionExecution{resources->jobs, resources->decisionScheduler, {}},
-                                                .provider = HeadlessDecisionProvider::SelectedNativeGameplay,
-                                                .querySchema =
-                                                    std::make_shared<const AI::QuerySchemaRegistry>(std::move(querySchema).Value())});
             }
             if (resources->perceptionPolicy)
                 input.perceptionProject =

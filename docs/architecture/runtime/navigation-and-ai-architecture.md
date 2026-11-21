@@ -3523,6 +3523,11 @@ native Scene Perception. Editor Play and headless launch reject a selected Scene
 policy above that ceiling before binding its sensing providers. A Scene within
 the ceiling keeps its authored per-tick budget.
 
+The optional `query.maximumWorkUnitsPerTick` caps the combined work issued to
+headless environment queries on each authoritative tick. Replay comparison
+detects changes to the effective query budget. The default retains the
+existing query replay profile identity.
+
 The optional `development` object declares boolean `liveMutation` and
 `replayCapture` permissions. Both default to false in an authored AI policy.
 Editor Play requires both the project permission and the explicit

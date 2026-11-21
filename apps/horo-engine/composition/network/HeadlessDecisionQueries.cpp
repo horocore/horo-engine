@@ -55,10 +55,11 @@ namespace Horo::Application::Internal {
     /** @copydoc HeadlessDecisionQueries::Create */
     Result<std::shared_ptr<HeadlessDecisionQueries>> HeadlessDecisionQueries::Create(
         HeadlessQueryPlanCatalog plans, std::shared_ptr<const AI::QuerySchemaRegistry> registry,
-        const AI::AiTaskSchedulerSettings &settings) {
+        const AI::AiTaskSchedulerSettings &settings, const std::size_t workUnitsLimit) {
         using Created = Result<std::shared_ptr<HeadlessDecisionQueries>>;
         if (!registry || plans.empty() || settings.evaluationsPerTick == 0 ||
-            settings.evaluationsPerTick > AI::AiTaskSchedulerSettings::HardAgents)
+            settings.evaluationsPerTick > AI::AiTaskSchedulerSettings::HardAgents || workUnitsLimit == 0 ||
+            workUnitsLimit > AI::AiTaskSchedulerSettings::HardWorkUnits)
             return Created::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid));
         auto contexts = AI::QueryContextProviderRegistry::Capture({}, *registry);
         if (contexts.HasError())
@@ -69,6 +70,7 @@ namespace Horo::Application::Internal {
             owner->registry_ = std::move(registry);
             owner->contexts_.emplace(std::move(contexts).Value());
             owner->maximumActive_ = settings.evaluationsPerTick;
+            owner->workUnitsLimit_ = workUnitsLimit;
             owner->budgets_.resize(AI::MaximumAiSceneAgents);
             return Created::Success(std::move(owner));
         } catch (const std::bad_alloc &) {
@@ -183,6 +185,12 @@ namespace Horo::Application::Internal {
         Sha256Builder hash;
         for (const auto &entry : plans_)
             (void)hash.Update(std::as_bytes(std::span{entry.second.digest.bytes}));
+        // The default keeps its digest for existing recordings. Non-default budgets add a canonical 32-bit suffix.
+        if (workUnitsLimit_ != AI::AiTaskSchedulerSettings::HardWorkUnits) {
+            const std::array encoded{std::byte(workUnitsLimit_ >> 24U), std::byte(workUnitsLimit_ >> 16U), std::byte(workUnitsLimit_ >> 8U),
+                                     std::byte(workUnitsLimit_)};
+            (void)hash.Update(encoded);
+        }
         return hash.Finalize();
     }
 
@@ -190,7 +198,7 @@ namespace Horo::Application::Internal {
     void HeadlessDecisionQueries::AdvanceQueries(std::uint64_t tick) {
         if (tasks_.empty())
             return;
-        AI::AiWorkBudget global{AI::AiTaskSchedulerSettings::HardWorkUnits};
+        AI::AiWorkBudget global{workUnitsLimit_};
         for (std::size_t visited = 0; visited < tasks_.size(); ++visited) {
             const auto task = tasks_[(cursor_ + visited) % tasks_.size()].lock();
             if (!task)

@@ -60,6 +60,7 @@ namespace Horo::Application::Internal {
         std::optional<Network::NetworkProjectSettings> networkSettings; /**< Owner-validated snapshot captured from the same root. */
         AI::AiTaskSchedulerSettings decisionScheduler;                  /**< Authoritative scheduler budgets from that same snapshot. */
         std::size_t perceptionWorkUnitsLimit{AI::AiTaskSchedulerSettings::HardWorkUnits};
+        std::size_t queryWorkUnitsLimit{AI::AiTaskSchedulerSettings::HardWorkUnits};
         bool developmentReplayAllowed{true}; /**< Legacy projects retain the explicit development CLI workflow. */
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition;
         Assets::AssetId sceneAsset; /**< Exact selected cooked Scene identity, including the full UUID. */

@@ -1,5 +1,6 @@
 #include "DecisionGraphCompilerTestSupport.h"
 #include "HeadlessCookedDecisionAdmission.h"
+#include "HeadlessDecisionQueries.h"
 #include "HeadlessNetworkServices.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/AIScenePerceptionSource.h"
@@ -799,10 +800,38 @@ namespace Horo::Application::PrefabAtomicTest {
             REQUIRE(operation.State() == expected);
         }
 
+        TEST_CASE("Headless query replay profile identifies the effective project work budget", "[integration][ai][query][replay]") {
+            namespace Decisions = AI::DecisionGraphTestSupport;
+            const auto registry = AI::CaptureBuiltinQuerySchema();
+            REQUIRE(registry.HasValue());
+            const auto query =
+                AI::CreateBuiltinLatticeQuery(Decisions::MakeIdentity<AI::QueryId>(1), Decisions::MakeIdentity<AI::QueryStageId>(1),
+                                              Decisions::MakeIdentity<AI::QueryResultSchemaId>(1), "Profile test",
+                                              {.stepMillimeters = 500, .outerSteps = 1}, 8);
+            REQUIRE(query.HasValue());
+            auto compiled = AI::EnvironmentQueryPlan::Compile(query.Value(), registry.Value());
+            REQUIRE(compiled.HasValue());
+            const auto bytes = AI::EnvironmentQueryCookedCodec::Encode(query.Value(), registry.Value());
+            REQUIRE(bytes.HasValue());
+            const auto digest = ComputeSha256(std::as_bytes(std::span{bytes.Value()}));
+            const Internal::HeadlessQueryPlanCatalog plans{
+                {query.Value().Id(), {std::make_shared<const AI::EnvironmentQueryPlan>(std::move(compiled).Value()), digest}}};
+            const auto schema = std::make_shared<const AI::QuerySchemaRegistry>(registry.Value());
+            const auto defaults = Internal::HeadlessDecisionQueries::Create(plans, schema, {}, AI::AiTaskSchedulerSettings::HardWorkUnits);
+            const auto limited = Internal::HeadlessDecisionQueries::Create(plans, schema, {}, 1024);
+            const auto smaller = Internal::HeadlessDecisionQueries::Create(plans, schema, {}, 512);
+            REQUIRE(defaults.HasValue());
+            REQUIRE(limited.HasValue());
+            REQUIRE(smaller.HasValue());
+            CHECK(defaults.Value()->ReplayProfile() == ComputeSha256(std::as_bytes(std::span{digest.bytes})));
+            CHECK(limited.Value()->ReplayProfile() != defaults.Value()->ReplayProfile());
+            CHECK(limited.Value()->ReplayProfile() != smaller.Value()->ReplayProfile());
+        }
+
         /** @brief Drives the product query owner across real cooked prefab retirement and replacement. */
         void RunSelectedQueryPrefab(Network::INetworkModeService &physics, NativeCookedDecisionProbe &probe,
                                     const Prefab::PrefabTemplateLoadRequest &source, const CancellationToken &cancellation,
-                                    AI::BlackboardKeyId key) {
+                                    AI::BlackboardKeyId key, bool limitedWork) {
             using enum Prefab::PrefabSpawnState;
             const auto tick = [&](std::uint64_t frame) {
                 const auto result = physics.RunFixedTick({frame, Duration::FromNanoseconds(16'666'667), cancellation});
@@ -863,6 +892,10 @@ namespace Horo::Application::PrefabAtomicTest {
             expectUnset(current);
             for (std::uint64_t frame = 7; frame <= 9; ++frame)
                 tick(frame);
+            if (limitedWork) {
+                expectUnset(current);
+                return;
+            }
             for (const auto id : current) {
                 CHECK(std::ranges::find(retired, id) == retired.end());
                 auto value = Internal::InspectHeadlessDecisionValue(physics, id, key);
@@ -1062,6 +1095,7 @@ namespace Horo::Application::PrefabAtomicTest {
             std::optional<AI::PerceptionSenseContract> nativeSense;
             bool prefabOnly = false;
             bool prefabQuery = false;
+            bool limitedQueryWork = false;
             std::uint64_t replayTick = 1;
             std::size_t replayTickCount = 1;
             bool rollbackPrefab = false;
@@ -1165,6 +1199,10 @@ namespace Horo::Application::PrefabAtomicTest {
                 prepareNative = true;
                 prefabOnly = true;
                 prefabQuery = true;
+                SECTION("default query budget publishes replacement results") {}
+                SECTION("one work unit per tick defers replacement results") {
+                    limitedQueryWork = true;
+                }
             }
             SECTION("native prefab-only scheduler refusal rolls back the entire spawn without dispatch") {
                 prepareNative = true;
@@ -1621,6 +1659,8 @@ namespace Horo::Application::PrefabAtomicTest {
             if (duplicateSelection)
                 selected.bindings.push_back({selectedController, requestedId});
             selected.querySchema = queryRegistry;
+            if (limitedQueryWork)
+                selected.queryWorkUnitsLimit = 1;
             const auto replayPlanDigest = plan->Digest();
             if (loadSchemaFromCook)
                 selected.environment.schemas.clear();
@@ -1714,7 +1754,7 @@ namespace Horo::Application::PrefabAtomicTest {
                     REQUIRE(memory.Value().count == 1);
                     CHECK(memory.Value().entries.front().lastKnownPosition == Math::WorldCoordinate64::FromMillimeters(1100, 200, -300));
                 } else if (nativeProbe && prefabQuery) {
-                    RunSelectedQueryPrefab(*physics.Value(), *nativeProbe, prefabSource, startup.Token(), queryKey);
+                    RunSelectedQueryPrefab(*physics.Value(), *nativeProbe, prefabSource, startup.Token(), queryKey, limitedQueryWork);
                 } else if (nativeProbe && prefabOnly) {
                     CHECK(nativeProbe->module[3] == 1);
                     const auto degraded =

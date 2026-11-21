@@ -188,6 +188,7 @@ namespace Horo::Application::Internal {
             if (const auto &policy = ai.Value()) {
                 resources.decisionScheduler = policy->Scheduler();
                 resources.perceptionWorkUnitsLimit = policy->PerceptionWorkUnitsLimit();
+                resources.queryWorkUnitsLimit = policy->QueryWorkUnitsLimit();
                 resources.developmentReplayAllowed =
                     policy->AllowsDebug(AiProjectRuntimeKind::Development, AiProjectDebugOperation::ReplayCapture);
             }
