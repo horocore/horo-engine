@@ -91,6 +91,40 @@ namespace Horo::AI {
             });
         }
 
+        /** @brief Appends one external provider stage while preserving the lattice and any other provider stage. */
+        Result<EnvironmentQueryAsset> AppendPointProviderTest(const EnvironmentQueryAsset &asset, QueryAssetStage stage,
+                                                              const std::uint64_t otherProvider) {
+            using Edited = Result<EnvironmentQueryAsset>;
+            const auto stages = asset.Stages();
+            const auto generator = std::ranges::find(stages, QueryStageKind::Generator, &QueryAssetStage::kind);
+            if (!stage.id.IsValid() || generator == stages.end() || stages.size() > 2 ||
+                generator->generator != QueryGeneratorId::Create(LatticeGenerator).Value() ||
+                asset.ResultSchema().itemType != QueryItemTypeId::Create(PointItem).Value())
+                return Edited::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+            if (stages.size() == 2 && !std::ranges::any_of(stages, [otherProvider](const QueryAssetStage &candidate) {
+                return candidate.kind == QueryStageKind::Test && candidate.test.Value() == otherProvider;
+            }))
+                return Edited::Failure(MakeError(AIErrors::EnvironmentQueryStageUnsupported));
+            const auto last = std::ranges::max_element(stages, {}, &QueryAssetStage::executionOrder);
+            if (last->executionOrder == std::numeric_limits<std::uint32_t>::max())
+                return Edited::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+            stage.executionOrder = last->executionOrder + 1;
+            QueryAssetSource edited{.id = asset.Id(),
+                                    .displayName = asset.DisplayName(),
+                                    .result = asset.ResultSchema(),
+                                    .stages = {stages.begin(), stages.end()}};
+            edited.stages.push_back(std::move(stage));
+            return EnvironmentQueryAsset::Capture(edited);
+        }
+
+        const QueryPlanStage *FindPointProviderTest(const EnvironmentQueryPlan &plan, const std::uint64_t provider) {
+            const auto id = QueryTestId::Create(provider).Value();
+            const auto stages = plan.Stages();
+            if (stages.size() < 2 || stages.size() > 3 || std::ranges::count(stages, id, &QueryPlanStage::test) != 1)
+                return nullptr;
+            return &*std::ranges::find(stages, id, &QueryPlanStage::test);
+        }
+
         /** @brief Native origin shared by the inert registration and its exact kernels. */
         QueryDescriptorOrigin BuiltinOrigin() {
             return {.provider = QueryProviderId::Create(LatticeProvider).Value(), .version = LatticeVersion.minimum};
@@ -449,30 +483,19 @@ namespace Horo::AI {
     Result<EnvironmentQueryAsset> AddBuiltinPointVisibilityTest(const EnvironmentQueryAsset &lattice, QueryStageId stage,
                                                                 std::array<std::uint8_t, 16> channel) {
         using Asset = Result<EnvironmentQueryAsset>;
-        if (!stage.IsValid() || lattice.Stages().size() != 1 || !HasBuiltinLatticeStages(lattice) ||
-            std::ranges::all_of(channel, [](auto byte) {
+        if (std::ranges::all_of(channel, [](auto byte) {
             return byte == 0;
         }))
             return Asset::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-        const auto generator = lattice.Stages().front();
-        if (generator.executionOrder == std::numeric_limits<std::uint32_t>::max())
-            return Asset::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
         const auto bytes = std::as_bytes(std::span{channel});
-        return EnvironmentQueryAsset::Capture({
-            .id = lattice.Id(),
-            .displayName = lattice.DisplayName(),
-            .result = lattice.ResultSchema(),
-            .stages = {generator,
-                       {
-                           .id = stage,
-                           .kind = QueryStageKind::Test,
-                           .executionOrder = generator.executionOrder + 1,
-                           .test = QueryTestId::Create(PointVisibilityTest).Value(),
-                           .descriptorVersion = LatticeVersion,
-                           .properties = {{QueryPropertyId::Create(VisibilityChannel).Value(),
-                                           std::vector<std::byte>{bytes.begin(), bytes.end()}}},
-                       }},
-        });
+        return AppendPointProviderTest(lattice,
+                                       {.id = stage,
+                                        .kind = QueryStageKind::Test,
+                                        .test = QueryTestId::Create(PointVisibilityTest).Value(),
+                                        .descriptorVersion = LatticeVersion,
+                                        .properties = {{QueryPropertyId::Create(VisibilityChannel).Value(),
+                                                        std::vector<std::byte>{bytes.begin(), bytes.end()}}}},
+                                       PointNavigationTest);
     }
 
     /** @copydoc UsesBuiltinPointVisibility */
@@ -487,18 +510,19 @@ namespace Horo::AI {
                                                                      const QueryContextSnapshot &contexts) {
         using Captured = Result<BuiltinPointVisibilityPlan>;
         const auto stages = plan.Stages();
-        if (stages.size() != 2 || contexts.Query() != plan.Id() || stages.back().test != QueryTestId::Create(PointVisibilityTest).Value())
+        const auto *visibility = FindPointProviderTest(plan, PointVisibilityTest);
+        if (!visibility || contexts.Query() != plan.Id())
             return Captured::Failure(MakeError(AIErrors::EnvironmentQueryStageUnsupported));
 
-        const auto *test = registry.Find(stages.back().test);
+        const auto *test = registry.Find(visibility->test);
         if (!test || test->origin != BuiltinOrigin())
             return Captured::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
         const auto generator = CapturePointOwnerGenerator(stages.front(), plan.ResultSchema().itemType, contexts, registry);
         if (generator.HasError())
             return Captured::Failure(generator.ErrorValue());
         const auto property =
-            std::ranges::find(stages.back().properties, QueryPropertyId::Create(VisibilityChannel).Value(), &QueryPropertyValue::id);
-        const auto *bytes = property == stages.back().properties.end() ? nullptr : std::get_if<std::vector<std::byte>>(&property->value);
+            std::ranges::find(visibility->properties, QueryPropertyId::Create(VisibilityChannel).Value(), &QueryPropertyValue::id);
+        const auto *bytes = property == visibility->properties.end() ? nullptr : std::get_if<std::vector<std::byte>>(&property->value);
         std::array<std::uint8_t, 16> channel{};
         if (!bytes || bytes->size() != channel.size() || std::ranges::all_of(*bytes, [](std::byte value) {
             return value == std::byte{};
@@ -507,31 +531,22 @@ namespace Horo::AI {
         std::ranges::transform(*bytes, channel.begin(), [](std::byte value) {
             return std::to_integer<std::uint8_t>(value);
         });
-        return Captured::Success({generator.Value().lattice, generator.Value().provenance, stages.back().id, channel});
+        return Captured::Success({generator.Value().lattice, generator.Value().provenance, visibility->id, channel});
     }
 
     /** @copydoc AddBuiltinPointNavigationTest */
     Result<EnvironmentQueryAsset> AddBuiltinPointNavigationTest(const EnvironmentQueryAsset &lattice, const QueryStageId stage,
                                                                 const std::optional<double> maximumScoredCost) {
         using Asset = Result<EnvironmentQueryAsset>;
-        if (!stage.IsValid() || lattice.Stages().size() != 1 || !HasBuiltinLatticeStages(lattice))
-            return Asset::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
         if (maximumScoredCost && (!std::isfinite(*maximumScoredCost) || *maximumScoredCost <= 0))
             return Asset::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-        const auto &generator = lattice.Stages().front();
-        if (generator.executionOrder == std::numeric_limits<std::uint32_t>::max())
-            return Asset::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
         QueryAssetStage path{.id = stage,
                              .kind = QueryStageKind::Test,
-                             .executionOrder = generator.executionOrder + 1,
                              .test = QueryTestId::Create(PointNavigationTest).Value(),
                              .descriptorVersion = LatticeVersion};
         if (maximumScoredCost)
             path.properties.emplace_back(QueryPropertyId::Create(NavigationMaximumScoredCost).Value(), *maximumScoredCost);
-        return EnvironmentQueryAsset::Capture({.id = lattice.Id(),
-                                               .displayName = lattice.DisplayName(),
-                                               .result = lattice.ResultSchema(),
-                                               .stages = {generator, std::move(path)}});
+        return AppendPointProviderTest(lattice, std::move(path), PointVisibilityTest);
     }
 
     /** @copydoc UsesBuiltinPointNavigation */
@@ -546,9 +561,10 @@ namespace Horo::AI {
                                                                      const QueryContextSnapshot &contexts) {
         using Captured = Result<BuiltinPointNavigationPlan>;
         const auto stages = plan.Stages();
-        if (stages.size() != 2 || contexts.Query() != plan.Id() || stages.back().test != QueryTestId::Create(PointNavigationTest).Value())
+        const auto *navigation = FindPointProviderTest(plan, PointNavigationTest);
+        if (!navigation || contexts.Query() != plan.Id())
             return Captured::Failure(MakeError(AIErrors::EnvironmentQueryStageUnsupported));
-        const auto &path = stages.back();
+        const auto &path = *navigation;
         const auto *descriptor = registry.Find(path.test);
         if (!descriptor || descriptor->origin != BuiltinOrigin())
             return Captured::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));

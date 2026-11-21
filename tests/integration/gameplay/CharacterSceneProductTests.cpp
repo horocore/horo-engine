@@ -442,6 +442,19 @@ namespace Horo::Application::CharacterSceneProductTest {
                     .source = {AnimationSourceKind::Graph, {}, graph.id}};
         }
 
+        /** @brief Adds the authored collision policy and committed material used by the native Character fixture. */
+        NavigationProductFixture::AddedAsset AddCharacterCollisionContent(NavigationProductFixture &navigation, const Fixture &character) {
+            const auto root = navigation.project.project.dir.path;
+            const auto characterRoot = character.project.project.dir.path;
+            for (const auto *relative :
+                 {".horo/collision.json", ".horo/surfaces.json", "assets/controller.horoasset", "assets/controller.horoasset.horo"})
+                std::filesystem::copy_file(characterRoot / relative, root / relative, std::filesystem::copy_options::overwrite_existing);
+            std::ifstream materialBytes(root / "assets/controller.horoasset", std::ios::binary);
+            REQUIRE(materialBytes.is_open());
+            return {Fixture::Record(character.materialId, "core.physics_material", "assets/controller.horoasset"),
+                    std::vector<std::uint8_t>{std::istreambuf_iterator<char>{materialBytes}, {}}};
+        }
+
         /** @brief Adds the canonical Character geometry and the authored decision closure to the real cooked Navigation project. */
         Assets::AssetId PublishDecisionMotionProject(NavigationProductFixture &navigation, DecisionFixture::Fixture &decision,
                                                      const AI::DecisionGraphSource &source, const AI::AiControllerDescriptor &controller,
@@ -449,13 +462,7 @@ namespace Horo::Application::CharacterSceneProductTest {
             Fixture character;
             auto &project = navigation.project;
             const auto root = project.project.dir.path;
-            const auto characterRoot = character.project.project.dir.path;
-            for (const auto *relative :
-                 {".horo/collision.json", ".horo/surfaces.json", "assets/controller.horoasset", "assets/controller.horoasset.horo"})
-                std::filesystem::copy_file(characterRoot / relative, root / relative, std::filesystem::copy_options::overwrite_existing);
-            std::ifstream materialBytes(root / "assets/controller.horoasset", std::ios::binary);
-            REQUIRE(materialBytes.is_open());
-            const std::vector<std::uint8_t> material{std::istreambuf_iterator<char>{materialBytes}, {}};
+            auto material = AddCharacterCollisionContent(navigation, character);
             const auto plan = decision.Compile(std::span{&source, 1}, source.asset.Value());
             const auto payload = AI::DecisionPlanCodec::EncodeCooked(*plan);
             REQUIRE(payload.HasValue());
@@ -465,9 +472,7 @@ namespace Horo::Application::CharacterSceneProductTest {
             const auto type = AI::DecisionAssetType(AI::DecisionPlanKind::BehaviorTree);
             WriteFile(root / "assets/move.horo_bt", authored.Value());
             project.WriteText("assets/move.horo_bt.horo", SidecarJson(asset.ToString(), type));
-            std::vector added{NavigationProductFixture::AddedAsset{Fixture::Record(character.materialId, "core.physics_material",
-                                                                                   "assets/controller.horoasset"),
-                                                                   material},
+            std::vector added{std::move(material),
                               NavigationProductFixture::AddedAsset{Fixture::Record(asset, type, "assets/move.horo_bt"), payload.Value()}};
             const auto texture = Assets::AssetId::FromBytes(PreviewTextureId);
             constexpr std::string_view preview = "assets/preview.horoasset";
@@ -495,11 +500,22 @@ namespace Horo::Application::CharacterSceneProductTest {
         }
     }  // namespace
 
-    TEST_CASE("Cooked tactical path tests publish the reachable or lowest-cost point through headless Navigation",
+    TEST_CASE("Cooked tactical point queries combine Navigation cost with Physics visibility",
               "[ai][navigation][character][product][eqs]") {
         using namespace AI;
         using DecisionFixture::MakeIdentity;
-        const bool scoreCost = GENERATE(false, true);
+        enum class Scenario {
+            Reachability,
+            Cost,
+            VisibilityFirst,
+            NavigationFirst
+        };
+        const auto scenario = GENERATE(Scenario::Reachability, Scenario::Cost, Scenario::VisibilityFirst, Scenario::NavigationFirst);
+        const bool scoreCost = scenario != Scenario::Reachability;
+        const bool mixed = scenario == Scenario::VisibilityFirst || scenario == Scenario::NavigationFirst;
+        std::optional<Fixture> character;
+        if (mixed)
+            character.emplace();
         const auto agent = MakeIdentity<AgentId>(50);
         const auto controller = MakeIdentity<ControllerTypeId>(49);
         const auto key = MakeIdentity<BlackboardKeyId>(4);
@@ -518,8 +534,15 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                     .innerSteps = scoreCost ? std::nullopt : std::optional<std::uint32_t>{1}},
                                                    1);
         REQUIRE(generator.HasValue());
+        if (scenario == Scenario::VisibilityFirst) {
+            generator = AddBuiltinPointVisibilityTest(generator.Value(), MakeIdentity<QueryStageId>(7), character->channel.Bytes());
+            REQUIRE(generator.HasValue());
+        }
         auto query =
             AddBuiltinPointNavigationTest(generator.Value(), MakeIdentity<QueryStageId>(2), scoreCost ? std::optional{10.0} : std::nullopt);
+        REQUIRE(query.HasValue());
+        if (scenario == Scenario::NavigationFirst)
+            query = AddBuiltinPointVisibilityTest(query.Value(), MakeIdentity<QueryStageId>(7), character->channel.Bytes());
         REQUIRE(query.HasValue());
         auto queryBytes = EnvironmentQueryCookedCodec::Encode(query.Value(), registry.Value());
         REQUIRE(queryBytes.HasValue());
@@ -572,10 +595,15 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                          ProjectPath::Parse(path + ".horo").Value()},
                                                         std::move(bytes)};
         };
-        const std::array assets{add(120, DecisionAssetType(DecisionPlanKind::BehaviorTree), "assets/path.horo_bt",
-                                    std::move(graphBytes).Value()),
-                                add(121, BlackboardSchemaAssetType, "assets/path.horo_bb", std::move(schemaBytes).Value()),
-                                add(122, EnvironmentQuerySourceAssetType, "assets/path.horo_eqs", std::move(queryBytes).Value())};
+        std::vector assets{add(120, DecisionAssetType(DecisionPlanKind::BehaviorTree), "assets/path.horo_bt",
+                               std::move(graphBytes).Value()),
+                           add(121, BlackboardSchemaAssetType, "assets/path.horo_bb", std::move(schemaBytes).Value()),
+                           add(122, EnvironmentQuerySourceAssetType, "assets/path.horo_eqs", std::move(queryBytes).Value())};
+        std::optional<Runtime::SceneAssetDependency> materialDependency;
+        if (character) {
+            assets.push_back(AddCharacterCollisionContent(fixture, *character));
+            materialDependency.emplace(character->materialId, Type("core.physics_material"));
+        }
         fixture.Publish(NavigationProductFixture::Input::Valid, NavigationProductFixture::Client::None, assets, [&](auto &source) {
             auto &actor = source.objects.front();
             actor.localTransform.translation = {1, 0, 1};
@@ -583,10 +611,21 @@ namespace Horo::Application::CharacterSceneProductTest {
             actor.components.aiController = AiControllerComponent{.controller = controller,
                                                                   .decisionAsset = graph.asset,
                                                                   .blackboardSchema = blackboardSchema->Identity()};
-        });
+            if (character) {
+                auto blocker = character->source.objects[1];
+                blocker.id = {4};
+                blocker.name = "Tactical visibility blocker";
+                blocker.localTransform.translation = {1.25F, 0, 1.25F};
+                auto &collider = blocker.components.colliders.front();
+                collider.body.object = {blocker.id.value};
+                collider.source = Runtime::PhysicsAnalyticCollider{Runtime::PhysicsSphereCollider{0.08F}};
+                source.objects.push_back(std::move(blocker));
+            }
+        }, materialDependency);
 
         NativeNavigationProductWorld product;
-        const auto started = product.Start(fixture, gameplay, {}, Physics::PhysicsRuntimeMode::Null, [&](auto &input, auto &project) {
+        const auto mode = mixed ? Physics::PhysicsRuntimeMode::Canonical : Physics::PhysicsRuntimeMode::Null;
+        const auto started = product.Start(fixture, gameplay, {}, mode, [&](auto &input, auto &project) {
             input.cookedDecisions = std::make_shared<const Internal::HeadlessCookedDecisionInput>(
                 Internal::HeadlessCookedDecisionInput{.committed = *project.committed,
                                                       .bindings = {{controller, assets.front().record.id}},
@@ -622,9 +661,11 @@ namespace Horo::Application::CharacterSceneProductTest {
         REQUIRE(winner);
         const auto actual = std::get<Math::WorldCoordinate64>(std::get<BlackboardScalarValue>(*winner));
         // This Detour provider scores through the cooked triangle's center, so the upper corner of the small lattice costs least.
-        const auto expected =
+        auto expected =
             scoreCost ? Math::WorldCoordinate64::FromMillimeters(1500, 0, 1500) : Math::WorldCoordinate64::FromMillimeters(5000, 0, 1000);
-        CAPTURE(scoreCost, actual.Millimeters(), expected.Millimeters());
+        if (mixed)
+            expected = Math::WorldCoordinate64::FromMillimeters(1500, 0, 1000);
+        CAPTURE(static_cast<int>(scenario), actual.Millimeters(), expected.Millimeters());
         CHECK(actual == expected);
     }
 

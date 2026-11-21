@@ -44,7 +44,8 @@ namespace Horo::Application::CharacterSceneProductTest {
         };
 
         void Publish(const Input input, const Client client = Client::None, std::span<const AddedAsset> added = {},
-                     const std::function<void(SceneSource::SceneSourceDocument &)> &editScene = {}) {
+                     const std::function<void(SceneSource::SceneSourceDocument &)> &editScene = {},
+                     std::optional<Runtime::SceneAssetDependency> explicitDependency = std::nullopt) {
             using namespace Navigation;
             const auto profile = NavigationAgentProfileId::Create(7).Value();
             const auto surface = SurfaceId::Create(53).Value();
@@ -151,7 +152,10 @@ namespace Horo::Application::CharacterSceneProductTest {
                 editScene(source);
             const SceneSource::SceneSourceView view{source.objects, source.prefabInstances};
             project.WriteText("assets/level.horo", SceneSource::EncodeSceneSource(view));
-            const auto scene = SceneSource::ConvertSceneSourceToRuntime(view, SceneCook::SceneDefinitionIdForAsset(project.sceneId), {1});
+            auto scene = SceneSource::ConvertSceneSourceToRuntime(view, SceneCook::SceneDefinitionIdForAsset(project.sceneId), {1});
+            REQUIRE(scene.HasValue());
+            if (explicitDependency)
+                scene = WithRequiredAsset(scene.Value(), *explicitDependency);
             REQUIRE(scene.HasValue());
             auto prefab = client == Client::Prefab ? EncodeNavigationPrefab(profile) : std::vector<std::uint8_t>{};
             PublishCook(Navigation::TestSupport::ContentEnvelope(set, definitionId, project.request.assets.target), scene.Value(),
@@ -159,6 +163,21 @@ namespace Horo::Application::CharacterSceneProductTest {
         }
 
     private:
+        static Result<Runtime::RuntimeSceneDefinition> WithRequiredAsset(const Runtime::RuntimeSceneDefinition &scene,
+                                                                        const Runtime::SceneAssetDependency &dependency) {
+            Runtime::SceneDefinitionBuilder builder{scene.Id(), scene.Revision()};
+            for (const auto &entity : scene.Entities())
+                builder.Add(entity);
+            for (const auto &asset : scene.AssetDependencies())
+                REQUIRE(builder.RequireAsset(asset).HasValue());
+            for (const auto &trigger : scene.TriggerVolumeEvidence())
+                REQUIRE(builder.RequireTriggerVolume(trigger).HasValue());
+            for (const auto &child : scene.ChildScenes())
+                REQUIRE(builder.RequireChildScene(child).HasValue());
+            REQUIRE(builder.RequireAsset(dependency).HasValue());
+            return std::move(builder).Build();
+        }
+
         /** @brief One real native callback, used by either ordinary or cooked prefab Scene composition. */
         static Gameplay::BehaviorComponent NavigationClient(const bool capture) {
             return {{1},

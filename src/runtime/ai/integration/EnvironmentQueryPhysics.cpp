@@ -185,7 +185,20 @@ namespace Horo::AI {
     Result<std::unique_ptr<QueryExecution>> AdmitBuiltinPointVisibilityQuery(
         const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
         Runtime::EntityRef querier, QueryExecutionInputs inputs, QueryExecutionSettings settings, IQueryPhysicsVisibilityOwner &owner) {
-        using Admission = Result<std::unique_ptr<QueryExecution>>;
+        auto prepared = PrepareBuiltinPointVisibilityTest(plan, registry, scene, querier, inputs, settings, owner);
+        if (prepared.HasError())
+            return Result<std::unique_ptr<QueryExecution>>::Failure(prepared.ErrorValue());
+        auto test = std::move(prepared).Value();
+        return AdmitPreparedPointQuery(plan, registry, std::move(inputs), settings, std::span{&test, 1});
+    }
+
+    /** @copydoc PrepareBuiltinPointVisibilityTest */
+    Result<PreparedPointQueryTest> PrepareBuiltinPointVisibilityTest(const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry,
+                                                                     const Runtime::RuntimeSceneView &scene, Runtime::EntityRef querier,
+                                                                     const QueryExecutionInputs &inputs,
+                                                                     const QueryExecutionSettings &settings,
+                                                                     IQueryPhysicsVisibilityOwner &owner) {
+        using Admission = Result<PreparedPointQueryTest>;
         if (!inputs.contexts || !inputs.contexts->MatchesScene(scene) || scene.Get(querier).HasError())
             return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
         const auto captured = CaptureBuiltinPointVisibility(plan, registry, *inputs.contexts);
@@ -197,16 +210,10 @@ namespace Horo::AI {
             return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextMissing));
 
         const QueryScoreRule rule{.stage = captured.Value().test, .requiredFilterValue = true};
-        auto scoring = QueryScoringPlan::Capture(plan, registry, std::span{&rule, 1}, QueryScoreTieBreak::StableIndex);
-        if (scoring.HasError())
-            return Admission::Failure(scoring.ErrorValue());
         const std::size_t width = 2U * captured.Value().lattice.outerSteps + 1U;
-        settings.maximumCandidates = std::min(settings.maximumCandidates, MaximumQueryPhysicsVisibilityRays);
-        settings.generatorWorkUnits = 2U * width * width;
-        settings.testWorkUnits = settings.maximumCandidates;
+        const auto capacity = std::min(settings.maximumCandidates, MaximumQueryPhysicsVisibilityRays);
         auto source = std::make_unique<PointVisibilitySource>(captured.Value(), scene, querier, *eye, owner);
-        return QueryExecution::Admit(std::move(inputs), captured.Value().generator, std::move(scoring).Value(), settings,
-                                     std::move(source));
+        return Admission::Success({captured.Value().generator, rule, 2U * width * width, capacity, capacity, std::move(source)});
     }
 
     /** @copydoc QueryPhysicsProbe::~QueryPhysicsProbe */

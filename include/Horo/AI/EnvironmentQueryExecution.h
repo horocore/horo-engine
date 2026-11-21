@@ -14,6 +14,7 @@
 #include <memory>
 
 namespace Horo::AI {
+    class QueryExecution;
     class QueryResultCache;
 
     /** @brief Scene-owned reuse for the captured native point plan identified by its cooked artifact. */
@@ -130,6 +131,25 @@ namespace Horo::AI {
         QueryDebugCaptureSettings debugCapture;
         std::size_t testWorkUnits{1}; /**< Host-declared bound for one admission attempt. */
     };
+
+    /** @brief One provider test and its bounded candidate and work requirements. */
+    struct PreparedPointQueryTest final {
+        QueryGeneratorProvenance generator;
+        QueryScoreRule rule;
+        std::size_t generationWorkUnits{};
+        std::size_t maximumCandidates{};
+        std::size_t testWorkUnits{};
+        std::unique_ptr<IQueryExecutionSource> source;
+    };
+
+    /** @brief Admits one point query using all declared provider tests.
+     * @param tests Owned stage preparations. The first source generates the common lattice; later sources only test it.
+     */
+    [[nodiscard]] Result<std::unique_ptr<QueryExecution>> AdmitPreparedPointQuery(const EnvironmentQueryPlan &plan,
+                                                                                  const QuerySchemaRegistry &registry,
+                                                                                  QueryExecutionInputs inputs,
+                                                                                  QueryExecutionSettings settings,
+                                                                                  std::span<PreparedPointQueryTest> tests);
 
     /** @brief Caller-issued per-tick allowances. Sharing the same allowance charges it once. */
     struct QueryExecutionBudget final {

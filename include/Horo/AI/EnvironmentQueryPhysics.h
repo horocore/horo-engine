@@ -83,6 +83,12 @@ namespace Horo::AI {
         const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
         Runtime::EntityRef querier, QueryExecutionInputs inputs, QueryExecutionSettings settings, IQueryPhysicsVisibilityOwner &owner);
 
+    /** @brief Prepares a stage that generates the lattice and retains its candidate order for one Physics capture. */
+    [[nodiscard]] Result<PreparedPointQueryTest> PrepareBuiltinPointVisibilityTest(
+        const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
+        Runtime::EntityRef querier, const QueryExecutionInputs &inputs, const QueryExecutionSettings &settings,
+        IQueryPhysicsVisibilityOwner &owner);
+
     /** @brief One queued tactical test against an exact Physics publication.
      * @details Submit on the Physics owner lane outside fixed-step callbacks. Poll on the query owner
      * lane, serialized with submission, cancellation and destruction. The host supplies exact geometry

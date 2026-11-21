@@ -58,6 +58,7 @@ namespace Horo::AI {
             std::optional<Runtime::EntityRef> actor;
             std::size_t pointCount{2};
             std::optional<bool> filter;
+            std::optional<QueryTestAvailability> nextAvailability;
             std::function<void()> onCurrent;
             std::function<void()> onTestStart;
             std::function<void()> onPoll;
@@ -105,6 +106,7 @@ namespace Horo::AI {
                     return Result<bool>::Success(false);
                 const auto *point = std::get_if<Math::WorldCoordinate64>(&item);
                 sample_ = {.stage = stage,
+                           .availability = std::exchange(probe_.nextAvailability, std::nullopt).value_or(QueryTestAvailability::Available),
                            .filter = probe_.filter,
                            .metric = point ? static_cast<double>(point->Millimeters()[0]) / 2.0 : 1.0};
                 if (probe_.onTestStart)
@@ -1241,6 +1243,54 @@ namespace Horo::AI {
             CHECK(query->Published()->winners[1].score.itemIndex == 0);
             CHECK(probe.cancelled == 0);
             CHECK_FALSE(query->ReadDebugSnapshot(scene->View()));
+        }
+
+        TEST_CASE("EQS composes two providers without losing a candidate's independent stage evidence", "[unit][ai][eqs][execution]") {
+            auto scene = MakeScene();
+            QueryFixture fixture;
+            const QueryTestDescriptor test{MakeIdentity<QueryTestId>(17), fixture.generator.origin, fixture.items[0].id, {1, 1}, {}, {}};
+            const auto registry = fixture.Registry(std::span{&test, 1});
+            const auto plan = fixture.Plan(registry, test.id, true);
+            const auto providers = QueryContextProviderRegistry::Capture({}, registry);
+            REQUIRE(providers.HasValue());
+            QueryContextCapture capture;
+            const auto view = scene->View();
+            const auto contexts = capture.Capture(plan, registry, providers.Value(), view, Source(view));
+            REQUIRE(contexts.HasValue());
+
+            ExecutionProbe generator, other;
+            other.nextAvailability = QueryTestAvailability::Failed;
+            const auto firstStage = MakeIdentity<QueryStageId>(18);
+            const auto secondStage = MakeIdentity<QueryStageId>(16);
+            const QueryGeneratorProvenance provenance{plan.Stages().front().id, fixture.generator.id, fixture.generator.origin.provider, 1};
+            std::array tests{
+                PreparedPointQueryTest{provenance, {.stage = secondStage, .score = QueryScoreRange{}}, 1, 2, 1,
+                                       std::make_unique<ExecutionSource>(generator)},
+                PreparedPointQueryTest{provenance, {.stage = firstStage, .score = QueryScoreRange{}}, 1, 2, 1,
+                                       std::make_unique<ExecutionSource>(other)}};
+            const QueryExecutionInputs inputs{{AiRuntimeIncarnation::Create(7).Value(), {1, 1}}, contexts.Value()};
+            auto query = AdmitPreparedPointQuery(plan, registry, inputs, {0, 10, 2, 1, 1, false, {2, true}}, tests);
+            REQUIRE(query.HasValue());
+            for (std::uint64_t tick = 1; tick <= 5; ++tick) {
+                if (query.Value()->Sync(tick))
+                    break;
+                AiWorkBudget budget{12};
+                query.Value()->Advance(tick, {budget, budget, budget});
+            }
+            CHECK(generator.generated == 1);
+            CHECK(other.generated == 0);
+            CHECK(generator.polls == 2);
+            CHECK(other.polls == 2);
+            const auto debug = query.Value()->ReadDebugSnapshot(view);
+            REQUIRE(debug);
+            CHECK(debug->terminalStatus == QueryExecutionStatus::Completed);
+            REQUIRE(debug->stages.size() == 4);
+            CHECK(debug->stages[0].score.stage == firstStage);
+            CHECK(debug->stages[0].score.status == QueryScoreStatus::ProviderFailed);
+            CHECK(debug->stages[1].score.stage == secondStage);
+            CHECK(debug->stages[1].score.status == QueryScoreStatus::Eligible);
+            REQUIRE(debug->winners.size() == 1);
+            CHECK(debug->winners.front().itemIndex == 1);
         }
 
         TEST_CASE("EQS debug explains a sampled stage and ranks winners independently of sampling", "[unit][ai][eqs][debug]") {

@@ -107,7 +107,7 @@ namespace Horo::AI {
     [[nodiscard]] Result<EnvironmentQueryAsset> AddBuiltinPointDistanceTest(const EnvironmentQueryAsset &lattice, QueryStageId stage,
                                                                             QueryPointDistanceTest settings);
 
-    /** @brief Adds one blocking-geometry visibility filter to a native lattice with no tests.
+    /** @brief Adds one blocking-geometry visibility filter to a native lattice, optionally with a Navigation stage.
      * @param lattice Exact native point generator. @param stage Fresh test identity.
      * @param channel Canonical 16-byte identity of the project collision channel.
      * @return Detached query source or typed validation error.

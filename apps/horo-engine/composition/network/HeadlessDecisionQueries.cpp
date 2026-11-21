@@ -181,9 +181,12 @@ namespace Horo::Application::Internal {
                                                   .deadlineTick = deadline,
                                                   .maximumCandidates = Candidates,
                                                   .bestCount = 1};
-        if (AI::UsesBuiltinPointVisibility(*plan.plan))
+        if (AI::UsesBuiltinPointVisibility(*plan.plan)) {
+            if (AI::UsesBuiltinPointNavigation(*plan.plan))
+                return AdmitMixedPointPlan(*plan.plan, owner.Value(), std::move(inputs), settings);
             return AI::AdmitBuiltinPointVisibilityQuery(*plan.plan, *registry_, scope_->scene, owner.Value(), std::move(inputs), settings,
                                                         *this);
+        }
         if (AI::UsesBuiltinPointNavigation(*plan.plan))
             return AI::AdmitBuiltinPointNavigationQuery(*plan.plan, *registry_, scope_->scene, std::move(inputs), settings, *this);
         if (!perception)
@@ -193,6 +196,19 @@ namespace Horo::Application::Internal {
         if (observations.HasError())
             return Execution::Failure(std::move(observations).ErrorValue());
         return AI::AdmitBuiltinPerceptionQuery(*plan.plan, *registry_, std::move(inputs), std::move(observations).Value(), settings);
+    }
+
+    /** @copydoc HeadlessDecisionQueries::AdmitMixedPointPlan */
+    Execution HeadlessDecisionQueries::AdmitMixedPointPlan(const AI::EnvironmentQueryPlan &plan, Runtime::EntityRef querier,
+                                                           AI::QueryExecutionInputs inputs, AI::QueryExecutionSettings settings) {
+        auto visibility = AI::PrepareBuiltinPointVisibilityTest(plan, *registry_, scope_->scene, querier, inputs, settings, *this);
+        if (visibility.HasError())
+            return Execution::Failure(visibility.ErrorValue());
+        auto navigation = AI::PrepareBuiltinPointNavigationTest(plan, *registry_, scope_->scene, inputs, settings, *this);
+        if (navigation.HasError())
+            return Execution::Failure(navigation.ErrorValue());
+        std::array tests{std::move(visibility).Value(), std::move(navigation).Value()};
+        return AI::AdmitPreparedPointQuery(plan, *registry_, std::move(inputs), settings, tests);
     }
 
     /** @copydoc HeadlessDecisionQueries::PrepareVisibilityCapability */

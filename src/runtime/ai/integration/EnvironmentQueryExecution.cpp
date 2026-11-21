@@ -90,6 +90,51 @@ namespace Horo::AI {
                    actual.generator == expected.generator && actual.provider == expected.provider && actual.revision == expected.revision;
         }
 
+        /** @brief Runs two providers through one generation pass and one outstanding test reservation. */
+        class PointProviderSource final : public IQueryExecutionSource {
+        public:
+            explicit PointProviderSource(std::span<PreparedPointQueryTest> tests)
+                : stages_{tests[0].rule.stage, tests[1].rule.stage}, sources_{std::move(tests[0].source), std::move(tests[1].source)} {}
+
+            bool IsCurrent(const QueryExecutionInputs &inputs) const noexcept override {
+                return sources_[0]->IsCurrent(inputs) && sources_[1]->IsCurrent(inputs);
+            }
+
+            Result<QueryGenerationResult> Generate(const QueryExecutionInputs &inputs, const QueryGeneratorOutput &output) override {
+                return sources_.front()->Generate(inputs, output);
+            }
+
+            Result<bool> StartTest(const QueryExecutionInputs &inputs, QueryStageId stage, const QueryGeneratedItem &item) override {
+                const auto found = std::ranges::find(stages_, stage);
+                if (pending_ || found == stages_.end())
+                    return Result<bool>::Failure(MakeError(AIErrors::EnvironmentQueryContextInvalid));
+                auto &source = *sources_[static_cast<std::size_t>(found - stages_.begin())];
+                auto admitted = source.StartTest(inputs, stage, item);
+                if (admitted.HasValue() && admitted.Value())
+                    pending_ = &source;
+                return admitted;
+            }
+
+            Result<std::optional<QueryTestSample>> PollTest() override {
+                if (!pending_)
+                    return Result<std::optional<QueryTestSample>>::Success(std::nullopt);
+                auto sample = pending_->PollTest();
+                if (sample.HasError() || sample.Value())
+                    pending_ = nullptr;
+                return sample;
+            }
+
+            void CancelTest() noexcept override {
+                if (auto *source = std::exchange(pending_, nullptr))
+                    source->CancelTest();
+            }
+
+        private:
+            std::array<QueryStageId, 2> stages_;
+            std::array<std::unique_ptr<IQueryExecutionSource>, 2> sources_;
+            IQueryExecutionSource *pending_{};
+        };
+
         /** @brief Checks only the exact captured generation. Replacement actors cannot satisfy this read. */
         [[nodiscard]] bool RetiredActor(const QueryGeneratedItem &item, const Runtime::RuntimeSceneView &scene) {
             const auto *actor = std::get_if<Runtime::EntityRef>(&item);
@@ -147,6 +192,33 @@ namespace Horo::AI {
             debug_->candidates.reserve(count);
             debug_->stages.reserve(count * scoring_.stages_.size());
         }
+    }
+
+    /** @copydoc AdmitPreparedPointQuery */
+    Result<std::unique_ptr<QueryExecution>> AdmitPreparedPointQuery(const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry,
+                                                                    QueryExecutionInputs inputs, QueryExecutionSettings settings,
+                                                                    std::span<PreparedPointQueryTest> tests) {
+        using Admission = Result<std::unique_ptr<QueryExecution>>;
+        if (tests.empty() || tests.size() > 2)
+            return Admission::Failure(MakeError(AIErrors::EnvironmentQueryStageUnsupported));
+        const auto generator = tests.front().generator;
+        settings.generatorWorkUnits = tests.front().generationWorkUnits;
+        settings.testWorkUnits = tests.front().testWorkUnits;
+        std::array<QueryScoreRule, 2> rules;
+        for (std::size_t index = 0; index < tests.size(); ++index) {
+            const auto &test = tests[index];
+            if (!test.source || test.generator.stage != generator.stage || test.generator.generator != generator.generator ||
+                test.generator.provider != generator.provider || test.generator.revision != generator.revision)
+                return Admission::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+            settings.maximumCandidates = std::min(settings.maximumCandidates, test.maximumCandidates);
+            settings.testWorkUnits = std::max(settings.testWorkUnits, test.testWorkUnits);
+            rules[index] = test.rule;
+        }
+        auto scoring = QueryScoringPlan::Capture(plan, registry, std::span{rules}.first(tests.size()), QueryScoreTieBreak::StableIndex);
+        if (scoring.HasError())
+            return Admission::Failure(scoring.ErrorValue());
+        auto source = tests.size() == 1 ? std::move(tests.front().source) : std::make_unique<PointProviderSource>(tests);
+        return QueryExecution::Admit(std::move(inputs), generator, std::move(scoring).Value(), settings, std::move(source));
     }
 
     /** @copydoc QueryExecution::Admit */

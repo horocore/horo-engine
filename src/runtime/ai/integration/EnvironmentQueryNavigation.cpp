@@ -276,7 +276,20 @@ namespace Horo::AI {
                                                                              const Runtime::RuntimeSceneView &scene,
                                                                              QueryExecutionInputs inputs, QueryExecutionSettings settings,
                                                                              const IQueryNavigationOwner &owner) {
-        using Admission = Result<std::unique_ptr<QueryExecution>>;
+        auto prepared = PrepareBuiltinPointNavigationTest(plan, registry, scene, inputs, settings, owner);
+        if (prepared.HasError())
+            return Result<std::unique_ptr<QueryExecution>>::Failure(prepared.ErrorValue());
+        auto test = std::move(prepared).Value();
+        return AdmitPreparedPointQuery(plan, registry, std::move(inputs), settings, std::span{&test, 1});
+    }
+
+    /** @copydoc PrepareBuiltinPointNavigationTest */
+    Result<PreparedPointQueryTest> PrepareBuiltinPointNavigationTest(const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry,
+                                                                     const Runtime::RuntimeSceneView &scene,
+                                                                     const QueryExecutionInputs &inputs,
+                                                                     const QueryExecutionSettings &settings,
+                                                                     const IQueryNavigationOwner &owner) {
+        using Admission = Result<PreparedPointQueryTest>;
         if (!inputs.contexts || !inputs.contexts->MatchesScene(scene))
             return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
         const auto captured = CaptureBuiltinPointNavigation(plan, registry, *inputs.contexts);
@@ -295,13 +308,9 @@ namespace Horo::AI {
         QueryScoreRule rule{.stage = captured.Value().test, .requiredFilterValue = true};
         if (const auto cost = captured.Value().maximumScoredCost)
             rule.score = QueryScoreRange{.maximum = *cost, .direction = QueryScoreDirection::Lower};
-        auto scoring = QueryScoringPlan::Capture(plan, registry, std::span{&rule, 1}, QueryScoreTieBreak::StableIndex);
-        if (scoring.HasError())
-            return Admission::Failure(scoring.ErrorValue());
         const std::size_t width = 2U * captured.Value().lattice.outerSteps + 1U;
-        settings.generatorWorkUnits = 2U * width * width;
         auto source = std::make_unique<PointNavigationSource>(captured.Value(), scene, *start, settings.deadlineTick, owner, *access);
-        return QueryExecution::Admit(std::move(inputs), captured.Value().generator, std::move(scoring).Value(), settings,
-                                     std::move(source));
+        return Admission::Success(
+            {captured.Value().generator, rule, 2U * width * width, settings.maximumCandidates, settings.testWorkUnits, std::move(source)});
     }
 }  // namespace Horo::AI

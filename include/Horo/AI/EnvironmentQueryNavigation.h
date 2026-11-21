@@ -4,15 +4,10 @@
  * @brief Tactical surface generation and reachability through Navigation-owned results.
  */
 
-#include "Horo/AI/EnvironmentQueryGenerators.h"
-#include "Horo/AI/EnvironmentQueryScoring.h"
+#include "Horo/AI/EnvironmentQueryExecution.h"
 #include "Horo/Navigation/NavigationCoordinator.h"
 
 namespace Horo::AI {
-    class QueryExecution;
-    struct QueryExecutionInputs;
-    struct QueryExecutionSettings;
-
     /** @brief Captured Navigation-owned samples in provider order, paired with their exact coordinate frame. */
     struct QueryNavigationSurfaceSource final {
         const Navigation::NavigationSamplePositionResult &samples;
@@ -102,4 +97,9 @@ namespace Horo::AI {
     [[nodiscard]] Result<std::unique_ptr<QueryExecution>> AdmitBuiltinPointNavigationQuery(
         const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
         QueryExecutionInputs inputs, QueryExecutionSettings settings, const IQueryNavigationOwner &owner);
+
+    /** @brief Prepares one bounded asynchronous Navigation stage. */
+    [[nodiscard]] Result<PreparedPointQueryTest> PrepareBuiltinPointNavigationTest(
+        const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
+        const QueryExecutionInputs &inputs, const QueryExecutionSettings &settings, const IQueryNavigationOwner &owner);
 }  // namespace Horo::AI
