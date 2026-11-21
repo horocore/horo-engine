@@ -100,6 +100,7 @@ namespace Horo::Application::Internal {
         XR::XRInteractionCutoff cutoff;
         Runtime::SceneRuntimeId scene;
         Input::PlayerId player{};
+        std::uint64_t assignmentRevision{};
 
         bool operator==(const OpenXRPlayInteractionScope &) const noexcept = default;
     };
@@ -626,6 +627,7 @@ namespace Horo::Application::Internal {
             std::optional<Editor::EditorXrSceneSourcePort> geometry;
             std::unique_ptr<XR::XRActionBindingCoordinator> coordinator;
             XR::XRWorldOriginRevision origin;
+            std::optional<std::uint64_t> interactionAssignment;
             Editor::EditorPlayState play{Editor::EditorPlayState::Idle};
             bool admitted{};
             bool neutralPending{}; /**< A suspension requires an empty committed cutoff before resampling. */

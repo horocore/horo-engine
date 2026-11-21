@@ -346,15 +346,16 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(lane.ErrorValue());
         if (!input_.port || input_.port->AssignedPlayer() != player)
             return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        const auto assignment = input_.port->ReadPlayerAssignmentRevision();
         const auto *snapshot = tracking_.Current();
         const auto state = sessions_.Snapshot();
         if (!snapshot || !scene_ || !scene_->published || scene_->retiring || !state.admitsActions || eventsPending_ || !input_.admitted ||
-            input_.play != Editor::EditorPlayState::Playing || snapshot->Focus() != XRTrackingFocusState::Focused ||
+            !assignment || input_.play != Editor::EditorPlayState::Playing || snapshot->Focus() != XRTrackingFocusState::Focused ||
             snapshot->Visibility() != XRTrackingVisibilityState::Visible || snapshot->State() != XRTrackingState::Active)
             return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
         if (scene_->session != state.session || snapshot->Session() != state.session || snapshot->WorldOriginRevision() != input_.origin ||
             !input_.coordinator || !input_.coordinator->Current() || input_.coordinator->Revision() != snapshot->BindingRevision() ||
-            !HasCurrentAssignedInput())
+            assignment != input_.interactionAssignment)
             return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotStale));
         return Outcome::Success(snapshot);
     }
@@ -367,7 +368,7 @@ namespace Horo::Application::Internal {
             return current;
         if (scope.scene != scene_->scene)
             return Outcome::Failure(MakeError(XRErrors::IdentityStale));
-        if (scope.cutoff != DescribeXRInteractionCutoff(*current.Value()))
+        if (scope.cutoff != DescribeXRInteractionCutoff(*current.Value()) || scope.assignmentRevision != input_.interactionAssignment)
             return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotStale));
         return current;
     }
@@ -380,7 +381,7 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(current.ErrorValue());
         const auto &snapshot = *current.Value();
         OpenXRPlayInteractionSources sources;
-        sources.scope_ = {DescribeXRInteractionCutoff(snapshot), scene_->scene, player};
+        sources.scope_ = {DescribeXRInteractionCutoff(snapshot), scene_->scene, player, *input_.interactionAssignment};
         using enum XRTrackedDeviceCapability;
         for (const auto &device : snapshot.Devices()) {
             const auto &capabilities = device.capabilities;
@@ -408,8 +409,6 @@ namespace Horo::Application::Internal {
         const auto current = CurrentInteractionTracking(scope);
         if (current.HasError())
             return Outcome::Failure(current.ErrorValue());
-        if (!input_.port->RoutingEligible())
-            return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
         const auto &bindings = input_.coordinator->Current()->bindings;
         const auto binding = std::ranges::find(bindings, request.selectAction, &XRResolvedActionBinding::action);
         if (binding == bindings.end() || binding->valueType != Input::ActionValueType::Digital)
@@ -433,10 +432,7 @@ namespace Horo::Application::Internal {
         if (std::this_thread::get_id() != lane_ || busy_ || closing_)
             return std::nullopt;
         const auto &selected = composition_.bindings->worldUiPointer;
-        if (!selected || !input_.port)
-            return std::nullopt;
-        const auto assignment = input_.port->ReadPlayerAssignmentRevision();
-        if (!assignment)
+        if (!selected)
             return std::nullopt;
         const auto current = ReadInteractionSources(player);
         if (current.HasError())
@@ -456,7 +452,7 @@ namespace Horo::Application::Internal {
         if (sample.HasError())
             return std::nullopt;
         return OpenXRWorldUiPointerFrame{{device->id, scope.cutoff.origin, scope.cutoff.bindingRevision, scope.scene, scope.player,
-                                          *assignment},
+                                          scope.assignmentRevision},
                                          sample.Value()};
     }
 
@@ -510,6 +506,8 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(opened.ErrorValue());
         }
         auto frame = std::move(opened).Value();
+        // The first raw commit can enable routing; assignment evidence must precede native callbacks.
+        const auto interactionAssignment = input_.router->RoutingState({}).assignmentRevision;
         const auto sampled = AppendInput(context, frame);
         const bool profileChanged = sampled.HasError() && RetireIfInputProfileChanged(sampled.ErrorValue());
         if (pendingRevoke_) {
@@ -532,6 +530,7 @@ namespace Horo::Application::Internal {
             RevokeSource();
             return sampled;
         }
+        input_.interactionAssignment = interactionAssignment;
         return Result<void>::Success();
     }
 

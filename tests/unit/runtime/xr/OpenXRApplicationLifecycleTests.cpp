@@ -1907,6 +1907,7 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK(worldUi->source.device == controller);
         CHECK(worldUi->source.scene == sources.Scope().scene);
         CHECK(worldUi->source.assignmentRevision != 0);
+        CHECK(worldUi->source.assignmentRevision == sources.Scope().assignmentRevision);
         CHECK(worldUi->sample.selectDown);
         CHECK(fixture.play->UsesXrScene());
         bool foreignScene{};
@@ -1942,10 +1943,19 @@ namespace Horo::Tests::OpenXRApplication {
         sample();
         CHECK(fixture.play->ReadWorldUiPointer(player));
 
+        const auto beforeReassignment = RequireValue(fixture.play->ReadInteractionSources(player));
+        fixture.router.AssignKeyboardMouse(player + 1);
+        const auto staleAssignment = fixture.play->ReadInteractionCandidates(beforeReassignment.Scope(), probes);
+        REQUIRE(staleAssignment.HasError());
+        CHECK(staleAssignment.ErrorValue().code.Value() == XR::XRErrors::TrackingSnapshotStale.code.Value());
+        CHECK(fixture.play->ReadInteractionSources(player).HasError());
+        CHECK_FALSE(fixture.play->ReadWorldUiPointer(player));
+
         fixture.script.actions.sample.boolean = XR_FALSE;
         sample();
         const auto newer = RequireValue(fixture.play->ReadInteractionSources(player));
         CHECK(newer.Scope().cutoff.tracking > sources.Scope().cutoff.tracking);
+        CHECK(newer.Scope().assignmentRevision != beforeReassignment.Scope().assignmentRevision);
         CHECK_FALSE(RequireValue(fixture.play->ReadControllerPointer(newer.Scope(), pointer)).selectDown);
         CHECK(fixture.play->ReadControllerPointer(sources.Scope(), pointer).HasError());
         const auto stale = fixture.play->ReadInteractionCandidates(sources.Scope(), probes);
