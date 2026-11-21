@@ -24,6 +24,15 @@ void QualifySourceDocumentPublicContract(Horo::Editor::SourceFileOpenService &op
     static_cast<void>(result);
 }
 
+/** @brief Qualifies the multi-document publication and undo receipt through the staged public header. */
+void QualifySourceBatchPublicContract(Horo::Editor::SourceDocumentService &documents,
+                                      const Horo::Editor::SourceDocumentSnapshot &snapshot) {
+    const Horo::Editor::SourceBatchEdit request{snapshot, {snapshot.Revision(), 0, 0, "// comment\n"}};
+    const auto batch = documents.EditBatch(std::span{&request, 1});
+    if (batch.HasValue() && batch.Value().CanUndo())
+        static_cast<void>(documents.UndoBatch(batch.Value()));
+}
+
 /** @brief Qualifies source persistence without importing editor implementation headers. */
 void QualifySourceSavePublicContract(Horo::Editor::SourceFileOpenService &open, Horo::DurableFileSystem &files,
                                      const Horo::Editor::SourceDocumentSnapshot &snapshot) {

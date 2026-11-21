@@ -12,6 +12,7 @@
 #include <filesystem>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -168,6 +169,42 @@ namespace Horo::Editor {
         std::optional<SourceEditingView> afterView{};
     };
 
+    /** @brief A patch tied to an exact owner publication, including its document incarnation. */
+    struct SourceBatchEdit final {
+        SourceDocumentSnapshot source;
+        SourceTextEdit edit;
+    };
+
+    /** @brief One document result in request order, including unchanged documents. */
+    struct SourceBatchItem final {
+        SourceDocumentSnapshot snapshot;
+        bool changed{};
+    };
+
+    /** @brief An owner-issued receipt for one atomic buffer transaction. */
+    class SourceEditBatch final {
+    public:
+        /** @brief Reads the outcome for each requested document. */
+        [[nodiscard]] std::span<const SourceBatchItem> Items() const noexcept {
+            return data_ ? std::span<const SourceBatchItem>{data_->items} : std::span<const SourceBatchItem>{};
+        }
+
+        /** @brief Reports whether each changed document retained its undo entry at publication. */
+        [[nodiscard]] bool CanUndo() const noexcept {
+            return data_ && data_->undoable;
+        }
+
+    private:
+        friend class SourceDocumentService;
+
+        struct Data final {
+            std::vector<SourceBatchItem> items;
+            bool undoable{};
+        };
+
+        std::shared_ptr<const Data> data_;
+    };
+
     /** @brief One history publication plus originating view metadata.
      * @details Only the matching originating view restores this position. Other views retain and clamp their own
      * selection/scroll against the new text. The service never stores live view state or dispatches to widgets.
@@ -236,6 +273,17 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<SourceDocumentSnapshot> Edit(DocumentInstanceId instance, const SourceTextEdit &edit,
                                                           CancellationToken cancellation = {});
+        /** @brief Publishes one distinct-document batch on the owner lane after checking live snapshots and disk bases.
+         * @param edits Exact source snapshots and patches, borrowed only for this call. @param cancellation Cooperative observer.
+         * @return Per-document results or a typed failure. Failure leaves buffers and history intact. No disk writes occur.
+         */
+        [[nodiscard]] Result<SourceEditBatch> EditBatch(std::span<const SourceBatchEdit> edits, CancellationToken cancellation = {});
+        /** @brief Replays all changed documents in an exact batch receipt backward as one owner-lane operation.
+         * @param batch Receipt for the current publications. @param cancellation Cooperative observer.
+         * @return Updated snapshots in the order of changed items, or failure preserving all buffers and history.
+         */
+        [[nodiscard]] Result<std::vector<SourceDocumentSnapshot>> UndoBatch(const SourceEditBatch &batch,
+                                                                            CancellationToken cancellation = {});
         /** @brief Queries bounded history without I/O. @param instance Exact admitted session.
          * @return Availability or lifecycle/thread failure. */
         [[nodiscard]] Result<SourceHistoryState> History(DocumentInstanceId instance) const;

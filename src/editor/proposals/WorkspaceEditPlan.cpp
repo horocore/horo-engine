@@ -149,11 +149,15 @@ namespace Horo::Editor::Proposals {
         };
 
         /** @brief Concatenates unchanged spans and replacements in one bounded forward copy. */
-        std::string Render(const std::string_view text, const std::span<const TextHunk> hunks, const std::size_t bytes) {
+        std::string Render(const std::string_view text, const std::span<const TextHunk> hunks, const std::size_t bytes,
+                           const std::span<const ReviewState> selection = {}) {
             std::string result;
             result.reserve(bytes);
             std::size_t copied{};
-            for (const auto &hunk : hunks) {
+            for (std::size_t index = 0; index < hunks.size(); ++index) {
+                if (!selection.empty() && selection[index] != ReviewState::Accepted)
+                    continue;
+                const auto &hunk = hunks[index];
                 const auto offset = static_cast<std::size_t>(hunk.offset);
                 result.append(text.substr(copied, offset - copied));
                 result.append(hunk.after);
@@ -161,6 +165,18 @@ namespace Horo::Editor::Proposals {
             }
             result.append(text.substr(copied));
             return result;
+        }
+
+        /** @brief Estimates only the subset the user accepted, in original source coordinates. */
+        std::size_t AcceptedSize(const std::size_t sourceBytes, const EditFile &file, const std::span<const ReviewState> selection) {
+            auto bytes = sourceBytes;
+            for (std::size_t index = 0; index < selection.size(); ++index) {
+                if (selection[index] != ReviewState::Accepted)
+                    continue;
+                const auto &hunk = file.hunks[index];
+                bytes = bytes - hunk.before.size() + hunk.after.size();
+            }
+            return bytes;
         }
 
         /** @brief Admits exact source evidence and charges work before hashing source or allocating a preview. */
@@ -271,5 +287,42 @@ namespace Horo::Editor::Proposals {
     Result<WorkspaceEditPlan> PlanRecoveredWorkspaceEdits(const ChangeSet &proposal, const ProjectPolicy &policy,
                                                           const std::span<const SourcePathObservation> observations, const Limits &limits) {
         return Plan(proposal, policy, observations, limits, ReviewSourceMatch::RecoveredContent);
+    }
+
+    /** @copydoc ReviewDecisions::ApplyAccepted */
+    Result<SourceEditBatch> ReviewDecisions::ApplyAccepted(SourceDocumentService &documents, const ProjectPolicy &policy,
+                                                           const WorkspaceEditPlan &plan, const CancellationToken cancellation) const {
+        using Output = Result<SourceEditBatch>;
+        if (proposal_.PolicyDigest() != policy.Digest())
+            return Output::Failure(MakeError(Errors::PolicyDenied));
+        if (!Matches(plan) || !AcceptancesCurrent(plan, units_))
+            return Output::Failure(MakeError(Errors::StaleBase));
+        try {
+            std::vector<std::string> replacements;
+            std::vector<SourceBatchEdit> edits;
+            replacements.reserve(units_.size());
+            edits.reserve(units_.size());
+            const Limits limits;
+            Budget budget{limits, ReviewSourceMatch::CurrentRevision};
+            for (std::size_t file = 0; file < units_.size(); ++file) {
+                const auto &selection = units_[file];
+                if (std::ranges::find(selection, ReviewState::Accepted) == selection.end())
+                    continue;
+                const auto *operation = std::get_if<EditFile>(&proposal_.Files()[file]);
+                if (!operation)
+                    return Output::Failure(MakeError(Errors::Invalid));
+                if (!policy.Allows(operation->base.path))
+                    return Output::Failure(MakeError(Errors::PolicyDenied));
+                const auto &source = std::get<FilePreview>(plan.entries[file]).before;
+                const auto bytes = AcceptedSize(source.Text().size(), *operation, selection);
+                if (!budget.Charge(bytes, budget.output))
+                    return Output::Failure(MakeError(Errors::Bounds));
+                const auto &replacement = replacements.emplace_back(Render(source.Text(), operation->hunks, bytes, selection));
+                edits.push_back({source, {source.Revision(), 0, source.Text().size(), replacement}});
+            }
+            return documents.EditBatch(edits, cancellation);
+        } catch (const std::bad_alloc &) {
+            return Output::Failure(MakeError(Errors::Bounds));
+        }
     }
 }  // namespace Horo::Editor::Proposals

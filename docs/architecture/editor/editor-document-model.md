@@ -216,6 +216,14 @@ Detached historical snapshots are charged and bounded by their consuming service
 silently attributed to the source owner after release. Reader handoff is synchronized
 by the host; readers touch only immutable roots and need no source-owner lock.
 
+An explicit buffer batch accepts one patch per exact live document publication.
+The owner stages every result and its history entry, then checks the current
+disk bytes against the saved bases before publishing any new buffer. It returns
+each document's outcome in request order. Group undo checks the receipt against
+the same live publications and stages every reversal before publishing. Save,
+external changes, and subsequent edits can retire that undo receipt. Batch edit
+and undo leave disk files untouched.
+
 Every service call and move stays on its creating thread. File loading/inspection/reload
 are explicit bounded use cases, not draw-loop polling. Reads check cancellation every
 4 KiB; text metadata inspection does likewise. Allocation, byte copying/comparison and

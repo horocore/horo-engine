@@ -87,6 +87,12 @@ namespace Horo::Editor {
             [[nodiscard]] std::optional<HistoryStep> Step(bool redo) const;
         };
 
+        struct StagedBatchEdit final {
+            Record *record;
+            std::shared_ptr<const Detail::SourceDocumentRoot> next;
+            std::optional<HistoryEntry> history;
+        };
+
         std::filesystem::path projectRoot;
         SourceDocumentLimits limits;
         std::thread::id owner{std::this_thread::get_id()};
@@ -123,7 +129,20 @@ namespace Horo::Editor {
                                                                                          CancellationToken cancellation);
         /** @brief Validates/reserves/copies one borrowed patch without changing the current root. */
         [[nodiscard]] Result<std::shared_ptr<const Detail::SourceText>> PrepareEdit(const Record &record, const SourceTextEdit &edit,
-                                                                                    CancellationToken cancellation) const;
+                                                                                    CancellationToken cancellation,
+                                                                                    std::size_t reservedBytes = 0) const;
+        /** @brief Resolves a supplied snapshot to its exact, still-current record. */
+        [[nodiscard]] Record *FindCurrent(const SourceDocumentSnapshot &snapshot);
+        /** @brief Reads only the authorized disk source and rejects any newer external bytes before batch publication. */
+        [[nodiscard]] Result<void> VerifyBatchBase(const Record &record, CancellationToken cancellation) const;
+        /** @brief Prepares a replacement root while accounting for other staged buffers. */
+        [[nodiscard]] Result<std::shared_ptr<const Detail::SourceDocumentRoot>> PrepareBatchRoot(const Record &record,
+                                                                                                 const SourceTextEdit &edit,
+                                                                                                 CancellationToken cancellation,
+                                                                                                 std::size_t reservedBytes) const;
+        /** @brief Stages one batch edit and reserves its history before any publication. */
+        [[nodiscard]] Result<StagedBatchEdit> StageBatchEdit(Record &record, const SourceTextEdit &edit, CancellationToken cancellation,
+                                                             std::size_t reservedBytes) const;
         /** @brief Validates save intent/path and read reservation before filesystem callback admission. */
         [[nodiscard]] Result<std::filesystem::path> PrepareSavePath(const Record &record, const SourceSaveRequest &request,
                                                                     const DocumentIdentity &identity, std::filesystem::path path,

@@ -118,6 +118,41 @@ TEST_CASE("Review recovery rejects corruption and stale accepted units", "[edito
     CHECK(decisions.State().Value() == ReviewState::Rejected);
 }
 
+TEST_CASE("Applying accepted proposal hunks stages one unsaved buffer transaction", "[editor][proposal][apply]") {
+    Workspace workspace;
+    const auto a = workspace.Open("src/a.cpp", "one two end");
+    const auto b = workspace.Open("src/b.cpp", "three", 2);
+    const auto proposal = workspace.Build({
+        EditFile{FileBase::Capture(a).Value(), {{0, "one", "first"}, {4, "two", "second"}, {8, "end", "last"}}},
+        EditFile{FileBase::Capture(b).Value(), {{0, "three", "third"}}},
+    });
+    const std::array observations{SourcePathObservation{a.Identity().key.source, a}, SourcePathObservation{b.Identity().key.source, b}};
+    const auto plan = PlanWorkspaceEdits(proposal, workspace.policy, observations).Value();
+    ReviewDecisions decisions{proposal};
+    REQUIRE(decisions.Decide(plan, {0, 0}, ReviewChoice::Accept).HasValue());
+    REQUIRE(decisions.Decide(plan, {0, 1}, ReviewChoice::Reject).HasValue());
+    REQUIRE(decisions.Decide(plan, {1}, ReviewChoice::Accept).HasValue());
+    const auto revisedPolicy = ProjectPolicy::Capture("workspace", 2, {{Path("src"), true}}).Value();
+    const auto denied = decisions.ApplyAccepted(workspace.documents, revisedPolicy, plan);
+    REQUIRE(denied.HasError());
+    CHECK(denied.ErrorValue().code.Value() == Errors::PolicyDenied.code.Value());
+    CHECK(a.IsCurrent());
+    CHECK(b.IsCurrent());
+
+    const auto applied = decisions.ApplyAccepted(workspace.documents, workspace.policy, plan);
+    REQUIRE(applied.HasValue());
+    REQUIRE(applied.Value().Items().size() == 2);
+    CHECK(applied.Value().Items()[0].snapshot.Text() == "first two end");
+    CHECK(applied.Value().Items()[1].snapshot.Text() == "third");
+    CHECK(applied.Value().Items()[0].snapshot.Dirty());
+    CHECK(applied.Value().Items()[1].snapshot.Dirty());
+    CHECK(decisions.ApplyAccepted(workspace.documents, workspace.policy, plan).HasError());
+    const auto undone = workspace.documents.UndoBatch(applied.Value());
+    REQUIRE(undone.HasValue());
+    CHECK(undone.Value()[0].Text() == a.Text());
+    CHECK(undone.Value()[1].Text() == b.Text());
+}
+
 TEST_CASE("Workspace plans preserve exact text and use canonical operation order", "[editor][proposal][plan]") {
     Workspace workspace;
     const std::string_view original = "\xef\xbb\xbf"

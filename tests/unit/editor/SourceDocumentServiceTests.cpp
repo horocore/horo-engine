@@ -436,6 +436,110 @@ TEST_CASE("Rejected cancelled and allocation failed history operations are atomi
     CHECK(owner.Snapshot(id).Value().Text() == "b\xc3\xa9\r\n");
 }
 
+TEST_CASE("Source batch publishes or undoes every edited buffer together", "[unit][editor][source][batch]") {
+    SourceProject project;
+    project.Put("first");
+    project.Put("second", "other.cpp");
+    project.Put("keep", "keep.cpp");
+    SourceDocumentService owner(project.directory);
+    const auto first = owner.Open(project.Identity(), project.directory / "code.cpp").Value();
+    const auto second = owner.Open(project.Identity("other.cpp", 2), project.directory / "other.cpp").Value();
+    const auto keep = owner.Open(project.Identity("keep.cpp", 3), project.directory / "keep.cpp").Value();
+    const std::array edits{SourceBatchEdit{first, {1, 0, 1, "F"}}, SourceBatchEdit{second, {1, 0, 1, "S"}},
+                           SourceBatchEdit{keep, {1, 0, 0, ""}}};
+    const auto applied = owner.EditBatch(edits);
+    REQUIRE(applied.HasValue());
+    const auto &batch = applied.Value();
+    REQUIRE(batch.CanUndo());
+    REQUIRE(batch.Items().size() == 3);
+    CHECK(batch.Items()[0].changed);
+    CHECK(batch.Items()[1].changed);
+    CHECK_FALSE(batch.Items()[2].changed);
+    CHECK(batch.Items()[2].snapshot.SharesStateWith(keep));
+    CHECK(batch.Items()[0].snapshot.Text() == "First");
+    CHECK(batch.Items()[1].snapshot.Text() == "Second");
+    CHECK(batch.Items()[0].snapshot.Dirty());
+    CHECK(batch.Items()[1].snapshot.Dirty());
+    SourceDocumentService disk(project.directory);
+    CHECK(disk.Open(project.Identity(), project.directory / "code.cpp").Value().Text() == first.Text());
+    CHECK(disk.Open(project.Identity("other.cpp", 2), project.directory / "other.cpp").Value().Text() == second.Text());
+
+    CancellationSource cancel;
+    cancel.RequestCancellation();
+    ErrorIs(owner.UndoBatch(batch, cancel.Token()), SourceDocumentErrors::Cancelled);
+    CHECK(batch.Items()[0].snapshot.IsCurrent());
+    CHECK(batch.Items()[1].snapshot.IsCurrent());
+    const auto undone = owner.UndoBatch(batch);
+    REQUIRE(undone.HasValue());
+    REQUIRE(undone.Value().size() == 2);
+    CHECK(undone.Value()[0].Text() == first.Text());
+    CHECK(undone.Value()[1].Text() == second.Text());
+    CHECK_FALSE(undone.Value()[0].Dirty());
+    CHECK_FALSE(undone.Value()[1].Dirty());
+    CHECK(owner.History(first.Identity().instance).Value().redoEntries == 1);
+    CHECK(owner.History(second.Identity().instance).Value().redoEntries == 1);
+    ErrorIs(owner.UndoBatch(batch), SourceDocumentErrors::Stale);
+}
+
+TEST_CASE("Rejected source batches preserve all live buffers and history", "[unit][editor][source][batch]") {
+    SourceProject project;
+    project.Put("first");
+    project.Put("second", "other.cpp");
+    SourceDocumentService owner(project.directory);
+    const auto first = owner.Open(project.Identity(), project.directory / "code.cpp").Value();
+    const auto second = owner.Open(project.Identity("other.cpp", 2), project.directory / "other.cpp").Value();
+    std::array edits{SourceBatchEdit{first, {1, 0, 1, "F"}}, SourceBatchEdit{second, {1, 0, 1, "S"}}};
+
+    SECTION("Invalid second range") {
+        edits[1].edit.offset = 99;
+        ErrorIs(owner.EditBatch(edits), SourceDocumentErrors::Invalid);
+    }
+    SECTION("Duplicate document") {
+        edits[1] = edits[0];
+        ErrorIs(owner.EditBatch(edits), SourceDocumentErrors::Invalid);
+    }
+    SECTION("External disk change has not been observed by the editor") {
+        project.Put("external", "other.cpp");
+        ErrorIs(owner.EditBatch(edits), SourceDocumentErrors::SaveConflict);
+    }
+    SECTION("Cancellation") {
+        CancellationSource cancel;
+        cancel.RequestCancellation();
+        ErrorIs(owner.EditBatch(edits, cancel.Token()), SourceDocumentErrors::Cancelled);
+    }
+    SECTION("Allocation fails during preparation") {
+        Result<SourceEditBatch> attempted = Result<SourceEditBatch>::Success({});
+        {
+            Tests::AllocationProbe::ScopedFailure fail{3};
+            attempted = owner.EditBatch(edits);
+        }
+        ErrorIs(attempted, SourceDocumentErrors::TooLarge);
+    }
+    CHECK(first.IsCurrent());
+    CHECK(second.IsCurrent());
+    CHECK(owner.History(first.Identity().instance).Value().undoEntries == 0);
+    CHECK(owner.History(second.Identity().instance).Value().undoEntries == 0);
+}
+
+TEST_CASE("An intervening edit blocks group undo without reverting other buffers", "[unit][editor][source][batch]") {
+    SourceProject project;
+    project.Put("first");
+    project.Put("second", "other.cpp");
+    SourceDocumentService owner(project.directory);
+    const auto first = owner.Open(project.Identity(), project.directory / "code.cpp").Value();
+    const auto second = owner.Open(project.Identity("other.cpp", 2), project.directory / "other.cpp").Value();
+    const std::array edits{SourceBatchEdit{first, {1, 0, 1, "F"}}, SourceBatchEdit{second, {1, 0, 1, "S"}}};
+    const auto applied = owner.EditBatch(edits);
+    REQUIRE(applied.HasValue());
+    const auto &batch = applied.Value();
+    const auto newer = owner.Edit(second.Identity().instance, {batch.Items()[1].snapshot.Revision(), 0, 1, "X"});
+    REQUIRE(newer.HasValue());
+    ErrorIs(owner.UndoBatch(batch), SourceDocumentErrors::Stale);
+    CHECK(batch.Items()[0].snapshot.IsCurrent());
+    CHECK(newer.Value().IsCurrent());
+    CHECK(newer.Value().Text() == "Xecond");
+}
+
 TEST_CASE("Source edit plans preserve BOM CRLF and scalar selection boundaries", "[unit][editor][source][editing]") {
     SourceProject project;
     project.Put("\xef\xbb\xbf  one\r\n\t\xc3\xa9 two\r\nlast");

@@ -322,6 +322,13 @@ namespace Horo::Editor::Proposals {
 
         /** @brief Restores the previous decision batch against the current plan. @return True if a decision was undone. */
         Result<bool> Undo(const WorkspaceEditPlan &plan);
+        /** @brief Applies only accepted text hunks through the current source owner.
+         * @param documents Owner of the live source snapshots. @param policy Active captured policy for this proposal.
+         * @param plan Exact proposal preview with current source evidence. @param cancellation Cooperative observer.
+         * @return Atomic buffer receipt or a typed refusal. Applying never writes disk.
+         */
+        [[nodiscard]] Result<SourceEditBatch> ApplyAccepted(SourceDocumentService &documents, const ProjectPolicy &policy,
+                                                            const WorkspaceEditPlan &plan, CancellationToken cancellation = {}) const;
         /** @brief Encodes the proposal digest and canonical unit states without source bytes or approval authority. */
         [[nodiscard]] std::string Encode() const;
         /** @brief Reconstructs decisions bound to the exact proposal and current plan.
