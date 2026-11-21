@@ -150,6 +150,15 @@ selection. Initial load and compatible reload use the same validator. A reload
 candidate must preserve the persistent `SkeletonId`; cancellation and shutdown fail
 closed without publishing partial state or replacing the last good snapshot.
 
+Owner-lane gameplay queries resolve stable joint and socket IDs against the
+exact current or previous committed pose. They return model-space matrices by
+composing the validated joint ancestry and authored socket offset. Gameplay can
+compose the result with the animated entity's world transform. A Scene socket
+binding carries the exact entity and animation incarnation across ticks. Reload
+or actor retirement invalidates the binding, and Scene cancellation or shutdown
+rejects further queries. Queries allocate no storage on success and expose
+neither mutable pose data nor an attachment entity's transform authority.
+
 ## Pose
 
 `Horo/Animation/PoseStorage.h` is the ANI-001.5 owner of bounded local/model

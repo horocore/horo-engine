@@ -48,6 +48,8 @@ namespace Horo::Runtime {
         [[nodiscard]] bool OnOwner() const noexcept;
         [[nodiscard]] Result<void> Admit(bool controls = false) const;
         [[nodiscard]] std::shared_ptr<Actor> Find(EntityRef entity) const noexcept;
+        /** @brief Checks owner admission before borrowing one exact active actor for a synchronous observation. */
+        [[nodiscard]] std::pair<const Actor *, Animation::GraphInstanceFailure> ResolveObservationActor(EntityRef entity) const noexcept;
         [[nodiscard]] bool CurrentScene(const RuntimeSceneView &scene) const noexcept;
         [[nodiscard]] Result<std::shared_ptr<Actor>> PrepareActor(const RuntimeSceneView &scene, const RuntimeEntityView &entity,
                                                                   std::uint32_t slot);

@@ -597,6 +597,23 @@ namespace Horo::Animation {
          * @return Success or typed stale/binding/size failure before any writes.
          */
         [[nodiscard]] GraphInstanceOutcome CopyPose(const PoseHandle &pose, std::span<Math::Transform> output) const;
+
+        /** @brief Reads the model-space joint transform from an exact committed local pose.
+         * @param pose Current or previous resident pose handle.
+         * @param joint Stable skeleton-local joint identity.
+         * @return Value matrix or a typed owner, handle, missing joint, or transform error.
+         * @pre Invoke on the instance owner thread. Successful reads perform no allocation.
+         */
+        [[nodiscard]] Result<Math::Mat4> JointModelTransform(const PoseHandle &pose, JointId joint) const;
+
+        /** @brief Reads the model-space attachment transform from an exact committed local pose.
+         * @param pose Current or previous resident pose handle.
+         * @param socket Stable skeleton-local socket identity.
+         * @return Joint model matrix composed with the authored socket offset, or a typed query error.
+         * @pre Invoke on the instance owner thread. Successful reads perform no allocation.
+         */
+        [[nodiscard]] Result<Math::Mat4> SocketModelTransform(const PoseHandle &pose, SkeletonSocketId socket) const;
+
         /** @brief Returns last committed metadata. @return Empty handles before the
          * first commit. */
         [[nodiscard]] GraphInstancePublication Publication() const noexcept;

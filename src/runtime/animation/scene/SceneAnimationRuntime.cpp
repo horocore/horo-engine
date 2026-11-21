@@ -192,42 +192,74 @@ namespace Horo::Runtime {
         return graph ? graph->QueryAction(handle) : A::GraphActionQueryOutcome{failure};
     }
 
-    /** @copydoc SceneAnimationRuntime::ResolveObservationGraph */
-    std::pair<const A::AnimationGraphInstance *, A::GraphInstanceFailure> SceneAnimationRuntime::ResolveObservationGraph(
+    /** @copydoc SceneAnimationRuntime::State::ResolveObservationActor */
+    std::pair<const SceneAnimationRuntime::State::Actor *, A::GraphInstanceFailure> SceneAnimationRuntime::State::ResolveObservationActor(
         EntityRef entity) const noexcept {
         using enum A::GraphInstanceFailure;
-        if (!state_->OnOwner())
+        if (!OnOwner())
             return {nullptr, ThreadViolation};
-        if (state_->closed)
+        if (closed)
             return {nullptr, AdmissionRejected};
-        if (state_->config.ownerCancellation.IsCancellationRequested())
+        if (config.ownerCancellation.IsCancellationRequested())
             return {nullptr, Cancelled};
-        const auto actor = state_->Find(entity);
+        const auto actor = Find(entity);
         if (!actor)
             return {nullptr, HandleStale};
-        return {&actor->graph, None};
+        return {actor.get(), None};
+    }
+
+    /** @copydoc SceneAnimationRuntime::JointModelTransform */
+    Result<Math::Mat4> SceneAnimationRuntime::JointModelTransform(const EntityRef entity, const A::PoseHandle &pose,
+                                                                  const A::JointId joint) const {
+        const auto [actor, failure] = state_->ResolveObservationActor(entity);
+        if (!actor)
+            return Result<Math::Mat4>::Failure(A::DescribeGraphInstanceFailure(Rejected(failure)));
+        return actor->graph.JointModelTransform(pose, joint);
+    }
+
+    /** @copydoc SceneAnimationRuntime::BindSocket */
+    Result<SceneAnimationSocketBinding> SceneAnimationRuntime::BindSocket(const EntityRef entity, const A::SkeletonSocketId socket) const {
+        const auto [actor, failure] = state_->ResolveObservationActor(entity);
+        if (!actor)
+            return Result<SceneAnimationSocketBinding>::Failure(A::DescribeGraphInstanceFailure(Rejected(failure)));
+        if (!actor->assets.skeleton->FindSocket(socket))
+            return Result<SceneAnimationSocketBinding>::Failure(MakeError(A::AnimationErrors::PoseSocketMissing));
+        return Result<SceneAnimationSocketBinding>::Success({entity, actor->instance, socket});
+    }
+
+    /** @copydoc SceneAnimationRuntime::SocketModelTransform */
+    Result<Math::Mat4> SceneAnimationRuntime::SocketModelTransform(const SceneAnimationSocketBinding &binding,
+                                                                   const A::PoseHandle &pose) const {
+        const auto [actor, failure] = state_->ResolveObservationActor(binding.entity);
+        if (!actor)
+            return Result<Math::Mat4>::Failure(A::DescribeGraphInstanceFailure(Rejected(failure)));
+        if (!binding.instance.IsValid() || !binding.socket.IsValid())
+            return Result<Math::Mat4>::Failure(MakeError(A::AnimationErrors::HandleMalformed));
+        if (binding.instance != actor->instance)
+            return Result<Math::Mat4>::Failure(MakeError(A::AnimationErrors::HandleStale));
+        return actor->graph.SocketModelTransform(pose, binding.socket);
     }
 
     /** @copydoc SceneAnimationRuntime::CopyParameters */
     A::GraphInstanceOutcome SceneAnimationRuntime::CopyParameters(EntityRef entity, const A::PoseHandle &pose,
                                                                   std::span<A::GraphParameterInput> output) const {
-        const auto [graph, failure] = ResolveObservationGraph(entity);
-        return graph ? graph->CopyParameters(pose, output) : Rejected(failure);
+        const auto [actor, failure] = state_->ResolveObservationActor(entity);
+        return actor ? actor->graph.CopyParameters(pose, output) : Rejected(failure);
     }
 
     /** @copydoc SceneAnimationRuntime::CopyStateEvents */
     A::GraphInstanceOutcome SceneAnimationRuntime::CopyStateEvents(EntityRef entity, const A::PoseHandle &pose,
                                                                    std::span<A::GraphStateEvent> output, std::uint32_t &written) const {
-        const auto [graph, failure] = ResolveObservationGraph(entity);
-        return graph ? graph->CopyStateEvents(pose, output, written) : Rejected(failure);
+        const auto [actor, failure] = state_->ResolveObservationActor(entity);
+        return actor ? actor->graph.CopyStateEvents(pose, output, written) : Rejected(failure);
     }
 
     /** @copydoc SceneAnimationRuntime::CopyClipEvents */
     A::GraphInstanceOutcome SceneAnimationRuntime::CopyClipEvents(EntityRef entity, const A::PoseHandle &pose,
                                                                   std::span<A::AnimationEventOccurrence> output,
                                                                   std::uint32_t &written) const {
-        const auto [graph, failure] = ResolveObservationGraph(entity);
-        return graph ? graph->CopyClipEvents(pose, output, written) : Rejected(failure);
+        const auto [actor, failure] = state_->ResolveObservationActor(entity);
+        return actor ? actor->graph.CopyClipEvents(pose, output, written) : Rejected(failure);
     }
 
     /** @copydoc SceneAnimationRuntime::CopyActionSlots */

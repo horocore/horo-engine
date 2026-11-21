@@ -404,6 +404,28 @@ namespace Horo::Animation {
                 return {GraphInstanceFailure::HandleStale};
             return {};
         }
+
+        /** @brief Resolves one model transform through the validated parent chain of a resident pose. */
+        Result<Math::Mat4> ReadJointModel(const SkeletonAsset &skeleton, const std::span<const Math::Transform> locals,
+                                          const JointId joint) {
+            auto index = skeleton.FindJointIndex(joint);
+            if (!index)
+                return Result<Math::Mat4>::Failure(MakeError(AnimationErrors::PoseJointMissing));
+
+            auto model = Math::Mat4::Identity();
+            do {
+                const auto local = locals[*index].TryToMatrix();
+                if (local.HasError())
+                    return Result<Math::Mat4>::Failure(MakeError(AnimationErrors::PoseTransformInvalid));
+                model = Math::Multiply(local.Value(), model);
+                const auto &parent = skeleton.Data().joints[*index].parent;
+                index = parent ? skeleton.FindJointIndex(*parent) : std::nullopt;
+            } while (index);
+
+            if (!Math::IsFinite(model))
+                return Result<Math::Mat4>::Failure(MakeError(AnimationErrors::PoseTransformInvalid));
+            return Result<Math::Mat4>::Success(model);
+        }
     }  // namespace
 
     /** @copydoc DescribeGraphInstanceFailure */
@@ -735,6 +757,33 @@ namespace Horo::Animation {
             return {GraphInstanceFailure::LimitExceeded};
         std::ranges::copy(state_->published.poses[pose.slot.index], output.begin());
         return {};
+    }
+
+    /** @copydoc AnimationGraphInstance::JointModelTransform */
+    Result<Math::Mat4> AnimationGraphInstance::JointModelTransform(const PoseHandle &pose, const JointId joint) const {
+        if (const auto resident = ResidentPublication(state_.get(), pose); resident.HasError())
+            return Result<Math::Mat4>::Failure(DescribeGraphInstanceFailure(resident));
+        return ReadJointModel(*state_->skeleton, state_->published.poses[pose.slot.index], joint);
+    }
+
+    /** @copydoc AnimationGraphInstance::SocketModelTransform */
+    Result<Math::Mat4> AnimationGraphInstance::SocketModelTransform(const PoseHandle &pose, const SkeletonSocketId socket) const {
+        if (const auto resident = ResidentPublication(state_.get(), pose); resident.HasError())
+            return Result<Math::Mat4>::Failure(DescribeGraphInstanceFailure(resident));
+        const auto *metadata = state_->skeleton->FindSocket(socket);
+        if (!metadata)
+            return Result<Math::Mat4>::Failure(MakeError(AnimationErrors::PoseSocketMissing));
+
+        const auto joint = ReadJointModel(*state_->skeleton, state_->published.poses[pose.slot.index], metadata->joint);
+        if (joint.HasError())
+            return joint;
+        const auto offset = metadata->localTransform.TryToMatrix();
+        if (offset.HasError())
+            return Result<Math::Mat4>::Failure(MakeError(AnimationErrors::PoseTransformInvalid));
+        const auto model = Math::Multiply(joint.Value(), offset.Value());
+        if (!Math::IsFinite(model))
+            return Result<Math::Mat4>::Failure(MakeError(AnimationErrors::PoseTransformInvalid));
+        return Result<Math::Mat4>::Success(model);
     }
 
     /** @copydoc AnimationGraphInstance::Publication */

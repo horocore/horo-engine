@@ -144,10 +144,24 @@ namespace Horo::Animation {
         /** @brief Returns roots sorted by stable identity. @return Borrowed immutable root identities. */
         [[nodiscard]] std::span<const JointId> RootJoints() const noexcept;
 
+        /** @brief Resolves a stable joint identity to its canonical pose index.
+         * @param joint Skeleton-local identity.
+         * @return Parent-before-child index, or empty if the identity is absent.
+         */
+        [[nodiscard]] std::optional<std::size_t> FindJointIndex(JointId joint) const noexcept;
+
+        /** @brief Resolves a socket by its stable identity.
+         * @param socket Skeleton-local identity.
+         * @return Immutable metadata borrowed from this snapshot, or null if absent.
+         */
+        [[nodiscard]] const SkeletonSocket *FindSocket(SkeletonSocketId socket) const noexcept;
+
     private:
-        SkeletonAsset(SkeletonAssetData data, std::vector<JointId> roots) noexcept : data_(std::move(data)), roots_(std::move(roots)) {}
+        SkeletonAsset(SkeletonAssetData data, std::vector<JointId> roots, std::vector<std::size_t> jointsById) noexcept
+            : data_(std::move(data)), roots_(std::move(roots)), jointsById_(std::move(jointsById)) {}
 
         SkeletonAssetData data_;
         std::vector<JointId> roots_;
+        std::vector<std::size_t> jointsById_;
     };
 }  // namespace Horo::Animation

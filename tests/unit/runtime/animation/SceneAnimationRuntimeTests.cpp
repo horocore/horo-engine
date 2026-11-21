@@ -7,9 +7,18 @@
 #include "animation/AnimationRuntimeFixture.h"
 
 #include <catch2/catch_approx.hpp>
+#include <thread>
 
 namespace Horo::Animation {
     namespace {
+        /** @brief Cooks the socket-bearing graph through the same portable Scene path used by the host. */
+        std::optional<AnimationAuthoringComponent> PrepareSocketGraph(Test::Cook::Fixture &cook) {
+            const auto graph = Test::Graph::Simple();
+            const Test::Instance::Prepared source(graph, 6, false, Test::Instance::SocketSkeleton());
+            cook.Replace(*source.skeleton, source.compileClips, graph);
+            return std::nullopt;
+        }
+
         /** @brief Cooks a genuine authoritative graph with a tracked root and ten units of travel per fixture tick. */
         std::optional<AnimationAuthoringComponent> PrepareRootedGraph(Test::Cook::Fixture &cook) {
             const auto graph = Test::Graph::Simple();
@@ -33,6 +42,69 @@ namespace Horo::Animation {
             CHECK(owner.ResolveRootMotion(entity, id, moved, context).HasError());
         }
     }  // namespace
+
+    TEST_CASE("Scene socket binding follows committed poses until their residency expires", "[animation][scene][sockets]") {
+        Test::Scene::Fixture fixture(false, true, PrepareSocketGraph);
+        auto &owner = *fixture.forward->adapter;
+        const auto binding = Test::Cook::Take(owner.BindSocket(fixture.entity, Test::Id<SkeletonSocketId>(21)));
+        const auto unpublished = owner.SocketModelTransform(binding, {});
+        REQUIRE(unpublished.HasError());
+        CHECK(unpublished.ErrorValue().code.Value() == AnimationErrors::HandleMalformed.code.Value());
+        REQUIRE(fixture.Tick().HasValue());
+        const auto first = fixture.Observation().component->currentPose;
+        REQUIRE(fixture.Tick().HasValue());
+        const auto second = fixture.Observation().component->currentPose;
+        CHECK(Test::Cook::Take(owner.SocketModelTransform(binding, first)).At(0, 3) == 18.0F);
+        CHECK(Test::Cook::Take(owner.SocketModelTransform(binding, second)).At(0, 3) == 28.0F);
+        CHECK(Test::Cook::Take(owner.JointModelTransform(fixture.entity, second, Test::Id<JointId>(2))).At(0, 3) == 20.0F);
+        REQUIRE(fixture.Tick().HasValue());
+        const auto retired = owner.SocketModelTransform(binding, first);
+        REQUIRE(retired.HasError());
+        CHECK(retired.ErrorValue().code.Value() == AnimationErrors::HandleStale.code.Value());
+    }
+
+    TEST_CASE("Scene socket binding rejects foreign callers and never retargets on reload", "[animation][scene][sockets]") {
+        Test::Scene::Fixture fixture(false, true, PrepareSocketGraph);
+        auto &owner = *fixture.forward->adapter;
+        const auto socket = Test::Id<SkeletonSocketId>(21);
+        const auto binding = Test::Cook::Take(owner.BindSocket(fixture.entity, socket));
+        ErrorCode foreignCode;
+        std::jthread foreign([&owner, &binding, &foreignCode] {
+            const auto read = owner.SocketModelTransform(binding, {});
+            if (read.HasError())
+                foreignCode = read.ErrorValue().code;
+        });
+        foreign.join();
+        CHECK(foreignCode.Value() == AnimationErrors::PoseThreadViolation.code.Value());
+        fixture.Activate(2);
+        const auto replacement = Test::Cook::Take(owner.BindSocket(fixture.entity, socket));
+        CHECK(replacement.instance != binding.instance);
+        REQUIRE(fixture.Tick().HasValue());
+        const auto pose = fixture.Observation().component->currentPose;
+        CHECK(owner.SocketModelTransform(replacement, pose).HasValue());
+        const auto retired = owner.SocketModelTransform(binding, pose);
+        REQUIRE(retired.HasError());
+        CHECK(retired.ErrorValue().code.Value() == AnimationErrors::HandleStale.code.Value());
+    }
+
+    TEST_CASE("Scene socket reads give typed missing and lifecycle errors", "[animation][scene][sockets]") {
+        Test::Scene::Fixture fixture(false, true, PrepareSocketGraph);
+        auto &owner = *fixture.forward->adapter;
+        const auto missing = owner.BindSocket(fixture.entity, Test::Id<SkeletonSocketId>(99));
+        REQUIRE(missing.HasError());
+        CHECK(missing.ErrorValue().code.Value() == AnimationErrors::PoseSocketMissing.code.Value());
+        const auto binding = Test::Cook::Take(owner.BindSocket(fixture.entity, Test::Id<SkeletonSocketId>(21)));
+        REQUIRE(fixture.Tick().HasValue());
+        const auto pose = fixture.Observation().component->currentPose;
+        fixture.lifetime.RequestCancellation();
+        const auto cancelled = owner.SocketModelTransform(binding, pose);
+        REQUIRE(cancelled.HasError());
+        CHECK(cancelled.ErrorValue().code.Value() == AnimationErrors::GraphOperationCancelled.code.Value());
+        owner.Shutdown();
+        const auto closed = owner.SocketModelTransform(binding, pose);
+        REQUIRE(closed.HasError());
+        CHECK(closed.ErrorValue().code.Value() == AnimationErrors::GraphAdmissionRejected.code.Value());
+    }
 
     TEST_CASE("Scene movement claims retire on abort and bind feedback to the exact retry", "[animation][scene][root-motion]") {
         Test::Scene::Fixture fixture(false, true, PrepareRootedGraph, {}, {}, true);

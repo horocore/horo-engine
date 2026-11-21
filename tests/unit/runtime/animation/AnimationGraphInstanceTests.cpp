@@ -9,6 +9,32 @@ namespace Horo::Animation {
     using Test::Id;
     using Test::Instance::Prepared;
 
+    TEST_CASE("Committed joint and socket queries compose the canonical pose without allocation", "[animation][graph][sockets]") {
+        const Prepared fixture(Test::Graph::Simple(), 6, false, Test::Instance::SocketSkeleton());
+        auto instance = fixture.Create();
+        const auto tick = Id<AnimationTickId>(1);
+        REQUIRE(instance.Evaluate({tick, {10}}).HasValue());
+        REQUIRE(instance.Commit(tick).HasValue());
+        const auto pose = instance.Publication().currentPose;
+
+        const auto allocations = HoroAnimationTestAllocationCount();
+        const auto joint = instance.JointModelTransform(pose, Id<JointId>(2));
+        const auto socket = instance.SocketModelTransform(pose, Id<SkeletonSocketId>(21));
+        CHECK(HoroAnimationTestAllocationCount() == allocations);
+        REQUIRE(joint.HasValue());
+        REQUIRE(socket.HasValue());
+        CHECK(joint.Value().At(0, 3) == 10.0F);
+        CHECK(socket.Value().At(0, 3) == 18.0F);
+        CHECK(socket.Value().At(1, 3) == 3.0F);
+
+        const auto missing = instance.SocketModelTransform(pose, Id<SkeletonSocketId>(22));
+        REQUIRE(missing.HasError());
+        CHECK(missing.ErrorValue().code.Value() == AnimationErrors::PoseSocketMissing.code.Value());
+        const auto missingJoint = instance.JointModelTransform(pose, Id<JointId>(77));
+        REQUIRE(missingJoint.HasError());
+        CHECK(missingJoint.ErrorValue().code.Value() == AnimationErrors::PoseJointMissing.code.Value());
+    }
+
     TEST_CASE("Animation graph instance stages cursors and fractional rate until atomic commit", "[animation][graph][instance]") {
         Prepared fixture;
         auto instance = fixture.Create();

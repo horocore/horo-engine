@@ -97,6 +97,13 @@ namespace Horo::Runtime {
         std::optional<SceneRootMotionResult> rootMotion; /**< Latest result from this exact committed instance. */
     };
 
+    /** @brief Stable attachment target that expires when its animation instance is replaced. */
+    struct SceneAnimationSocketBinding final {
+        EntityRef entity;                            /**< Exact active Scene entity. */
+        Animation::AnimationInstanceHandle instance; /**< Exact animation incarnation. */
+        Animation::SkeletonSocketId socket;          /**< Stable identity in the bound skeleton. */
+    };
+
     /**
      * @brief The Animation-owned Scene activation, structural and fixed-tick adapter.
      * @details Creation, all callbacks/control operations and destruction belong to the creating owner lane. Shared private
@@ -238,6 +245,32 @@ namespace Horo::Runtime {
          */
         [[nodiscard]] Animation::GraphInstanceOutcome CopyPose(EntityRef entity, const Animation::PoseHandle &pose,
                                                                std::span<Math::Transform> output) const;
+
+        /** @brief Reads a committed joint transform in the animated entity's model space.
+         * @param entity Exact active entity. @param pose Current or previous resident handle.
+         * @param joint Stable skeleton-local joint identity.
+         * @return Value matrix or a typed owner, lifecycle, residency, or joint error.
+         * @pre Invoke on the Scene owner lane. Successful reads perform no allocation.
+         */
+        [[nodiscard]] Result<Math::Mat4> JointModelTransform(EntityRef entity, const Animation::PoseHandle &pose,
+                                                             Animation::JointId joint) const;
+
+        /** @brief Binds an attachment to an active actor without depending on its current pose.
+         * @param entity Exact active entity. @param socket Stable skeleton-local socket identity.
+         * @return Value binding, or a typed owner, lifecycle, entity, or missing socket error.
+         * @pre Invoke on the Scene owner lane.
+         */
+        [[nodiscard]] Result<SceneAnimationSocketBinding> BindSocket(EntityRef entity, Animation::SkeletonSocketId socket) const;
+
+        /** @brief Reads a bound socket in the animated entity's model space.
+         * @param binding Attachment bound to the exact current actor incarnation.
+         * @param pose Current or previous resident handle for the bound actor.
+         * @return Value matrix or a typed lifecycle, residency, binding, or socket error.
+         * @pre Invoke on the Scene owner lane. Successful reads perform no allocation.
+         */
+        [[nodiscard]] Result<Math::Mat4> SocketModelTransform(const SceneAnimationSocketBinding &binding,
+                                                              const Animation::PoseHandle &pose) const;
+
         /** @brief Copies action slot observations through a resident committed Scene pose.
          * @param entity Exact active entity. @param pose Exact resident handle. @param output Caller-owned slot storage.
          * @param written Complete slot count or zero on failure.
@@ -251,9 +284,6 @@ namespace Horo::Runtime {
         struct State;
         /** @brief Resolves the mutable authoritative graph only on the idle owner lane. */
         [[nodiscard]] std::pair<Animation::AnimationGraphInstance *, Animation::GraphActionFailure> ResolveActionGraph(
-            EntityRef entity) const noexcept;
-        /** @brief Checks owner admission before borrowing one exact active graph for a synchronous observation. */
-        [[nodiscard]] std::pair<const Animation::AnimationGraphInstance *, Animation::GraphInstanceFailure> ResolveObservationGraph(
             EntityRef entity) const noexcept;
         explicit SceneAnimationRuntime(std::shared_ptr<State> state) noexcept;
         std::shared_ptr<State> state_;
