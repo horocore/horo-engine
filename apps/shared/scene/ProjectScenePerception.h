@@ -3,6 +3,7 @@
  * @brief Project-authored Perception selection and matched Scene position evidence.
  */
 #include "Horo/AI/AISceneActivation.h"
+#include "Horo/AI/AITaskScheduler.h"
 #include "Horo/AI/PerceptionSenseProvider.h"
 #include "Horo/Assets/AssetId.h"
 #include "Horo/Platform/ProjectReadFiles.h"
@@ -46,11 +47,12 @@ namespace Horo::Application::Internal {
     /** @brief Reads and freezes explicit project policy for the exact verified cooked Scene selection.
      * @param files Project-owned read boundary. @param context Exact load deadline and project identity.
      * @param path Explicit project-relative settings file. @param asset Full selected cooked asset identity.
-     * @param definition Definition decoded by the committed asset owner. @return Frozen policy or typed failure.
+     * @param definition Definition decoded by the committed asset owner.
+     * @param workUnitsLimit Project ceiling for the Scene's native execution budget. @return Frozen policy or typed failure.
      */
     [[nodiscard]] Result<std::shared_ptr<const ProjectScenePerceptionPolicy>> CaptureProjectScenePerception(
         const Platform::IProjectReadFiles &files, const Platform::ProjectReadContext &context, std::string_view path, Assets::AssetId asset,
-        const Runtime::RuntimeSceneDefinition &definition);
+        const Runtime::RuntimeSceneDefinition &definition, std::size_t workUnitsLimit = AI::AiTaskSchedulerSettings::HardWorkUnits);
 
     /** @brief Combines authored listener identities with the prepared image's exact inert sense/stimulus contracts.
      * @param policy Explicit native listener declarations. @param contracts Owner-copied inert metadata from one prepared image.

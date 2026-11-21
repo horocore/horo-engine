@@ -12,6 +12,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         struct EditorDecisionPolicy final {
             AI::AiTaskSchedulerSettings scheduler;
             bool debugGranted{};
+            std::size_t perceptionWorkUnitsLimit{AI::AiTaskSchedulerSettings::HardWorkUnits};
         };
 
         /** @brief Resolves the selected project's policy before any provider admission. */
@@ -29,9 +30,10 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             if (settings.Scheduler().mode != AI::AiSchedulingMode::Deterministic)
                 return Policy::Failure(
                     MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Editor Decision Play requires a deterministic project AI scheduler."));
-            return Policy::Success(
-                {settings.Scheduler(), selection.decisionDebugGranted &&
-                                           settings.AllowsDebug(AiProjectRuntimeKind::Development, AiProjectDebugOperation::LiveMutation)});
+            return Policy::Success({settings.Scheduler(),
+                                    selection.decisionDebugGranted &&
+                                        settings.AllowsDebug(AiProjectRuntimeKind::Development, AiProjectDebugOperation::LiveMutation),
+                                    settings.PerceptionWorkUnitsLimit()});
         }
     }  // namespace
 
@@ -294,7 +296,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         if (selected.HasError())
             return Result<void>::Failure(selected.ErrorValue());
         policy.aiControllers = std::move(selected).Value();
-        if (auto perception = PrepareDecisionPerception(policy, cooked.Value(), definition, providerSource); perception.HasError())
+        if (auto perception =
+                PrepareDecisionPerception(policy, cooked.Value(), definition, providerSource, settings.Value().perceptionWorkUnitsLimit);
+            perception.HasError())
             return perception;
         if (cancellation.IsCancellationRequested())
             return JobCancelled();

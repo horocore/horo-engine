@@ -27,6 +27,11 @@ namespace Horo::Application {
             return scheduler_;
         }
 
+        /** @brief Returns the maximum authored Perception work units a Scene may request per tick. */
+        [[nodiscard]] std::size_t PerceptionWorkUnitsLimit() const noexcept {
+            return perceptionWorkUnitsLimit_;
+        }
+
         /** @brief Checks the authored operation permission for a host-selected execution profile.
          * @param profile Exact execution profile supplied by the host.
          * @param operation Explicit operation requested by the application.
@@ -37,10 +42,12 @@ namespace Horo::Application {
     private:
         friend Result<std::optional<ProjectAiSettings>> ResolveProjectAiSettings(const ProjectSourceDocument &);
 
-        ProjectAiSettings(AI::AiTaskSchedulerSettings scheduler, bool mutation, bool capture)
-            : scheduler_(std::move(scheduler)), mutation_(mutation), capture_(capture) {}
+        ProjectAiSettings(AI::AiTaskSchedulerSettings scheduler, std::size_t perceptionWorkUnitsLimit, bool mutation, bool capture)
+            : scheduler_(std::move(scheduler)), perceptionWorkUnitsLimit_(perceptionWorkUnitsLimit), mutation_(mutation),
+              capture_(capture) {}
 
         AI::AiTaskSchedulerSettings scheduler_;
+        std::size_t perceptionWorkUnitsLimit_;
         bool mutation_{};
         bool capture_{};
     };

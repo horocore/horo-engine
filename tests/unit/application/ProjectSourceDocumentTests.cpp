@@ -69,6 +69,7 @@ namespace {
                     "demotionDelayTicks": 8
                 }
             },
+            "perception": {"maximumWorkUnitsPerTick": 1024},
             "development": {"liveMutation": true, "replayCapture": true}
         })");
         for (const auto *backend : {"null", "vulkan", "opengl"}) {
@@ -83,6 +84,7 @@ namespace {
             CHECK(policy.Scheduler().maximumAgents == 64);
             CHECK(policy.Scheduler().evaluationsPerTick == 12);
             CHECK(policy.Scheduler().workUnitsPerTick == 512);
+            CHECK(policy.PerceptionWorkUnitsLimit() == 1024);
             REQUIRE(policy.Scheduler().simulationProfile);
             CHECK(policy.Scheduler().simulationProfile->reducedIntervalTicks == 4);
             for (const auto operation : {AiProjectDebugOperation::LiveMutation, AiProjectDebugOperation::ReplayCapture}) {
@@ -101,6 +103,8 @@ namespace {
             R"({"schemaVersion":1,"scheduler":{"mode":"bestEffort","simulationProfile":{}}})",
             R"({"schemaVersion":1,"scheduler":{"simulationProfile":{"fullDistanceMillimeters":1,"reducedDistanceMillimeters":2,"suspensionDistanceMillimeters":3,"reducedIntervalTicks":4,"demotionDelayTicks":1}}})",
             R"({"schemaVersion":1,"scheduler":{"renderBackend":"vulkan"}})",
+            R"({"schemaVersion":1,"perception":{"maximumWorkUnitsPerTick":0}})",
+            R"({"schemaVersion":1,"perception":{"maximumWorkUnitsPerTick":1048577}})",
             R"({"schemaVersion":1,"development":{"liveMutation":"true"}})",
             R"({"schemaVersion":1,"visualization":{"inspectAgent":4}})",
         };

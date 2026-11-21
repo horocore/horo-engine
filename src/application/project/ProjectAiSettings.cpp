@@ -96,6 +96,15 @@ namespace Horo::Application {
                    ReadSimulation(object, scheduler);
         }
 
+        /** @brief Validates the project ceiling for explicitly selected Scene perception budgets. */
+        bool ReadPerception(const Json &root, std::size_t &limit) {
+            const auto found = root.find("perception");
+            if (found == root.end())
+                return true;
+            constexpr std::array<std::string_view, 1> keys{"maximumWorkUnitsPerTick"};
+            return HasOnly(*found, keys) && ReadUnsigned(*found, keys.front(), limit) && limit > 0 && limit <= Scheduler::HardWorkUnits;
+        }
+
         /** @brief Reads only explicitly authorized development operations. */
         bool ReadDevelopment(const Json &root, bool &mutation, bool &capture) {
             const auto debug = root.find("development");
@@ -125,7 +134,7 @@ namespace Horo::Application {
         if (!source.aiSettingsSource)
             return Settings::Success(std::nullopt);
         const auto root = Json::parse(*source.aiSettingsSource, nullptr, false);
-        constexpr std::array<std::string_view, 3> keys{"schemaVersion", "scheduler", "development"};
+        constexpr std::array<std::string_view, 4> keys{"schemaVersion", "scheduler", "perception", "development"};
         std::uint32_t version{};
         if (!HasOnly(root, keys) || !ReadUnsigned(root, "schemaVersion", version) || version != 1)
             return Settings::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project AI settings schema."));
@@ -134,9 +143,12 @@ namespace Horo::Application {
             return Settings::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project AI scheduler settings."));
         if (const auto validated = AI::AiTaskScheduler::ValidateSettings(scheduler); validated.HasError())
             return Settings::Failure(validated.ErrorValue());
+        auto perceptionLimit = Scheduler::HardWorkUnits;
+        if (!ReadPerception(root, perceptionLimit))
+            return Settings::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project AI perception budget."));
         bool mutation{}, capture{};
         if (!ReadDevelopment(root, mutation, capture))
             return Settings::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project AI development permissions."));
-        return Settings::Success(ProjectAiSettings{std::move(scheduler), mutation, capture});
+        return Settings::Success(ProjectAiSettings{std::move(scheduler), perceptionLimit, mutation, capture});
     }
 }  // namespace Horo::Application

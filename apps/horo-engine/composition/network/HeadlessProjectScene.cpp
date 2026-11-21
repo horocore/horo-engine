@@ -187,6 +187,7 @@ namespace Horo::Application::Internal {
                 return Metadata::Failure(ai.ErrorValue());
             if (const auto &policy = ai.Value()) {
                 resources.decisionScheduler = policy->Scheduler();
+                resources.perceptionWorkUnitsLimit = policy->PerceptionWorkUnitsLimit();
                 resources.developmentReplayAllowed =
                     policy->AllowsDebug(AiProjectRuntimeKind::Development, AiProjectDebugOperation::ReplayCapture);
             }
@@ -230,7 +231,7 @@ namespace Horo::Application::Internal {
                           "This Scene requires committed asset payloads; provide --cooked-root and --cook-target."));
         if (!launch.perceptionPolicyPath.empty()) {
             auto policy = CaptureProjectScenePerception(*resources->sourceFiles, resources->sourceContext, launch.perceptionPolicyPath,
-                                                        resources->sceneAsset, *resources->definition);
+                                                        resources->sceneAsset, *resources->definition, resources->perceptionWorkUnitsLimit);
             if (policy.HasError())
                 return Result<std::unique_ptr<HeadlessProjectSceneResources>>::Failure(policy.ErrorValue());
             resources->perceptionPolicy = std::move(policy).Value();

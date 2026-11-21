@@ -3518,6 +3518,11 @@ scheduler. The launcher's current cooked Decision path requires deterministic
 timing. Release Scene cooking validates the AI policy from the exact captured
 project document before publishing any cooked generation.
 
+The optional `perception.maximumWorkUnitsPerTick` sets the project ceiling for
+native Scene Perception. Editor Play and headless launch reject a selected Scene
+policy above that ceiling before binding its sensing providers. A Scene within
+the ceiling keeps its authored per-tick budget.
+
 The optional `development` object declares boolean `liveMutation` and
 `replayCapture` permissions. Both default to false in an authored AI policy.
 Editor Play requires both the project permission and the explicit

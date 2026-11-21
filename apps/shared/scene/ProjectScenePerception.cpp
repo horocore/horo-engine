@@ -198,7 +198,7 @@ namespace Horo::Application::Internal {
     /** @copydoc CaptureProjectScenePerception */
     Result<std::shared_ptr<const ProjectScenePerceptionPolicy>> CaptureProjectScenePerception(
         const Platform::IProjectReadFiles &files, const Platform::ProjectReadContext &context, const std::string_view path,
-        const Assets::AssetId asset, const Runtime::RuntimeSceneDefinition &definition) {
+        const Assets::AssetId asset, const Runtime::RuntimeSceneDefinition &definition, const std::size_t workUnitsLimit) {
         using Output = Result<std::shared_ptr<const ProjectScenePerceptionPolicy>>;
         if (!asset.IsValid())
             return Output::Failure(MakeError(AI::AIErrors::PerceptionDependencyMissing, "Select an exact committed Scene for Perception."));
@@ -241,8 +241,12 @@ namespace Horo::Application::Internal {
             std::ranges::sort(policy.controllers, {}, key);
             if (std::ranges::adjacent_find(policy.controllers, {}, key) != policy.controllers.end())
                 throw std::invalid_argument("Duplicate Perception controller");
-            if (schema == 2)
+            if (schema == 2) {
                 policy.native = ReadNative(root["native"]);
+                if (policy.native->workUnitsPerTick > workUnitsLimit)
+                    return Output::Failure(
+                        MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Scene Perception budget exceeds the project AI limit."));
+            }
             return Output::Success(std::make_shared<const ProjectScenePerceptionPolicy>(std::move(policy)));
         } catch (const Json::exception &) {
             return Output::Failure(MakeError(AI::AIErrors::PerceptionDescriptorInvalid, "Malformed project Perception policy."));

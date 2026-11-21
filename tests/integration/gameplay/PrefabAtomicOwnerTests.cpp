@@ -937,12 +937,16 @@ namespace Horo::Application::PrefabAtomicTest {
         }
 
         /** @brief Writes only the project metadata and sidecars needed to admit a committed scene in the real executable. */
-        void WriteDecisionProductSources(const std::filesystem::path &root, std::span<const Assets::AssetRecord> records) {
+        void WriteDecisionProductSources(const std::filesystem::path &root, std::span<const Assets::AssetRecord> records,
+                                         const nlohmann::json &ai = {}) {
             std::filesystem::create_directories(root / ".horo");
             std::filesystem::create_directories(root / "assets");
             std::ofstream metadata{root / ".horo/project.json"};
-            metadata
-                << R"({"horoVersion":"0.0.1","persistentContract":"sha256:0101010101010101010101010101010101010101010101010101010101010101","projectId":"p1","name":"Test","projectVersion":"0.1.0","createdAt":"2026-07-18T00:00:00Z","settings":{"renderBackend":"opengl"}})";
+            auto sourceSettings = nlohmann::json::parse(
+                R"({"horoVersion":"0.0.1","persistentContract":"sha256:0101010101010101010101010101010101010101010101010101010101010101","projectId":"p1","name":"Test","projectVersion":"0.1.0","createdAt":"2026-07-18T00:00:00Z","settings":{"renderBackend":"opengl"}})");
+            if (!ai.is_null())
+                sourceSettings["settings"]["ai"] = ai;
+            metadata << sourceSettings;
             REQUIRE(metadata.good());
             for (const auto &record : records) {
                 std::ofstream source{root / record.sourcePath.String()};
@@ -1534,7 +1538,10 @@ namespace Horo::Application::PrefabAtomicTest {
                     UNSCOPED_INFO(published.ErrorValue().message);
                 REQUIRE(published.HasValue());
                 Output::TempDir project;
-                WriteDecisionProductSources(project.path, records);
+                nlohmann::json ai;
+                if (selectNativePerception)
+                    ai = {{"schemaVersion", 1}, {"perception", {{"maximumWorkUnitsPerTick", perception["native"]["workUnitsPerTick"]}}}};
+                WriteDecisionProductSources(project.path, records, ai);
                 DecisionProductTerminalOptions options{.prefab = prefabOnly ? std::optional{prefabId} : std::nullopt};
                 if (selectNativePerception) {
                     options.perceptionPolicy = "perception.json";
@@ -1547,6 +1554,11 @@ namespace Horo::Application::PrefabAtomicTest {
                     ExpectDecisionProductExit(0, project.path, directory.path, target, sceneId, *gameplay, controller.descriptor.controller,
                                               artifactId, options);
                     const auto admittedBudget = perception["native"]["workUnitsPerTick"];
+                    perception["native"]["workUnitsPerTick"] = admittedBudget.get<std::size_t>() + 1;
+                    write();
+                    options.refusal = "Scene Perception budget exceeds the project AI limit.";
+                    ExpectDecisionProductExit(3, project.path, directory.path, target, sceneId, *gameplay, controller.descriptor.controller,
+                                              artifactId, options);
                     perception["native"]["workUnitsPerTick"] = 1;
                     write();
                     options.refusal = AI::AIErrors::SchedulerBudgetExhausted.summary;

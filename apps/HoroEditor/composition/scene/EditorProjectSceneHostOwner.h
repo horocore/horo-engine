@@ -675,7 +675,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         [[nodiscard]] Result<void> PrepareDecisionPerception(EditorProjectScenePolicy &policy,
                                                              const Runtime::RuntimeSceneDefinition &cooked,
                                                              const Runtime::RuntimeSceneDefinition &live,
-                                                             const Editor::EditorPlayDecisionProviderSource &source);
+                                                             const Editor::EditorPlayDecisionProviderSource &source,
+                                                             std::size_t workUnitsLimit);
         /** @brief Publishes current positions and polls sensing before the selected Play Decision tick. */
         [[nodiscard]] Result<void> PollDecisionPerception(std::uint64_t tick, Duration fixedStep);
         /** @brief Resolves the saved parent Scene and verifies that its cook still matches the selected source.

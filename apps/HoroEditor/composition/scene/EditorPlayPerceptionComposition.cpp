@@ -10,7 +10,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
     Result<void> ProjectPlaySceneHost::PrepareDecisionPerception(EditorProjectScenePolicy &policy,
                                                                  const Runtime::RuntimeSceneDefinition &cooked,
                                                                  const Runtime::RuntimeSceneDefinition &live,
-                                                                 const Editor::EditorPlayDecisionProviderSource &source) {
+                                                                 const Editor::EditorPlayDecisionProviderSource &source,
+                                                                 const std::size_t workUnitsLimit) {
         const auto &selection = *policy.decisions;
         if (selection.perceptionPolicy.empty())
             return Result<void>::Success();
@@ -25,7 +26,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         const Platform::ProjectReadContext context{.projectIdentity = metadata.Value().projectId,
                                                    .projectGeneration = 1,
                                                    .deadline = std::chrono::steady_clock::now() + std::chrono::seconds{30}};
-        auto captured = CaptureProjectScenePerception(*files.Value(), context, selection.perceptionPolicy, selection.scene, cooked);
+        auto captured =
+            CaptureProjectScenePerception(*files.Value(), context, selection.perceptionPolicy, selection.scene, cooked, workUnitsLimit);
         if (captured.HasError())
             return Result<void>::Failure(std::move(captured).ErrorValue());
         const auto &native = captured.Value()->native;
