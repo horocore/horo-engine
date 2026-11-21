@@ -42,6 +42,7 @@ namespace Horo::Runtime {
         std::uint64_t maximumJointOperations{64ULL * 1024ULL * 1024ULL};
         Animation::AnimationClipLimits clip;
         Animation::GraphActionLimits actions;
+        std::uint32_t maximumClipOccurrencesPerTick{256}; /**< Cold-reserved event capacity per active graph publication. */
     };
 
     /** @brief Optional host-provided CPU evaluation policy; the job system outlives the Scene adapter. */
@@ -164,6 +165,34 @@ namespace Horo::Runtime {
          */
         [[nodiscard]] Animation::GraphActionCommandOutcome ReleaseActionResult(EntityRef entity,
                                                                                const Animation::GraphActionHandle &handle);
+        /** @brief Reads a retained authority action at the owner control boundary.
+         * @param entity Exact active entity. @param handle Exact request identity for that entity.
+         * @return Copied request fact or typed admission/handle failure.
+         */
+        [[nodiscard]] Animation::GraphActionQueryOutcome QueryAction(EntityRef entity, const Animation::GraphActionHandle &handle) const;
+        /** @brief Copies the typed parameter block of an exact resident committed pose.
+         * @param entity Exact active entity. @param pose Exact resident handle.
+         * @param output Caller storage matching the number of declared graph parameters.
+         * @return Typed owner/lifecycle/residency/size outcome. Failure preserves output.
+         */
+        [[nodiscard]] Animation::GraphInstanceOutcome CopyParameters(EntityRef entity, const Animation::PoseHandle &pose,
+                                                                     std::span<Animation::GraphParameterInput> output) const;
+        /** @brief Copies state-machine lifecycle events from one resident committed pose.
+         * @param entity Exact active entity. @param pose Exact resident handle.
+         * @param output Caller storage for the complete event block. @param written Receives the count on success.
+         * @return Typed owner/lifecycle/residency/size outcome. Failure preserves output and count.
+         */
+        [[nodiscard]] Animation::GraphInstanceOutcome CopyStateEvents(EntityRef entity, const Animation::PoseHandle &pose,
+                                                                      std::span<Animation::GraphStateEvent> output,
+                                                                      std::uint32_t &written) const;
+        /** @brief Copies clip occurrences from one resident committed pose without consuming them.
+         * @param entity Exact active entity. @param pose Exact resident handle.
+         * @param output Caller storage for the complete occurrence block. @param written Receives the count on success.
+         * @return Typed owner/lifecycle/residency/size outcome. Failure preserves output and count.
+         */
+        [[nodiscard]] Animation::GraphInstanceOutcome CopyClipEvents(EntityRef entity, const Animation::PoseHandle &pose,
+                                                                     std::span<Animation::AnimationEventOccurrence> output,
+                                                                     std::uint32_t &written) const;
         /** @brief Copies a genuine resident committed pose through the actual graph owner.
          * @param entity Exact active entity. @param pose Exact resident graph handle. @param output Complete caller-owned joint storage.
          * @return Existing allocation-free graph residency/owner/size outcome; failures preserve output.
@@ -183,7 +212,10 @@ namespace Horo::Runtime {
         struct State;
         /** @brief Resolves the mutable authoritative graph only on the idle owner lane. */
         [[nodiscard]] std::pair<Animation::AnimationGraphInstance *, Animation::GraphActionFailure> ResolveActionGraph(
-            EntityRef entity) const;
+            EntityRef entity) const noexcept;
+        /** @brief Checks owner admission before borrowing one exact active graph for a synchronous observation. */
+        [[nodiscard]] std::pair<const Animation::AnimationGraphInstance *, Animation::GraphInstanceFailure> ResolveObservationGraph(
+            EntityRef entity) const noexcept;
         explicit SceneAnimationRuntime(std::shared_ptr<State> state) noexcept;
         std::shared_ptr<State> state_;
     };

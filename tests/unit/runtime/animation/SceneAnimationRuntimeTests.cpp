@@ -1,5 +1,6 @@
 #include "AllocationProbe.h"
 #include "AnimationActionTestFixtures.h"
+#include "AnimationClipNotifyTestFixtures.h"
 #include "AnimationGraphInstanceTestFixtures.h"
 #include "AnimationPoseCompositionTestFixtures.h"
 #include "AnimationStateGraphTestFixtures.h"
@@ -111,6 +112,9 @@ namespace Horo::Animation {
         auto &owner = *fixture.forward->adapter;
         const auto queued = owner.QueueAction(fixture.entity, Test::Actions::Request());
         REQUIRE(queued.HasValue());
+        const auto pending = owner.QueryAction(fixture.entity, queued.handle);
+        REQUIRE(pending.HasValue());
+        CHECK(pending.observation.phase == GraphActionPhase::Pending);
         CHECK_FALSE(fixture.Observation().component);
         REQUIRE(fixture.Tick().HasValue());
         const auto first = fixture.Observation();
@@ -128,7 +132,11 @@ namespace Horo::Animation {
         CHECK_FALSE(slots.front().active.IsValid());
         REQUIRE(owner.CopyActionSlots(fixture.entity, first.component->currentPose, slots, written).HasValue());
         CHECK(slots.front().action == Test::Actions::Request().action);
+        const auto terminal = owner.QueryAction(fixture.entity, queued.handle);
+        REQUIRE(terminal.HasValue());
+        CHECK(terminal.observation.phase == GraphActionPhase::Terminal);
         REQUIRE(owner.ReleaseActionResult(fixture.entity, queued.handle).HasValue());
+        CHECK(owner.QueryAction(fixture.entity, queued.handle).failure == GraphActionFailure::HandleStale);
     }
 
     TEST_CASE("Actual Animation Scene loads real AST Graph or Clip artifacts and publishes genuine first-pose baseline",
@@ -372,14 +380,77 @@ namespace Horo::Animation {
         });
         REQUIRE(fixture.Tick().HasValue());
         CHECK(fixture.PoseX() == 10.0F);
-        REQUIRE(fixture.forward->adapter->QueueTrigger(fixture.entity, Test::Id<GraphParameterId>(2)).HasValue());
+        auto &owner = *fixture.forward->adapter;
+        const auto before = fixture.Observation().component->currentPose;
+        const auto trigger = Test::Id<GraphParameterId>(2);
+        REQUIRE(owner.QueueTrigger(fixture.entity, trigger).HasValue());
         fixture.peer->failUpdate = true;
         REQUIRE(fixture.Tick().HasError());
         CHECK(fixture.PoseX() == 10.0F);
         REQUIRE(fixture.scheduler->RunFrame(fixture.lifecycle, fixture.token, false).HasValue());
         CHECK(fixture.PoseX() == 100.0F);
+        const auto after = fixture.Observation().component->currentPose;
+        std::array<GraphParameterInput, 2> parameters;
+        REQUIRE(owner.CopyParameters(fixture.entity, before, parameters).HasValue());
+        REQUIRE(parameters[1].id == trigger);
+        CHECK(parameters[1].value == GraphParameterValue{false});
+        REQUIRE(owner.CopyParameters(fixture.entity, after, parameters).HasValue());
+        CHECK(parameters[1].value == GraphParameterValue{true});
+        std::array<GraphStateEvent, 8> events;
+        std::uint32_t written{99};
+        CHECK(owner.CopyStateEvents(fixture.entity, after, {}, written).failure == GraphInstanceFailure::LimitExceeded);
+        CHECK(written == 99);
+        REQUIRE(owner.CopyStateEvents(fixture.entity, after, events, written).HasValue());
+        REQUIRE(written > 0);
+        CHECK(std::ranges::any_of(std::span{events}.first(written), [](const auto &event) {
+            return event.kind == GraphStateEventKind::TransitionCompleted;
+        }));
         REQUIRE(fixture.Tick().HasValue());
         CHECK(fixture.PoseX() == 110.0F);
+        CHECK(owner.CopyParameters(fixture.entity, before, parameters).failure == GraphInstanceFailure::HandleStale);
+    }
+
+    TEST_CASE("Scene clip occurrences retain exact committed identity and reject foreign or retired observations",
+              "[animation][scene][notifies][lifecycle]") {
+        const auto graph = Test::Graph::Simple();
+        Test::Instance::Prepared source(graph);
+        auto clip = source.compileClips.front().Data();
+        clip.eventSchemas = {Test::Notifies::Schema()};
+        clip.events = {Test::Notifies::Event(7, 5)};
+        source.compileClips.front() = Test::Cook::Take(AnimationClipAsset::Create(std::move(clip), *source.skeleton));
+        Test::Scene::Fixture fixture(false, true,
+                                     [&source, &graph](Test::Cook::Fixture &cook) -> std::optional<AnimationAuthoringComponent> {
+            cook.Replace(*source.skeleton, source.compileClips, graph);
+            return std::nullopt;
+        });
+        auto &owner = *fixture.forward->adapter;
+        REQUIRE(fixture.Tick().HasValue());
+        const auto pose = fixture.Observation().component->currentPose;
+        std::array<AnimationEventOccurrence, 1> events;
+        std::uint32_t written{};
+        REQUIRE(owner.CopyClipEvents(fixture.entity, pose, events, written).HasValue());
+        REQUIRE(written == 1);
+        const auto event = events.front();
+        CHECK(event.id.marker == Test::Id<AnimationEventMarkerId>(7));
+        CHECK(event.id.instance == pose.instance);
+        REQUIRE(fixture.Tick().HasValue());
+        REQUIRE(owner.CopyClipEvents(fixture.entity, pose, events, written).HasValue());
+        CHECK(written == 1);
+        CHECK(events.front() == event);
+
+        GraphInstanceFailure foreign{};
+        std::jthread thread([&foreign, &owner, &fixture, &pose, &events, &written] {
+            foreign = owner.CopyClipEvents(fixture.entity, pose, events, written).failure;
+        });
+        thread.join();
+        CHECK(foreign == GraphInstanceFailure::ThreadViolation);
+        CHECK(written == 1);
+        fixture.Activate(2);
+        CHECK(owner.CopyClipEvents(fixture.entity, pose, events, written).failure == GraphInstanceFailure::HandleStale);
+        owner.Shutdown();
+        CHECK(owner.CopyClipEvents(fixture.entity, pose, events, written).failure == GraphInstanceFailure::AdmissionRejected);
+        CHECK(events.front() == event);
+        CHECK(written == 1);
     }
 
     TEST_CASE("Actual owner shutdown defers staged Graph retirement until the scheduler decision",

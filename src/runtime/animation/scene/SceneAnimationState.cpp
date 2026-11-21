@@ -84,6 +84,7 @@ namespace Horo::Runtime {
         context.maximumJointOperations = config.limits.maximumJointOperations;
         context.clipLimits = config.limits.clip;
         context.actions = config.limits.actions;
+        context.clipEvents.maximumOccurrencesPerTick = config.limits.maximumClipOccurrencesPerTick;
         context.cancellation = config.ownerCancellation;
         context.evaluationDomain = config.evaluationDomain;
         auto graph = A::AnimationGraphInstance::Create(prepared.Borrow(), context);

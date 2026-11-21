@@ -25,7 +25,9 @@ namespace Horo::Runtime {
 
         bool ValidWorkPolicy(const SceneAnimationLimits &limits) noexcept {
             return limits.maximumInstructions > 0 && limits.maximumInstructions <= A::AnimationGraphHardLimits::EvaluationInstructions &&
-                   limits.maximumJointOperations > 0 && limits.maximumJointOperations <= 64ULL * 1024ULL * 1024ULL;
+                   limits.maximumJointOperations > 0 && limits.maximumJointOperations <= 64ULL * 1024ULL * 1024ULL &&
+                   limits.maximumClipOccurrencesPerTick > 0 &&
+                   limits.maximumClipOccurrencesPerTick <= A::AnimationNotifyHardLimits::OccurrencesPerTick;
         }
 
         A::GraphInstanceOutcome Rejected(A::GraphInstanceFailure failure) noexcept {
@@ -140,7 +142,8 @@ namespace Horo::Runtime {
     }
 
     /** @copydoc SceneAnimationRuntime::ResolveActionGraph */
-    std::pair<A::AnimationGraphInstance *, A::GraphActionFailure> SceneAnimationRuntime::ResolveActionGraph(EntityRef entity) const {
+    std::pair<A::AnimationGraphInstance *, A::GraphActionFailure> SceneAnimationRuntime::ResolveActionGraph(
+        EntityRef entity) const noexcept {
         using enum A::GraphActionFailure;
         if (!state_->OnOwner())
             return {nullptr, ThreadViolation};
@@ -170,6 +173,50 @@ namespace Horo::Runtime {
     A::GraphActionCommandOutcome SceneAnimationRuntime::ReleaseActionResult(EntityRef entity, const A::GraphActionHandle &handle) {
         const auto [graph, failure] = ResolveActionGraph(entity);
         return graph ? graph->ReleaseActionResult(handle) : A::GraphActionCommandOutcome{failure};
+    }
+
+    /** @copydoc SceneAnimationRuntime::QueryAction */
+    A::GraphActionQueryOutcome SceneAnimationRuntime::QueryAction(EntityRef entity, const A::GraphActionHandle &handle) const {
+        const auto [graph, failure] = ResolveActionGraph(entity);
+        return graph ? graph->QueryAction(handle) : A::GraphActionQueryOutcome{failure};
+    }
+
+    /** @copydoc SceneAnimationRuntime::ResolveObservationGraph */
+    std::pair<const A::AnimationGraphInstance *, A::GraphInstanceFailure> SceneAnimationRuntime::ResolveObservationGraph(
+        EntityRef entity) const noexcept {
+        using enum A::GraphInstanceFailure;
+        if (!state_->OnOwner())
+            return {nullptr, ThreadViolation};
+        if (state_->closed)
+            return {nullptr, AdmissionRejected};
+        if (state_->config.ownerCancellation.IsCancellationRequested())
+            return {nullptr, Cancelled};
+        const auto actor = state_->Find(entity);
+        if (!actor)
+            return {nullptr, HandleStale};
+        return {&actor->graph, None};
+    }
+
+    /** @copydoc SceneAnimationRuntime::CopyParameters */
+    A::GraphInstanceOutcome SceneAnimationRuntime::CopyParameters(EntityRef entity, const A::PoseHandle &pose,
+                                                                  std::span<A::GraphParameterInput> output) const {
+        const auto [graph, failure] = ResolveObservationGraph(entity);
+        return graph ? graph->CopyParameters(pose, output) : Rejected(failure);
+    }
+
+    /** @copydoc SceneAnimationRuntime::CopyStateEvents */
+    A::GraphInstanceOutcome SceneAnimationRuntime::CopyStateEvents(EntityRef entity, const A::PoseHandle &pose,
+                                                                   std::span<A::GraphStateEvent> output, std::uint32_t &written) const {
+        const auto [graph, failure] = ResolveObservationGraph(entity);
+        return graph ? graph->CopyStateEvents(pose, output, written) : Rejected(failure);
+    }
+
+    /** @copydoc SceneAnimationRuntime::CopyClipEvents */
+    A::GraphInstanceOutcome SceneAnimationRuntime::CopyClipEvents(EntityRef entity, const A::PoseHandle &pose,
+                                                                  std::span<A::AnimationEventOccurrence> output,
+                                                                  std::uint32_t &written) const {
+        const auto [graph, failure] = ResolveObservationGraph(entity);
+        return graph ? graph->CopyClipEvents(pose, output, written) : Rejected(failure);
     }
 
     /** @copydoc SceneAnimationRuntime::CopyActionSlots */

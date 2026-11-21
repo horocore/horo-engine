@@ -110,5 +110,9 @@ namespace Horo::Runtime {
             config.evaluationDomain = Animation::AnimationEvaluationDomain::Count;
             CHECK(SceneAnimationRuntime::Create(config).HasError());
         }
+        SECTION("unbounded clip occurrence capacity") {
+            config.limits.maximumClipOccurrencesPerTick = Animation::AnimationNotifyHardLimits::OccurrencesPerTick + 1;
+            CHECK(SceneAnimationRuntime::Create(config).HasError());
+        }
     }
 }  // namespace Horo::Runtime

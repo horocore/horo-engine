@@ -224,6 +224,19 @@ parameters are owner-composed. Suppressed commands are not reported as success o
 queued until release. Stop, scene/actor generation loss and authority change close
 contribution admission before owner-safe-point handoff/lease retirement.
 
+### Scene gameplay observations
+
+The Scene animation owner exposes committed graph parameters, state lifecycle
+events, and clip occurrences for an exact active entity and resident pose handle.
+Each read copies a complete block into caller-owned storage. An action query
+returns the copied fact for an exact request handle at the owner control boundary.
+The Scene owner checks admission before consulting the graph. These reads preserve
+stable occurrence identities, allocate no storage, and leave graph publication
+and consumption unchanged. Reload and entity replacement retire old instance
+identities. Shutdown and cancellation close Scene admission.
+The host's Scene limits bound the per-graph clip occurrence storage reserved
+during activation. The graph accounts for that storage in its instance budget.
+
 ## Animation Clip
 
 A clip stores immutable sampled animation data for one exact skeleton publication.
