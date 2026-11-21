@@ -7,6 +7,7 @@
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/AI/PerceptionSenseProvider.h"
+#include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Navigation/NavigationErrors.h"
@@ -1377,6 +1378,53 @@ TEST_CASE("Editor authoring EQS evaluates a committed NavMesh without starting P
     preview.scenes->Shutdown();
 }
 
+namespace {
+    using NavigationPlayFixture = Application::CharacterSceneProductTest::NavigationProductFixture;
+
+    void CookEditorPlayDecisionAssets(NavigationPlayFixture &fixture, std::span<NavigationPlayFixture::AddedAsset> assets,
+                                     const std::shared_ptr<const AI::DecisionNodeGeneration> &providers,
+                                     std::shared_ptr<const AI::QuerySchemaRegistry> querySchema) {
+        using namespace Assets;
+        AssetRegistry registry;
+        std::vector<AssetRecord> records;
+        for (const auto &asset : assets)
+            records.push_back(asset.record);
+        REQUIRE(registry.Publish(std::move(records)).status == AssetRegistryBuildStatus::Complete);
+
+        Application::PrefabCookTestSupport::TempDir decisionCook;
+        Application::DecisionAssetCookRequest request{.assets = fixture.project.request.assets,
+                                                      .environment = {.nodes = providers},
+                                                      .querySchema = std::move(querySchema)};
+        request.assets.cookedRoot = decisionCook.path;
+        request.assets.registry = registry.Snapshot();
+        request.assets.validateHostInputs = [&providers] {
+            return providers->CanUse() ? Result<void>::Success()
+                                       : Result<void>::Failure(MakeError(Application::DecisionCookErrors::Stale));
+        };
+        auto captured = AssetCookInputSnapshot::Capture(request.assets.sourceRoot, request.assets.registry, request.assets.limits,
+                                                        1024U * 1024U);
+        REQUIRE(captured.HasValue());
+        request.assets.pinnedInputs = std::make_shared<const AssetCookInputSnapshot>(std::move(captured).Value());
+        const auto cooked = Application::DecisionAssetCookHost::Cook(fixture.project.jobs, request);
+        if (cooked.HasError())
+            UNSCOPED_INFO(cooked.ErrorValue().code.Value() << ": " << cooked.ErrorValue().message);
+        REQUIRE(cooked.HasValue());
+        auto contents = ReadCookGenerationContents(fixture.project.files, cooked.Value().generation, 1024U * 1024U);
+        REQUIRE(contents.HasValue());
+        REQUIRE(contents.Value().artifacts.size() == assets.size());
+        for (auto &envelope : contents.Value().artifacts) {
+            const auto artifact = DecodeCookedArtifact(envelope);
+            REQUIRE(artifact.HasValue());
+            const auto destination = std::ranges::find_if(assets, [&](const auto &asset) {
+                return asset.record.id == artifact.Value().id;
+            });
+            REQUIRE(destination != assets.end());
+            REQUIRE(destination->cookedEnvelope.empty());
+            destination->cookedEnvelope = std::move(envelope);
+        }
+    }
+}  // namespace
+
 TEST_CASE("Editor Play publishes cooked tactical path output through its admitted Navigation agent", "[editor][play][ai][product][eqs]") {
     using namespace Horo::AI;
     using namespace Horo::Application::Internal;
@@ -1388,8 +1436,12 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
     Fixture fixture;
     bool mixed = false;
     bool allowInspection = true;
-#if HORO_TEST_PHYSICS_NATIVE
+    bool enablePerception = false;
     SECTION("Navigation reachability alone publishes the first reachable candidate") {}
+    SECTION("Native Perception observes a peer while the same agent completes its Navigation query") {
+        enablePerception = true;
+    }
+#if HORO_TEST_PHYSICS_NATIVE
     SECTION("Real Physics visibility eliminates the first reachable candidate") {
         mixed = true;
     }
@@ -1425,9 +1477,8 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
 #endif
     auto queries = CaptureBuiltinQuerySchema();
     REQUIRE(queries.HasValue());
-    auto queryBytes = EnvironmentQueryCookedCodec::Encode(query.Value(), queries.Value());
+    auto queryBytes = EnvironmentQuerySourceCodec::Encode(query.Value());
     REQUIRE(queryBytes.HasValue());
-    const auto cookedDigest = ComputeSha256(std::as_bytes(std::span{queryBytes.Value()}));
     const Gameplay::GameModuleLoadExpectation expected{"game.ai.tests", Gameplay::CurrentGameplayBuildFingerprint(),
                                                        Horo::Tests::ReadDescriptorRevision(HORO_TEST_AI_MODULE_REVISION_PATH)};
     auto image = Gameplay::GameModuleHost{}.Load(HORO_TEST_AI_MODULE_PATH, expected);
@@ -1446,21 +1497,22 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
                                  BehaviorTreeQueryOutput{query.Value().Id(), result.id, result.version, result.itemType, key, 80});
     auto graph = Decisions::Tree(19, {Decisions::TreeNode(1, DecisionControlKind::Root), std::move(task)}, {Decisions::Edge(1, 1, 2)});
     graph.executionTask = MakeIdentity<TaskId>(401);
-    auto compiled = DecisionGraphCompiler::Compile(graph.asset, std::span{&graph, 1}, {providers.Value(), {schema}, {}, 1});
-    REQUIRE(compiled.HasValue());
-    REQUIRE(compiled.Value().plan);
-    auto graphBytes = DecisionPlanCodec::EncodeCooked(*compiled.Value().plan);
+    auto graphBytes = DecisionPlanCodec::EncodeSource(std::span{&graph, 1}, graph.asset);
     REQUIRE(graphBytes.HasValue());
-    const auto add = [&](std::uint8_t serial, std::string_view type, const std::string &path, std::vector<std::uint8_t> bytes) {
+    const auto add = [&](std::uint8_t serial, std::string_view type, const std::string &path, std::span<const std::uint8_t> bytes) {
         const auto id = Assets::AssetId::FromBytes({serial});
-        fixture.project.WriteText(path, "Cooked fixture source");
+        fixture.project.WriteText(path, {reinterpret_cast<const char *>(bytes.data()), bytes.size()});
         fixture.project.WriteText(path + ".horo", Cook::SidecarJson(id.ToString(), type));
-        return Fixture::AddedAsset{{id, Cook::Type(type), ProjectPath::Parse(path).Value(), ProjectPath::Parse(path + ".horo").Value()},
-                                   std::move(bytes)};
+        return Fixture::AddedAsset{{id, Cook::Type(type), ProjectPath::Parse(path).Value(), ProjectPath::Parse(path + ".horo").Value()}};
     };
-    std::vector assets{add(121, DecisionAssetType(DecisionPlanKind::BehaviorTree), "assets/path.horo_bt", std::move(graphBytes).Value()),
-                       add(122, BlackboardSchemaAssetType, "assets/path.horo_bb", std::move(schemaBytes).Value()),
-                       add(123, EnvironmentQuerySourceAssetType, "assets/path.horo_eqs", std::move(queryBytes).Value())};
+    std::vector assets{add(121, DecisionAssetType(DecisionPlanKind::BehaviorTree), "assets/path.horo_bt", graphBytes.Value()),
+                       add(122, BlackboardSchemaAssetType, "assets/path.horo_bb", schemaBytes.Value()),
+                       add(123, EnvironmentQuerySourceAssetType, "assets/path.horo_eqs", queryBytes.Value())};
+    CookEditorPlayDecisionAssets(fixture, assets, providers.Value(),
+                                std::make_shared<const QuerySchemaRegistry>(std::move(queries).Value()));
+    const auto committedQuery = Assets::DecodeCookedArtifact(assets.back().cookedEnvelope);
+    REQUIRE(committedQuery.HasValue());
+    const auto cookedDigest = committedQuery.Value().payloadDigest;
     const auto root = fixture.project.project.dir.path;
 #if HORO_TEST_PHYSICS_NATIVE
     if (collision) {
@@ -1474,12 +1526,39 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
                           {std::istreambuf_iterator<char>{material}, {}}});
     }
 #endif
+    constexpr auto perceptionPath = "play-navigation-perception.json";
+    std::shared_ptr<const PerceptionSenseGeneration> senses;
+    if (enablePerception) {
+        auto registeredSenses = image.Value().owner->AcquirePerceptionSenses();
+        REQUIRE(registeredSenses.HasValue());
+        senses = std::move(registeredSenses).Value();
+        REQUIRE(senses->Contracts().size() == 1);
+        const auto &contract = senses->Contracts().front();
+        const auto sense = std::to_string(contract.sense.identity.Value());
+        const auto work = (contract.workUnits + PerceptionSenseGeneration::ValidationWorkUnits + 1) * 3;
+        fixture.project.WriteText(
+            perceptionPath,
+            std::string{R"({"schema":2,"sceneAsset":")"} + fixture.project.sceneId.ToString() +
+                R"(","sceneRevision":1,"worldOriginMillimeters":[0,0,0],"controllers":[{"controller":)" +
+                std::to_string(controller.Value()) + R"(,"listeners":[91],"sources":[)" + sense +
+                R"(],"layers":1,"mask":1}],"native":{"listeners":[{"id":91,"sense":)" + sense +
+                R"(}],"radiusMillimeters":4000,"visibleLayers":1,"workUnitsPerTick":)" + std::to_string(work) + "}}");
+    }
     fixture.Publish(Fixture::Input::Valid, Fixture::Client::None, assets, [&](auto &scene) {
         auto &actor = scene.objects.back();
         actor.localTransform.translation = {1, 0, 1};
         actor.components.aiAgent = AiAgentComponent{.agent = agent};
         actor.components.aiController =
             AiControllerComponent{.controller = controller, .decisionAsset = graph.asset, .blackboardSchema = schema->Identity()};
+        if (enablePerception) {
+            actor.components.aiController->requiredCapabilities = AiCapabilitySet::Of(AiCapability::Perception);
+            auto peer = actor;
+            peer.id = {6};
+            peer.name = "Sensed Navigation peer";
+            peer.localTransform.translation.z = 2;
+            peer.components.aiAgent->agent = MakeIdentity<AgentId>(404);
+            scene.objects.push_back(std::move(peer));
+        }
 #if HORO_TEST_PHYSICS_NATIVE
         if (collision) {
             auto blocker = collision->source.objects[1];
@@ -1522,7 +1601,7 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
                                                                                 fixture.project.sceneId,
                                                                                 {{controller, assets.front().record.id}},
                                                                                 {{schema->Identity(), key}},
-                                                                                {},
+                                                                                enablePerception ? perceptionPath : "",
                                                                                 fixedStep}});
     const Editor::EditorPlaySceneFactory factory = [&](Runtime::SceneRuntimeId id, const Runtime::RuntimeSceneDefinition &definition) {
         return projectFactory(root, id, definition);
@@ -1540,6 +1619,8 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
     const auto started = play.Start(document, registry, components, factory, {}, Editor::EditorPlayViewSource::AuthoredCamera, nullptr, {},
                                     nullptr, {.decision = [&] {
         return Result<std::shared_ptr<const DecisionNodeGeneration>>::Success(providers.Value());
+    }, .perception = [&] {
+        return Result<std::shared_ptr<const PerceptionSenseGeneration>>::Success(senses);
     }});
     if (started.HasError())
         UNSCOPED_INFO(started.ErrorValue().code.Value() << ": " << started.ErrorValue().message);
@@ -1596,6 +1677,17 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
         std::this_thread::sleep_for(std::chrono::milliseconds{1});
     }
     REQUIRE(winner);
+    if (enablePerception) {
+        const auto &snapshot = play.AgentInspectionHistory().back().snapshot;
+        CHECK_FALSE(snapshot->perceptionFailure);
+        REQUIRE(snapshot->stimuli.size() == 1);
+        const auto peer = play.SceneView()->Find({6});
+        REQUIRE(peer);
+        const auto &stimulus = snapshot->stimuli.front();
+        CHECK(stimulus.key.source.slot == peer->entity.index);
+        CHECK(stimulus.key.sense == senses->Contracts().front().sense.identity);
+        CHECK(stimulus.sensed);
+    }
     const auto expectedPoint =
         mixed ? Math::WorldCoordinate64::FromMillimeters(1000, 0, 5000) : Math::WorldCoordinate64::FromMillimeters(5000, 0, 1000);
     CHECK(std::get<Math::WorldCoordinate64>(std::get<BlackboardScalarValue>(*winner)) == expectedPoint);
