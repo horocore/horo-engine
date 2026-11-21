@@ -1338,8 +1338,9 @@ controller. For example, `"decisionWatches": [{"node": 2, "listener": 91}]`
 selects event-only evaluation for that controller in Editor Play and
 authoritative headless sessions. Scene admission checks both identities before
 creating the Decision executor. The graph wakes on watched Perception changes,
-committed Blackboard dependencies, accepted task continuation events, or the
-next fixed deadline of an active service or time limit.
+including retirement of an observed source in a committed Scene update. It also
+wakes on committed Blackboard dependencies, accepted task continuation events,
+and the next fixed deadline of an active service or time limit.
 Other controllers retain their fixed-tick cadence. Deterministic headless
 replay requires its regular fixed-tick scheduling policy.
 

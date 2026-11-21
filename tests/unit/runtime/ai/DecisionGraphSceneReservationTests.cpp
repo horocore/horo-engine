@@ -505,9 +505,35 @@ namespace Horo::AI {
             CHECK(fixture.probe.resumes == 1);
             CHECK(fixture.probe.lastResumeReason == AiTaskResumeReason::Event);
             CHECK(evaluate(4) == 0);
-            REQUIRE(runtime.SetCookedPerceptionWatchesAtSafePoint(agent, {}).HasValue());
-            sees = true;
-            CHECK(evaluate(5) == 0);
+            SECTION("removing the watch leaves later observations idle") {
+                REQUIRE(runtime.SetCookedPerceptionWatchesAtSafePoint(agent, {}).HasValue());
+                sees = true;
+                CHECK(evaluate(5) == 0);
+            }
+            SECTION("the structural publication of a retired source wakes the surviving watcher") {
+                auto structural = runtime.MakeStructuralParticipant(std::span{&authored.descriptor, 1});
+                const std::array removed{*view.Find(Runtime::SceneObjectId{2})};
+                {
+                    const auto staged = structural->Prepare(view, {}, removed);
+                    REQUIRE(staged.HasValue());
+                    REQUIRE(staged.Value()->ValidatePublication().HasValue());
+                }
+                CHECK(evaluate(5) == 0);
+
+                auto prepared = structural->Prepare(view, {}, removed);
+                REQUIRE(prepared.HasValue());
+                REQUIRE(prepared.Value()->ValidatePublication().HasValue());
+                prepared.Value()->Publish();
+                REQUIRE(prepared.Value()->AfterPublication().HasValue());
+
+                const auto decision = scheduler->EvaluateAtDecision(6);
+                REQUIRE(decision.HasValue());
+                CHECK(decision.Value().failed == 0);
+                CHECK(decision.Value().evaluated == 1);
+                CHECK(fixture.probe.resumes == 2);
+                CHECK(fixture.probe.lastResumeReason == AiTaskResumeReason::Event);
+                REQUIRE(scheduler->CommitAtIntentDispatch(6).HasValue());
+            }
             runtime.BeginShutdown();
         }
 

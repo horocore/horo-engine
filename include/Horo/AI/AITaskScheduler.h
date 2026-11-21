@@ -11,6 +11,9 @@
 
 namespace Horo::AI {
     class CookedDecisionPlan;
+    namespace Detail {
+        struct AiSceneRuntimeState;
+    }
 
     /** @brief Authored priority; starvation promotion precedes ordinary priority. */
     enum class AiTaskPriority : std::uint8_t {
@@ -377,6 +380,7 @@ namespace Horo::AI {
     private:
         friend class AiSceneRuntime;
         friend class AiRuntimeCapability;
+        friend struct Detail::AiSceneRuntimeState;
         /** @brief Queues a committed dependency of the exact reactive plan for the next decision tick. */
         void QueueBlackboardWake(AgentHandle agent, const std::shared_ptr<const CookedDecisionPlan> &plan,
                                  std::span<const BlackboardKeyId> changedKeys) noexcept;

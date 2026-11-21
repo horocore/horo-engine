@@ -106,6 +106,9 @@ namespace Horo::AI::Detail {
         /** @brief Binds original-host allocation authority before exposing any capability. */
         AiSceneRuntimeState() noexcept;
 
+        /** @brief Retires exact source facts at structural publication and wakes surviving watchers. */
+        void RetirePerceptionSources(std::span<const PerceptionSourceRef> sources) noexcept;
+
         const DiagnosticCapture captureDiagnostics; /**< Immutable original host image allocation authority. */
         const std::thread::id owner{std::this_thread::get_id()};
         AiSceneActivationBinding binding;
