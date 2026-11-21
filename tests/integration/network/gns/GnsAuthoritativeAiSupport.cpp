@@ -81,8 +81,8 @@ namespace Horo::Network::NativeQualification {
     }
 
     /** @copydoc AuthoritativeAi::Verify */
-    void AuthoritativeAi::Verify(const App::NetworkProductHost &host, const INetworkModeService &scene,
-                                 NetworkModeWorld world, bool authority) const {
+    void AuthoritativeAi::Verify(const App::NetworkProductHost &host, const INetworkModeService &scene, NetworkModeWorld world,
+                                 bool authority) const {
         const auto health = host.AiHealth(world);
         const auto agent = Decisions::MakeIdentity<AI::AgentId>(AgentId);
         const auto key = state_->fixture.schema->Keys().front().key;

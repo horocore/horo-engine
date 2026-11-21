@@ -21,8 +21,8 @@ namespace Horo::Network::NativeQualification {
         /** @brief Supplies the committed plan and its bounded scheduler to the production composition. */
         void Configure(Application::Internal::HeadlessSceneActivationInput &input, JobSystem &jobs) const;
         /** @brief Verifies native task completion and Blackboard access belong to the authority session alone. */
-        void Verify(const Application::Internal::NetworkProductHost &host, const INetworkModeService &scene,
-                    NetworkModeWorld world, bool authority) const;
+        void Verify(const Application::Internal::NetworkProductHost &host, const INetworkModeService &scene, NetworkModeWorld world,
+                    bool authority) const;
 
     private:
         struct State;
