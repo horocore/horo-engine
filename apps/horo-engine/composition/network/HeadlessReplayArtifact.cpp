@@ -19,7 +19,7 @@ namespace Horo::Application::Internal {
         constexpr std::size_t MaximumEvidenceBytes = 128U * 1024U;
 
         /** @brief Describes supported and omitted boundaries even when trace records were captured for diagnostics. */
-        Json EncodeCoverage() {
+        Json EncodeCoverage(const bool hasCharacterMotion) {
             constexpr auto names =
                 std::to_array<std::string_view>({"scene-input", "perception-input", "query-publication", "blackboard-sync", "decision",
                                                  "navigation", "gameplay", "physics", "achieved-character-motion", "canonical-ai"});
@@ -30,7 +30,28 @@ namespace Horo::Application::Internal {
             boundaries["scene-input"] = "deterministic";
             boundaries["decision"] = "deterministic";
             boundaries["canonical-ai"] = "deterministic";
+            if (hasCharacterMotion)
+                boundaries["achieved-character-motion"] = "deterministic";
             return {{"version", AI::AiReplayManifest::CurrentVersion}, {"boundaries", std::move(boundaries)}};
+        }
+
+        /** @brief Encodes stable authored keys and copied solver outputs in canonical evidence order. */
+        Json EncodeCharacterMotion(std::span<const HeadlessReplayCharacterMotion> motion) {
+            auto records = Json::array();
+            for (const auto &record : motion) {
+                const auto &position = record.position;
+                const auto &heading = record.heading;
+                const auto &velocity = record.achievedVelocity;
+                records.push_back({{"objectId", std::to_string(record.object.value)},
+                                   {"componentId", std::to_string(record.component.value)},
+                                   {"characterTick", std::to_string(record.characterTick)},
+                                   {"positionMeters", {position.x, position.y, position.z}},
+                                   {"heading", {heading.x, heading.y, heading.z, heading.w}},
+                                   {"velocityMetersPerSecond", {velocity.x, velocity.y, velocity.z}},
+                                   {"grounded", record.grounded},
+                                   {"termination", static_cast<std::uint8_t>(record.termination)}});
+            }
+            return records;
         }
 
         /** @brief Projects the stable portion of one original v4 trace record. */
@@ -64,30 +85,37 @@ namespace Horo::Application::Internal {
                 auto records = Json::array();
                 for (const auto &record : capture.trace->Records())
                     records.push_back(EncodeRecord(record));
-                const Json payload{{"format", "horo-ai-replay-evidence"},
-                                   {"version", 1},
-                                   {"sceneDefinitionId", std::to_string(data.definition.value)},
-                                   {"agentId", std::to_string(capture.subject.Value())},
-                                   {"tick", std::to_string(capture.tick)},
-                                   {"recordedBoundaries", {"scene-input", "decision", "canonical-ai"}},
-                                   {"manifest", EncodeCoverage()},
-                                   {"sceneInput",
-                                    {{"revision", std::to_string(data.definitionRevision.value)},
-                                     {"digest", FormatSha256(data.sceneInput)}}},
-                                   {"canonicalAi",
-                                    {{"recordVersion", AI::AiCanonicalReferenceRecordVersion}, {"digest", FormatSha256(canonicalDigest)}}},
-                                   {"decision",
-                                    {{"traceVersion", header.version},
-                                     {"rootGraphId", std::to_string(header.root.Value())},
-                                     {"planDigest", FormatSha256(header.planDigest)},
-                                     {"outcome", static_cast<std::uint8_t>(header.outcome)},
-                                     {"blackboard",
-                                      {{"schemaId", std::to_string(capture.blackboard.schema.Value())},
-                                       {"schemaVersion", capture.blackboard.schemaVersion},
-                                       {"schemaGeneration", std::to_string(capture.blackboard.schemaGeneration)},
-                                       {"instanceGeneration", capture.blackboard.instanceGeneration},
-                                       {"revision", std::to_string(capture.blackboardRevision)}}},
-                                     {"records", std::move(records)}}}};
+                const bool hasCharacterMotion = data.characterMotion.has_value();
+                Json payload{{"format", "horo-ai-replay-evidence"},
+                             {"version", 1},
+                             {"sceneDefinitionId", std::to_string(data.definition.value)},
+                             {"agentId", std::to_string(capture.subject.Value())},
+                             {"tick", std::to_string(capture.tick)},
+                             {"recordedBoundaries", {"scene-input", "decision", "canonical-ai"}},
+                             {"manifest", EncodeCoverage(hasCharacterMotion)},
+                             {"sceneInput",
+                              {{"revision", std::to_string(data.definitionRevision.value)}, {"digest", FormatSha256(data.sceneInput)}}},
+                             {"canonicalAi",
+                              {{"recordVersion", AI::AiCanonicalReferenceRecordVersion}, {"digest", FormatSha256(canonicalDigest)}}},
+                             {"decision",
+                              {{"traceVersion", header.version},
+                               {"rootGraphId", std::to_string(header.root.Value())},
+                               {"planDigest", FormatSha256(header.planDigest)},
+                               {"outcome", static_cast<std::uint8_t>(header.outcome)},
+                               {"blackboard",
+                                {{"schemaId", std::to_string(capture.blackboard.schema.Value())},
+                                 {"schemaVersion", capture.blackboard.schemaVersion},
+                                 {"schemaGeneration", std::to_string(capture.blackboard.schemaGeneration)},
+                                 {"instanceGeneration", capture.blackboard.instanceGeneration},
+                                 {"revision", std::to_string(capture.blackboardRevision)}}},
+                               {"records", std::move(records)}}}};
+                if (hasCharacterMotion) {
+                    payload["recordedBoundaries"].insert(payload["recordedBoundaries"].end() - 1, "achieved-character-motion");
+                    auto motion = EncodeCharacterMotion(*data.characterMotion);
+                    const auto canonical = motion.dump();
+                    const auto digest = ComputeSha256(std::as_bytes(std::span{canonical.data(), canonical.size()}));
+                    payload["characterMotion"] = {{"schemaVersion", 1}, {"digest", FormatSha256(digest)}, {"records", std::move(motion)}};
+                }
                 auto text = payload.dump();
                 if (text.size() >= MaximumEvidenceBytes)
                     return Result<std::string>::Failure(MakeError(AI::AIErrors::DecisionAssetStorageUnavailable));

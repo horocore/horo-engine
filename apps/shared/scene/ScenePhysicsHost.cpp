@@ -1,6 +1,7 @@
 #include "ScenePhysicsHost.h"
 
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/Physics/CharacterErrors.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Runtime/Scene/SceneAnimationRuntime.h"
 
@@ -551,6 +552,36 @@ namespace Horo::Application::Internal {
         if (collisionRoot.HasError())
             return Pose::Failure(collisionRoot.ErrorValue());
         return CharacterLocalPose(scene, actor.Value(), collisionRoot.Value());
+    }
+
+    /** @copydoc ScenePhysicsHost::ReadCharacterFixedMovement */
+    Result<std::optional<Character::CharacterMovementResult>> ScenePhysicsHost::ReadCharacterFixedMovement(
+        const Character::CharacterControllerHandle controller, const Runtime::FixedStepContext &context) {
+        using Movement = Result<std::optional<Character::CharacterMovementResult>>;
+        const auto scope = Borrow();
+        if (scope.HasError())
+            return Movement::Failure(scope.ErrorValue());
+        auto &native = scope.Value();
+        const auto physics = native.physics.PublishedTick();
+        if (const auto &pending = fixedAnimation_->pending) {
+            if (pending->attempt.attempt != context.attemptNumber || pending->scene != native.scene ||
+                pending->step != AnimationFixedState::NativeStep::Completed || pending->attempt.tick != physics.completedTick)
+                return Movement::Failure(MakeError(Physics::PhysicsErrors::QuerySnapshotStale));
+            const auto staged = FixedAccess::ReadMovement(native.character, pending->attempt, controller);
+            if (staged.HasError())
+                return Movement::Failure(staged.ErrorValue());
+            return Movement::Success(staged.Value() ? std::optional{*staged.Value()} : std::nullopt);
+        }
+        const auto snapshot = native.character.ControllerLocomotionSnapshot(controller);
+        if (snapshot.HasError()) {
+            if (snapshot.ErrorValue().code.Value() == Character::CharacterErrors::InvalidState.code.Value() &&
+                native.character.ControllerTransform(controller).HasValue())
+                return Movement::Success(std::nullopt);
+            return Movement::Failure(snapshot.ErrorValue());
+        }
+        if (snapshot.Value().tick != physics.completedTick)
+            return Movement::Success(std::nullopt);
+        return Movement::Success(snapshot.Value().movement);
     }
 
     /** @copydoc ScenePhysicsHost::ReadCharacterVelocity */

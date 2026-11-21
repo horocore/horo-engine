@@ -106,6 +106,13 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<Math::Transform> ReadCharacterLocalTransform(const Runtime::RuntimeSceneView &scene,
                                                                           const Runtime::RuntimeEntityView &entity,
                                                                           std::uint64_t schedulerTick);
+        /** @brief Copies solved Character motion for the current scheduler attempt before replay publication.
+         * @param controller Exact live controller from this Scene's paired Character owner.
+         * @param context Current fixed attempt after the paired native solver succeeds.
+         * @return An owned result, no movement this tick, or a typed stale/lifecycle failure.
+         */
+        [[nodiscard]] Result<std::optional<Character::CharacterMovementResult>> ReadCharacterFixedMovement(
+            Character::CharacterControllerHandle controller, const Runtime::FixedStepContext &context);
         /** @brief Returns only the actual published Physics candidate's issued state target. */
         [[nodiscard]] Result<Physics::Detail::PhysicsSceneStateTarget> PublishedStateTarget();
         /** @brief Returns only the exact actual pending candidate for this receiving Scene; no Scene-ID-only authority. */

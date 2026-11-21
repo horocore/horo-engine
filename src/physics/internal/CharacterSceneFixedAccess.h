@@ -48,6 +48,13 @@ namespace Horo::Character::Detail {
                                                                                                CharacterSceneTickAttempt attempt,
                                                                                                CharacterControllerHandle controller);
 
+        /** @brief Borrows one exact attempt's solved movement on the Character owner lane, or null if it had no result.
+         * @pre The borrow ends before Commit, Abort or any other Character owner mutation.
+         */
+        [[nodiscard]] static Result<const CharacterMovementResult *> ReadMovement(const CharacterWorld &world,
+                                                                                  CharacterSceneTickAttempt attempt,
+                                                                                  CharacterControllerHandle controller);
+
         /** @brief Publishes the preflighted candidate after the scheduler commitment fence.
          * @param world Exact active paired owner. @param attempt Current staged attempt. A mismatched caller breaks the commit invariant.
          */

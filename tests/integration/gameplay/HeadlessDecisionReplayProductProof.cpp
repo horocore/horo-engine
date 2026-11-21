@@ -7,6 +7,7 @@
 #include "NetworkProductHost.h"
 #include "OwnedTestDirectory.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <fstream>
@@ -75,7 +76,18 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(coverage.at("canonical-ai") == "deterministic");
             CHECK(coverage.at("physics") == "omitted");
             CHECK(coverage.at("navigation") == "omitted");
-            CHECK(coverage.at("achieved-character-motion") == "omitted");
+            CHECK(coverage.at("achieved-character-motion") == (data.characterMotion ? "deterministic" : "omitted"));
+            if (data.characterMotion) {
+                const auto &capture = artifact.at("characterMotion");
+                const auto &motion = capture.at("records");
+                REQUIRE(motion.size() == 1);
+                CHECK(capture.at("schemaVersion") == 1);
+                const auto canonicalMotion = motion.dump();
+                CHECK(capture.at("digest") == FormatSha256(ComputeSha256(std::as_bytes(std::span{canonicalMotion}))));
+                CHECK(motion.at(0).at("objectId") == "3");
+                CHECK(motion.at(0).at("componentId") == "7");
+                CHECK(motion.at(0).at("velocityMetersPerSecond").at(0).get<float>() > 0);
+            }
             CHECK(artifact.at("sceneInput").at("revision") == std::to_string(data.definitionRevision.value));
             CHECK(artifact.at("sceneInput").at("digest") == FormatSha256(data.sceneInput));
             const auto &decision = artifact.at("decision");
@@ -99,6 +111,9 @@ namespace Horo::Application::PrefabAtomicTest {
                               std::optional<std::uint32_t> referenceGeneration) {
         using namespace Network;
         const auto definitionId = definition->Id();
+        const bool hasCharacter = std::ranges::any_of(definition->Entities(), [](const auto &entity) {
+            return entity.components.characterController.has_value();
+        });
         const auto definitionRevision = definition->Revision();
         const auto encodedScene = SceneCook::EncodeCookedSceneDefinition(*definition);
         REQUIRE(encodedScene.HasValue());
@@ -111,7 +126,20 @@ namespace Horo::Application::PrefabAtomicTest {
         REQUIRE(output.HasValue());
         const auto replay = std::make_shared<Internal::HeadlessDecisionReplay>(Internal::HeadlessDecisionReplaySelection{agent, 1});
         input.decisionReplay = replay;
-        auto configured = Internal::ComposeHeadlessSceneNetworkServices(std::move(definition), std::move(input));
+        std::optional<Internal::GameplayWorldSelection> gameplay;
+        if (hasCharacter) {
+            std::ifstream revision{HORO_TEST_GAME_MODULE_REVISION_PATH};
+            std::uint64_t descriptorRevision{};
+            REQUIRE((revision >> descriptorRevision));
+            gameplay = Internal::GameplayWorldSelection{.moduleId = "game.tests",
+                                                        .nativeArtifact = HORO_TEST_GAME_MODULE_PATH,
+                                                        .descriptorRevision = descriptorRevision,
+                                                        .physicsPermission = Internal::GameplayPhysicsPermission::Granted,
+                                                        .moduleRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>(),
+                                                        .characterPermission = Internal::GameplayCharacterPermission::Granted};
+        }
+        auto configured = Internal::ComposeHeadlessSceneNetworkServices(std::move(definition), std::move(input), {}, gameplay);
+        INFO((configured.HasError() ? configured.ErrorValue().message : "composition succeeded"));
         REQUIRE(configured.HasValue());
         auto composition = std::move(configured).Value();
         const auto defaults = DefaultNetworkProjectSettings(NetworkProjectSettingsId::Create(10).Value());
@@ -194,6 +222,9 @@ namespace Horo::Application::PrefabAtomicTest {
         const auto &data = captured->Value();
         CHECK(data.definitionRevision == definitionRevision);
         CHECK(data.sceneInput == sceneInputDigest);
+        REQUIRE(data.characterMotion.has_value() == hasCharacter);
+        if (data.characterMotion)
+            CHECK(data.characterMotion->size() == 1);
         const auto &evidence = data.evidence;
         CHECK(evidence.tick == 1);
         CHECK(evidence.subject == agent);

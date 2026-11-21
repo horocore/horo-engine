@@ -194,6 +194,17 @@ namespace Horo::Character {
     Result<std::optional<CharacterRootMotionFeedback>> Detail::CharacterSceneFixedAccess::ReadRootMotion(
         const CharacterWorld &world, const CharacterSceneTickAttempt attempt, const CharacterControllerHandle controller) {
         using Output = Result<std::optional<CharacterRootMotionFeedback>>;
+        const auto movement = ReadMovement(world, attempt, controller);
+        if (movement.HasError())
+            return Output::Failure(movement.ErrorValue());
+        return Output::Success(movement.Value() ? movement.Value()->rootMotion : std::nullopt);
+    }
+
+    /** @copydoc Detail::CharacterSceneFixedAccess::ReadMovement */
+    Result<const CharacterMovementResult *> Detail::CharacterSceneFixedAccess::ReadMovement(const CharacterWorld &world,
+                                                                                            const CharacterSceneTickAttempt attempt,
+                                                                                            const CharacterControllerHandle controller) {
+        using Output = Result<const CharacterMovementResult *>;
         const auto &impl = *world.impl_;
         if (const auto owner = RequireOwnerThread(impl.ownerThread); owner.HasError())
             return Output::Failure(owner.ErrorValue());
@@ -205,9 +216,7 @@ namespace Horo::Character {
 
         const auto &results = impl.fastPath.MovementResults();
         const auto found = std::ranges::lower_bound(results, controller, {}, &CharacterMovementResult::controller);
-        if (found == results.end() || found->controller != controller)
-            return Output::Success(std::nullopt);
-        return Output::Success(found->rootMotion);
+        return Output::Success(found == results.end() || found->controller != controller ? nullptr : std::to_address(found));
     }
 
     /** @copydoc Detail::CharacterSceneFixedAccess::Commit */

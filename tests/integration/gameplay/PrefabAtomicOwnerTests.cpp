@@ -1047,6 +1047,7 @@ namespace Horo::Application::PrefabAtomicTest {
             bool cancelBeforeNativeActivation = false;
             bool runTerminal = false;
             bool captureReplay = false;
+            bool captureCharacterReplay = false;
             bool abortReplay = false;
             auto role = NetworkProjectRole::Standalone;
             std::optional<std::uint32_t> replayReferenceGeneration;
@@ -1061,10 +1062,16 @@ namespace Horo::Application::PrefabAtomicTest {
                 executionBudget = 100;
                 captureReplay = true;
             }
+            SECTION("standalone records the real Character result of a fixed gameplay command") {
+                executionBudget = 100;
+                captureReplay = true;
+                captureCharacterReplay = true;
+            }
             SECTION("standalone rejection after replay preparation cannot publish the attempted tick") {
                 executionBudget = 100;
                 captureReplay = true;
                 abortReplay = true;
+                captureCharacterReplay = true;
             }
             SECTION("standalone replay encodes a live authored Blackboard entity by its stable identity") {
                 executionBudget = 100;
@@ -1400,6 +1407,32 @@ namespace Horo::Application::PrefabAtomicTest {
             }
             if (replayReferenceGeneration)
                 source.Add({.object = {2}});
+            if (captureCharacterReplay) {
+                const auto material = Assets::AssetId::FromBytes({94});
+                const auto type = Physics::AssetType();
+                const auto materialDigest = Put(raw, material, type, target, Physics::CanonicalMaterialBytes(material));
+                auto envelope = raw.Load(material, {});
+                REQUIRE(envelope.HasValue());
+                artifacts.push_back(std::move(envelope).Value());
+                manifest.push_back({material, type, material.ToString() + ".cooked", materialDigest});
+                records.push_back(Physics::Record(material, type));
+                Runtime::CharacterControllerComponent character{.id = {7}, .enabled = true};
+                character.collision.profile = Physics::Profile();
+                character.collision.queryChannel = Physics::Settings().simulation.schema->QueryChannels().front().id;
+                character.collision.defaultMaterial =
+                    Runtime::PhysicsColliderMaterialBinding{Physics::PhysicsMaterialSlotId::FromValue(1), material};
+                source.Add(
+                    {.object = {3},
+                     .localTransform = {.translation = {0, 0.495F, 0}},
+                     .components = {.characterController = character,
+                                    .behaviors = {{{1}, BehaviorType("game.tests.character_client"), 1, true, {{"continuous", true}}}}}});
+                source.Add({.object = {4},
+                            .components = {.rigidBody = Runtime::RigidBodyComponent{.id = {20}, .body = {200}},
+                                           .colliders = {Physics::Collider(21, 201, 4, 200, material,
+                                                                           Runtime::PhysicsAnalyticCollider{
+                                                                               Runtime::PhysicsStaticPlaneCollider{{0, 1, 0}, 0}})}}});
+                REQUIRE(source.RequireAsset({material, type}).HasValue());
+            }
             if (selectNativePerception) {
                 auto peer = controller.agent.agent;
                 peer.agent = Decisions::MakeIdentity<AI::AgentId>(2);

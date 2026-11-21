@@ -18,6 +18,7 @@
 #include <limits>
 #include <new>
 #include <optional>
+#include <tuple>
 #include <utility>
 
 namespace Horo::Application::Internal {
@@ -59,6 +60,46 @@ namespace Horo::Application::Internal {
                 return HeadlessDecisionReplay::Capture::Failure(std::move(encoded).ErrorValue());
             return HeadlessDecisionReplay::Capture::Success(
                 {std::move(evidence), std::move(encoded).Value(), scene.DefinitionId(), authored.definitionRevision, authored.sceneInput});
+        }
+
+        /** @brief Copies exact solved Character results over stable authored keys without stepping a subsystem. */
+        Result<std::optional<std::vector<HeadlessReplayCharacterMotion>>> CaptureCharacterReplay(
+            ScenePhysicsHost &native, const HeadlessNetworkDetail::ReplayAuthoredScene &authored, const Runtime::RuntimeSceneView &scene,
+            const Runtime::FixedStepContext &context) {
+            using Capture = Result<std::optional<std::vector<HeadlessReplayCharacterMotion>>>;
+            const auto scope = native.Borrow();
+            if (scope.HasError())
+                return Capture::Failure(scope.ErrorValue());
+            const auto bindings = scope.Value().characterBindings;
+            if (bindings.empty())
+                return Capture::Success(std::nullopt);
+            constexpr std::size_t MaximumControllers = 256;
+            if (bindings.size() > MaximumControllers)
+                return Capture::Failure(
+                    MakeError(AI::AIErrors::CanonicalStateInvalid, "Character replay evidence exceeds its controller budget."));
+            try {
+                std::vector<HeadlessReplayCharacterMotion> result;
+                result.reserve(bindings.size());
+                for (const auto &binding : bindings) {
+                    const auto owner = binding.owner.entity;
+                    if (!scene.SameIncarnation(authored.initialScene) || owner.index >= authored.slots.size() ||
+                        owner != authored.slots[owner.index])
+                        return Capture::Failure(
+                            MakeError(AI::AIErrors::CanonicalStateInvalid, "Character replay requires an authored controller identity."));
+                    const auto movement = native.ReadCharacterFixedMovement(binding.handle, context);
+                    if (movement.HasError())
+                        return Capture::Failure(movement.ErrorValue());
+                    if (const auto &solved = movement.Value())
+                        result.push_back({binding.object, binding.component, solved->tick, solved->finalPosition, solved->finalHeading,
+                                          solved->achievedVelocityMetersPerSecond, solved->termination, solved->grounded});
+                }
+                std::ranges::sort(result, {}, [](const HeadlessReplayCharacterMotion &motion) {
+                    return std::tuple{motion.object, motion.component};
+                });
+                return Capture::Success(std::move(result));
+            } catch (const std::bad_alloc &) {
+                return Capture::Failure(MakeError(AI::AIErrors::DecisionAssetStorageUnavailable));
+            }
         }
     }  // namespace
 
@@ -112,7 +153,7 @@ namespace Horo::Application::Internal {
             armedAgent_ = agent.Value();
     }
 
-    void HeadlessDecisionReplay::Prepare(const HeadlessNetworkDetail::WorldRecord &world, const Runtime::FixedStepContext &context) {
+    void HeadlessDecisionReplay::Prepare(HeadlessNetworkDetail::WorldRecord &world, const Runtime::FixedStepContext &context) {
         if (owner_ != std::this_thread::get_id() || pending_ || attemptWorld_ != &world || attempt_ != context.attemptNumber ||
             selection_.tick != context.simulationTick)
             return;
@@ -126,7 +167,19 @@ namespace Horo::Application::Internal {
             return;
         }
         armedAgent_ = {};
-        pending_ = EncodeReplayCapture(std::move(evidence).Value(), *world.replayAuthoredScene, *scene);
+        auto captured = EncodeReplayCapture(std::move(evidence).Value(), *world.replayAuthoredScene, *scene);
+        if (captured.HasError()) {
+            pending_ = std::move(captured);
+            return;
+        }
+        auto motion = CaptureCharacterReplay(world.native, *world.replayAuthoredScene, *scene, context);
+        if (motion.HasError()) {
+            pending_ = Capture::Failure(std::move(motion).ErrorValue());
+            return;
+        }
+        auto value = std::move(captured).Value();
+        value.characterMotion = std::move(motion).Value();
+        pending_ = Capture::Success(std::move(value));
     }
 
     void HeadlessDecisionReplay::Commit(const Runtime::FixedStepContext &context) noexcept {

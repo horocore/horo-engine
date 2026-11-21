@@ -75,6 +75,18 @@ namespace Horo::Application::Internal {
         }
     };
 
+    /** @brief Achieved motion keyed by an original authored Scene controller, independent of process handles. */
+    struct HeadlessReplayCharacterMotion final {
+        Runtime::SceneObjectId object;
+        Runtime::PhysicsComponentId component;
+        std::uint64_t characterTick{};
+        Math::Vec3 position;
+        Math::Quaternion heading;
+        Math::Vec3 achievedVelocity;
+        Character::CharacterMovementTermination termination{};
+        bool grounded{};
+    };
+
     /** @brief Original decision evidence and its reference-aware canonical encoding owned after fixed commit. */
     struct HeadlessDecisionReplayData final {
         AI::AiSceneDecisionReplayCapture evidence;
@@ -82,6 +94,8 @@ namespace Horo::Application::Internal {
         Runtime::SceneDefinitionId definition;
         Runtime::SceneDefinitionRevision definitionRevision;
         Sha256Digest sceneInput;
+        std::optional<std::vector<HeadlessReplayCharacterMotion>>
+            characterMotion; /**< Empty records still cover an idle controller tick. */
     };
 
     /** @brief Product-owned mailbox for one exact committed tick; no concurrent access or file storage. */
@@ -109,7 +123,7 @@ namespace Horo::Application::Internal {
         /** @brief Captures the exact original root Scene bindings before mounted or gameplay entities materialize. */
         static Result<void> BindAuthoredScene(HeadlessNetworkDetail::WorldRecord &world, const Runtime::RuntimeSceneDefinition &definition);
         void Arm(HeadlessNetworkDetail::WorldRecord &world, const Runtime::FixedStepContext &context);
-        void Prepare(const HeadlessNetworkDetail::WorldRecord &world, const Runtime::FixedStepContext &context);
+        void Prepare(HeadlessNetworkDetail::WorldRecord &world, const Runtime::FixedStepContext &context);
         void Commit(const Runtime::FixedStepContext &context) noexcept;
         void Abort(const Runtime::FixedStepContext &context) noexcept;
         /** @brief Clears only the exact opt-in held by the pinned Scene owner. */
