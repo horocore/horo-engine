@@ -27,8 +27,26 @@ An engine build with tests enabled can run the same checks from a fresh copy
 using `ctest --test-dir <engine-build> -R '^HoroGameplayAiGuardSdkQualification$' --output-on-failure`.
 Copy each asset with its paired `.horo` identity file when reusing it.
 The schema's **Target visible** key starts at `false`. To inspect that key in a
-project running this schema, launch cooked Editor Play with
-`--play-ai-inspect-key 83003 1`.
+project running this schema, use the cooked Editor Play setup below.
+
+## Run the authored guard in Editor Play
+
+Copy the assets and their identity files into a project that loads the guard
+gameplay module. Bind the authored guard's AI controller to the desired Behavior
+Tree and the Guard Blackboard schema. Cook the Scene and Decision assets for the
+same target, then launch the Editor with their registered asset IDs.
+
+```text
+HoroEditor --project <project-root> --cooked-root <committed-target-root> --cook-target <target>
+           --play-ai-scene <scene-asset-id> --play-ai-decision <controller-id> <decision-asset-id>
+           --play-ai-inspect-key 83003 1
+```
+
+Put the flags on one command line. Use the same Scene asset ID with
+`--play-navigation-scene` when testing movement against a baked NavMesh.
+The Game panel shows the selected agent's Blackboard and the latest runtime
+diagnostic. Select **Open graph at node** when a diagnostic names a node.
+If the source has changed, save the intended version, recook, and restart Play.
 
 `Assets/PatrolPoints.horo_eqs` generates a three-by-three grid around the
 querying agent. The points are one metre apart. The distance stage retains
@@ -76,7 +94,7 @@ reachability and Physics visibility from the same Scene publication.
 `host/GuardCover.cpp` filters out exposed, unreachable and occupied points,
 chooses the lowest Navigation cost, and reserves the winner on the Scene owner.
 Equal costs favor the lower authored cover ID. Retain the returned receipt
-while moving to the selected point. The receipt is bound to its provider\'s
+while moving to the selected point. The receipt is bound to its provider's
 Scene owner thread and generation. Release that exact receipt if movement
 fails, the task is cancelled, or the guard leaves cover. When no point is
 selected, inspect reachability, exposure and the current guard reservations.

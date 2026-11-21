@@ -1,3 +1,4 @@
+#include "Horo/AI/AIErrors.h"
 #include "Horo/AI/PerceptionSenseProvider.h"
 #include "Horo/Gameplay/GameModule.h"
 
@@ -57,6 +58,34 @@ namespace {
         const auto empty = sense.Evaluate({binding.agent, binding.listener, position, 2, 1, {}}, budget, budget);
         return empty.HasValue() && empty.Value().count == 0;
     }
+    /** @brief Confirms rejected host slices leave the next fixed tick available. */
+    bool CheckAdmission(PerceptionSenseInstance &sense, const PerceptionSenseBinding &binding) {
+        constexpr std::size_t maximumCandidates = 32;
+        const auto position = Math::WorldCoordinate64::FromMillimeters(0, 0, 0);
+        std::array<PerceptionSenseCandidate, maximumCandidates + 1> candidates{};
+        for (std::uint32_t index = 0; index < candidates.size(); ++index)
+            candidates[index] = {{7, index + 1, 1}, position};
+
+        AiWorkBudget available{128};
+        const auto oversized = sense.Evaluate({binding.agent, binding.listener, position, 3, 1, candidates}, available, available);
+        if (oversized.HasValue() || oversized.ErrorValue().code.Value() != AIErrors::PerceptionSpatialLimitExceeded.code.Value() ||
+            available.Remaining() != 128)
+            return false;
+
+        const auto allowed = std::span{candidates}.first(maximumCandidates);
+        AiWorkBudget depleted{1};
+        const auto deferred = sense.Evaluate({binding.agent, binding.listener, position, 3, 1, allowed}, depleted, available);
+        if (deferred.HasValue() || deferred.ErrorValue().code.Value() != AIErrors::SchedulerBudgetExhausted.code.Value())
+            return false;
+
+        const auto retried = sense.Evaluate({binding.agent, binding.listener, position, 3, 1, allowed}, available, available);
+        if (retried.HasError() || retried.Value().count != maximumCandidates)
+            return false;
+        for (std::size_t index = 0; index < maximumCandidates; ++index)
+            if (retried.Value().samples[index].candidate != index || !retried.Value().samples[index].sensed)
+                return false;
+        return true;
+    }
 }  // namespace
 
 int main() {
@@ -67,8 +96,8 @@ int main() {
                                          {7, 0, 1},
                                          PerceptionListenerTypeId::Create(83012).Value()};
     const auto sense = CreateSense(bundle->perceptionSenses[0], binding);
-    if (!sense || !CheckSense(*sense, binding)) {
-        std::cerr << "Guard proximity samples did not match the admitted input and alert radius.\n";
+    if (!sense || !CheckSense(*sense, binding) || !CheckAdmission(*sense, binding)) {
+        std::cerr << "Guard proximity failed its range, capacity, or budget check.\n";
         return 1;
     }
     return 0;
