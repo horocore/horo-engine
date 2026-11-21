@@ -2,6 +2,7 @@
 #include "Horo/AI/EnvironmentQueryPhysics.h"
 #include "PerceptionSightTestSupport.h"
 
+#include <algorithm>
 #include <array>
 #include <limits>
 #include <numbers>
@@ -222,6 +223,45 @@ namespace Horo::AI {
             REQUIRE(independent.HasValue());
             REQUIRE(independent.Value().has_value());
             CHECK(independent.Value()->filter == false);
+        }
+
+        TEST_CASE("EQS visibility preserves every candidate against one Physics publication", "[unit][ai][sight][eqs]") {
+            SightWorld physics;
+            (void)physics.Box(-5);
+            physics.Advance();
+            const auto publication = ProbePublication(physics);
+            const auto stage = QueryStageId::Create(2).Value();
+            const Physics::PhysicsQueryFilter filter{.channel = VisibilityChannel()};
+            const Physics::PhysicsRayQuery blocked{.maximumDistanceMeters = 10};
+            const Physics::PhysicsRayQuery clear{.origin = {2, 0, 0}, .maximumDistanceMeters = 10};
+            const std::array rays{clear, blocked, blocked, clear, blocked, clear, clear, blocked, clear};
+            const std::array expected{true, false, false, true, false, true, true, false, true};
+            QueryPhysicsProbe probe;
+            REQUIRE(probe.StartVisibility(physics.capability, publication, stage, rays, filter).Value());
+            CHECK_FALSE(probe.PollVisibility(publication).Value().has_value());
+            REQUIRE(physics.world->ProcessQueryBatch().HasValue());
+
+            SECTION("completed rays stay in submission order") {
+                const auto result = probe.PollVisibility(publication);
+                REQUIRE(result.HasValue());
+                REQUIRE(result.Value());
+                const auto &receipt = *result.Value();
+                CHECK(receipt.stage == stage);
+                CHECK(receipt.publication.identity.world == publication.identity.world);
+                CHECK(receipt.publication.identity.capabilityGeneration == publication.identity.capabilityGeneration);
+                CHECK(receipt.publication.sceneGeneration == publication.sceneGeneration);
+                CHECK(receipt.publication.revision == publication.revision);
+                CHECK(receipt.publication.completedTick == publication.completedTick);
+                REQUIRE(receipt.count == rays.size());
+                CHECK(std::ranges::equal(std::span{receipt.clear}.first(receipt.count), expected));
+            }
+            SECTION("the next Physics tick makes an unread batch stale") {
+                physics.Advance();
+                const auto result = probe.PollVisibility(publication);
+                REQUIRE(result.HasError());
+                CHECK(result.ErrorValue().code.Value() == Physics::PhysicsErrors::QuerySnapshotStale.code.Value());
+            }
+            CHECK_FALSE(probe.PollVisibility(publication).Value().has_value());
         }
 
         TEST_CASE("EQS Physics probe releases backpressure and retires stale or cancelled work", "[unit][ai][sight][eqs]") {

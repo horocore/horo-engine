@@ -3,6 +3,7 @@
 #include "Horo/AI/AIErrors.h"
 #include "Horo/Physics/PhysicsErrors.h"
 
+#include <algorithm>
 #include <array>
 #include <utility>
 
@@ -51,23 +52,21 @@ namespace Horo::AI {
             return Result<bool>::Success(entry.hits.empty());
         }
 
-        /** @brief Reduces only complete evidence from a single provider publication. */
-        Result<std::optional<QueryTestSample>> TranslateCompletion(const Physics::PhysicsQueryBatchCompletion &completion,
-                                                                   const QueryPhysicsPublication &publication,
-                                                                   const std::size_t commandCount, const QueryStageId stage) {
-            using Sample = Result<std::optional<QueryTestSample>>;
-            if (commandCount == 0 || completion.entries.size() != commandCount)
-                return Sample::Failure(MakeError(AIErrors::EnvironmentQueryContextInvalid));
-            std::size_t clear = 0;
-            for (const auto &entry : completion.entries) {
-                auto result = IsClear(entry, publication);
+        using Visibility = Result<std::optional<QueryPhysicsVisibilityResult>>;
+
+        /** @brief Detaches complete blocking evidence in the provider's stable command order. */
+        Visibility TranslateCompletion(const Physics::PhysicsQueryBatchCompletion &completion, const QueryPhysicsPublication &publication,
+                                       const std::size_t commandCount, const QueryStageId stage) {
+            if (commandCount == 0 || commandCount > MaximumQueryPhysicsVisibilityRays || completion.entries.size() != commandCount)
+                return Visibility::Failure(MakeError(AIErrors::EnvironmentQueryContextInvalid));
+            QueryPhysicsVisibilityResult visibility{.publication = publication, .stage = stage, .count = commandCount};
+            for (std::size_t index = 0; index < commandCount; ++index) {
+                auto result = IsClear(completion.entries[index], publication);
                 if (result.HasError())
-                    return Sample::Failure(std::move(result).ErrorValue());
-                clear += result.Value();
+                    return Visibility::Failure(std::move(result).ErrorValue());
+                visibility.clear[index] = result.Value();
             }
-            return Sample::Success(QueryTestSample{.stage = stage,
-                                                   .filter = clear != 0,
-                                                   .metric = static_cast<double>(clear) / static_cast<double>(commandCount)});
+            return Visibility::Success(visibility);
         }
     }  // namespace
 
@@ -91,11 +90,21 @@ namespace Horo::AI {
                                                   const QueryPhysicsPublication publication, const QueryStageId stage,
                                                   const std::span<const Physics::PhysicsRayQuery> rays,
                                                   const Physics::PhysicsQueryFilter filter) {
-        if (rays.empty())
-            return Result<bool>::Failure(MakeError(AIErrors::EnvironmentQueryContextInvalid));
         if (rays.size() > MaximumExposureRays)
             return Result<bool>::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
-        std::array<Physics::PhysicsQueryCommand, MaximumExposureRays> commands;
+        return StartVisibility(capability, publication, stage, rays, filter);
+    }
+
+    /** @copydoc QueryPhysicsProbe::StartVisibility */
+    Result<bool> QueryPhysicsProbe::StartVisibility(const Physics::PhysicsQueryEventCapability &capability,
+                                                    const QueryPhysicsPublication publication, const QueryStageId stage,
+                                                    const std::span<const Physics::PhysicsRayQuery> rays,
+                                                    const Physics::PhysicsQueryFilter filter) {
+        if (rays.empty())
+            return Result<bool>::Failure(MakeError(AIErrors::EnvironmentQueryContextInvalid));
+        if (rays.size() > MaximumQueryPhysicsVisibilityRays)
+            return Result<bool>::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+        std::array<Physics::PhysicsQueryCommand, MaximumQueryPhysicsVisibilityRays> commands;
         for (std::size_t index = 0; index < rays.size(); ++index)
             commands[index] = ProbeCommand(publication, rays[index], filter);
         return Queue(capability, publication, stage, std::span{commands}.first(rays.size()));
@@ -128,28 +137,42 @@ namespace Horo::AI {
 
     /** @copydoc QueryPhysicsProbe::Poll */
     Result<std::optional<QueryTestSample>> QueryPhysicsProbe::Poll(const QueryPhysicsPublication &current) {
-        using ResultType = Result<std::optional<QueryTestSample>>;
+        using Sample = Result<std::optional<QueryTestSample>>;
+        auto completed = PollVisibility(current);
+        if (completed.HasError())
+            return Sample::Failure(std::move(completed).ErrorValue());
+        if (!completed.Value())
+            return Sample::Success(std::nullopt);
+        const auto &result = *completed.Value();
+        const auto clear = std::ranges::count(std::span{result.clear}.first(result.count), true);
+        return Sample::Success(QueryTestSample{.stage = result.stage,
+                                               .filter = clear > 0,
+                                               .metric = static_cast<double>(clear) / static_cast<double>(result.count)});
+    }
+
+    /** @copydoc QueryPhysicsProbe::PollVisibility */
+    Visibility QueryPhysicsProbe::PollVisibility(const QueryPhysicsPublication &current) {
         if (!pending_)
-            return ResultType::Success(std::nullopt);
+            return Visibility::Success(std::nullopt);
         if (!SameAccess(current.identity, publication_.identity) || current.sceneGeneration != publication_.sceneGeneration ||
             current.revision != publication_.revision || current.completedTick != publication_.completedTick) {
             Cancel();
-            return ResultType::Failure(MakeError(Physics::PhysicsErrors::QuerySnapshotStale));
+            return Visibility::Failure(MakeError(Physics::PhysicsErrors::QuerySnapshotStale));
         }
         const auto live = capability_.ValidateQueryPublication(current.sceneGeneration, current.completedTick, current.revision);
         if (live.HasError()) {
             Cancel();
-            return ResultType::Failure(live.ErrorValue());
+            return Visibility::Failure(live.ErrorValue());
         }
         const auto completed = pending_->Poll();
         if (completed.HasValue() && !completed.Value())
-            return ResultType::Success(std::nullopt);
+            return Visibility::Success(std::nullopt);
         pending_.reset();
         capability_ = {};
-        const auto commandCount = std::exchange(commandCount_, 0);
+        const auto count = std::exchange(commandCount_, 0);
         if (completed.HasError())
-            return ResultType::Failure(completed.ErrorValue());
-        return TranslateCompletion(*completed.Value(), publication_, commandCount, stage_);
+            return Visibility::Failure(completed.ErrorValue());
+        return TranslateCompletion(*completed.Value(), publication_, count, stage_);
     }
 
     /** @copydoc QueryPhysicsProbe::Cancel */

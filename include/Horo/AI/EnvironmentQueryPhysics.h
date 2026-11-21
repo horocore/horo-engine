@@ -7,6 +7,9 @@
 #include "Horo/AI/EnvironmentQueryScoring.h"
 #include "Horo/Physics/PhysicsQueryEventCapability.h"
 
+#include <array>
+#include <cstddef>
+
 namespace Horo::AI {
     /** @brief Exact world binding and completed Physics publication captured by the host. */
     struct QueryPhysicsPublication final {
@@ -14,6 +17,17 @@ namespace Horo::AI {
         std::uint64_t sceneGeneration{};
         std::uint64_t revision{};
         std::uint64_t completedTick{};
+    };
+
+    /** @brief Hard adapter limit for one ordered visibility request. Physics may impose a smaller allowance. */
+    inline constexpr std::size_t MaximumQueryPhysicsVisibilityRays = 32;
+
+    /** @brief Complete visibility evidence in submitted candidate order, with its original Physics publication. */
+    struct QueryPhysicsVisibilityResult final {
+        QueryPhysicsPublication publication;
+        QueryStageId stage;
+        std::array<bool, MaximumQueryPhysicsVisibilityRays> clear{};
+        std::size_t count{};
     };
 
     /** @brief One queued tactical test against an exact Physics publication.
@@ -57,6 +71,22 @@ namespace Horo::AI {
         [[nodiscard]] Result<bool> StartExposure(const Physics::PhysicsQueryEventCapability &capability,
                                                  QueryPhysicsPublication publication, QueryStageId stage,
                                                  std::span<const Physics::PhysicsRayQuery> rays, Physics::PhysicsQueryFilter filter);
+
+        /** @brief Queues one blocking-only ray per candidate against an exact Physics publication.
+         * @param capability Live Physics client. @param publication Captured input and authority.
+         * @param stage Exact authored query stage. @param rays Ordered local-frame rays, bounded by MaximumQueryPhysicsVisibilityRays.
+         * @param filter Common collision selectors. @return True admits all rays, false for backpressure, or a typed error.
+         */
+        [[nodiscard]] Result<bool> StartVisibility(const Physics::PhysicsQueryEventCapability &capability,
+                                                   QueryPhysicsPublication publication, QueryStageId stage,
+                                                   std::span<const Physics::PhysicsRayQuery> rays, Physics::PhysicsQueryFilter filter);
+
+        /** @brief Reads complete ordered evidence while the original Physics publication remains current.
+         * @param current Exact live owner observation. @return No value while idle or pending, a complete receipt, or a typed error.
+         * @details Read on the Physics owner before advancing its publication. The detached receipt contains no live Physics
+         * state and may be passed to the next BlackboardSync by the same query owner.
+         */
+        [[nodiscard]] Result<std::optional<QueryPhysicsVisibilityResult>> PollVisibility(const QueryPhysicsPublication &current);
 
         /** @brief Drains a queued completion without waiting.
          * @param current Host-validated binding and publication still authorized for this probe.
