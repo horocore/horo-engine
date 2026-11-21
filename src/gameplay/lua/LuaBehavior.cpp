@@ -576,6 +576,11 @@ namespace Horo::Gameplay {
         return ReplaceCompatible(std::move(candidate).Value());
     }
 
+    /** @copydoc LuaBehaviorProgram::SourceDigest */
+    Sha256Digest LuaBehaviorProgram::SourceDigest() const noexcept {
+        return ComputeSha256(std::as_bytes(std::span{impl_->source}));
+    }
+
     /** @copydoc LuaBehaviorProgram::Revision */
     std::uint64_t LuaBehaviorProgram::Revision() const noexcept {
         return impl_->revision;

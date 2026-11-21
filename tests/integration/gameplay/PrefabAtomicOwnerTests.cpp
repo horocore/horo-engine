@@ -1441,11 +1441,10 @@ namespace Horo::Application::PrefabAtomicTest {
                 character.collision.queryChannel = Physics::Settings().simulation.schema->QueryChannels().front().id;
                 character.collision.defaultMaterial =
                     Runtime::PhysicsColliderMaterialBinding{Physics::PhysicsMaterialSlotId::FromValue(1), material};
-                source.Add(
-                    {.object = {3},
-                     .localTransform = {.translation = {0, 0.495F, 0}},
-                     .components = {.characterController = character,
-                                    .behaviors = {{{1}, BehaviorType("game.tests.character_client"), 1, true, {{"continuous", true}}}}}});
+                source.Add({.object = {3},
+                            .localTransform = {.translation = {0, 0.495F, 0}},
+                            .components = {.characterController = character,
+                                           .behaviors = {{{1}, BehaviorType("game.tests.character_client"), 1, true}}}});
                 source.Add({.object = {4},
                             .components = {.rigidBody = Runtime::RigidBodyComponent{.id = {20}, .body = {200}},
                                            .colliders = {Physics::Collider(21, 201, 4, 200, material,

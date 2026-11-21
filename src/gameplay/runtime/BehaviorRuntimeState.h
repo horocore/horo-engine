@@ -99,6 +99,7 @@ namespace Horo::Gameplay {
 
             Impl &runtime;
             Instance &instance;
+            BehaviorFixedEvidence *fixedEvidence{}; /**< Caller-owned opt-in diagnostic, valid only during fixed dispatch. */
             std::span<const GameplayInputAction> input;
             Runtime::SceneCommandBuffer &commands;
             bool allowSimulationMutation{true};
@@ -152,6 +153,12 @@ namespace Horo::Gameplay {
                     return Result<void>::Failure(
                         MakeError(GameplayErrors::InvalidBehaviorComponent, "This lifecycle phase cannot mutate simulation transforms."));
                 commands.SetLocalTransform(instance.entity, transform);
+                if (fixedEvidence) {
+                    if (fixedEvidence->transformCount < fixedEvidence->transforms.size())
+                        fixedEvidence->transforms[fixedEvidence->transformCount++] = {instance.entity, transform};
+                    else
+                        fixedEvidence->truncated = true;
+                }
                 return Result<void>::Success();
             }
 

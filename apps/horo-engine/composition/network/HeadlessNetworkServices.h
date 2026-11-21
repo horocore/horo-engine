@@ -120,6 +120,14 @@ namespace Horo::Application::Internal {
         std::vector<AI::DecisionQueryPublication> publications;
     };
 
+    /** @brief Gameplay-phase observations keyed by stable authored objects rather than runtime handles. */
+    struct HeadlessReplayGameplay final {
+        GameplayReplayProfile profile;
+        std::size_t callbacks{};
+        bool sceneCommandsQueued{};
+        std::vector<std::pair<Runtime::SceneObjectId, Math::Transform>> transforms;
+    };
+
     /** @brief Original decision evidence and its reference-aware canonical encoding owned after fixed commit. */
     struct HeadlessDecisionReplayData final {
         AI::AiSceneDecisionReplayCapture evidence;
@@ -132,6 +140,7 @@ namespace Horo::Application::Internal {
         std::optional<HeadlessReplayPhysics> physics; /**< Absent for explicit Null Physics. */
         std::optional<HeadlessReplayPerception> perception;
         std::optional<HeadlessReplayQueries> queries;
+        std::optional<HeadlessReplayGameplay> gameplay;
     };
 
     /** @brief Product-owned mailbox for one exact committed tick; no concurrent access or file storage. */
@@ -164,6 +173,9 @@ namespace Horo::Application::Internal {
         void Abort(const Runtime::FixedStepContext &context) noexcept;
         /** @brief Clears only the exact opt-in held by the pinned Scene owner. */
         void DiscardArm() noexcept;
+        /** @brief Supplies optional storage only for the selected fixed attempt and exact World. */
+        Gameplay::BehaviorFixedEvidence *ObserveGameplay(const HeadlessNetworkDetail::WorldRecord &,
+                                                         const Runtime::FixedStepContext &) noexcept;
 
         HeadlessDecisionReplaySelection selection_;
         const std::thread::id owner_{std::this_thread::get_id()};
@@ -172,6 +184,7 @@ namespace Horo::Application::Internal {
         std::uint64_t attempt_{};
         std::optional<std::uint64_t> previousPhysicsTick_;
         std::optional<HeadlessReplayPerception> perception_;
+        std::optional<Gameplay::BehaviorFixedEvidence> gameplay_;
         std::optional<Capture> pending_;
         std::optional<Capture> committed_;
         bool published_{};

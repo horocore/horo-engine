@@ -81,7 +81,8 @@ namespace Horo::Gameplay {
     }
 
     /** @copydoc BehaviorRuntime::FixedUpdate */
-    Result<void> BehaviorRuntime::FixedUpdate(const std::span<const GameplayInputAction> input, const FixedDeltaTime delta) const {
+    Result<void> BehaviorRuntime::FixedUpdate(const std::span<const GameplayInputAction> input, const FixedDeltaTime delta,
+                                              BehaviorFixedEvidence *evidence) const {
         impl_->vfxStructuralReceipt.reset();
         if (impl_->SceneView().RuntimeId() != impl_->sceneIdentity) {
             impl_->ShutdownNow();
@@ -95,12 +96,14 @@ namespace Horo::Gameplay {
             return Result<void>::Success();
         Runtime::SceneCommandBuffer commands;
         for (std::size_t index = 0; index < impl_->instances.size(); ++index)
-            if (auto updated = RunFixedInstance(index, input, delta, commands); updated.HasError())
+            if (auto updated = RunFixedInstance(index, input, delta, commands, evidence); updated.HasError())
                 return updated;
         if (!commands.Empty()) {
             Result<void> committed = impl_->CommitCommands(std::move(commands));
             if (committed.HasError())
                 return Result<void>::Failure(committed.ErrorValue());
+            if (evidence)
+                evidence->sceneCommandsQueued = true;
         }
         return Result<void>::Success();
     }
@@ -111,11 +114,12 @@ namespace Horo::Gameplay {
     }
 
     Result<void> BehaviorRuntime::RunFixedInstance(std::size_t index, std::span<const GameplayInputAction> input, FixedDeltaTime delta,
-                                                   Runtime::SceneCommandBuffer &commands) const {
+                                                   Runtime::SceneCommandBuffer &commands, BehaviorFixedEvidence *evidence) const {
         auto &instance = impl_->instances[index];
         if (!instance.component.enabled)
             return Result<void>::Success();
         Impl::ContextBackend backend{*impl_, instance, input, commands};
+        backend.fixedEvidence = evidence;
         BehaviorContext context{backend};
         if (!instance.started) {
             instance.implementation->OnStart(context);
@@ -130,6 +134,8 @@ namespace Horo::Gameplay {
                 instance.implementation->OnInputAction(context, action);
         }
         instance.implementation->OnFixedUpdate(context, delta);
+        if (evidence)
+            ++evidence->callbacks;
         return Result<void>::Success();
     }
 

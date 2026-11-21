@@ -19,6 +19,7 @@ namespace Horo::Application::Internal {
         constexpr std::uint32_t SceneInputSchemaVersion = 1;
         constexpr std::uint32_t PerceptionInputSchemaVersion = 1;
         constexpr std::uint32_t QueryPublicationSchemaVersion = 1;
+        constexpr std::uint32_t GameplaySchemaVersion = 1;
         constexpr std::uint32_t RigidBodyMotionSchemaVersion = 1;
         constexpr std::uint32_t CharacterMotionSchemaVersion = 1;
 
@@ -31,16 +32,9 @@ namespace Horo::Application::Internal {
         /** @brief Describes supported and omitted boundaries even when trace records were captured for diagnostics. */
         Json EncodeCoverage(const HeadlessDecisionReplayData &data, Json &recorded) {
             constexpr auto &names = HeadlessReplayBoundaryNames;
-            const std::array deterministic{true,
-                                           data.perception.has_value(),
-                                           data.queries.has_value(),
-                                           data.queries.has_value(),
-                                           true,
-                                           false,
-                                           false,
-                                           data.physics.has_value(),
-                                           data.characterMotion.has_value(),
-                                           true};
+            const std::array
+                deterministic{true,  data.perception.has_value(), data.queries.has_value(), data.queries.has_value(),         true,
+                              false, data.gameplay.has_value(),   data.physics.has_value(), data.characterMotion.has_value(), true};
             static_assert(deterministic.size() == names.size());
             auto boundaries = Json::object();
             for (std::size_t index = 0; index < names.size(); ++index) {
@@ -88,6 +82,39 @@ namespace Horo::Application::Internal {
                     {"profile", FormatSha256(queries.profile)},
                     {"revision", std::to_string(revision)},
                     {"digest", FormatSha256(HashRecords(records))},
+                    {"records", std::move(records)}};
+        }
+
+        /** @brief Encodes accepted Gameplay transform commands in their original submission order. */
+        Json EncodeGameplayRecords(const HeadlessReplayGameplay &gameplay) {
+            auto transforms = Json::array();
+            for (const auto &[object, local] : gameplay.transforms) {
+                const auto &position = local.translation;
+                const auto &rotation = local.rotation;
+                const auto &scale = local.scale;
+                transforms.push_back({{"objectId", std::to_string(object.value)},
+                                      {"translation", {position.x, position.y, position.z}},
+                                      {"rotation", {rotation.x, rotation.y, rotation.z, rotation.w}},
+                                      {"scale", {scale.x, scale.y, scale.z}}});
+            }
+            return {{"callbacks", gameplay.callbacks},
+                    {"sceneCommandsQueued", gameplay.sceneCommandsQueued},
+                    {"transforms", std::move(transforms)}};
+        }
+
+        /** @brief Declares the exact observed phase and the omitted opaque state. */
+        Json EncodeGameplay(const HeadlessReplayGameplay &gameplay) {
+            auto records = EncodeGameplayRecords(gameplay);
+            auto omissions = Json::array({"private-module-state", "external-gameplay-inputs", "deferred-scene-publication"});
+            if (gameplay.profile.native)
+                omissions.push_back("native-image-content");
+            return {{"schemaVersion", GameplaySchemaVersion},
+                    {"scope", "fixed-transform-submissions"},
+                    {"source", gameplay.profile.native ? "native" : "lua"},
+                    {"revision", std::to_string(gameplay.profile.revision)},
+                    {"profile", FormatSha256(gameplay.profile.digest)},
+                    {"digest", FormatSha256(HashRecords(records))},
+                    {"omissions", std::move(omissions)},
                     {"records", std::move(records)}};
         }
 
@@ -202,6 +229,8 @@ namespace Horo::Application::Internal {
                                {"records", std::move(records)}}}};
                 if (data.physics)
                     payload["physics"] = EncodePhysics(*data.physics);
+                if (data.gameplay)
+                    payload["gameplay"] = EncodeGameplay(*data.gameplay);
                 if (const auto &queries = data.queries) {
                     payload["queryPublication"] = EncodeQueryBoundary(*queries, false, capture.tick);
                     payload["blackboardSync"] = EncodeQueryBoundary(*queries, true, capture.blackboardRevision);
@@ -266,6 +295,9 @@ namespace Horo::Application::Internal {
             if (const auto &perception = data.perception)
                 result.Observe(PerceptionInput, PerceptionInputSchemaVersion, data.sceneInput,
                                {data.definition.value, perception->revision}, perception->digest);
+            if (const auto &gameplay = data.gameplay)
+                result.Observe(Gameplay, GameplaySchemaVersion, gameplay->profile.digest, {gameplay->profile.revision, data.evidence.tick},
+                               HashRecords(EncodeGameplayRecords(*gameplay)));
             if (const auto &queries = data.queries) {
                 result.Observe(QueryPublication, QueryPublicationSchemaVersion, queries->profile,
                                {data.evidence.subject.Value(), data.evidence.tick}, HashRecords(EncodeQueries(*queries, false)));

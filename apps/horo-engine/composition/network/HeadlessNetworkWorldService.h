@@ -823,7 +823,9 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 if (const auto tracked = owners_->fixed->TrackGameplay(record_, context); tracked.HasError())
                     return tracked;
             }
-            return gameplay_->FixedTick(context);
+            const auto &replay = owners_->configured->decisionReplay;
+            auto *observed = replay ? replay->ObserveGameplay(*record_, context) : nullptr;
+            return gameplay_->FixedTick(context, {}, observed);
         }
 
         /** @brief Executes the opted-in canonical AI phases before configured gameplay on the same fixed clock. */

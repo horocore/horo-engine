@@ -29,6 +29,12 @@ namespace Horo::Runtime {
 }
 
 namespace Horo::Application::Internal {
+    /** @brief Compatibility metadata from the active native or Lua behavior image. */
+    struct GameplayReplayProfile final {
+        Sha256Digest digest;
+        std::uint64_t revision{};
+        bool native{};
+    };
     /** @brief Trusted host policy resolved before invoking project code; no ambient grant. */
     enum class GameplayPhysicsPermission {
         Denied,
@@ -184,14 +190,17 @@ namespace Horo::Application::Internal {
         /** @brief Dispatch the actual host-committed semantic Input through the same Gameplay/Scene command owner.
          * @param input Existing canonical Input snapshot, borrowed only during this call. @param delta Existing fixed quantum.
          * @return Original callback/transaction failure; no Input or Scene authority is issued. */
-        [[nodiscard]] Result<void> FixedUpdate(std::span<const Gameplay::GameplayInputAction> input, Gameplay::FixedDeltaTime delta);
+        [[nodiscard]] Result<void> FixedUpdate(std::span<const Gameplay::GameplayInputAction> input, Gameplay::FixedDeltaTime delta,
+                                               Gameplay::BehaviorFixedEvidence *evidence = nullptr);
         /** @brief Advances exact host tick addressing then invokes Gameplay callbacks. @param context Current host tick.
          * @return Tick/callback failure; admission is revoked on callback failure. */
         [[nodiscard]] Result<void> FixedTick(const Runtime::FixedStepContext &context);
         /** @param context Exact existing fixed dispatch. @param input Existing host-committed semantic Input.
          * @return Original tick/callback failure through the same fixed owner. */
-        [[nodiscard]] Result<void> FixedTick(const Runtime::FixedStepContext &context,
-                                             std::span<const Gameplay::GameplayInputAction> input);
+        [[nodiscard]] Result<void> FixedTick(const Runtime::FixedStepContext &context, std::span<const Gameplay::GameplayInputAction> input,
+                                             Gameplay::BehaviorFixedEvidence *evidence = nullptr);
+        /** @brief Reads the admitted behavior source compatibility without looking up or reloading a module. */
+        [[nodiscard]] GameplayReplayProfile ReplayProfile() const noexcept;
         /** @brief Advances prefab preparation, commits the actual Scene transaction, and observes its completion.
          * @param phase Host lifecycle phase.
          * @param context Current immutable frame context.

@@ -8,12 +8,28 @@
 #include "Horo/Gameplay/BehaviorRegistry.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
+#include <array>
 #include <cstddef>
 #include <memory>
 #include <optional>
 #include <vector>
 
 namespace Horo::Gameplay {
+    /** @brief One transform command accepted from an enabled Gameplay callback. */
+    struct BehaviorTransformSubmission final {
+        Runtime::EntityRef entity;
+        Math::Transform local;
+    };
+
+    /** @brief Bounded optional observation of one successful Gameplay phase. */
+    struct BehaviorFixedEvidence final {
+        static constexpr std::size_t MaximumTransforms = 64;
+        std::array<BehaviorTransformSubmission, MaximumTransforms> transforms{};
+        std::size_t transformCount{};
+        std::size_t callbacks{};
+        bool sceneCommandsQueued{};
+        bool truncated{};
+    };
     enum class BehaviorRestoreServices : std::uint32_t;
 
     /** @brief Host-issued animation access for an exact frozen behavior type. */
@@ -111,8 +127,11 @@ namespace Horo::Gameplay {
         [[nodiscard]] std::shared_ptr<const Runtime::SceneStructuralReceipt> VfxStructuralReceipt() const noexcept;
 
         /** @brief Delivers queued events/input, runs one deterministic tick, and commits mutations.
-         * @param input Current tick input. @param delta Validated fixed step. @return Success or a lifecycle/callback error. */
-        [[nodiscard]] Result<void> FixedUpdate(std::span<const GameplayInputAction> input, FixedDeltaTime delta) const;
+         * @param input Current tick input. @param delta Validated fixed step.
+         * @param evidence Optional fresh diagnostic storage, valid only for this call. Ignore it on failure.
+         * @return Success or a lifecycle/callback error. */
+        [[nodiscard]] Result<void> FixedUpdate(std::span<const GameplayInputAction> input, FixedDeltaTime delta,
+                                               BehaviorFixedEvidence *evidence = nullptr) const;
         /** @brief Runs presentation-only callbacks without committing simulation mutation.
          * @param delta Current presentation frame delta. */
         void PresentationUpdate(FrameDeltaTime delta) const;
@@ -161,7 +180,7 @@ namespace Horo::Gameplay {
         [[nodiscard]] static Result<void> CheckRestoreServices(const Impl &, BehaviorRestoreServices);
         [[nodiscard]] Result<void> RestoreReloadInstance(std::size_t, const BehaviorInstanceReloadState &) const;
         [[nodiscard]] Result<void> RunFixedInstance(std::size_t, std::span<const GameplayInputAction>, FixedDeltaTime,
-                                                    Runtime::SceneCommandBuffer &) const;
+                                                    Runtime::SceneCommandBuffer &, BehaviorFixedEvidence *) const;
         /** @brief Activates instances and rolls back failed factory/lifecycle construction.
          * @param impl Complete host-routed state with admitted scopes.
          * @return Active runner or original typed activation/rollback failure.

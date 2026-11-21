@@ -446,12 +446,12 @@ namespace Horo::Application::Internal {
 
     /** @copydoc GameplayWorldComposition::FixedUpdate(std::span<const Gameplay::GameplayInputAction>,Gameplay::FixedDeltaTime) */
     Result<void> GameplayWorldComposition::FixedUpdate(const std::span<const Gameplay::GameplayInputAction> input,
-                                                       const Gameplay::FixedDeltaTime delta) {
+                                                       const Gameplay::FixedDeltaTime delta, Gameplay::BehaviorFixedEvidence *evidence) {
         if (!behaviors_)
             return Result<void>::Failure(MakeError(Gameplay::GameplayErrors::PhysicsUnavailable));
         if (vfxScene_ && !vfxTickOpen_)
             return Result<void>::Failure(MakeError(Gameplay::GameplayVfxErrors::ScopeInvalid));
-        const auto result = behaviors_->FixedUpdate(input, delta);
+        const auto result = behaviors_->FixedUpdate(input, delta, evidence);
         if (result.HasError())
             Shutdown();
         return result;
@@ -464,7 +464,8 @@ namespace Horo::Application::Internal {
 
     /** @copydoc GameplayWorldComposition::FixedTick(const Runtime::FixedStepContext&,std::span<const Gameplay::GameplayInputAction>) */
     Result<void> GameplayWorldComposition::FixedTick(const Runtime::FixedStepContext &context,
-                                                     const std::span<const Gameplay::GameplayInputAction> input) {
+                                                     const std::span<const Gameplay::GameplayInputAction> input,
+                                                     Gameplay::BehaviorFixedEvidence *evidence) {
         if (auto begun = BeginVfxTick(context); begun.HasError())
             return begun;
         tick_ = context.simulationTick;
@@ -474,7 +475,29 @@ namespace Horo::Application::Internal {
                 return advanced;
             }
         }
-        return FixedUpdate(input, Gameplay::FixedDeltaTime{static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0});
+        return FixedUpdate(input, Gameplay::FixedDeltaTime{static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0},
+                           evidence);
+    }
+
+    /** @copydoc GameplayWorldComposition::ReplayProfile */
+    GameplayReplayProfile GameplayWorldComposition::ReplayProfile() const noexcept {
+        const auto hashText = [](const std::string_view text) {
+            return ComputeSha256(std::as_bytes(std::span{text}));
+        };
+        const auto profile = [](const Sha256Digest &left, const Sha256Digest &right, const std::uint64_t revision, const bool native) {
+            std::array<std::byte, 9> identity{};
+            identity[0] = static_cast<std::byte>(native);
+            for (std::size_t byte = 0; byte < sizeof(revision); ++byte)
+                identity[byte + 1] = static_cast<std::byte>(revision >> (byte * 8));
+            const std::array<std::span<const std::byte>, 3> parts{std::as_bytes(std::span{left.bytes}),
+                                                                  std::as_bytes(std::span{right.bytes}), identity};
+            return GameplayReplayProfile{ComputeSha256Fragments(parts), revision, native};
+        };
+        if (native_)
+            return profile(hashText(native_->ModuleId()), hashText(native_->BuildFingerprint()), native_->DescriptorRevision(), true);
+        if (script_)
+            return profile(hashText(script_->Descriptor().typeId.Value()), script_->SourceDigest(), script_->Revision(), false);
+        return {};
     }
 
     /** @copydoc GameplayWorldComposition::OnPhase */

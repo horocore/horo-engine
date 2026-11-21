@@ -244,13 +244,45 @@ namespace Horo::Application::Internal {
             }
         }
 
+        /** @brief Copies the actual dispatched Gameplay phase using stable authored transform recipients. */
+        Result<HeadlessReplayGameplay> CaptureGameplayReplay(const GameplayWorldComposition &owner,
+                                                             const Gameplay::BehaviorFixedEvidence &evidence,
+                                                             const HeadlessNetworkDetail::ReplayAuthoredScene &authored,
+                                                             const Runtime::RuntimeSceneView &scene) {
+            using Capture = Result<HeadlessReplayGameplay>;
+            const auto profile = owner.ReplayProfile();
+            if (evidence.truncated || profile.revision == 0 || !scene.SameIncarnation(authored.initialScene))
+                return Capture::Failure(MakeError(AI::AIErrors::CanonicalStateInvalid, "Gameplay replay evidence is incomplete."));
+            try {
+                HeadlessReplayGameplay result{profile, evidence.callbacks, evidence.sceneCommandsQueued, {}};
+                result.transforms.reserve(evidence.transformCount);
+                for (const auto &command : std::span{evidence.transforms}.first(evidence.transformCount)) {
+                    const auto entity = scene.Get(command.entity);
+                    if (entity.HasError() || !IsOriginalReplayEntity(authored, command.entity.entity) || !entity.Value().authoredObject)
+                        return Capture::Failure(MakeError(AI::AIErrors::CanonicalRestoreStale,
+                                                          "Gameplay replay requires original authored transform recipients."));
+                    result.transforms.emplace_back(*entity.Value().authoredObject, command.local);
+                }
+                return Capture::Success(std::move(result));
+            } catch (const std::bad_alloc &) {
+                return Capture::Failure(MakeError(AI::AIErrors::DecisionAssetStorageUnavailable));
+            }
+        }
+
         /** @brief Adds selected native evidence to an otherwise complete detached replay capture. */
         HeadlessDecisionReplay::Capture CaptureNativeReplay(HeadlessDecisionReplayData data, HeadlessNetworkDetail::WorldRecord &world,
                                                             const HeadlessNetworkDetail::ReplayAuthoredScene &authored,
                                                             const Runtime::RuntimeSceneView &scene,
                                                             const Runtime::FixedStepContext &context,
-                                                            const std::optional<std::uint64_t> previousPhysicsTick) {
+                                                            const std::optional<std::uint64_t> previousPhysicsTick,
+                                                            const std::optional<Gameplay::BehaviorFixedEvidence> &gameplay) {
             using Capture = HeadlessDecisionReplay::Capture;
+            if (gameplay && world.activeGameplay) {
+                auto observed = CaptureGameplayReplay(*world.activeGameplay, *gameplay, authored, scene);
+                if (observed.HasError())
+                    return Capture::Failure(std::move(observed).ErrorValue());
+                data.gameplay = std::move(observed).Value();
+            }
             if (world.decisionQueries) {
                 const auto publications = world.decisionQueries->ReadReplay(context.simulationTick);
                 if (publications.HasError())
@@ -320,6 +352,7 @@ namespace Horo::Application::Internal {
             return;
         attemptWorld_ = &world;
         attempt_ = context.attemptNumber;
+        gameplay_.reset();
         perception_.reset();
         if (const auto spatial = world.perception.Current()) {
             const auto scene = world.scenes->ActiveScene();
@@ -358,6 +391,14 @@ namespace Horo::Application::Internal {
         }
     }
 
+    /** @copydoc HeadlessDecisionReplay::ObserveGameplay */
+    Gameplay::BehaviorFixedEvidence *HeadlessDecisionReplay::ObserveGameplay(const HeadlessNetworkDetail::WorldRecord &world,
+                                                                             const Runtime::FixedStepContext &context) noexcept {
+        if (owner_ != std::this_thread::get_id() || !armedAgent_.IsValid() || attemptWorld_ != &world || attempt_ != context.attemptNumber)
+            return nullptr;
+        return &gameplay_.emplace();
+    }
+
     void HeadlessDecisionReplay::Prepare(HeadlessNetworkDetail::WorldRecord &world, const Runtime::FixedStepContext &context) {
         if (owner_ != std::this_thread::get_id() || pending_ || attemptWorld_ != &world || attempt_ != context.attemptNumber ||
             selection_.tick != context.simulationTick)
@@ -375,7 +416,7 @@ namespace Horo::Application::Internal {
         auto captured = EncodeReplayCapture(std::move(evidence).Value(), *world.replayAuthoredScene, *scene, perception_);
         pending_ = captured.HasError() ? std::move(captured)
                                        : CaptureNativeReplay(std::move(captured).Value(), world, *world.replayAuthoredScene, *scene,
-                                                             context, previousPhysicsTick_);
+                                                             context, previousPhysicsTick_, gameplay_);
     }
 
     void HeadlessDecisionReplay::Commit(const Runtime::FixedStepContext &context) noexcept {

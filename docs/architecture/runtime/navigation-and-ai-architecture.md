@@ -3384,7 +3384,12 @@ positions and disclosure policy before sensing. Provider outputs and private
 state are listed as omissions. For built-in point queries, the report records
 the selected agent's terminal result and its later successful Blackboard write
 at their respective ticks. The verified cooked query inventory identifies the
-comparison profile. Input playback requires an additional input recording.
+comparison profile. Gameplay evidence records fixed callbacks and authored
+transform submissions in command order. The source profile uses the active
+native module's descriptor and SDK build identity, or the admitted Lua source
+and behavior identity. Native image bytes, module-private state, deferred Scene
+publication, and external Gameplay inputs remain explicit omissions. Input
+playback requires an additional input recording.
 
 Use `horo-engine --compare-ai-replay <recorded evidence.json> <replayed evidence.json>`
 to compare two single-tick reports with matching coverage and content identities.

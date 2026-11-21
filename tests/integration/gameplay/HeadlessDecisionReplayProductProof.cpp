@@ -142,6 +142,21 @@ namespace Horo::Application::PrefabAtomicTest {
                 CHECK(bodies.at(1).at("linearVelocityMetersPerSecond").at(1).get<float>() < 0);
             }
             CHECK(coverage.at("navigation") == "omitted");
+            CHECK(coverage.at("gameplay") == (data.gameplay ? "deterministic" : "omitted"));
+            if (const auto &gameplay = data.gameplay) {
+                const auto &section = artifact.at("gameplay");
+                CHECK(section.at("source") == "native");
+                CHECK(section.at("profile") == FormatSha256(gameplay->profile.digest));
+                const auto &records = section.at("records");
+                CHECK(records.at("callbacks") == (data.characterMotion ? 1 : 0));
+                if (data.characterMotion) {
+                    CHECK(records.at("sceneCommandsQueued") == true);
+                    const auto &transforms = records.at("transforms");
+                    REQUIRE(transforms.size() == 1);
+                    CHECK(transforms.at(0).at("objectId") == "3");
+                    CHECK(transforms.at(0).at("translation").at(0) == 21);
+                }
+            }
             CHECK(coverage.at("query-publication") == (data.queries ? "deterministic" : "omitted"));
             if (data.queries) {
                 const bool terminal = data.evidence.tick == 3;
@@ -208,6 +223,13 @@ namespace Horo::Application::PrefabAtomicTest {
             REQUIRE(character.Value());
             CHECK(character.Value()->tick == data.evidence.tick);
             CHECK(character.Value()->boundary == AI::AiReplayBoundary::AchievedCharacterMotion);
+            REQUIRE(changed.gameplay);
+            ++changed.gameplay->callbacks;
+            const auto gameplay = Internal::CompareHeadlessReplayCaptures(data, changed);
+            REQUIRE(gameplay.HasValue());
+            REQUIRE(gameplay.Value());
+            CHECK(gameplay.Value()->boundary == AI::AiReplayBoundary::Gameplay);
+            changed.gameplay = data.gameplay;
             REQUIRE(changed.physics);
             REQUIRE_FALSE(changed.physics->bodies.empty());
             changed.physics->bodies.back().pose.translation.y -= 1.0F;
@@ -348,6 +370,7 @@ namespace Horo::Application::PrefabAtomicTest {
         INFO((captured->HasError() ? captured->ErrorValue().message : "success"));
         REQUIRE(captured->HasValue());
         const auto &data = captured->Value();
+        CHECK(data.gameplay.has_value() == gameplay.has_value());
         CHECK(data.definitionRevision == definitionRevision);
         CHECK(data.sceneInput == sceneInputDigest);
         CHECK(data.perception.has_value() == hasPerception);

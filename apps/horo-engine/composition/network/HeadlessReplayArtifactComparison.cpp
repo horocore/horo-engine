@@ -168,6 +168,20 @@ namespace Horo::Application::Internal {
             if (file.at("format") != "horo-ai-replay-evidence" || file.at("version") != 1)
                 return Outcome::Failure(MakeError(AI::AIErrors::CanonicalSchemaUnsupported));
             auto result = ReadRequired(file);
+            if (file.contains("gameplay")) {
+                const auto &gameplay = file.at("gameplay");
+                const auto &records = gameplay.at("records");
+                const auto &transforms = records.at("transforms");
+                if (gameplay.at("schemaVersion") != 1 || gameplay.at("scope") != "fixed-transform-submissions" || !transforms.is_array() ||
+                    transforms.size() > 64 || !records.at("callbacks").is_number_unsigned() ||
+                    !records.at("sceneCommandsQueued").is_boolean())
+                    throw InvalidEvidence{};
+                const auto digest = HashJson(records);
+                if (digest != ReadDigest(gameplay.at("digest")))
+                    throw InvalidEvidence{};
+                result.At(Gameplay) = {{AI::AiReplayCoverage::Deterministic, 1, ReadDigest(gameplay.at("profile"))},
+                                       {{ReadIdentity(gameplay.at("revision")), result.tick}, digest}};
+            }
             if (file.contains("queryPublication") || file.contains("blackboardSync")) {
                 result.At(QueryPublication) = ReadQueryBoundary(file.at("queryPublication"), result.agent);
                 result.At(BlackboardSync) = ReadQueryBoundary(file.at("blackboardSync"), result.agent);
