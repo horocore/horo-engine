@@ -336,7 +336,8 @@ namespace Horo::Editor::Proposals {
         Deleted,
         DeleteRecovery,
         Renamed,
-        RenameRecovery
+        RenameRecovery,
+        FileGroupRecovery
     };
 
     struct SourceReviewAudit;
@@ -366,6 +367,7 @@ namespace Horo::Editor::Proposals {
         std::shared_ptr<const SourceReviewAudit> audit;
         std::vector<SourceDocumentSnapshot> drafts;
         std::vector<SourceDocumentSnapshot> renames;
+        std::size_t deletions{};
     };
 
     /** @brief One accepted creation and its logical initial source revision, detached from the editor owner. */
@@ -397,6 +399,7 @@ namespace Horo::Editor::Proposals {
     struct PreparedSourceTextEdit final {
         SourceDocumentSnapshot source;
         std::string replacement;
+        std::uint32_t file{};
     };
 
     /** @brief Accepted operations, shared attribution and exact leases for worker-to-editor handoff. */
@@ -418,13 +421,15 @@ namespace Horo::Editor::Proposals {
          */
         [[nodiscard]] Result<SourceReviewApplied> CommitObserved(SourceDocumentService &documents, const DurableFileSystem &files,
                                                                  CancellationToken cancellation = {}) const;
-        /** @brief Applies accepted text, draft creations and renames as one group.
+        /** @brief Applies accepted text, drafts and file moves as one group.
          * @param open Source document and routing owner. @param files Worker filesystem authority.
-         * @param cancellation Current workspace admission. @return Complete group or a conflict without publication.
-         * @pre The caller holds project mutation authority if the group contains renames.
+         * @param cancellation Current workspace admission. @param deletions Reserved Trash payloads in proposal order.
+         * @return Complete group or a conflict without publication.
+         * @pre The caller holds project mutation authority for physical moves.
          */
         [[nodiscard]] Result<SourceReviewApplied> CommitFileGroup(SourceFileOpenService &open, DurableFileSystem &files,
-                                                                  CancellationToken cancellation = {}) const;
+                                                                  CancellationToken cancellation = {},
+                                                                  std::span<const SourceReviewDeletion> deletions = {}) const;
 
         /** @brief Views accepted text operations in canonical proposal order. */
         [[nodiscard]] std::span<const PreparedSourceTextEdit> TextEdits() const noexcept {
@@ -464,6 +469,8 @@ namespace Horo::Editor::Proposals {
         [[nodiscard]] bool HasAcceptedChanges() const noexcept;
         /** @brief Reports whether the given canonical file has any accepted unit. */
         [[nodiscard]] bool HasAcceptedChanges(std::size_t file) const noexcept;
+        /** @brief Counts files with at least one accepted operation or hunk. */
+        [[nodiscard]] std::size_t AcceptedFileCount() const noexcept;
         /** @brief Records one atomic decision. Acceptance requires a current, conflict-free plan for every selected operation.
          * @param plan The latest defensive workspace plan. @param target Whole proposal, file or edit hunk.
          * @param choice Explicit review-only choice. @return Success or typed failure, with no partial decisions or source writes.

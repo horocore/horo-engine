@@ -116,28 +116,114 @@ namespace Horo::Editor {
                                                                                                : FailureFeedback(error, fallback);
         }
 
+        /** @brief Owns unpublished Trash attempts and leaves any visible payload available for recovery. */
+        class ReviewTrash final {
+        public:
+            explicit ReviewTrash(DurableFileSystem &files) : files_(files) {}
+
+            ~ReviewTrash() noexcept {
+                if (preserve_)
+                    return;
+                for (const auto &attempt : attempts_) {
+                    try {
+                        std::error_code error;
+                        if (attempt.directory.empty() || std::filesystem::canonical(attempt.directory, error) != attempt.directory || error)
+                            continue;
+                        const auto payload = files_.InspectEntry(attempt.directory / "payload");
+                        if (payload.HasValue() && !payload.Value())
+                            RetireEmptyTrash(files_, attempt.manifest, attempt.directory,
+                                             attempt.witness && TrashFileIdentity(files_, attempt.manifest) == attempt.witness);
+                    } catch (...) {
+                        // A failed cleanup leaves the reserved directory available for inspection.
+                    }
+                }
+            }
+
+            /** @brief Reserves and records one source's original name before any move begins. */
+            Result<std::filesystem::path> Reserve(const std::filesystem::path &root, const SourceDocumentId &source) {
+                using Output = Result<std::filesystem::path>;
+                auto &attempt = attempts_.emplace_back();
+                auto directory = PrepareTrash(root, files_);
+                if (directory.HasError())
+                    return directory;
+                attempt.directory = std::move(directory).Value();
+                attempt.manifest = attempt.directory / "source-review-manifest";
+                bool created{};
+                const bool written = WriteTrashManifest(files_, attempt.manifest, source, created);
+                if (created)
+                    attempt.witness = TrashFileIdentity(files_, attempt.manifest);
+                if (!written || !attempt.witness)
+                    return Output::Failure(MakeError(SourceDocumentErrors::ReadFailed));
+                return Output::Success(attempt.directory / "payload");
+            }
+
+            /** @brief Retains all manifests for a successful group or uncertain rollback. */
+            void Preserve() noexcept {
+                preserve_ = true;
+            }
+
+        private:
+            struct Attempt final {
+                std::filesystem::path directory;
+                std::filesystem::path manifest;
+                std::optional<FileEntryIdentity> witness;
+            };
+
+            DurableFileSystem &files_;
+            std::vector<Attempt> attempts_;
+            bool preserve_{};
+        };
+
+        /** @brief Prepares one owned Trash payload per accepted deletion while holding project authority. */
+        Result<Proposals::SourceReviewApplied> ApplyWithTrash(const Proposals::PreparedSourceReview &review, SourceFileOpenService &open,
+                                                              DurableFileSystem &files, const CancellationToken &lifetime) {
+            using Output = Result<Proposals::SourceReviewApplied>;
+            try {
+                ReviewTrash trash{files};
+                std::vector<SourceReviewDeletion> deletions;
+                deletions.reserve(review.FileOperations().size());
+                for (const auto &operation : review.FileOperations()) {
+                    const auto *deletion = std::get_if<Proposals::PreparedSourceDelete>(&operation);
+                    if (!deletion)
+                        continue;
+                    if (lifetime.IsCancellationRequested())
+                        return Output::Failure(MakeError(SourceDocumentErrors::Cancelled));
+                    auto payload = trash.Reserve(open.ProjectRoot(), deletion->source.Identity().key.source);
+                    if (payload.HasError())
+                        return Output::Failure(std::move(payload).ErrorValue());
+                    deletions.push_back({deletion->source, std::move(payload).Value(), deletion->disk});
+                }
+                auto applied = review.CommitFileGroup(open, files, lifetime, deletions);
+                if (applied.HasValue() || applied.ErrorValue().code.Value() == SourceDocumentErrors::SaveOutcomeUnknown.code.Value())
+                    trash.Preserve();
+                return applied;
+            } catch (const std::bad_alloc &) {
+                return Output::Failure(MakeError(Proposals::Errors::Bounds));
+            }
+        }
+
         /** @brief Holds project authority for physical moves in the accepted group. */
         Result<Proposals::SourceReviewApplied> CommitReviewedFileGroup(const Proposals::PreparedSourceReview &review,
                                                                        SourceFileOpenService &open, DurableFileSystem &files,
                                                                        const ProjectMutationCoordinator *mutations,
                                                                        const CancellationToken &lifetime) {
-            const bool renames = std::ranges::any_of(review.FileOperations(), [](const auto &operation) {
-                return std::holds_alternative<Proposals::PreparedSourceRename>(operation);
+            const bool physical = std::ranges::any_of(review.FileOperations(), [](const auto &operation) {
+                return !std::holds_alternative<Proposals::PreparedSourceCreate>(operation);
             });
-            if (!renames)
+            if (!physical)
                 return review.CommitFileGroup(open, files, lifetime);
             using Output = Result<Proposals::SourceReviewApplied>;
             if (!mutations)
                 return Output::Failure(MakeError(Proposals::Errors::Invalid));
-            const auto lease = mutations->TryAcquire({open.ProjectRoot(), ProjectMutationOwner::Asset, "source-review-rename"});
+            const auto lease = mutations->TryAcquire({open.ProjectRoot(), ProjectMutationOwner::Asset, "source-review-group"});
             if (lease.HasError())
                 return Output::Failure(lease.ErrorValue());
-            return review.CommitFileGroup(open, files, lifetime);
+            return ApplyWithTrash(review, open, files, lifetime);
         }
 
         /** @brief Checks that every effective edit and opened draft still belongs to the latest group. */
         bool CanUndoDrafts(const SourceFileReviewBatch &receipt) noexcept {
-            if (!receipt.renames.empty())
+            if (!receipt.renames.empty() || receipt.deletions)
                 return false;
             const auto edits = receipt.edits.Items();
             return (receipt.edits.CanUndo() || !std::ranges::any_of(edits, &SourceBatchItem::changed)) &&
@@ -386,12 +472,15 @@ namespace Horo::Editor {
         auto applied = fileGroup ? CommitReviewedFileGroup(review, *open, *files, mutations, preparation.lifetime)
                                  : review.CommitObserved(documents, *files, preparation.lifetime);
         if (applied.HasError()) {
-            feedback_ = RenameFailure(applied.ErrorValue(), Feedback::ApplyFailed);
+            const auto &error = applied.ErrorValue();
+            feedback_ = error.code.Value() == SourceDocumentErrors::SaveOutcomeUnknown.code.Value()
+                            ? Feedback::FileGroupRecovery
+                            : FailureFeedback(error, Feedback::ApplyFailed);
             return false;
         }
         auto outcome = std::move(applied).Value();
         if (fileGroup)
-            *fileGroup = {std::move(outcome.batch), std::move(outcome.drafts), std::move(outcome.renames)};
+            *fileGroup = {std::move(outcome.batch), std::move(outcome.drafts), std::move(outcome.renames), outcome.deletions};
         batch_ = fileGroup ? SourceEditBatch{} : std::move(outcome.batch);
         fileGroup_ = std::move(fileGroup);
         draft_ = {};

@@ -357,26 +357,40 @@ namespace Horo::Editor {
         return Output::Success(std::move(staged));
     }
 
-    /** @copydoc SourceDocumentService::Storage::StageRenames */
-    Result<std::vector<SourceDocumentService::Storage::StagedRename>> SourceDocumentService::Storage::StageRenames(
-        const std::span<const RenameRequest> renames, const StagedBatch &batch, DurableFileSystem &files,
-        const CancellationToken cancellation) {
-        using Moves = std::vector<StagedRename>;
+    /** @copydoc SourceDocumentService::Storage::StageMoves */
+    Result<std::vector<SourceDocumentService::Storage::StagedMove>> SourceDocumentService::Storage::StageMoves(
+        const std::span<const RenameRequest> renames, const std::span<const DeleteRequest> deletions, const StagedBatch &batch,
+        DurableFileSystem &files, const CancellationToken cancellation) {
+        using Moves = std::vector<StagedMove>;
         using Output = Result<Moves>;
         Moves moves;
-        moves.reserve(renames.size());
+        moves.reserve(renames.size() + deletions.size());
         auto reservedBytes = batch.bytes;
-        for (const auto &rename : renames) {
-            auto staged = StageRename(rename, cancellation, reservedBytes);
+        const auto append = [&](Result<StagedMove> staged) -> Result<void> {
             if (staged.HasError())
-                return Output::Failure(staged.ErrorValue());
+                return Result<void>::Failure(std::move(staged).ErrorValue());
+            const auto *record = staged.Value().edit.record;
+            if (std::ranges::find(batch.items, record, &StagedBatchEdit::record) != batch.items.end() ||
+                std::ranges::any_of(moves, [&](const auto &move) {
+                return move.edit.record == record;
+            }))
+                return Failure<void>(SourceDocumentErrors::Invalid);
             auto &move = moves.emplace_back(std::move(staged).Value());
             const auto &edit = move.edit;
-            if (std::ranges::find(batch.items, edit.record, &StagedBatchEdit::record) != batch.items.end())
-                return Failure<Moves>(SourceDocumentErrors::Invalid);
             if (edit.history && edit.next->text != edit.record->root->base)
                 reservedBytes += edit.next->text->bytes.size();
-            if (const auto lease = LockRename(move, files, cancellation); lease.HasError())
+            return Result<void>::Success();
+        };
+        for (const auto &rename : renames) {
+            if (const auto result = append(StageRename(rename, cancellation, reservedBytes)); result.HasError())
+                return Output::Failure(result.ErrorValue());
+        }
+        for (const auto &deletion : deletions) {
+            if (const auto result = append(StageDelete(deletion)); result.HasError())
+                return Output::Failure(result.ErrorValue());
+        }
+        for (auto &move : moves) {
+            if (const auto lease = LockMove(move, files, cancellation); lease.HasError())
                 return Output::Failure(lease.ErrorValue());
         }
         return Output::Success(std::move(moves));
@@ -387,12 +401,13 @@ namespace Horo::Editor {
                                                                             const SourceBatchDiskEvidence &evidence,
                                                                             DurableFileSystem &files, const CancellationToken cancellation,
                                                                             const std::span<const DraftRequest> drafts,
-                                                                            const std::span<const RenameRequest> renames) {
+                                                                            const std::span<const RenameRequest> renames,
+                                                                            const std::span<const DeleteRequest> deletions) {
         using Output = Result<SourceFileReviewBatch>;
         try {
             if (const auto access = CheckAccess(); access.HasError())
                 return Output::Failure(access.ErrorValue());
-            if (drafts.empty() && renames.empty())
+            if (drafts.empty() && renames.empty() && deletions.empty())
                 return Failure<SourceFileReviewBatch>(SourceDocumentErrors::Invalid);
             Detail::SourcePublicationGuard guard{storage_->saving};
             auto prepared = storage_->StageDrafts(drafts, cancellation);
@@ -411,16 +426,19 @@ namespace Horo::Editor {
             if (stage.HasError())
                 return Output::Failure(stage.ErrorValue());
             auto batch = std::move(stage).Value();
-            auto stagedMoves = storage_->StageRenames(renames, batch, files, cancellation);
+            auto stagedMoves = storage_->StageMoves(renames, deletions, batch, files, cancellation);
             if (stagedMoves.HasError())
                 return Output::Failure(stagedMoves.ErrorValue());
             auto moves = std::move(stagedMoves).Value();
             std::vector<SourceDocumentSnapshot> movedSources;
-            movedSources.reserve(moves.size());
-            for (const auto &move : moves)
-                movedSources.push_back(SourceDocumentSnapshot{move.edit.next});
+            movedSources.reserve(renames.size());
+            for (const auto &move : moves) {
+                if (move.edit.next)
+                    movedSources.push_back(SourceDocumentSnapshot{move.edit.next});
+            }
             static_assert(std::is_nothrow_move_constructible_v<Output>);
-            auto result = Output::Success({storage_->MakeBatchReceipt(batch.items), std::move(opened), std::move(movedSources)});
+            auto result =
+                Output::Success({storage_->MakeBatchReceipt(batch.items), std::move(opened), std::move(movedSources), deletions.size()});
             if (!edits.empty()) {
                 const auto disk = storage_->VerifyBatchEvidence(batch, evidence, files, cancellation);
                 if (disk.HasError())
@@ -429,11 +447,11 @@ namespace Horo::Editor {
             if (cancellation.IsCancellationRequested())
                 return Failure<SourceFileReviewBatch>(SourceDocumentErrors::Cancelled);
             if (!moves.empty()) {
-                if (const auto moved = storage_->MoveRenames(moves, files, cancellation, evidence, &batch); moved.HasError())
+                if (const auto moved = storage_->MoveSources(moves, files, cancellation, evidence, &batch); moved.HasError())
                     return Output::Failure(moved.ErrorValue());
             }
             storage_->PublishStagedEdits(batch.items);
-            storage_->PublishRenames(moves);
+            storage_->PublishMoves(moves);
             static_assert(std::is_nothrow_move_constructible_v<Storage::Record>);
             for (auto &record : newRecords)
                 storage_->records.push_back(std::move(record));

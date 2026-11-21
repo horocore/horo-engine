@@ -224,6 +224,8 @@ namespace {
             "workspace.local_agent.source_patch_create_excerpt",
             "workspace.local_agent.source_patch_structural_preview",
             "workspace.local_agent.source_patch_confirm_delete",
+            "workspace.local_agent.source_patch_confirm_moves",
+            "workspace.local_agent.source_patch_group_recovery",
             "workspace.local_agent.source_patch_confirm_rename",
             "workspace.local_agent.source_patch_rename_complete",
             "workspace.local_agent.source_patch_rename_recovery",

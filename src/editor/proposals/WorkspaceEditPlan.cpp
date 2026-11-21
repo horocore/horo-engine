@@ -490,7 +490,7 @@ namespace Horo::Editor::Proposals {
                     auto replacement = RenderAcceptedText(policy, *edit, preview->before.Text(), selection, budget);
                     if (replacement.HasError())
                         return Output::Failure(replacement.ErrorValue());
-                    prepared.edits_.push_back({preview->before, std::move(replacement).Value()});
+                    prepared.edits_.push_back({preview->before, std::move(replacement).Value(), ordinal});
                     audit->revisions.push_back({ordinal, preview->before.Revision(), 0});
                     continue;
                 }
@@ -604,7 +604,8 @@ namespace Horo::Editor::Proposals {
 
     /** @copydoc PreparedSourceReview::CommitFileGroup */
     Result<SourceReviewApplied> PreparedSourceReview::CommitFileGroup(SourceFileOpenService &open, DurableFileSystem &files,
-                                                                      const CancellationToken cancellation) const {
+                                                                      const CancellationToken cancellation,
+                                                                      const std::span<const SourceReviewDeletion> deletions) const {
         using Output = Result<SourceReviewApplied>;
         try {
             if (files_.empty() || !audit_)
@@ -613,6 +614,7 @@ namespace Horo::Editor::Proposals {
             std::vector<SourceReviewRename> renames;
             drafts.reserve(files_.size());
             renames.reserve(files_.size());
+            std::size_t deletion{};
             for (const auto &operation : files_) {
                 const SourceDocumentId *destination{};
                 if (const auto *creation = std::get_if<PreparedSourceCreate>(&operation)) {
@@ -622,25 +624,33 @@ namespace Horo::Editor::Proposals {
                     destination = &rename->destination;
                     renames.push_back({rename->source, *destination, rename->text, rename->disk});
                 } else {
-                    return Output::Failure(MakeError(Errors::Invalid));
+                    const auto &removed = std::get<PreparedSourceDelete>(operation);
+                    if (deletion == deletions.size() || !removed.source.SharesStateWith(deletions[deletion].source) ||
+                        &removed.disk != &deletions[deletion].disk)
+                        return Output::Failure(MakeError(Errors::Invalid));
+                    ++deletion;
+                    continue;
                 }
                 if (ObserveSourceDestination(*destination, open.ProjectRoot(), files, cancellation) != SourcePathState::Absent)
                     return Output::Failure(
                         MakeError(cancellation.IsCancellationRequested() ? SourceDocumentErrors::Cancelled : Errors::StaleBase));
             }
+            if (deletion != deletions.size())
+                return Output::Failure(MakeError(Errors::Invalid));
             const auto edits = BatchInputs();
             auto audit = std::make_shared<SourceReviewAudit>(*audit_);
-            auto published = open.PublishReviewedGroup(edits, drafts, renames, disk_, files, cancellation);
+            auto published = open.PublishReviewedGroup(edits, drafts, renames, deletions, disk_, files, cancellation);
             if (published.HasError())
                 return Output::Failure(std::move(published).ErrorValue());
             auto result = std::move(published).Value();
             const auto items = result.edits.Items();
             std::size_t edit{};
             for (auto &revision : audit->revisions) {
-                if (revision.before && !revision.after)
+                if (edit < items.size() && revision.file == edits_[edit].file)
                     revision.after = items[edit++].snapshot.Revision();
             }
-            return Output::Success({std::move(result.edits), std::move(audit), std::move(result.drafts), std::move(result.renames)});
+            return Output::Success(
+                {std::move(result.edits), std::move(audit), std::move(result.drafts), std::move(result.renames), result.deletions});
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(Errors::Bounds));
         }

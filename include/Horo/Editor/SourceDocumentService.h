@@ -246,6 +246,14 @@ namespace Horo::Editor {
         SourceEditBatch edits;
         std::vector<SourceDocumentSnapshot> drafts;
         std::vector<SourceDocumentSnapshot> renames;
+        std::size_t deletions{};
+    };
+
+    /** @brief A clean source and its payload reserved by the project mutation owner. */
+    struct SourceReviewDeletion final {
+        SourceDocumentSnapshot source;
+        std::filesystem::path payload;
+        const SourceBatchDiskEvidence &disk;
     };
 
     /** @brief One history publication plus originating view metadata.
@@ -415,6 +423,13 @@ namespace Horo::Editor {
             const SourceBatchDiskEvidence &disk;
         };
 
+        /** @brief A clean source and its reserved payload path in project Trash. */
+        struct DeleteRequest final {
+            SourceDocumentSnapshot from;
+            std::filesystem::path payload;
+            const SourceBatchDiskEvidence &disk;
+        };
+
         /** @brief Stages and atomically publishes one text-only edit batch. */
         [[nodiscard]] Result<SourceEditBatch> PublishBatch(std::span<const SourceBatchEdit> edits, const SourceBatchDiskEvidence *evidence,
                                                            const DurableFileSystem *files, CancellationToken cancellation);
@@ -422,7 +437,8 @@ namespace Horo::Editor {
         [[nodiscard]] Result<SourceFileReviewBatch> PublishReviewGroup(std::span<const SourceBatchEdit> edits,
                                                                        const SourceBatchDiskEvidence &evidence, DurableFileSystem &files,
                                                                        CancellationToken cancellation, std::span<const DraftRequest> drafts,
-                                                                       std::span<const RenameRequest> renames);
+                                                                       std::span<const RenameRequest> renames,
+                                                                       std::span<const DeleteRequest> deletions);
         /** @brief Replays edit history and retires unchanged drafts only after validating the complete receipt. */
         [[nodiscard]] Result<std::vector<SourceDocumentSnapshot>> UndoWithDrafts(const SourceEditBatch &batch,
                                                                                  std::span<const SourceDocumentSnapshot> drafts,

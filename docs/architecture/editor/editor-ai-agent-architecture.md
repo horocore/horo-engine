@@ -840,12 +840,15 @@ the draft identities and buffers alongside any text replacements. It
 revalidates the edit bases before exposing the group. Creation remains
 unsaved until ordinary Save. Grouped Undo replays the edits and retires the
 drafts together while every affected publication is still current.
-Groups may include confirmed renames alongside edits and draft creations.
+Groups may include confirmed renames and deletions alongside edits and drafts.
+Each deletion has its own reserved payload and durable origin manifest in
+project Trash. A successful group closes the deleted source sessions.
 The source owner stages all rekeys and acquires the writer leases before any
 move. It makes the new buffers and routing identities visible only after
 every rename is durable. A later failure rolls visible moves back in reverse
 order using exclusive moves. If an original name is now occupied, recovery
-remains explicit and the workspace keeps the pre-application document roots.
+keeps the source review and Trash evidence available. The workspace keeps
+the pre-application document roots.
 The source owner rechecks the policy, the live publications and the saved disk
 bases before publishing one batch of buffer changes. Only accepted text ranges
 enter that batch. The workspace retains its latest receipt for a single grouped

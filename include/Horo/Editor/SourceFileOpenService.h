@@ -262,13 +262,15 @@ namespace Horo::Editor {
         /** @brief Publishes reviewed text, drafts and renames under one source and registry transaction.
          * @param edits Exact current source edits. @param drafts Unique project-relative draft destinations.
          * @param renames Admitted physical moves with unique source and destination paths.
+         * @param deletions Exact clean sources with reserved project Trash destinations.
          * @param evidence Worker-observed edit bases. @param files Filesystem authority used to observe the bases.
          * @param cancellation Cooperative observer. @return Complete group receipt or typed refusal.
-         * @pre The caller holds project mutation authority if renames are present.
+         * @pre The caller holds project mutation authority for all physical moves.
          */
         [[nodiscard]] Result<SourceFileReviewBatch> PublishReviewedGroup(std::span<const SourceBatchEdit> edits,
                                                                          std::span<const SourceReviewDraft> drafts,
                                                                          std::span<const SourceReviewRename> renames,
+                                                                         std::span<const SourceReviewDeletion> deletions,
                                                                          const SourceBatchDiskEvidence &evidence, DurableFileSystem &files,
                                                                          CancellationToken cancellation = {});
         /** @brief Replays edits and closes unchanged unsaved drafts from the same group.

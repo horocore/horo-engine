@@ -93,9 +93,7 @@ namespace Horo::Editor {
             if (!review.decisions.HasAcceptedChanges(index))
                 continue;
             const auto kind = review.files[index].kind;
-            if (selected && (*selected == Delete || kind == Delete))
-                return std::nullopt;
-            if (!selected || kind == Rename || (*selected == Edit && kind == Create))
+            if (!selected || *selected == Edit || kind == Delete || kind == Rename)
                 selected = kind;
         }
         return selected;

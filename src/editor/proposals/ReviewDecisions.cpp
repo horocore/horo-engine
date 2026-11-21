@@ -128,6 +128,11 @@ namespace Horo::Editor::Proposals {
         return file < units_.size() && HasAcceptance(units_[file]);
     }
 
+    /** @copydoc ReviewDecisions::AcceptedFileCount */
+    std::size_t ReviewDecisions::AcceptedFileCount() const noexcept {
+        return static_cast<std::size_t>(std::ranges::count_if(units_, HasAcceptance));
+    }
+
     /** @brief Publishes a complete decision change with bounded undo history. */
     void ReviewDecisions::Publish(Units units) {
         if (units == units_)

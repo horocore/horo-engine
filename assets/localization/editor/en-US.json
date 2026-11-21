@@ -211,6 +211,8 @@
     "workspace.local_agent.source_patch_create_excerpt": {"text": "Preview excerpt. The proposed file contains more text."},
     "workspace.local_agent.source_patch_structural_preview": {"text": "File operations are available for preview and review."},
     "workspace.local_agent.source_patch_confirm_delete": {"text": "Move accepted source to Trash"},
+    "workspace.local_agent.source_patch_confirm_moves": {"text": "Confirm file moves and apply changes"},
+    "workspace.local_agent.source_patch_group_recovery": {"text": "Some file moves need recovery. Check the reviewed paths and project Trash before retrying."},
     "workspace.local_agent.source_patch_confirm_rename": {"text": "Confirm source rename"},
     "workspace.local_agent.source_patch_rename_complete": {"text": "The source was renamed. Save any unsaved changes."},
     "workspace.local_agent.source_patch_rename_recovery": {"text": "The rename needs recovery. Check both paths before retrying."},

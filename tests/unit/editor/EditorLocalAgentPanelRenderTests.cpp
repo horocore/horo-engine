@@ -617,11 +617,18 @@ namespace {
         }));
         fixture.Activate("###source_patch_apply");
         CHECK(fixture.command.command == EditorWorkspaceViewCommand::None);
-        REQUIRE(fixture.ChatWindow());
-        ImGui::FocusWindow(fixture.ChatWindow());
-        ImGui::ActivateItemByID(ImHashStr("###source_patch_reject_file", 0, fixture.ChatWindow()->GetID(0)));
-        fixture.Draw(420);
-        fixture.Activate("###source_patch_confirm_delete");
+        bool mixed{};
+        SECTION("A selected deletion keeps its dedicated confirmation") {
+            REQUIRE(fixture.ChatWindow());
+            ImGui::FocusWindow(fixture.ChatWindow());
+            ImGui::ActivateItemByID(ImHashStr("###source_patch_reject_file", 0, fixture.ChatWindow()->GetID(0)));
+            fixture.Draw(420);
+            fixture.Activate("###source_patch_confirm_delete");
+        }
+        SECTION("The group confirmation applies the deletion and text edit together") {
+            mixed = true;
+            fixture.Activate("###source_patch_confirm_moves");
+        }
         REQUIRE(fixture.command.command == EditorWorkspaceViewCommand::ApplySourceReview);
         CHECK(std::filesystem::is_regular_file(project.directory / "remove.cpp"));
         JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
@@ -630,9 +637,12 @@ namespace {
         REQUIRE(Await([&] {
             return transactions.Poll(owner.Documents(), &files, &owner, nullptr, &mutations);
         }));
-        CHECK(transactions.Status().feedback == SourceTransactionFeedback::Deleted);
+        CHECK(transactions.Status().feedback == (mixed ? SourceTransactionFeedback::Applied : SourceTransactionFeedback::Deleted));
         CHECK_FALSE(std::filesystem::exists(project.directory / "remove.cpp"));
-        CHECK(edited.IsCurrent());
+        CHECK(edited.IsCurrent() != mixed);
+        const auto current = owner.Documents().Snapshot(edited.Identity().instance);
+        REQUIRE(current.HasValue());
+        CHECK(current.Value().Text() == (mixed ? "two" : "one"));
     }
 
     TEST_CASE("The file picker sends the selected sources and routes each returned card", "[.][chat-http]") {

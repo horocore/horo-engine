@@ -1030,7 +1030,7 @@ namespace Horo::Editor {
                                        state.feedback == Renamed || state.feedback == RenameRecovery;
                 if (state.feedback != Preparing && std::exchange(sourceApplyQueued_, false) && completed)
                     patchReview_.reset();
-                constexpr std::array<const char *, 12> keys{nullptr,
+                constexpr std::array<const char *, 13> keys{nullptr,
                                                             "source_patch_applied",
                                                             "source_patch_reverted",
                                                             "source_patch_apply_failed",
@@ -1041,7 +1041,8 @@ namespace Horo::Editor {
                                                             "source_patch_delete_complete",
                                                             "source_patch_delete_recovery",
                                                             "source_patch_rename_complete",
-                                                            "source_patch_rename_recovery"};
+                                                            "source_patch_rename_recovery",
+                                                            "source_patch_group_recovery"};
                 if (const auto *key = keys[static_cast<std::size_t>(state.feedback)])
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, key), Theme::Text(), fonts);
                 if (state.audit)
@@ -1188,10 +1189,7 @@ namespace Horo::Editor {
                 DrawPatchDecisions(review, locale);
                 const bool writingAudit = sourceReviewTransaction_ && sourceReviewTransaction_().writingAudit;
                 const auto kind = EditorPatchApplyKind(review);
-                if (!kind && review.decisions.HasAcceptedChanges())
-                    Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "source_patch_structural_preview"),
-                                    Theme::Muted(), fonts);
-                const auto *action = PatchApplyLabel(kind.value_or(EditorPatchFileKind::Edit));
+                const auto *action = PatchApplyLabel(kind.value_or(EditorPatchFileKind::Edit), review.decisions.AcceptedFileCount() > 1);
                 if (requestSourceReviewApply_ && Button(locale, action, kind.has_value() && !writingAudit))
                     QueueSourceApply(review, command);
                 if (!buildRoot_.empty() && Button(locale, "source_patch_checkpoint_save", CanCheckpointPatchReview()))
@@ -1200,12 +1198,12 @@ namespace Horo::Editor {
             }
 
             /** @brief Gives native file moves an explicit confirmation action. */
-            static const char *PatchApplyLabel(const EditorPatchFileKind kind) {
+            static const char *PatchApplyLabel(const EditorPatchFileKind kind, const bool grouped) {
                 switch (kind) {
                     case EditorPatchFileKind::Delete:
-                        return "source_patch_confirm_delete";
+                        return grouped ? "source_patch_confirm_moves" : "source_patch_confirm_delete";
                     case EditorPatchFileKind::Rename:
-                        return "source_patch_confirm_rename";
+                        return grouped ? "source_patch_confirm_moves" : "source_patch_confirm_rename";
                     default:
                         return "source_patch_apply";
                 }

@@ -666,15 +666,20 @@ namespace {
         }
     }
 
-    TEST_CASE("Reviewed renames publish with edits and roll back a later move failure", "[editor][source][review][rename]") {
+    TEST_CASE("Reviewed deletions and renames publish together or restore every original path", "[editor][source][review][move]") {
         struct Files final : TestSupport::NativePublicationFiles {
-            bool failSecond{};
+            int failOnMove{};
             int moves{};
+
+            Result<void> WritePrivateDurable(const std::filesystem::path &path, std::span<const std::byte> bytes, bool &created,
+                                             std::filesystem::perms mode) override {
+                return native.WritePrivateDurable(path, bytes, created, mode);
+            }
 
             Result<void> MoveFileNoReplaceTracked(const std::filesystem::path &from, const std::filesystem::path &to,
                                                   AtomicFileReplacementReceipt &receipt) override {
                 auto moved = native.MoveFileNoReplaceTracked(from, to, receipt);
-                if (++moves == 2 && failSecond && receipt.WasCommitted())
+                if (++moves == failOnMove && receipt.WasCommitted())
                     return Result<void>::Failure(MakeError(SourceDocumentErrors::ReadFailed));
                 return moved;
             }
@@ -684,10 +689,12 @@ namespace {
         project.Put("alpha", "a.cpp");
         project.Put("beta", "b.cpp");
         project.Put("base", "edit.cpp");
+        project.Put("remove", "delete.cpp");
         SourceFileOpenService open{project.directory};
         const auto a = *open.Open({.path = "a.cpp"}).Value().sourceSnapshot;
         const auto b = *open.Open({.path = "b.cpp"}).Value().sourceSnapshot;
         const auto edit = *open.Open({.path = "edit.cpp"}).Value().sourceSnapshot;
+        const auto deletion = *open.Open({.path = "delete.cpp"}).Value().sourceSnapshot;
         const auto aPath = SourceDocumentId::Parse("new-a.cpp").Value();
         const auto bPath = SourceDocumentId::Parse("new-b.cpp").Value();
         const auto draft = SourceDocumentId::Parse("draft.cpp").Value();
@@ -695,6 +702,7 @@ namespace {
                                                    {{a.Identity().key.source, false},
                                                     {b.Identity().key.source, false},
                                                     {edit.Identity().key.source, false},
+                                                    {deletion.Identity().key.source, false},
                                                     {aPath, false},
                                                     {bPath, false},
                                                     {draft, false}})
@@ -704,11 +712,13 @@ namespace {
                                                           {"provider", "model", "request"},
                                                           {RenameFile{FileBase::Capture(a).Value(), aPath, {{0, "alpha", "reviewed"}}},
                                                            RenameFile{FileBase::Capture(b).Value(), bPath, {}}, CreateFile{draft, "draft"},
-                                                           EditFile{FileBase::Capture(edit).Value(), {{0, "base", "edited"}}}}})
+                                                           EditFile{FileBase::Capture(edit).Value(), {{0, "base", "edited"}}},
+                                                           DeleteFile{FileBase::Capture(deletion).Value()}}})
                                   .Value();
         const std::array observed{SourcePathObservation{a.Identity().key.source, a},
                                   SourcePathObservation{b.Identity().key.source, b},
                                   SourcePathObservation{edit.Identity().key.source, edit},
+                                  SourcePathObservation{deletion.Identity().key.source, deletion},
                                   SourcePathObservation{aPath, SourcePathState::Absent},
                                   SourcePathObservation{bPath, SourcePathState::Absent},
                                   SourcePathObservation{draft, SourcePathState::Absent}};
@@ -721,12 +731,16 @@ namespace {
         WorkspacePanelHost host;
         host.AttachDocumentIdentityRegistry(open.DocumentRegistry());
         REQUIRE(host.OpenDocument(a.Identity().key).HasValue());
+        REQUIRE(host.OpenDocument(deletion.Identity().key).HasValue());
         CancellationSource lifetime;
         EditorWorkspaceViewCommandData command;
         REQUIRE(QueueSourceReviewApplication("workspace", decisions, policy, plan, lifetime.Token(), command));
         REQUIRE(reviews.Process(command, open.Documents(), &jobs, project.directory, &files, &open));
         SECTION("The second visible move cannot confirm durability") {
-            files.failSecond = true;
+            files.failOnMove = 2;
+        }
+        SECTION("The Trash move fails after completing both renames") {
+            files.failOnMove = 3;
         }
         SECTION("Every move reaches durability") {}
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
@@ -735,12 +749,14 @@ namespace {
             std::this_thread::sleep_for(std::chrono::milliseconds{1});
         }
         host.RefreshDocuments();
-        if (files.failSecond) {
+        const auto trash = project.directory / ".horo/local/trash";
+        if (files.failOnMove) {
             CHECK(reviews.Status().feedback == SourceTransactionFeedback::Conflict);
-            CHECK(files.moves == 4);
+            CHECK(files.moves == 2 * files.failOnMove);
             CHECK(a.IsCurrent());
             CHECK(b.IsCurrent());
             CHECK(edit.IsCurrent());
+            CHECK(deletion.IsCurrent());
             CHECK(open.DocumentRegistry().IsCurrent(a.Identity()));
             CHECK(open.DocumentRegistry().IsCurrent(b.Identity()));
             CHECK_FALSE(open.DocumentRegistry().Find({DocumentKind::Source, draft}));
@@ -748,10 +764,12 @@ namespace {
             CHECK(std::filesystem::is_regular_file(project.directory / "b.cpp"));
             CHECK_FALSE(std::filesystem::exists(project.directory / "new-a.cpp"));
             CHECK_FALSE(std::filesystem::exists(project.directory / "new-b.cpp"));
+            CHECK(std::filesystem::is_regular_file(project.directory / "delete.cpp"));
+            CHECK(std::filesystem::is_empty(trash));
             return;
         }
         REQUIRE(reviews.Status().feedback == SourceTransactionFeedback::Applied);
-        CHECK(files.moves == 2);
+        CHECK(files.moves == 3);
         CHECK(open.DocumentRegistry().Find(a.Identity().instance)->key.source == aPath);
         CHECK(open.DocumentRegistry().Find(b.Identity().instance)->key.source == bPath);
         CHECK(host.DocumentTabs().front().identity.key.source == aPath);
@@ -762,6 +780,15 @@ namespace {
         CHECK_FALSE(std::filesystem::exists(project.directory / "draft.cpp"));
         CHECK(std::filesystem::is_regular_file(project.directory / "new-a.cpp"));
         CHECK(std::filesystem::is_regular_file(project.directory / "new-b.cpp"));
+        CHECK_FALSE(open.DocumentRegistry().Find(deletion.Identity().instance));
+        CHECK_FALSE(deletion.IsCurrent());
+        CHECK_FALSE(std::filesystem::exists(project.directory / "delete.cpp"));
+        const auto attempt = std::filesystem::directory_iterator{trash};
+        REQUIRE(attempt != std::filesystem::directory_iterator{});
+        std::ifstream file(attempt->path() / "payload", std::ios::binary);
+        CHECK((std::string{std::istreambuf_iterator<char>{file}, {}} == "remove"));
+        REQUIRE(reviews.Status().audit);
+        CHECK(EncodeSourceReviewAudit(*reviews.Status().audit).HasValue());
     }
 
     TEST_CASE("Overlapping review applications and group undo produce deterministic revisions", "[editor][source][review][concurrency]") {

@@ -127,10 +127,11 @@ namespace Horo::Editor {
             std::size_t bytes{};
         };
 
-        /** @brief A rename's new root and leased native operands, staged without changing the record. */
-        struct StagedRename final {
+        /** @brief A leased source move with an optional rekey, staged without changing the record. */
+        struct StagedMove final {
             StagedBatchEdit edit;
-            const RenameRequest *request;
+            SourceDocumentSnapshot source;
+            const SourceBatchDiskEvidence *disk;
             std::filesystem::path destination;
             ExclusiveFileLock sourceLease;
             ExclusiveFileLock destinationLease;
@@ -205,22 +206,25 @@ namespace Horo::Editor {
         /** @brief Publishes already verified edit roots and their history without allocation. */
         void PublishStagedEdits(std::span<StagedBatchEdit> edits) const noexcept;
         /** @brief Prepares rekey, buffer and history without applying any mutation. */
-        [[nodiscard]] Result<StagedRename> StageRename(const RenameRequest &request, CancellationToken cancellation,
-                                                       std::size_t reservedBytes);
-        /** @brief Stages the group's renames beside its text edits and leases both ends of every move. */
-        [[nodiscard]] Result<std::vector<StagedRename>> StageRenames(std::span<const RenameRequest> renames, const StagedBatch &batch,
-                                                                     DurableFileSystem &files, CancellationToken cancellation);
+        [[nodiscard]] Result<StagedMove> StageRename(const RenameRequest &request, CancellationToken cancellation,
+                                                     std::size_t reservedBytes);
+        /** @brief Stages one clean deletion to its reserved Trash payload. */
+        [[nodiscard]] Result<StagedMove> StageDelete(const DeleteRequest &request);
+        /** @brief Stages the group's file moves beside its text edits and acquires their writer leases. */
+        [[nodiscard]] Result<std::vector<StagedMove>> StageMoves(std::span<const RenameRequest> renames,
+                                                                 std::span<const DeleteRequest> deletions, const StagedBatch &batch,
+                                                                 DurableFileSystem &files, CancellationToken cancellation);
         /** @brief Acquires source and destination publication leases for a staged rename. */
-        [[nodiscard]] Result<void> LockRename(StagedRename &rename, DurableFileSystem &files, CancellationToken cancellation) const;
+        [[nodiscard]] Result<void> LockMove(StagedMove &rename, DurableFileSystem &files, CancellationToken cancellation) const;
         /** @brief Rechecks leased operands and preserves native visibility on every failure path. */
-        [[nodiscard]] const ErrorCodeDescriptor *TryMoveRename(const StagedRename &rename, DurableFileSystem &files,
+        [[nodiscard]] const ErrorCodeDescriptor *TrySourceMove(const StagedMove &rename, DurableFileSystem &files,
                                                                AtomicFileReplacementReceipt &receipt,
                                                                CancellationToken cancellation) const noexcept;
         /** @brief Moves a group under its leases and restores visible moves in reverse order on failure. */
-        [[nodiscard]] Result<void> MoveRenames(std::span<StagedRename> renames, DurableFileSystem &files, CancellationToken cancellation,
+        [[nodiscard]] Result<void> MoveSources(std::span<StagedMove> renames, DurableFileSystem &files, CancellationToken cancellation,
                                                const SourceBatchDiskEvidence &evidence, const StagedBatch *edits = nullptr) const;
-        /** @brief Publishes rekeys after every physical move has reached durability. */
-        void PublishRenames(std::span<StagedRename> renames) const noexcept;
+        /** @brief Publishes rekeys and retires deleted records after every physical move reaches durability. */
+        void PublishMoves(std::span<StagedMove> moves) noexcept;
         /** @brief Reserves disk read scratch alongside the staged text, then verifies every original disk base. */
         [[nodiscard]] Result<void> VerifyBatchBases(const StagedBatch &batch, CancellationToken cancellation) const;
         /** @brief Verifies the exact ordered worker evidence and current metadata before publishing. */

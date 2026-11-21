@@ -211,6 +211,8 @@
     "workspace.local_agent.source_patch_create_excerpt": {"text": "Metnin bir bölümü gösteriliyor. Önerilen dosyada daha fazla metin var."},
     "workspace.local_agent.source_patch_structural_preview": {"text": "Dosya işlemleri önizlenebilir ve incelenebilir."},
     "workspace.local_agent.source_patch_confirm_delete": {"text": "Kabul edilen kaynağı Çöp Kutusu’na taşı"},
+    "workspace.local_agent.source_patch_confirm_moves": {"text": "Dosya taşımalarını onayla ve değişiklikleri uygula"},
+    "workspace.local_agent.source_patch_group_recovery": {"text": "Bazı dosya taşımaları kurtarma gerektiriyor. Yeniden denemeden önce incelenen yolları ve projenin Çöp Kutusu’nu kontrol et."},
     "workspace.local_agent.source_patch_confirm_rename": {"text": "Kaynağın yeniden adlandırılmasını onayla"},
     "workspace.local_agent.source_patch_rename_complete": {"text": "Kaynak yeniden adlandırıldı. Kaydedilmemiş değişiklikleri kaydedebilirsin."},
     "workspace.local_agent.source_patch_rename_recovery": {"text": "Yeniden adlandırma kurtarma gerektiriyor. Yeniden denemeden önce her iki yolu da kontrol et."},
