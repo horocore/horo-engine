@@ -2,6 +2,7 @@
 #include "AgentTurnTestTools.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <stdexcept>
 #include <thread>
 
 namespace Horo::Agent {
@@ -139,6 +140,58 @@ namespace Horo::Agent {
         const auto result = runtime.Run(model, nullptr, 23, Request(), limits, parent.get_token());
         CHECK(result.status == expected);
         CHECK(result.messages.empty());
+    }
+
+    TEST_CASE("Editor Agent settles cancellation and bridge failure within a tool round", "[agent][turn]") {
+        struct Bridge final : IAgentTurnTools {
+            explicit Bridge(std::stop_source &parent) : parent(parent) {}
+
+            std::stop_source &parent;
+            bool cancelDuringAdmission{};
+            bool failDuringDispatch{};
+            mutable std::size_t calls{};
+
+            bool ValidArguments(std::string_view) const override {
+                if (cancelDuringAdmission)
+                    parent.request_stop();
+                return true;
+            }
+
+            AgentTurnStatus Run(std::uint64_t, std::size_t, const ModelToolIntent &, std::chrono::steady_clock::time_point,
+                                std::stop_token, std::string &result) const override {
+                ++calls;
+                if (failDuringDispatch)
+                    throw std::runtime_error("Bridge failed");
+                parent.request_stop();
+                result = "{}";
+                return AgentTurnStatus::Completed;
+            }
+        };
+
+        std::stop_source parent;
+        Bridge bridge{parent};
+        auto expected = AgentTurnStatus::Cancelled;
+        std::size_t expectedCalls = 1;
+        SECTION("cancellation during admission stops before dispatch") {
+            bridge.cancelDuringAdmission = true;
+            expectedCalls = 0;
+        }
+        SECTION("cancellation during dispatch prevents further tools") {}
+        SECTION("a throwing bridge produces one tool failure") {
+            bridge.failDuringDispatch = true;
+            expected = AgentTurnStatus::ToolFailed;
+        }
+
+        Model model;
+        model.action = [](std::size_t, const ModelEventSink &sink, std::stop_token) {
+            return Emit(sink, {Intent("first"), Intent("second"), {.kind = ModelEventKind::Completed}});
+        };
+        AgentTurnRuntime runtime;
+        const auto result = runtime.Run(model, &bridge, 51, Request(true), {}, parent.get_token());
+        CHECK(result.status == expected);
+        CHECK(result.messages.empty());
+        CHECK(bridge.calls == expectedCalls);
+        CHECK(model.requests.size() == 1);
     }
 
     TEST_CASE("Editor Agent deadline cancels the exact still queued authoring tool", "[agent][turn]") {
