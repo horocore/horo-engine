@@ -150,7 +150,7 @@ namespace Horo::Application::Internal {
                                                           .runtimeUi = runtimeUi_,
                                                           .vfx = vfx_,
                                                           .vfxModuleId = vfxModuleId_,
-                                                          .animation = native_ ? native_->AnimationContext() : nullptr});
+                                                          .animation = animationContext_});
         if (runtime.HasError())
             return Result<void>::Failure(runtime.ErrorValue());
         behaviors_ = std::move(runtime).Value();
@@ -177,6 +177,14 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(MakeError(GameplayErrors::PhysicsPermissionDenied));
             if (auto registered = registry_.Register(script_->Registration()); registered.HasError())
                 return registered;
+            if (!selection.animation.expired()) {
+                scriptAnimationLifetime_.emplace();
+                auto grant = CreateGameplayAnimationContext(selection.animation, Runtime::SceneRuntimeId{physics_->Binding().scene},
+                                                            selection.moduleId, scriptAnimationLifetime_->Token());
+                if (grant.HasError())
+                    return Result<void>::Failure(grant.ErrorValue());
+                animationContext_ = std::move(grant).Value();
+            }
         }
         if (auto frozen = registry_.Freeze(); frozen.HasError())
             return frozen;
@@ -222,6 +230,7 @@ namespace Horo::Application::Internal {
             retirementAdmission_.reset();
             return Result<void>::Failure(*candidate.diagnostic);
         }
+        animationContext_ = native_->AnimationContext();
         return native_->ContributeBehaviorsTo(registry_);
     }
 
@@ -394,7 +403,7 @@ namespace Horo::Application::Internal {
                                                           .runtimeUi = runtimeUi_,
                                                           .vfx = vfx_,
                                                           .vfxModuleId = vfxModuleId_,
-                                                          .animation = native_ ? native_->AnimationContext() : nullptr},
+                                                          .animation = animationContext_},
                                                          prefabContext_);
         if (runtime.HasError())
             return Result<void>::Failure(runtime.ErrorValue());
@@ -594,6 +603,8 @@ namespace Horo::Application::Internal {
 
     /** @copydoc GameplayWorldComposition::RevokeCapabilities */
     void GameplayWorldComposition::RevokeCapabilities() noexcept {
+        if (scriptAnimationLifetime_)
+            scriptAnimationLifetime_->RequestCancellation();
         if (runtimeUi_)
             runtimeUi_->Revoke();
         if (prefabContext_)

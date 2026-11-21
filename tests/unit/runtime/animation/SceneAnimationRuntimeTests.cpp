@@ -5,6 +5,7 @@
 #include "AnimationPoseCompositionTestFixtures.h"
 #include "AnimationStateGraphTestFixtures.h"
 #include "Horo/Gameplay/GameplayAnimationScene.h"
+#include "Horo/Gameplay/LuaBehavior.h"
 #include "animation/AnimationRuntimeFixture.h"
 
 #include <catch2/catch_approx.hpp>
@@ -12,6 +13,47 @@
 
 namespace Horo::Animation {
     namespace {
+        /** @brief Runs the real Lua VM against a Scene grant and records its final assertion marker. */
+        class LuaAnimationProbe final : public Gameplay::Detail::IBehaviorContextBackend {
+        public:
+            Gameplay::GameplayEntityRef entity;
+            std::shared_ptr<const Gameplay::GameplayAnimationContext> grant;
+            Math::Transform output;
+
+            Gameplay::GameplayEntityRef Entity() const noexcept override {
+                return entity;
+            }
+
+            Gameplay::BehaviorInstanceId InstanceId() const noexcept override {
+                return Gameplay::BehaviorInstanceId{1};
+            }
+
+            std::span<const Gameplay::BehaviorField> Fields() const noexcept override {
+                return {};
+            }
+
+            std::span<const Gameplay::GameplayInputAction> InputActions() const noexcept override {
+                return {};
+            }
+
+            Result<Math::Transform> LocalTransform() const override {
+                return Result<Math::Transform>::Success(output);
+            }
+
+            Result<void> SetLocalTransform(const Math::Transform &value) override {
+                output = value;
+                return Result<void>::Success();
+            }
+
+            Result<void> Publish(Gameplay::GameplayEvent) override {
+                return Result<void>::Success();
+            }
+
+            std::shared_ptr<const Gameplay::GameplayAnimationContext> AnimationContext() const noexcept override {
+                return grant;
+            }
+        };
+
         /** @brief Cooks the socket-bearing graph through the same portable Scene path used by the host. */
         std::optional<AnimationAuthoringComponent> PrepareSocketGraph(Test::Cook::Fixture &cook) {
             const auto graph = Test::Graph::Simple();
@@ -43,6 +85,55 @@ namespace Horo::Animation {
             CHECK(owner.ResolveRootMotion(entity, id, moved, context).HasError());
         }
     }  // namespace
+
+    TEST_CASE("Lua animation callbacks send typed commands and retire retained callback authority", "[animation][scene][gameplay][lua]") {
+        Test::Scene::Fixture fixture(false, true, [](Test::Cook::Fixture &cook) -> std::optional<AnimationAuthoringComponent> {
+            const auto graph = Test::Instance::Blended();
+            const Test::Instance::Prepared source(graph, 6, false, Test::Instance::SocketSkeleton());
+            cook.Replace(*source.skeleton, source.compileClips, graph);
+            return std::nullopt;
+        });
+        LuaAnimationProbe probe;
+        probe.entity = {fixture.entity.runtime.value, fixture.entity.entity.index, fixture.entity.entity.generation};
+        CancellationSource lifetime;
+        probe.grant = Test::Cook::Take(
+            Gameplay::CreateGameplayAnimationContext(fixture.forward->adapter, fixture.entity.runtime, "game.animation", lifetime.Token()));
+        const auto type = Test::Cook::Take(Gameplay::BehaviorTypeId::Parse("game.animation.probe"));
+        const auto program = Test::Cook::Take(Gameplay::LuaBehaviorProgram::Compile(R"lua(
+local old
+return horo.behavior {
+    type_id = "game.animation.probe", display_name = "Animation Probe", category = "Tests", schema_version = 1,
+    on_fixed_update = function(ctx)
+        local animation = ctx.animation
+        if not old then
+            assert(not animation.snapshot().has_pose)
+            assert(animation.set_parameter("1", 1.0))
+            old = animation
+            return
+        end
+        local ok, reason = old.set_parameter("1", 0.0)
+        assert(ok == nil and reason == "animation.callback.expired")
+        assert(animation.snapshot().has_pose)
+        assert(animation.parameters(1)[1].value == 1.0)
+        assert(#animation.state_events(0) == 0 and #animation.clip_events(0) == 0)
+        assert(animation.socket(21)[13] > 0.0)
+        ctx.transform.set_position(42.0, 0.0, 0.0)
+    end
+}
+)lua",
+                                                                                    type, "animation_probe.horo_script"));
+        const auto factory = program->Registration().factory;
+        const auto destroy = [factory](Gameplay::IBehaviorInstance *instance) {
+            factory.destroy(factory.userData, instance);
+        };
+        const std::unique_ptr<Gameplay::IBehaviorInstance, decltype(destroy)> instance(factory.create(factory.userData), destroy);
+        REQUIRE(instance);
+        Gameplay::BehaviorContext context{probe};
+        instance->OnFixedUpdate(context, {0.01});
+        REQUIRE(fixture.Tick().HasValue());
+        instance->OnFixedUpdate(context, {0.01});
+        CHECK(probe.output.translation.x == 42.0F);
+    }
 
     TEST_CASE("Gameplay animation grant reads only its Scene and retires with the module", "[animation][scene][gameplay]") {
         Test::Scene::Fixture fixture(false, true, PrepareSocketGraph);

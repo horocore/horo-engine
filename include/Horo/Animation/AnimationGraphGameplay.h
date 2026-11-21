@@ -9,6 +9,15 @@
 #include "Horo/Foundation/CancellationToken.h"
 
 namespace Horo::Animation {
+    /** @brief Fixed implementation ceilings for event payloads, owned queues and traversal scratch. */
+    struct AnimationNotifyHardLimits final {
+        static constexpr std::uint32_t OccurrencesPerTick = 16384;
+        static constexpr std::uint32_t Consumers = 16;
+        static constexpr std::uint32_t TypesPerConsumer = 64;
+        static constexpr std::uint32_t QueuedOccurrences = 65536;
+        static constexpr std::uint64_t Operations = 64ULL * 1024ULL * 1024ULL;
+    };
+
     /** @brief Committed disposition of a Graph-owned motion request. */
     enum class AnimationRootMotionDisposition : std::uint8_t {
         Unavailable,

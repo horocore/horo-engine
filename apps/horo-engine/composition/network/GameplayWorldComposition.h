@@ -293,6 +293,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> ValidateVfxBinding(const GameplayWorldSelection &selection) const;
         std::string vfxModuleId_;
         std::shared_ptr<const Gameplay::GameplayVfxContext> vfx_;
+        std::optional<CancellationSource> scriptAnimationLifetime_;
+        std::shared_ptr<const Gameplay::GameplayAnimationContext> animationContext_;
         std::shared_ptr<Gameplay::GameplayVfxScene> vfxScene_;
         bool vfxTickOpen_{};
         std::shared_ptr<Gameplay::GameplayPhysicsContext> physics_;

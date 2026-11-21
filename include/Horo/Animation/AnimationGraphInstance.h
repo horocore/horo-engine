@@ -76,15 +76,6 @@ namespace Horo::Animation {
         float minimumStateContribution{};
     };
 
-    /** @brief Fixed implementation ceilings for event payloads, owned queues and traversal scratch. */
-    struct AnimationNotifyHardLimits final {
-        static constexpr std::uint32_t OccurrencesPerTick = 16384;
-        static constexpr std::uint32_t Consumers = 16;
-        static constexpr std::uint32_t TypesPerConsumer = 64;
-        static constexpr std::uint32_t QueuedOccurrences = 65536;
-        static constexpr std::uint64_t Operations = 64ULL * 1024ULL * 1024ULL;
-    };
-
     /** @brief Owner-assigned identity and finite storage/work admission, captured
      * at the control boundary. */
     struct GraphInstanceCreateContext final {

@@ -26,6 +26,25 @@ through `BehaviorContext::AnimationContext` during simulation-capable phases.
 The native SDK boundary advances to 32 because the module context and behavior
 backend layout changed.
 
+An admitted Lua behavior receives `ctx.animation` for its own entity during
+simulation callbacks. A stored table or function from an earlier callback
+returns `nil, "animation.callback.expired"`. An action handle can be stored
+and used through a fresh callback's animation table. Lua can pass a positive
+integer or decimal string for stable IDs, and receives stable IDs as decimal
+strings. Lua booleans, integers and floating-point numbers map to the matching
+Graph parameter types.
+
+Use `set_parameter(id, value)`, `trigger(id)`, `queue_action(id, section)`,
+`action(handle)`, `cancel_action(handle, cut)` and `release_action(handle)` for
+commands and action observations. `snapshot()` reports playback state,
+pose availability and optional committed root motion. `socket(id)` reads a
+16-value model-space matrix in column-major order. `parameters(count)` copies
+the complete parameter block and requires the declared count. The
+`state_events(capacity)` and `clip_events(capacity)` calls copy complete
+occurrence blocks with a caller-supplied capacity. These reads use the latest
+committed pose. A failed operation returns `nil` and a stable error code.
+Copy buffers and Lua output count against the VM memory budget.
+
 ## Cooked prefab creation and retirement
 
 The explicitly selected production `GameplayWorldComposition` may grant

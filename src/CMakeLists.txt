@@ -1239,6 +1239,7 @@ add_library(HoroGameplayLua STATIC
     gameplay/lua/LuaDecisionNode.cpp
         gameplay/lua/LuaBehavior.cpp
         gameplay/lua/LuaVfxBinding.cpp
+        gameplay/lua/LuaAnimationBinding.cpp
         gameplay/lua/LuaBehaviorSandbox.cpp
         gameplay/lua/LuaBehaviorSandbox.h
         gameplay/lua/LuaBehaviorMetadata.cpp
@@ -2123,6 +2124,7 @@ add_library(HoroEngine::GameplayAnimationApi ALIAS HoroGameplayAnimationApi)
 target_link_libraries(HoroGameplayAnimationApi INTERFACE HoroEngine::GameplayApi HoroEngine::AnimationApi)
 target_link_libraries(HoroGameplayRuntime PRIVATE HoroEngine::GameplayAnimationApi)
 target_link_libraries(HoroGameplayModuleHost PRIVATE HoroEngine::GameplayAnimationApi)
+target_link_libraries(HoroGameplayLua PRIVATE HoroEngine::GameplayAnimationApi)
 
 add_library(HoroGameplayAnimationScene STATIC gameplay/GameplayAnimationScene.cpp)
 add_library(HoroEngine::GameplayAnimationScene ALIAS HoroGameplayAnimationScene)
