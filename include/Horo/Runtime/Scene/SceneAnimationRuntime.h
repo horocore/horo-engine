@@ -194,6 +194,11 @@ namespace Horo::Runtime {
          * @return Existing allocation-free graph outcome, including stale/thread/lifecycle/type errors.
          */
         [[nodiscard]] Animation::GraphInstanceOutcome QueueTrigger(EntityRef entity, Animation::GraphParameterId parameter);
+        /** @brief Stages a typed scalar for the exact active graph's next committed tick.
+         * @param entity Exact active entity. @param parameter Declared scalar and its typed value.
+         * @return Allocation-free graph outcome or Scene admission failure.
+         */
+        [[nodiscard]] Animation::GraphInstanceOutcome QueueParameter(EntityRef entity, const Animation::GraphParameterInput &parameter);
         /** @brief Queues an action on an authoritative Scene graph at the owner control boundary.
          * @param entity Exact active entity. @param request Actual authored action and queue policy.
          * @return Existing graph command outcome with a handle on admission.
@@ -282,6 +287,9 @@ namespace Horo::Runtime {
 
     private:
         struct State;
+        /** @brief Resolves the graph at the Scene's owner-lane parameter admission boundary. */
+        [[nodiscard]] std::pair<Animation::AnimationGraphInstance *, Animation::GraphInstanceFailure> ResolveParameterGraph(
+            EntityRef entity) const noexcept;
         /** @brief Resolves the mutable authoritative graph only on the idle owner lane. */
         [[nodiscard]] std::pair<Animation::AnimationGraphInstance *, Animation::GraphActionFailure> ResolveActionGraph(
             EntityRef entity) const noexcept;

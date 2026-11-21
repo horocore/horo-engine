@@ -172,7 +172,7 @@ namespace Horo::Animation::Detail {
         GraphRootMotionWorkspace rootMotion;
         GraphScalarWorkspace scalars;
         std::vector<GraphParameterValue> parameters;
-        std::vector<std::uint8_t> queuedTriggers;
+        std::vector<std::optional<GraphParameterValue>> queuedParameters;
         std::vector<GraphPlayerState> players;
         std::vector<GraphPreparedMachine> preparedMachines;
         std::vector<std::uint8_t> latchScratch;
@@ -195,6 +195,10 @@ namespace Horo::Animation::Detail {
             return std::span{poses.coverage}.subspan(static_cast<std::size_t>(slot.index) * joints, joints);
         }
     };
+
+    /** @brief Validates one input against its declared variant and finite value contract. */
+    [[nodiscard]] GraphInstanceFailure ValidateParameterValue(const GraphParameter &declaration,
+                                                              const GraphParameterInput &parameter) noexcept;
 
     /** @brief Checks opt-in authority and actual bound root tracks after clip binding validation. */
     [[nodiscard]] GraphInstanceFailure AdmitRootMotion(const GraphInstanceAssets &assets,

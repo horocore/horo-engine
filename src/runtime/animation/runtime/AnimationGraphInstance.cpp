@@ -200,7 +200,7 @@ namespace Horo::Animation {
                 !charge(memory.poseTransforms + 2ULL * assets.program->SkeletonBinding().joints, sizeof(Math::Transform)) ||
                 !charge(memory.poseTransforms, sizeof(std::uint8_t)) ||
                 !charge(memory.clipPlayers, 2ULL * sizeof(Detail::GraphPlayerState)) ||
-                !charge(memory.parameters, 4ULL * sizeof(GraphParameterValue) + sizeof(std::uint8_t)) ||
+                !charge(memory.parameters, 4ULL * sizeof(GraphParameterValue) + sizeof(std::optional<GraphParameterValue>)) ||
                 !charge(assets.clips.size(), sizeof(std::shared_ptr<const AnimationClipAsset>)) ||
                 !charge(assets.curves.size(), sizeof(std::shared_ptr<const AnimationParameterCurve>) + sizeof(std::size_t)))
                 return false;
@@ -354,7 +354,7 @@ namespace Horo::Animation {
                 return failure;
             state.parameters.resize(memory.parameters);
             state.candidate.parameters.resize(memory.parameters);
-            state.queuedTriggers.resize(memory.parameters);
+            state.queuedParameters.resize(memory.parameters);
             for (auto &parameters : state.published.parameters)
                 parameters.resize(memory.parameters);
             state.curves.publications.assign(assets.curves.begin(), assets.curves.end());
@@ -561,7 +561,7 @@ namespace Horo::Animation {
         if (!state_->rootMotion.poses.empty())
             state_->published.rootMotion[slot] = state_->rootMotion.poses[state_->program->OutputSlot().index];
         std::ranges::copy(state_->candidate.parameters, state_->published.parameters[slot].begin());
-        std::ranges::fill(state_->queuedTriggers, 0);
+        std::ranges::fill(state_->queuedParameters, std::nullopt);
         PublishBlendMembers(*state_, slot);
         state_->published.handles[slot] = handle;
         state_->players.swap(state_->candidate.players);
@@ -626,6 +626,16 @@ namespace Horo::Animation {
 
     /** @copydoc AnimationGraphInstance::QueueTrigger */
     GraphInstanceOutcome AnimationGraphInstance::QueueTrigger(const GraphParameterId parameter) {
+        return QueueParameterInput({parameter, true}, true);
+    }
+
+    /** @copydoc AnimationGraphInstance::QueueParameter */
+    GraphInstanceOutcome AnimationGraphInstance::QueueParameter(const GraphParameterInput &parameter) {
+        return QueueParameterInput(parameter, false);
+    }
+
+    /** @copydoc AnimationGraphInstance::QueueParameterInput */
+    GraphInstanceOutcome AnimationGraphInstance::QueueParameterInput(const GraphParameterInput &parameter, const bool trigger) {
         if (const auto owner = Owner(state_.get()); owner.HasError())
             return owner;
         if (state_->closed)
@@ -635,12 +645,14 @@ namespace Horo::Animation {
         if (state_->ownerCancellation.IsCancellationRequested())
             return {GraphInstanceFailure::Cancelled};
         const auto declarations = state_->program->Parameters();
-        const auto found = std::ranges::lower_bound(declarations, parameter, {}, &GraphParameter::id);
-        if (!parameter.IsValid() || found == declarations.end() || found->id != parameter)
+        const auto found = std::ranges::lower_bound(declarations, parameter.id, {}, &GraphParameter::id);
+        if (found == declarations.end() || found->id != parameter.id)
             return {GraphInstanceFailure::BindingMismatch};
-        if (found->type != GraphValueType::Trigger)
+        if ((found->type == GraphValueType::Trigger) != trigger)
             return {GraphInstanceFailure::TypeMismatch};
-        state_->queuedTriggers[static_cast<std::size_t>(found - declarations.begin())] = 1;
+        if (const auto failure = Detail::ValidateParameterValue(*found, parameter); failure != GraphInstanceFailure::None)
+            return {failure};
+        state_->queuedParameters[static_cast<std::size_t>(found - declarations.begin())] = parameter.value;
         return {};
     }
 
@@ -799,7 +811,7 @@ namespace Horo::Animation {
             return owner;
         state_->closed = true;
         Detail::ShutdownActions(*state_);
-        std::ranges::fill(state_->queuedTriggers, 0);
+        std::ranges::fill(state_->queuedParameters, std::nullopt);
         state_->candidate.tick = {};
         state_->candidate.cancellation = {};
         state_->candidate.eventCount = 0;

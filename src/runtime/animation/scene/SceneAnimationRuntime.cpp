@@ -128,18 +128,32 @@ namespace Horo::Runtime {
         return Result<void>::Success();
     }
 
-    A::GraphInstanceOutcome SceneAnimationRuntime::QueueTrigger(EntityRef entity, A::GraphParameterId parameter) {
-        using enum Horo::Animation::GraphInstanceFailure;
+    /** @copydoc SceneAnimationRuntime::ResolveParameterGraph */
+    std::pair<A::AnimationGraphInstance *, A::GraphInstanceFailure> SceneAnimationRuntime::ResolveParameterGraph(
+        EntityRef entity) const noexcept {
+        using enum A::GraphInstanceFailure;
         if (!state_->OnOwner())
-            return Rejected(ThreadViolation);
+            return {nullptr, ThreadViolation};
         if (state_->closed || state_->attempting)
-            return Rejected(AdmissionRejected);
+            return {nullptr, AdmissionRejected};
         if (state_->config.ownerCancellation.IsCancellationRequested())
-            return Rejected(Cancelled);
+            return {nullptr, Cancelled};
         const auto actor = state_->Find(entity);
         if (!actor)
-            return Rejected(HandleStale);
-        return actor->graph.QueueTrigger(parameter);
+            return {nullptr, HandleStale};
+        return {&actor->graph, None};
+    }
+
+    /** @copydoc SceneAnimationRuntime::QueueTrigger */
+    A::GraphInstanceOutcome SceneAnimationRuntime::QueueTrigger(EntityRef entity, A::GraphParameterId parameter) {
+        const auto [graph, failure] = ResolveParameterGraph(entity);
+        return graph ? graph->QueueTrigger(parameter) : Rejected(failure);
+    }
+
+    /** @copydoc SceneAnimationRuntime::QueueParameter */
+    A::GraphInstanceOutcome SceneAnimationRuntime::QueueParameter(EntityRef entity, const A::GraphParameterInput &parameter) {
+        const auto [graph, failure] = ResolveParameterGraph(entity);
+        return graph ? graph->QueueParameter(parameter) : Rejected(failure);
     }
 
     A::GraphInstanceOutcome SceneAnimationRuntime::CopyPose(EntityRef entity, const A::PoseHandle &pose,

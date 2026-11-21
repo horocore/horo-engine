@@ -32,19 +32,17 @@ namespace Horo::Animation::Detail {
         return AnimationClipOutcome<AnimationTimeDelta>::Success({integral + carry});
     }
 
+    /** @copydoc ValidateParameterValue */
+    GraphInstanceFailure ValidateParameterValue(const GraphParameter &declaration, const GraphParameterInput &parameter) noexcept {
+        using enum GraphInstanceFailure;
+        if (declaration.defaultValue.index() != parameter.value.index())
+            return TypeMismatch;
+        if (const auto value = std::get_if<float>(&parameter.value); value && !std::isfinite(*value))
+            return Malformed;
+        return None;
+    }
+
     namespace {
-
-        /** @brief Validates one scalar override's variant and value before storing the
-         * candidate snapshot. */
-        GraphInstanceFailure ValidateParameterValue(const GraphParameter &declaration, const GraphParameterInput &parameter) noexcept {
-            using enum GraphInstanceFailure;
-            if (declaration.defaultValue.index() != parameter.value.index())
-                return TypeMismatch;
-            if (const auto value = std::get_if<float>(&parameter.value); value && !std::isfinite(*value))
-                return Malformed;
-            return None;
-        }
-
         /** @brief Captures all defaults and exact typed overrides before any
          * instruction runs. */
         GraphInstanceOutcome CaptureParameters(GraphInstanceState &state, const GraphEvaluationInput &input) noexcept {
@@ -55,9 +53,6 @@ namespace Horo::Animation::Detail {
                 state.candidate.parameters[index] = declarations[index].defaultValue;
             for (std::size_t index = 0; index < state.curves.publications.size(); ++index)
                 state.candidate.parameters[state.curves.parameters[index]] = state.curves.publications[index]->Sample(input.curveTime);
-            for (std::size_t index = 0; index < declarations.size(); ++index)
-                if (state.queuedTriggers[index] != 0)
-                    state.candidate.parameters[index] = true;
             for (std::size_t index = 0; index < input.parameters.size(); ++index) {
                 const auto &parameter = input.parameters[index];
                 const auto found = std::ranges::lower_bound(declarations, parameter.id, {}, &GraphParameter::id);
@@ -69,10 +64,11 @@ namespace Horo::Animation::Detail {
                     if (input.parameters[earlier].id == parameter.id)
                         return {GraphInstanceFailure::Malformed};
                 const auto destination = static_cast<std::size_t>(found - declarations.begin());
-                // False invocation input cannot erase an already accepted queued trigger.
-                if (found->type != GraphValueType::Trigger || state.queuedTriggers[destination] == 0)
-                    state.candidate.parameters[destination] = parameter.value;
+                state.candidate.parameters[destination] = parameter.value;
             }
+            for (std::size_t index = 0; index < declarations.size(); ++index)
+                if (state.queuedParameters[index])
+                    state.candidate.parameters[index] = *state.queuedParameters[index];
             return {};
         }
 

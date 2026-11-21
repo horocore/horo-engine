@@ -475,6 +475,15 @@ namespace Horo::Animation {
          * attempted tick.
          */
         [[nodiscard]] GraphInstanceOutcome QueueTrigger(GraphParameterId parameter);
+
+        /** @brief Stages one typed scalar override for the next committed tick.
+         * @param parameter Declared float, boolean, or integer parameter and value.
+         * @return Success or a typed owner, lifecycle, identity, type, or non-finite value failure.
+         * @details The most recently accepted value for an ID overrides the invocation input. Failed attempts
+         * retain the queue for retry. A successful commit consumes it. Trigger declarations use QueueTrigger.
+         */
+        [[nodiscard]] GraphInstanceOutcome QueueParameter(const GraphParameterInput &parameter);
+
         /** @brief Copies an immutable typed gameplay parameter block from an exact
          * committed pose publication.
          * @param publication Exact resident instance/slot/generation identity
@@ -625,6 +634,8 @@ namespace Horo::Animation {
 
     private:
         friend struct Detail::GraphSceneCommitAccess;
+        /** @brief Validates and stages one exact declared parameter or trigger. */
+        [[nodiscard]] GraphInstanceOutcome QueueParameterInput(const GraphParameterInput &parameter, bool trigger);
         /** @brief Evaluates with exclusive access granted by the Scene owner for the lifetime of one joined batch. */
         [[nodiscard]] GraphInstanceOutcome EvaluateExclusive(const GraphEvaluationInput &input,
                                                              const CancellationToken &publicationCancellation);

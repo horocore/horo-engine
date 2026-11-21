@@ -589,8 +589,13 @@ linearization boundary: a later cancellation does not undo a committed tick.
 IDs identify float, boolean, integer and trigger values. Each invocation copies its
 admitted inputs before instruction execution; missing declarations, duplicate IDs,
 non-finite values and variant/type mismatches return finite binding/malformed/type
-diagnostics. Omitted scalar inputs retain compiled-default behavior. There is no
-second mutable gameplay parameter store.
+diagnostics. Omitted scalar inputs retain compiled-default behavior. The graph
+owns one preallocated command slot per declaration. `QueueParameter` replaces
+the pending scalar value for that identity. Admitted gameplay scalar commands
+take precedence over the fixed invocation input for the next committed tick.
+Abort, cancellation at commit and failed evaluation retain the pending value
+for retry. A successful commit consumes it. Scene admission uses the same
+graph command path.
 
 The owner calls `QueueTrigger` before evaluation. Repeated events coalesce within the
 pending fixed tick. False invocation input cannot erase an accepted queued event.

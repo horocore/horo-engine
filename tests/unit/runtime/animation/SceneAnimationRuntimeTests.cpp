@@ -43,6 +43,32 @@ namespace Horo::Animation {
         }
     }  // namespace
 
+    TEST_CASE("Scene gameplay parameter commands affect only the next committed playback tick", "[animation][scene][parameters]") {
+        Test::Scene::Fixture fixture(false, true, [](Test::Cook::Fixture &cook) -> std::optional<AnimationAuthoringComponent> {
+            const auto graph = Test::Instance::Blended();
+            const Test::Instance::Prepared source(graph);
+            cook.Replace(*source.skeleton, source.compileClips, graph);
+            return std::nullopt;
+        });
+        auto &owner = *fixture.forward->adapter;
+        const auto weight = Test::Id<GraphParameterId>(1);
+        REQUIRE(owner.QueueParameter(fixture.entity, {weight, 1.0F}).HasValue());
+        fixture.peer->failUpdate = true;
+        REQUIRE(fixture.Tick().HasError());
+        CHECK_FALSE(fixture.Observation().component);
+        REQUIRE(fixture.scheduler->RunFrame(fixture.lifecycle, fixture.token, false).HasValue());
+        const auto pose = fixture.Observation().component->currentPose;
+        std::array<GraphParameterInput, 1> parameters;
+        REQUIRE(owner.CopyParameters(fixture.entity, pose, parameters).HasValue());
+        CHECK(std::get<float>(parameters[0].value) == 1.0F);
+        REQUIRE(fixture.Tick().HasValue());
+        const auto next = fixture.Observation().component->currentPose;
+        REQUIRE(owner.CopyParameters(fixture.entity, next, parameters).HasValue());
+        CHECK(std::get<float>(parameters[0].value) == 0.5F);
+        fixture.lifetime.RequestCancellation();
+        CHECK(owner.QueueParameter(fixture.entity, {weight, 0.0F}).failure == GraphInstanceFailure::Cancelled);
+    }
+
     TEST_CASE("Scene socket binding follows committed poses until their residency expires", "[animation][scene][sockets]") {
         Test::Scene::Fixture fixture(false, true, PrepareSocketGraph);
         auto &owner = *fixture.forward->adapter;
