@@ -19,8 +19,7 @@ namespace Horo::AI {
             ExpectError(runtime.ActiveBinding(), AIErrors::RuntimeUnavailable);
         }
 
-        TEST_CASE("AI activation rejects duplicate controller descriptors before publication",
-                  "[unit][ai][scene][activation][identity]") {
+        TEST_CASE("AI activation rejects duplicate controller descriptors before publication", "[unit][ai][scene][activation][identity]") {
             auto runtime = std::move(AiSceneRuntime::Create()).Value();
             auto fixture = MakeFixture(1, 11, 7, 0);
             const std::array descriptors{fixture.descriptor, fixture.descriptor};
