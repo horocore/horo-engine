@@ -438,15 +438,24 @@ namespace Horo::Editor {
         DiscardRecovery
     };
 
+    struct EnvironmentQueryVisibilityStageAddition final {
+        std::array<std::uint8_t, 16> channel;
+    };
+
+    struct EnvironmentQueryNavigationStageAddition final {
+        std::optional<double> maximumScoredCost;
+    };
+
     /** @brief An optional structural edit: append a typed test or remove one exact stage. */
-    using EnvironmentQueryDistanceStageChange = std::variant<std::monostate, AI::QueryPointDistanceTest, AI::QueryStageId>;
+    using EnvironmentQueryStageChange = std::variant<std::monostate, AI::QueryPointDistanceTest, EnvironmentQueryVisibilityStageAddition,
+                                                     EnvironmentQueryNavigationStageAddition, AI::QueryStageId>;
 
     /** @brief A typed transaction correlated to exactly one authoring revision. */
     struct EnvironmentQueryEditRequest final {
         EnvironmentQueryDocumentFence fence;
         EnvironmentQueryEditAction action{EnvironmentQueryEditAction::Apply};
         std::optional<AI::BuiltinPointQuerySettings> settings;
-        EnvironmentQueryDistanceStageChange stageChange;
+        EnvironmentQueryStageChange stageChange;
         std::shared_ptr<const DocumentRecoveryRecord> recovery;
         std::optional<AI::BuiltinPerceptionQuerySettings> perception;
     };
@@ -882,6 +891,11 @@ namespace Horo::Editor {
         std::string name;
     };
 
+    struct PhysicsQueryChannelChoice final {
+        Physics::PhysicsQueryChannelId id;
+        std::string name;
+    };
+
     /** @brief Name and stable identity of a registered Physics material. */
     struct PhysicsMaterialChoice {
         Assets::AssetId id;
@@ -892,7 +906,7 @@ namespace Horo::Editor {
     inline EditorWorkspaceViewCommandData MakeEnvironmentQueryEditCommand(const EnvironmentQueryWorkspaceDocument &document,
                                                                           EnvironmentQueryEditAction action,
                                                                           std::optional<AI::BuiltinPointQuerySettings> settings = {},
-                                                                          EnvironmentQueryDistanceStageChange stageChange = {}) {
+                                                                          EnvironmentQueryStageChange stageChange = {}) {
         return {.command = EditorWorkspaceViewCommand::EditEnvironmentQuery,
                 .environmentQueryEdit = EnvironmentQueryEditRequest{{document.identity.instance, document.revision},
                                                                     action,
@@ -985,6 +999,7 @@ namespace Horo::Editor {
         std::vector<InspectorProviderApproval> inspectorApprovals;
         SceneTransactionContext physicsContext;
         std::vector<PhysicsProfileChoice> physicsProfiles;
+        std::vector<PhysicsQueryChannelChoice> physicsQueryChannels;
         std::vector<PhysicsMaterialChoice> physicsMaterials;
         std::vector<NavigationDefinitionSnapshot> navigationDefinitions;
         std::string navigationEditError;

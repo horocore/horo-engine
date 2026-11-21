@@ -85,16 +85,20 @@ namespace Horo::Editor {
         using EnvironmentQueryWorkspaceSource::RegisteredQueryDocument;
 
         /** @brief Applies one typed structural edit to a detached, already validated query. */
-        Result<AI::EnvironmentQueryAsset> ChangeDistanceStages(const AI::EnvironmentQueryAsset &source,
-                                                               const EnvironmentQueryDistanceStageChange &change) {
+        Result<AI::EnvironmentQueryAsset> ChangePointStages(const AI::EnvironmentQueryAsset &source,
+                                                            const EnvironmentQueryStageChange &change) {
             if (const auto *remove = std::get_if<AI::QueryStageId>(&change))
-                return AI::RemoveBuiltinPointDistanceTest(source, *remove);
+                return AI::RemoveBuiltinPointTest(source, *remove);
             std::set<AI::QueryStageId> occupied;
             for (const auto &stage : source.Stages())
                 occupied.insert(stage.id);
             const auto id = AuthoredAiSources::Issue(occupied);
             if (id.HasError())
                 return Result<AI::EnvironmentQueryAsset>::Failure(id.ErrorValue());
+            if (const auto *visibility = std::get_if<EnvironmentQueryVisibilityStageAddition>(&change))
+                return AI::AddBuiltinPointVisibilityTest(source, id.Value(), visibility->channel);
+            if (const auto *navigation = std::get_if<EnvironmentQueryNavigationStageAddition>(&change))
+                return AI::AddBuiltinPointNavigationTest(source, id.Value(), navigation->maximumScoredCost);
             return AI::AddBuiltinPointDistanceTest(source, id.Value(), std::get<AI::QueryPointDistanceTest>(change));
         }
 
@@ -116,7 +120,7 @@ namespace Horo::Editor {
             if (edited.HasError())
                 return Prepared::Failure(edited.ErrorValue());
             if (changesStages) {
-                edited = ChangeDistanceStages(edited.Value(), request.stageChange);
+                edited = ChangePointStages(edited.Value(), request.stageChange);
                 if (edited.HasError())
                     return Prepared::Failure(edited.ErrorValue());
             }

@@ -714,7 +714,7 @@ TEST_CASE("Registered Query settings use shared history and tracked source publi
 
     auto changed = *document.settings;
     const auto issue = [&](EnvironmentQueryEditAction action, const std::optional<BuiltinPointQuerySettings> &values = {},
-                           EnvironmentQueryDistanceStageChange change = {}) {
+                           EnvironmentQueryStageChange change = {}) {
         controller.ProcessCommand(MakeEnvironmentQueryEditCommand(document, action, values, change));
     };
     changed.lattice.stepMillimeters = 0;
@@ -995,6 +995,76 @@ TEST_CASE("Environment Query New creates the first registered source from explic
     draft.innerSteps = 1;
 
     constexpr auto path = "assets/First lattice.horo_eqs";
+    SECTION("Physics and Navigation stages retain identity through edits, history, save, and cook") {
+        const auto command = AssetBrowserInteractionSession::ConfirmCreateQuery(draft);
+        REQUIRE(command);
+        controller.ProcessCommand(*command);
+        const auto &documents = controller.ViewModel().environmentQueryDocuments;
+        REQUIRE(documents.size() == 1);
+        const auto &document = documents.front();
+        REQUIRE(document.settings);
+        const auto original = document.query;
+        using enum EnvironmentQueryEditAction;
+        const auto edit = [&](EnvironmentQueryStageChange change, std::optional<BuiltinPointQuerySettings> values = std::nullopt) {
+            controller.ProcessCommand(
+                MakeEnvironmentQueryEditCommand(document, Apply, values ? std::move(values) : document.settings, change));
+            REQUIRE_FALSE(document.diagnostic);
+        };
+        const std::array<std::uint8_t, 16> channel{1};
+        edit(EnvironmentQueryVisibilityStageAddition{channel});
+        REQUIRE(document.settings->visibility);
+        const auto visibility = document.settings->visibility->stage;
+        edit(EnvironmentQueryNavigationStageAddition{25.0});
+        REQUIRE(document.settings->navigation);
+        const auto navigation = document.settings->navigation->stage;
+        CHECK(visibility != navigation);
+
+        auto changed = *document.settings;
+        changed.navigation->maximumScoredCost = 50.0;
+        changed.visibility->channel = {2};
+        changed.lattice.stepMillimeters = 350;
+        edit({}, changed);
+        CHECK(document.settings->navigation->maximumScoredCost == 50.0);
+        CHECK(document.settings->visibility->channel == changed.visibility->channel);
+        CHECK(document.settings->lattice.stepMillimeters == 350);
+        CHECK(document.settings->navigation->stage == navigation);
+        CHECK(document.settings->visibility->stage == visibility);
+        CHECK(document.query->Stages().front().id == original->Stages().front().id);
+        const auto mixed = document.query;
+
+        edit(visibility);
+        CHECK_FALSE(document.settings->visibility);
+        REQUIRE(document.settings->navigation);
+        CHECK(document.settings->navigation->stage == navigation);
+        controller.ProcessCommand(MakeEnvironmentQueryEditCommand(document, Undo));
+        CHECK(document.query == mixed);
+        REQUIRE(document.settings->visibility);
+        controller.ProcessCommand(MakeEnvironmentQueryEditCommand(document, Redo));
+        CHECK_FALSE(document.settings->visibility);
+        controller.ProcessCommand(MakeEnvironmentQueryEditCommand(document, Undo));
+        controller.ProcessCommand(MakeEnvironmentQueryEditCommand(document, Save));
+        REQUIRE_FALSE(document.diagnostic);
+        REQUIRE_FALSE(document.dirty);
+        controller.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::CloseWorkspaceDocument, .documentInstance = document.identity.instance});
+        REQUIRE(documents.empty());
+        Project::Open(controller, path);
+        REQUIRE(documents.size() == 1);
+        const auto &reopened = documents.front();
+        REQUIRE(reopened.settings);
+        REQUIRE(reopened.settings->visibility);
+        REQUIRE(reopened.settings->navigation);
+        CHECK(reopened.settings->visibility->stage == visibility);
+        CHECK(reopened.settings->navigation->stage == navigation);
+        CHECK(reopened.settings->visibility->channel == changed.visibility->channel);
+        CHECK(reopened.settings->navigation->maximumScoredCost == 50.0);
+        const auto encoded = EnvironmentQueryCookedCodec::Encode(*reopened.query, registry.Value());
+        REQUIRE(encoded.HasValue());
+        const auto cooked = EnvironmentQueryCookedCodec::Decode(encoded.Value(), registry.Value());
+        REQUIRE(cooked.HasValue());
+        CHECK(UsesBuiltinPointVisibility(cooked.Value()));
+        CHECK(UsesBuiltinPointNavigation(cooked.Value()));
+    }
     SECTION("Perception creation and history publish the exact cooked actor query") {
         draft.perceivedActors = true;
         draft.currentlySensed = false;

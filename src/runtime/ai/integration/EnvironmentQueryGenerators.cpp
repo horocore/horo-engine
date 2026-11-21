@@ -125,6 +125,46 @@ namespace Horo::AI {
             return &*std::ranges::find(stages, id, &QueryPlanStage::test);
         }
 
+        using VisibilityChannelId = std::array<std::uint8_t, 16>;
+
+        std::optional<VisibilityChannelId> ReadVisibilityChannel(const QueryPlanStage &stage) {
+            const auto property =
+                std::ranges::find(stage.properties, QueryPropertyId::Create(VisibilityChannel).Value(), &QueryPropertyValue::id);
+            const auto *bytes = property == stage.properties.end() ? nullptr : std::get_if<std::vector<std::byte>>(&property->value);
+            VisibilityChannelId channel{};
+            if (!bytes || bytes->size() != channel.size() || std::ranges::all_of(*bytes, [](auto value) {
+                return value == std::byte{};
+            }))
+                return std::nullopt;
+            std::ranges::transform(*bytes, channel.begin(), [](auto value) {
+                return std::to_integer<std::uint8_t>(value);
+            });
+            return channel;
+        }
+
+        std::vector<QueryPropertyValue> VisibilityProperties(const VisibilityChannelId &channel) {
+            const auto bytes = std::as_bytes(std::span{channel});
+            return {{QueryPropertyId::Create(VisibilityChannel).Value(), std::vector<std::byte>{bytes.begin(), bytes.end()}}};
+        }
+
+        Result<std::optional<double>> ReadNavigationCost(const QueryPlanStage &stage) {
+            const auto property =
+                std::ranges::find(stage.properties, QueryPropertyId::Create(NavigationMaximumScoredCost).Value(), &QueryPropertyValue::id);
+            using Cost = Result<std::optional<double>>;
+            if (property == stage.properties.end())
+                return Cost::Success(std::nullopt);
+            const auto *cost = std::get_if<double>(&property->value);
+            if (!cost || !std::isfinite(*cost) || *cost <= 0)
+                return Cost::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+            return Cost::Success(*cost);
+        }
+
+        std::vector<QueryPropertyValue> NavigationProperties(std::optional<double> cost) {
+            if (!cost)
+                return {};
+            return {{QueryPropertyId::Create(NavigationMaximumScoredCost).Value(), *cost}};
+        }
+
         /** @brief Native origin shared by the inert registration and its exact kernels. */
         QueryDescriptorOrigin BuiltinOrigin() {
             return {.provider = QueryProviderId::Create(LatticeProvider).Value(), .version = LatticeVersion.minimum};
@@ -487,14 +527,12 @@ namespace Horo::AI {
             return byte == 0;
         }))
             return Asset::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-        const auto bytes = std::as_bytes(std::span{channel});
         return AppendPointProviderTest(lattice,
                                        {.id = stage,
                                         .kind = QueryStageKind::Test,
                                         .test = QueryTestId::Create(PointVisibilityTest).Value(),
                                         .descriptorVersion = LatticeVersion,
-                                        .properties = {{QueryPropertyId::Create(VisibilityChannel).Value(),
-                                                        std::vector<std::byte>{bytes.begin(), bytes.end()}}}},
+                                        .properties = VisibilityProperties(channel)},
                                        PointNavigationTest);
     }
 
@@ -520,18 +558,10 @@ namespace Horo::AI {
         const auto generator = CapturePointOwnerGenerator(stages.front(), plan.ResultSchema().itemType, contexts, registry);
         if (generator.HasError())
             return Captured::Failure(generator.ErrorValue());
-        const auto property =
-            std::ranges::find(visibility->properties, QueryPropertyId::Create(VisibilityChannel).Value(), &QueryPropertyValue::id);
-        const auto *bytes = property == visibility->properties.end() ? nullptr : std::get_if<std::vector<std::byte>>(&property->value);
-        std::array<std::uint8_t, 16> channel{};
-        if (!bytes || bytes->size() != channel.size() || std::ranges::all_of(*bytes, [](std::byte value) {
-            return value == std::byte{};
-        }))
+        const auto channel = ReadVisibilityChannel(*visibility);
+        if (!channel)
             return Captured::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-        std::ranges::transform(*bytes, channel.begin(), [](std::byte value) {
-            return std::to_integer<std::uint8_t>(value);
-        });
-        return Captured::Success({generator.Value().lattice, generator.Value().provenance, visibility->id, channel});
+        return Captured::Success({generator.Value().lattice, generator.Value().provenance, visibility->id, *channel});
     }
 
     /** @copydoc AddBuiltinPointNavigationTest */
@@ -543,9 +573,8 @@ namespace Horo::AI {
         QueryAssetStage path{.id = stage,
                              .kind = QueryStageKind::Test,
                              .test = QueryTestId::Create(PointNavigationTest).Value(),
-                             .descriptorVersion = LatticeVersion};
-        if (maximumScoredCost)
-            path.properties.emplace_back(QueryPropertyId::Create(NavigationMaximumScoredCost).Value(), *maximumScoredCost);
+                             .descriptorVersion = LatticeVersion,
+                             .properties = NavigationProperties(maximumScoredCost)};
         return AppendPointProviderTest(lattice, std::move(path), PointVisibilityTest);
     }
 
@@ -571,23 +600,26 @@ namespace Horo::AI {
         const auto generator = CapturePointOwnerGenerator(stages.front(), plan.ResultSchema().itemType, contexts, registry);
         if (generator.HasError())
             return Captured::Failure(generator.ErrorValue());
-        const auto property =
-            std::ranges::find(path.properties, QueryPropertyId::Create(NavigationMaximumScoredCost).Value(), &QueryPropertyValue::id);
-        std::optional<double> ceiling;
-        if (property != path.properties.end()) {
-            const auto *cost = std::get_if<double>(&property->value);
-            if (!cost || !std::isfinite(*cost) || *cost <= 0)
-                return Captured::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-            ceiling = *cost;
-        }
-        return Captured::Success({generator.Value().lattice, generator.Value().provenance, path.id, ceiling});
+        const auto ceiling = ReadNavigationCost(path);
+        if (ceiling.HasError())
+            return Captured::Failure(ceiling.ErrorValue());
+        return Captured::Success({generator.Value().lattice, generator.Value().provenance, path.id, ceiling.Value()});
     }
 
     /** @copydoc RemoveBuiltinPointDistanceTest */
     Result<EnvironmentQueryAsset> RemoveBuiltinPointDistanceTest(const EnvironmentQueryAsset &lattice, QueryStageId stage) {
+        const auto test = std::ranges::find(lattice.Stages(), stage, &QueryAssetStage::id);
+        if (test == lattice.Stages().end() || test->test.Value() != PointDistanceTest)
+            return Result<EnvironmentQueryAsset>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+        return RemoveBuiltinPointTest(lattice, stage);
+    }
+
+    /** @copydoc RemoveBuiltinPointTest */
+    Result<EnvironmentQueryAsset> RemoveBuiltinPointTest(const EnvironmentQueryAsset &lattice, QueryStageId stage) {
         const auto stages = lattice.Stages();
         const auto test = std::ranges::find(stages, stage, &QueryAssetStage::id);
-        if (test == stages.end() || test->kind != QueryStageKind::Test || test->test != QueryTestId::Create(PointDistanceTest).Value())
+        const std::array known{PointDistanceTest, PointVisibilityTest, PointNavigationTest};
+        if (test == stages.end() || test->kind != QueryStageKind::Test || std::ranges::find(known, test->test.Value()) == known.end())
             return Result<EnvironmentQueryAsset>::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
         QueryAssetSource edited{.id = lattice.Id(),
                                 .displayName = lattice.DisplayName(),
@@ -596,6 +628,44 @@ namespace Horo::AI {
         edited.stages.erase(edited.stages.begin() + (test - stages.begin()));
         return EnvironmentQueryAsset::Capture(edited);
     }
+
+    namespace {
+        Result<bool> ReadPointProviderSettings(const QueryPlanStage &stage, const QuerySchemaRegistry &registry,
+                                               BuiltinPointQuerySettings &settings) {
+            using Read = Result<bool>;
+            const auto provider = stage.test.Value();
+            if (provider != PointVisibilityTest && provider != PointNavigationTest)
+                return Read::Success(false);
+            const auto *descriptor = registry.Find(stage.test);
+            if (!descriptor || descriptor->origin != BuiltinOrigin())
+                return Read::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
+            if (provider == PointVisibilityTest) {
+                const auto channel = ReadVisibilityChannel(stage);
+                if (!channel || settings.visibility)
+                    return Read::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+                settings.visibility.emplace(stage.id, *channel);
+                return Read::Success(true);
+            }
+            const auto cost = ReadNavigationCost(stage);
+            if (cost.HasError() || settings.navigation)
+                return Read::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+            settings.navigation.emplace(stage.id, cost.Value());
+            return Read::Success(true);
+        }
+
+        void WritePointTestSettings(QueryAssetStage &stage, const BuiltinPointQuerySettings &settings) {
+            if (stage.test.Value() == PointVisibilityTest) {
+                stage.properties = VisibilityProperties(settings.visibility->channel);
+                return;
+            }
+            if (stage.test.Value() == PointNavigationTest) {
+                stage.properties = NavigationProperties(settings.navigation->maximumScoredCost);
+                return;
+            }
+            const auto entry = std::ranges::find(settings.distanceTests, stage.id, &QueryPointDistanceStageSettings::stage);
+            stage.properties = DistanceProperties(entry->test);
+        }
+    }  // namespace
 
     /** @copydoc ReadBuiltinPointQuerySettings */
     Result<BuiltinPointQuerySettings> ReadBuiltinPointQuerySettings(const EnvironmentQueryAsset &asset,
@@ -615,12 +685,19 @@ namespace Horo::AI {
         settings.latticeCenters = PointCenterOptions(generator->contextChoice, registry);
         settings.distanceTests.reserve(stages.size() - 1);
         for (const auto &stage : stages.subspan(1)) {
+            const auto provider = ReadPointProviderSettings(stage, registry, settings);
+            if (provider.HasError())
+                return Settings::Failure(provider.ErrorValue());
+            if (provider.Value())
+                continue;
             const auto distance = BuiltinPointDistanceQuery::Capture(stage, registry);
             if (distance.HasError())
                 return Settings::Failure(distance.ErrorValue());
             settings.distanceTests.emplace_back(stage.id, distance.Value().Settings(),
                                                 PointCenterOptions(registry.Find(stage.test)->contextChoice, registry));
         }
+        if ((settings.visibility || settings.navigation) && !settings.distanceTests.empty())
+            return Settings::Failure(MakeError(AIErrors::EnvironmentQueryStageUnsupported));
         return Settings::Success(std::move(settings));
     }
 
@@ -632,7 +709,12 @@ namespace Horo::AI {
         if (previous.HasError())
             return Edited::Failure(previous.ErrorValue());
         constexpr auto stageId = &QueryPointDistanceStageSettings::stage;
-        if (!std::ranges::equal(previous.Value().distanceTests, settings.distanceTests, {}, stageId, stageId))
+        const auto identity = [](const auto &stage) {
+            return stage ? std::optional{stage->stage} : std::nullopt;
+        };
+        if (!std::ranges::equal(previous.Value().distanceTests, settings.distanceTests, {}, stageId, stageId) ||
+            identity(previous.Value().visibility) != identity(settings.visibility) ||
+            identity(previous.Value().navigation) != identity(settings.navigation))
             return Edited::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
 
         const auto generator = std::ranges::find(asset.Stages(), QueryStageKind::Generator, &QueryAssetStage::kind);
@@ -650,8 +732,7 @@ namespace Horo::AI {
                 stage.properties = generated.Value().Stages().front().properties;
                 continue;
             }
-            const auto entry = std::ranges::find(settings.distanceTests, stage.id, stageId);
-            stage.properties = DistanceProperties(entry->test);
+            WritePointTestSettings(stage, settings);
         }
         auto captured = EnvironmentQueryAsset::Capture(edited);
         if (captured.HasError())

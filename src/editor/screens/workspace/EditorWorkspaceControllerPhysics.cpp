@@ -10,6 +10,7 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::RefreshPhysicsProfiles */
     void EditorWorkspaceController::RefreshPhysicsProfiles() {
         m_viewModel.physicsProfiles.clear();
+        m_viewModel.physicsQueryChannels.clear();
         const auto metadata = Application::LoadProjectMetadata(ProjectRoot());
         if (metadata.HasError())
             return;
@@ -18,6 +19,15 @@ namespace Horo::Editor {
             return;
         for (const auto &profile : document.Value().settings->Input().profiles)
             m_viewModel.physicsProfiles.emplace_back(profile.id, profile.name);
+        const auto &settings = *document.Value().settings;
+        for (const auto &channel : settings.Schema()->QueryChannels()) {
+            if (!channel.enabled)
+                continue;
+            const auto &labels = settings.Input().channels;
+            const auto label =
+                std::ranges::find(labels, channel.id, &Application::CollisionDisplayMetadata<Physics::PhysicsQueryChannelId>::id);
+            m_viewModel.physicsQueryChannels.emplace_back(channel.id, label != labels.end() ? label->name : channel.id.ToString());
+        }
     }
 
     /** @copydoc EditorWorkspaceController::RefreshPhysicsMaterials */

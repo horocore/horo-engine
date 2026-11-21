@@ -16,6 +16,7 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <cmath>
 #include <format>
 #include <limits>
 #include <set>
@@ -429,6 +430,8 @@ namespace Horo::Editor {
         const auto stages = plan.Value().Stages();
         if (!document.settings)
             return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
+        if (document.settings->visibility || document.settings->navigation)
+            return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryStageUnsupported));
         const auto *generator = m_querySchema->Find(stages.front().generator);
         if (!generator)
             return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
@@ -686,6 +689,7 @@ namespace Horo::Editor {
         };
         return positiveUint32(step) && outer <= AI::MaximumQueryLatticeOuterSteps && (!annulus || inner <= outer) && maximum > 0 &&
                maximum <= AI::EnvironmentQuerySchemaLimits::MaximumResults &&
+               (!navigation || !preferPathCost || (std::isfinite(pathCostCeiling) && pathCostCeiling > 0)) &&
                std::ranges::all_of(distances, [positiveUint32](const Distance &distance) {
             return positiveUint32(distance.radius) && positiveUint32(distance.weight);
         });
@@ -703,7 +707,60 @@ namespace Horo::Editor {
                                                 AI::QueryPointDistanceTest{static_cast<std::uint32_t>(distance.radius),
                                                                            distance.preferNearer,
                                                                            static_cast<std::uint32_t>(distance.weight), distance.center});
+        if (visibility)
+            settings.visibility.emplace(visibility->stage, queryChannel.Bytes());
+        if (navigation)
+            settings.navigation.emplace(navigation->stage, preferPathCost ? std::optional{pathCostCeiling} : std::nullopt);
         return settings;
+    }
+
+    /** @copydoc EditorWorkspaceView::DrawEnvironmentQueryProviderStages */
+    EnvironmentQueryStageChange EditorWorkspaceView::DrawEnvironmentQueryProviderStages(
+        EnvironmentQueryFields &fields, std::span<const PhysicsQueryChannelChoice> channels) const {
+        const auto text = [&](std::string_view key) {
+            return m_context.localization.Get("editor", key);
+        };
+        const auto &fonts = m_context.theme.fonts;
+        const auto button = [&](std::string_view key, bool enabled = true) {
+            return Ui::Button({.label = text(key).c_str(), .enabled = enabled, .font = fonts.sans});
+        };
+        const auto selected = std::ranges::find(channels, fields.queryChannel, &PhysicsQueryChannelChoice::id);
+        const auto current = selected == channels.end() ? fields.queryChannel.ToString() : selected->name;
+        Ui::FieldLabel(text("workspace.environment_query.query_channel").c_str(), fonts);
+        if (!channels.empty() && ImGui::BeginCombo("##query_channel", current.c_str())) {
+            for (const auto &channel : channels) {
+                const auto id = channel.id.ToString();
+                ImGui::PushID(id.c_str());
+                if (ImGui::Selectable(channel.name.c_str(), channel.id == fields.queryChannel))
+                    fields.queryChannel = channel.id;
+                ImGui::PopID();
+            }
+            ImGui::EndCombo();
+        }
+        if (fields.visibility) {
+            if (button("workspace.environment_query.remove_visibility"))
+                return fields.visibility->stage;
+        } else if (button("workspace.environment_query.add_visibility",
+                          fields.IsValid() &&
+                              std::ranges::find(channels, fields.queryChannel, &PhysicsQueryChannelChoice::id) != channels.end())) {
+            return EnvironmentQueryVisibilityStageAddition{fields.queryChannel.Bytes()};
+        }
+
+        static_cast<void>(Ui::CheckboxControl(text("workspace.environment_query.rank_path_cost").c_str(), &fields.preferPathCost, fonts));
+        if (fields.preferPathCost) {
+            Ui::FieldLabel(text("workspace.environment_query.path_cost_ceiling").c_str(), fonts);
+            ImGui::InputDouble("##path_cost_ceiling", &fields.pathCostCeiling);
+        }
+        if (fields.navigation) {
+            if (button("workspace.environment_query.remove_navigation"))
+                return fields.navigation->stage;
+        } else {
+            const bool validCost = !fields.preferPathCost || (std::isfinite(fields.pathCostCeiling) && fields.pathCostCeiling > 0);
+            if (button("workspace.environment_query.add_navigation", fields.IsValid() && validCost))
+                return EnvironmentQueryNavigationStageAddition{fields.preferPathCost ? std::optional{fields.pathCostCeiling}
+                                                                                     : std::nullopt};
+        }
+        return {};
     }
 
     /** @copydoc EditorWorkspaceView::DrawEnvironmentQueryDistanceStages */
@@ -787,6 +844,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceView::DrawEnvironmentQuerySettings */
     void EditorWorkspaceView::DrawEnvironmentQuerySettings(const EnvironmentQueryWorkspaceDocument &document,
+                                                           std::span<const PhysicsQueryChannelChoice> channels,
                                                            EditorWorkspaceViewCommandData &outCommand) const {
         using enum EnvironmentQueryEditAction;
         const auto text = [&](std::string_view key) {
@@ -805,6 +863,12 @@ namespace Horo::Editor {
                       .annulus = current.lattice.innerSteps.has_value(),
                       .center = current.lattice.center,
                       .newDistanceRadius = current.lattice.stepMillimeters,
+                      .visibility = current.visibility,
+                      .navigation = current.navigation,
+                      .queryChannel = current.visibility ? Physics::PhysicsQueryChannelId::FromBytes(current.visibility->channel)
+                                                         : (channels.empty() ? Physics::PhysicsQueryChannelId{} : channels.front().id),
+                      .preferPathCost = current.navigation && current.navigation->maximumScoredCost.has_value(),
+                      .pathCostCeiling = current.navigation ? current.navigation->maximumScoredCost.value_or(100) : 100,
                       .widgetId = std::format("##EqsSettings/{}/{}", fence.instance.Value(), fence.revision)};
             fields.distances.reserve(current.distanceTests.size());
             for (const auto &entry : current.distanceTests)
@@ -823,9 +887,11 @@ namespace Horo::Editor {
         number("workspace.environment_query.create_limit", "##limit", fields.maximum);
         DrawPointContextChoice(LocalizePointContexts(m_context.localization), fonts, fields.center, current.latticeCenters);
         const auto remove = DrawEnvironmentQueryDistanceStages(fields);
-        const bool roomForStage = document.query->Stages().size() < AI::EnvironmentQuerySchemaLimits::Stages;
+        const bool roomForStage =
+            !current.visibility && !current.navigation && document.query->Stages().size() < AI::EnvironmentQuerySchemaLimits::Stages;
         if (roomForStage)
             number("workspace.environment_query.new_distance_radius", "##new_distance_radius", fields.newDistanceRadius);
+        auto change = fields.distances.empty() ? DrawEnvironmentQueryProviderStages(fields, channels) : EnvironmentQueryStageChange{};
         const bool valid = fields.IsValid();
         const auto button = [&](std::string_view key, bool enabled) {
             return Ui::Button({.label = text(key).c_str(), .enabled = enabled, .font = fonts.sans});
@@ -833,8 +899,8 @@ namespace Horo::Editor {
         const bool add = button("workspace.environment_query.add_distance_test",
                                 valid && roomForStage && fields.newDistanceRadius > 0 &&
                                     fields.newDistanceRadius <= std::numeric_limits<std::uint32_t>::max());
-        if (const bool apply = button("workspace.environment_query.edit_apply", valid); apply || add || remove) {
-            EnvironmentQueryDistanceStageChange change;
+        if (const bool apply = button("workspace.environment_query.edit_apply", valid);
+            apply || add || remove || !std::holds_alternative<std::monostate>(change)) {
             if (remove)
                 change = *remove;
             else if (add)
@@ -865,7 +931,7 @@ namespace Horo::Editor {
         if (opened->perception)
             DrawPerceptionQuerySettings(*opened, outCommand);
         else if (opened->settings)
-            DrawEnvironmentQuerySettings(*opened, outCommand);
+            DrawEnvironmentQuerySettings(*opened, viewModel.physicsQueryChannels, outCommand);
         else
             label(text("workspace.environment_query.read_only"), Theme::Muted());
         if (opened->diagnostic)
@@ -905,6 +971,10 @@ namespace Horo::Editor {
 
         if (opened->perception) {
             label(text("workspace.environment_query.perception_preview"), Theme::Muted());
+            return true;
+        }
+        if (opened->settings && (opened->settings->visibility || opened->settings->navigation)) {
+            label(text("workspace.environment_query.provider_preview"), Theme::Muted());
             return true;
         }
 

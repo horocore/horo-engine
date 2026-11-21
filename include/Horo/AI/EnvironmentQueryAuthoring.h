@@ -5,6 +5,7 @@
 
 #include "Horo/AI/EnvironmentQuerySchema.h"
 
+#include <array>
 #include <optional>
 #include <vector>
 
@@ -41,12 +42,26 @@ namespace Horo::AI {
         std::vector<QueryPointContextOption> centers; /**< Available authored choices in registered order. */
     };
 
+    /** @brief Editable Physics stage using the canonical project collision channel identity. */
+    struct QueryPointVisibilityStageSettings final {
+        QueryStageId stage;
+        std::array<std::uint8_t, 16> channel;
+    };
+
+    /** @brief Editable Navigation stage with an optional positive traversal cost ceiling for ranking. */
+    struct QueryPointNavigationStageSettings final {
+        QueryStageId stage;
+        std::optional<double> maximumScoredCost;
+    };
+
     /** @brief Editable settings of the admitted native lattice and its existing distance stages. */
     struct BuiltinPointQuerySettings final {
         QueryPointLattice lattice;
         std::uint32_t maximumResults{};
         std::vector<QueryPointDistanceStageSettings> distanceTests; /**< Admitted semantic execution order. */
         std::vector<QueryPointContextOption> latticeCenters;        /**< Available generator choices in registered order. */
+        std::optional<QueryPointVisibilityStageSettings> visibility;
+        std::optional<QueryPointNavigationStageSettings> navigation;
     };
 
     /** @brief Pure initial-source factory installed by the application with the matching provider registry. */

@@ -180,6 +180,11 @@ namespace Horo::Editor {
             AI::QueryContextId center;
             std::vector<Distance> distances;
             std::uint64_t newDistanceRadius{};
+            std::optional<AI::QueryPointVisibilityStageSettings> visibility;
+            std::optional<AI::QueryPointNavigationStageSettings> navigation;
+            Physics::PhysicsQueryChannelId queryChannel;
+            bool preferPathCost{};
+            double pathCostCeiling{100};
             std::string widgetId;
 
             /** @brief Checks all editable fields before narrowing user input. */
@@ -191,6 +196,9 @@ namespace Horo::Editor {
         mutable EnvironmentQueryFields m_environmentQueryFields;
         /** @brief Draws the existing distance stages and returns the identity selected for removal. */
         [[nodiscard]] std::optional<AI::QueryStageId> DrawEnvironmentQueryDistanceStages(EnvironmentQueryFields &fields) const;
+        /** @brief Draws external provider choices and emits at most one structural edit. */
+        [[nodiscard]] EnvironmentQueryStageChange DrawEnvironmentQueryProviderStages(
+            EnvironmentQueryFields &fields, std::span<const PhysicsQueryChannelChoice> channels) const;
         /** @brief Draws typed Perception controls against the current document revision. */
         void DrawPerceptionQuerySettings(const EnvironmentQueryWorkspaceDocument &document,
                                          EditorWorkspaceViewCommandData &outCommand) const;
@@ -199,6 +207,7 @@ namespace Horo::Editor {
                                          EditorWorkspaceViewCommandData &outCommand) const;
         /** @brief Draws typed settings and emits a single revision-fenced edit/history action. */
         void DrawEnvironmentQuerySettings(const EnvironmentQueryWorkspaceDocument &document,
+                                          std::span<const PhysicsQueryChannelChoice> channels,
                                           EditorWorkspaceViewCommandData &outCommand) const;
         /** @brief Presents the admitted semantic source without retaining a runtime plan. */
         bool DrawDecisionGraphDocument(const EditorWorkspaceViewModel &viewModel, EditorWorkspaceViewCommandData &outCommand) const;
