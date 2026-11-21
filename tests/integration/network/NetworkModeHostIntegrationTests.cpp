@@ -89,7 +89,10 @@ namespace Horo::Network {
                                                    {},
                                                    owners->sessions,
                                                    NetworkWorldCompositionPurpose::Gameplay,
-                                                   owners->worldSetup},
+                                                   owners->worldSetup,
+                                                   {},
+                                                   {},
+                                                   HeadlessSceneTravelLoad{load, std::chrono::seconds{5}}},
                                                   std::move(factories).Value().factories);
         REQUIRE(created.HasValue());
         auto host = std::move(created).Value();
@@ -121,13 +124,19 @@ namespace Horo::Network {
         REQUIRE(host->RunFrame().HasValue());
         const auto initial = capture(worlds.front());
         const std::array next{World(kind, 105)};
+        const auto elapsedStartupDeadline = std::chrono::steady_clock::now() - std::chrono::seconds{1};
+        load.deadline = elapsedStartupDeadline;
         REQUIRE(host->RequestTravel(next).HasValue());
+        CHECK(load.deadline == elapsedStartupDeadline);
         CHECK_FALSE(initial.IsRevoked());
         CHECK(host->Role(kind, next.front().scene).HasError());
         REQUIRE(host->RunFrame().HasValue());
+        REQUIRE(load.deadline > elapsedStartupDeadline);
+        const auto travelDeadline = load.deadline;
         CHECK_FALSE(initial.IsRevoked());
         CHECK(host->Role(kind, next.front().scene).HasError());
         REQUIRE(host->RunFrame().HasValue());
+        CHECK(load.deadline == travelDeadline);
         REQUIRE_FALSE(host->TakeTravelFailure());
         const auto replacement = capture(next.front());
         CHECK(initial.IsRevoked());

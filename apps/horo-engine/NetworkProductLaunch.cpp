@@ -556,6 +556,9 @@ namespace Horo::Application::Internal {
                                             capabilities.initialState.get(), std::move(initialHost).Value());
             if (configured.HasError())
                 return Result<std::unique_ptr<NetworkProductHost>>::Failure(configured.ErrorValue());
+            std::optional<HeadlessSceneTravelLoad> travelLoad;
+            if (capabilities.resources)
+                travelLoad.emplace(capabilities.resources->load, launch.sceneInput.loadTimeout);
             return NetworkProductHost::Create(*clock,
                                               {project,
                                                product,
@@ -570,7 +573,8 @@ namespace Horo::Application::Internal {
                                                launch.purpose,
                                                binding,
                                                configured.Value().fixedParticipant,
-                                               configured.Value().pollRetirement},
+                                               configured.Value().pollRetirement,
+                                               travelLoad},
                                               std::move(configured).Value().factories, &diagnostic, debugger);
         }
 

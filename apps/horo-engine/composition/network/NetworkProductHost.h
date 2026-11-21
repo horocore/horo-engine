@@ -1,5 +1,6 @@
 #pragma once
 
+#include "HeadlessSceneLoadBoundary.h"
 #include "Horo/Application/NetworkDebugger.h"
 #include "Horo/Network/NetworkModeComposition.h"
 #include "Horo/Runtime/RuntimeHost.h"
@@ -28,6 +29,7 @@ namespace Horo::Application::Internal {
         std::optional<Network::NetworkWorldBindingSetup> worldBinding; /**< Required for network gameplay, not transport qualification. */
         NetworkFixedParticipantFactory fixedParticipant;               /**< Optional cold factory from the SAME world composition. */
         NetworkNativeRetirementPoll pollRetirement;                    /**< Exact same owner retained until actual native retirement. */
+        std::optional<HeadlessSceneTravelLoad> sceneTravelLoad;        /**< Shared candidate load budget for configured Scene travel. */
     };
 
     // Application-owned bridge: target admission precedes the canonical runtime lifecycle.
