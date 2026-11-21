@@ -320,6 +320,8 @@ namespace Horo::Editor::Proposals {
         SourceTransactionFeedback feedback{};
         bool canUndo{};
         std::shared_ptr<const SourceReviewAudit> audit;
+        bool writingAudit{};
+        bool auditHistoryError{};
     };
 
     /** @brief Exact owner receipt and its redacted attribution, returned together after publication. */

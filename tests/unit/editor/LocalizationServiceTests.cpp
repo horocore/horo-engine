@@ -235,6 +235,7 @@ namespace {
             "workspace.local_agent.source_patch_transaction_cancelled",
             "workspace.local_agent.source_patch_transaction_preparing",
             "workspace.local_agent.source_patch_audit_proposal",
+            "workspace.local_agent.source_patch_audit_history_error",
             "workspace.local_agent.source_patch_hunks",
             "workspace.local_agent.source_patch_checkpoint_save",
             "workspace.local_agent.source_patch_checkpoint_load",

@@ -226,6 +226,7 @@
     "workspace.local_agent.source_patch_transaction_cancelled": {"text": "Kaynak incelemesi işlemi iptal edildi."},
     "workspace.local_agent.source_patch_transaction_preparing": {"text": "Kabul edilen kaynak değişiklikleri hazırlanıyor…"},
     "workspace.local_agent.source_patch_audit_proposal": {"text": "Son uygulanan teklif"},
+    "workspace.local_agent.source_patch_audit_history_error": {"text": "Kaynak inceleme geçmişi okunamadı veya kaydedilemedi."},
     "workspace.local_agent.source_patch_hunks": {"text": "Değişiklik aralığı kararları"},
     "workspace.local_agent.source_patch_checkpoint_save": {"text": "Teklifi ve kararları yerelde kaydet"},
     "workspace.local_agent.source_patch_checkpoint_load": {"text": "Kaydedilen kaynak incelemesini geri yükle"},

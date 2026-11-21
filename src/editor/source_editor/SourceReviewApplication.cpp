@@ -1,5 +1,6 @@
 #include "SourceReviewApplication.h"
 
+#include "SourceReviewHistory.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 
 #include <algorithm>
@@ -42,7 +43,7 @@ namespace Horo::Editor {
         const bool canUndo = !preparing_ && batch_.CanUndo() && std::ranges::all_of(batch_.Items(), [](const auto &item) {
             return !item.changed || item.snapshot.IsCurrent();
         });
-        return {feedback_, canUndo, audit_};
+        return {feedback_, canUndo, audit_, auditWrite_.has_value(), auditHistoryError_};
     }
 
     /** @copydoc SourceReviewTransactions::QueueUndo */
@@ -78,7 +79,7 @@ namespace Horo::Editor {
         if (preparing_)
             return;
         feedback_ = lifetime.IsCancellationRequested() ? Feedback::Cancelled : Feedback::ApplyFailed;
-        if (feedback_ == Feedback::Cancelled || !jobs || !files || !request || !request->plan)
+        if (feedback_ == Feedback::Cancelled || auditWrite_ || !jobs || !files || !request || !request->plan)
             return;
         try {
             auto output = std::make_shared<std::optional<Proposals::PreparedSourceReview>>();
@@ -130,6 +131,66 @@ namespace Horo::Editor {
         audit_ = std::move(outcome.audit);
         feedback_ = Feedback::Applied;
         return true;
+    }
+
+    /** @copydoc SourceReviewTransactions::UpdateAuditHistory */
+    void SourceReviewTransactions::UpdateAuditHistory(const JobSystem *jobs, const std::filesystem::path &root) {
+        if (auditRead_) {
+            if (const auto snapshot = auditRead_->job.Snapshot(); snapshot && snapshot->terminalResult) {
+                if (!audit_) {
+                    auditHistoryError_ = snapshot->state != JobState::Succeeded;
+                    audit_ = std::move(*auditRead_->latest);
+                }
+                auditRead_.reset();
+            }
+        }
+        if (auditWrite_) {
+            if (const auto snapshot = auditWrite_->Snapshot(); snapshot && snapshot->terminalResult) {
+                auditHistoryError_ = snapshot->state != JobState::Succeeded;
+                auditWrite_.reset();
+            }
+        }
+        if (auditReadRequested_ || !jobs || root.empty())
+            return;
+        auditReadRequested_ = true;
+        try {
+            auto latest = std::make_shared<std::shared_ptr<const Proposals::SourceReviewAudit>>();
+            auto job = jobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Io},
+                                          [root, latest](const CancellationToken &stop) {
+                auto history = ReadSourceReviewHistory(root, stop);
+                if (history.HasError())
+                    return Result<void>::Failure(history.ErrorValue());
+                *latest = std::move(history).Value();
+                return Result<void>::Success();
+            });
+            if (job.HasValue()) {
+                auditRead_.emplace(HistoryRead{std::move(job).Value(), std::move(latest)});
+                return;
+            }
+        } catch (const std::bad_alloc &) {
+            // Reading attribution is independent from admitting live source documents.
+        }
+        auditHistoryError_ = true;
+    }
+
+    /** @copydoc SourceReviewTransactions::RecordAppliedAudit */
+    void SourceReviewTransactions::RecordAppliedAudit(const JobSystem *jobs, const std::filesystem::path &root,
+                                                      const ProjectMutationCoordinator *mutations, DurableFileSystem *files) {
+        if (!audit_ || !jobs || !mutations || !files)
+            return;
+        try {
+            auto job = jobs->SubmitResult({.priority = JobPriority::Interactive, .resource = JobResource::Io},
+                                          [root, record = audit_, mutations, files](const CancellationToken &stop) {
+                return AppendSourceReviewHistory(root, *record, *mutations, *files, stop);
+            });
+            if (job.HasValue()) {
+                auditWrite_ = std::move(job).Value();
+                return;
+            }
+        } catch (const std::bad_alloc &) {
+            // A storage submission failure leaves the exact live receipt and its undo available.
+        }
+        auditHistoryError_ = true;
     }
 
     /** @copydoc SourceReviewTransactions::Undo */

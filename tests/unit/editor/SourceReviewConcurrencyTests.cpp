@@ -2,10 +2,13 @@
 #include "Horo/Foundation/Platform.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/source_editor/SourceReviewApplication.h"
+#include "editor/source_editor/SourceReviewHistory.h"
 
+#include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <chrono>
+#include <iterator>
 #include <thread>
 
 namespace {
@@ -74,6 +77,80 @@ namespace {
             return reviews.Process(command, documents, &jobs, project.directory, &files);
         }
     };
+
+    TEST_CASE("Redacted source review history survives reopening without restoring edit authority", "[editor][source][review][history]") {
+        ReviewWorkspace workspace;
+        ProjectMutationCoordinator mutations{workspace.files};
+        const auto command = workspace.Queue("private-provider-label", "agent replacement");
+        REQUIRE(workspace.Process(command));
+        workspace.Drain();
+        REQUIRE(workspace.reviews.Status().feedback == SourceTransactionFeedback::Applied);
+        const auto audit = workspace.reviews.Status().audit;
+        REQUIRE(audit);
+        workspace.reviews.RecordAppliedAudit(&workspace.jobs, workspace.project.directory, &mutations, &workspace.files);
+        REQUIRE(workspace.reviews.Status().writingAudit);
+        const auto waitForHistory = [&workspace](SourceReviewTransactions &owner, const auto &pending) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+            while (pending(owner.Status()) && std::chrono::steady_clock::now() < deadline) {
+                owner.UpdateAuditHistory(&workspace.jobs, workspace.project.directory);
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+            REQUIRE_FALSE(pending(owner.Status()));
+        };
+        waitForHistory(workspace.reviews, [](const auto &state) {
+            return state.writingAudit;
+        });
+        CHECK_FALSE(workspace.reviews.Status().auditHistoryError);
+
+        SourceReviewTransactions reopened;
+        waitForHistory(reopened, [](const auto &state) {
+            return !state.audit && !state.auditHistoryError;
+        });
+        const auto historical = reopened.Status();
+        REQUIRE(historical.audit);
+        CHECK(historical.audit->proposal.digest == audit->proposal.digest);
+        CHECK(historical.audit->decisionDigest == audit->decisionDigest);
+        CHECK(historical.feedback == SourceTransactionFeedback::None);
+        CHECK_FALSE(historical.canUndo);
+        EditorWorkspaceViewCommandData undo;
+        CHECK_FALSE(reopened.QueueUndo(workspace.lifetime.Token(), undo));
+
+        const auto historyPath = workspace.project.directory / ".horo/local/agent/source-review-history";
+        std::ifstream stored(historyPath, std::ios::binary);
+        const std::string bytes{std::istreambuf_iterator<char>{stored}, {}};
+        for (const auto *sensitive : {"private-provider-label", "agent replacement", "a.cpp", "b.cpp", "provider"})
+            CHECK(bytes.find(sensitive) == std::string::npos);
+        std::ifstream disk(workspace.project.directory / "a.cpp", std::ios::binary);
+        CHECK((std::string{std::istreambuf_iterator<char>{disk}, {}} == "base"));
+    }
+
+    TEST_CASE("Source review history retains bounded records and preserves corrupt evidence", "[editor][source][review][history]") {
+        ReviewWorkspace workspace;
+        ProjectMutationCoordinator mutations{workspace.files};
+        REQUIRE(workspace.Process(workspace.Queue("proposal", "reviewed")));
+        workspace.Drain();
+        REQUIRE(workspace.reviews.Status().audit);
+        auto audit = *workspace.reviews.Status().audit;
+        for (std::size_t index = 0; index <= SourceReviewHistoryCapacity; ++index) {
+            audit.proposal.revision = index + 1;
+            REQUIRE(AppendSourceReviewHistory(workspace.project.directory, audit, mutations, workspace.files).HasValue());
+        }
+        const auto latest = ReadSourceReviewHistory(workspace.project.directory);
+        REQUIRE(latest.HasValue());
+        REQUIRE(latest.Value());
+        CHECK(latest.Value()->proposal.revision == SourceReviewHistoryCapacity + 1);
+        constexpr auto historyName = ".horo/local/agent/source-review-history";
+        const auto path = workspace.project.directory / historyName;
+        {
+            std::ifstream stored(path, std::ios::binary);
+            CHECK(std::count(std::istreambuf_iterator<char>{stored}, {}, '\n') == SourceReviewHistoryCapacity + 1);
+        }
+        workspace.project.Put("interrupted", historyName);
+        CHECK(ReadSourceReviewHistory(workspace.project.directory).HasError());
+        CHECK(AppendSourceReviewHistory(workspace.project.directory, audit, mutations, workspace.files).HasError());
+        std::ifstream stored(path, std::ios::binary);
+        CHECK((std::string{std::istreambuf_iterator<char>{stored}, {}} == "interrupted"));
+    }
 
     TEST_CASE("Overlapping review applications and group undo produce deterministic revisions", "[editor][source][review][concurrency]") {
         ReviewWorkspace workspace;

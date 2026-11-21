@@ -6,6 +6,7 @@
 
 namespace Horo::Editor {
     struct EditorWorkspaceViewCommandData;
+    class ProjectMutationCoordinator;
 
     /** @brief Owns the exact review decisions and evidence until the workspace safely dispatches the command. */
     struct SourceReviewApplication final {
@@ -33,6 +34,18 @@ namespace Horo::Editor {
                      const std::filesystem::path &root, const DurableFileSystem *files);
         /** @brief Polls one preparing job without waiting. @return True if a buffer group was published. */
         bool Poll(SourceDocumentService &documents, const DurableFileSystem *files);
+        /** @brief Polls history jobs and requests the initial read once for this workspace.
+         * @param jobs Host job system. @param root Authorized project root.
+         * @details Adopted attribution carries no source owner receipt or undo authority.
+         */
+        void UpdateAuditHistory(const JobSystem *jobs, const std::filesystem::path &root);
+        /** @brief Records the just-published receipt after Poll returned true.
+         * @param jobs Host job system. @param root Authorized project root.
+         * @param mutations Shared project mutation owner. @param files Tracked filesystem.
+         * @pre Host owners outlive their jobs. No source bytes cross the history boundary.
+         */
+        void RecordAppliedAudit(const JobSystem *jobs, const std::filesystem::path &root, const ProjectMutationCoordinator *mutations,
+                                DurableFileSystem *files);
         /** @brief Reads the latest feedback and whether every changed document still permits group undo. */
         [[nodiscard]] Proposals::SourceTransactionStatus Status() const noexcept;
         /** @brief Stages one grouped undo when its receipt remains current. */
@@ -55,5 +68,15 @@ namespace Horo::Editor {
         };
 
         std::optional<Preparation> preparing_;
+
+        struct HistoryRead final {
+            JobHandle job;
+            std::shared_ptr<std::shared_ptr<const Proposals::SourceReviewAudit>> latest;
+        };
+
+        std::optional<HistoryRead> auditRead_;
+        std::optional<JobHandle> auditWrite_;
+        bool auditReadRequested_{};
+        bool auditHistoryError_{};
     };
 }  // namespace Horo::Editor

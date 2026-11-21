@@ -824,6 +824,12 @@ The application audit has a separate versioned, bounded encoding with a
 checksum over its canonical payload. Each accepted file has exactly one
 ordered before-and-after revision pair. Decoding provides attribution only
 and cannot open a document, dispatch an edit, or restore undo authority.
+The workspace appends the audit on an I/O worker after the source owner returns
+its receipt. Atomic publication retains the most recent 16 applications in
+`.horo/local/agent/source-review-history` under the project and destination
+leases. Reopening a workspace reads historical attribution without restoring a
+live transaction or touching source files. Corrupt history stays on disk and
+the panel reports a read or publication error.
 
 ## Backend Providers
 

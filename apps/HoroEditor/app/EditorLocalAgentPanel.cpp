@@ -990,6 +990,9 @@ namespace Horo::Editor {
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, key), Theme::Text(), fonts);
                 if (state.audit)
                     DrawSourceAudit(*state.audit, locale, fonts);
+                if (state.auditHistoryError)
+                    Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "source_patch_audit_history_error"),
+                                    Theme::Text(), fonts);
                 if (requestSourceReviewUndo_ && contextLifetime_ && state.canUndo && Button(locale, "source_patch_revert", true))
                     status_ = requestSourceReviewUndo_(contextLifetime_->Token(), command) ? nullptr : "source_patch_revert_failed";
             }
@@ -1098,7 +1101,9 @@ namespace Horo::Editor {
                         ImGui::PopID();
                 }
                 DrawPatchDecisions(review, locale);
-                if (requestSourceReviewApply_ && Button(locale, "source_patch_apply", review.decisions.HasAcceptedChanges()))
+                const bool writingAudit = sourceReviewTransaction_ && sourceReviewTransaction_().writingAudit;
+                if (requestSourceReviewApply_ &&
+                    Button(locale, "source_patch_apply", !writingAudit && review.decisions.HasAcceptedChanges()))
                     QueueSourceApply(review, command);
                 if (!buildRoot_.empty() && Button(locale, "source_patch_checkpoint_save", CanCheckpointPatchReview()))
                     SavePatchReview(review);

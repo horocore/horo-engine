@@ -9,8 +9,11 @@
 namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::UpdateSourceAutosave */
     void EditorWorkspaceController::UpdateSourceAutosave(const float elapsedSeconds, const int delaySeconds) {
-        if (m_sourceReviews.Poll(m_sourceOpenService.Documents(), m_durableFiles))
+        m_sourceReviews.UpdateAuditHistory(m_sourceRecoveryJobs, ProjectRoot());
+        if (m_sourceReviews.Poll(m_sourceOpenService.Documents(), m_durableFiles)) {
+            m_sourceReviews.RecordAppliedAudit(m_sourceRecoveryJobs, ProjectRoot(), m_mutations, m_durableFiles);
             RefreshSourceDocumentProjection();
+        }
         NativeDurableFileSystem files;
         if (auto outcome = m_sourceOpenService.Documents().UpdateAutosave(elapsedSeconds, delaySeconds, files)) {
             m_sourceSaveOutcome = std::move(*outcome);
