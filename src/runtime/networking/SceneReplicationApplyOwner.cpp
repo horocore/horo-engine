@@ -89,7 +89,7 @@ namespace Horo::Network {
             auto entity = view.Get(update.mapping.entity);
             if (entity.HasError())
                 return Result<Math::Transform>::Failure(entity.ErrorValue());
-            return Result<Math::Transform>::Success(*entity.Value().localTransform);
+            return Result<Math::Transform>::Success(*entity.Value().PresentationLocalTransform());
         }
 
         /** @brief Validates stable sorted field identities before indexing their transform properties. */

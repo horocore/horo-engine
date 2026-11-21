@@ -1,9 +1,11 @@
 #include "AllocationProbe.h"
 #include "Horo/Network/SceneReplicationApplyOwner.h"
 #include "Horo/Runtime/RuntimeHost.h"
+#include "ReplicaCharacterSceneTestSupport.h"
 #include "ReplicationCaptureTestSupport.h"
 #include "ReplicationStateCodecTestSupport.h"
 
+#include <functional>
 #include <limits>
 
 namespace Horo::Network {
@@ -79,7 +81,9 @@ namespace Horo::Network {
                 return Result<void>::Success();
             }
 
-            Result<void> OnPhase(Runtime::RuntimePhase, const Runtime::FrameContext &) override {
+            Result<void> OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &context) override {
+                if (phase == Runtime::RuntimePhase::CommitDeferredLifecycleChanges && applyReplica)
+                    applyReplica(context);
                 return Result<void>::Success();
             }
 
@@ -104,6 +108,7 @@ namespace Horo::Network {
             void Shutdown() noexcept override {}
 
             Runtime::RuntimeDispatchEvidence evidence;
+            std::function<void(const Runtime::FrameContext &)> applyReplica;
             bool reject{}, premature{}, observed{}, repeated{};
 
         private:
@@ -282,6 +287,47 @@ namespace Horo::Network {
         REQUIRE(fixture.Step().HasValue());
         REQUIRE(sample().published == 1);
         CHECK(std::get<double>(capture->Latest(fixture.mapping.object).Value()->Fields()[0].value) == 3.0);
+    }
+
+    TEST_CASE("Decoded replica fields update the Character presentation pose without overwriting its other axes",
+              "[network][capture][scene]") {
+        namespace Codec = StateCodecTestSupport;
+        ObservedSceneFixture fixture;
+        Codec::CodecFixture wire;
+        RuntimeSceneTestSupport::ReplicaCharacterAssets assets;
+        const auto replica =
+            std::make_shared<Runtime::RuntimeSceneService>(assets.registry, assets.loads, Runtime::RuntimeSceneAssetLimits{},
+                                                           fixture.mapping.entity.runtime);
+        REQUIRE(replica->BindReplicaTransformDispatch(fixture.runtime->DispatchSource()).HasValue());
+        REQUIRE(replica->Startup({}).HasValue());
+        RuntimeSceneTestSupport::ActivateReplicaTestScene(*replica, RuntimeSceneTestSupport::ReplicaCharacterDefinition());
+        const auto entity = fixture.mapping.entity;
+        const auto heading = Math::Quaternion::FromAxisAngle({0, 1, 0}, 0.5F);
+        fixture.observer->applyReplica = [&wire, &replica, &fixture, entity, heading](const Runtime::FrameContext &frame) {
+            const auto before = replica->ActiveScene().value();
+            Runtime::SceneCommandBuffer priorPose;
+            priorPose.SetLocalTransform(entity, {.translation = {0, 6, 7}, .rotation = heading}, {.scene = before.RuntimeId()});
+            REQUIRE(replica->CommitReplicaTransformBatch(before, priorPose, frame.dispatchEvidence).HasValue());
+
+            const std::array fields{SceneReplicationFieldBinding{FieldIdValue(1), SceneReplicationProperty::TranslationX}};
+            const auto receiver = SceneReplicationApplyOwner::CreateForService(replica, replica->ActiveScene().value(),
+                                                                               frame.dispatchEvidence, fixture.mapping.provenance.schema,
+                                                                               fixture.mapping.provenance.schemaVersion, fields);
+            REQUIRE(receiver.HasValue());
+            auto decoded = wire.codec->Decode(wire.full, fixture.mapping);
+            REQUIRE(decoded.HasValue());
+            const std::array updates{ReplicationApplyUpdate{fixture.mapping, Codec::Recipient(), std::move(decoded).Value()}};
+            auto prepared = receiver.Value()->Prepare(updates);
+            REQUIRE(prepared.HasValue());
+            REQUIRE(prepared.Value()->Commit({}).HasValue());
+        };
+        REQUIRE(fixture.runtime->RunFrame().HasValue());
+        const auto displayed = replica->ActiveScene()->Get(entity);
+        REQUIRE(displayed.HasValue());
+        CHECK(displayed.Value().PresentationLocalTransform()->translation == Math::Vec3{1, 6, 7});
+        CHECK(displayed.Value().PresentationLocalTransform()->rotation == heading);
+        CHECK(displayed.Value().localTransform->translation == Math::Vec3{});
+        CHECK(displayed.Value().localTransform->rotation == Math::Quaternion::Identity());
     }
 
     TEST_CASE("Application-owned Scene capture reads its exact committed fixed tick and mapped schema", "[network][capture][scene]") {

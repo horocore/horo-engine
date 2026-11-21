@@ -223,7 +223,8 @@ namespace Horo::Network::AnimationProduct {
 
     TEST_CASE("Actual Headless successful steady native Scene and Animation fixed frame performs no allocation",
               "[animation][headless][product][allocation]") {
-        Fixture fixture;
+        const bool rootMotion = GENERATE(false, true);
+        Fixture fixture(rootMotion, false, {}, rootMotion);
         REQUIRE(fixture.Tick().HasValue());
         REQUIRE(fixture.Tick().HasValue());
         auto result = Result<void>::Success();
@@ -235,7 +236,9 @@ namespace Horo::Network::AnimationProduct {
         }
         REQUIRE(result.HasValue());
         CHECK(measured.requests == 0);
-        CHECK(fixture.trace->Observe().component->currentPose.generation.Value() == 3);
+        const auto observed = fixture.trace->Observe();
+        CHECK(observed.component->currentPose.generation.Value() == 3);
+        CHECK(observed.rootMotion.has_value() == rootMotion);
     }
 
     TEST_CASE("Actual transport-qualified Headless listen pair aborts both real native Animation owners on later-world failure",

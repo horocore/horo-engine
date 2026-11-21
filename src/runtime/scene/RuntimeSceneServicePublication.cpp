@@ -46,7 +46,8 @@ namespace Horo::Runtime {
         if (commands.Empty() || !std::ranges::all_of(commands.commands_, admittedTransform))
             return Result<void>::Failure(MakeError(SceneErrors::InvalidCandidate));
         const LifecycleMutation mutation{*this};
-        const auto committed = active_.scene->CommitWithRegistry(commands, assetPreparationServices_.registry);
+        const auto committed = active_.scene->CommitWithRegistry(commands, assetPreparationServices_.registry, {}, nullptr,
+                                                                 RuntimeScene::CommitPurpose::ReplicaTransforms);
         return committed.HasValue() ? Result<void>::Success() : Result<void>::Failure(committed.ErrorValue());
     }
 

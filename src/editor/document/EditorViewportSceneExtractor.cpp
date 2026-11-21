@@ -27,7 +27,7 @@ namespace Horo::Editor {
                 return Result<Math::Mat4>::Failure(value.ErrorValue());
 
             const Runtime::RuntimeEntityView &view = value.Value();
-            const Math::Transform *local = view.localTransform;
+            const Math::Transform *local = view.PresentationLocalTransform();
             if (view.authoredObject) {
                 const auto preview =
                     std::ranges::find(previews, view.authoredObject->value, [](const SceneObjectTransformPreview &candidate) {
@@ -312,7 +312,7 @@ namespace Horo::Editor {
                 return Result<SceneObjectWorldTransforms>::Failure(parent.ErrorValue());
             parentToWorld = parent.Value();
         }
-        const Math::Mat4 localToWorld = Math::Multiply(parentToWorld, value.Value().localTransform->ToMatrix());
+        const Math::Mat4 localToWorld = Math::Multiply(parentToWorld, value.Value().PresentationLocalTransform()->ToMatrix());
         return Result<SceneObjectWorldTransforms>::Success({localToWorld, parentToWorld});
     }
 

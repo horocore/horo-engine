@@ -47,10 +47,11 @@ namespace Horo::Render {
             for (std::size_t depth = 0; depth < 64; ++depth) {
                 if (cancellation.IsCancellationRequested())
                     return Result<LightPose>::Failure(MakeError(LightCullingErrors::Cancelled));
-                const auto local = entity.localTransform->TryToMatrix();
+                const auto *pose = entity.PresentationLocalTransform();
+                const auto local = pose->TryToMatrix();
                 if (local.HasError())
                     return Result<LightPose>::Failure(local.ErrorValue());
-                const auto localRotation = entity.localTransform->rotation.TryNormalized();
+                const auto localRotation = pose->rotation.TryNormalized();
                 if (localRotation.HasError())
                     return Result<LightPose>::Failure(localRotation.ErrorValue());
                 world = Math::Multiply(local.Value(), world);

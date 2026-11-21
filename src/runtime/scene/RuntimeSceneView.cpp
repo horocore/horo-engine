@@ -75,7 +75,8 @@ namespace Horo::Runtime {
                                  value.groupReferences ? std::span<const RuntimeResolvedGroupReference>{*value.groupReferences}
                                                        : std::span<const RuntimeResolvedGroupReference>{},
                                  value.groupSpawnLineage ? std::span<const Assets::AssetId>{*value.groupSpawnLineage}
-                                                         : std::span<const Assets::AssetId>{}};
+                                                         : std::span<const Assets::AssetId>{},
+                                 value.replicaPresentationTransform ? &*value.replicaPresentationTransform : nullptr};
     }
 
     /** @copydoc RuntimeSceneView::FindBaseline */

@@ -170,7 +170,7 @@ namespace Horo::Editor {
             const auto &entity = borrowed.Value();
             if (entity.parent != node.parent || entity.authoredObject != node.authored || *entity.primitiveMesh != node.primitive)
                 return Output::Failure(GeometryError("XR geometry mapping or mesh shape changed."));
-            const auto local = entity.localTransform->ToMatrix();
+            const auto local = entity.PresentationLocalTransform()->ToMatrix();
             impl_->worlds[index] = node.parentIndex == NoParent ? local : Math::Multiply(impl_->worlds[node.parentIndex], local);
             if (!Math::IsFinite(impl_->worlds[index]))
                 return Output::Failure(GeometryError("XR geometry transform is not finite."));

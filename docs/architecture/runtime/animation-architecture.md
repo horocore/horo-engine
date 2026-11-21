@@ -836,6 +836,11 @@ reads its committed collision-root position and heading through the same
 scheduler tick used to capture the network snapshot. It expresses that pose in
 the Scene parent's coordinate frame and keeps the authored local scale. The
 replication field schema still determines which axes may be sent.
+The receiving Scene publishes the replicated Character pose in its presentation
+view during the existing replica commit. The Character collision root remains
+local simulation state. A partial field update uses the last received
+presentation pose as its base, and visual hierarchy traversal includes that pose
+when rendering descendants.
 
 Rules:
 

@@ -460,6 +460,7 @@ namespace Horo::Runtime {
         slot.active = false;
         slot.authoredObject.reset();
         slot.parent.reset();
+        slot.replicaPresentationTransform.reset();
         slot.primitiveMesh.reset();
         slot.components = {};
         slot.baselineOwner.reset();
@@ -513,7 +514,7 @@ namespace Horo::Runtime {
         RuntimeSceneStorage candidate = storage_;
         StructuralCommitResult result;
         result.created.reserve(commands.commands_.size());
-        const CommandApplier applier{*this, candidate, result};
+        const CommandApplier applier{*this, candidate, result, purpose};
         if (const auto status = applier.ApplyCommands(commands); status.HasError())
             return Result<StructuralCommitResult>::Failure(status.ErrorValue());
         std::vector<std::unique_ptr<SceneStructuralCandidate>> owners;

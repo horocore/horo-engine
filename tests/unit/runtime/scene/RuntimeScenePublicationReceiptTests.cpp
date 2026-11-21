@@ -1,6 +1,6 @@
 #include "Horo/Foundation/CancellationToken.h"
 #include "Horo/Runtime/RuntimeHost.h"
-#include "RuntimeSceneTestSupport.h"
+#include "ReplicaCharacterSceneTestSupport.h"
 
 #include <catch2/catch_test_macros.hpp>
 #include <functional>
@@ -70,15 +70,15 @@ namespace {
     struct ReplicaTransformFixture final {
         ReplicaClock clock;
         std::unique_ptr<RuntimeHost> host = RuntimeHost::Create(clock).Value();
-        RuntimeSceneService service;
+        ReplicaCharacterAssets assets;
+        RuntimeSceneService service{assets.registry, assets.loads};
         PhaseObserver *observer{};
 
-        ReplicaTransformFixture() {
+        explicit ReplicaTransformFixture(const RuntimeSceneDefinition &definition = Definition()) {
             REQUIRE(service.BindReplicaTransformDispatch(host->DispatchSource()).HasValue());
             CHECK(service.BindReplicaTransformDispatch(host->DispatchSource()).HasError());
             REQUIRE(service.Startup({}).HasValue());
-            REQUIRE(service.QueuePreparation(Definition()).HasValue());
-            REQUIRE(service.OnPhase(RuntimePhase::CommitDeferredLifecycleChanges, Context({})).HasValue());
+            ActivateReplicaTestScene(service, definition);
             auto phases = std::make_unique<PhaseObserver>();
             observer = phases.get();
             REQUIRE(host->AddParticipant(std::move(phases)).HasValue());
@@ -147,6 +147,41 @@ namespace {
         CHECK(view.IsCurrent());
         CHECK(view.Get(first).Value().localTransform->translation.x == 0.0F);
         CHECK(view.Get(second).Value().localTransform->translation.x == 0.0F);
+    }
+
+    TEST_CASE("Replica batches publish Character presentation and ordinary Scene transforms together",
+              "[unit][runtime][scene][publication]") {
+        ReplicaTransformFixture fixture{ReplicaCharacterDefinition()};
+        auto &scene = fixture.service;
+        const auto view = scene.ActiveScene().value();
+        const auto root = view.Find(SceneObjectId{1}).value();
+        const auto child = view.Find(SceneObjectId{2}).value();
+        fixture.observer->observe = [&scene, &view, root, child](RuntimePhase phase, const FrameContext &frame) {
+            if (phase != RuntimePhase::CommitDeferredLifecycleChanges)
+                return;
+            Math::Transform moved;
+            moved.translation.x = 8.0F;
+            SceneCommandBuffer invalid;
+            invalid.SetLocalTransform(root, moved, {.scene = view.RuntimeId()});
+            auto malformed = moved;
+            malformed.translation.x = std::numeric_limits<float>::infinity();
+            invalid.SetLocalTransform(child, malformed, {.scene = view.RuntimeId()});
+            CHECK(scene.CommitReplicaTransformBatch(view, invalid, frame.dispatchEvidence).HasError());
+            CHECK(view.Get(root).Value().replicaPresentationTransform == nullptr);
+
+            SceneCommandBuffer valid;
+            valid.SetLocalTransform(root, moved, {.scene = view.RuntimeId()});
+            valid.SetLocalTransform(child, moved, {.scene = view.RuntimeId()});
+            REQUIRE(scene.CommitReplicaTransformBatch(view, valid, frame.dispatchEvidence).HasValue());
+            CHECK_FALSE(view.IsCurrent());
+        };
+        REQUIRE(fixture.host->RunFrame().HasValue());
+        const auto current = scene.ActiveScene().value();
+        const auto character = current.Get(root).Value();
+        CHECK(character.localTransform->translation.x == 0.0F);
+        CHECK(character.PresentationLocalTransform()->translation.x == 8.0F);
+        CHECK(current.Get(child).Value().localTransform->translation.x == 8.0F);
+        CHECK(current.Get(child).Value().replicaPresentationTransform == nullptr);
     }
 
     TEST_CASE("Scene receipts witness the exact aggregate publication and cannot observe an ordinary or moved queue",

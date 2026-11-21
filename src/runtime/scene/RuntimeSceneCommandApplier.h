@@ -17,6 +17,7 @@ namespace Horo::Runtime {
         const RuntimeScene &scene;
         RuntimeSceneStorage &candidate;
         StructuralCommitResult &result;
+        CommitPurpose purpose;
 
         Result<void> operator()(const SceneCommandBuffer::CreateCommand &create) const {
             const Result<EntityRef> created = scene.CreateEntity(candidate, create.info);
@@ -687,7 +688,7 @@ namespace Horo::Runtime {
         /** @brief Reuses the existing command admission and exact resource validator without introducing another policy. */
         static Result<void> ValidateResourceAdmission(const SceneCommandBuffer &commands, SceneRuntimeId runtime,
                                                       const Assets::AssetRegistry *registry, CommitPurpose purpose) {
-            if (purpose == CommitPurpose::Ordinary && commands.HasRestoreGroups())
+            if (purpose != CommitPurpose::RestoreMaterialization && commands.HasRestoreGroups())
                 return Result<void>::Failure(
                     MakeError(SceneErrors::InvalidCandidate, "Private restore groups cannot enter ordinary commit."));
             const auto revision = registry ? registry->Snapshot().Revision() : Assets::AssetRegistryRevision{};
@@ -730,7 +731,12 @@ namespace Horo::Runtime {
         Result<void> operator()(const SceneCommandBuffer::SetLocalTransformCommand &transform) const {
             if (!scene.IsValid(candidate, transform.entity) || transform.localTransform.TryToMatrix().HasError())
                 return Result<void>::Failure(MakeError(SceneErrors::InvalidEntity, "Deferred transform target or value is invalid."));
-            candidate.slots[transform.entity.entity.index].localTransform = transform.localTransform;
+            auto &slot = candidate.slots[transform.entity.entity.index];
+            const auto &character = slot.components.characterController;
+            if (purpose == CommitPurpose::ReplicaTransforms && character && character->enabled)
+                slot.replicaPresentationTransform = transform.localTransform;
+            else
+                slot.localTransform = transform.localTransform;
             ++result.transformsUpdated;
             return Result<void>::Success();
         }

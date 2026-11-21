@@ -774,6 +774,13 @@ namespace Horo::Runtime {
         std::span<const RuntimeGroupAssetLease> groupAssets;            /**< Exact named envelope pins, borrowed for this entity view. */
         std::span<const RuntimeResolvedGroupReference> groupReferences; /**< Borrowed immutable post-publication reference interfaces. */
         std::span<const Assets::AssetId> groupSpawnLineage; /**< Borrowed inherited creation evidence for host capability scoping. */
+        const Math::Transform
+            *replicaPresentationTransform{}; /**< Optional committed replica pose, separate from the simulation transform. */
+
+        /** @brief Returns the effective local pose for presentation, with the ordinary Scene pose as its baseline. */
+        [[nodiscard]] const Math::Transform *PresentationLocalTransform() const noexcept {
+            return replicaPresentationTransform ? replicaPresentationTransform : localTransform;
+        }
     };
 
     /** @brief Explicit subsystem ownership for staged structural changes; never backend discovery. */
@@ -1005,7 +1012,8 @@ namespace Horo::Runtime {
         /** @brief Only the Scene service friend selects private materialization; ordinary public commits cannot defer native owners. */
         enum class CommitPurpose : std::uint8_t {
             Ordinary,
-            RestoreMaterialization
+            RestoreMaterialization,
+            ReplicaTransforms
         };
         [[nodiscard]] Result<void> PrepareGroupPublication(const SceneCommandBuffer &commands, const StructuralCommitResult &result,
                                                            std::vector<std::unique_ptr<SceneStructuralCandidate>> &owners) const;
@@ -1014,7 +1022,7 @@ namespace Horo::Runtime {
          * @param registry Optional current registry owner used by resource admission.
          * @param participants Other owners that prepare and publish with the Scene.
          * @param notificationError Optional destination for post-publication diagnostics.
-         * @param purpose Selects ordinary commit or private restore materialization.
+         * @param purpose Selects ordinary commit or the Scene service's private restore and replica operations.
          * @param trackedResult Optional destination for the committed result before notifications run.
          * @return Failure before publication, or success with the committed result when it was not transferred to tracked storage.
          */
@@ -1040,6 +1048,7 @@ namespace Horo::Runtime {
             std::optional<SceneObjectId> authoredObject;
             std::optional<EntityId> parent;
             Math::Transform localTransform;
+            std::optional<Math::Transform> replicaPresentationTransform;
             std::optional<PrimitiveMeshDescriptor> primitiveMesh;
             RuntimeComponentSet components;
             std::optional<SceneDefinitionId> baselineOwner;
@@ -1139,7 +1148,8 @@ namespace Horo::Runtime {
          * refused.
          * @param evidence Live callback evidence from the bound issuer's CommitDeferredLifecycleChanges dispatch.
          * @return Success only after the complete Scene transaction is published. Failure preserves the prior Scene.
-         * @details This does not consume a pending work queue, invoke lifecycle phases, or expose mutable Scene storage. */
+         * @details Enabled Character actors receive a presentation pose. Their simulation transform remains owned
+         * by Character. The batch does not consume a pending work queue, invoke lifecycle phases, or expose mutable storage. */
         [[nodiscard]] Result<void> CommitReplicaTransformBatch(const RuntimeSceneView &expected, const SceneCommandBuffer &commands,
                                                                const RuntimeDispatchEvidence &evidence);
         /** @brief Adds one owned activation participant before startup. @param participant Non-null unique owner.
