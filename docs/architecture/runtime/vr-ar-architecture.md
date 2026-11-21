@@ -1229,6 +1229,7 @@ Desktop OpenXR probe through the installed Editor.
 horo-engine --probe-xr-package <windows|linux> system-default <runtime-name>
   <hmd-system-name> <install-sha256> <editor-executable> <editor-sha256>
   <installation-root> <project> <trust-roots> <catalog> <catalog-signature>
+  --connection desktop-local [--timeout-seconds 1..90]
 ```
 
 Pass the command as one argument vector and quote runtime or file names with
@@ -1249,12 +1250,17 @@ fixed reason such as permission denial, rejected runtime, stale evidence or
 unsupported profile. Native diagnostic text and device labels stay in the
 child.
 
-The receipt records the installed component digest, host, loader route,
-renderer, a digest of the explicit runtime/HMD pair, the runtime and graphics
-versions, the observed space and native swapchain format counts, and the admitted provider
-routes. Treat it as packaged Desktop preflight evidence. Per-unit headset
-selection, remote installation, connection transport provenance, interaction
-profile, and physical-device smoke results remain separate qualification work.
+With `--connection desktop-local`, the terminal emits one
+`horo-xr-desktop-qualification-v1` record. Its fields are the installed component
+digest, expected executable digest, host, loader route, renderer, digest of the
+explicit runtime/HMD pair, connection, and outcome. The `preflight` outcome on
+stdout appends runtime and graphics versions, reference-space and swapchain
+format counts, and the admitted provider route mask. Typed outcomes on stderr
+cover stale or busy packages, timeouts, unavailable runtime and rejected receipts.
+The timeout defaults to 90 seconds. Omit both options to keep the existing
+child-receipt format. This is packaged Desktop preflight evidence. Per-unit
+headset selection, remote installation, connection transport provenance,
+interaction profile, and physical-device smoke results require separate runs.
 
 XR Setup also presents the current session inspector. It joins session/capability
 generation and revision with the latest same-owner Input tracking cutoff. The

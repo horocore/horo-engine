@@ -12,6 +12,7 @@ namespace Horo::Application::Internal::OpenXRProbeWire {
     inline constexpr std::string_view LocalConnection = "desktop-local";
     inline constexpr std::string_view Route = "system-default";
     inline constexpr std::string_view Renderer = "vulkan";
+    inline constexpr unsigned PackagedRouteCount = 4;
 
     /** @brief Closed redacted reasons allowed through the Desktop process pipe. */
     enum class FailureReason : std::uint8_t {

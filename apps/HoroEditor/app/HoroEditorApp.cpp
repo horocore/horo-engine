@@ -5456,6 +5456,7 @@ namespace Horo::Editor {
             const auto targetIdentity = FormatSha256(OpenXRProbeWire::TargetDigest(target.runtimeName, target.systemName));
             const auto &runtime = observed.runtimeVersion;
             const auto &graphics = observed.graphicsApi;
+            static_assert(static_cast<unsigned>(OpenXRPackagedRoute::Count) == OpenXRProbeWire::PackagedRouteCount);
             unsigned admittedRoutes{};
             for (std::size_t index = 0; index < observed.extensionRoutes.size(); ++index) {
                 using enum XR::OpenXRInternal::NativeExtensionState;

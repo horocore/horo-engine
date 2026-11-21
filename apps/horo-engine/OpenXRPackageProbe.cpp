@@ -9,10 +9,13 @@
 #include <algorithm>
 #include <array>
 #include <charconv>
+#include <chrono>
 #include <filesystem>
 #include <fstream>
+#include <optional>
 #include <ostream>
 #include <ranges>
+#include <string>
 #include <string_view>
 
 namespace Horo::Application::Internal {
@@ -34,10 +37,64 @@ namespace Horo::Application::Internal {
         };
 
         constexpr std::size_t MaximumReceiptBytes = 512;
+        constexpr std::size_t ReceiptIdentityColumns = 6;
         constexpr std::string_view Usage =
             "Usage: horo-engine --probe-xr-package <windows|linux> system-default <runtime-name> <hmd-system-name> "
             "<install-sha256> <editor-executable> <editor-sha256> <installation-root> <project> <trust-roots> <catalog> "
-            "<catalog-signature>\n";
+            "<catalog-signature> [--connection desktop-local [--timeout-seconds 1..90]]\n";
+
+        struct ProbeOptions final {
+            std::chrono::seconds timeout{90};
+            bool qualifiedReport{};
+        };
+
+        /** @brief Reads the bounded explicit connection and deadline without forwarding arbitrary child arguments. */
+        std::optional<ProbeOptions> ReadOptions(const std::span<char *> arguments) {
+            ProbeOptions result;
+            if (arguments.empty())
+                return result;
+            if ((arguments.size() != 2 && arguments.size() != 4) || std::string_view{arguments[0]} != "--connection" ||
+                std::string_view{arguments[1]} != OpenXRProbeWire::LocalConnection)
+                return std::nullopt;
+            result.qualifiedReport = true;
+            if (arguments.size() == 2)
+                return result;
+            const std::string_view value{arguments[3]};
+            unsigned seconds{};
+            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), seconds);
+            if (std::string_view{arguments[2]} != "--timeout-seconds" || parsed.ec != std::errc{} ||
+                parsed.ptr != value.data() + value.size() || seconds == 0 || seconds > 90)
+                return std::nullopt;
+            result.timeout = std::chrono::seconds{seconds};
+            return result;
+        }
+
+        struct ProbeIdentity final {
+            std::string_view install;
+            std::string_view executable;
+            std::string_view host;
+            std::string target;
+        };
+
+        /** @brief Reports the exact package and target without disclosing child output or device labels. */
+        void WriteQualifiedReport(std::ostream &destination, const ProbeIdentity &identity, std::string_view outcome,
+                                  std::string_view facts = {}) {
+            destination << "horo-xr-desktop-qualification-v1 " << identity.install << ' ' << identity.executable << ' ' << identity.host
+                        << ' ' << OpenXRProbeWire::Route << ' ' << OpenXRProbeWire::Renderer << ' ' << identity.target << ' '
+                        << OpenXRProbeWire::LocalConnection << ' ' << outcome;
+            if (!facts.empty())
+                destination << ' ' << facts;
+            destination << '\n';
+        }
+
+        int FailProbe(std::ostream &errors, const ProbeOptions &options, const ProbeIdentity &identity, std::string_view reason,
+                      std::string_view message) {
+            if (options.qualifiedReport)
+                WriteQualifiedReport(errors, identity, reason);
+            else
+                errors << message << '\n';
+            return 1;
+        }
 
         /** @brief Requires an exact bounded readable file underneath the cooperating product lease. */
         bool MatchesExecutable(const std::filesystem::path &path, const Sha256Digest &expected) {
@@ -73,21 +130,22 @@ namespace Horo::Application::Internal {
         /** @brief Validates one process-owned record and rejects any extra strings or keys. */
         ReceiptKind ReadReceipt(const std::string_view line, const std::string_view digest, const std::string_view host,
                                 const std::string_view target) {
-            constexpr std::size_t IdentityColumns = 6;
-            constexpr std::array<std::uint32_t, 9> maxima{65'535, 65'535, UINT32_MAX, UINT32_MAX, UINT32_MAX, UINT32_MAX, 16, 128, 7};
-            std::array<std::string_view, IdentityColumns + maxima.size()> columns{};
+            constexpr std::array<std::uint32_t, 9> maxima{65'535,     65'535,     UINT32_MAX,
+                                                          UINT32_MAX, UINT32_MAX, UINT32_MAX,
+                                                          16,         128,        (1U << OpenXRProbeWire::PackagedRouteCount) - 1U};
+            std::array<std::string_view, ReceiptIdentityColumns + maxima.size()> columns{};
             std::size_t count{};
             for (auto word : std::views::split(line, ' ')) {
                 if (count == columns.size() || word.empty())
                     return ReceiptKind::Invalid;
                 columns[count++] = std::string_view{word.begin(), word.end()};
             }
-            if (count < IdentityColumns || columns[1] != digest || columns[2] != host || columns[3] != OpenXRProbeWire::Route ||
+            if (count < ReceiptIdentityColumns || columns[1] != digest || columns[2] != host || columns[3] != OpenXRProbeWire::Route ||
                 columns[4] != OpenXRProbeWire::Renderer || columns[5] != target)
                 return ReceiptKind::Invalid;
             if (columns[0] == OpenXRProbeWire::FailureRecord) {
                 const auto &reasons = OpenXRProbeWire::FailureNames;
-                return count == IdentityColumns + 2 && columns[6] == OpenXRProbeWire::LocalConnection &&
+                return count == ReceiptIdentityColumns + 2 && columns[6] == OpenXRProbeWire::LocalConnection &&
                                std::ranges::find(reasons, columns[7]) != reasons.end()
                            ? ReceiptKind::Failure
                            : ReceiptKind::Invalid;
@@ -95,7 +153,7 @@ namespace Horo::Application::Internal {
             if (count != columns.size() || columns[0] != OpenXRProbeWire::Record)
                 return ReceiptKind::Invalid;
             for (std::size_t index = 0; index < maxima.size(); ++index) {
-                const auto field = columns[index + IdentityColumns];
+                const auto field = columns[index + ReceiptIdentityColumns];
                 std::uint32_t value{};
                 const auto parsed = std::from_chars(field.data(), field.data() + field.size(), value);
                 if (parsed.ec != std::errc{} || parsed.ptr != field.data() + field.size() || value > maxima[index])
@@ -129,6 +187,16 @@ namespace Horo::Application::Internal {
                 return {bytes.data(), size};
             }
 
+            /** @brief Projects only the validated fields after the child's fixed identity columns. */
+            [[nodiscard]] std::string_view Facts() const noexcept {
+                auto facts = Text();
+                for (unsigned index = 0; index < ReceiptIdentityColumns; ++index)
+                    facts.remove_prefix(facts.find(' ') + 1);
+                if (kind == ReceiptKind::Failure)
+                    facts.remove_prefix(OpenXRProbeWire::LocalConnection.size() + 1);
+                return facts;
+            }
+
             std::array<char, MaximumReceiptBytes> bytes{};
             std::size_t size{};
             bool rejected{};
@@ -153,7 +221,8 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Requests an exact fixed child mode. Only signed project and installed renderer flags are forwarded. */
-        ExternalProcessRequest MakeRequest(const std::span<char *> arguments, const std::filesystem::path &installation) {
+        ExternalProcessRequest MakeRequest(const std::span<char *> arguments, const std::filesystem::path &installation,
+                                           std::chrono::seconds timeout) {
             ExternalProcessRequest request;
             request.executable = arguments[Executable];
             request.workingDirectory = installation;
@@ -174,7 +243,7 @@ namespace Horo::Application::Internal {
                                  arguments[System],
                                  arguments[InstallDigest]};
             request.environment.unset = {"XR_RUNTIME_JSON", "XR_ENABLE_API_LAYERS", "XR_API_LAYER_PATH", "XR_LOADER_DEBUG"};
-            request.timeout = std::chrono::seconds{90};
+            request.timeout = timeout;
             request.maximumLineBytes = MaximumReceiptBytes;
             request.maximumOutputBytes = 128U * 1024U;
             return request;
@@ -182,44 +251,43 @@ namespace Horo::Application::Internal {
 
         /** @brief Requires one current native receipt while the caller retains the installed-product lease. */
         int ProbeInstalledRuntime(const std::span<char *> arguments, const std::filesystem::path &installation,
-                                  const std::filesystem::path &executable, const Sha256Digest &executableDigest, std::ostream &output,
-                                  std::ostream &errors) {
-            const std::string_view host{arguments[Host]};
-            const std::string_view digest{arguments[InstallDigest]};
+                                  const std::filesystem::path &executable, const Sha256Digest &executableDigest,
+                                  const ProbeIdentity &identity, const ProbeOptions &options, std::ostream &output, std::ostream &errors) {
             Cli::CliInvocationStopController stop{std::chrono::milliseconds::zero()};
             NativeCliInterrupts interrupts;
-            if (interrupts.Start(stop).HasError()) {
-                errors << "XR probe could not acquire native cancellation handling.\n";
-                return 1;
-            }
-            auto request = MakeRequest(arguments, installation);
+            if (interrupts.Start(stop).HasError())
+                return FailProbe(errors, options, identity, "interrupt-handler-unavailable",
+                                 "XR probe could not acquire native cancellation handling.");
+            auto request = MakeRequest(arguments, installation, options.timeout);
             request.forceCancellation = stop.ForceToken();
-            const auto target = FormatSha256(OpenXRProbeWire::TargetDigest(arguments[Runtime], arguments[System]));
             ProbeReceipt receipt;
             request.onOutput = [&](const ProcessOutputLine &line) noexcept {
-                receipt.Observe(line, digest, host, target);
+                receipt.Observe(line, identity.install, identity.host, identity.target);
             };
             NativeExternalProcessRunner runner;
             const auto terminal = runner.Run(request, stop.Token());
-            if (terminal.HasError()) {
-                errors << "XR probe launch or process cleanup failed.\n";
-                return 1;
-            }
-            if (terminal.Value().stopCause == ProcessStopCause::Timeout) {
-                errors << "XR probe timed out; the supervised process tree was retired.\n";
-                return 1;
-            }
+            if (terminal.HasError())
+                return FailProbe(errors, options, identity, "launch-or-retirement-failed", "XR probe launch or process cleanup failed.");
+            if (terminal.Value().stopCause == ProcessStopCause::Timeout)
+                return FailProbe(errors, options, identity, "timed-out", "XR probe timed out; the supervised process tree was retired.");
             if (terminal.Value().reason != ProcessTerminationReason::Exited || terminal.Value().stopCause != ProcessStopCause::None ||
-                stop.Token().IsCancellationRequested()) {
-                errors << "XR probe was interrupted or required process cleanup.\n";
-                return 1;
-            }
+                stop.Token().IsCancellationRequested())
+                return FailProbe(errors, options, identity, "interrupted-or-retired",
+                                 "XR probe was interrupted or required process cleanup.");
             const bool finishedSuccess = receipt.kind == ReceiptKind::Success && terminal.Value().exitCode == 0;
             const bool finishedFailure = receipt.kind == ReceiptKind::Failure && terminal.Value().exitCode == 1;
-            if (receipt.rejected || (!finishedSuccess && !finishedFailure) || !MatchesExecutable(executable, executableDigest)) {
-                errors << "XR probe reported no current installed runtime/device receipt. Check the requested default runtime, HMD and "
-                          "package.\n";
-                return 1;
+            if (!MatchesExecutable(executable, executableDigest))
+                return FailProbe(errors, options, identity, "stale-package",
+                                 "XR probe reported no current installed runtime/device receipt. "
+                                 "Check the requested default runtime, HMD and package.");
+            if (receipt.rejected || (!finishedSuccess && !finishedFailure))
+                return FailProbe(errors, options, identity, "unattributed-receipt",
+                                 "XR probe reported no current installed runtime/device receipt. Check the requested default runtime, HMD "
+                                 "and package.");
+            if (options.qualifiedReport) {
+                WriteQualifiedReport(finishedSuccess ? output : errors, identity, finishedSuccess ? "preflight" : receipt.Facts(),
+                                     finishedSuccess ? receipt.Facts() : std::string_view{});
+                return finishedSuccess && output ? 0 : 1;
             }
             if (finishedFailure) {
                 errors << receipt.Text() << '\n';
@@ -232,15 +300,22 @@ namespace Horo::Application::Internal {
     }  // namespace
 
     /** @copydoc RunOpenXRPackageProbe */
-    int RunOpenXRPackageProbe(const std::span<char *> arguments, std::ostream &output, std::ostream &errors) {
-        if (arguments.size() != Count || std::ranges::any_of(arguments, [](const char *value) {
+    int RunOpenXRPackageProbe(const std::span<char *> input, std::ostream &output, std::ostream &errors) {
+        if (input.size() < Count || std::ranges::any_of(input, [](const char *value) {
             return value == nullptr;
         })) {
             errors << Usage;
             return 2;
         }
+        const auto options = ReadOptions(input.subspan(Count));
+        if (!options) {
+            errors << Usage;
+            return 2;
+        }
+        const auto arguments = input.first(Count);
         const std::string_view host{arguments[Host]};
-        if (host.empty() || host != OpenXRProbeWire::DesktopHost() || std::string_view{arguments[Route]} != OpenXRProbeWire::Route) {
+        if (host.empty() || host != OpenXRProbeWire::DesktopHost() ||
+            std::string_view{arguments[Route]} != OpenXRProbeWire::Route) {
             errors << "XR probe unavailable for the declared host or connection route.\n";
             return 2;
         }
@@ -268,13 +343,14 @@ namespace Horo::Application::Internal {
             errors << "XR probe paths use an invalid native encoding.\n";
             return 2;
         }
+        const ProbeIdentity identity{digest, arguments[ExecutableDigest], host,
+                                     FormatSha256(OpenXRProbeWire::TargetDigest(arguments[Runtime], arguments[System]))};
         NativeDurableFileSystem files;
         const auto lease = files.TryAcquireProductLaunch(installation);
-        if (lease.HasError() || !MatchesExecutable(executable, executableDigest.Value())) {
-            errors << "XR probe installation is stale, busy, or differs from its expected executable digest.\n";
-            return 1;
-        }
+        if (lease.HasError() || !MatchesExecutable(executable, executableDigest.Value()))
+            return FailProbe(errors, *options, identity, "stale-or-busy-package",
+                             "XR probe installation is stale, busy, or differs from its expected executable digest.");
 
-        return ProbeInstalledRuntime(arguments, installation, executable, executableDigest.Value(), output, errors);
+        return ProbeInstalledRuntime(arguments, installation, executable, executableDigest.Value(), identity, *options, output, errors);
     }
 }  // namespace Horo::Application::Internal
