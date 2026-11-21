@@ -30,6 +30,7 @@
 namespace Horo::AI {
     class AiSceneRuntime;
     class DecisionQueryTask;
+    struct DecisionQueryPublication;
     class IDecisionQueryTaskBinder;
     class PerceptionSpatialBroadphase;
     class PerceptionSpatialSnapshot;
@@ -465,10 +466,12 @@ namespace Horo::AI {
         /** @brief Runs one admitted query task's BlackboardSync against its exact Scene-owned destination.
          * @param task Existing owner-bound query task. @param scene Current view for output revalidation.
          * @param tick Exact simulation tick before that agent's next decision.
+         * @param publication Optional detached observer of a result published on this tick.
          * @return True if an output was committed, false for idle or pending work, or a typed stale or publication error.
          */
         [[nodiscard]] Result<bool> SyncDecisionQueryAtBlackboardSync(DecisionQueryTask &task, const Runtime::RuntimeSceneView &scene,
-                                                                     std::uint64_t tick) const;
+                                                                     std::uint64_t tick,
+                                                                     std::optional<DecisionQueryPublication> *publication = nullptr) const;
         /** @brief Resolves the exact live Scene entity for owner-side query context capture.
          * @param agent Current AI agent generation. @return Exact entity reference or a typed stale-owner failure.
          */

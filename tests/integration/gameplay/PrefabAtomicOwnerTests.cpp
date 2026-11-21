@@ -29,7 +29,8 @@ namespace Horo::Application::PrefabAtomicTest {
     /** @brief Drives the actual headless fixed lifecycle through its replay publication or abort boundary. */
     void ExpectDecisionReplay(std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition,
                               Internal::HeadlessSceneActivationInput input, AI::AgentId agent, const Sha256Digest &planDigest, bool abort,
-                              std::optional<std::uint32_t> referenceGeneration);
+                              std::optional<std::uint32_t> referenceGeneration, std::optional<Internal::GameplayWorldSelection> gameplay,
+                              std::uint64_t tick);
 
     namespace {
         /** @brief Captures a declared registry for both real host and prefab admission. */
@@ -1056,6 +1057,7 @@ namespace Horo::Application::PrefabAtomicTest {
             std::optional<AI::PerceptionSenseContract> nativeSense;
             bool prefabOnly = false;
             bool prefabQuery = false;
+            std::uint64_t replayTick = 1;
             bool rollbackPrefab = false;
             bool preserveInactive = false;
             auto selectedPrefab = prefabId;
@@ -1072,6 +1074,18 @@ namespace Horo::Application::PrefabAtomicTest {
                 executionBudget = 100;
                 captureReplay = true;
                 capturePerceptionReplay = true;
+            }
+            SECTION("standalone replay records a terminal query result") {
+                executionBudget = 100;
+                captureReplay = true;
+                prepareNative = true;
+                replayTick = 3;
+            }
+            SECTION("standalone replay records the query's later Blackboard write") {
+                executionBudget = 100;
+                captureReplay = true;
+                prepareNative = true;
+                replayTick = 4;
             }
             SECTION("standalone rejection after replay preparation cannot publish the attempted tick") {
                 executionBudget = 100;
@@ -1265,7 +1279,7 @@ namespace Horo::Application::PrefabAtomicTest {
                 REQUIRE(schema.HasValue());
                 ai.schema = std::make_shared<const AI::BlackboardSchema>(std::move(schema).Value());
             }
-            if (prefabQuery) {
+            if (prefabQuery || replayTick > 1) {
                 auto registry = AI::CaptureBuiltinQuerySchema();
                 REQUIRE(registry.HasValue());
                 const auto query =
@@ -1574,6 +1588,7 @@ namespace Horo::Application::PrefabAtomicTest {
             if (duplicateSelection)
                 selected.bindings.push_back({selectedController, requestedId});
             selected.querySchema = queryRegistry;
+            const auto replayPlanDigest = plan->Digest();
             if (loadSchemaFromCook)
                 selected.environment.schemas.clear();
             if (prepareNative) {
@@ -1614,8 +1629,8 @@ namespace Horo::Application::PrefabAtomicTest {
             }
             auto scene = std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(definition).Value());
             if (captureReplay) {
-                ExpectDecisionReplay(std::move(scene), std::move(input), controller.agent.agent.agent, plan->Digest(), abortReplay,
-                                     replayReferenceGeneration);
+                ExpectDecisionReplay(std::move(scene), std::move(input), controller.agent.agent.agent, replayPlanDigest, abortReplay,
+                                     replayReferenceGeneration, std::move(gameplay), replayTick);
                 return;
             }
             std::optional<Gameplay::GameplayReplicationAdmissionPolicy> admission;

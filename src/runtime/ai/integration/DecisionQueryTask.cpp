@@ -71,6 +71,20 @@ namespace Horo::AI {
         }
 
         /** @brief Converts only the admitted native winner types, with a fresh entity-generation fence. */
+        /** @brief Detaches stable task metadata and the first ranked item before observer reentry. */
+        DecisionQueryPublication ObservePublication(const DecisionQueryTaskDescriptor &descriptor, const QueryExecutionResult &result) {
+            return {descriptor,
+                    result.status,
+                    result.mode,
+                    result.publicationTick,
+                    result.contextRevision,
+                    result.generator,
+                    result.generated,
+                    result.evaluated,
+                    result.invalidCoordinates,
+                    result.winners.empty() ? std::nullopt : std::optional{result.winners.front()}};
+        }
+
         Result<BlackboardScalarValue> WinnerValue(const QueryGeneratedItem &item, const Runtime::RuntimeSceneView &scene,
                                                   const BlackboardValueKind kind) {
             if (const auto *point = std::get_if<Math::WorldCoordinate64>(&item); point && kind == BlackboardValueKind::WorldCoordinate)
@@ -266,11 +280,11 @@ namespace Horo::AI {
     }
 
     /** @copydoc DecisionQueryTask::SyncQuery */
-    void DecisionQueryTask::SyncQuery(const std::uint64_t tick) {
+    void DecisionQueryTask::SyncQuery(const std::uint64_t tick, std::optional<DecisionQueryPublication> *publication) {
         if (!query_)
             return;
-        if (!operation_.IsCancellationRequested())
-            (void)query_->Sync(tick);
+        if (!operation_.IsCancellationRequested() && query_->Sync(tick) && publication)
+            *publication = ObservePublication(descriptor_, *query_->Published());
         if (operation_.IsCancellationRequested())
             Discard();
     }
@@ -284,7 +298,7 @@ namespace Horo::AI {
 
     /** @copydoc DecisionQueryTask::CommitOutput */
     Result<bool> DecisionQueryTask::CommitOutput(const std::uint64_t tick, const Runtime::RuntimeSceneView &scene,
-                                                 BlackboardInstance &blackboard) {
+                                                 BlackboardInstance &blackboard, std::optional<DecisionQueryPublication> *publication) {
         if (!ready_ || tick <= resolvedTick_)
             return Result<bool>::Success(false);
         const auto &result = *query_->Published();
@@ -306,8 +320,13 @@ namespace Horo::AI {
             return RejectOutput(std::move(staged).ErrorValue());
         // Hide the pending output while notifying observers, which may synchronously call back.
         const auto task = operation_.task;
+        auto detached = publication ? std::optional{ObservePublication(descriptor_, result)} : std::nullopt;
         ready_ = false;
         auto committed = blackboard.CommitAtBlackboardSync(std::move(write));
+        if (detached && committed.HasValue()) {
+            detached->blackboardCommitted = true;
+            *publication = std::move(detached);
+        }
         if (!query_ || operation_.task != task)
             return Result<bool>::Success(committed.HasValue());
         if (committed.HasError())

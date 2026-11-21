@@ -142,6 +142,18 @@ namespace Horo::Application::Internal {
             return {{AI::AiReplayCoverage::Deterministic, 1, ReadDigest(section.at("settingsDigest"))}, {stamp, hash}};
         }
 
+        /** @brief Reads the redacted query publication or its confirmed Blackboard write records. */
+        PortableBoundary ReadQueryBoundary(const Json &section, std::uint64_t agent) {
+            const auto &records = section.at("records");
+            if (section.at("schemaVersion") != 1 || !records.is_array() || records.size() > 32)
+                throw InvalidEvidence{};
+            const auto hash = HashJson(records);
+            if (hash != ReadDigest(section.at("digest")))
+                throw InvalidEvidence{};
+            return {{AI::AiReplayCoverage::Deterministic, 1, ReadDigest(section.at("profile"))},
+                    {{agent, ReadIdentity(section.at("revision"))}, hash}};
+        }
+
         /** @brief Reads only a bounded regular file and rejects deep JSON before recursive processing. */
         Result<PortableReplay> ReadReplay(const std::filesystem::path &path) {
             using Outcome = Result<PortableReplay>;
@@ -156,6 +168,12 @@ namespace Horo::Application::Internal {
             if (file.at("format") != "horo-ai-replay-evidence" || file.at("version") != 1)
                 return Outcome::Failure(MakeError(AI::AIErrors::CanonicalSchemaUnsupported));
             auto result = ReadRequired(file);
+            if (file.contains("queryPublication") || file.contains("blackboardSync")) {
+                result.At(QueryPublication) = ReadQueryBoundary(file.at("queryPublication"), result.agent);
+                result.At(BlackboardSync) = ReadQueryBoundary(file.at("blackboardSync"), result.agent);
+                if (result.At(QueryPublication).profile != result.At(BlackboardSync).profile)
+                    throw InvalidEvidence{};
+            }
             if (file.contains("perceptionInput")) {
                 const auto &input = file.at("perceptionInput");
                 if (input.at("schemaVersion") != 1 || input.at("scope") != "spatial-publication")

@@ -4,6 +4,7 @@
 #include "GameplayWorldComposition.h"
 #include "HeadlessSceneLoadBoundary.h"
 #include "Horo/AI/AISceneActivation.h"
+#include "Horo/AI/DecisionQueryTask.h"
 #include "Horo/Navigation/NavigationAreas.h"
 #include "Horo/Navigation/NavigationCrowdAvoidance.h"
 #include "Horo/Navigation/NavigationMovement.h"
@@ -113,6 +114,12 @@ namespace Horo::Application::Internal {
         std::size_t listenerCount{};
     };
 
+    /** @brief Selected agent's observed query results and Blackboard writes for a single committed tick. */
+    struct HeadlessReplayQueries final {
+        Sha256Digest profile;
+        std::vector<AI::DecisionQueryPublication> publications;
+    };
+
     /** @brief Original decision evidence and its reference-aware canonical encoding owned after fixed commit. */
     struct HeadlessDecisionReplayData final {
         AI::AiSceneDecisionReplayCapture evidence;
@@ -124,6 +131,7 @@ namespace Horo::Application::Internal {
             characterMotion;                          /**< Empty records still cover an idle controller tick. */
         std::optional<HeadlessReplayPhysics> physics; /**< Absent for explicit Null Physics. */
         std::optional<HeadlessReplayPerception> perception;
+        std::optional<HeadlessReplayQueries> queries;
     };
 
     /** @brief Product-owned mailbox for one exact committed tick; no concurrent access or file storage. */

@@ -19,7 +19,14 @@ namespace Horo::Runtime {
 
 namespace Horo::Application::Internal {
     class CommittedSceneAssets;
-    using CookedSceneQueryPlanCatalog = std::map<AI::QueryId, std::shared_ptr<const AI::EnvironmentQueryPlan>>;
+
+    /** @brief Compiled query and the exact authenticated cooked bytes that produced it. */
+    struct CookedSceneQueryPlan final {
+        std::shared_ptr<const AI::EnvironmentQueryPlan> plan;
+        Sha256Digest digest;
+    };
+
+    using CookedSceneQueryPlanCatalog = std::map<AI::QueryId, CookedSceneQueryPlan>;
 
     /** @brief Durable selection of a Decision artifact for an initial or explicit prefab controller. */
     struct CookedDecisionSceneBinding final {

@@ -22,6 +22,13 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> RunAtFixedTick(AI::AiSceneRuntime &runtime, const Runtime::RuntimeSceneView &scene,
                                                   Math::WorldCoordinate64 origin, std::uint64_t tick);
 
+        /** @brief Observes terminal results for one exact live agent and tick without changing query execution. */
+        void ArmReplay(AI::AgentHandle agent, std::uint64_t tick) noexcept;
+        /** @brief Returns the one observed publication prefix after the query's ordinary owner phases finish. */
+        [[nodiscard]] Result<std::span<const AI::DecisionQueryPublication>> ReadReplay(std::uint64_t tick) const;
+        /** @brief Identifies the verified cooked query inventory in stable query ID order. */
+        [[nodiscard]] Sha256Digest ReplayProfile() const noexcept;
+
     private:
         struct TickScope final {
             AI::AiSceneRuntime &runtime;
@@ -53,5 +60,10 @@ namespace Horo::Application::Internal {
         std::size_t maximumActive_{};
         std::size_t cursor_{};
         TickScope *scope_{};
+        AI::AgentHandle replayAgent_;
+        std::uint64_t replayTick_{};
+        std::array<AI::DecisionQueryPublication, 32> replayPublications_{};
+        std::size_t replayCount_{};
+        bool replayOverflow_{};
     };
 }  // namespace Horo::Application::Internal

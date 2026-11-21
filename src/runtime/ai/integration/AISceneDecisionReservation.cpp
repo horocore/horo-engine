@@ -205,7 +205,8 @@ namespace Horo::AI {
 
     /** @copydoc AiSceneRuntime::SyncDecisionQueryAtBlackboardSync */
     Result<bool> AiSceneRuntime::SyncDecisionQueryAtBlackboardSync(DecisionQueryTask &task, const Runtime::RuntimeSceneView &scene,
-                                                                   std::uint64_t tick) const {
+                                                                   std::uint64_t tick,
+                                                                   std::optional<DecisionQueryPublication> *publication) const {
         using Sync = Result<bool>;
         if (auto valid = CapabilityAtSafePoint().ValidateAtSafePoint(); valid.HasError())
             return Sync::Failure(valid.ErrorValue());
@@ -220,8 +221,8 @@ namespace Horo::AI {
         const auto selected = DecisionAgent(*state, owner);
         if (selected.HasError())
             return Sync::Failure(selected.ErrorValue());
-        task.SyncQuery(tick);
-        return task.CommitOutput(tick, scene, *selected.Value()->blackboard);
+        task.SyncQuery(tick, publication);
+        return task.CommitOutput(tick, scene, *selected.Value()->blackboard, publication);
     }
 
     /** @copydoc AiSceneRuntime::PrepareCookedDecisionRegistration */

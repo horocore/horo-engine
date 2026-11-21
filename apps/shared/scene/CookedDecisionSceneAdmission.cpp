@@ -47,7 +47,11 @@ namespace Horo::Application::Internal {
                 if (plan.HasError())
                     return Loaded::Failure(plan.ErrorValue());
                 const auto id = plan.Value().Id();
-                if (!queries.emplace(id, std::make_shared<const AI::EnvironmentQueryPlan>(std::move(plan).Value())).second)
+                const auto digest = ComputeSha256(std::as_bytes(std::span{artifact.payload}));
+                if (!queries
+                         .emplace(id,
+                                  CookedSceneQueryPlan{std::make_shared<const AI::EnvironmentQueryPlan>(std::move(plan).Value()), digest})
+                         .second)
                     return Loaded::Failure(MakeError(AI::AIErrors::EnvironmentQueryIdentityConflict));
             }
             return Loaded::Success(std::move(queries));
@@ -66,7 +70,7 @@ namespace Horo::Application::Internal {
             const auto query = queries->find(output.query);
             if (query == queries->end())
                 return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
-            const auto &result = query->second->ResultSchema();
+            const auto &result = query->second.plan->ResultSchema();
             const auto kind = input.querySchema->Find(result.itemType)->kind;
             if (result.id != output.result || result.version != output.resultVersion || result.itemType != output.item)
                 return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryVersionIncompatible));

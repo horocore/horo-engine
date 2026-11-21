@@ -22,6 +22,21 @@ namespace Horo::AI {
         std::uint64_t timeoutTicks{};
     };
 
+    /** @brief Detached terminal result for an authored EQS task, copied only for an explicit owner observer. */
+    struct DecisionQueryPublication final {
+        DecisionQueryTaskDescriptor descriptor;
+        QueryExecutionStatus status{};
+        QueryExecutionMode mode{};
+        std::uint64_t publicationTick{};
+        std::uint64_t contextRevision{};
+        QueryGeneratorProvenance generator;
+        std::size_t generated{};
+        std::size_t evaluated{};
+        std::size_t invalidCoordinates{};
+        std::optional<QueryExecutionWinner> winner;
+        bool blackboardCommitted{};
+    };
+
     /** @brief Explicit host boundary for admitting existing staged query executions. */
     class IDecisionQueryTaskHost {
     public:
@@ -86,14 +101,15 @@ namespace Horo::AI {
         /** @brief Delegates budgeted work to the admitted query after BlackboardSync. */
         void AdvanceQuery(std::uint64_t tick, QueryExecutionBudget budget);
         /** @brief Collects already available provider completion at BlackboardSync. */
-        void SyncQuery(std::uint64_t tick);
+        void SyncQuery(std::uint64_t tick, std::optional<DecisionQueryPublication> *publication = nullptr);
         /** @brief Applies one eligible result to the exact active destination before the task succeeds.
          * @param tick Current BlackboardSync tick. @param scene Fresh destination Scene.
          * @param blackboard Exact destination admitted by the decision node.
          * @return True once on commit, false when no output is ready or the task retains a write failure, or a typed stale error.
          * @details A rejected Blackboard write is reported by the task's next Resume and is never retried.
          */
-        [[nodiscard]] Result<bool> CommitOutput(std::uint64_t tick, const Runtime::RuntimeSceneView &scene, BlackboardInstance &blackboard);
+        [[nodiscard]] Result<bool> CommitOutput(std::uint64_t tick, const Runtime::RuntimeSceneView &scene, BlackboardInstance &blackboard,
+                                                std::optional<DecisionQueryPublication> *publication = nullptr);
 
     private:
         /** @brief Retains only typed admission evidence and the explicit host port. */

@@ -97,7 +97,7 @@ namespace Horo::Application::Internal {
             if (tasks_.size() == AI::AiTaskSchedulerSettings::HardAgents)
                 return Executor::Failure(MakeError(AI::AIErrors::EnvironmentQueryLimitExceeded));
         }
-        auto task = AI::DecisionQueryTask::BindAuthored(configuration, *plan->second, *registry_, tree, *this);
+        auto task = AI::DecisionQueryTask::BindAuthored(configuration, *plan->second.plan, *registry_, tree, *this);
         if (task.HasError())
             return Executor::Failure(task.ErrorValue());
         auto retained = std::shared_ptr<AI::DecisionQueryTask>{std::move(task).Value()};
@@ -124,11 +124,11 @@ namespace Horo::Application::Internal {
             return Execution::Failure(position.ErrorValue());
         AI::QueryContextCapture capture;
         const auto contexts =
-            capture.Capture(*plan->second, *registry_, *contexts_, scope_->scene,
+            capture.Capture(*plan->second.plan, *registry_, *contexts_, scope_->scene,
                             {.querier = owner.Value(), .querierLocation = position.Value(), .executionRevision = submitted});
         if (contexts.HasError())
             return Execution::Failure(contexts.ErrorValue());
-        auto admitted = AI::AdmitBuiltinPointQuery(*plan->second, *registry_, scope_->scene,
+        auto admitted = AI::AdmitBuiltinPointQuery(*plan->second.plan, *registry_, scope_->scene,
                                                    {operation.agent, contexts.Value(), operation.ownerCancellation},
                                                    {.submittedTick = submitted,
                                                     .deadlineTick = deadline,
@@ -145,12 +145,45 @@ namespace Horo::Application::Internal {
             const auto task = entry.lock();
             if (!task || !task->ActiveAgent().IsValid())
                 continue;
-            const auto synced = scope.runtime.SyncDecisionQueryAtBlackboardSync(*task, scope.scene, scope.tick);
+            std::optional<AI::DecisionQueryPublication> publication;
+            const auto observe = replayTick_ == scope.tick && replayAgent_ == task->ActiveAgent();
+            const auto synced =
+                scope.runtime.SyncDecisionQueryAtBlackboardSync(*task, scope.scene, scope.tick, observe ? &publication : nullptr);
+            if (publication) {
+                if (replayCount_ < replayPublications_.size())
+                    replayPublications_[replayCount_++] = *publication;
+                else
+                    replayOverflow_ = true;
+            }
             if (synced.HasError() && synced.ErrorValue().code.Value() != AI::AIErrors::EnvironmentQueryContextStale.code.Value())
                 return Result<void>::Failure(synced.ErrorValue());
             scope.active += task->ActiveAgent().IsValid();
         }
         return Result<void>::Success();
+    }
+
+    /** @copydoc HeadlessDecisionQueries::ArmReplay */
+    void HeadlessDecisionQueries::ArmReplay(const AI::AgentHandle agent, const std::uint64_t tick) noexcept {
+        replayAgent_ = agent;
+        replayTick_ = tick;
+        replayCount_ = 0;
+        replayOverflow_ = false;
+    }
+
+    /** @copydoc HeadlessDecisionQueries::ReadReplay */
+    Result<std::span<const AI::DecisionQueryPublication>> HeadlessDecisionQueries::ReadReplay(const std::uint64_t tick) const {
+        using Replay = Result<std::span<const AI::DecisionQueryPublication>>;
+        if (tick == 0 || tick != replayTick_ || replayOverflow_)
+            return Replay::Failure(MakeError(AI::AIErrors::EnvironmentQueryLimitExceeded));
+        return Replay::Success(std::span{replayPublications_}.first(replayCount_));
+    }
+
+    /** @copydoc HeadlessDecisionQueries::ReplayProfile */
+    Sha256Digest HeadlessDecisionQueries::ReplayProfile() const noexcept {
+        Sha256Builder hash;
+        for (const auto &entry : plans_)
+            (void)hash.Update(std::as_bytes(std::span{entry.second.digest.bytes}));
+        return hash.Finalize();
     }
 
     /** @copydoc HeadlessDecisionQueries::AdvanceQueries */

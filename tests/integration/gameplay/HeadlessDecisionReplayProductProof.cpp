@@ -108,7 +108,7 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(artifact.at("format") == "horo-ai-replay-evidence");
             CHECK(artifact.at("version") == 1);
             CHECK(artifact.at("sceneDefinitionId") == std::to_string(data.definition.value));
-            CHECK(artifact.at("tick") == "1");
+            CHECK(artifact.at("tick") == std::to_string(data.evidence.tick));
             CHECK(artifact.at("agentId") == std::to_string(data.evidence.subject.Value()));
             CHECK(artifact.at("canonicalAi").at("digest") == FormatSha256(digest));
             CHECK(artifact.at("canonicalAi").at("recordVersion") == AI::AiCanonicalReferenceRecordVersion);
@@ -127,7 +127,7 @@ namespace Horo::Application::PrefabAtomicTest {
             REQUIRE(data.physics);
             CHECK(coverage.at("physics") == "deterministic");
             const auto &physics = artifact.at("physics");
-            CHECK(physics.at("physicsTick") == "1");
+            CHECK(physics.at("physicsTick") == std::to_string(data.evidence.tick));
             CHECK(physics.at("scope") == "authored-rigid-body-motion");
             CHECK(physics.at("settingsDigest") == FormatSha256(data.physics->settings.digest));
             const auto &bodies = physics.at("bodies");
@@ -142,6 +142,17 @@ namespace Horo::Application::PrefabAtomicTest {
                 CHECK(bodies.at(1).at("linearVelocityMetersPerSecond").at(1).get<float>() < 0);
             }
             CHECK(coverage.at("navigation") == "omitted");
+            CHECK(coverage.at("query-publication") == (data.queries ? "deterministic" : "omitted"));
+            if (data.queries) {
+                const bool terminal = data.evidence.tick == 3;
+                REQUIRE(artifact.at("queryPublication").at("records").size() == (terminal ? 1 : 0));
+                REQUIRE(artifact.at("blackboardSync").at("records").size() == (terminal ? 0 : 1));
+                const auto &record = artifact.at(terminal ? "queryPublication" : "blackboardSync").at("records").at(0);
+                CHECK(record.at("queryId") == "1");
+                CHECK(record.at("outputKeyId") == "4");
+                CHECK(record.at("publicationTick") == "3");
+                CHECK(record.at("winner").at("positionMillimeters").is_array());
+            }
             CHECK(coverage.at("achieved-character-motion") == (data.characterMotion ? "deterministic" : "omitted"));
             if (data.characterMotion) {
                 const auto &capture = artifact.at("characterMotion");
@@ -219,7 +230,8 @@ namespace Horo::Application::PrefabAtomicTest {
     /** @copydoc ExpectDecisionReplay */
     void ExpectDecisionReplay(std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition,
                               Internal::HeadlessSceneActivationInput input, AI::AgentId agent, const Sha256Digest &planDigest, bool abort,
-                              std::optional<std::uint32_t> referenceGeneration) {
+                              std::optional<std::uint32_t> referenceGeneration, std::optional<Internal::GameplayWorldSelection> gameplay,
+                              const std::uint64_t tick) {
         using namespace Network;
         const auto definitionId = definition->Id();
         const bool hasPerception = static_cast<bool>(input.perceptionPositions);
@@ -236,9 +248,8 @@ namespace Horo::Application::PrefabAtomicTest {
         const auto output =
             Internal::HeadlessReplayOutput::Parse(std::string_view{reinterpret_cast<const char *>(utf8.data()), utf8.size()});
         REQUIRE(output.HasValue());
-        const auto replay = std::make_shared<Internal::HeadlessDecisionReplay>(Internal::HeadlessDecisionReplaySelection{agent, 1});
+        const auto replay = std::make_shared<Internal::HeadlessDecisionReplay>(Internal::HeadlessDecisionReplaySelection{agent, tick});
         input.decisionReplay = replay;
-        std::optional<Internal::GameplayWorldSelection> gameplay;
         if (hasCharacter) {
             std::ifstream revision{HORO_TEST_GAME_MODULE_REVISION_PATH};
             std::uint64_t descriptorRevision{};
@@ -310,6 +321,11 @@ namespace Horo::Application::PrefabAtomicTest {
         REQUIRE(started.HasValue());
         REQUIRE(host.Value()->RunFrame().HasValue());
         CHECK_FALSE(replay->TakeCommitted());
+        for (std::uint64_t step = 1; step < tick; ++step) {
+            clock.Advance(Duration::FromNanoseconds(16'666'667));
+            REQUIRE(host.Value()->RunFrame().HasValue());
+            CHECK_FALSE(replay->TakeCommitted());
+        }
         clock.Advance(Duration::FromNanoseconds(16'666'667));
         const auto fixed = host.Value()->RunFrame();
         if (abort) {
@@ -339,7 +355,8 @@ namespace Horo::Application::PrefabAtomicTest {
         if (data.characterMotion)
             CHECK(data.characterMotion->size() == 1);
         const auto &evidence = data.evidence;
-        CHECK(evidence.tick == 1);
+        CHECK(evidence.tick == tick);
+        CHECK(data.queries.has_value() == (tick > 1));
         CHECK(evidence.subject == agent);
         REQUIRE(evidence.trace);
         CHECK(evidence.trace->Header().planDigest == planDigest);

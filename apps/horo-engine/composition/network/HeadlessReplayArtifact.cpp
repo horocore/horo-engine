@@ -18,6 +18,7 @@ namespace Horo::Application::Internal {
         using Json = nlohmann::json;
         constexpr std::uint32_t SceneInputSchemaVersion = 1;
         constexpr std::uint32_t PerceptionInputSchemaVersion = 1;
+        constexpr std::uint32_t QueryPublicationSchemaVersion = 1;
         constexpr std::uint32_t RigidBodyMotionSchemaVersion = 1;
         constexpr std::uint32_t CharacterMotionSchemaVersion = 1;
 
@@ -32,8 +33,8 @@ namespace Horo::Application::Internal {
             constexpr auto &names = HeadlessReplayBoundaryNames;
             const std::array deterministic{true,
                                            data.perception.has_value(),
-                                           false,
-                                           false,
+                                           data.queries.has_value(),
+                                           data.queries.has_value(),
                                            true,
                                            false,
                                            false,
@@ -48,6 +49,46 @@ namespace Horo::Application::Internal {
                     recorded.push_back(names[index]);
             }
             return {{"version", AI::AiReplayManifest::CurrentVersion}, {"boundaries", std::move(boundaries)}};
+        }
+
+        /** @brief Encodes terminal query outcomes or the corresponding successful Blackboard writes in owner order. */
+        Json EncodeQueries(const HeadlessReplayQueries &queries, const bool blackboard) {
+            auto records = Json::array();
+            for (const auto &result : queries.publications) {
+                if (result.blackboardCommitted != blackboard)
+                    continue;
+                Json record{{"queryId", std::to_string(result.descriptor.query.Value())},
+                            {"nodeId", std::to_string(result.descriptor.node.Value())},
+                            {"outputKeyId", std::to_string(result.descriptor.output.Value())},
+                            {"resultSchemaId", std::to_string(result.descriptor.resultSchema.Value())},
+                            {"resultVersion", result.descriptor.resultVersion},
+                            {"status", static_cast<std::uint8_t>(result.status)},
+                            {"publicationTick", std::to_string(result.publicationTick)},
+                            {"contextRevision", std::to_string(result.contextRevision)},
+                            {"generatorRevision", std::to_string(result.generator.revision)},
+                            {"generated", result.generated},
+                            {"evaluated", result.evaluated},
+                            {"invalidCoordinates", result.invalidCoordinates}};
+                if (result.winner) {
+                    const auto &winner = *result.winner;
+                    if (const auto *point = std::get_if<Math::WorldCoordinate64>(&winner.item))
+                        record["winner"] = {{"positionMillimeters", point->Millimeters()},
+                                            {"candidateIndex", winner.score.itemIndex},
+                                            {"score", winner.score.scoreKey}};
+                }
+                records.push_back(std::move(record));
+            }
+            return records;
+        }
+
+        /** @brief Wraps one query observation with its exact cooked input profile. */
+        Json EncodeQueryBoundary(const HeadlessReplayQueries &queries, const bool blackboard, const std::uint64_t revision) {
+            auto records = EncodeQueries(queries, blackboard);
+            return {{"schemaVersion", QueryPublicationSchemaVersion},
+                    {"profile", FormatSha256(queries.profile)},
+                    {"revision", std::to_string(revision)},
+                    {"digest", FormatSha256(HashRecords(records))},
+                    {"records", std::move(records)}};
         }
 
         /** @brief Encodes stable authored keys and copied solver outputs in canonical evidence order. */
@@ -161,6 +202,10 @@ namespace Horo::Application::Internal {
                                {"records", std::move(records)}}}};
                 if (data.physics)
                     payload["physics"] = EncodePhysics(*data.physics);
+                if (const auto &queries = data.queries) {
+                    payload["queryPublication"] = EncodeQueryBoundary(*queries, false, capture.tick);
+                    payload["blackboardSync"] = EncodeQueryBoundary(*queries, true, capture.blackboardRevision);
+                }
                 if (const auto &perception = data.perception)
                     payload["perceptionInput"] = {{"schemaVersion", PerceptionInputSchemaVersion},
                                                   {"scope", "spatial-publication"},
@@ -221,6 +266,13 @@ namespace Horo::Application::Internal {
             if (const auto &perception = data.perception)
                 result.Observe(PerceptionInput, PerceptionInputSchemaVersion, data.sceneInput,
                                {data.definition.value, perception->revision}, perception->digest);
+            if (const auto &queries = data.queries) {
+                result.Observe(QueryPublication, QueryPublicationSchemaVersion, queries->profile,
+                               {data.evidence.subject.Value(), data.evidence.tick}, HashRecords(EncodeQueries(*queries, false)));
+                result.Observe(BlackboardSync, QueryPublicationSchemaVersion, queries->profile,
+                               {data.evidence.subject.Value(), data.evidence.blackboardRevision},
+                               HashRecords(EncodeQueries(*queries, true)));
+            }
             if (const auto &physics = data.physics) {
                 const AI::AiReplayStamp stamp{physics->publication.completedTick, physics->publication.publicationRevision};
                 result.Observe(Physics, RigidBodyMotionSchemaVersion, physics->settings.digest, stamp,

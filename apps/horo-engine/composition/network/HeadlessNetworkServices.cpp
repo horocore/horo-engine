@@ -245,18 +245,35 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Adds selected native evidence to an otherwise complete detached replay capture. */
-        HeadlessDecisionReplay::Capture CaptureNativeReplay(HeadlessDecisionReplayData data, ScenePhysicsHost &native,
+        HeadlessDecisionReplay::Capture CaptureNativeReplay(HeadlessDecisionReplayData data, HeadlessNetworkDetail::WorldRecord &world,
                                                             const HeadlessNetworkDetail::ReplayAuthoredScene &authored,
                                                             const Runtime::RuntimeSceneView &scene,
                                                             const Runtime::FixedStepContext &context,
                                                             const std::optional<std::uint64_t> previousPhysicsTick) {
             using Capture = HeadlessDecisionReplay::Capture;
-            auto motion = CaptureCharacterReplay(native, authored, scene, context);
+            if (world.decisionQueries) {
+                const auto publications = world.decisionQueries->ReadReplay(context.simulationTick);
+                if (publications.HasError())
+                    return Capture::Failure(publications.ErrorValue());
+                const auto records = publications.Value();
+                if (std::ranges::any_of(records, [](const AI::DecisionQueryPublication &record) {
+                    return record.mode != AI::QueryExecutionMode::DeterministicWorkUnits ||
+                           (record.winner && !std::holds_alternative<Math::WorldCoordinate64>(record.winner->item));
+                }))
+                    return Capture::Failure(MakeError(AI::AIErrors::CanonicalSchemaUnsupported,
+                                                      "Headless replay requires deterministic point query evidence."));
+                try {
+                    data.queries.emplace(HeadlessReplayQueries{world.decisionQueries->ReplayProfile(), {records.begin(), records.end()}});
+                } catch (const std::bad_alloc &) {
+                    return Capture::Failure(MakeError(AI::AIErrors::DecisionAssetStorageUnavailable));
+                }
+            }
+            auto motion = CaptureCharacterReplay(world.native, authored, scene, context);
             if (motion.HasError())
                 return Capture::Failure(std::move(motion).ErrorValue());
             data.characterMotion = std::move(motion).Value();
             if (previousPhysicsTick) {
-                auto physics = CapturePhysicsReplay(native, authored, scene, *previousPhysicsTick);
+                auto physics = CapturePhysicsReplay(world.native, authored, scene, *previousPhysicsTick);
                 if (physics.HasError())
                     return Capture::Failure(std::move(physics).ErrorValue());
                 data.physics = std::move(physics).Value();
@@ -334,8 +351,11 @@ namespace Horo::Application::Internal {
         const auto armed = world.ai->ArmDecisionReplayAtSafePoint(agent.Value(), selection_.tick);
         if (armed.HasError())
             pending_ = Capture::Failure(armed.ErrorValue());
-        else
+        else {
             armedAgent_ = agent.Value();
+            if (world.decisionQueries)
+                world.decisionQueries->ArmReplay(armedAgent_, selection_.tick);
+        }
     }
 
     void HeadlessDecisionReplay::Prepare(HeadlessNetworkDetail::WorldRecord &world, const Runtime::FixedStepContext &context) {
@@ -354,7 +374,7 @@ namespace Horo::Application::Internal {
         armedAgent_ = {};
         auto captured = EncodeReplayCapture(std::move(evidence).Value(), *world.replayAuthoredScene, *scene, perception_);
         pending_ = captured.HasError() ? std::move(captured)
-                                       : CaptureNativeReplay(std::move(captured).Value(), world.native, *world.replayAuthoredScene, *scene,
+                                       : CaptureNativeReplay(std::move(captured).Value(), world, *world.replayAuthoredScene, *scene,
                                                              context, previousPhysicsTick_);
     }
 
