@@ -8,6 +8,10 @@
 #include <span>
 #include <variant>
 
+namespace Horo::Editor {
+    class SourceFileOpenService;
+}
+
 namespace Horo::Editor::Proposals {
     inline constexpr std::uint32_t WireVersion = 1;
 
@@ -360,6 +364,7 @@ namespace Horo::Editor::Proposals {
     struct SourceReviewApplied final {
         SourceEditBatch batch;
         std::shared_ptr<const SourceReviewAudit> audit;
+        std::vector<SourceDocumentSnapshot> drafts;
     };
 
     /** @brief One accepted creation and its logical initial source revision, detached from the editor owner. */
@@ -412,6 +417,12 @@ namespace Horo::Editor::Proposals {
          */
         [[nodiscard]] Result<SourceReviewApplied> CommitObserved(SourceDocumentService &documents, const DurableFileSystem &files,
                                                                  CancellationToken cancellation = {}) const;
+        /** @brief Applies accepted text and draft creations through the registry owner as one group.
+         * @param open Source document and routing owner. @param files Worker filesystem authority.
+         * @param cancellation Current workspace admission. @return Complete group or a conflict without publication.
+         */
+        [[nodiscard]] Result<SourceReviewApplied> CommitDrafts(SourceFileOpenService &open, const DurableFileSystem &files,
+                                                               CancellationToken cancellation = {}) const;
 
         /** @brief Views accepted text operations in canonical proposal order. */
         [[nodiscard]] std::span<const PreparedSourceTextEdit> TextEdits() const noexcept {
@@ -433,6 +444,8 @@ namespace Horo::Editor::Proposals {
         std::vector<PreparedSourceFileOperation> files_;
         SourceBatchDiskEvidence disk_;
         std::shared_ptr<const SourceReviewAudit> audit_;
+        /** @brief Borrows the edit spans for one synchronous owner invocation. */
+        [[nodiscard]] std::vector<SourceBatchEdit> BatchInputs() const;
         /** @brief Builds the borrowed batch inputs and dispatches the requested verification mode. */
         [[nodiscard]] Result<SourceEditBatch> Publish(SourceDocumentService &documents, const DurableFileSystem *files,
                                                       CancellationToken cancellation) const;

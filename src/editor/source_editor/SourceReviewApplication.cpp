@@ -115,6 +115,32 @@ namespace Horo::Editor {
             return error.code.Value() == SourceDocumentErrors::SaveOutcomeUnknown.code.Value() ? Feedback::RenameRecovery
                                                                                                : FailureFeedback(error, fallback);
         }
+
+        /** @brief Checks that every effective edit and opened draft still belongs to the latest group. */
+        bool CanUndoDrafts(const SourceDraftBatch &receipt) noexcept {
+            const auto edits = receipt.edits.Items();
+            return (receipt.edits.CanUndo() || !std::ranges::any_of(edits, &SourceBatchItem::changed)) &&
+                   std::ranges::all_of(edits, [](const auto &item) {
+                return !item.changed || item.snapshot.IsCurrent();
+            }) && std::ranges::all_of(receipt.drafts, &SourceDocumentSnapshot::IsCurrent);
+        }
+
+        /** @brief Reports durable save only when every changed buffer and draft was saved. */
+        Proposals::SourceReviewDisposition DraftDisposition(const SourceDraftBatch &receipt) noexcept {
+            using enum Proposals::SourceReviewDisposition;
+            bool pending{};
+            const auto observe = [&](const SourceDocumentSnapshot &snapshot) {
+                if (snapshot.WasSavedInPlace())
+                    return true;
+                pending = true;
+                return snapshot.IsCurrent();
+            };
+            if (!std::ranges::all_of(receipt.drafts, observe) || !std::ranges::all_of(receipt.edits.Items(), [&](const auto &item) {
+                return !item.changed || observe(item.snapshot);
+            }))
+                return Stale;
+            return pending ? Applied : Saved;
+        }
     }  // namespace
 
     /** @copydoc QueueSourceReviewApplication */
@@ -137,8 +163,9 @@ namespace Horo::Editor {
             return !item.changed || item.snapshot.IsCurrent();
         });
         const bool renameUndo = renamed_.IsCurrent() && feedback_ != Feedback::RenameRecovery;
+        const bool draftGroupUndo = draftGroup_ && CanUndoDrafts(*draftGroup_);
         return {feedback_,
-                !preparing_ && (groupUndo || draft_.IsCurrent() || renameUndo || deleted_.has_value()),
+                !preparing_ && (groupUndo || draft_.IsCurrent() || draftGroupUndo || renameUndo || deleted_.has_value()),
                 audit_,
                 auditWrite_.has_value(),
                 auditHistoryError_,
@@ -152,6 +179,8 @@ namespace Horo::Editor {
             return Reverted;
         if (committedFileOutcome_)
             return *committedFileOutcome_;
+        if (draftGroup_)
+            return DraftDisposition(*draftGroup_);
         const auto &structuralBuffer = draft_.Revision() ? draft_ : renamed_;
         if (structuralBuffer.Revision()) {
             if (structuralBuffer.WasSavedInPlace())
@@ -184,6 +213,7 @@ namespace Horo::Editor {
             return false;
         command.sourceReviewUndo = batch_;
         command.sourceReviewDraftUndo = draft_;
+        command.sourceReviewDraftGroupUndo = draftGroup_;
         command.sourceReviewRenameUndo = renamed_;
         if (deleted_)
             command.sourceReviewDeleteUndo = deleted_->source;
@@ -203,7 +233,9 @@ namespace Horo::Editor {
             case EditorWorkspaceViewCommand::UndoSourceReview:
                 if (preparing_)
                     return true;
-                if (command.sourceReviewDraftUndo.Revision())
+                if (command.sourceReviewDraftGroupUndo)
+                    UndoDraftGroup(command.sourceReviewDraftGroupUndo, open, command.sourceReviewLifetime);
+                else if (command.sourceReviewDraftUndo.Revision())
                     UndoDraft(command.sourceReviewDraftUndo, open, command.sourceReviewLifetime);
                 else if (command.sourceReviewRenameUndo.Revision())
                     StartRenameRestore(command.sourceReviewRenameUndo, jobs, root, files, command.sourceReviewLifetime);
@@ -315,13 +347,28 @@ namespace Horo::Editor {
                 return CommitRename(*rename, open, *files, mutations, preparation.lifetime);
             return CommitDelete(std::get<Proposals::PreparedSourceDelete>(*operation), open, *files, mutations, preparation.lifetime);
         }
-        auto applied = review.CommitObserved(documents, *files, preparation.lifetime);
+        std::shared_ptr<SourceDraftBatch> draftGroup;
+        if (!review.FileOperations().empty()) {
+            feedback_ = Feedback::ApplyFailed;
+            if (!open)
+                return false;
+            try {
+                draftGroup = std::make_shared<SourceDraftBatch>();
+            } catch (const std::bad_alloc &) {
+                return false;
+            }
+        }
+        auto applied = draftGroup ? review.CommitDrafts(*open, *files, preparation.lifetime)
+                                  : review.CommitObserved(documents, *files, preparation.lifetime);
         if (applied.HasError()) {
             feedback_ = FailureFeedback(applied.ErrorValue(), Feedback::ApplyFailed);
             return false;
         }
         auto outcome = std::move(applied).Value();
-        batch_ = std::move(outcome.batch);
+        if (draftGroup)
+            *draftGroup = {std::move(outcome.batch), std::move(outcome.drafts)};
+        batch_ = draftGroup ? SourceEditBatch{} : std::move(outcome.batch);
+        draftGroup_ = std::move(draftGroup);
         draft_ = {};
         renamed_ = {};
         beforeRename_ = {};
@@ -331,6 +378,10 @@ namespace Horo::Editor {
         reverted_ = false;
         auditSequence_ = 0;
         feedback_ = Feedback::Applied;
+        if (host && draftGroup_) {
+            for (const auto &draft : draftGroup_->drafts)
+                static_cast<void>(host->OpenDocument(draft.Identity().key));
+        }
         return true;
     }
 
@@ -361,6 +412,7 @@ namespace Horo::Editor {
             }
         }
         draft_ = std::move(staged).Value();
+        draftGroup_.reset();
         renamed_ = {};
         beforeRename_ = {};
         deleted_.reset();
@@ -448,6 +500,7 @@ namespace Horo::Editor {
         }
         batch_ = {};
         draft_ = {};
+        draftGroup_.reset();
         renamed_ = {};
         beforeRename_ = {};
         deleted_.reset();
@@ -476,6 +529,7 @@ namespace Horo::Editor {
         }
         batch_ = {};
         draft_ = {};
+        draftGroup_.reset();
         renamed_ = std::move(moved).Value();
         beforeRename_ = std::move(rename.source);
         deleted_.reset();
@@ -655,6 +709,26 @@ namespace Horo::Editor {
             return;
         }
         draft_ = {};
+        reverted_ = true;
+        feedback_ = Feedback::Undone;
+    }
+
+    /** @copydoc SourceReviewTransactions::UndoDraftGroup */
+    void SourceReviewTransactions::UndoDraftGroup(const std::shared_ptr<const SourceDraftBatch> &receipt, SourceFileOpenService *open,
+                                                  const CancellationToken &lifetime) {
+        if (lifetime.IsCancellationRequested()) {
+            feedback_ = Feedback::Cancelled;
+            return;
+        }
+        feedback_ = Feedback::Conflict;
+        if (!open || !receipt || draftGroup_ != receipt)
+            return;
+        const auto undone = open->UndoReviewedDrafts(*receipt, lifetime);
+        if (undone.HasError()) {
+            feedback_ = FailureFeedback(undone.ErrorValue(), Feedback::UndoFailed);
+            return;
+        }
+        draftGroup_.reset();
         reverted_ = true;
         feedback_ = Feedback::Undone;
     }

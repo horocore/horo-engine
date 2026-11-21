@@ -241,6 +241,12 @@ namespace Horo::Editor {
         std::shared_ptr<const Data> data_;
     };
 
+    /** @brief Receipt for edits and unsaved creations published in one source transaction. */
+    struct SourceDraftBatch final {
+        SourceEditBatch edits;
+        std::vector<SourceDocumentSnapshot> drafts;
+    };
+
     /** @brief One history publication plus originating view metadata.
      * @details Only the matching originating view restores this position. Other views retain and clamp their own
      * selection/scroll against the new text. The service never stores live view state or dispatches to widgets.
@@ -392,9 +398,24 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> Shutdown();
 
     private:
-        /** @brief Stages and atomically publishes one edit batch using the supplied disk verification mode. */
+        /** @brief Owned destination and borrowed text for one draft prepared by the registry owner. */
+        struct DraftRequest final {
+            DocumentIdentity identity;
+            std::filesystem::path path;
+            std::string_view text;
+        };
+
+        /** @brief Stages and atomically publishes one text-only edit batch. */
         [[nodiscard]] Result<SourceEditBatch> PublishBatch(std::span<const SourceBatchEdit> edits, const SourceBatchDiskEvidence *evidence,
                                                            const DurableFileSystem *files, CancellationToken cancellation);
+        /** @brief Prepares all roots and disk checks before publishing edits and drafts together. */
+        [[nodiscard]] Result<SourceDraftBatch> PublishWithDrafts(std::span<const SourceBatchEdit> edits,
+                                                                 const SourceBatchDiskEvidence &evidence, const DurableFileSystem &files,
+                                                                 CancellationToken cancellation, std::span<const DraftRequest> drafts);
+        /** @brief Replays edit history and retires unchanged drafts only after validating the complete receipt. */
+        [[nodiscard]] Result<std::vector<SourceDocumentSnapshot>> UndoWithDrafts(const SourceEditBatch &batch,
+                                                                                 std::span<const SourceDocumentSnapshot> drafts,
+                                                                                 CancellationToken cancellation);
         friend class SourceFileOpenService;
         /** @brief Prepares a history replay completely before changing its cursor or publishing. */
         [[nodiscard]] Result<SourceHistoryResult> ReplayHistory(DocumentInstanceId instance, std::uint64_t expectedRevision, bool redo,

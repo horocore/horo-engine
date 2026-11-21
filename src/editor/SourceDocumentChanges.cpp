@@ -227,10 +227,11 @@ namespace Horo::Editor {
 
     /** @copydoc SourceDocumentService::Storage::StageEdits */
     Result<SourceDocumentService::Storage::StagedBatch> SourceDocumentService::Storage::StageEdits(
-        const std::span<const SourceBatchEdit> edits, const CancellationToken cancellation) {
-        if (edits.empty() || edits.size() > limits.maximumDocuments)
+        const std::span<const SourceBatchEdit> edits, const CancellationToken cancellation, const std::size_t draftBytes) {
+        if (edits.size() > limits.maximumDocuments)
             return Failure<StagedBatch>(SourceDocumentErrors::Invalid);
         StagedBatch batch;
+        batch.bytes = draftBytes;
         batch.items.reserve(edits.size());
         for (const auto &edit : edits) {
             auto *record = FindCurrent(edit.source);
@@ -311,15 +312,95 @@ namespace Horo::Editor {
                 return Output::Failure(disk.ErrorValue());
             if (cancellation.IsCancellationRequested())
                 return Failure<SourceEditBatch>(SourceDocumentErrors::Cancelled);
-            for (auto &item : batch.items) {
-                if (!item.history)
-                    continue;
-                storage_->CommitHistory(*item.record, std::move(*item.history));
-                item.record->Publish(std::move(item.next));
-            }
+            storage_->PublishStagedEdits(batch.items);
             return result;
         } catch (const std::bad_alloc &) {
             return Failure<SourceEditBatch>(SourceDocumentErrors::TooLarge);
+        }
+    }
+
+    /** @copydoc SourceDocumentService::Storage::PublishStagedEdits */
+    void SourceDocumentService::Storage::PublishStagedEdits(const std::span<StagedBatchEdit> edits) const noexcept {
+        for (auto &item : edits) {
+            if (!item.history)
+                continue;
+            CommitHistory(*item.record, std::move(*item.history));
+            item.record->Publish(std::move(item.next));
+        }
+    }
+
+    /** @copydoc SourceDocumentService::Storage::StageDrafts */
+    Result<std::vector<SourceDocumentService::Storage::Record>> SourceDocumentService::Storage::StageDrafts(
+        const std::span<const DraftRequest> drafts, const CancellationToken cancellation) const {
+        using Records = std::vector<Record>;
+        using Output = Result<Records>;
+        if (drafts.size() > limits.maximumDocuments - records.size())
+            return Failure<Records>(SourceDocumentErrors::TooLarge);
+        std::size_t bytes{};
+        for (const auto &draft : drafts) {
+            if (draft.text.size() > limits.maximumDocumentBytes || draft.text.size() > limits.maximumResidentBytes - bytes)
+                return Failure<Records>(SourceDocumentErrors::TooLarge);
+            bytes += draft.text.size();
+        }
+        if (const auto budget = AdmitBytes(bytes); budget.HasError())
+            return Output::Failure(budget.ErrorValue());
+        Records staged;
+        staged.reserve(drafts.size());
+        for (const auto &draft : drafts) {
+            if (const auto admitted = AdmitNew(draft.identity); admitted.HasError())
+                return Output::Failure(admitted.ErrorValue());
+            auto record = PrepareDraft(draft.identity, draft.path, std::string{draft.text}, cancellation);
+            if (record.HasError())
+                return Output::Failure(record.ErrorValue());
+            staged.push_back(std::move(record).Value());
+        }
+        return Output::Success(std::move(staged));
+    }
+
+    /** @copydoc SourceDocumentService::PublishWithDrafts */
+    Result<SourceDraftBatch> SourceDocumentService::PublishWithDrafts(const std::span<const SourceBatchEdit> edits,
+                                                                      const SourceBatchDiskEvidence &evidence,
+                                                                      const DurableFileSystem &files, const CancellationToken cancellation,
+                                                                      const std::span<const DraftRequest> drafts) {
+        using Output = Result<SourceDraftBatch>;
+        try {
+            if (const auto access = CheckAccess(); access.HasError())
+                return Output::Failure(access.ErrorValue());
+            if (drafts.empty())
+                return Failure<SourceDraftBatch>(SourceDocumentErrors::Invalid);
+            Detail::SourcePublicationGuard guard{storage_->saving};
+            auto prepared = storage_->StageDrafts(drafts, cancellation);
+            if (prepared.HasError())
+                return Output::Failure(prepared.ErrorValue());
+            auto newRecords = std::move(prepared).Value();
+            std::vector<SourceDocumentSnapshot> opened;
+            opened.reserve(newRecords.size());
+            std::size_t draftBytes{};
+            for (const auto &record : newRecords) {
+                draftBytes += record.root->text->bytes.size();
+                opened.push_back(SourceDocumentSnapshot{record.root});
+            }
+            storage_->records.reserve(storage_->records.size() + newRecords.size());
+            auto stage = storage_->StageEdits(edits, cancellation, draftBytes);
+            if (stage.HasError())
+                return Output::Failure(stage.ErrorValue());
+            auto batch = std::move(stage).Value();
+            static_assert(std::is_nothrow_move_constructible_v<Output>);
+            auto result = Output::Success({storage_->MakeBatchReceipt(batch.items), std::move(opened)});
+            if (!edits.empty()) {
+                const auto disk = storage_->VerifyBatchEvidence(batch, evidence, files, cancellation);
+                if (disk.HasError())
+                    return Output::Failure(disk.ErrorValue());
+            }
+            if (cancellation.IsCancellationRequested())
+                return Failure<SourceDraftBatch>(SourceDocumentErrors::Cancelled);
+            storage_->PublishStagedEdits(batch.items);
+            static_assert(std::is_nothrow_move_constructible_v<Storage::Record>);
+            for (auto &record : newRecords)
+                storage_->records.push_back(std::move(record));
+            return result;
+        } catch (const std::bad_alloc &) {
+            return Failure<SourceDraftBatch>(SourceDocumentErrors::TooLarge);
         }
     }
 
@@ -341,14 +422,27 @@ namespace Horo::Editor {
     /** @copydoc SourceDocumentService::UndoBatch */
     Result<std::vector<SourceDocumentSnapshot>> SourceDocumentService::UndoBatch(const SourceEditBatch &batch,
                                                                                  const CancellationToken cancellation) {
+        return UndoWithDrafts(batch, {}, cancellation);
+    }
+
+    /** @copydoc SourceDocumentService::UndoWithDrafts */
+    Result<std::vector<SourceDocumentSnapshot>> SourceDocumentService::UndoWithDrafts(const SourceEditBatch &batch,
+                                                                                      const std::span<const SourceDocumentSnapshot> drafts,
+                                                                                      const CancellationToken cancellation) {
         using Snapshots = std::vector<SourceDocumentSnapshot>;
         using Output = Result<Snapshots>;
 
         try {
             if (const auto access = CheckAccess(); access.HasError())
                 return Output::Failure(access.ErrorValue());
-            if (!batch.CanUndo())
+            const bool hasEdits = std::ranges::any_of(batch.Items(), &SourceBatchItem::changed);
+            if (!batch.CanUndo() && (drafts.empty() || hasEdits))
                 return Failure<Snapshots>(SourceDocumentErrors::Invalid);
+            for (const auto &draft : drafts) {
+                const auto *record = storage_->FindCurrent(draft);
+                if (!record || !record->root->draft)
+                    return Failure<Snapshots>(SourceDocumentErrors::Stale);
+            }
             std::vector<Storage::StagedBatchUndo> staged;
             Snapshots snapshots;
             staged.reserve(batch.Items().size());
@@ -375,6 +469,16 @@ namespace Horo::Editor {
                     item.record->historyPosition = item.position;
                     item.record->Publish(std::move(item.next));
                 }
+                static_assert(std::is_nothrow_move_assignable_v<Storage::Record>);
+                std::erase_if(storage_->records, [&](const auto &record) noexcept {
+                    const auto snapshot = SourceDocumentSnapshot{record.root};
+                    if (!std::ranges::any_of(drafts, [&](const auto &draft) {
+                        return draft.SharesStateWith(snapshot);
+                    }))
+                        return false;
+                    record.Revoke();
+                    return true;
+                });
             });
         } catch (const std::bad_alloc &) {
             return Failure<Snapshots>(SourceDocumentErrors::TooLarge);

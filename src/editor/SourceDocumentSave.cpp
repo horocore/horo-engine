@@ -59,22 +59,6 @@ namespace Horo::Editor {
                                            .remediationHint = "Change destination permissions or choose Save As.",
                                            .userActionable = true};
 
-        /** @brief Holds admission closed while filesystem/provider callbacks execute. */
-        struct PublicationGuard final {
-            bool *busy;
-
-            explicit PublicationGuard(bool &value) noexcept : busy(&value) {
-                *busy = true;
-            }
-
-            ~PublicationGuard() noexcept {
-                *busy = false;
-            }
-
-            PublicationGuard(const PublicationGuard &) = delete;
-            PublicationGuard &operator=(const PublicationGuard &) = delete;
-        };
-
         /** @brief Reports cleanup failure without replacing the primary save outcome or throwing during unwind. */
         bool TryRemoveTemporary(DurableFileSystem &files, const std::filesystem::path &path) noexcept {
             try {
@@ -295,7 +279,7 @@ namespace Horo::Editor {
             lockPath += ".horo-source.lock";
             auto temporary = path;
             temporary += ".horo-source.temporary";
-            PublicationGuard publication{storage_->saving};
+            Detail::SourcePublicationGuard publication{storage_->saving};
             if (auto lock = files.TryAcquireExclusive(lockPath, "horo.source_document"); lock.HasError()) {
                 return Result<SourceSaveResult>::Failure(lock.ErrorValue());
             } else {
@@ -396,7 +380,7 @@ namespace Horo::Editor {
             sourceLock += ".horo-source.lock";
             auto destinationLock = request.destination;
             destinationLock += ".horo-source.lock";
-            PublicationGuard publication{storage_->saving};
+            Detail::SourcePublicationGuard publication{storage_->saving};
             const auto source = files.TryAcquireExclusive(sourceLock, "horo.source_document");
             if (source.HasError())
                 return Output::Failure(source.ErrorValue());

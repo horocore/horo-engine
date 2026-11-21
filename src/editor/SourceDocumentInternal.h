@@ -8,6 +8,23 @@
 #include <vector>
 
 namespace Horo::Editor::Detail {
+    /** @brief Prevents nested source owner access during filesystem callbacks and publication. */
+    struct SourcePublicationGuard final {
+        explicit SourcePublicationGuard(bool &value) noexcept : busy(value) {
+            busy = true;
+        }
+
+        ~SourcePublicationGuard() noexcept {
+            busy = false;
+        }
+
+        SourcePublicationGuard(const SourcePublicationGuard &) = delete;
+        SourcePublicationGuard &operator=(const SourcePublicationGuard &) = delete;
+
+    private:
+        bool &busy;
+    };
+
     struct SourceText final {
         std::string bytes;
         SourceTextMetadata metadata;
@@ -145,6 +162,11 @@ namespace Horo::Editor {
         [[nodiscard]] Record *Find(DocumentInstanceId instance);
         /** @brief Reserves a unique new session and its maximum temporary load. */
         [[nodiscard]] Result<void> AdmitNew(const DocumentIdentity &identity) const;
+        /** @brief Validates one draft destination and builds a detached unsaved record. */
+        [[nodiscard]] Result<Record> PrepareDraft(const DocumentIdentity &identity, const std::filesystem::path &path, std::string text,
+                                                  CancellationToken cancellation) const;
+        /** @brief Stages unique draft records and accounts for all retained draft text before allocation. */
+        [[nodiscard]] Result<std::vector<Record>> StageDrafts(std::span<const DraftRequest> drafts, CancellationToken cancellation) const;
         /** @brief Prepares and publishes an open root only after validated owner access. */
         [[nodiscard]] Result<std::shared_ptr<const Detail::SourceDocumentRoot>> OpenRoot(const DocumentIdentity &identity,
                                                                                          const std::filesystem::path &absolutePath,
@@ -166,9 +188,12 @@ namespace Horo::Editor {
         [[nodiscard]] Result<StagedBatchEdit> StageBatchEdit(Record &record, const SourceTextEdit &edit, CancellationToken cancellation,
                                                              std::size_t reservedBytes) const;
         /** @brief Prepares every edit without publishing any root or history change. */
-        [[nodiscard]] Result<StagedBatch> StageEdits(std::span<const SourceBatchEdit> edits, CancellationToken cancellation);
+        [[nodiscard]] Result<StagedBatch> StageEdits(std::span<const SourceBatchEdit> edits, CancellationToken cancellation,
+                                                     std::size_t draftBytes = 0);
         /** @brief Prepares the immutable result before any root is published. */
         [[nodiscard]] SourceEditBatch MakeBatchReceipt(std::span<const StagedBatchEdit> edits) const;
+        /** @brief Publishes already verified edit roots and their history without allocation. */
+        void PublishStagedEdits(std::span<StagedBatchEdit> edits) const noexcept;
         /** @brief Reserves disk read scratch alongside the staged text, then verifies every original disk base. */
         [[nodiscard]] Result<void> VerifyBatchBases(const StagedBatch &batch, CancellationToken cancellation) const;
         /** @brief Verifies the exact ordered worker evidence and current metadata before publishing. */

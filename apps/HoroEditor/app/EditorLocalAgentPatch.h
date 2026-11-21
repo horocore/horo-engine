@@ -61,7 +61,7 @@ namespace Horo::Editor {
     };
 
     /** @brief Gives the available apply route for the accepted selection, including single-file confirmation.
-     * @return Edit for a text-only group, a kind for one structural action, or no route for mixed or empty selections.
+     * @return Edit for text, Create for a group with drafts, a kind for one physical move, or no route.
      */
     [[nodiscard]] std::optional<EditorPatchFileKind> EditorPatchApplyKind(const EditorLocalAgentPatchReview &review);
 

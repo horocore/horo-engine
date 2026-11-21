@@ -253,6 +253,88 @@ namespace {
         }
     }
 
+    TEST_CASE("Source review applies and reverts edits and drafts together", "[editor][source][review][create]") {
+        TestSupport::SourceProject project;
+        project.Put("base");
+        SourceFileOpenService open{project.directory};
+        const auto source = *open.Open({.path = "code.cpp"}).Value().sourceSnapshot;
+        const auto original = source.Identity();
+        const auto first = SourceDocumentId::Parse("first.cpp").Value();
+        const auto second = SourceDocumentId::Parse("second.cpp").Value();
+        const auto policy = ProjectPolicy::Capture("workspace", 1, {{original.key.source, false}, {first, false}, {second, false}}).Value();
+        const auto proposal =
+            ChangeSet::Capture(policy, {"drafts",
+                                        1,
+                                        {"provider", "model", "request"},
+                                        {CreateFile{first, "first"}, EditFile{FileBase::Capture(source).Value(), {{0, "base", "edited"}}},
+                                         CreateFile{second, ""}}})
+                .Value();
+        const std::array observed{SourcePathObservation{original.key.source, source}, SourcePathObservation{first, SourcePathState::Absent},
+                                  SourcePathObservation{second, SourcePathState::Absent}};
+        const auto plan = std::make_shared<const WorkspaceEditPlan>(PlanWorkspaceEdits(proposal, policy, observed).Value());
+        ReviewDecisions decisions{proposal};
+        REQUIRE(decisions.Decide(*plan, {}, ReviewChoice::Accept).HasValue());
+        NativeDurableFileSystem files;
+        SECTION("A target that appears after observation rejects the entire group") {
+            auto prepared = decisions.PrepareTransaction(policy, *plan);
+            REQUIRE(prepared.HasValue());
+            auto candidate = std::move(prepared).Value();
+            REQUIRE(candidate.ObserveDisk(project.directory, files).HasValue());
+            project.Put("other", "second.cpp");
+            REQUIRE(candidate.CommitDrafts(open, files).HasError());
+            CHECK(source.IsCurrent());
+            CHECK_FALSE(open.DocumentRegistry().Find({DocumentKind::Source, first}));
+            CHECK_FALSE(open.DocumentRegistry().Find({DocumentKind::Source, second}));
+            return;
+        }
+
+        WorkspacePanelHost host;
+        host.AttachDocumentIdentityRegistry(open.DocumentRegistry());
+        REQUIRE(host.OpenDocument(original.key).HasValue());
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
+        SourceReviewTransactions reviews;
+        CancellationSource lifetime;
+        EditorWorkspaceViewCommandData command;
+        REQUIRE(QueueSourceReviewApplication("workspace", decisions, policy, plan, lifetime.Token(), command));
+        REQUIRE(reviews.Process(command, open.Documents(), &jobs, project.directory, &files, &open));
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (reviews.Status().feedback == SourceTransactionFeedback::Preparing && std::chrono::steady_clock::now() < deadline) {
+            static_cast<void>(reviews.Poll(open.Documents(), &files, &open, &host));
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+        REQUIRE(reviews.Status().feedback == SourceTransactionFeedback::Applied);
+        REQUIRE(host.DocumentTabs().size() == 3);
+        REQUIRE(reviews.Status().audit);
+        CHECK(EncodeSourceReviewAudit(*reviews.Status().audit).HasValue());
+        const auto firstTab = open.DocumentRegistry().Find({DocumentKind::Source, first}).value();
+        const auto secondTab = open.DocumentRegistry().Find({DocumentKind::Source, second}).value();
+        const auto edited = open.Documents().Snapshot(original.instance).Value();
+        CHECK(edited.Text() == "edited");
+        CHECK(edited.DiskBase() == "base");
+        CHECK(open.Documents().Snapshot(firstTab.instance).Value().Text() == "first");
+        const auto empty = open.Documents().Snapshot(secondTab.instance).Value();
+        CHECK(empty.Dirty());
+        CHECK_FALSE(std::filesystem::exists(project.directory / "first.cpp"));
+        CHECK_FALSE(std::filesystem::exists(project.directory / "second.cpp"));
+        EditorWorkspaceViewCommandData undo;
+        REQUIRE(reviews.QueueUndo(lifetime.Token(), undo));
+        SECTION("Undo preserves newer edits to any draft") {
+            REQUIRE(open.Documents().Edit(secondTab.instance, {empty.Revision(), 0, 0, "authored"}).HasValue());
+            REQUIRE(reviews.Process(undo, open.Documents(), &jobs, project.directory, &files, &open));
+            CHECK(reviews.Status().feedback == SourceTransactionFeedback::Conflict);
+            CHECK(edited.IsCurrent());
+            CHECK(open.DocumentRegistry().IsCurrent(firstTab));
+            CHECK(open.Documents().Snapshot(secondTab.instance).Value().Text() == "authored");
+            return;
+        }
+        REQUIRE(reviews.Process(undo, open.Documents(), &jobs, project.directory, &files, &open));
+        CHECK(reviews.Status().feedback == SourceTransactionFeedback::Undone);
+        CHECK(open.Documents().Snapshot(original.instance).Value().Text() == "base");
+        host.RefreshDocuments();
+        REQUIRE(host.DocumentTabs().size() == 1);
+        CHECK(host.DocumentTabs().front().identity == original);
+    }
+
     TEST_CASE("A confirmed deletion moves only the exact clean source and rolls back a failed move", "[editor][source][review][delete]") {
         struct Files final : TestSupport::NativePublicationFiles {
             bool failAfterCommit{};

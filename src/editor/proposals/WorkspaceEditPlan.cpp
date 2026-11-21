@@ -1,3 +1,4 @@
+#include "Horo/Editor/SourceFileOpenService.h"
 #include "Horo/Foundation/Platform.h"
 #include "ProposedPatchInternal.h"
 
@@ -550,16 +551,22 @@ namespace Horo::Editor::Proposals {
         }
     }
 
+    /** @copydoc PreparedSourceReview::BatchInputs */
+    std::vector<SourceBatchEdit> PreparedSourceReview::BatchInputs() const {
+        std::vector<SourceBatchEdit> edits;
+        edits.reserve(edits_.size());
+        for (const auto &edit : edits_)
+            edits.push_back({edit.source, {edit.source.Revision(), 0, edit.source.Text().size(), edit.replacement}});
+        return edits;
+    }
+
     /** @copydoc PreparedSourceReview::Publish */
     Result<SourceEditBatch> PreparedSourceReview::Publish(SourceDocumentService &documents, const DurableFileSystem *files,
                                                           const CancellationToken cancellation) const {
         if (edits_.empty() || !files_.empty())
             return Result<SourceEditBatch>::Failure(MakeError(Errors::Invalid));
         try {
-            std::vector<SourceBatchEdit> edits;
-            edits.reserve(edits_.size());
-            for (const auto &edit : edits_)
-                edits.push_back({edit.source, {edit.source.Revision(), 0, edit.source.Text().size(), edit.replacement}});
+            const auto edits = BatchInputs();
             if (files)
                 return documents.EditBatchWithEvidence(edits, disk_, *files, cancellation);
             return documents.EditBatch(edits, cancellation);
@@ -589,7 +596,43 @@ namespace Horo::Editor::Proposals {
             const auto items = batch.Items();
             for (std::size_t index = 0; index < items.size(); ++index)
                 audit->revisions[index].after = items[index].snapshot.Revision();
-            return Output::Success({std::move(batch), std::move(audit)});
+            return Output::Success({std::move(batch), std::move(audit), {}});
+        } catch (const std::bad_alloc &) {
+            return Output::Failure(MakeError(Errors::Bounds));
+        }
+    }
+
+    /** @copydoc PreparedSourceReview::CommitDrafts */
+    Result<SourceReviewApplied> PreparedSourceReview::CommitDrafts(SourceFileOpenService &open, const DurableFileSystem &files,
+                                                                   const CancellationToken cancellation) const {
+        using Output = Result<SourceReviewApplied>;
+        try {
+            if (files_.empty() || !audit_)
+                return Output::Failure(MakeError(Errors::Invalid));
+            std::vector<SourceReviewDraft> drafts;
+            drafts.reserve(files_.size());
+            for (const auto &operation : files_) {
+                const auto *creation = std::get_if<PreparedSourceCreate>(&operation);
+                if (!creation)
+                    return Output::Failure(MakeError(Errors::Invalid));
+                if (ObserveSourceDestination(creation->file.path, open.ProjectRoot(), files, cancellation) != SourcePathState::Absent)
+                    return Output::Failure(
+                        MakeError(cancellation.IsCancellationRequested() ? SourceDocumentErrors::Cancelled : Errors::StaleBase));
+                drafts.push_back({creation->file.path, creation->file.text});
+            }
+            const auto edits = BatchInputs();
+            auto audit = std::make_shared<SourceReviewAudit>(*audit_);
+            auto published = open.PublishReviewedDrafts(edits, drafts, disk_, files, cancellation);
+            if (published.HasError())
+                return Output::Failure(std::move(published).ErrorValue());
+            auto result = std::move(published).Value();
+            const auto items = result.edits.Items();
+            std::size_t edit{};
+            for (auto &revision : audit->revisions) {
+                if (revision.before)
+                    revision.after = items[edit++].snapshot.Revision();
+            }
+            return Output::Success({std::move(result.edits), std::move(audit), std::move(result.drafts)});
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(Errors::Bounds));
         }

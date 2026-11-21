@@ -87,14 +87,18 @@ namespace Horo::Editor {
 
     /** @copydoc EditorPatchApplyKind */
     std::optional<EditorPatchFileKind> EditorPatchApplyKind(const EditorLocalAgentPatchReview &review) {
+        const auto movesFile = [](const EditorPatchFileKind kind) {
+            return kind == EditorPatchFileKind::Delete || kind == EditorPatchFileKind::Rename;
+        };
         std::optional<EditorPatchFileKind> selected;
         for (std::size_t index = 0; index < review.files.size(); ++index) {
             if (!review.decisions.HasAcceptedChanges(index))
                 continue;
             const auto kind = review.files[index].kind;
-            if (selected && (*selected != EditorPatchFileKind::Edit || kind != EditorPatchFileKind::Edit))
+            if (selected && (movesFile(*selected) || movesFile(kind)))
                 return std::nullopt;
-            selected = kind;
+            if (!selected || kind != EditorPatchFileKind::Edit)
+                selected = kind;
         }
         return selected;
     }

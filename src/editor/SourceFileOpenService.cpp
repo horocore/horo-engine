@@ -555,6 +555,73 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc SourceFileOpenService::PublishReviewedDrafts */
+    Result<SourceDraftBatch> SourceFileOpenService::PublishReviewedDrafts(const std::span<const SourceBatchEdit> edits,
+                                                                          const std::span<const SourceReviewDraft> drafts,
+                                                                          const SourceBatchDiskEvidence &evidence,
+                                                                          const DurableFileSystem &files,
+                                                                          const CancellationToken cancellation) {
+        using Output = Result<SourceDraftBatch>;
+        try {
+            if (publishing_)
+                return Output::Failure(MakeError(SourceDocumentErrors::Busy));
+            if (!projectRootValid_ || !policy_.embeddedEditorAvailable || drafts.empty() ||
+                drafts.size() > SourceDocumentLimits{}.maximumDocuments)
+                return Output::Failure(MakeError(SourceOpenErrors::Unsafe));
+            auto registry = *documentRegistry_;
+            std::vector<SourceDocumentService::DraftRequest> staged;
+            staged.reserve(drafts.size());
+            for (const auto &draft : drafts) {
+                if (!draft.path.IsValid())
+                    return Output::Failure(MakeError(SourceOpenErrors::Unsafe));
+                const auto &name = draft.path.Value();
+                auto path = projectRoot_ / std::u8string{name.begin(), name.end()};
+                if (const auto admitted = AdmitSaveDestination(*this, path); admitted.HasError())
+                    return Output::Failure(admitted.ErrorValue());
+                auto opened = registry.Open({DocumentKind::Source, draft.path});
+                if (opened.HasError())
+                    return Output::Failure(opened.ErrorValue());
+                if (opened.Value().disposition != DocumentOpenDisposition::Opened)
+                    return Output::Failure(MakeError(SourceDocumentErrors::SaveConflict));
+                staged.push_back({std::move(opened).Value().identity, std::move(path), draft.text});
+            }
+            RegistryPublication guard{publishing_};
+            auto result = sourceDocuments_.PublishWithDrafts(edits, evidence, files, cancellation, staged);
+            if (result.HasValue())
+                *documentRegistry_ = std::move(registry);
+            return result;
+        } catch (const std::bad_alloc &) {
+            return Output::Failure(MakeError(SourceDocumentErrors::TooLarge));
+        }
+    }
+
+    /** @copydoc SourceFileOpenService::UndoReviewedDrafts */
+    Result<void> SourceFileOpenService::UndoReviewedDrafts(const SourceDraftBatch &receipt, const CancellationToken cancellation) {
+        using Output = Result<void>;
+        try {
+            if (publishing_)
+                return Output::Failure(MakeError(SourceDocumentErrors::Busy));
+            if (receipt.drafts.empty())
+                return Output::Failure(MakeError(SourceDocumentErrors::Invalid));
+            auto registry = *documentRegistry_;
+            for (const auto &draft : receipt.drafts) {
+                const auto identity = draft.Identity();
+                if (!registry.IsCurrent(identity))
+                    return Output::Failure(MakeError(SourceDocumentErrors::Stale));
+                if (const auto closed = registry.Close(identity.instance); closed.HasError())
+                    return Output::Failure(closed.ErrorValue());
+            }
+            RegistryPublication guard{publishing_};
+            const auto undone = sourceDocuments_.UndoWithDrafts(receipt.edits, receipt.drafts, cancellation);
+            if (undone.HasError())
+                return Output::Failure(undone.ErrorValue());
+            *documentRegistry_ = std::move(registry);
+            return Output::Success();
+        } catch (const std::bad_alloc &) {
+            return Output::Failure(MakeError(SourceDocumentErrors::TooLarge));
+        }
+    }
+
     /** @copydoc SourceFileOpenService::ResolveClose */
     Result<bool> SourceFileOpenService::ResolveClose(const SourceSaveRequest &request, const SourceCloseDecision decision,
                                                      DurableFileSystem &files) {

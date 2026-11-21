@@ -862,6 +862,7 @@ namespace Horo::Editor {
         std::shared_ptr<const SourceReviewApplication> sourceReviewApplication;
         SourceEditBatch sourceReviewUndo;
         SourceDocumentSnapshot sourceReviewDraftUndo;
+        std::shared_ptr<const SourceDraftBatch> sourceReviewDraftGroupUndo;
         SourceDocumentSnapshot sourceReviewRenameUndo;
         SourceDocumentSnapshot sourceReviewDeleteUndo;
         CancellationToken sourceReviewLifetime;

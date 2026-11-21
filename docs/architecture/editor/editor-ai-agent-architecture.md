@@ -835,6 +835,11 @@ the entire accepted selection. It renders accepted text from original ranges,
 inspects each structural destination, and records saved-file evidence before
 returning the detached candidate. Text-only publication rejects candidates
 that also carry structural operations.
+When the accepted file operations are creations, the source owner stages
+the draft identities and buffers alongside any text replacements. It
+revalidates the edit bases before exposing the group. Creation remains
+unsaved until ordinary Save. Grouped Undo replays the edits and retires the
+drafts together while every affected publication is still current.
 The source owner rechecks the policy, the live publications and the saved disk
 bases before publishing one batch of buffer changes. Only accepted text ranges
 enter that batch. The workspace retains its latest receipt for a single grouped
