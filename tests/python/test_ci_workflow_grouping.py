@@ -579,10 +579,11 @@ def test_shader_job_keeps_vulkan_native_commands_in_the_same_build() -> None:
     assert smoke_selected.fullmatch("HoroVulkanVfxGpuParity")
     assert not smoke_selected.fullmatch("HoroVulkanVfxGpuBudget")
     assert not selected.search("UnrelatedTests::case")
-    canvas = workflow_step(native_job, "Verify packaged Vulkan canvas shader interfaces")
+    canvas = workflow_step(native_job, "Verify packaged Vulkan canvas interfaces and scale rollback")
     assert "HORO_VULKAN_UI_PAINT_ASSET_ROOT" in canvas
     assert "--no-tests=error" in canvas
     assert "Packaged Vulkan sampled canvas binds|Application Vulkan UI package binds" in canvas
+    assert "A rejected Camera canvas scale preserves" in canvas
     editor = workflow_step(native_job, "Qualify the real Vulkan GUI and WSI pair")
     assert 'HORO_VULKAN_UI_PAINT_ASSET_ROOT="$HORO_EDITOR_VULKAN_ASSET_ROOT"' in editor
     assert "HoroEditorVulkanPresentationSmoke::" in editor

@@ -216,12 +216,12 @@ jobs:
           python3 .github/scripts/ui_paint_fixture.py produce
           --root "$RUNNER_TEMP/ui-paint-msl"
           --tools-root "$RUNNER_TEMP/viewport-cook-tools"
-      - name: Verify packaged Vulkan canvas shader interfaces
+      - name: Verify packaged Vulkan canvas interfaces and scale rollback
         if: runner.os == 'Linux'
         run: >-
           env HORO_VULKAN_UI_PAINT_ASSET_ROOT="$GITHUB_WORKSPACE/build/ci/native-editor-assets"
           ctest --test-dir build/ci --no-tests=error --output-on-failure
-          -R '(Packaged Vulkan sampled canvas binds|Application Vulkan UI package binds)'
+          -R '(Packaged Vulkan sampled canvas binds|Application Vulkan UI package binds|A rejected Camera canvas scale preserves)'
       - name: Retain same-run UI Metal qualification inputs
         if: runner.os == 'Linux'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a

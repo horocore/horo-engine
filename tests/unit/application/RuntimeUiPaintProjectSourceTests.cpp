@@ -370,6 +370,39 @@ TEST_CASE("Project Camera canvas uses game viewport dimensions instead of the ma
     CHECK_FALSE(fixture.port.InputEligible({Source::Owner(), 1, 1}));
 }
 
+TEST_CASE("A rejected Camera canvas scale preserves the committed application visual policy",
+          "[application][runtime_ui][project][camera-canvas][accessibility]") {
+    const auto *root = std::getenv("HORO_VULKAN_UI_PAINT_ASSET_ROOT");
+    if (!root || !*root)
+        SKIP("Supply the immutable offline Vulkan UI paint package.");
+    ProjectUi fixture{true, false, {}, UiRenderMode::ScreenSpaceCamera, {200, 80}, {}, root};
+    constexpr UiCanvasPixelExtent regular{72, 48};
+    REQUIRE(fixture.port.UpdateCameraOutput(regular).HasValue());
+    REQUIRE_FALSE(fixture.Publish(1, 1));
+    const auto scene = fixture.scenes.ActiveScene()->RuntimeId();
+    auto expectedScale = UiCanvasScaleFactor{1, 1};
+    fixture.observeViewport = [&](const std::uint64_t frame) {
+        const auto source = Take(fixture.port.ReadSceneCanvasFrame(frame, scene));
+        REQUIRE(source);
+        CHECK(source->program->projection.pixelExtent == regular);
+        CHECK(source->program->projection.userUiScale == expectedScale);
+    };
+    fixture.Frame();
+
+    // This height fits in logical units at 100%, but would overflow when halving the scale.
+    REQUIRE(fixture.port.UpdateCameraOutput({1, 100'000}).HasValue());
+    const auto rejected = fixture.port.UpdateVisualAccessibility({2, false, false, {1, 2}});
+    REQUIRE(rejected.HasError());
+    CHECK(rejected.ErrorValue().code.Value() == UiErrors::CanvasSpaceOverflow.code.Value());
+    REQUIRE(fixture.port.UpdateCameraOutput(regular).HasValue());
+    fixture.Frame();
+
+    // A corrected retry can commit the same configuration revision.
+    expectedScale = {3, 2};
+    REQUIRE(fixture.port.UpdateVisualAccessibility({2, false, false, expectedScale}).HasValue());
+    fixture.Frame();
+}
+
 TEST_CASE("Project Scene canvas sources use canonical admission and the same application paint phase",
           "[application][runtime_ui][project]") {
     ProjectUi fixture;

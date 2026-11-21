@@ -100,14 +100,14 @@ namespace Horo::Application::Internal {
             auto evidence = *state_->output;
             evidence.userUiScale = policy.scale;
             evidence.minimumControlTargetDips = policy.minimumControlTargetDips;
-            if (const auto queued = state_->QueueOutput(evidence); queued.HasError())
-                return queued;
+            std::optional<UiCanvasViewportEvidence> camera;
             if (state_->cameraOutput) {
-                evidence.pixelExtent = state_->cameraOutput->pixelExtent;
-                evidence.safeAreaInsets = {};
-                if (const auto queued = state_->QueueOutput(evidence, true); queued.HasError())
-                    return queued;
+                camera = evidence;
+                camera->pixelExtent = state_->cameraOutput->pixelExtent;
+                camera->safeAreaInsets = {};
             }
+            if (const auto queued = state_->QueueOutputs(evidence, camera); queued.HasError())
+                return queued;
         }
         state_->accessibility = policy;
         return Result<void>::Success();
