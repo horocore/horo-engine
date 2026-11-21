@@ -1139,6 +1139,7 @@ namespace Horo::Application::PrefabAtomicTest {
             bool prefabOnly = false;
             bool prefabQuery = false;
             bool perceptionQuery = false;
+            bool physicsQuery = false;
             bool limitedQueryWork = false;
             std::uint64_t replayTick = 1;
             std::size_t replayTickCount = 1;
@@ -1270,6 +1271,10 @@ namespace Horo::Application::PrefabAtomicTest {
                 selectNativePerception = true;
                 reactiveNativePerception = true;
             }
+            SECTION("cooked Physics visibility filters a blocked point before the Blackboard winner is published") {
+                prepareNative = true;
+                physicsQuery = true;
+            }
             SECTION("cooked Perception query publishes an Actor through the native headless owner") {
                 prepareNative = true;
                 selectNativePerception = true;
@@ -1395,20 +1400,28 @@ namespace Horo::Application::PrefabAtomicTest {
                 REQUIRE(schema.HasValue());
                 ai.schema = std::make_shared<const AI::BlackboardSchema>(std::move(schema).Value());
             }
-            if (prefabQuery || perceptionQuery || replayTick > 1) {
+            if (prefabQuery || perceptionQuery || physicsQuery || replayTick > 1) {
                 auto registry = AI::CaptureBuiltinQuerySchema();
                 REQUIRE(registry.HasValue());
                 const auto id = Decisions::MakeIdentity<AI::QueryId>(1);
                 const auto generator = Decisions::MakeIdentity<AI::QueryStageId>(1);
                 const auto queryResult = Decisions::MakeIdentity<AI::QueryResultSchemaId>(1);
-                const auto query =
+                auto query =
                     perceptionQuery
                         ? AI::CreateBuiltinPerceptionQuery(id, generator, Decisions::MakeIdentity<AI::QueryStageId>(2), queryResult,
                                                            "Perceived actor", AI::QueryPerceptionMatch::CurrentlySensed, 8)
                         : AI::CreateBuiltinLatticeQuery(id, generator, queryResult, "Prefab query",
-                                                        {.stepMillimeters = 500, .outerSteps = 1}, 8);
-                const auto kind = perceptionQuery ? AI::BlackboardValueKind::EntityReference : AI::BlackboardValueKind::WorldCoordinate;
+                                                        {.stepMillimeters = 500,
+                                                         .outerSteps = 1,
+                                                         .innerSteps = physicsQuery ? std::optional<std::uint32_t>{1} : std::nullopt},
+                                                        8);
+                if (physicsQuery) {
+                    REQUIRE(query.HasValue());
+                    const auto channel = Physics::Settings().simulation.schema->QueryChannels().front().id;
+                    query = AI::AddBuiltinPointVisibilityTest(query.Value(), Decisions::MakeIdentity<AI::QueryStageId>(2), channel.Bytes());
+                }
                 REQUIRE(query.HasValue());
+                const auto kind = perceptionQuery ? AI::BlackboardValueKind::EntityReference : AI::BlackboardValueKind::WorldCoordinate;
                 auto encoded = AI::EnvironmentQueryCookedCodec::Encode(query.Value(), registry.Value());
                 REQUIRE(encoded.HasValue());
                 queryBytes = std::move(encoded).Value();
@@ -1547,8 +1560,8 @@ namespace Horo::Application::PrefabAtomicTest {
             if (replayReferenceGeneration)
                 source.Add({.object = {2}});
             std::vector<std::uint8_t> replayMaterialPayload;
-            if (captureCharacterReplay) {
-                const auto material = Assets::AssetId::FromBytes({94});
+            if (captureCharacterReplay || physicsQuery) {
+                const auto material = Assets::AssetId::FromBytes({physicsQuery ? std::uint8_t{240} : std::uint8_t{94}});
                 const auto type = Physics::AssetType();
                 replayMaterialPayload = Physics::CanonicalMaterialBytes(material);
                 const auto materialDigest = Put(raw, material, type, target, replayMaterialPayload);
@@ -1557,29 +1570,38 @@ namespace Horo::Application::PrefabAtomicTest {
                 artifacts.push_back(std::move(envelope).Value());
                 manifest.push_back({material, type, material.ToString() + ".cooked", materialDigest});
                 records.push_back(Physics::Record(material, type));
-                Runtime::CharacterControllerComponent character{.id = {7}, .enabled = true};
-                character.collision.profile = Physics::Profile();
-                character.collision.queryChannel = Physics::Settings().simulation.schema->QueryChannels().front().id;
-                character.collision.defaultMaterial =
-                    Runtime::PhysicsColliderMaterialBinding{Physics::PhysicsMaterialSlotId::FromValue(1), material};
-                source.Add({.object = {3},
-                            .localTransform = {.translation = {0, 0.495F, 0}},
-                            .components = {.characterController = character,
-                                           .behaviors = {{{1}, BehaviorType("game.tests.character_client"), 1, true}}}});
-                source.Add({.object = {4},
-                            .components = {.rigidBody = Runtime::RigidBodyComponent{.id = {20}, .body = {200}},
-                                           .colliders = {Physics::Collider(21, 201, 4, 200, material,
-                                                                           Runtime::PhysicsAnalyticCollider{
-                                                                               Runtime::PhysicsStaticPlaneCollider{{0, 1, 0}, 0}})}}});
-                Runtime::RigidBodyComponent falling{.id = {30}, .body = {300}};
-                falling.motion = Runtime::AuthoredPhysicsMotionType::Dynamic;
-                falling.mass = Runtime::AuthoredPhysicsDensity{500.0F};
-                source.Add({.object = {5},
-                            .localTransform = {.translation = {8, 10, 0}},
-                            .components = {.rigidBody = falling,
-                                           .colliders = {Physics::Collider(31, 301, 5, 300, material,
-                                                                           Runtime::PhysicsAnalyticCollider{
-                                                                               Runtime::PhysicsSphereCollider{0.6F}})}}});
+                if (physicsQuery) {
+                    source.Add({.object = {3},
+                                .localTransform = {.translation = {0, 0, -0.25F}},
+                                .components = {.rigidBody = Runtime::RigidBodyComponent{.id = {20}, .body = {200}},
+                                               .colliders = {Physics::Collider(21, 201, 3, 200, material,
+                                                                               Runtime::PhysicsAnalyticCollider{
+                                                                                   Runtime::PhysicsSphereCollider{0.10F}})}}});
+                } else {
+                    Runtime::CharacterControllerComponent character{.id = {7}, .enabled = true};
+                    character.collision.profile = Physics::Profile();
+                    character.collision.queryChannel = Physics::Settings().simulation.schema->QueryChannels().front().id;
+                    character.collision.defaultMaterial =
+                        Runtime::PhysicsColliderMaterialBinding{Physics::PhysicsMaterialSlotId::FromValue(1), material};
+                    source.Add({.object = {3},
+                                .localTransform = {.translation = {0, 0.495F, 0}},
+                                .components = {.characterController = character,
+                                               .behaviors = {{{1}, BehaviorType("game.tests.character_client"), 1, true}}}});
+                    source.Add({.object = {4},
+                                .components = {.rigidBody = Runtime::RigidBodyComponent{.id = {20}, .body = {200}},
+                                               .colliders = {Physics::Collider(21, 201, 4, 200, material,
+                                                                               Runtime::PhysicsAnalyticCollider{
+                                                                                   Runtime::PhysicsStaticPlaneCollider{{0, 1, 0}, 0}})}}});
+                    Runtime::RigidBodyComponent falling{.id = {30}, .body = {300}};
+                    falling.motion = Runtime::AuthoredPhysicsMotionType::Dynamic;
+                    falling.mass = Runtime::AuthoredPhysicsDensity{500.0F};
+                    source.Add({.object = {5},
+                                .localTransform = {.translation = {8, 10, 0}},
+                                .components = {.rigidBody = falling,
+                                               .colliders = {Physics::Collider(31, 301, 5, 300, material,
+                                                                               Runtime::PhysicsAnalyticCollider{
+                                                                                   Runtime::PhysicsSphereCollider{0.6F}})}}});
+                }
                 REQUIRE(source.RequireAsset({material, type}).HasValue());
             }
             if (selectNativePerception || captureStimuli) {
@@ -1709,7 +1731,10 @@ namespace Horo::Application::PrefabAtomicTest {
                                           sceneId, options);
                 return;
             }
-            REQUIRE(Output::PublishFixture(directory.path, target, manifest, artifacts).HasValue());
+            const auto published = Output::PublishFixture(directory.path, target, manifest, artifacts);
+            if (published.HasError())
+                UNSCOPED_INFO(published.ErrorValue().code.Value() << ": " << published.ErrorValue().message);
+            REQUIRE(published.HasValue());
             Assets::AssetRegistry registry;
             REQUIRE(registry.Publish(std::move(records)).status == Assets::AssetRegistryBuildStatus::Complete);
             auto committed =
@@ -1748,6 +1773,8 @@ namespace Horo::Application::PrefabAtomicTest {
                 plan.reset();
             }
             AI::AiTaskSchedulerSettings schedulerSettings;
+            if (physicsQuery)
+                schedulerSettings.mode = AI::AiSchedulingMode::BestEffort;
             if (rollbackPrefab) {
                 schedulerSettings.maximumAgents = 1;
                 schedulerSettings.evaluationsPerTick = 1;
@@ -1817,7 +1844,10 @@ namespace Horo::Application::PrefabAtomicTest {
                     startup.RequestCancellation();
                     REQUIRE(physics.Value()->Activate().HasError());
                 } else {
-                    REQUIRE(physics.Value()->Activate().HasValue());
+                    const auto activated = physics.Value()->Activate();
+                    if (activated.HasError())
+                        UNSCOPED_INFO(activated.ErrorValue().code.Value() << ": " << activated.ErrorValue().message);
+                    REQUIRE(activated.HasValue());
                 }
                 if (selectNativePerception) {
                     CHECK((nativeProbe->module == std::array<std::uint32_t, 4>{2, 0, 0, 1}));
@@ -1866,6 +1896,29 @@ namespace Horo::Application::PrefabAtomicTest {
                         CHECK(nativeProbe->module[1] == 4);
                         CHECK((nativeProbe->decision == std::array<std::uint32_t, 3>{2, 0, 0}));
                     }
+                } else if (physicsQuery) {
+                    const auto agent = controller.agent.agent.agent;
+                    for (std::uint64_t frame = 1; frame <= 7; ++frame) {
+                        const auto result = physics.Value()->RunFixedTick({frame, Duration::FromNanoseconds(16'666'667), startup.Token()});
+                        if (result.HasError())
+                            UNSCOPED_INFO(result.ErrorValue().message);
+                        REQUIRE(result.HasValue());
+                        const auto diagnostic = Internal::InspectHeadlessDecisionFailure(*physics.Value());
+                        REQUIRE(diagnostic.HasValue());
+                        if (diagnostic.Value())
+                            UNSCOPED_INFO(diagnostic.Value()->error.code.Value() << ": " << diagnostic.Value()->error.message);
+                        CHECK_FALSE(diagnostic.Value());
+                        if (frame < 7) {
+                            const auto pending = Internal::InspectHeadlessDecisionValue(*physics.Value(), agent, queryKey);
+                            REQUIRE(pending.HasValue());
+                            CHECK_FALSE(pending.Value());
+                        }
+                    }
+                    const auto selectedPoint = Internal::InspectHeadlessDecisionValue(*physics.Value(), agent, queryKey);
+                    REQUIRE(selectedPoint.HasValue());
+                    REQUIRE(selectedPoint.Value());
+                    const auto &value = std::get<AI::BlackboardScalarValue>(*selectedPoint.Value());
+                    CHECK(std::get<Math::WorldCoordinate64>(value) == Math::WorldCoordinate64::FromMillimeters(-500, 0, 0));
                 } else if (nativeProbe && prefabQuery) {
                     RunSelectedQueryPrefab(*physics.Value(), *nativeProbe, prefabSource, startup.Token(), queryKey, limitedQueryWork);
                 } else if (nativeProbe && prefabOnly) {
@@ -1906,7 +1959,7 @@ namespace Horo::Application::PrefabAtomicTest {
             if (nativeProbe) {
                 const auto modules = cancelBeforeNativeActivation || expected ? 0u : 1u;
                 const auto activeDecisions = selectNativePerception || (prefabOnly && !preserveInactive) ? 2u : 1u;
-                const auto tasks = modules == 0 || rollbackPrefab || prefabQuery || perceptionQuery ? 0u : activeDecisions;
+                const auto tasks = modules == 0 || rollbackPrefab || prefabQuery || perceptionQuery || physicsQuery ? 0u : activeDecisions;
                 CHECK(nativeProbe->module[3] == modules);
                 if (selectNativePerception) {
                     const auto senseEvaluations = perceptionQuery ? 8u : reactiveNativePerception ? 4u : 2u;

@@ -318,14 +318,14 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<AI::AiSceneCookedDecisionExecution> ResolveProductDecisionExecution(HeadlessProjectSceneResources &resources) {
             using Execution = Result<AI::AiSceneCookedDecisionExecution>;
             const bool reactive = resources.perceptionPolicy && SelectsReactiveDecisions(*resources.perceptionPolicy);
-            const auto mode = reactive ? AI::AiSchedulingMode::BestEffort : AI::AiSchedulingMode::Deterministic;
-            if (resources.decisionSchedulerModeAuthored && resources.decisionScheduler.mode != mode)
+            if (reactive && resources.decisionSchedulerModeAuthored && resources.decisionScheduler.mode != AI::AiSchedulingMode::BestEffort)
                 return Execution::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid,
                                                     "Headless AI scheduler mode must match the authored Perception watches."));
             AI::AiSceneCookedDecisionExecution execution{resources.jobs, resources.decisionScheduler, {}};
-            execution.scheduler.mode = mode;
-            if (reactive)
+            if (reactive) {
+                execution.scheduler.mode = AI::AiSchedulingMode::BestEffort;
                 execution.timing = AI::AiCookedDecisionTiming::BestEffortReactive;
+            }
             return Execution::Success(std::move(execution));
         }
 

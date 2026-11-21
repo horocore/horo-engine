@@ -128,6 +128,7 @@ namespace Horo::AI {
         std::size_t generatorWorkUnits{};
         bool allowPartial{};
         QueryDebugCaptureSettings debugCapture;
+        std::size_t testWorkUnits{1}; /**< Host-declared bound for one admission attempt. */
     };
 
     /** @brief Caller-issued per-tick allowances. Sharing the same allowance charges it once. */

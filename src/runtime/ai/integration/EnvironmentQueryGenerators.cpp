@@ -28,6 +28,9 @@ namespace Horo::AI {
         constexpr std::uint64_t DistancePreferNearer = LatticeProvider + 8;
         constexpr std::uint64_t DistanceScoreWeight = LatticeProvider + 9;
         constexpr std::uint64_t PointCenter = LatticeProvider + 10;
+        constexpr std::uint64_t PointVisibilityTest = LatticeProvider + 11;
+        constexpr std::uint64_t VisibilityChannel = LatticeProvider + 12;
+
         constexpr std::array NativePointCenters{BuiltinQueryContext::QuerierLocation, BuiltinQueryContext::WorldOrigin,
                                                 BuiltinQueryContext::TargetLocation};
 
@@ -370,6 +373,14 @@ namespace Horo::AI {
                                                   {QueryPropertyId::Create(PointCenter).Value(), Unsigned64, false}},
                                    .contextChoice = centers,
                                },
+                               QueryTestDescriptor{
+                                   .id = QueryTestId::Create(PointVisibilityTest).Value(),
+                                   .origin = origin,
+                                   .inputItemType = item,
+                                   .inputItemVersion = LatticeVersion,
+                                   .contexts = {{BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation), LatticeVersion}},
+                                   .properties = {{QueryPropertyId::Create(VisibilityChannel).Value(), CanonicalBytes, true, 16}},
+                               },
                                std::move(perception.test)};
         return QuerySchemaRegistry::Capture({items, contexts, generators, tests});
     }
@@ -421,6 +432,71 @@ namespace Horo::AI {
             .properties = DistanceProperties(settings),
         });
         return EnvironmentQueryAsset::Capture(edited);
+    }
+
+    /** @copydoc AddBuiltinPointVisibilityTest */
+    Result<EnvironmentQueryAsset> AddBuiltinPointVisibilityTest(const EnvironmentQueryAsset &lattice, QueryStageId stage,
+                                                                std::array<std::uint8_t, 16> channel) {
+        using Asset = Result<EnvironmentQueryAsset>;
+        if (!stage.IsValid() || lattice.Stages().size() != 1 || !HasBuiltinLatticeStages(lattice) ||
+            std::ranges::all_of(channel, [](auto byte) {
+            return byte == 0;
+        }))
+            return Asset::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+        const auto generator = lattice.Stages().front();
+        if (generator.executionOrder == std::numeric_limits<std::uint32_t>::max())
+            return Asset::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+        const auto bytes = std::as_bytes(std::span{channel});
+        return EnvironmentQueryAsset::Capture({
+            .id = lattice.Id(),
+            .displayName = lattice.DisplayName(),
+            .result = lattice.ResultSchema(),
+            .stages = {generator,
+                       {
+                           .id = stage,
+                           .kind = QueryStageKind::Test,
+                           .executionOrder = generator.executionOrder + 1,
+                           .test = QueryTestId::Create(PointVisibilityTest).Value(),
+                           .descriptorVersion = LatticeVersion,
+                           .properties = {{QueryPropertyId::Create(VisibilityChannel).Value(),
+                                           std::vector<std::byte>{bytes.begin(), bytes.end()}}},
+                       }},
+        });
+    }
+
+    /** @copydoc UsesBuiltinPointVisibility */
+    bool UsesBuiltinPointVisibility(const EnvironmentQueryPlan &plan) noexcept {
+        return std::ranges::any_of(plan.Stages(), [](const QueryPlanStage &stage) {
+            return stage.test == QueryTestId::Create(PointVisibilityTest).Value();
+        });
+    }
+
+    /** @copydoc CaptureBuiltinPointVisibility */
+    Result<BuiltinPointVisibilityPlan> CaptureBuiltinPointVisibility(const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry,
+                                                                     const QueryContextSnapshot &contexts) {
+        using Captured = Result<BuiltinPointVisibilityPlan>;
+        const auto stages = plan.Stages();
+        if (stages.size() != 2 || contexts.Query() != plan.Id() || stages.back().test != QueryTestId::Create(PointVisibilityTest).Value())
+            return Captured::Failure(MakeError(AIErrors::EnvironmentQueryStageUnsupported));
+
+        const auto *test = registry.Find(stages.back().test);
+        if (!test || test->origin != BuiltinOrigin())
+            return Captured::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
+        const auto generator = CapturePointOwnerGenerator(stages.front(), plan.ResultSchema().itemType, contexts, registry);
+        if (generator.HasError())
+            return Captured::Failure(generator.ErrorValue());
+        const auto property =
+            std::ranges::find(stages.back().properties, QueryPropertyId::Create(VisibilityChannel).Value(), &QueryPropertyValue::id);
+        const auto *bytes = property == stages.back().properties.end() ? nullptr : std::get_if<std::vector<std::byte>>(&property->value);
+        std::array<std::uint8_t, 16> channel{};
+        if (!bytes || bytes->size() != channel.size() || std::ranges::all_of(*bytes, [](std::byte value) {
+            return value == std::byte{};
+        }))
+            return Captured::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+        std::ranges::transform(*bytes, channel.begin(), [](std::byte value) {
+            return std::to_integer<std::uint8_t>(value);
+        });
+        return Captured::Success({generator.Value().lattice, generator.Value().provenance, stages.back().id, channel});
     }
 
     /** @copydoc RemoveBuiltinPointDistanceTest */

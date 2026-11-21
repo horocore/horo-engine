@@ -373,7 +373,8 @@ namespace Horo::AI {
     enum class AiCookedDecisionTiming : std::uint8_t {
         Deterministic,
         BestEffortExternalFeedback,
-        BestEffortReactive
+        BestEffortReactive,
+        BestEffortQueries
     };
 
     /** @brief Opt-in fixed-tick execution for flat cooked Behavior Trees owned by this Scene. */
@@ -391,6 +392,7 @@ namespace Horo::AI {
                 return scheduler.mode == AiSchedulingMode::Deterministic;
             return scheduler.mode == AiSchedulingMode::BestEffort &&
                    (timing == AiCookedDecisionTiming::BestEffortReactive ||
+                    (timing == AiCookedDecisionTiming::BestEffortQueries && queryTasks) ||
                     (timing == AiCookedDecisionTiming::BestEffortExternalFeedback && intents));
         }
     };

@@ -107,6 +107,30 @@ namespace Horo::AI {
     [[nodiscard]] Result<EnvironmentQueryAsset> AddBuiltinPointDistanceTest(const EnvironmentQueryAsset &lattice, QueryStageId stage,
                                                                             QueryPointDistanceTest settings);
 
+    /** @brief Adds one blocking-geometry visibility filter to a native lattice with no tests.
+     * @param lattice Exact native point generator. @param stage Fresh test identity.
+     * @param channel Canonical 16-byte identity of the project collision channel.
+     * @return Detached query source or typed validation error.
+     */
+    [[nodiscard]] Result<EnvironmentQueryAsset> AddBuiltinPointVisibilityTest(const EnvironmentQueryAsset &lattice, QueryStageId stage,
+                                                                              std::array<std::uint8_t, 16> channel);
+
+    /** @brief Validated native line-of-sight plan for a bounded Physics owner batch. */
+    struct BuiltinPointVisibilityPlan final {
+        QueryPointLattice lattice;
+        QueryGeneratorProvenance generator;
+        QueryStageId test;
+        std::array<std::uint8_t, 16> channel;
+    };
+
+    /** @brief Checks for the native GeometryLineOfSight test in a compiled plan. */
+    [[nodiscard]] bool UsesBuiltinPointVisibility(const EnvironmentQueryPlan &plan) noexcept;
+
+    /** @brief Validates exact native lattice and visibility descriptors before provider access. */
+    [[nodiscard]] Result<BuiltinPointVisibilityPlan> CaptureBuiltinPointVisibility(const EnvironmentQueryPlan &plan,
+                                                                                   const QuerySchemaRegistry &registry,
+                                                                                   const QueryContextSnapshot &contexts);
+
     /** @brief Removes a native point-distance stage while retaining all other source data.
      * @param lattice Detached source containing the stage. @param stage Stable identity of the test to remove.
      * @return Detached source or a typed refusal when the identity is absent or selects a different stage kind.

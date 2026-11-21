@@ -514,11 +514,10 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 record_->admittedControllers = std::move(prepared).Value();
                 catalog = record_->admittedControllers;
                 if (OwnsCookedDecisionExecution() && !queries.empty()) {
-                    auto driver =
-                        HeadlessDecisionQueries::Create(std::move(queries), input.cookedDecisions->querySchema,
-                                                        input.cookedDecisions->execution->scheduler,
-                                                        input.cookedDecisions->queryWorkUnitsLimit,
-                                                        input.decisionReplay ? std::nullopt : input.cookedDecisions->queryCacheLimits);
+                    auto driver = HeadlessDecisionQueries::Create(
+                        std::move(queries), input.cookedDecisions->querySchema, ConfiguredDecisionExecution().scheduler,
+                        input.cookedDecisions->queryWorkUnitsLimit,
+                        input.decisionReplay ? std::nullopt : input.cookedDecisions->queryCacheLimits);
                     if (driver.HasError())
                         return Result<void>::Failure(driver.ErrorValue());
                     record_->decisionQueries = std::move(driver).Value();
@@ -604,8 +603,12 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 execution.scheduler.mode = AI::AiSchedulingMode::BestEffort;
                 execution.timing = AI::AiCookedDecisionTiming::BestEffortReactive;
             }
-            if (record_->decisionQueries)
+            if (record_->decisionQueries) {
                 execution.queryTasks = record_->decisionQueries;
+                if (execution.scheduler.mode == AI::AiSchedulingMode::BestEffort &&
+                    execution.timing == AI::AiCookedDecisionTiming::Deterministic)
+                    execution.timing = AI::AiCookedDecisionTiming::BestEffortQueries;
+            }
             if (record_->decisionMotion) {
                 execution.intents = record_->decisionMotion;
                 execution.timing = AI::AiCookedDecisionTiming::BestEffortExternalFeedback;
@@ -882,7 +885,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                     return Result<void>::Failure(frame.ErrorValue());
                 origin = frame.Value().Origin();
             }
-            return record_->decisionQueries->RunAtFixedTick(*record_->ai, *scene, origin, tick);
+            return record_->decisionQueries->RunAtFixedTick(*record_->ai, *scene, origin, tick, &record_->native);
         }
 
         /** @brief Executes the registered decision phases for worlds without authored query tasks. */

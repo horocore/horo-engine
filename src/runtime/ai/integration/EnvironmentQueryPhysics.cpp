@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <utility>
 
 namespace Horo::AI {
@@ -68,7 +69,145 @@ namespace Horo::AI {
             }
             return Visibility::Success(visibility);
         }
+
+        /** @brief Computes the exact unsigned magnitude before converting an axis delta to metres. */
+        double DeltaMeters(std::int64_t point, std::int64_t reference) noexcept {
+            if (point >= reference)
+                return static_cast<double>(static_cast<std::uint64_t>(point) - static_cast<std::uint64_t>(reference)) / 1000.0;
+            return -static_cast<double>(static_cast<std::uint64_t>(reference) - static_cast<std::uint64_t>(point)) / 1000.0;
+        }
+
+        /** @brief Forms one segment without subtracting rounded global floats. */
+        std::optional<Physics::PhysicsRayQuery> VisibilityRay(const std::array<std::int64_t, 3> &eye, const Math::WorldCoordinate64 &point,
+                                                              Math::Vec3 localEye) noexcept {
+            const auto target = point.Millimeters();
+            const std::array delta{DeltaMeters(target[0], eye[0]), DeltaMeters(target[1], eye[1]), DeltaMeters(target[2], eye[2])};
+            const double distance = std::hypot(delta[0], delta[1], delta[2]);
+            if (distance == 0.0)
+                return std::nullopt;
+            return Physics::PhysicsRayQuery{
+                .origin = localEye,
+                .direction = {static_cast<float>(delta[0] / distance), static_cast<float>(delta[1] / distance),
+                              static_cast<float>(delta[2] / distance)},
+                .maximumDistanceMeters = static_cast<float>(distance),
+            };
+        }
+
+        /** @brief Owns one immutable candidate inventory and detaches a complete Physics batch before any result reaches EQS. */
+        class PointVisibilitySource final : public IQueryExecutionSource {
+        public:
+            PointVisibilitySource(BuiltinPointVisibilityPlan plan, Runtime::RuntimeSceneView scene, Runtime::EntityRef querier,
+                                  Math::WorldCoordinate64 eye, IQueryPhysicsVisibilityOwner &owner)
+                : plan_(plan), scene_(scene), querier_(querier), eye_(eye), owner_(owner) {}
+
+            bool IsCurrent(const QueryExecutionInputs &inputs) const noexcept override {
+                return inputs.contexts->MatchesScene(scene_) && (!batch_ || owner_.RetainsVisibilityAuthority(scene_, batch_->publication));
+            }
+
+            Result<QueryGenerationResult> Generate(const QueryExecutionInputs &inputs, const QueryGeneratorOutput &output) override {
+                auto generated = GenerateQueryLattice(*inputs.contexts, plan_.lattice.center, plan_.lattice, output);
+                if (generated.HasError())
+                    return generated;
+                count_ = generated.Value().itemCount;
+                for (std::size_t index = 0; index < count_; ++index)
+                    points_[index] = std::get<Math::WorldCoordinate64>(output.items[index]);
+                return generated;
+            }
+
+            Result<bool> StartTest(const QueryExecutionInputs &, QueryStageId stage, const QueryGeneratedItem &item) override {
+                using Started = Result<bool>;
+                const auto *point = std::get_if<Math::WorldCoordinate64>(&item);
+                if (stage != plan_.test || !point || sample_ || next_ >= count_ || *point != points_[next_])
+                    return Started::Failure(MakeError(AIErrors::EnvironmentQueryContextInvalid));
+                if (!batch_) {
+                    auto captured = owner_.CaptureVisibility({querier_, stage, eye_, std::span{points_}.first(count_),
+                                                              Physics::PhysicsQueryChannelId::FromBytes(plan_.channel)});
+                    if (captured.HasError())
+                        return Started::Failure(std::move(captured).ErrorValue());
+                    if (!captured.Value())
+                        return Started::Success(false);
+                    batch_ = std::move(captured).Value();
+                    if (batch_->stage != stage || batch_->count != count_ || !batch_->publication.identity.world.IsValid() ||
+                        batch_->publication.identity.capabilityGeneration == 0 ||
+                        batch_->publication.sceneGeneration != scene_.RuntimeId().value || batch_->publication.completedTick == 0 ||
+                        batch_->publication.revision == 0)
+                        return Started::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
+                }
+                const bool visible = batch_->clear[next_++];
+                sample_.emplace(QueryTestSample{.stage = stage, .filter = visible, .metric = visible ? 1.0 : 0.0});
+                return Started::Success(true);
+            }
+
+            Result<std::optional<QueryTestSample>> PollTest() override {
+                return Result<std::optional<QueryTestSample>>::Success(std::exchange(sample_, std::nullopt));
+            }
+
+            void CancelTest() noexcept override {
+                sample_.reset();
+            }
+
+        private:
+            BuiltinPointVisibilityPlan plan_;
+            Runtime::RuntimeSceneView scene_;
+            Runtime::EntityRef querier_;
+            Math::WorldCoordinate64 eye_;
+            IQueryPhysicsVisibilityOwner &owner_;
+            std::array<Math::WorldCoordinate64, MaximumQueryPhysicsVisibilityRays> points_;
+            std::size_t count_{};
+            std::size_t next_{};
+            std::optional<QueryPhysicsVisibilityResult> batch_;
+            std::optional<QueryTestSample> sample_;
+        };
+
     }  // namespace
+
+    /** @copydoc ProjectQueryPhysicsVisibilityRays */
+    Result<QueryPhysicsVisibilityRays> ProjectQueryPhysicsVisibilityRays(const QueryPhysicsVisibilityRequest &request,
+                                                                         Math::WorldCoordinate64 origin) {
+        using Projected = Result<QueryPhysicsVisibilityRays>;
+        if (request.points.empty() || request.points.size() > MaximumQueryPhysicsVisibilityRays)
+            return Projected::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+        QueryPhysicsVisibilityRays projected;
+        const auto eye = request.eye.Millimeters();
+        const auto frame = origin.Millimeters();
+        const Math::Vec3 localEye{static_cast<float>(DeltaMeters(eye[0], frame[0])), static_cast<float>(DeltaMeters(eye[1], frame[1])),
+                                  static_cast<float>(DeltaMeters(eye[2], frame[2]))};
+        for (std::size_t index = 0; index < request.points.size(); ++index) {
+            if (auto ray = VisibilityRay(eye, request.points[index], localEye)) {
+                projected.rays[projected.count] = *ray;
+                projected.indices[projected.count++] = index;
+            }
+        }
+        return Projected::Success(projected);
+    }
+
+    /** @copydoc AdmitBuiltinPointVisibilityQuery */
+    Result<std::unique_ptr<QueryExecution>> AdmitBuiltinPointVisibilityQuery(
+        const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
+        Runtime::EntityRef querier, QueryExecutionInputs inputs, QueryExecutionSettings settings, IQueryPhysicsVisibilityOwner &owner) {
+        using Admission = Result<std::unique_ptr<QueryExecution>>;
+        if (!inputs.contexts || !inputs.contexts->MatchesScene(scene) || scene.Get(querier).HasError())
+            return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
+        const auto captured = CaptureBuiltinPointVisibility(plan, registry, *inputs.contexts);
+        if (captured.HasError())
+            return Admission::Failure(captured.ErrorValue());
+        const auto *context = inputs.contexts->Find(BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation));
+        const auto *eye = context ? std::get_if<Math::WorldCoordinate64>(&context->value) : nullptr;
+        if (!eye)
+            return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextMissing));
+
+        const QueryScoreRule rule{.stage = captured.Value().test, .requiredFilterValue = true};
+        auto scoring = QueryScoringPlan::Capture(plan, registry, std::span{&rule, 1}, QueryScoreTieBreak::StableIndex);
+        if (scoring.HasError())
+            return Admission::Failure(scoring.ErrorValue());
+        const std::size_t width = 2U * captured.Value().lattice.outerSteps + 1U;
+        settings.maximumCandidates = std::min(settings.maximumCandidates, MaximumQueryPhysicsVisibilityRays);
+        settings.generatorWorkUnits = 2U * width * width;
+        settings.testWorkUnits = settings.maximumCandidates;
+        auto source = std::make_unique<PointVisibilitySource>(captured.Value(), scene, querier, *eye, owner);
+        return QueryExecution::Admit(std::move(inputs), captured.Value().generator, std::move(scoring).Value(), settings,
+                                     std::move(source));
+    }
 
     /** @copydoc QueryPhysicsProbe::~QueryPhysicsProbe */
     QueryPhysicsProbe::~QueryPhysicsProbe() {

@@ -129,6 +129,100 @@ namespace Horo::AI {
             CHECK_FALSE(probe.Poll(publication).Value().has_value());
         }
 
+        TEST_CASE("EQS visibility projects precise local rays and keeps coincident candidate slots", "[unit][ai][sight][eqs]") {
+            const auto far = std::numeric_limits<std::int64_t>::max();
+            const auto origin = Math::WorldCoordinate64::FromMillimeters(far - 1000, 0, 0);
+            const auto eye = Math::WorldCoordinate64::FromMillimeters(far - 500, 0, 0);
+            const std::array points{eye, Math::WorldCoordinate64::FromMillimeters(far, 0, 0),
+                                    Math::WorldCoordinate64::FromMillimeters(far - 1000, 0, 0)};
+            const auto projected = ProjectQueryPhysicsVisibilityRays({.eye = eye, .points = points}, origin);
+            REQUIRE(projected.HasValue());
+            REQUIRE(projected.Value().count == 2);
+            CHECK(projected.Value().indices[0] == 1);
+            CHECK(projected.Value().indices[1] == 2);
+            CHECK(projected.Value().rays[0].origin.x == 0.5F);
+            CHECK(projected.Value().rays[0].direction.x == 1.0F);
+            CHECK(projected.Value().rays[1].direction.x == -1.0F);
+            CHECK(projected.Value().rays[0].maximumDistanceMeters == 0.5F);
+        }
+
+        TEST_CASE("EQS visibility retries admission and drops detached results from a retired owner", "[unit][ai][sight][eqs]") {
+            using Capture = Result<std::optional<QueryPhysicsVisibilityResult>>;
+
+            class Provider final : public IQueryPhysicsVisibilityOwner {
+            public:
+                bool live{true};
+                std::size_t attempts{};
+
+                bool RetainsVisibilityAuthority(const Runtime::RuntimeSceneView &,
+                                                const QueryPhysicsPublication &) const noexcept override {
+                    return live;
+                }
+
+                Capture CaptureVisibility(const QueryPhysicsVisibilityRequest &request) override {
+                    if (++attempts == 1)
+                        return Capture::Success(std::nullopt);
+                    QueryPhysicsVisibilityResult result{
+                        .publication = {.identity = {Physics::PhysicsWorldId::Create(1).Value(), 1},
+                                        .sceneGeneration = request.querier.runtime.value,
+                                        .revision = 4,
+                                        .completedTick = 2},
+                        .stage = request.stage,
+                        .count = request.points.size(),
+                    };
+                    result.clear.front() = true;
+                    return Capture::Success(result);
+                }
+            } provider;
+
+            SightScene fixture;
+            const auto scene = fixture.scene->View();
+            const auto registry = CaptureBuiltinQuerySchema();
+            REQUIRE(registry.HasValue());
+            const auto initial = CreateBuiltinLatticeQuery(QueryId::Create(1).Value(), QueryStageId::Create(1).Value(),
+                                                           QueryResultSchemaId::Create(1).Value(), "Visibility",
+                                                           {.stepMillimeters = 500, .outerSteps = 0}, 1);
+            REQUIRE(initial.HasValue());
+            const auto source =
+                AddBuiltinPointVisibilityTest(initial.Value(), QueryStageId::Create(2).Value(), VisibilityChannel().Bytes());
+            REQUIRE(source.HasValue());
+            const auto plan = EnvironmentQueryPlan::Compile(source.Value(), registry.Value());
+            REQUIRE(plan.HasValue());
+            const auto providers = QueryContextProviderRegistry::Capture({}, registry.Value());
+            REQUIRE(providers.HasValue());
+            QueryContextCapture capture;
+            const auto contexts = capture.Capture(plan.Value(), registry.Value(), providers.Value(), scene,
+                                                  {.querier = fixture.listener, .executionRevision = 1});
+            REQUIRE(contexts.HasValue());
+            const AgentHandle agent{AiRuntimeIncarnation::Create(1).Value(), {1, 1}};
+            auto admitted =
+                AdmitBuiltinPointVisibilityQuery(plan.Value(), registry.Value(), scene, fixture.listener, {agent, contexts.Value()},
+                                                 {.submittedTick = 1, .deadlineTick = 6, .maximumCandidates = 1, .bestCount = 1}, provider);
+            REQUIRE(admitted.HasValue());
+            auto &query = *admitted.Value();
+            AiWorkBudget allowance{64};
+            const QueryExecutionBudget budget{allowance, allowance, allowance};
+            CHECK_FALSE(query.Sync(2));
+            query.Advance(2, budget);
+            CHECK(provider.attempts == 1);
+            CHECK_FALSE(query.Sync(3));
+            query.Advance(3, budget);
+            CHECK(provider.attempts == 2);
+            SECTION("the current Physics authority publishes the candidate") {
+                REQUIRE(query.Sync(4));
+                REQUIRE(query.Published());
+                CHECK(query.Published()->status == QueryExecutionStatus::Completed);
+                REQUIRE(query.Published()->winners.size() == 1);
+            }
+            SECTION("retirement takes precedence over a detached candidate") {
+                provider.live = false;
+                REQUIRE(query.Sync(4));
+                REQUIRE(query.Published());
+                CHECK(query.Published()->status == QueryExecutionStatus::StaleInputs);
+                CHECK(query.Published()->winners.empty());
+            }
+        }
+
 #if HORO_TEST_PHYSICS_NATIVE
         /** @brief Captures the exact Physics test world publication. */
         QueryPhysicsPublication ProbePublication(const SightWorld &physics) {

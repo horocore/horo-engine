@@ -4,10 +4,19 @@
 #include "HeadlessCookedDecisionAdmission.h"
 #include "Horo/AI/DecisionNodeRegistration.h"
 #include "Horo/AI/DecisionQueryTask.h"
+#include "Horo/AI/EnvironmentQueryPhysics.h"
+
+namespace Horo::Physics {
+    class PhysicsWorld;
+}
 
 namespace Horo::Application::Internal {
+    class ScenePhysicsHost;
+
     /** @brief Owns the query binding and fixed-step phases for one authoritative runtime world. */
-    class HeadlessDecisionQueries final : public AI::IDecisionQueryTaskBinder, private AI::IDecisionQueryTaskHost {
+    class HeadlessDecisionQueries final : public AI::IDecisionQueryTaskBinder,
+                                          private AI::IDecisionQueryTaskHost,
+                                          private AI::IQueryPhysicsVisibilityOwner {
     public:
         /** @brief Freezes the matching query plans and allocates bounded phase state before Scene activation. */
         [[nodiscard]] static Result<std::shared_ptr<HeadlessDecisionQueries>> Create(
@@ -21,7 +30,7 @@ namespace Horo::Application::Internal {
 
         /** @brief Publishes eligible results, evaluates decisions, and advances admitted queries on the same fixed tick. */
         [[nodiscard]] Result<void> RunAtFixedTick(AI::AiSceneRuntime &runtime, const Runtime::RuntimeSceneView &scene,
-                                                  Math::WorldCoordinate64 origin, std::uint64_t tick);
+                                                  Math::WorldCoordinate64 origin, std::uint64_t tick, ScenePhysicsHost *physics = nullptr);
 
         /** @brief Observes terminal results for one exact live agent and tick without changing query execution. */
         void ArmReplay(AI::AgentHandle agent, std::uint64_t tick) noexcept;
@@ -36,6 +45,7 @@ namespace Horo::Application::Internal {
             const Runtime::RuntimeSceneView &scene;
             Math::WorldCoordinate64 origin;
             std::uint64_t tick;
+            ScenePhysicsHost *physics;
             std::size_t active{};
         };
 
@@ -52,6 +62,14 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<std::unique_ptr<AI::QueryExecution>> AdmitPlan(const CookedSceneQueryPlan &plan,
                                                                             const AI::AiTaskOperationContext &operation,
                                                                             std::uint64_t submitted, std::uint64_t deadline);
+        /** @copydoc AI::IQueryPhysicsVisibilityOwner::RetainsVisibilityAuthority */
+        [[nodiscard]] bool RetainsVisibilityAuthority(const Runtime::RuntimeSceneView &scene,
+                                                      const AI::QueryPhysicsPublication &publication) const noexcept override;
+        /** @copydoc AI::IQueryPhysicsVisibilityOwner::CaptureVisibility */
+        [[nodiscard]] Result<std::optional<AI::QueryPhysicsVisibilityResult>> CaptureVisibility(
+            const AI::QueryPhysicsVisibilityRequest &request) override;
+        /** @brief Acquires a revocable capability only when the exact published Scene or Physics world changes. */
+        [[nodiscard]] Result<void> PrepareVisibilityCapability(Physics::PhysicsWorld &world);
         /** @brief Publishes at most one result per active query through the Scene-owned BlackboardSync lane. */
         [[nodiscard]] Result<void> PublishOutputs(TickScope &scope);
         /** @brief Issues bounded allowances in round-robin occurrence order without allocating. */
@@ -68,6 +86,9 @@ namespace Horo::Application::Internal {
         std::size_t workUnitsLimit_{};
         std::optional<AI::QueryResultCacheLimits> cacheLimits_;
         std::shared_ptr<AI::QueryResultCache> cache_;
+        Physics::PhysicsQueryEventCapability visibility_;
+        Runtime::RuntimeSceneView visibilityScene_;
+        bool bestEffort_{};
         std::size_t cursor_{};
         TickScope *scope_{};
         AI::AgentHandle replayAgent_;

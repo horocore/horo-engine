@@ -3,7 +3,9 @@
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryCache.h"
 #include "Horo/AI/EnvironmentQueryPerception.h"
+#include "Horo/Physics/PhysicsErrors.h"
 #include "ProjectScenePerception.h"
+#include "ScenePhysicsHost.h"
 
 #include <algorithm>
 #include <bit>
@@ -50,6 +52,29 @@ namespace Horo::Application::Internal {
             std::shared_ptr<DecisionQueryTask> task_;
         };
 
+        using Visibility = Result<std::optional<AI::QueryPhysicsVisibilityResult>>;
+
+        /** @brief Leaves competing batches untouched and drains its own result before the Physics tick advances. */
+        Visibility RunVisibilityBatch(Physics::PhysicsWorld &world, const Physics::PhysicsQueryEventCapability &capability,
+                                      const AI::QueryPhysicsPublication &publication, AI::QueryStageId stage,
+                                      std::span<const Physics::PhysicsRayQuery> rays, Physics::PhysicsQueryFilter filter) {
+            AI::QueryPhysicsProbe probe;
+            const auto admitted = probe.StartVisibility(capability, publication, stage, rays, filter);
+            if (admitted.HasError())
+                return Visibility::Failure(admitted.ErrorValue());
+            if (!admitted.Value())
+                return Visibility::Success(std::nullopt);
+            // Drain this admitted batch while its exact tick still owns the native query publication.
+            if (const auto processed = world.ProcessQueryBatch(); processed.HasError())
+                return Visibility::Failure(processed.ErrorValue());
+            const auto completed = probe.PollVisibility(publication);
+            if (completed.HasError())
+                return Visibility::Failure(completed.ErrorValue());
+            if (!completed.Value())
+                return Visibility::Failure(MakeError(AI::AIErrors::EnvironmentQueryProviderFailed));
+            return completed;
+        }
+
         constexpr auto Candidates = EnvironmentQuerySchemaLimits::MaximumResults;
         constexpr auto AgentUnits = Candidates * (3U + std::bit_width(Candidates));
     }  // namespace
@@ -74,7 +99,8 @@ namespace Horo::Application::Internal {
             owner->contexts_.emplace(std::move(contexts).Value());
             owner->maximumActive_ = settings.evaluationsPerTick;
             owner->workUnitsLimit_ = workUnitsLimit;
-            if (settings.mode == AI::AiSchedulingMode::BestEffort)
+            owner->bestEffort_ = settings.mode == AI::AiSchedulingMode::BestEffort;
+            if (owner->bestEffort_)
                 owner->cacheLimits_ = cacheLimits;
             owner->budgets_.resize(AI::MaximumAiSceneAgents);
             return Created::Success(std::move(owner));
@@ -97,6 +123,8 @@ namespace Horo::Application::Internal {
         const auto plan = plans_.find(output->query);
         if (plan == plans_.end())
             return Executor::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
+        if (AI::UsesBuiltinPointVisibility(*plan->second.plan) && !bestEffort_)
+            return Executor::Failure(MakeError(AI::AIErrors::EnvironmentQueryStageUnsupported));
         if (tasks_.size() == AI::AiTaskSchedulerSettings::HardAgents) {
             std::erase_if(tasks_, [](const auto &task) {
                 return task.expired();
@@ -152,6 +180,9 @@ namespace Horo::Application::Internal {
                                                   .deadlineTick = deadline,
                                                   .maximumCandidates = Candidates,
                                                   .bestCount = 1};
+        if (AI::UsesBuiltinPointVisibility(*plan.plan))
+            return AI::AdmitBuiltinPointVisibilityQuery(*plan.plan, *registry_, scope_->scene, owner.Value(), std::move(inputs), settings,
+                                                        *this);
         if (!perception)
             return AI::AdmitBuiltinPointQuery(*plan.plan, *registry_, scope_->scene, std::move(inputs), settings, {cache_, plan.digest});
 
@@ -159,6 +190,83 @@ namespace Horo::Application::Internal {
         if (observations.HasError())
             return Execution::Failure(std::move(observations).ErrorValue());
         return AI::AdmitBuiltinPerceptionQuery(*plan.plan, *registry_, std::move(inputs), std::move(observations).Value(), settings);
+    }
+
+    /** @copydoc HeadlessDecisionQueries::PrepareVisibilityCapability */
+    Result<void> HeadlessDecisionQueries::PrepareVisibilityCapability(Physics::PhysicsWorld &world) {
+        if (visibilityScene_.SameIncarnation(scope_->scene) && visibility_.Identity().world == world.Identity())
+            return Result<void>::Success();
+        auto capability = world.IssueQueryEventCapability();
+        if (capability.HasError())
+            return Result<void>::Failure(std::move(capability).ErrorValue());
+        visibility_ = std::move(capability).Value();
+        visibilityScene_ = scope_->scene;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc HeadlessDecisionQueries::RetainsVisibilityAuthority */
+    bool HeadlessDecisionQueries::RetainsVisibilityAuthority(const Runtime::RuntimeSceneView &scene,
+                                                             const QueryPhysicsPublication &publication) const noexcept {
+        if (!scope_ || !scope_->physics || !visibilityScene_.SameIncarnation(scene) || !scope_->scene.SameIncarnation(scene))
+            return false;
+        const auto identity = visibility_.Identity();
+        if (identity.world != publication.identity.world || identity.capabilityGeneration != publication.identity.capabilityGeneration)
+            return false;
+        try {
+            const auto scope = scope_->physics->Borrow();
+            if (scope.HasError() || scope.Value().scene.value != publication.sceneGeneration ||
+                scope.Value().physics.Identity() != identity.world)
+                return false;
+            const auto tick = scope.Value().physics.PublishedTick();
+            return visibility_.ValidateQueryPublication(publication.sceneGeneration, tick.completedTick, tick.publicationRevision)
+                .HasValue();
+        } catch (const std::bad_alloc &) {
+            return false;
+        }
+    }
+
+    /** @copydoc HeadlessDecisionQueries::CaptureVisibility */
+    Result<std::optional<QueryPhysicsVisibilityResult>> HeadlessDecisionQueries::CaptureVisibility(
+        const QueryPhysicsVisibilityRequest &request) {
+        using Captured = Result<std::optional<QueryPhysicsVisibilityResult>>;
+        if (!scope_ || !scope_->physics)
+            return Captured::Failure(MakeError(Physics::PhysicsErrors::CapabilityUnavailable));
+        auto projected = ProjectQueryPhysicsVisibilityRays(request, scope_->origin);
+        if (projected.HasError())
+            return Captured::Failure(std::move(projected).ErrorValue());
+        const auto native = scope_->physics->Borrow();
+        if (native.HasError())
+            return Captured::Failure(native.ErrorValue());
+        const auto &binding = native.Value();
+        const auto querier = scope_->scene.Get(request.querier);
+        if (binding.scene != scope_->scene.RuntimeId() || querier.HasError())
+            return Captured::Failure(MakeError(Physics::PhysicsErrors::QuerySnapshotStale));
+        if (auto capability = PrepareVisibilityCapability(binding.physics); capability.HasError())
+            return Captured::Failure(std::move(capability).ErrorValue());
+
+        const auto tick = binding.physics.PublishedTick();
+        const QueryPhysicsPublication publication{visibility_.Identity(), binding.scene.value, tick.publicationRevision,
+                                                  tick.completedTick};
+        QueryPhysicsVisibilityResult result{.publication = publication, .stage = request.stage, .count = request.points.size()};
+        std::fill_n(result.clear.begin(), result.count, true);
+        const auto &rays = projected.Value();
+        if (rays.count == 0) {
+            const auto valid =
+                visibility_.ValidateQueryPublication(publication.sceneGeneration, publication.completedTick, publication.revision);
+            return valid.HasValue() ? Captured::Success(result) : Captured::Failure(valid.ErrorValue());
+        }
+        Physics::PhysicsQueryFilter filter{.channel = request.channel};
+        const auto body = std::ranges::find(binding.bodyBindings, querier.Value().authoredObject.value_or(Runtime::SceneObjectId{}),
+                                            &Physics::PhysicsSceneBodyBinding::object);
+        if (body != binding.bodyBindings.end())
+            filter.excludedBody = body->handle;
+        const auto completed =
+            RunVisibilityBatch(binding.physics, visibility_, publication, request.stage, std::span{rays.rays}.first(rays.count), filter);
+        if (completed.HasError() || !completed.Value())
+            return completed;
+        for (std::size_t index = 0; index < rays.count; ++index)
+            result.clear[rays.indices[index]] = completed.Value()->clear[index];
+        return Captured::Success(result);
     }
 
     /** @copydoc HeadlessDecisionQueries::PublishOutputs */
@@ -239,7 +347,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc HeadlessDecisionQueries::RunAtFixedTick */
     Result<void> HeadlessDecisionQueries::RunAtFixedTick(AI::AiSceneRuntime &runtime, const Runtime::RuntimeSceneView &scene,
-                                                         Math::WorldCoordinate64 origin, std::uint64_t tick) {
+                                                         Math::WorldCoordinate64 origin, std::uint64_t tick, ScenePhysicsHost *physics) {
         if (scope_ || !scene.IsCurrent() || tick == 0)
             return Result<void>::Failure(MakeError(AI::AIErrors::TaskContextInvalid));
         if (auto prepared = PrepareCache(scene); prepared.HasError())
@@ -247,7 +355,7 @@ namespace Horo::Application::Internal {
         std::erase_if(tasks_, [](const auto &task) {
             return task.expired();
         });
-        TickScope current{runtime, scene, origin, tick};
+        TickScope current{runtime, scene, origin, tick, physics};
 
         struct Reset final {
             TickScope *&slot;

@@ -78,7 +78,8 @@ namespace Horo::AI {
             return settings.maximumCandidates > 0 && settings.maximumCandidates <= EnvironmentQuerySchemaLimits::MaximumResults &&
                    settings.bestCount > 0 && settings.bestCount <= maximumResults && settings.generatorWorkUnits > 0 &&
                    settings.generatorWorkUnits <= EnvironmentQuerySchemaLimits::MaximumResults * 16U &&
-                   settings.debugCapture.maximumSamples <= QueryDebugCaptureSettings::MaximumSamples;
+                   settings.debugCapture.maximumSamples <= QueryDebugCaptureSettings::MaximumSamples && settings.testWorkUnits > 0 &&
+                   settings.testWorkUnits <= EnvironmentQuerySchemaLimits::MaximumResults * 16U;
         }
 
         /** @brief Rejects a generator that returns a different publication or more than its admitted capacity. */
@@ -163,8 +164,10 @@ namespace Horo::AI {
             return Admission::Failure(MakeError(AIErrors::EnvironmentQueryStageUnsupported));
         if (!WithinLimits(settings, scoring.maximumResults_))
             return Admission::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
-        return Admission::Success(std::unique_ptr<QueryExecution>(
-            new QueryExecution(std::move(inputs), provenance, std::move(scoring), settings, std::move(source))));
+        auto execution = std::unique_ptr<QueryExecution>(
+            new QueryExecution(std::move(inputs), provenance, std::move(scoring), settings, std::move(source)));
+        execution->testWorkUnits_ = settings.testWorkUnits;
+        return Admission::Success(std::move(execution));
     }
 
     /** @copydoc QueryExecution::AdmitDeterministic */

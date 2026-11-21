@@ -4,7 +4,7 @@
  * @brief Owner-lane Physics capability adapter for tactical clearance and visibility.
  */
 
-#include "Horo/AI/EnvironmentQueryScoring.h"
+#include "Horo/AI/EnvironmentQueryExecution.h"
 #include "Horo/Physics/PhysicsQueryEventCapability.h"
 
 #include <array>
@@ -29,6 +29,59 @@ namespace Horo::AI {
         std::array<bool, MaximumQueryPhysicsVisibilityRays> clear{};
         std::size_t count{};
     };
+
+    /** @brief Borrowed admission input for one candidate-ordered host Physics evaluation. */
+    struct QueryPhysicsVisibilityRequest final {
+        Runtime::EntityRef querier;
+        QueryStageId stage;
+        Math::WorldCoordinate64 eye;
+        std::span<const Math::WorldCoordinate64> points;
+        Physics::PhysicsQueryChannelId channel;
+    };
+
+    /** @brief Projects candidate points onto nonzero local rays and retains their original indices. */
+    struct QueryPhysicsVisibilityRays final {
+        std::array<Physics::PhysicsRayQuery, MaximumQueryPhysicsVisibilityRays> rays{};
+        std::array<std::size_t, MaximumQueryPhysicsVisibilityRays> indices{};
+        std::size_t count{};
+    };
+
+    /** @brief Makes exact finite segment directions before converting to Physics floats.
+     * @param request Ordered candidates and their canonical global eye. @param origin Exact Physics origin.
+     * @return Detached nonzero rays; coincident candidates stay clear without dispatching a ray.
+     */
+    [[nodiscard]] Result<QueryPhysicsVisibilityRays> ProjectQueryPhysicsVisibilityRays(const QueryPhysicsVisibilityRequest &request,
+                                                                                       Math::WorldCoordinate64 origin);
+
+    /** @brief Bounded owner-side geometry capture for an admitted native query. */
+    class IQueryPhysicsVisibilityOwner {
+    public:
+        virtual ~IQueryPhysicsVisibilityOwner() = default;
+
+        /** @brief Checks that detached evidence still belongs to the same live Physics world.
+         * @param scene Exact original Scene. @param publication Originating Physics generation and authority.
+         * @return True while the same owner is live. Ordinary Physics tick advancement does not retire the owner.
+         */
+        [[nodiscard]] virtual bool RetainsVisibilityAuthority(const Runtime::RuntimeSceneView &scene,
+                                                              const QueryPhysicsPublication &publication) const noexcept = 0;
+
+        /** @brief Admits all candidates against one exact Physics publication on the owner lane.
+         * @param request Valid only during this call.
+         * @return Empty on backpressure, complete ordered evidence, or the original typed provider failure.
+         */
+        [[nodiscard]] virtual Result<std::optional<QueryPhysicsVisibilityResult>> CaptureVisibility(
+            const QueryPhysicsVisibilityRequest &request) = 0;
+    };
+
+    /** @brief Admits a native lattice with one geometry visibility stage under best-effort scheduling.
+     * @param plan Compiled native query. @param registry Registry used to validate it. @param scene Current owner view.
+     * @param querier Exact actor. @param inputs Owned execution identity and contexts. @param settings Query limits and timing.
+     * @param owner Borrowed fixed-tick provider; it outlives the query and runs only on the owner lane.
+     * @return Bounded execution or a typed refusal. No live Physics data is retained or shared through the query cache.
+     */
+    [[nodiscard]] Result<std::unique_ptr<QueryExecution>> AdmitBuiltinPointVisibilityQuery(
+        const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
+        Runtime::EntityRef querier, QueryExecutionInputs inputs, QueryExecutionSettings settings, IQueryPhysicsVisibilityOwner &owner);
 
     /** @brief One queued tactical test against an exact Physics publication.
      * @details Submit on the Physics owner lane outside fixed-step callbacks. Poll on the query owner
