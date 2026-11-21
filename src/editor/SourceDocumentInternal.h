@@ -160,6 +160,9 @@ namespace Horo::Editor {
         [[nodiscard]] SourceEditBatch MakeBatchReceipt(std::span<const StagedBatchEdit> edits) const;
         /** @brief Reserves disk read scratch alongside the staged text, then verifies every original disk base. */
         [[nodiscard]] Result<void> VerifyBatchBases(const StagedBatch &batch, CancellationToken cancellation) const;
+        /** @brief Verifies the exact ordered worker evidence and current metadata before publishing. */
+        [[nodiscard]] Result<void> VerifyBatchEvidence(const StagedBatch &batch, const SourceBatchDiskEvidence &evidence,
+                                                       const DurableFileSystem &files, CancellationToken cancellation) const;
         /** @brief Prepares the history reversal against the exact publication in the supplied receipt. */
         [[nodiscard]] Result<StagedBatchUndo> StageBatchUndo(const SourceBatchItem &item, CancellationToken cancellation,
                                                              std::size_t reservedBytes);

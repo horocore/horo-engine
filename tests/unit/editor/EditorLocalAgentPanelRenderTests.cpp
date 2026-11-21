@@ -534,6 +534,7 @@ namespace {
             };
         };
         LocalAgentFixture fixture{"en-US", configure};
+        JobSystem sourceJobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
         fixture.Draw(420);
         fixture.Enter("##Endpoint", endpoint);
         fixture.Enter("##Model", "editor-multi-inline-patch");
@@ -604,12 +605,12 @@ namespace {
         REQUIRE(fixture.command.command == EditorWorkspaceViewCommand::ApplySourceReview);
         CHECK(one.IsCurrent());
         CHECK(two.IsCurrent());
-        REQUIRE(transactions.Process(std::exchange(fixture.command, {}), owner, &fixture.jobs.Get()));
+        REQUIRE(transactions.Process(std::exchange(fixture.command, {}), owner, &sourceJobs, project.directory, &fixture.files));
         CHECK(fixture.DrawnText().find("Preparing accepted source changes") != std::string::npos);
         CHECK(one.IsCurrent());
         CHECK(two.IsCurrent());
         REQUIRE(Await([&] {
-            return transactions.Poll(owner);
+            return transactions.Poll(owner, &fixture.files);
         }));
         CHECK(fixture.DrawnText().find("Accepted changes applied to the open files.") != std::string::npos);
         const auto appliedOne = owner.Snapshot(one.Identity().instance).Value();
@@ -624,7 +625,7 @@ namespace {
         fixture.Activate("###source_patch_revert");
         REQUIRE(fixture.command.command == EditorWorkspaceViewCommand::UndoSourceReview);
         fixture.panels.DetachAll();
-        REQUIRE(transactions.Process(std::exchange(fixture.command, {}), owner, &fixture.jobs.Get()));
+        REQUIRE(transactions.Process(std::exchange(fixture.command, {}), owner, &sourceJobs, project.directory, &fixture.files));
         CHECK(transactions.Status().feedback == Proposals::SourceTransactionFeedback::Cancelled);
         CHECK(appliedOne.IsCurrent());
         CHECK(appliedTwo.IsCurrent());
@@ -632,7 +633,7 @@ namespace {
         CHECK(fixture.DrawnText().find("The source review action was cancelled.") != std::string::npos);
         fixture.Activate("###source_patch_revert");
         REQUIRE(fixture.command.command == EditorWorkspaceViewCommand::UndoSourceReview);
-        REQUIRE(transactions.Process(std::exchange(fixture.command, {}), owner, &fixture.jobs.Get()));
+        REQUIRE(transactions.Process(std::exchange(fixture.command, {}), owner, &sourceJobs, project.directory, &fixture.files));
         CHECK(fixture.DrawnText().find("Applied changes were undone together.") != std::string::npos);
         CHECK_FALSE(transactions.Status().canUndo);
         CHECK(owner.Snapshot(one.Identity().instance).Value().Text() == one.Text());

@@ -1,4 +1,5 @@
 #include "../../support/SourceDocumentTestProject.h"
+#include "Horo/Foundation/Platform.h"
 #include "editor/screens/workspace/EditorWorkspaceViewModel.h"
 #include "editor/source_editor/SourceReviewApplication.h"
 
@@ -19,7 +20,8 @@ namespace {
         DocumentIdentity b = project.Identity("b.cpp", 2);
         ProjectPolicy policy = ProjectPolicy::Capture("workspace", 1, {{a.key.source, false}, {b.key.source, false}}).Value();
         SourceReviewTransactions reviews;
-        JobSystem jobs{JobSystemConfig{}};
+        NativeDurableFileSystem files;
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
         CancellationSource lifetime;
 
         ReviewWorkspace() {
@@ -61,10 +63,15 @@ namespace {
         void Drain() {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
             while (reviews.Status().feedback == SourceTransactionFeedback::Preparing && std::chrono::steady_clock::now() < deadline) {
-                static_cast<void>(reviews.Poll(documents));
+                static_cast<void>(reviews.Poll(documents, &files));
                 std::this_thread::sleep_for(std::chrono::milliseconds{1});
             }
             REQUIRE(reviews.Status().feedback != SourceTransactionFeedback::Preparing);
+        }
+
+        /** @brief Dispatches through the same authority used to verify publication. */
+        bool Process(const EditorWorkspaceViewCommandData &command) {
+            return reviews.Process(command, documents, &jobs, project.directory, &files);
         }
     };
 
@@ -75,7 +82,7 @@ namespace {
             const auto alpha = workspace.Queue("alpha", "alpha");
             const auto beta = workspace.Queue("beta", "beta");
             const bool alphaFirst = index % 2 == 0;
-            REQUIRE(workspace.reviews.Process(alphaFirst ? alpha : beta, workspace.documents, &workspace.jobs));
+            REQUIRE(workspace.Process(alphaFirst ? alpha : beta));
             workspace.Drain();
             REQUIRE(workspace.reviews.Status().feedback == SourceTransactionFeedback::Applied);
             const auto applied = workspace.Snapshots();
@@ -83,14 +90,14 @@ namespace {
             CHECK(applied[0].Text() == applied[1].Text());
             CHECK(applied[0].Revision() == 2 + 2 * index);
             CHECK(applied[0].Revision() == applied[1].Revision());
-            REQUIRE(workspace.reviews.Process(alphaFirst ? beta : alpha, workspace.documents, &workspace.jobs));
+            REQUIRE(workspace.Process(alphaFirst ? beta : alpha));
             workspace.Drain();
             CHECK(workspace.reviews.Status().feedback == SourceTransactionFeedback::Conflict);
             CHECK(applied[0].IsCurrent());
             CHECK(applied[1].IsCurrent());
             EditorWorkspaceViewCommandData undo;
             REQUIRE(workspace.reviews.QueueUndo(workspace.lifetime.Token(), undo));
-            REQUIRE(workspace.reviews.Process(undo, workspace.documents, &workspace.jobs));
+            REQUIRE(workspace.Process(undo));
             CHECK(workspace.reviews.Status().feedback == SourceTransactionFeedback::Undone);
             const auto restored = workspace.Snapshots();
             CHECK(restored[0].Text() == "base");
@@ -118,7 +125,7 @@ namespace {
             workspace.lifetime.RequestCancellation();
             expected = SourceTransactionFeedback::Cancelled;
         }
-        REQUIRE(workspace.reviews.Process(command, workspace.documents, &workspace.jobs));
+        REQUIRE(workspace.Process(command));
         workspace.Drain();
         CHECK(workspace.reviews.Status().feedback == expected);
         CHECK_FALSE(workspace.reviews.Status().canUndo);
@@ -130,7 +137,7 @@ namespace {
         ReviewWorkspace workspace;
         const auto command = workspace.Queue("proposal", "agent");
         const auto before = workspace.Snapshots();
-        REQUIRE(workspace.reviews.Process(command, workspace.documents, &workspace.jobs));
+        REQUIRE(workspace.Process(command));
         REQUIRE(workspace.reviews.Status().feedback == SourceTransactionFeedback::Preparing);
         CHECK(before[0].IsCurrent());
         CHECK(before[1].IsCurrent());
@@ -146,5 +153,23 @@ namespace {
         CHECK(workspace.reviews.Status().feedback == expected);
         CHECK(before[0].IsCurrent());
         CHECK(workspace.Snapshots()[1].Text() == (expected == SourceTransactionFeedback::Conflict ? "user" : "base"));
+    }
+
+    TEST_CASE("Source publication checks worker evidence after a same-size external rewrite", "[editor][source][review][concurrency]") {
+        ReviewWorkspace workspace;
+        const auto before = workspace.Snapshots();
+        const auto evidence = SourceBatchDiskEvidence::Capture(workspace.project.directory, before, workspace.files);
+        REQUIRE(evidence.HasValue());
+        const std::array edits{SourceBatchEdit{before[0], {1, 0, 4, "new A"}}, SourceBatchEdit{before[1], {1, 0, 4, "new B"}}};
+        const auto path = workspace.project.directory / "b.cpp";
+        const auto previousTime = std::filesystem::last_write_time(path);
+        workspace.project.Put("disk", "b.cpp");
+        std::filesystem::last_write_time(path, previousTime);
+        REQUIRE(std::filesystem::last_write_time(path) == previousTime);
+        const auto applied = workspace.documents.EditBatchWithEvidence(edits, evidence.Value(), workspace.files);
+        REQUIRE(applied.HasError());
+        CHECK(applied.ErrorValue().code.Value() == SourceDocumentErrors::SaveConflict.code.Value());
+        CHECK(before[0].IsCurrent());
+        CHECK(before[1].IsCurrent());
     }
 }  // namespace

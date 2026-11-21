@@ -806,11 +806,13 @@ command that loses its evidence reports a conflict. An older review never
 rebases onto new user or external edits without another review.
 
 The command shares its immutable preview with one workspace-owned preparation
-job. Policy validation and reconstruction of the accepted text run on the
-worker. The editor polls completion without waiting and publishes through the
-source owner after rechecking the current leases and disk bases. A manual edit
+job. Policy validation, reconstruction of the accepted text, and exact reads
+of the saved disk bytes run on an I/O worker. The editor polls completion
+without waiting. The source owner compares the current leases and native file
+mutation evidence, then publishes the group. A manual edit
 can advance a source while the job is running. In that case the owner rejects
 the stale preparation before publishing any buffer.
+Missing native file identity evidence also prevents publication.
 
 ## Backend Providers
 

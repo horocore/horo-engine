@@ -4035,6 +4035,7 @@ add_library(HoroEditorServices STATIC
         editor/proposals/WorkspaceEditPlan.cpp
         editor/proposals/ReviewDecisions.cpp
         editor/SourceDocumentChanges.cpp
+        editor/SourceDocumentBatchDisk.cpp
         editor/SourceEditingCommands.cpp
         editor/SourceDocumentSave.cpp
         editor/SourceDocumentSnapshot.cpp

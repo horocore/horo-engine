@@ -23,10 +23,16 @@ namespace Horo::Editor {
     /** @brief Owns the last applied source group and dispatches explicit editor source transaction commands. */
     class SourceReviewTransactions final {
     public:
-        /** @brief Consumes Apply or Undo through the source document owner. @return True for a recognized command. */
-        bool Process(const EditorWorkspaceViewCommandData &command, SourceDocumentService &documents, const JobSystem *jobs);
+        /** @brief Consumes Apply or Undo through the source document owner.
+         * @param command Deferred owner-lane request. @param documents Live source owner.
+         * @param jobs Host job system. @param root Authorized workspace root.
+         * @param files Host filesystem authority, retained by the host until its job system drains.
+         * @return True for a recognized command.
+         */
+        bool Process(const EditorWorkspaceViewCommandData &command, SourceDocumentService &documents, const JobSystem *jobs,
+                     const std::filesystem::path &root, const DurableFileSystem *files);
         /** @brief Polls one preparing job without waiting. @return True if a buffer group was published. */
-        bool Poll(SourceDocumentService &documents);
+        bool Poll(SourceDocumentService &documents, const DurableFileSystem *files);
         /** @brief Reads the latest feedback and whether every changed document still permits group undo. */
         [[nodiscard]] Proposals::SourceTransactionStatus Status() const noexcept;
         /** @brief Stages one grouped undo when its receipt remains current. */
@@ -34,7 +40,8 @@ namespace Horo::Editor {
 
     private:
         /** @brief Submits immutable review preparation on the host job system. */
-        void Start(std::shared_ptr<const SourceReviewApplication> request, const JobSystem *jobs, const CancellationToken &lifetime);
+        void Start(std::shared_ptr<const SourceReviewApplication> request, const JobSystem *jobs, const std::filesystem::path &root,
+                   const DurableFileSystem *files, const CancellationToken &lifetime);
         /** @brief Replays the current source review as one group. */
         void Undo(const SourceEditBatch &receipt, SourceDocumentService &documents, const CancellationToken &lifetime);
         SourceEditBatch batch_;

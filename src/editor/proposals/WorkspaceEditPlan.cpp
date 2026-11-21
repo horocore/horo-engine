@@ -339,17 +339,50 @@ namespace Horo::Editor::Proposals {
         }
     }
 
-    /** @copydoc PreparedSourceReview::Commit */
-    Result<SourceEditBatch> PreparedSourceReview::Commit(SourceDocumentService &documents, const CancellationToken cancellation) const {
+    /** @copydoc PreparedSourceReview::ObserveDisk */
+    Result<void> PreparedSourceReview::ObserveDisk(const std::filesystem::path &root, const DurableFileSystem &files,
+                                                   const CancellationToken cancellation) {
+        disk_ = {};
+        try {
+            std::vector<SourceDocumentSnapshot> sources;
+            sources.reserve(edits_.size());
+            for (const auto &edit : edits_)
+                sources.push_back(edit.source);
+            auto observed = SourceBatchDiskEvidence::Capture(root, sources, files, cancellation);
+            if (observed.HasError())
+                return Result<void>::Failure(observed.ErrorValue());
+            disk_ = std::move(observed).Value();
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(Errors::Bounds));
+        }
+    }
+
+    /** @copydoc PreparedSourceReview::Publish */
+    Result<SourceEditBatch> PreparedSourceReview::Publish(SourceDocumentService &documents, const DurableFileSystem *files,
+                                                          const CancellationToken cancellation) const {
         try {
             std::vector<SourceBatchEdit> edits;
             edits.reserve(edits_.size());
             for (const auto &edit : edits_)
                 edits.push_back({edit.source, {edit.source.Revision(), 0, edit.source.Text().size(), edit.replacement}});
+            if (files)
+                return documents.EditBatchWithEvidence(edits, disk_, *files, cancellation);
             return documents.EditBatch(edits, cancellation);
         } catch (const std::bad_alloc &) {
             return Result<SourceEditBatch>::Failure(MakeError(Errors::Bounds));
         }
+    }
+
+    /** @copydoc PreparedSourceReview::Commit */
+    Result<SourceEditBatch> PreparedSourceReview::Commit(SourceDocumentService &documents, const CancellationToken cancellation) const {
+        return Publish(documents, nullptr, cancellation);
+    }
+
+    /** @copydoc PreparedSourceReview::CommitObserved */
+    Result<SourceEditBatch> PreparedSourceReview::CommitObserved(SourceDocumentService &documents, const DurableFileSystem &files,
+                                                                 const CancellationToken cancellation) const {
+        return Publish(documents, &files, cancellation);
     }
 
     /** @copydoc ReviewDecisions::ApplyAccepted */

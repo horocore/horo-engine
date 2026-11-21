@@ -9,7 +9,7 @@
 namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::UpdateSourceAutosave */
     void EditorWorkspaceController::UpdateSourceAutosave(const float elapsedSeconds, const int delaySeconds) {
-        if (m_sourceReviews.Poll(m_sourceOpenService.Documents()))
+        if (m_sourceReviews.Poll(m_sourceOpenService.Documents(), m_durableFiles))
             RefreshSourceDocumentProjection();
         NativeDurableFileSystem files;
         if (auto outcome = m_sourceOpenService.Documents().UpdateAutosave(elapsedSeconds, delaySeconds, files)) {
@@ -279,7 +279,7 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::ProcessSourceDocumentCommand */
     bool EditorWorkspaceController::ProcessSourceDocumentCommand(const EditorWorkspaceViewCommandData &command) {
-        if (m_sourceReviews.Process(command, m_sourceOpenService.Documents(), m_sourceRecoveryJobs))
+        if (m_sourceReviews.Process(command, m_sourceOpenService.Documents(), m_sourceRecoveryJobs, ProjectRoot(), m_durableFiles))
             return true;
         NativeDurableFileSystem files;
         switch (command.command) {

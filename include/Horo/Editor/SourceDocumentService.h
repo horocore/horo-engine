@@ -175,6 +175,24 @@ namespace Horo::Editor {
         SourceTextEdit edit;
     };
 
+    /** @brief Immutable worker observation of exact saved bytes and their native mutation witnesses. */
+    class SourceBatchDiskEvidence final {
+    public:
+        /** @brief Reads and checks the saved bytes of every supplied source without accessing the editor owner.
+         * @param root Existing authorized project root. @param sources Exact immutable source leases in batch order.
+         * @param files Host filesystem metadata authority. @param cancellation Cooperative observer.
+         * @return Detached disk evidence or a typed refusal.
+         */
+        [[nodiscard]] static Result<SourceBatchDiskEvidence> Capture(const std::filesystem::path &root,
+                                                                     std::span<const SourceDocumentSnapshot> sources,
+                                                                     const DurableFileSystem &files, CancellationToken cancellation = {});
+
+    private:
+        friend class SourceDocumentService;
+        struct Data;
+        std::shared_ptr<const Data> data_;
+    };
+
     /** @brief One document result in request order, including unchanged documents. */
     struct SourceBatchItem final {
         SourceDocumentSnapshot snapshot;
@@ -285,6 +303,14 @@ namespace Horo::Editor {
          * @return Per-document results or a typed failure. Failure leaves buffers and history intact. No disk writes occur.
          */
         [[nodiscard]] Result<SourceEditBatch> EditBatch(std::span<const SourceBatchEdit> edits, CancellationToken cancellation = {});
+        /** @brief Publishes an atomic batch after rechecking the worker's disk evidence through the same authority.
+         * @param edits Exact source snapshots and patches. @param evidence Worker-verified disk bases in edit order.
+         * @param files Active host filesystem authority. @param cancellation Cooperative observer.
+         * @return Receipt or failure with all buffers intact. Revalidation reads metadata only.
+         */
+        [[nodiscard]] Result<SourceEditBatch> EditBatchWithEvidence(std::span<const SourceBatchEdit> edits,
+                                                                    const SourceBatchDiskEvidence &evidence, const DurableFileSystem &files,
+                                                                    CancellationToken cancellation = {});
         /** @brief Replays all changed documents in an exact batch receipt backward as one owner-lane operation.
          * @param batch Receipt for the current publications. @param cancellation Cooperative observer.
          * @return Updated snapshots in the order of changed items, or failure preserving all buffers and history.
@@ -347,6 +373,9 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> Shutdown();
 
     private:
+        /** @brief Stages and atomically publishes one edit batch using the supplied disk verification mode. */
+        [[nodiscard]] Result<SourceEditBatch> PublishBatch(std::span<const SourceBatchEdit> edits, const SourceBatchDiskEvidence *evidence,
+                                                           const DurableFileSystem *files, CancellationToken cancellation);
         friend class SourceFileOpenService;
         /** @brief Prepares a history replay completely before changing its cursor or publishing. */
         [[nodiscard]] Result<SourceHistoryResult> ReplayHistory(DocumentInstanceId instance, std::uint64_t expectedRevision, bool redo,

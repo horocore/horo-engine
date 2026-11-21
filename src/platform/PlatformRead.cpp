@@ -125,7 +125,9 @@ namespace Horo {
             std::optional<FileEntryIdentity> EntryIdentity(const ReadSnapshot &snapshot) const noexcept {
 #if defined(_WIN32)
                 FILE_ID_INFO info{};
-                if (!GetFileInformationByHandleEx(value_, FileIdInfo, &info, sizeof(info)))
+                FILE_BASIC_INFO times{};
+                if (!GetFileInformationByHandleEx(value_, FileIdInfo, &info, sizeof(info)) ||
+                    !GetFileInformationByHandleEx(value_, FileBasicInfo, &times, sizeof(times)))
                     return std::nullopt;
                 // ReFS needs all 128 file-ID bits and the full volume serial; the read snapshot's legacy ID is insufficient.
                 auto identity = snapshot.identity;
@@ -133,6 +135,7 @@ namespace Horo {
                 const auto fileId = std::bit_cast<std::array<std::uint64_t, 2>>(info.FileId);
                 identity[1] = fileId[0];
                 identity[2] = fileId[1];
+                identity[6] = static_cast<std::uint64_t>(times.ChangeTime.QuadPart);
                 return FileEntryIdentity{identity};
 #else
                 return FileEntryIdentity{snapshot.identity};

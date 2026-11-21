@@ -322,11 +322,22 @@ namespace Horo::Editor::Proposals {
     /** @brief Detached accepted text and exact immutable leases, suitable for worker-to-editor handoff. */
     class PreparedSourceReview final {
     public:
+        /** @brief Captures the full saved bytes on a worker before publication.
+         * @param root Authorized project root. @param files Host filesystem authority.
+         * @param cancellation Cooperative observer. @return Success or typed refusal.
+         */
+        Result<void> ObserveDisk(const std::filesystem::path &root, const DurableFileSystem &files, CancellationToken cancellation = {});
         /** @brief Publishes through the source owner after its current lease and disk checks.
          * @param documents Current source owner. @param cancellation Current workspace admission.
          * @return Atomic receipt or failure with all source buffers intact.
          */
         [[nodiscard]] Result<SourceEditBatch> Commit(SourceDocumentService &documents, CancellationToken cancellation = {}) const;
+        /** @brief Publishes with native metadata revalidation of the worker's full disk reads.
+         * @param documents Current source owner. @param files The same active host filesystem authority.
+         * @param cancellation Current workspace admission. @return Atomic receipt or typed refusal.
+         */
+        [[nodiscard]] Result<SourceEditBatch> CommitObserved(SourceDocumentService &documents, const DurableFileSystem &files,
+                                                             CancellationToken cancellation = {}) const;
 
     private:
         friend class ReviewDecisions;
@@ -337,6 +348,10 @@ namespace Horo::Editor::Proposals {
         };
 
         std::vector<Edit> edits_;
+        SourceBatchDiskEvidence disk_;
+        /** @brief Builds the borrowed batch inputs and dispatches the requested verification mode. */
+        [[nodiscard]] Result<SourceEditBatch> Publish(SourceDocumentService &documents, const DurableFileSystem *files,
+                                                      CancellationToken cancellation) const;
     };
 
     /** @brief Inert decisions on one exact proposal. Edits have per-hunk decisions and structural operations are indivisible. */

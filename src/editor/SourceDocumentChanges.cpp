@@ -56,6 +56,7 @@ namespace Horo::Editor {
             return disk.bytes == root.text->bytes && disk.bytes == root.base->bytes && root.external == SourceExternalState::InSync &&
                    !root.saveUnconfirmed;
         }
+
     }  // namespace
 
     /** @copydoc SourceDocumentService::Storage::PrepareEdit */
@@ -279,6 +280,21 @@ namespace Horo::Editor {
     /** @copydoc SourceDocumentService::EditBatch */
     Result<SourceEditBatch> SourceDocumentService::EditBatch(const std::span<const SourceBatchEdit> edits,
                                                              const CancellationToken cancellation) {
+        return PublishBatch(edits, nullptr, nullptr, cancellation);
+    }
+
+    /** @copydoc SourceDocumentService::EditBatchWithEvidence */
+    Result<SourceEditBatch> SourceDocumentService::EditBatchWithEvidence(const std::span<const SourceBatchEdit> edits,
+                                                                         const SourceBatchDiskEvidence &evidence,
+                                                                         const DurableFileSystem &files,
+                                                                         const CancellationToken cancellation) {
+        return PublishBatch(edits, &evidence, &files, cancellation);
+    }
+
+    /** @copydoc SourceDocumentService::PublishBatch */
+    Result<SourceEditBatch> SourceDocumentService::PublishBatch(const std::span<const SourceBatchEdit> edits,
+                                                                const SourceBatchDiskEvidence *evidence, const DurableFileSystem *files,
+                                                                const CancellationToken cancellation) {
         using Output = Result<SourceEditBatch>;
         try {
             if (const auto access = CheckAccess(); access.HasError())
@@ -289,7 +305,9 @@ namespace Horo::Editor {
             auto batch = std::move(stage).Value();
             static_assert(std::is_nothrow_move_constructible_v<Output>);
             auto result = Output::Success(storage_->MakeBatchReceipt(batch.items));
-            if (const auto disk = storage_->VerifyBatchBases(batch, cancellation); disk.HasError())
+            const auto disk = evidence ? storage_->VerifyBatchEvidence(batch, *evidence, *files, cancellation)
+                                       : storage_->VerifyBatchBases(batch, cancellation);
+            if (disk.HasError())
                 return Output::Failure(disk.ErrorValue());
             if (cancellation.IsCancellationRequested())
                 return Failure<SourceEditBatch>(SourceDocumentErrors::Cancelled);

@@ -16,7 +16,8 @@ namespace Horo::Editor {
                 return Feedback::Cancelled;
             if (code == Proposals::Errors::StaleBase.code.Value() || code == Proposals::Errors::PolicyDenied.code.Value() ||
                 code == Source::Stale.code.Value() || code == Source::SaveConflict.code.Value() ||
-                code == Source::DiskChanged.code.Value() || code == Source::Removed.code.Value() || code == Source::Closed.code.Value())
+                code == Source::DiskChanged.code.Value() || code == Source::Removed.code.Value() || code == Source::Closed.code.Value() ||
+                code == Source::ReadFailed.code.Value())
                 return Feedback::Conflict;
             return fallback;
         }
@@ -56,10 +57,10 @@ namespace Horo::Editor {
 
     /** @copydoc SourceReviewTransactions::Process */
     bool SourceReviewTransactions::Process(const EditorWorkspaceViewCommandData &command, SourceDocumentService &documents,
-                                           const JobSystem *jobs) {
+                                           const JobSystem *jobs, const std::filesystem::path &root, const DurableFileSystem *files) {
         switch (command.command) {
             case EditorWorkspaceViewCommand::ApplySourceReview:
-                Start(command.sourceReviewApplication, jobs, command.sourceReviewLifetime);
+                Start(command.sourceReviewApplication, jobs, root, files, command.sourceReviewLifetime);
                 return true;
             case EditorWorkspaceViewCommand::UndoSourceReview:
                 if (!preparing_)
@@ -72,20 +73,25 @@ namespace Horo::Editor {
 
     /** @copydoc SourceReviewTransactions::Start */
     void SourceReviewTransactions::Start(std::shared_ptr<const SourceReviewApplication> request, const JobSystem *jobs,
+                                         const std::filesystem::path &root, const DurableFileSystem *files,
                                          const CancellationToken &lifetime) {
         if (preparing_)
             return;
         feedback_ = lifetime.IsCancellationRequested() ? Feedback::Cancelled : Feedback::ApplyFailed;
-        if (feedback_ == Feedback::Cancelled || !jobs || !request || !request->plan)
+        if (feedback_ == Feedback::Cancelled || !jobs || !files || !request || !request->plan)
             return;
         try {
             auto output = std::make_shared<std::optional<Proposals::PreparedSourceReview>>();
-            auto job = jobs->SubmitResult({.parentCancellation = lifetime, .priority = JobPriority::Interactive},
-                                          [request = std::move(request), output](const CancellationToken &stop) {
+            auto job =
+                jobs->SubmitResult({.parentCancellation = lifetime, .priority = JobPriority::Interactive, .resource = JobResource::Io},
+                                   [request = std::move(request), output, root, files](const CancellationToken &stop) {
                 auto prepared = request->decisions.PrepareAccepted(request->policy, *request->plan, stop);
                 if (prepared.HasError())
                     return Result<void>::Failure(std::move(prepared).ErrorValue());
-                output->emplace(std::move(prepared).Value());
+                auto candidate = std::move(prepared).Value();
+                if (const auto disk = candidate.ObserveDisk(root, *files, stop); disk.HasError())
+                    return Result<void>::Failure(disk.ErrorValue());
+                output->emplace(std::move(candidate));
                 return Result<void>::Success();
             });
             if (job.HasValue()) {
@@ -98,7 +104,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc SourceReviewTransactions::Poll */
-    bool SourceReviewTransactions::Poll(SourceDocumentService &documents) {
+    bool SourceReviewTransactions::Poll(SourceDocumentService &documents, const DurableFileSystem *files) {
         if (!preparing_)
             return false;
         const auto job = preparing_->job.Snapshot();
@@ -110,11 +116,11 @@ namespace Horo::Editor {
             feedback_ = Feedback::Cancelled;
             return false;
         }
-        if (const auto &error = job->terminalResult->error; error || !*preparation.output) {
+        if (const auto &error = job->terminalResult->error; error || !*preparation.output || !files) {
             feedback_ = error ? FailureFeedback(*error, Feedback::ApplyFailed) : Feedback::ApplyFailed;
             return false;
         }
-        auto applied = preparation.output->value().Commit(documents, preparation.lifetime);
+        auto applied = preparation.output->value().CommitObserved(documents, *files, preparation.lifetime);
         if (applied.HasError()) {
             feedback_ = FailureFeedback(applied.ErrorValue(), Feedback::ApplyFailed);
             return false;
