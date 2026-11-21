@@ -85,9 +85,9 @@ namespace Horo::XR {
     Result<void> XRSimulatorRuntime::Impl::PrepareBindings(const XRSessionId &candidate) {
         candidateBindings = {};
         candidateBindings.session = candidate;
+        const auto expected = activatingScenario ? activatingScenario->BindingFingerprint() : XRSimulatorBindingFingerprint{};
         if (!query)
-            return Nonzero(expectedFingerprint) ? Result<void>::Failure(MakeError(XRErrors::OperationUnsupported))
-                                                : Result<void>::Success();
+            return Nonzero(expected) ? Result<void>::Failure(MakeError(XRErrors::OperationUnsupported)) : Result<void>::Success();
         const auto before = host.Snapshot().session;
         const auto *coordinator = query();
         if (host.Snapshot().session != before || shutdownRequested)
@@ -98,7 +98,7 @@ namespace Horo::XR {
         const auto fingerprint = RuntimeInternal::XRSimulatorHostAccess::BindingFingerprint(plan);
         if (fingerprint.HasError())
             return Result<void>::Failure(fingerprint.ErrorValue());
-        if (Nonzero(expectedFingerprint) && fingerprint.Value() != expectedFingerprint)
+        if (Nonzero(expected) && fingerprint.Value() != expected)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
         if (auto copied = CopyBindings(plan); copied.HasError())
             return copied;
@@ -106,6 +106,10 @@ namespace Horo::XR {
         candidateBindings.revision = coordinator->Revision();
         candidateBindings.count = plan.bindings.size();
         candidateBindings.fingerprint = fingerprint.Value();
+        if (activatingScenario)
+            for (const auto &step : activatingScenario->Steps())
+                if (auto admitted = ValidateControlBindings(step, candidateBindings); admitted.HasError())
+                    return admitted;
         return Result<void>::Success();
     }
 
@@ -118,10 +122,14 @@ namespace Horo::XR {
             return Result<void>::Success();
         try {
             auto bindings = PrepareBindings(candidate);
-            if (bindings.HasError() && children)
-                children->Release(stage, candidate);
+            if (bindings.HasError()) {
+                candidateBindings = {};
+                if (children)
+                    children->Release(stage, candidate);
+            }
             return bindings;
         } catch (...) {
+            candidateBindings = {};
             if (children)
                 children->Release(stage, candidate);
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
@@ -157,11 +165,11 @@ namespace Horo::XR {
         return Result<void>::Success();
     }
 
-    Result<void> XRSimulatorRuntime::Impl::ValidateControlBindings(const XRSimulatorStep &step) const {
+    Result<void> XRSimulatorRuntime::Impl::ValidateControlBindings(const XRSimulatorStep &step, const Bindings &bindings) {
         for (const auto &action : std::span{step.actions}.first(step.actionCount)) {
-            if (action.bindingIndex >= activeBindings.count)
+            if (action.bindingIndex >= bindings.count)
                 return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
-            const auto &binding = activeBindings.values[action.bindingIndex];
+            const auto &binding = bindings.values[action.bindingIndex];
             if (action.role != binding.role || action.kind != binding.kind)
                 return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
         }

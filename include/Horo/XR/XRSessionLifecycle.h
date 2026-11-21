@@ -56,6 +56,9 @@ namespace Horo::XR {
         Ready /**< Native Ready for the same retained owner after Idle; never creates or rediscovers a session. */
     };
 
+    /** @brief Resolves a canonical event without issuing identity or mutating a session. */
+    [[nodiscard]] std::optional<XRSessionState> NextXRSessionState(XRSessionState current, XRSessionEvent event) noexcept;
+
     /** @brief Fixed-size state publication; consumers must revalidate its exact session before use. */
     struct XRSessionSnapshot final {
         XRSessionId session;                            /**< Published owner, invalid when inactive or destroyed. */

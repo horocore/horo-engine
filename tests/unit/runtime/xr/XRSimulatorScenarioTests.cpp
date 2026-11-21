@@ -1,5 +1,7 @@
+#include "Horo/XR/XRSessionErrors.h"
 #include "support/xr/XRSimulatorTestSupport.h"
 
+#include <catch2/generators/catch_generators.hpp>
 #include <limits>
 
 namespace {
@@ -86,6 +88,24 @@ namespace {
         auto fingerprint = XRSimulatorBindingFingerprint{};
         fingerprint[0] = std::byte{1};
         REQUIRE(XRSimulatorScenario::Create({.steps = steps, .bindings = fingerprint}).HasValue());
+    }
+
+    TEST_CASE("Simulator timelines reject impossible transitions and events after session retirement", "[xr][simulator][codec]") {
+        const std::array legal{Event(XRSessionEvent::FocusLost), Event(XRSessionEvent::BecameFocused), Event(XRSessionEvent::SessionLost)};
+        REQUIRE(XRSimulatorScenario::Create({.steps = legal}).HasValue());
+        SECTION("focus cannot resume before the session is visible") {
+            const std::array invalid{Event(XRSessionEvent::BecameFocused)};
+            const auto rejected = XRSimulatorScenario::Create({.initialState = XRSimulatorInitialState::Ready, .steps = invalid});
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == XRSessionErrors::TransitionInvalid.code.Value());
+        }
+        SECTION("no later step can target a retired replay owner") {
+            const auto terminal = GENERATE(XRSessionEvent::SessionLost, XRSessionEvent::Idle);
+            const std::array invalid{Event(XRSessionEvent::Stopping), Event(terminal), Event(XRSessionEvent::Ready)};
+            const auto rejected = XRSimulatorScenario::Create({.steps = invalid});
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == XRErrors::OperationUnavailable.code.Value());
+        }
     }
 
     TEST_CASE("Simulator rejects unsupported render faults before changing the owner or loading a scenario",

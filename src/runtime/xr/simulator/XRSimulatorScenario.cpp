@@ -1,5 +1,6 @@
 #include "Horo/XR/XRSimulatorScenario.h"
 
+#include "Horo/XR/XRSessionErrors.h"
 #include "XRFakeRuntimeHostComposition.h"
 #include "XRSimulatorCodecInternal.h"
 
@@ -232,7 +233,21 @@ namespace Horo::XR {
             return Result<void>::Success();
         }
 
+        Result<XRSessionState> PlaybackState(XRSessionState current, const XRSimulatorStep &step) {
+            using Outcome = Result<XRSessionState>;
+            if (current == XRSessionState::Inactive || current == XRSessionState::Lost)
+                return Outcome::Failure(MakeError(XRErrors::OperationUnavailable, "The scenario continues after its session retired."));
+            if (!step.event)
+                return Outcome::Success(current);
+            const auto next = NextXRSessionState(current, *step.event);
+            return next ? Outcome::Success(*next) : Outcome::Failure(MakeError(XRSessionErrors::TransitionInvalid));
+        }
+
         Result<void> ValidateScenarioSteps(const XRSimulatorScenarioDescriptor &descriptor) {
+            constexpr std::array initialStates{XRSessionState::Ready, XRSessionState::Running, XRSessionState::Visible,
+                                               XRSessionState::Focused};
+            static_assert(initialStates.size() == static_cast<std::size_t>(XRSimulatorInitialState::Count));
+            auto state = initialStates[static_cast<std::size_t>(descriptor.initialState)];
             std::uint64_t elapsed{};
             std::size_t bytes = SimulatorInternal::CaptureManifestCharge;
             std::size_t nodes = SimulatorInternal::CaptureManifestNodeCharge;
@@ -240,6 +255,10 @@ namespace Horo::XR {
             for (const auto &step : descriptor.steps) {
                 if (auto valid = ValidateXRSimulatorStep(step); valid.HasError())
                     return valid;
+                const auto next = PlaybackState(state, step);
+                if (next.HasError())
+                    return Result<void>::Failure(next.ErrorValue());
+                state = next.Value();
                 if (step.deltaNanoseconds > maximum - elapsed)
                     return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
                 elapsed += step.deltaNanoseconds;

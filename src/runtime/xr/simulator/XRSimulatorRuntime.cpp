@@ -127,7 +127,18 @@ namespace Horo::XR {
         return Result<void>::Success();
     }
 
-    Result<void> XRSimulatorRuntime::Impl::Activate(const XRSimulatorInitialState initial) {
+    Result<void> XRSimulatorRuntime::Impl::Activate(const XRSimulatorScenario *scenario) {
+        struct ScenarioBorrow final {
+            const XRSimulatorScenario *&slot;
+
+            ~ScenarioBorrow() {
+                slot = nullptr;
+            }
+        };
+
+        activatingScenario = scenario;
+        const ScenarioBorrow borrow{activatingScenario};
+        const auto initial = scenario ? scenario->InitialState() : XRSimulatorInitialState::Focused;
         const auto capabilities = Capabilities(incarnation);
         const auto budget = query ? static_cast<std::uint32_t>(XRFakeLimits::MaximumActions) : 0U;
         if (const auto activated = host.Activate(capabilities, Plan(capabilities), {2, 1, 1},
@@ -158,7 +169,7 @@ namespace Horo::XR {
             return Result<std::unique_ptr<XRSimulatorRuntime>>::Failure(incarnation.ErrorValue());
         auto impl = std::make_unique<Impl>(incarnation.Value());
         Impl::Operation operation{*impl};
-        if (auto active = impl->Activate(XRSimulatorInitialState::Focused); active.HasError())
+        if (auto active = impl->Activate(); active.HasError())
             return Result<std::unique_ptr<XRSimulatorRuntime>>::Failure(active.ErrorValue());
         // End the operation before moving the implementation; operation retains the same allocated owner.
         return Result<std::unique_ptr<XRSimulatorRuntime>>::Success(
@@ -173,7 +184,7 @@ namespace Horo::XR {
         auto impl =
             std::make_unique<XRSimulatorRuntime::Impl>(incarnation.Value(), &composition.resources, std::move(composition.bindings));
         XRSimulatorRuntime::Impl::Operation operation{*impl};
-        if (auto active = impl->Activate(XRSimulatorInitialState::Focused); active.HasError())
+        if (auto active = impl->Activate(); active.HasError())
             return Result<std::unique_ptr<XRSimulatorRuntime>>::Failure(active.ErrorValue());
         return Result<std::unique_ptr<XRSimulatorRuntime>>::Success(
             std::unique_ptr<XRSimulatorRuntime>{new XRSimulatorRuntime(std::move(impl))});
@@ -185,12 +196,8 @@ namespace Horo::XR {
             return lane;
         Impl::Operation operation{*impl_};
         auto candidate = input;  // Bounded cold copy precedes any replacement.
-        const auto prior = impl_->expectedFingerprint;
-        impl_->expectedFingerprint = candidate.BindingFingerprint();
-        if (auto activated = impl_->Activate(candidate.InitialState()); activated.HasError()) {
-            impl_->expectedFingerprint = prior;
+        if (auto activated = impl_->Activate(&candidate); activated.HasError())
             return activated;
-        }
         impl_->EndCapture(XRSimulatorCaptureState::Partial);
         impl_->scenario = std::move(candidate);
         impl_->pendingEvent.reset();
@@ -206,7 +213,7 @@ namespace Horo::XR {
             return lane;
         if (auto shape = ValidateXRSimulatorStep(controls); shape.HasError())
             return shape;
-        if (auto binding = impl_->ValidateControlBindings(controls); binding.HasError())
+        if (auto binding = impl_->ValidateControlBindings(controls, impl_->activeBindings); binding.HasError())
             return binding;
         if (!controls.executeFrame)
             impl_->pendingEvent = controls.event;
@@ -244,7 +251,7 @@ namespace Horo::XR {
         if (!impl_->scenario)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         Impl::Operation operation{*impl_};
-        if (auto active = impl_->Activate(impl_->scenario->InitialState()); active.HasError())
+        if (auto active = impl_->Activate(&*impl_->scenario); active.HasError())
             return active;
         impl_->EndCapture(XRSimulatorCaptureState::Partial);
         impl_->pendingEvent.reset();
@@ -260,8 +267,8 @@ namespace Horo::XR {
         if (auto lane = impl_->Lane(); lane.HasError())
             return lane;
         Impl::Operation operation{*impl_};
-        const auto initial = impl_->scenario ? impl_->scenario->InitialState() : XRSimulatorInitialState::Focused;
-        if (auto active = impl_->Activate(initial); active.HasError())
+        const auto *scenario = impl_->scenario ? &*impl_->scenario : nullptr;
+        if (auto active = impl_->Activate(scenario); active.HasError())
             return active;
         impl_->EndCapture(XRSimulatorCaptureState::Partial);
         impl_->replay = false;

@@ -31,6 +31,7 @@ namespace {
         REQUIRE(runtime->Tick(Cutoff(2)).Value().consumed);
         REQUIRE_FALSE(runtime->Tick(Cutoff(3)).Value().consumed);
         REQUIRE(runtime->Snapshot().playback == XRSimulatorPlayback::Paused);
+        CHECK(runtime->Tracking() == nullptr);
     }
 
     TEST_CASE("Simulator focus tracking loss and terminal events revoke prior publication", "[xr][simulator][runtime]") {

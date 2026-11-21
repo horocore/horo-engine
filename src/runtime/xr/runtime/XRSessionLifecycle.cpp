@@ -113,6 +113,10 @@ namespace Horo::XR {
         }
     }  // namespace
 
+    std::optional<XRSessionState> NextXRSessionState(const XRSessionState current, const XRSessionEvent event) noexcept {
+        return IsLegalEvent(current, event) ? std::optional{StateForEvent(event)} : std::nullopt;
+    }
+
     /** @copydoc XRSessionLifecycle::XRSessionLifecycle */
     XRSessionLifecycle::XRSessionLifecycle(IXRSessionResources &resources) noexcept : resources_(&resources) {}
 
@@ -186,8 +190,8 @@ namespace Horo::XR {
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
         if (source != ownedSession_)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
-        const XRSessionState next = StateForEvent(event);
-        if (!IsLegalEvent(snapshot_.state, event))
+        const auto next = NextXRSessionState(snapshot_.state, event);
+        if (!next)
             return Result<void>::Failure(MakeError(XRSessionErrors::TransitionInvalid));
         if (event == XRSessionEvent::Ready) {
             if (!acceptedPlan_ || acceptedPlan_->System() != ownedSession_.system)
@@ -195,7 +199,7 @@ namespace Horo::XR {
             snapshot_.session = ownedSession_;
             snapshot_.capabilityRevision = acceptedPlan_->Revision();
         }
-        PublishState(next);
+        PublishState(*next);
         if (next == XRSessionState::Inactive || next == XRSessionState::Lost) {
             snapshot_.session = {};
             snapshot_.capabilityRevision = {};
