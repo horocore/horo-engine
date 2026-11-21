@@ -210,6 +210,14 @@ namespace Horo::Editor::Proposals {
         std::variant<SourcePathState, SourceDocumentSnapshot> evidence;
     };
 
+    /** @brief Inspects a project-relative destination without following redirects or granting write authority.
+     * @param path Exact portable source identity. @param root Canonical workspace root.
+     * @param files Host filesystem authority. @param stop Cooperative stop token.
+     * @return Evidence for the leaf, or the first blocking parent condition.
+     */
+    [[nodiscard]] SourcePathState ObserveSourceDestination(const SourceDocumentId &path, const std::filesystem::path &root,
+                                                           const DurableFileSystem &files, const CancellationToken &stop = {});
+
     /** @brief The first conflicting prerequisite of one file operation. */
     enum class PlanConflictReason : std::uint8_t {
         Unobserved,

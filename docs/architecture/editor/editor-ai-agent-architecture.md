@@ -798,6 +798,12 @@ owner rechecks the clean source and its native identity before moving it. The
 Trash entry preserves the original relative path and complete bytes. The tab
 closes after the native move reaches durability. A post-move failure attempts
 an exclusive move back to the original name, preserving any new occupant.
+The grouped Undo action restores the current deletion's witnessed payload
+only to its original project-relative path. It checks the path with the same
+no-follow destination inspection as the review and refuses a new file, case
+alias, redirect, open document, or replaced Trash payload. A failed restore
+after a visible move attempts to return the payload to Trash. Once restored,
+the file can be reopened through the normal Source route.
 Confirming a single reviewed rename moves the existing disk base with an
 exclusive same-filesystem rename. The editor rekeys the same document instance
 only after a durable move, retaining the open tab and text history. Accepted

@@ -3,6 +3,7 @@
 /** @file SourceReviewApplication.h @brief Deferred, explicitly requested application of a reviewed proposal. */
 #include "Horo/Editor/ProposedChangeSet.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/Foundation/Platform.h"
 
 namespace Horo::Editor {
     struct EditorWorkspaceViewCommandData;
@@ -31,10 +32,12 @@ namespace Horo::Editor {
          * @param jobs Host job system. @param root Authorized workspace root.
          * @param files Host filesystem authority, retained by the host until its job system drains.
          * @param open Source and registry owner for staged file operations.
+         * @param mutations Project mutation authority for restoring a deleted source.
          * @return True for a recognized command.
          */
         bool Process(const EditorWorkspaceViewCommandData &command, SourceDocumentService &documents, const JobSystem *jobs,
-                     const std::filesystem::path &root, const DurableFileSystem *files, SourceFileOpenService *open = nullptr);
+                     const std::filesystem::path &root, DurableFileSystem *files, SourceFileOpenService *open = nullptr,
+                     const ProjectMutationCoordinator *mutations = nullptr);
         /** @brief Polls one preparing job without waiting.
          * @param documents Current source owner. @param files Host filesystem authority.
          * @param open Source and registry owner for staged file operations.
@@ -85,6 +88,9 @@ namespace Horo::Editor {
         void Undo(const SourceEditBatch &receipt, SourceDocumentService &documents, const CancellationToken &lifetime);
         /** @brief Directs an exact unchanged draft undo through the owning document registry. */
         void UndoDraft(const SourceDocumentSnapshot &receipt, SourceFileOpenService *open, const CancellationToken &lifetime);
+        /** @brief Restores the current review's owned Trash payload without overwriting an existing file. */
+        void UndoDelete(const SourceDocumentSnapshot &receipt, SourceFileOpenService *open, DurableFileSystem *files,
+                        const ProjectMutationCoordinator *mutations, const CancellationToken &lifetime);
         /** @brief Observes the exact current renamed file before restoring its original name and buffer. */
         void StartRenameRestore(const SourceDocumentSnapshot &receipt, const JobSystem *jobs, const std::filesystem::path &root,
                                 const DurableFileSystem *files, const CancellationToken &lifetime);
@@ -111,6 +117,23 @@ namespace Horo::Editor {
         SourceDocumentSnapshot draft_;
         SourceDocumentSnapshot renamed_;
         SourceDocumentSnapshot beforeRename_;
+
+        /** @brief Owns the Trash paths and native identities observed by a completed deletion. */
+        struct DeletedSource final {
+            SourceDocumentSnapshot source;
+            std::filesystem::path original;
+            std::filesystem::path payload;
+            std::filesystem::path manifest;
+            std::optional<FileEntryIdentity> payloadIdentity;
+            std::optional<FileEntryIdentity> manifestIdentity;
+        };
+
+        /** @brief Restores a witnessed payload, or returns the resulting conflict or recovery disposition. */
+        static Proposals::SourceTransactionFeedback RestoreDeletedFile(DeletedSource &deleted, SourceFileOpenService &open,
+                                                                       DurableFileSystem &files,
+                                                                       const ProjectMutationCoordinator &mutations,
+                                                                       const CancellationToken &lifetime);
+        std::optional<DeletedSource> deleted_;
         std::shared_ptr<const Proposals::SourceReviewAudit> audit_;
         Proposals::SourceTransactionFeedback feedback_{};
         bool reverted_{};

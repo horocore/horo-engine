@@ -284,7 +284,7 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::ProcessSourceDocumentCommand */
     bool EditorWorkspaceController::ProcessSourceDocumentCommand(const EditorWorkspaceViewCommandData &command) {
         if (m_sourceReviews.Process(command, m_sourceOpenService.Documents(), m_sourceRecoveryJobs, ProjectRoot(), m_durableFiles,
-                                    &m_sourceOpenService)) {
+                                    &m_sourceOpenService, m_mutations)) {
             if (command.command == EditorWorkspaceViewCommand::UndoSourceReview)
                 RefreshSourceDocumentProjection();
             return true;

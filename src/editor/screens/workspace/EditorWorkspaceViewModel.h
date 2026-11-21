@@ -863,6 +863,7 @@ namespace Horo::Editor {
         SourceEditBatch sourceReviewUndo;
         SourceDocumentSnapshot sourceReviewDraftUndo;
         SourceDocumentSnapshot sourceReviewRenameUndo;
+        SourceDocumentSnapshot sourceReviewDeleteUndo;
         CancellationToken sourceReviewLifetime;
     };
 

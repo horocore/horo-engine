@@ -69,6 +69,22 @@ namespace Horo::Editor {
                    files.SyncDirectory(path.parent_path()).HasValue() && files.SyncDirectory(path.parent_path().parent_path()).HasValue();
         }
 
+        /** @brief Captures a Trash file's no-follow witness only at its exact physical path. */
+        std::optional<FileEntryIdentity> TrashFileIdentity(const DurableFileSystem &files, const std::filesystem::path &path) noexcept {
+            try {
+                std::error_code error;
+                if (std::filesystem::weakly_canonical(path, error) != path || error)
+                    return std::nullopt;
+                const auto observed = files.InspectEntry(path);
+                if (observed.HasError() || !observed.Value())
+                    return std::nullopt;
+                const auto &entry = *observed.Value();
+                return entry.kind == FileEntryKind::RegularFile && entry.hardLinks == 1 ? entry.identity : std::nullopt;
+            } catch (...) {
+                return std::nullopt;
+            }
+        }
+
         /** @brief Distinguishes lost source or workspace evidence from an invalid operation. */
         Feedback FailureFeedback(const Error &error, const Feedback fallback) {
             namespace Source = SourceDocumentErrors;
@@ -122,7 +138,7 @@ namespace Horo::Editor {
         });
         const bool renameUndo = renamed_.IsCurrent() && feedback_ != Feedback::RenameRecovery;
         return {feedback_,
-                !preparing_ && (groupUndo || draft_.IsCurrent() || renameUndo),
+                !preparing_ && (groupUndo || draft_.IsCurrent() || renameUndo || deleted_.has_value()),
                 audit_,
                 auditWrite_.has_value(),
                 auditHistoryError_,
@@ -169,6 +185,8 @@ namespace Horo::Editor {
         command.sourceReviewUndo = batch_;
         command.sourceReviewDraftUndo = draft_;
         command.sourceReviewRenameUndo = renamed_;
+        if (deleted_)
+            command.sourceReviewDeleteUndo = deleted_->source;
         command.sourceReviewLifetime = lifetime;
         command.command = EditorWorkspaceViewCommand::UndoSourceReview;
         return true;
@@ -176,8 +194,8 @@ namespace Horo::Editor {
 
     /** @copydoc SourceReviewTransactions::Process */
     bool SourceReviewTransactions::Process(const EditorWorkspaceViewCommandData &command, SourceDocumentService &documents,
-                                           const JobSystem *jobs, const std::filesystem::path &root, const DurableFileSystem *files,
-                                           SourceFileOpenService *open) {
+                                           const JobSystem *jobs, const std::filesystem::path &root, DurableFileSystem *files,
+                                           SourceFileOpenService *open, const ProjectMutationCoordinator *mutations) {
         switch (command.command) {
             case EditorWorkspaceViewCommand::ApplySourceReview:
                 Start(command.sourceReviewApplication, jobs, root, files, command.sourceReviewLifetime);
@@ -189,6 +207,8 @@ namespace Horo::Editor {
                     UndoDraft(command.sourceReviewDraftUndo, open, command.sourceReviewLifetime);
                 else if (command.sourceReviewRenameUndo.Revision())
                     StartRenameRestore(command.sourceReviewRenameUndo, jobs, root, files, command.sourceReviewLifetime);
+                else if (command.sourceReviewDeleteUndo.Revision())
+                    UndoDelete(command.sourceReviewDeleteUndo, open, files, mutations, command.sourceReviewLifetime);
                 else
                     Undo(command.sourceReviewUndo, documents, command.sourceReviewLifetime);
                 return true;
@@ -323,6 +343,7 @@ namespace Horo::Editor {
         draft_ = {};
         renamed_ = {};
         beforeRename_ = {};
+        deleted_.reset();
         committedFileOutcome_.reset();
         audit_ = std::move(outcome.audit);
         reverted_ = false;
@@ -360,6 +381,7 @@ namespace Horo::Editor {
         draft_ = std::move(staged).Value();
         renamed_ = {};
         beforeRename_ = {};
+        deleted_.reset();
         batch_ = {};
         committedFileOutcome_.reset();
         audit_ = std::move(creation.audit);
@@ -406,6 +428,7 @@ namespace Horo::Editor {
             RetireEmptyTrash(files, manifest, trash.Value(), ownsManifest);
             return false;
         }
+        DeletedSource receipt{deletion.source, path.Value(), saved, manifest, {}, TrashFileIdentity(files, manifest)};
         if (const auto latest = deletion.disk.RecheckSingle(root, deletion.source, files, lifetime); latest.HasError()) {
             feedback_ = FailureFeedback(latest.ErrorValue(), Feedback::ApplyFailed);
             RetireEmptyTrash(files, manifest, trash.Value(), ownsManifest);
@@ -422,7 +445,9 @@ namespace Horo::Editor {
             return false;
         }
         bool closed{};
-        if (moved.durable && deletion.source.IsCurrent()) {
+        if (moved.durable)
+            receipt.payloadIdentity = TrashFileIdentity(files, saved);
+        if (receipt.payloadIdentity && deletion.source.IsCurrent()) {
             try {
                 closed = open->CloseDocument(identity.instance).HasValue();
             } catch (const std::bad_alloc &) {
@@ -443,6 +468,9 @@ namespace Horo::Editor {
         draft_ = {};
         renamed_ = {};
         beforeRename_ = {};
+        deleted_.reset();
+        if (closed)
+            deleted_.emplace(std::move(receipt));
         committedFileOutcome_ = closed ? Proposals::SourceReviewDisposition::Saved : Proposals::SourceReviewDisposition::Stale;
         audit_ = std::move(deletion.audit);
         reverted_ = false;
@@ -468,6 +496,7 @@ namespace Horo::Editor {
         draft_ = {};
         renamed_ = std::move(moved).Value();
         beforeRename_ = std::move(rename.source);
+        deleted_.reset();
         committedFileOutcome_.reset();
         if (!renamed_.Dirty())
             committedFileOutcome_ = Proposals::SourceReviewDisposition::Saved;
@@ -646,5 +675,76 @@ namespace Horo::Editor {
         draft_ = {};
         reverted_ = true;
         feedback_ = Feedback::Undone;
+    }
+
+    /** @copydoc SourceReviewTransactions::RestoreDeletedFile */
+    Feedback SourceReviewTransactions::RestoreDeletedFile(DeletedSource &deleted, SourceFileOpenService &open, DurableFileSystem &files,
+                                                          const ProjectMutationCoordinator &mutations, const CancellationToken &lifetime) {
+        const auto &root = open.ProjectRoot();
+        const auto key = deleted.source.Identity().key;
+        const auto &relative = key.source.Value();
+        if (root / std::u8string{relative.begin(), relative.end()} != deleted.original)
+            return Feedback::Conflict;
+        const auto project = mutations.TryAcquire({root, ProjectMutationOwner::Asset, "source-review-trash"});
+        if (project.HasError())
+            return Feedback::UndoFailed;
+        const auto available = [&] {
+            return Proposals::ObserveSourceDestination(key.source, root, files, lifetime) == Proposals::SourcePathState::Absent;
+        };
+        if (open.DocumentRegistry().Find(key) || !available())
+            return lifetime.IsCancellationRequested() ? Feedback::Cancelled : Feedback::Conflict;
+        auto lockPath = deleted.original;
+        lockPath += ".horo-source.lock";
+        const auto lease = files.TryAcquireExclusive(lockPath, "horo.source_document");
+        if (lease.HasError())
+            return Feedback::UndoFailed;
+        const auto trash = deleted.payload.parent_path();
+        if (!available() || TrashFileIdentity(files, deleted.payload) != deleted.payloadIdentity)
+            return lifetime.IsCancellationRequested() ? Feedback::Cancelled : Feedback::Conflict;
+        if (lifetime.IsCancellationRequested())
+            return Feedback::Cancelled;
+
+        const auto restored = MoveObserved(files, deleted.payload, deleted.original);
+        if (restored.durable) {
+            const bool ownsManifest = deleted.manifestIdentity && TrashFileIdentity(files, deleted.manifest) == deleted.manifestIdentity;
+            RetireEmptyTrash(files, deleted.manifest, trash, ownsManifest);
+            return Feedback::Undone;
+        }
+        if (!restored.visible)
+            return Feedback::Conflict;
+        const auto returned = MoveObserved(files, deleted.original, deleted.payload);
+        if (returned.durable) {
+            deleted.payloadIdentity = TrashFileIdentity(files, deleted.payload);
+            if (deleted.payloadIdentity)
+                return Feedback::UndoFailed;
+        }
+        return Feedback::DeleteRecovery;
+    }
+
+    /** @copydoc SourceReviewTransactions::UndoDelete */
+    void SourceReviewTransactions::UndoDelete(const SourceDocumentSnapshot &receipt, SourceFileOpenService *open, DurableFileSystem *files,
+                                              const ProjectMutationCoordinator *mutations, const CancellationToken &lifetime) {
+        if (lifetime.IsCancellationRequested()) {
+            feedback_ = Feedback::Cancelled;
+            return;
+        }
+        feedback_ = Feedback::Conflict;
+        if (!deleted_ || !deleted_->source.SharesStateWith(receipt))
+            return;
+        feedback_ = Feedback::UndoFailed;
+        if (!open || !files || !mutations)
+            return;
+        try {
+            feedback_ = RestoreDeletedFile(*deleted_, *open, *files, *mutations, lifetime);
+            if (feedback_ == Feedback::Undone) {
+                deleted_.reset();
+                reverted_ = true;
+            } else if (feedback_ == Feedback::DeleteRecovery) {
+                deleted_.reset();
+                committedFileOutcome_ = Proposals::SourceReviewDisposition::Stale;
+            }
+        } catch (const std::bad_alloc &) {
+            // An allocation failure during admission leaves the Trash payload untouched.
+        }
     }
 }  // namespace Horo::Editor

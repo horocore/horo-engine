@@ -1,3 +1,4 @@
+#include "Horo/Foundation/Platform.h"
 #include "ProposedPatchInternal.h"
 
 #include <algorithm>
@@ -11,6 +12,49 @@ namespace Horo::Editor::Proposals {
         using PlanResult = Result<WorkspaceEditPlan>;
         using PlanEntry = std::variant<FilePreview, PlanConflict>;
         using ObservationIndex = std::map<std::string, const SourcePathObservation *>;
+
+        /** @brief Compares portable names without treating locale-specific folding as filesystem authority. */
+        bool PortableAlias(const std::u8string_view left, const std::u8string_view right) {
+            const auto fold = [](const char8_t value) {
+                return value >= u8'A' && value <= u8'Z' ? static_cast<char8_t>(value + (u8'a' - u8'A')) : value;
+            };
+            return std::ranges::equal(left, right, {}, fold, fold);
+        }
+
+        /** @brief Checks one exact child spelling and refuses redirects before stepping into a parent. */
+        SourcePathState InspectDestinationComponent(const std::filesystem::path &parent, const std::filesystem::path &name, const bool leaf,
+                                                    const DurableFileSystem &files, const CancellationToken &stop) {
+            constexpr std::size_t MaximumDirectoryEntries = 8192;
+            const auto entries = files.ListDirectory(parent, MaximumDirectoryEntries, stop);
+            if (entries.HasError())
+                return SourcePathState::Unavailable;
+            const auto spelling = name.generic_u8string();
+            const FileDirectoryEntry *exact{};
+            for (const auto &entry : entries.Value()) {
+                if (entry.name == name)
+                    exact = &entry;
+                else if (PortableAlias(entry.name.generic_u8string(), spelling))
+                    return SourcePathState::PortableAlias;
+            }
+            if (exact) {
+                if (exact->info.kind == FileEntryKind::Redirect)
+                    return SourcePathState::Redirect;
+                if (leaf)
+                    return SourcePathState::Occupied;
+                if (exact->info.kind != FileEntryKind::Directory)
+                    return SourcePathState::Unavailable;
+                const auto inspected = files.InspectEntry(parent / name);
+                return inspected.HasValue() && inspected.Value() && inspected.Value()->kind == FileEntryKind::Directory
+                           ? SourcePathState::Occupied
+                           : SourcePathState::Unavailable;
+            }
+            if (!leaf)
+                return SourcePathState::ParentMissing;
+            const auto inspected = files.InspectEntry(parent / name);
+            if (inspected.HasError())
+                return SourcePathState::Unavailable;
+            return inspected.Value() ? SourcePathState::Occupied : SourcePathState::Absent;
+        }
 
         /** @brief Presents the source, result and original-byte edits of one canonical operation. */
         struct Operation final {
@@ -313,6 +357,26 @@ namespace Horo::Editor::Proposals {
             }
         }
     }  // namespace
+
+    /** @copydoc ObserveSourceDestination */
+    SourcePathState ObserveSourceDestination(const SourceDocumentId &path, const std::filesystem::path &root,
+                                             const DurableFileSystem &files, const CancellationToken &stop) {
+        if (!path.IsValid() || !root.is_absolute() || stop.IsCancellationRequested())
+            return SourcePathState::Unavailable;
+        const auto entry = files.InspectEntry(root);
+        if (entry.HasError() || !entry.Value() || entry.Value()->kind != FileEntryKind::Directory)
+            return SourcePathState::Unavailable;
+        auto parent = root;
+        const auto &text = path.Value();
+        const std::filesystem::path relative{std::u8string{text.begin(), text.end()}};
+        for (const auto &name : relative.parent_path()) {
+            const auto state = InspectDestinationComponent(parent, name, false, files, stop);
+            if (state != SourcePathState::Occupied)
+                return state;
+            parent /= name;
+        }
+        return InspectDestinationComponent(parent, relative.filename(), true, files, stop);
+    }
 
     /** @copydoc PlanWorkspaceEdits */
     Result<WorkspaceEditPlan> PlanWorkspaceEdits(const ChangeSet &proposal, const ProjectPolicy &policy,

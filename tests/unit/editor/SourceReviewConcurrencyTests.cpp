@@ -304,6 +304,14 @@ namespace {
         REQUIRE(QueueSourceReviewApplication("workspace", decisions, policy, plan, lifetime.Token(), apply));
         REQUIRE(reviews.Process(apply, open.Documents(), &jobs, project.directory, &files, &open));
         auto expected = SourceTransactionFeedback::Deleted;
+        enum class Restoration {
+            None,
+            Original,
+            Collision,
+            ReplacedPayload,
+            FailedDurability
+        };
+        auto restoration = Restoration::None;
         SECTION("A newer user edit prevents removal") {
             REQUIRE(open.Documents().Edit(identity.instance, {source.Revision(), 0, 0, "authored "}).HasValue());
             expected = SourceTransactionFeedback::Conflict;
@@ -322,6 +330,18 @@ namespace {
             expected = SourceTransactionFeedback::DeleteRecovery;
         }
         SECTION("Confirmation moves the exact saved source to Trash") {}
+        SECTION("Review undo restores the file without creating a new draft") {
+            restoration = Restoration::Original;
+        }
+        SECTION("Review undo preserves a case alias that now occupies the original name") {
+            restoration = Restoration::Collision;
+        }
+        SECTION("Review undo rejects a replaced Trash payload") {
+            restoration = Restoration::ReplacedPayload;
+        }
+        SECTION("A failed restore returns the payload to Trash and can be retried") {
+            restoration = Restoration::FailedDurability;
+        }
         const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
         while (reviews.Status().feedback == SourceTransactionFeedback::Preparing && std::chrono::steady_clock::now() < deadline) {
             static_cast<void>(reviews.Poll(open.Documents(), &files, &open, &host, &mutations));
@@ -358,9 +378,55 @@ namespace {
             const auto first = std::filesystem::directory_iterator{trash};
             REQUIRE(first != std::filesystem::directory_iterator{});
             const auto &item = first->path();
-            std::ifstream saved(item / "payload", std::ios::binary);
-            CHECK((std::string{std::istreambuf_iterator<char>{saved}, {}} == "saved content"));
+            const auto payload = item / "payload";
+            {
+                std::ifstream saved(payload, std::ios::binary);
+                CHECK((std::string{std::istreambuf_iterator<char>{saved}, {}} == "saved content"));
+            }
             CHECK(std::filesystem::is_regular_file(item / "source-review-manifest"));
+            if (restoration == Restoration::None)
+                return;
+            const auto alias = project.directory / "Code.cpp";
+            if (restoration == Restoration::Collision)
+                std::ofstream(alias, std::ios::binary) << "other author";
+            if (restoration == Restoration::ReplacedPayload) {
+                REQUIRE(std::filesystem::remove(payload));
+                std::ofstream(payload, std::ios::binary) << "saved content";
+            }
+            const auto undo = [&] {
+                EditorWorkspaceViewCommandData revert;
+                REQUIRE(reviews.QueueUndo(lifetime.Token(), revert));
+                REQUIRE(reviews.Process(revert, open.Documents(), &jobs, project.directory, &files, &open, &mutations));
+            };
+            if (restoration == Restoration::FailedDurability) {
+                files.failAfterCommit = true;
+                undo();
+                REQUIRE(reviews.Status().feedback == SourceTransactionFeedback::UndoFailed);
+                CHECK_FALSE(std::filesystem::exists(native));
+                CHECK(std::filesystem::is_regular_file(payload));
+            }
+            undo();
+            if (restoration == Restoration::Collision || restoration == Restoration::ReplacedPayload) {
+                CHECK(reviews.Status().feedback == SourceTransactionFeedback::Conflict);
+                CHECK(std::filesystem::is_regular_file(payload));
+                if (restoration == Restoration::Collision) {
+                    std::ifstream disk(alias, std::ios::binary);
+                    CHECK((std::string{std::istreambuf_iterator<char>{disk}, {}} == "other author"));
+                } else {
+                    CHECK_FALSE(std::filesystem::exists(native));
+                }
+                return;
+            }
+            CHECK(reviews.Status().feedback == SourceTransactionFeedback::Undone);
+            CHECK(reviews.Status().disposition == SourceReviewDisposition::Reverted);
+            CHECK_FALSE(reviews.Status().canUndo);
+            CHECK_FALSE(std::filesystem::exists(payload));
+            CHECK_FALSE(std::filesystem::exists(item));
+            const auto reopened = open.Open({.path = "code.cpp"});
+            REQUIRE(reopened.HasValue());
+            REQUIRE(reopened.Value().sourceSnapshot);
+            CHECK(reopened.Value().sourceSnapshot->Text() == "saved content");
+            CHECK_FALSE(reopened.Value().sourceSnapshot->Dirty());
         } else {
             CHECK(open.DocumentRegistry().Find(identity.instance) == identity);
             CHECK(std::filesystem::is_regular_file(native));
