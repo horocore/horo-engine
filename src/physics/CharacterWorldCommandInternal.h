@@ -99,6 +99,11 @@ namespace Horo::Character::Detail {
         return left.sequence < right.sequence;
     }
 
+    /** @brief Orders copied commands without involving their staging provenance. */
+    void SortFrozenCommands(auto &commands) noexcept {
+        std::ranges::sort(commands, CommandLess, &CharacterFrozenMovement::request);
+    }
+
     /** @brief Releases the attempted tick exclusion and completes deferred owner shutdown. */
     void ReleaseTick(auto &impl) noexcept {
         impl.debug.End();
@@ -134,7 +139,8 @@ namespace Horo::Character::Detail {
     /** @brief Validates a frozen frame completely before queue or controller publication changes. */
     [[nodiscard]] Result<void> ValidateFrozenCommands(auto &impl) {
         for (std::size_t index = 0; index < impl.fastPath.CommandScratch().size(); ++index) {
-            const CharacterMovementRequest &command = impl.fastPath.CommandScratch()[index];
+            const auto &commands = impl.fastPath.CommandScratch();
+            const CharacterMovementRequest &command = commands[index].request;
             if (const auto valid = ValidateCharacterMovementRequest(command, impl.descriptor.sceneGeneration, impl.descriptor.identity);
                 valid.HasError())
                 return valid;
@@ -143,8 +149,8 @@ namespace Horo::Character::Detail {
                 return Result<void>::Failure(record.ErrorValue());
             if (command.sequence <= record.Value()->lastSequence)
                 return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
-            if (index != 0 && impl.fastPath.CommandScratch()[index - 1].controller == command.controller &&
-                impl.fastPath.CommandScratch()[index - 1].sequence == command.sequence)
+            if (index != 0 && commands[index - 1].request.controller == command.controller &&
+                commands[index - 1].request.sequence == command.sequence)
                 return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
         }
         return Result<void>::Success();
@@ -152,8 +158,10 @@ namespace Horo::Character::Detail {
 
     /** @brief Retires the frozen frame's queue entries and advances the producer watermark under the queue lock. */
     void CloseCommandFrame(auto &impl, const std::uint64_t tick) noexcept {
-        for (const CharacterMovementRequest &command : impl.fastPath.CommandScratch())
-            impl.closedSequences[command.controller.slot.index] = command.sequence;
+        for (const auto &frozen : impl.fastPath.CommandScratch()) {
+            if (!frozen.sceneOnly)
+                impl.closedSequences[frozen.request.controller.slot.index] = frozen.request.sequence;
+        }
         std::erase_if(impl.fastPath.Commands(), [tick](const CharacterQueuedMovement &queued) {
             return queued.request.tick == tick;
         });
@@ -184,15 +192,75 @@ namespace Horo::Character::Detail {
         impl.fastPath.CommandScratch().clear();
         for (const CharacterQueuedMovement &queued : impl.fastPath.Commands()) {
             if (queued.request.tick == input.tick)
-                impl.fastPath.CommandScratch().push_back(queued.request);
+                impl.fastPath.CommandScratch().push_back({queued.request});
         }
-        std::ranges::sort(impl.fastPath.CommandScratch(), CommandLess);
+        SortFrozenCommands(impl.fastPath.CommandScratch());
         if (const auto valid = ValidateFrozenCommands(impl); valid.HasError())
             return valid;
         if (retainForScene)
             impl.frozenSceneTick.store(input.tick);
         else
             CloseCommandFrame(impl, input.tick);
+        return Result<void>::Success();
+    }
+
+    /** @brief Merges validated Animation intent with the last gameplay command or makes a bounded root-only command. */
+    [[nodiscard]] Result<void> MergeSceneRootMotion(auto &impl, const CharacterSceneRootMotion &root, std::size_t queued,
+                                                    std::uint64_t tick) {
+        const auto record = impl.controllers.Resolve(root.controller);
+        if (record.HasError())
+            return Result<void>::Failure(record.ErrorValue());
+
+        auto &commands = impl.fastPath.CommandScratch();
+        const auto gameplay = std::span{commands}.first(queued);
+        const auto after = std::ranges::upper_bound(gameplay, root.controller, {}, [](const auto &frozen) {
+            return frozen.request.controller;
+        });
+        auto *selected =
+            after != gameplay.begin() && std::prev(after)->request.controller == root.controller ? &*std::prev(after) : nullptr;
+        CharacterMovementRequest request =
+            selected ? selected->request
+                     : CharacterMovementRequest{.controller = root.controller,
+                                                .tick = tick,
+                                                .sequence = std::max(std::uint64_t{1}, record.Value()->lastSequence)};
+        if (request.rootMotion)
+            return Result<void>::Failure(
+                MakeError(CharacterErrors::RequestInvalid, "Two sources provided root motion for one controller."));
+        request.rootMotion = root.intent;
+        if (const auto valid = ValidateCharacterMovementRequest(request, impl.descriptor.sceneGeneration, impl.descriptor.identity);
+            valid.HasError())
+            return valid;
+        if (const auto admitted = ValidateCommandMutationState(*record.Value(), request); admitted.HasError())
+            return admitted;
+        if (selected) {
+            selected->request.rootMotion = root.intent;
+            return Result<void>::Success();
+        }
+        if (commands.size() >= impl.settings.Values().work.maximumCommandsPerTick)
+            return Result<void>::Failure(MakeError(CharacterErrors::CapacityExceeded));
+        commands.push_back({request, true});
+        return Result<void>::Success();
+    }
+
+    /** @brief Admits unique sorted Scene packets before querying any controller. */
+    [[nodiscard]] Result<void> ApplySceneRootMotion(auto &impl, const CharacterSceneTickAttempt attempt,
+                                                    const std::span<const CharacterSceneRootMotion> roots) {
+        if (roots.empty())
+            return Result<void>::Success();
+        if (roots.size() > impl.settings.Values().capacities.maximumControllers)
+            return Result<void>::Failure(MakeError(CharacterErrors::CapacityExceeded));
+        const auto registryLock = impl.synchronization.LockRegistry();
+        auto &commands = impl.fastPath.CommandScratch();
+        const auto queued = commands.size();
+        for (std::size_t index{}; index < roots.size(); ++index) {
+            const auto &root = roots[index];
+            if (root.intent.source.attempt != attempt.attempt || (index != 0 && !(roots[index - 1].controller < root.controller)))
+                return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
+            if (const auto merged = MergeSceneRootMotion(impl, root, queued, attempt.tick); merged.HasError())
+                return merged;
+        }
+        if (commands.size() != queued)
+            SortFrozenCommands(commands);
         return Result<void>::Success();
     }
 
@@ -415,7 +483,7 @@ namespace Horo::Character::Detail {
 
     /** @brief Identifies the final replacement for one controller in sorted command scratch. */
     [[nodiscard]] bool IsFinalCommand(const auto &commands, const std::size_t index) noexcept {
-        return index + 1 == commands.size() || commands[index + 1].controller != commands[index].controller;
+        return index + 1 == commands.size() || commands[index + 1].request.controller != commands[index].request.controller;
     }
 
     /** @brief Builds and validates one immutable post-tick publication candidate. */
@@ -460,13 +528,16 @@ namespace Horo::Character::Detail {
     }
 
     /** @brief Resolves final commands into validated movement candidates without mutating records. */
-    [[nodiscard]] Result<std::uint32_t> ResolveCommandFrame(auto &impl, const CharacterFixedTickInput &input) {
+    [[nodiscard]] Result<std::uint32_t> ResolveCommandFrame(auto &impl, const CharacterFixedTickInput &input,
+                                                            const std::uint64_t sceneAttempt = 0) {
         std::uint32_t applied{};
         auto &movementResults = impl.fastPath.MovementResults();
         for (std::size_t index = 0; index < impl.fastPath.CommandScratch().size(); ++index) {
-            const CharacterMovementRequest &command = impl.fastPath.CommandScratch()[index];
+            const CharacterMovementRequest &command = impl.fastPath.CommandScratch()[index].request;
             if (!IsFinalCommand(impl.fastPath.CommandScratch(), index))
                 continue;
+            if (sceneAttempt != 0 && command.rootMotion && command.rootMotion->source.attempt != sceneAttempt)
+                return Result<std::uint32_t>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
             CharacterControllerMotionInput previous;
             CharacterControllerDescriptor descriptor;
             bool spawned{};
@@ -509,7 +580,7 @@ namespace Horo::Character::Detail {
         for (std::size_t index = 0; index < impl.fastPath.CommandScratch().size(); ++index) {
             if (!IsFinalCommand(impl.fastPath.CommandScratch(), index))
                 continue;
-            const CharacterMovementRequest &command = impl.fastPath.CommandScratch()[index];
+            const CharacterMovementRequest &command = impl.fastPath.CommandScratch()[index].request;
             const auto record = impl.controllers.Resolve(command.controller);
             if (record.HasError())
                 return Result<void>::Failure(record.ErrorValue());
@@ -566,13 +637,16 @@ namespace Horo::Character::Detail {
     }
 
     /** @brief Commits one final command and its already-preflighted immutable publication. */
-    [[nodiscard]] Result<void> CommitCommand(auto &impl, const CharacterMovementRequest &command, const std::uint64_t tick,
+    [[nodiscard]] Result<void> CommitCommand(auto &impl, const CharacterFrozenMovement &frozen, const std::uint64_t tick,
                                              std::size_t &movementResultIndex) {
+        const auto &command = frozen.request;
         const auto record = impl.controllers.ResolveMutable(command.controller);
         if (record.HasError())
             return Result<void>::Failure(record.ErrorValue());
-        record.Value()->lastMovement = command;
-        record.Value()->lastSequence = command.sequence;
+        if (!frozen.sceneOnly) {
+            record.Value()->lastMovement = command;
+            record.Value()->lastSequence = command.sequence;
+        }
         if (!record.Value()->spawned)
             return Result<void>::Success();
         if (movementResultIndex >= impl.fastPath.MovementResults().size())

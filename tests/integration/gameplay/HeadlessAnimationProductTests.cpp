@@ -67,6 +67,39 @@ namespace Horo::Network::AnimationProduct {
     }
 
 #if HORO_TEST_PHYSICS_NATIVE
+    TEST_CASE("Actual Headless product resolves cooked root motion without a gameplay command",
+              "[animation][headless][product][root-motion]") {
+        const bool listenPair = GENERATE(false, true);
+        Fixture fixture(true, listenPair, {}, true);
+        CHECK_FALSE(fixture.trace->Observe().rootMotion);
+        REQUIRE(fixture.Tick().HasValue());
+        const auto first = fixture.trace->Observe().rootMotion;
+        REQUIRE(first);
+        CHECK(first->disposition == Runtime::SceneRootMotionDisposition::Consumed);
+        CHECK(first->request.id.tick.Value() == 1);
+        CHECK(std::abs(first->applied.translation.x - 0.2F) < 0.00001F);
+        CHECK(std::abs(first->remaining.translation.x) < 0.00001F);
+        const auto unbound = App::InspectHeadlessAnimationEntity(*fixture.trace->entries[0].service, {4});
+        REQUIRE(unbound);
+        const auto unavailable = Take(fixture.trace->Owner()->Query(*unbound)).rootMotion;
+        REQUIRE(unavailable);
+        CHECK(unavailable->disposition == Runtime::SceneRootMotionDisposition::Unavailable);
+        REQUIRE(fixture.Tick().HasValue());
+        const auto second = fixture.trace->Observe().rootMotion;
+        REQUIRE(second);
+        CHECK(second->request.id.tick.Value() == 2);
+        CHECK(second->request.id.generation > first->request.id.generation);
+        CHECK(second->disposition == Runtime::SceneRootMotionDisposition::Consumed);
+        if (listenPair) {
+            const Runtime::SceneRuntimeId client{72};
+            const auto *replica = fixture.trace->Owner(client);
+            REQUIRE(replica);
+            const auto observed = Take(replica->Query(fixture.trace->Entity(client)));
+            REQUIRE(observed.component);
+            CHECK_FALSE(observed.rootMotion);
+        }
+    }
+
     TEST_CASE("Actual configured Headless product commits real cooked Graph or Clip pose once after native fixed work",
               "[animation][headless][product][canonical]") {
         bool clip{};

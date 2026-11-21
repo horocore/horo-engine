@@ -14,11 +14,19 @@ namespace Horo::Character::Detail {
         [[nodiscard]] constexpr auto operator<=>(const CharacterSceneTickAttempt &) const noexcept = default;
     };
 
+    /** @brief Animation intent for one exact scene-bound controller. */
+    struct CharacterSceneRootMotion final {
+        CharacterControllerHandle controller;
+        CharacterRootMotionIntent intent;
+    };
+
     /** @brief Synchronous input from the paired Scene Physics owner. */
     struct CharacterSceneFixedInput final {
         Duration delta;
         CharacterPhysicsQueryContext query;
         std::span<const Physics::PhysicsKinematicTargetCommand> platformTargets;
+        std::span<const CharacterSceneRootMotion>
+            rootMotion; /**< Strictly sorted by controller, with one entry per receiving controller. */
     };
 
     /** @brief Splits the existing command solver from its publication for scheduler-owned composition. */

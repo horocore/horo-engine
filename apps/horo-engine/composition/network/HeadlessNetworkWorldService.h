@@ -846,15 +846,27 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 if (animation.HasError())
                     return animation;
             }
-            auto advanced = record_->native.AdvanceFixedTick(context.fixedDelta);
+            auto advanced = AdvanceConfiguredNative(context);
             if (advanced.HasError()) {
                 if (gameplay_)
                     gameplay_->Shutdown();
                 return advanced;
             }
-            if (record_->navigationPath)
-                record_->navigationPath->DispatchAtFixedTick(context.simulationTick);
             return Result<void>::Success();
+        }
+
+        /** @brief Keeps authoritative Character candidates under the same scheduler fence as their Animation owner. */
+        Result<void> AdvanceConfiguredNative(const Runtime::FixedStepContext &context) {
+            if (record_->animation && record_->request.world != Network::NetworkModeWorldKind::Client) {
+                const auto scene = record_->scenes->ActiveScene();
+                if (!scene)
+                    return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
+                return record_->native.StageAnimationFixedTick(*scene, *record_->animation, context);
+            }
+            auto advanced = record_->native.AdvanceFixedTick(context.fixedDelta);
+            if (advanced.HasValue() && record_->navigationPath)
+                record_->navigationPath->DispatchAtFixedTick(context.simulationTick);
+            return advanced;
         }
 
         /** @brief Prepare only canonical Physics for this exact paired Scene; no fallback or ambient lookup. */

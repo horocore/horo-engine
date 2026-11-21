@@ -287,6 +287,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 return Result<void>::Failure(MakeError(InvalidProjectScene, "Animation runtime identity admission failed."));
             Runtime::SceneAnimationRuntimeConfig config{selected.dispatch,          identity.identity, selected.target,
                                                         animationLifetime_.Token(), selected.limits,   selected.inputs};
+            config.enableRootMotionRequests = policy.physicsMode == Physics::PhysicsRuntimeMode::Canonical;
             auto created = Runtime::SceneAnimationRuntime::Create(std::move(config));
             if (created.HasError())
                 return Result<void>::Failure(created.ErrorValue());
@@ -565,18 +566,26 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         }
 
         Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context) override {
-            if (animation_) {
-                if (auto evaluated = animation_->OnFixedUpdate(context); evaluated.HasError())
-                    return evaluated;
-            }
-            return native_.AdvanceFixedTick(context.fixedDelta);
+            if (!animation_)
+                return native_.AdvanceFixedTick(context.fixedDelta);
+            if (auto evaluated = animation_->OnFixedUpdate(context); evaluated.HasError())
+                return evaluated;
+            const auto scene = scenes_->ActiveScene();
+            if (!scene)
+                return Result<void>::Failure(MakeError(InvalidProjectScene));
+            return native_.StageAnimationFixedTick(*scene, *animation_, context);
         }
 
         Result<void> PrepareRuntimeFixedCommit(const Runtime::FixedStepContext &context) override {
-            return animation_ ? animation_->PrepareFixedCommit(context) : Result<void>::Success();
+            if (!animation_)
+                return Result<void>::Success();
+            if (auto prepared = animation_->PrepareFixedCommit(context); prepared.HasError())
+                return prepared;
+            return native_.PrepareAnimationFixedCommit(context);
         }
 
         void CommitRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+            native_.CommitAnimationFixedTick(context);
             if (animation_)
                 animation_->CommitFixedUpdate(context);
             if (decisionTickPending_) {
@@ -586,6 +595,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         }
 
         void AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
+            native_.AbortAnimationFixedTick(context);
             if (animation_)
                 animation_->AbortFixedUpdate(context);
             decisionTickPending_ = false;

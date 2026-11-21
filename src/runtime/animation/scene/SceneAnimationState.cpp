@@ -8,6 +8,14 @@ namespace Horo::Runtime {
     namespace A = Animation;
     using namespace AnimationSceneInternal;
 
+    namespace {
+        /** @brief Only a simulation instance may extract an authored movement request. */
+        bool RequestsRootMotion(A::RootMotionPolicy policy, A::AnimationEvaluationDomain domain) noexcept {
+            return policy == A::RootMotionPolicy::RequestCharacterMovement &&
+                   domain == A::AnimationEvaluationDomain::AuthoritativeSimulation;
+        }
+    }  // namespace
+
     SceneAnimationRuntime::State::State(SceneAnimationRuntimeConfig value) : config(std::move(value)) {}
 
     SceneAnimationRuntime::State::Actor::Actor(PreparedAssets prepared, A::AnimationGraphInstance instanceOwner, EntityRef owner,
@@ -66,7 +74,7 @@ namespace Horo::Runtime {
             return Return::Failure(MakeError(A::AnimationErrors::GenerationExhausted));
         const auto generation = nextGeneration++;
         const auto &component = *entity.components->animation;
-        const bool requestsMotion = component.rootMotion == A::RootMotionPolicy::RequestCharacterMovement;
+        const bool requestsMotion = RequestsRootMotion(component.rootMotion, config.evaluationDomain);
         if (requestsMotion && !config.enableRootMotionRequests)
             return Return::Failure(MakeError(A::AnimationAssetErrors::Unsupported));
         A::AnimationCookedContext codec;

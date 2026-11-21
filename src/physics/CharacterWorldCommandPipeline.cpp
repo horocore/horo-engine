@@ -175,13 +175,11 @@ namespace Horo::Character {
         impl.tickQueries = 0;
         if (const auto frozen = FreezeCommandFrame(impl, input, true); frozen.HasError())
             return frozen;
-        const auto resolved = ResolveCommandFrame(impl, input);
+        if (const auto merged = ApplySceneRootMotion(impl, attempt, source.rootMotion); merged.HasError())
+            return merged;
+        const auto resolved = ResolveCommandFrame(impl, input, attempt.attempt);
         if (resolved.HasError())
             return Result<void>::Failure(resolved.ErrorValue());
-        if (std::ranges::any_of(impl.fastPath.MovementResults(), [attempt](const auto &movement) {
-            return movement.rootMotion.has_value() && movement.rootMotion->source.attempt != attempt.attempt;
-        }))
-            return Result<void>::Failure(MakeError(CharacterErrors::CommandOrderInvalid));
 
         const auto registryLock = impl.synchronization.LockRegistry();
         const auto publicationLock = impl.synchronization.LockPublication();

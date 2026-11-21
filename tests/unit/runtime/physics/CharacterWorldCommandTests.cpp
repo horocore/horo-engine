@@ -424,6 +424,33 @@ namespace Horo::Character {
             CHECK(CharacterSceneFixedAccess::ReadRootMotion(world, attempt, spawned.controller).HasError());
         }
 
+        TEST_CASE("Scene root motion combines with the selected gameplay command and preserves its sequence",
+                  "[physics][character][root-motion]") {
+            using Detail::CharacterSceneFixedAccess;
+            auto spawned = SpawnedActiveWorldWithController();
+            auto &world = *spawned.world;
+            const std::array roots{Detail::CharacterSceneRootMotion{spawned.controller, {{8, 1}, {{0.1F, 0, 0}, {}}}}};
+            REQUIRE(CharacterSceneFixedAccess::Stage(world, {1, 1}, {.delta = FixedTick(1).fixedDelta, .rootMotion = roots}).HasValue());
+            CharacterSceneFixedAccess::Commit(world, {1, 1});
+            CHECK(world.ControllerTransform(spawned.controller).Value().position.x == Catch::Approx(0.1F));
+
+            auto gameplay = Movement(spawned.controller, 2, 1);
+            gameplay.desiredVelocityMetersPerSecond = Math::Vec3{};
+            REQUIRE(world.QueueMovementCommand(gameplay).HasValue());
+            auto following = roots;
+            following.front().intent.source = {9, 2};
+            REQUIRE(
+                CharacterSceneFixedAccess::Stage(world, {2, 2}, {.delta = FixedTick(2).fixedDelta, .rootMotion = following}).HasValue());
+            const auto feedback = CharacterSceneFixedAccess::ReadRootMotion(world, {2, 2}, spawned.controller);
+            REQUIRE(feedback.HasValue());
+            REQUIRE(feedback.Value());
+            CHECK(feedback.Value()->applied.translation == Math::Vec3{});
+            CHECK(feedback.Value()->remaining.translation.x == Catch::Approx(0.1F));
+            CharacterSceneFixedAccess::Commit(world, {2, 2});
+            CHECK(world.ControllerTransform(spawned.controller).Value().position.x == Catch::Approx(0.1F));
+            CHECK(world.QueueMovementCommand(Movement(spawned.controller, 3, 1)).HasError());
+        }
+
         TEST_CASE("Character capsule sweep rejects stale snapshots and malformed hit evidence without publication",
                   "[physics][character][world][sweep][validation]") {
             auto spawned = SpawnedActiveWorldWithController();

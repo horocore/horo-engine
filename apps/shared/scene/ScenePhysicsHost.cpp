@@ -1,13 +1,138 @@
 #include "ScenePhysicsHost.h"
 
+#include "Horo/Foundation/JobSystem.h"
 #include "Horo/Physics/PhysicsErrors.h"
+#include "Horo/Runtime/Scene/SceneAnimationRuntime.h"
 
 #include <algorithm>
+#include <exception>
 #include <new>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace Horo::Application::Internal {
+    namespace {
+        using Scope = Physics::Detail::PhysicsSceneHostScope;
+        using FixedAccess = Character::Detail::CharacterSceneFixedAccess;
+        using Attempt = Character::Detail::CharacterSceneTickAttempt;
+        using QueryContext = Character::CharacterPhysicsQueryContext;
+
+        /** @brief Admits the same previous native publication for ordinary and staged Character ticks. */
+        Result<QueryContext> PrepareCharacterQuery(const Scope &scope, Character::CharacterPhysicsQueryAdapter &adapter,
+                                                   std::uint64_t tick) {
+            if (const auto processed = scope.physics.ProcessQueryBatch(); processed.HasError())
+                return Result<QueryContext>::Failure(processed.ErrorValue());
+            const auto current = scope.physics.PublishedTick();
+            const auto &descriptor = scope.character.Descriptor();
+            if (current.publicationRevision != 0) {
+                if (const auto refreshed = scope.character.RefreshPhysicsSnapshot(scope.physics.Identity(), current.publicationRevision);
+                    refreshed.HasError())
+                    return Result<QueryContext>::Failure(refreshed.ErrorValue());
+            } else if (current.completedTick != 0 || scope.character.PublishedTick().completedTick != 0 ||
+                       descriptor.sceneGeneration != scope.scene.value || descriptor.physicsWorld != scope.physics.Identity()) {
+                return Result<QueryContext>::Failure(
+                    MakeError(Physics::PhysicsErrors::QuerySnapshotStale,
+                              "Only the exact unticked Scene-owned pair may use its prepared Character query context."));
+            }
+            return Result<QueryContext>::Success(adapter.Context({descriptor.sceneGeneration, descriptor.identity, descriptor.physicsWorld,
+                                                                  descriptor.collisionFilterGeneration, descriptor.originGeneration, tick,
+                                                                  descriptor.physicsSnapshotRevision}));
+        }
+
+        /** @brief Checks the actor's declared policy before calling the Animation owner. */
+        bool RequestsCharacterMotion(const Runtime::RuntimeEntityView &actor) noexcept {
+            return actor.components && actor.components->animation &&
+                   actor.components->animation->rootMotion == Animation::RootMotionPolicy::RequestCharacterMovement;
+        }
+    }  // namespace
+
+    /** @brief Bounded per-host input/receipt storage and the exact native attempt retained by the scheduler. */
+    struct ScenePhysicsHost::AnimationFixedState final {
+        enum class NativeStep {
+            Pending,
+            Attempted,
+            Completed
+        };
+
+        struct Receipt final {
+            Character::CharacterControllerHandle controller;
+            Runtime::SceneRootMotionRequest request;
+        };
+
+        struct Pending final {
+            Runtime::SceneRuntimeId scene;
+            Attempt attempt;
+            NativeStep step{NativeStep::Pending};
+        };
+
+        std::vector<Character::Detail::CharacterSceneRootMotion> roots;
+        std::vector<Receipt> receipts;
+        std::optional<Pending> pending;
+        std::optional<Runtime::SceneRuntimeId> failedScene;
+
+        explicit AnimationFixedState(std::size_t capacity) {
+            roots.reserve(capacity);
+            receipts.reserve(capacity);
+        }
+
+        /** @brief Excludes overlap with a pending tick or an irreversible failed native step. */
+        bool MayStart(Runtime::SceneRuntimeId scene) const noexcept {
+            return !pending && failedScene != scene;
+        }
+
+        /** @brief Copies current root requests only from entities with a resident controller. */
+        Result<void> Collect(const Scope &scope, const Runtime::RuntimeSceneView &scene, Runtime::SceneAnimationRuntime &animation,
+                             const Runtime::FixedStepContext &context) {
+            roots.clear();
+            receipts.clear();
+            if (scope.characterBindings.size() > std::min(roots.capacity(), receipts.capacity()))
+                return Result<void>::Failure(MakeError(Physics::PhysicsErrors::CapacityExceeded));
+            for (const auto &binding : scope.characterBindings) {
+                const auto entity = scene.Find(binding.object);
+                if (!entity)
+                    continue;
+                const auto actor = scene.Get(*entity);
+                if (actor.HasError())
+                    return Result<void>::Failure(actor.ErrorValue());
+                if (!RequestsCharacterMotion(actor.Value()))
+                    continue;
+                const auto claimed = animation.ClaimRootMotion(*entity, context);
+                if (claimed.HasError())
+                    return Result<void>::Failure(claimed.ErrorValue());
+                if (const auto &request = claimed.Value(); request) {
+                    roots.push_back({binding.handle,
+                                     {{request->id.tick.Value(), request->id.generation.Value()},
+                                      {request->delta.translation, request->delta.rotation},
+                                      Character::CharacterRootTranslation::Suggest,
+                                      Character::CharacterRootRotation::Additive}});
+                    receipts.emplace_back(binding.handle, *request);
+                }
+            }
+            std::ranges::sort(roots, {}, &Character::Detail::CharacterSceneRootMotion::controller);
+            return Result<void>::Success();
+        }
+
+        /** @brief Returns preflighted solver feedback to the original claimed animation instance. */
+        Result<void> Resolve(const Scope &scope, Runtime::SceneAnimationRuntime &animation, const Runtime::FixedStepContext &context,
+                             Attempt attempt) const {
+            for (const auto &receipt : receipts) {
+                const auto feedback = FixedAccess::ReadRootMotion(scope.character, attempt, receipt.controller);
+                if (feedback.HasError())
+                    return Result<void>::Failure(feedback.ErrorValue());
+                if (!feedback.Value())
+                    return Result<void>::Failure(MakeError(Physics::PhysicsErrors::InvalidState));
+                const auto &applied = feedback.Value()->applied;
+                if (auto resolved =
+                        animation.ResolveRootMotion(receipt.request.entity, receipt.request.id,
+                                                    Animation::AnimationRootMotionDelta{applied.translation, applied.rotation}, context);
+                    resolved.HasError())
+                    return resolved;
+            }
+            return Result<void>::Success();
+        }
+    };
+
     /** @copydoc ParseScenePhysicsHostMode */
     std::optional<Physics::PhysicsRuntimeMode> ParseScenePhysicsHostMode(const std::string_view name) noexcept {
         if (name == "null")
@@ -156,6 +281,8 @@ namespace Horo::Application::Internal {
     /** @copydoc ScenePhysicsHost::ScenePhysicsHost */
     ScenePhysicsHost::ScenePhysicsHost(const ScenePhysicsIdentityRange identities) : identities_(identities) {}
 
+    ScenePhysicsHost::~ScenePhysicsHost() = default;
+
     /** @copydoc ScenePhysicsHost::MakeParticipant */
     Result<std::unique_ptr<Runtime::SceneActivationParticipant>> ScenePhysicsHost::MakeParticipant(
         Physics::PhysicsRuntime &runtime, Physics::PhysicsSceneActivationAuthority &authority,
@@ -166,9 +293,16 @@ namespace Horo::Application::Internal {
         if (participant_)
             return Result<std::unique_ptr<Runtime::SceneActivationParticipant>>::Failure(
                 MakeError(Physics::PhysicsErrors::InvalidState, "This Scene host already has its Physics participant."));
-        auto participant = std::make_unique<Participant>(*this, runtime, authority, std::move(settings));
-        participant_ = participant.get();
-        return Result<std::unique_ptr<Runtime::SceneActivationParticipant>>::Success(std::move(participant));
+        try {
+            auto fixed = std::make_unique<AnimationFixedState>(settings.character.Values().capacities.maximumControllers);
+            auto participant = std::make_unique<Participant>(*this, runtime, authority, std::move(settings));
+            fixedAnimation_ = std::move(fixed);
+            participant_ = participant.get();
+            return Result<std::unique_ptr<Runtime::SceneActivationParticipant>>::Success(std::move(participant));
+        } catch (const std::bad_alloc &) {
+            return Result<std::unique_ptr<Runtime::SceneActivationParticipant>>::Failure(
+                MakeError(Physics::PhysicsErrors::CapacityExceeded));
+        }
     }
 
     /** @copydoc ScenePhysicsHost::MakeStructuralParticipant */
@@ -198,31 +332,96 @@ namespace Horo::Application::Internal {
         if (publication.completedTick == std::numeric_limits<std::uint64_t>::max())
             return Result<void>::Failure(MakeError(Physics::PhysicsErrors::GenerationExhausted));
         const auto tick = publication.completedTick + 1;
-        if (const auto processed = scope.physics.ProcessQueryBatch(); processed.HasError())
-            return processed;
-        const auto current = scope.physics.PublishedTick();
-        const auto &descriptor = scope.character.Descriptor();
-        if (current.publicationRevision != 0) {
-            if (const auto refreshed = scope.character.RefreshPhysicsSnapshot(scope.physics.Identity(), current.publicationRevision);
-                refreshed.HasError())
-                return refreshed;
-        } else if (current.completedTick != 0 || scope.character.PublishedTick().completedTick != 0 ||
-                   descriptor.sceneGeneration != scope.scene.value || descriptor.physicsWorld != scope.physics.Identity()) {
-            return Result<void>::Failure(
-                MakeError(Physics::PhysicsErrors::QuerySnapshotStale,
-                          "Only the exact unticked Scene-owned pair may use its prepared Character query context."));
-        }
-        // Initial placement already bound these exact owners. Until Physics publishes its first real tick,
-        // retain the prepared Character context; no synthetic Physics publication or tick is introduced.
-        const auto revision = descriptor.physicsSnapshotRevision;
+        if (!fixedAnimation_->MayStart(scope.scene))
+            return Result<void>::Failure(MakeError(Physics::PhysicsErrors::InvalidState));
         Character::CharacterPhysicsQueryAdapter adapter{scope.physics};
-        const auto query = adapter.Context({descriptor.sceneGeneration, descriptor.identity, descriptor.physicsWorld,
-                                            descriptor.collisionFilterGeneration, descriptor.originGeneration, tick, revision});
-        if (const auto advanced =
-                scope.character.AdvanceFixedTick({.tick = tick, .sceneGeneration = scope.scene.value, .fixedDelta = delta, .query = query});
+        const auto query = PrepareCharacterQuery(scope, adapter, tick);
+        if (query.HasError())
+            return Result<void>::Failure(query.ErrorValue());
+        if (const auto advanced = scope.character.AdvanceFixedTick(
+                {.tick = tick, .sceneGeneration = scope.scene.value, .fixedDelta = delta, .query = query.Value()});
             advanced.HasError())
             return advanced;
         return scope.physics.AdvanceFixedTick({.simulationTick = tick, .sceneGeneration = scope.scene.value, .fixedDelta = delta});
+    }
+
+    /** @copydoc ScenePhysicsHost::StageAnimationFixedTick */
+    Result<void> ScenePhysicsHost::StageAnimationFixedTick(const Runtime::RuntimeSceneView &scene,
+                                                           Runtime::SceneAnimationRuntime &animation,
+                                                           const Runtime::FixedStepContext &context) {
+        auto borrowed = Borrow();
+        if (borrowed.HasError())
+            return Result<void>::Failure(borrowed.ErrorValue());
+        auto &scope = borrowed.Value();
+        auto &fixed = *fixedAnimation_;
+        if (!scene.IsCurrent() || scene.RuntimeId() != scope.scene || !fixed.MayStart(scope.scene))
+            return Result<void>::Failure(MakeError(Physics::PhysicsErrors::InvalidState));
+        if (scope.physics.State() == Physics::PhysicsWorldState::ActiveNull)
+            return Result<void>::Success();
+        const auto previous = scope.physics.PublishedTick().completedTick;
+        if (previous == std::numeric_limits<std::uint64_t>::max())
+            return Result<void>::Failure(MakeError(Physics::PhysicsErrors::GenerationExhausted));
+
+        const Attempt attempt{previous + 1, context.attemptNumber};
+        Character::CharacterPhysicsQueryAdapter adapter{scope.physics};
+        const auto query = PrepareCharacterQuery(scope, adapter, attempt.tick);
+        if (query.HasError())
+            return Result<void>::Failure(query.ErrorValue());
+        if (const auto collected = fixed.Collect(scope, scene, animation, context); collected.HasError())
+            return collected;
+        if (const auto staged = FixedAccess::Stage(scope.character, attempt,
+                                                   {.delta = context.fixedDelta, .query = query.Value(), .rootMotion = fixed.roots});
+            staged.HasError())
+            return staged;
+        fixed.pending = AnimationFixedState::Pending{scope.scene, attempt};
+        return fixed.Resolve(scope, animation, context, attempt);
+    }
+
+    /** @copydoc ScenePhysicsHost::PrepareAnimationFixedCommit */
+    Result<void> ScenePhysicsHost::PrepareAnimationFixedCommit(const Runtime::FixedStepContext &context) {
+        if (!fixedAnimation_ || !fixedAnimation_->pending)
+            return Result<void>::Success();
+        auto &pending = *fixedAnimation_->pending;
+        auto borrowed = Borrow();
+        if (borrowed.HasError())
+            return Result<void>::Failure(borrowed.ErrorValue());
+        auto &scope = borrowed.Value();
+        using Step = AnimationFixedState::NativeStep;
+        if (pending.attempt.attempt != context.attemptNumber || pending.scene != scope.scene || pending.step != Step::Pending)
+            return Result<void>::Failure(MakeError(Physics::PhysicsErrors::InvalidState));
+        if (context.cancellation.IsCancellationRequested())
+            return JobCancelled();
+        pending.step = Step::Attempted;
+        auto stepped = scope.physics.AdvanceFixedTick(
+            {.simulationTick = pending.attempt.tick, .sceneGeneration = scope.scene.value, .fixedDelta = context.fixedDelta});
+        if (stepped.HasValue())
+            pending.step = Step::Completed;
+        return stepped;
+    }
+
+    /** @copydoc ScenePhysicsHost::CommitAnimationFixedTick */
+    void ScenePhysicsHost::CommitAnimationFixedTick(const Runtime::FixedStepContext &context) noexcept {
+        if (!fixedAnimation_ || !fixedAnimation_->pending)
+            return;
+        const auto pending = *fixedAnimation_->pending;
+        auto scope = Borrow();
+        if (pending.attempt.attempt != context.attemptNumber || pending.step != AnimationFixedState::NativeStep::Completed ||
+            scope.HasError() || pending.scene != scope.Value().scene)
+            std::terminate();
+        FixedAccess::Commit(scope.Value().character, pending.attempt);
+        fixedAnimation_->pending.reset();
+    }
+
+    /** @copydoc ScenePhysicsHost::AbortAnimationFixedTick */
+    void ScenePhysicsHost::AbortAnimationFixedTick(const Runtime::FixedStepContext &context) noexcept {
+        if (!fixedAnimation_ || !fixedAnimation_->pending || fixedAnimation_->pending->attempt.attempt != context.attemptNumber)
+            return;
+        const auto pending = *fixedAnimation_->pending;
+        fixedAnimation_->pending.reset();
+        if (pending.step != AnimationFixedState::NativeStep::Pending)
+            fixedAnimation_->failedScene = pending.scene;
+        if (auto scope = Borrow(); scope.HasValue() && pending.scene == scope.Value().scene)
+            FixedAccess::Abort(scope.Value().character, pending.attempt);
     }
 
     /** @copydoc ScenePhysicsHost::HasPublishedScene */

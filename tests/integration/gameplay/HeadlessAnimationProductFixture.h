@@ -234,9 +234,10 @@ namespace Horo::Network::AnimationProduct {
         std::unique_ptr<App::NetworkProductHost> host;
         App::NetworkFixedParticipantFactory retainedFactory;
 
-        explicit Fixture(bool directClip = false, bool pair = false, std::shared_ptr<Inputs> publicPresentation = {})
+        explicit Fixture(bool directClip = false, bool pair = false, std::shared_ptr<Inputs> publicPresentation = {},
+                         bool rootMotion = false)
             : listenPair(pair), replicaInputs(std::move(publicPresentation)) {
-            WriteAnimation(directClip);
+            WriteAnimation(directClip, rootMotion);
             project.Cook();
             committed = Take(App::CommittedSceneAssets::Capture(project.project.files,
                                                                 {project.project.cooked.path, project.project.request.assets.target},
@@ -272,20 +273,24 @@ namespace Horo::Network::AnimationProduct {
             records.push_back(Application::CharacterSceneProductTest::Fixture::Record(id, type, path));
         }
 
-        std::string ClipSource() const {
+        std::string ClipSource(bool rootMotion) const {
             auto data = native.compileClips.front().Data();
             data.descriptor.duration = {1'000'000'000};
             data.tracks.front().keys.back().time = {1'000'000'000};
+            if (rootMotion) {
+                data.descriptor.hasRootMotion = true;
+                data.tracks.front().keys.back().transform.translation.x = 12.0F;
+            }
             auto clip = Take(Animation::AnimationClipAsset::Create(std::move(data), *native.skeleton));
             return Take(Animation::SerializeClipAnimationSource(clip));
         }
 
-        void WriteAnimation(bool directClip) {
+        void WriteAnimation(bool directClip, bool rootMotion) {
             auto records = std::vector<Assets::AssetRecord>(project.project.registry.Snapshot().Records().begin(),
                                                             project.project.registry.Snapshot().Records().end());
             Add(records, "skeleton", native.skeleton->Data().skeleton.Asset(), "core.animation.skeleton",
                 Take(Animation::SerializeSkeletonAnimationSource(*native.skeleton)));
-            Add(records, "clip", native.compileClips.front().Data().descriptor.id.Asset(), "core.animation.clip", ClipSource());
+            Add(records, "clip", native.compileClips.front().Data().descriptor.id.Asset(), "core.animation.clip", ClipSource(rootMotion));
             Add(records, "graph", native.program->Id().Asset(), "core.animation.graph",
                 Take(Animation::SerializeAnimationGraphSource(Animation::Test::Graph::Simple())));
             REQUIRE(project.project.registry.Publish(std::move(records)).status == Assets::AssetRegistryBuildStatus::Complete);
@@ -297,7 +302,18 @@ namespace Horo::Network::AnimationProduct {
                 binding.source.clip = native.compileClips.front().Data().descriptor.id;
             else
                 binding.source.graph = native.program->Id();
-            project.source.objects.push_back({.id = {3}, .name = "Real animated actor A", .components = {.animation = binding}});
+            if (rootMotion) {
+                auto actor = project.source.objects.front();
+                actor.id = {3};
+                actor.name = "Real animated Character";
+                actor.components.camera.reset();
+                project.source.objects.front().components.characterController.reset();
+                binding.rootMotion = Animation::RootMotionPolicy::RequestCharacterMovement;
+                actor.components.animation = binding;
+                project.source.objects.push_back(std::move(actor));
+            } else {
+                project.source.objects.push_back({.id = {3}, .name = "Real animated actor A", .components = {.animation = binding}});
+            }
             binding.component = Animation::Test::Id<Animation::AnimationComponentId>(8);
             project.source.objects.push_back({.id = {4}, .name = "Real animated actor B", .components = {.animation = binding}});
             project.project.WriteText("assets/level.horo",

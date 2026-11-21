@@ -82,7 +82,7 @@ add_library(HoroScenePhysicsHost STATIC shared/scene/ScenePhysicsHost.cpp shared
 target_compile_features(HoroScenePhysicsHost PUBLIC cxx_std_20)
 target_include_directories(HoroScenePhysicsHost PUBLIC "${HORO_SCENE_PHYSICS_HOST_HEADERS}")
 target_link_libraries(HoroScenePhysicsHost PUBLIC HoroPhysicsSceneHostInternal HoroEngine::SceneCook HoroEngine::Assets
-        HoroEngine::ProjectPhysicsCapture)
+        HoroEngine::ProjectPhysicsCapture PRIVATE HoroEngine::AnimationSceneIntegration)
 
 set(HORO_SCENE_DECISION_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/scene_decision_headers")
 file(GENERATE OUTPUT "${HORO_SCENE_DECISION_HEADERS}/CookedDecisionSceneAdmission.h"

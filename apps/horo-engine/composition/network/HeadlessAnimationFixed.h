@@ -140,6 +140,15 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             }
             if (auto prepared = PrepareGameplay(context); prepared.HasError())
                 return prepared;
+            for (std::size_t index = 0; index < count_; ++index) {
+                const auto &record = evaluated_[index];
+                if (record->request.world == Network::NetworkModeWorldKind::Client)
+                    continue;
+                if (auto prepared = record->native.PrepareAnimationFixedCommit(context); prepared.HasError())
+                    return prepared;
+                if (record->navigationPath)
+                    record->navigationPath->DispatchAtFixedTick(context.simulationTick);
+            }
             if (auto *replay = DecisionReplay()) {
                 for (const auto &record : pins_)
                     if (record)
@@ -156,8 +165,10 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 std::terminate();
             if (facts.committedTick != facts.fixedTick || facts.committedAttempt != facts.fixedAttempt)
                 std::terminate();
-            for (std::size_t index = 0; index < count_; ++index)
+            for (std::size_t index = 0; index < count_; ++index) {
+                evaluated_[index]->native.CommitAnimationFixedTick(context);
                 evaluated_[index]->animation->CommitFixedUpdate(context);
+            }
             CommitGameplay(context);
             if (auto *replay = DecisionReplay())
                 replay->Commit(context);
@@ -174,8 +185,10 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             AbortGameplay(context);
             if (auto *replay = DecisionReplay())
                 replay->Abort(context);
-            for (std::size_t index = count_; index > 0; --index)
+            for (std::size_t index = count_; index > 0; --index) {
+                evaluated_[index - 1]->native.AbortAnimationFixedTick(context);
                 evaluated_[index - 1]->animation->AbortFixedUpdate(context);
+            }
             Resolve();
         }
 
@@ -342,6 +355,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             config.inputs = record.replicaAnimation ? record.replicaAnimation : input.replicaAnimationInputs;
         } else {
             config.inputs = input.animationInputs;
+            config.enableRootMotionRequests = input.mode == Physics::PhysicsRuntimeMode::Canonical;
         }
         auto adapter = Runtime::SceneAnimationRuntime::Create(config);
         if (adapter.HasError())

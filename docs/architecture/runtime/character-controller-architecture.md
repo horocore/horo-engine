@@ -869,6 +869,17 @@ events, and the tick watermark become visible together at commit. An aborted
 attempt releases the queue for retry and retains its gameplay commands. A root
 command must carry the current scheduler attempt before the world can stage it.
 
+Editor Play and the authoritative headless Scene host route opted-in actors
+through the published Character binding for their current Scene. The staged
+packet can supply movement when there is no gameplay command, without taking a
+sequence number from the gameplay queue. With a gameplay command present the
+host's suggestion preserves explicit velocity intent, including zero. An actor
+without a live Character binding keeps an unavailable result. If native
+Physics has already attempted its in-place step, abort fences that Scene
+incarnation from further ticks so it cannot continue with mismatched owners.
+Replica Animation instances can load the same authored component and sample it
+for presentation without producing an authoritative movement request.
+
 Gameplay selects the admitted translation/rotation mode before command closure.
 `Suggest` uses an explicit gameplay-translation presence bit, not a velocity
 epsilon. Platform carry applies first. Desired gameplay heading establishes the

@@ -400,7 +400,7 @@ horo_allow_target_dependencies(TARGET HoroExtensions
 # Executables are composition roots and may select any production module.
 horo_allow_target_dependencies(TARGET HoroHostModuleComposition DEPENDENCIES HoroFoundation HoroPlatformServices)
 horo_allow_target_dependencies(TARGET HoroScenePhysicsHost
-    DEPENDENCIES HoroPhysicsSceneHostInternal HoroSceneCook HoroAssets HoroProjectPhysicsCapture)
+    DEPENDENCIES HoroPhysicsSceneHostInternal HoroSceneCook HoroAssets HoroProjectPhysicsCapture HoroAnimationSceneIntegration)
 horo_allow_target_dependencies(TARGET HoroCookedDecisionSceneAdmissionInternal
     DEPENDENCIES HoroAISceneIntegration HoroPrefabRuntime HoroScenePhysicsHost HoroSceneRuntimeConversion)
 horo_allow_target_dependencies(TARGET HoroMountedWorldHostInternal

@@ -12,6 +12,11 @@
 #include <string_view>
 #include <thread>
 
+namespace Horo::Runtime {
+    struct FixedStepContext;
+    class SceneAnimationRuntime;
+}  // namespace Horo::Runtime
+
 namespace Horo::Application::Internal {
     /** @brief Parses explicit application Physics policy without backend discovery or fallback.
      * @param name Exact startup value: null or canonical. @return Selected typed mode, or absence for invalid input.
@@ -44,10 +49,12 @@ namespace Horo::Application::Internal {
     class ScenePhysicsHost final {
         class Candidate;
         class Participant;
+        struct AnimationFixedState;
 
     public:
         /** @brief Binds the synchronous observer to the constructing application owner lane. */
         explicit ScenePhysicsHost(ScenePhysicsIdentityRange identities = {});
+        ~ScenePhysicsHost();
         ScenePhysicsHost(const ScenePhysicsHost &) = delete;
         ScenePhysicsHost &operator=(const ScenePhysicsHost &) = delete;
         ScenePhysicsHost(ScenePhysicsHost &&) = delete;
@@ -97,11 +104,28 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<void> AdvanceFixedTick(Duration delta);
 
+        /** @brief Stages authoritative Animation requests through the exact Scene-owned Character solver.
+         * @param scene Current Scene projection of this pair. @param animation Exact Animation owner of that scene.
+         * @param context Actual scheduler attempt, after Animation evaluation. @return Typed staging failure or success.
+         */
+        [[nodiscard]] Result<void> StageAnimationFixedTick(const Runtime::RuntimeSceneView &scene,
+                                                           Runtime::SceneAnimationRuntime &animation,
+                                                           const Runtime::FixedStepContext &context);
+        /** @brief Runs the native Physics step only after fallible Animation and Character preparation.
+         * @param context Same scheduler attempt. @return Typed Physics or lifecycle failure.
+         */
+        [[nodiscard]] Result<void> PrepareAnimationFixedCommit(const Runtime::FixedStepContext &context);
+        /** @brief Publishes the staged Character result after the scheduler commitment fence. */
+        void CommitAnimationFixedTick(const Runtime::FixedStepContext &context) noexcept;
+        /** @brief Discards staged Character movement and fences the Scene if native Physics was already attempted. */
+        void AbortAnimationFixedTick(const Runtime::FixedStepContext &context) noexcept;
+
     private:
         ScenePhysicsIdentityRange identities_;
         std::thread::id owner_{std::this_thread::get_id()};
         Participant *participant_{};
         Physics::PhysicsSceneActivationCandidate *published_{};
         Physics::PhysicsSceneActivationCandidate *pending_{};
+        std::unique_ptr<AnimationFixedState> fixedAnimation_;
     };
 }  // namespace Horo::Application::Internal
