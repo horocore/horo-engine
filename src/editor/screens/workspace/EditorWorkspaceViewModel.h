@@ -277,6 +277,7 @@ namespace Horo::Editor {
         EditDecisionUtilityGraph,
         EditDecisionLayout,
         OpenDecisionDiagnosticKey,
+        ReloadExternalDecisionGraph,
         OpenDiagnosticSource,
         ChangeActivePanel,
         CloseWorkspacePanel,
@@ -783,6 +784,7 @@ namespace Horo::Editor {
         std::optional<UtilityGraphEditRequest> utilityGraphEdit = std::nullopt;
         std::optional<DecisionGraphLayoutRequest> decisionLayoutEdit = std::nullopt;
         std::optional<DecisionDiagnosticKeyRequest> decisionDiagnosticKey;
+        std::optional<DecisionGraphDocumentFence> decisionGraphReload;
         std::optional<DiagnosticSourceRequest> diagnosticSource = std::nullopt;
         std::optional<CreateGameplayBehaviorRequest> gameplayBehaviorRequest = std::nullopt;
         std::optional<AssetSceneDropRequest> assetSceneDrop = std::nullopt;

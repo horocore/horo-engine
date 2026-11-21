@@ -1218,7 +1218,7 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorWorkspaceController::OpenEmbeddedDecisionGraphSource */
-    void EditorWorkspaceController::OpenEmbeddedDecisionGraphSource(const SourceOpenResult &result) {
+    void EditorWorkspaceController::OpenEmbeddedDecisionGraphSource(const SourceOpenResult &result, const bool reloadExternal) {
         const auto &opened = *result.document;
         const auto fail = [&](std::string_view key) {
             if (opened.disposition == DocumentOpenDisposition::Opened)
@@ -1248,7 +1248,8 @@ namespace Horo::Editor {
         }
         const auto &source = captured.Value().Sources().front();
         auto &host = m_viewModel.workspacePanelHost;
-        if (existing != documents.end() && (existing->dirty || HasPendingBlackboardReferenceEdit(existing->identity.instance))) {
+        if (!reloadExternal && existing != documents.end() &&
+            (existing->dirty || HasPendingBlackboardReferenceEdit(existing->identity.instance))) {
             if (existing->identity != opened.identity || existing->source != source.sourceDigest) {
                 existing->conflict = true;
                 existing->diagnostic = MakeError(Assets::AssetSourceErrors::Conflict);
@@ -1261,7 +1262,7 @@ namespace Horo::Editor {
             static_cast<void>(host.FocusDocument(existing->identity.instance));
             return;
         }
-        if (existing != documents.end() && existing->identity == opened.identity && existing->asset == record->id &&
+        if (!reloadExternal && existing != documents.end() && existing->identity == opened.identity && existing->asset == record->id &&
             existing->source == source.sourceDigest &&
             (existing->editable || !m_gameplayRegistry || !NeedsDecisionTaskProviders(*existing->graph))) {
             static_cast<void>(host.FocusDocument(opened.identity.instance));
@@ -1281,6 +1282,10 @@ namespace Horo::Editor {
         decltype(m_decisionGraphDrafts) prepared;
         candidate.family = DecisionFamily(*candidate.graph);
         auto metadata = CaptureDecisionLayout(ProjectRoot(), result.location.absolutePath, candidate.asset, candidate.graph->asset);
+        if (reloadExternal && metadata.HasError()) {
+            fail("workspace.decision_graph.invalid");
+            return;
+        }
         candidate.layout = std::make_shared<const DecisionGraphLayout>();
         if (metadata.HasValue()) {
             candidate.layout = std::make_shared<const DecisionGraphLayout>(std::move(metadata.Value().layout));
@@ -1328,6 +1333,9 @@ namespace Horo::Editor {
                 static_cast<void>(host.CloseDocument(existing->identity.instance));
             *existing = std::move(candidate);
         }
+        static_cast<void>(host.SetDocumentDirty(existing->identity.instance, false));
+        if (reloadExternal)
+            m_viewModel.contentBrowserOperationError.clear();
         if (existing->diagnostic)
             PublishDecisionGraphDiagnostics(*existing->diagnostic);
     }
@@ -1766,8 +1774,38 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc EditorWorkspaceController::ReloadExternalDecisionGraph */
+    void EditorWorkspaceController::ReloadExternalDecisionGraph(const DecisionGraphDocumentFence fence) {
+        if (m_viewModel.workspacePanelHost.ActiveDocument() != fence.instance || HasPendingBlackboardReferenceEdit(fence.instance))
+            return;
+        const auto &documents = m_viewModel.decisionGraphDocuments;
+        const auto document = std::ranges::find_if(documents, [&](const auto &entry) {
+            return entry.identity.instance == fence.instance;
+        });
+        if (document == documents.end() || document->revision != fence.revision || !document->conflict)
+            return;
+        const auto *record = m_assetRegistry.Find(document->asset);
+        if (!record)
+            return;
+        const auto opened = m_sourceOpenService.Open({.path = Foundation::Paths::Resolve(ProjectRoot(), record->sourcePath),
+                                                      .origin = SourceOpenOrigin::Command,
+                                                      .mode = SourceOpenMode::EmbeddedOnly});
+        if (opened.HasError() || !opened.Value().document || opened.Value().document->identity != document->identity) {
+            if (opened.HasValue() && opened.Value().document && opened.Value().document->disposition == DocumentOpenDisposition::Opened)
+                static_cast<void>(m_documentRegistry.Close(opened.Value().document->identity.instance));
+            m_viewModel.contentBrowserOperationError = "workspace.decision_graph.invalid";
+            return;
+        }
+        OpenEmbeddedDecisionGraphSource(opened.Value(), true);
+    }
+
     /** @copydoc EditorWorkspaceController::ProcessDecisionGraphEdit */
     bool EditorWorkspaceController::ProcessDecisionGraphEdit(const EditorWorkspaceViewCommandData &cmd) {
+        if (cmd.command == EditorWorkspaceViewCommand::ReloadExternalDecisionGraph) {
+            if (cmd.decisionGraphReload)
+                ReloadExternalDecisionGraph(*cmd.decisionGraphReload);
+            return true;
+        }
         if (cmd.command == EditorWorkspaceViewCommand::OpenDecisionDiagnosticKey) {
             if (cmd.decisionDiagnosticKey)
                 OpenDecisionDiagnosticKey(*cmd.decisionDiagnosticKey);

@@ -1381,7 +1381,7 @@ namespace Horo::Editor {
         /** @brief Loads or focuses an exact registry-backed Blackboard schema through the embedded workspace. */
         void OpenEmbeddedBlackboardSource(const SourceOpenResult &result);
         /** @brief Opens an exact registered decision source independently of runtime admission. */
-        void OpenEmbeddedDecisionGraphSource(const SourceOpenResult &result);
+        void OpenEmbeddedDecisionGraphSource(const SourceOpenResult &result, bool reloadExternal = false);
         /** @brief Releases the matching read-only decision tab if open. */
         bool CloseDecisionGraphSource(DocumentInstanceId instance);
 
@@ -1479,6 +1479,8 @@ namespace Horo::Editor {
         void OpenSourceFile(const SourceOpenRequest &request);
         /** @brief Executes typed state-machine authoring against the active document revision. */
         bool ProcessDecisionGraphEdit(const EditorWorkspaceViewCommandData &cmd);
+        /** @brief Reopens the exact conflicted Decision document after an explicit discard request. */
+        void ReloadExternalDecisionGraph(DecisionGraphDocumentFence fence);
         /** @brief Resolves a current finding to a registered Blackboard document and selects its exact key. */
         void OpenDecisionDiagnosticKey(const DecisionDiagnosticKeyRequest &request);
         /** @brief Saves all dirty intrinsic decision documents through the registered source owner. */

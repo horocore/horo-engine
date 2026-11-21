@@ -1124,6 +1124,35 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
         const auto preserved = Assets::CaptureAssetSource(project.root, metadata, MaximumDecisionLayoutBytes);
         REQUIRE(preserved.HasValue());
         CHECK(preserved.Value().identity == external.Value().identity);
+
+        const auto revision = view.revision;
+        const auto reload = [&](std::uint64_t expected) {
+            controller.ProcessCommand({.command = EditorWorkspaceViewCommand::ReloadExternalDecisionGraph,
+                                       .decisionGraphReload = DecisionGraphDocumentFence{instance, expected}});
+        };
+        reload(revision);
+        CHECK(view.revision == revision);
+        CHECK(view.layout == local);
+        CHECK(view.dirty);
+        const DecisionGraphLayout externalLayout{{node, 20, 30}};
+        const auto encoded = EncodeDecisionLayout(externalLayout, view.asset, view.graph->asset);
+        REQUIRE(encoded.HasValue());
+        {
+            const auto &bytes = encoded.Value();
+            std::ofstream file(metadata, std::ios::binary);
+            file.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            REQUIRE(static_cast<bool>(file));
+        }
+        reload(revision - 1);
+        CHECK(view.layout == local);
+        CHECK(view.dirty);
+        reload(revision);
+        CHECK(view.revision == revision + 1);
+        CHECK(*view.layout == externalLayout);
+        CHECK_FALSE(view.conflict);
+        CHECK_FALSE(view.canUndo);
+        CHECK_FALSE(view.canRedo);
+        CHECK_FALSE(controller.HasDirtySourceDocuments());
     }
 
     SECTION("tracked save receipts retain the last durable graph when layout recording fails") {

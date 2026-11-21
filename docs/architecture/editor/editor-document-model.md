@@ -643,6 +643,11 @@ When the canonical file changes externally:
 - dirty document: offer compare, keep local, reload external, or save local as
 - active save: detect conflict before replacement
 
+For a conflicted Decision graph, **Discard Draft and Reload from Disk** stages
+the registered source and its layout before replacing the open document. A
+failed read or decode leaves the draft and its history intact. An accepted
+replacement starts a new revision with an empty undo and redo history.
+
 By default, external reload starts a new history branch, clears redo history, and prevents undo across the reload boundary. It is never injected as a hidden command. Rebase is allowed only through an explicit policy that rebuilds valid semantic history entries.
 
 ## Navigation Definition And Scene Intent

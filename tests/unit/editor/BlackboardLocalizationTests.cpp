@@ -190,6 +190,7 @@ TEST_CASE("Decision graph workspace and initial state machine labels resolve in 
                               "state_machine",
                               "utility",
                               "read_only",
+                              "reload_external",
                               "edit_utility_option",
                               "edit_utility_priority",
                               "edit_utility_compensation",

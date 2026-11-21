@@ -1119,8 +1119,15 @@ namespace Horo::Editor {
         }
         const auto &feedback = viewModel.contentBrowserOperationError;
         if (feedback == "workspace.decision_graph.diagnostic_key_missing" ||
-            feedback == "workspace.decision_graph.diagnostic_key_unavailable")
+            feedback == "workspace.decision_graph.diagnostic_key_unavailable" ||
+            (opened->conflict && feedback == "workspace.decision_graph.invalid"))
             label(text(feedback), Theme::Warn());
+        if (opened->conflict &&
+            Ui::Button({.label = text("workspace.decision_graph.reload_external").c_str(), .font = m_context.theme.fonts.sans})) {
+            outCommand = {.command = EditorWorkspaceViewCommand::ReloadExternalDecisionGraph,
+                          .decisionGraphReload = DecisionGraphDocumentFence{opened->identity.instance, opened->revision}};
+            return true;
+        }
 
         const auto *propertyMachine = std::get_if<AI::StateMachineAssetDescriptor>(&opened->graph->body);
         const bool propertyOnly = opened->editable && propertyMachine && !CanEditStateMachineTopology(*propertyMachine);

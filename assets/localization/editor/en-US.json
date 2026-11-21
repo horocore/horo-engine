@@ -1010,6 +1010,7 @@
     "workspace.decision_graph.edit_tree_delete": {"text": "Remove Task and Its Connection"},
     "workspace.decision_graph.edit_tree_append_task": {"text": "Append Connected Task"},
     "workspace.decision_graph.edit_conflict": {"text": "The saved Decision source changed. Your draft is still open."},
+    "workspace.decision_graph.reload_external": {"text": "Discard Draft and Reload from Disk"},
     "workspace.decision_graph.edit_refused": {"text": "The edit or source operation was rejected. Your draft is unchanged."},
     "workspace.decision_graph.open_diagnostic_key": {"text": "Open Blackboard Key"},
     "workspace.decision_graph.problems": {"text": "Problems"},
