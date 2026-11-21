@@ -7,6 +7,7 @@
 #include "Horo/Editor/DocumentRecoveryService.h"
 #include "OwnedTestDirectory.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
+#include "editor/screens/workspace/EnvironmentQueryPreviewPhysics.h"
 #include "editor/screens/workspace/WorkspacePathText.h"
 #include "editor/screens/workspace/panels/global_dock/panes/asset_browser/AssetBrowserInteractionSession.h"
 
@@ -229,13 +230,29 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
     CancellationSource cancellation;
     REQUIRE(project.runtime.Startup(cancellation.Token()).HasValue());
     JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 8}};
+    const auto owner = std::this_thread::get_id();
+    std::size_t physicsCaptures{};
+    const EnvironmentQueryPreviewPhysics physics{[&](const Runtime::RuntimeSceneView &scene, const QueryPhysicsVisibilityRequest &request) {
+        CHECK(std::this_thread::get_id() == owner);
+        CHECK(scene.IsCurrent());
+        CHECK(scene.Get(request.querier).HasValue());
+        CHECK(request.eye == Math::WorldCoordinate64::FromMillimeters(2000, 3000, -4000));
+        CHECK(request.points.size() == MaximumQueryPhysicsVisibilityRays);
+        CHECK(request.channel == Physics::PhysicsQueryChannelId::FromBytes({1}));
+        ++physicsCaptures;
+        EnvironmentQueryPreviewPhysics::Visibility clear;
+        clear.fill(true);
+        clear.front() = false;
+        return Result<EnvironmentQueryPreviewPhysics::Visibility>::Success(clear);
+    }};
     EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(),
                                          {.assets = {.mutableAssetRegistry = &project.registry},
                                           .mutations = &project.mutations,
                                           .durableFiles = &project.files,
                                           .jobs = &jobs,
                                           .querySchema = &registry.Value(),
-                                          .queryContextAccess = {&providers.Value(), granted}});
+                                          .queryContextAccess = {&providers.Value(), granted},
+                                          .queryPreviewPhysics = &physics});
     REQUIRE_FALSE(controller.InitializationError());
     const auto &model = controller.ViewModel();
     REQUIRE(model.objects.size() == 1);
@@ -282,6 +299,7 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
     auto expected = Ready;
     std::optional<QueryStageId> distanceStage;
     std::optional<QueryStageId> filterStage;
+    std::optional<QueryStageId> visibilityStage;
     bool mixedContexts = false;
     bool usesTarget = false;
     bool usesProvider = false;
@@ -401,6 +419,27 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
         submit(edited);
         REQUIRE(document.preview.status == Running);
     }
+    SECTION("the saved Physics stage samples a large lattice without changing the authoring Scene") {
+        distanceStage = QueryStageId::Create(12).Value();
+        visibilityStage = QueryStageId::Create(13).Value();
+        const auto distance = AddBuiltinPointDistanceTest(query.Value(), *distanceStage, {50000, true, 2});
+        REQUIRE(distance.HasValue());
+        const auto occlusion = AddBuiltinPointVisibilityTest(distance.Value(), *visibilityStage, {1});
+        REQUIRE(occlusion.HasValue());
+        project.WriteAsset(occlusion.Value());
+        Project::Open(controller, Project::Path);
+        auto edited = pinned;
+        edited.source = document.source;
+        submit(edited);
+        REQUIRE(document.preview.status == Running);
+        CHECK(physicsCaptures == 1);
+        SECTION("the ranked sample is published") {}
+        SECTION("a cancelled sample leaves no retained evidence") {
+            edited.action = EnvironmentQueryPreviewAction::Cancel;
+            submit(edited);
+            expected = Cancelled;
+        }
+    }
     SECTION("the retained preview is bounded, stable and leaves the Scene owner unchanged") {
         submit(pinned);
         REQUIRE(document.preview.status == Running);
@@ -498,6 +537,22 @@ TEST_CASE("Environment Query workspace previews the saved native lattice from an
         CHECK(preview.winnerCount == 0);
         REQUIRE(preview.stages.size() == 9);
         CHECK(preview.stages[4].score.status == QueryScoreStatus::Filtered);
+        CHECK(active->IsCurrent());
+        return;
+    }
+    if (visibilityStage) {
+        constexpr std::size_t width = MaximumQueryLatticeOuterSteps * 2 + 1;
+        CHECK(preview.generated == width * width);
+        CHECK(preview.evaluated == MaximumQueryPhysicsVisibilityRays);
+        CHECK(preview.winnerCount == MaximumQueryPhysicsVisibilityRays - 1);
+        REQUIRE(preview.stages.size() == preview.candidates.size() * 2);
+        CHECK(preview.stages[0].score.stage == *distanceStage);
+        CHECK(preview.stages[0].score.contribution > 0.0);
+        CHECK(preview.stages[1].score.stage == *visibilityStage);
+        CHECK(preview.stages[1].score.status == QueryScoreStatus::Filtered);
+        CHECK(preview.stages.back().score.status == QueryScoreStatus::Eligible);
+        CHECK(preview.candidates.back().index == preview.generated - 1);
+        CHECK(model.documentRevision == pinned.scene);
         CHECK(active->IsCurrent());
         return;
     }

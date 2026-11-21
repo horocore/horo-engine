@@ -56,6 +56,60 @@ namespace Horo::Application::CharacterSceneProductTest {
     }  // namespace
 
 #if HORO_TEST_PHYSICS_NATIVE
+    TEST_CASE("Editor authoring query visibility reads the canonical Scene before any fixed tick", "[editor][character][product][eqs]") {
+        Fixture fixture;
+        const auto target = fixture.project.request.assets.target;
+        auto prepared =
+            Internal::PrepareEditorProjectPreview(fixture.project.project.dir.path, fixture.project.jobs,
+                                                  {.physicsMode = Physics::PhysicsRuntimeMode::Canonical,
+                                                   .cooked = Internal::SceneCookSelection{fixture.project.cooked.path, target}});
+        REQUIRE(prepared.HasValue());
+        auto preview = std::move(prepared).Value();
+        CancellationSource lifetime;
+        REQUIRE(preview.scenes->Startup(lifetime.Token()).HasValue());
+        const auto definition =
+            SceneSource::ConvertSceneSourceToRuntime({fixture.source.objects, fixture.source.prefabInstances}, {1}, {1});
+        REQUIRE(definition.HasValue());
+        REQUIRE(preview.scenes->QueuePreparation(definition.Value()).HasValue());
+        const auto publish = [&](std::uint64_t frame) {
+            REQUIRE(preview.scenes
+                        ->OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, {frame, {}, 0.0, 0, {}, false, lifetime.Token()})
+                        .HasValue());
+        };
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+        std::uint64_t frame{};
+        while (!preview.scenes->ActiveScene() && std::chrono::steady_clock::now() < deadline) {
+            publish(++frame);
+            if (const auto error = preview.scenes->TakeOperationError())
+                FAIL(error->message);
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+        const auto scene = preview.scenes->ActiveScene();
+        REQUIRE(scene);
+        const auto querier = scene->Find(Runtime::SceneObjectId{1});
+        REQUIRE(querier);
+        const auto revision = scene->StructuralRevision();
+        const auto eye = Math::WorldCoordinate64::FromMillimeters(0, 5000, 0);
+        const std::array points{Math::WorldCoordinate64::FromMillimeters(0, -1000, 0), eye,
+                                Math::WorldCoordinate64::FromMillimeters(2000, 5000, 0)};
+        const AI::QueryPhysicsVisibilityRequest request{*querier, AI::QueryStageId::Create(1).Value(), eye, points, fixture.channel};
+        const auto visibility = preview.queryPreviewPhysics.capture(*scene, request);
+        if (visibility.HasError())
+            UNSCOPED_INFO(visibility.ErrorValue().message);
+        REQUIRE(visibility.HasValue());
+        CHECK_FALSE(visibility.Value()[0]);
+        CHECK(visibility.Value()[1]);
+        CHECK(visibility.Value()[2]);
+        CHECK(scene->IsCurrent());
+        CHECK(scene->StructuralRevision() == revision);
+
+        REQUIRE(preview.scenes->QueueUnload().HasValue());
+        publish(++frame);
+        REQUIRE_FALSE(scene->IsCurrent());
+        CHECK(preview.queryPreviewPhysics.capture(*scene, request).HasError());
+        preview.scenes->Shutdown();
+    }
+
     namespace {
         constexpr auto ParityActor = Runtime::SceneObjectId{3};
         constexpr std::size_t ParityTicks = 4;

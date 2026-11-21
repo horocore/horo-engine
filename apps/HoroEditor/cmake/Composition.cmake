@@ -236,6 +236,8 @@ target_link_libraries(HoroEditorPlaySaveHostInternal PRIVATE HoroEngine::Applica
 set(HORO_EDITOR_PROJECT_SCENE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/editor_project_scene_headers")
 file(MAKE_DIRECTORY "${HORO_EDITOR_PROJECT_SCENE_HEADERS}")
 configure_file(HoroEditor/composition/scene/EditorProjectSceneHost.h "${HORO_EDITOR_PROJECT_SCENE_HEADERS}/EditorProjectSceneHost.h" COPYONLY)
+file(GENERATE OUTPUT "${HORO_EDITOR_PROJECT_SCENE_HEADERS}/EnvironmentQueryPreviewPhysics.h"
+    CONTENT "#pragma once\n#include \"${PROJECT_SOURCE_DIR}/src/editor/screens/workspace/EnvironmentQueryPreviewPhysics.h\"\n")
 configure_file(HoroEditor/composition/scene/EditorMountedWorldViewport.h
     "${HORO_EDITOR_PROJECT_SCENE_HEADERS}/EditorMountedWorldViewport.h" COPYONLY)
 add_library(HoroEditorSceneProductHost STATIC

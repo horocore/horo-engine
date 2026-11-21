@@ -74,6 +74,7 @@ namespace Horo::Application {
 
 namespace Horo::Editor {
     struct CapturedDecisionExternal;
+    struct EnvironmentQueryPreviewPhysics;
 
     struct TerrainDocumentView;
     class IEditorPlayXrHost;
@@ -152,6 +153,7 @@ namespace Horo::Editor {
         AI::LatticeQueryAuthoringFactory latticeQueryFactory{};
         const AI::QuerySchemaRegistry *querySchema{}; /**< Application-owned immutable descriptor registry. */
         AI::QueryContextProviderAccess queryContextAccess;
+        const EnvironmentQueryPreviewPhysics *queryPreviewPhysics{};
     };
 
     class EditorWorkspaceController {  // NOSONAR(cpp:S1820, cpp:S1448) Authoritative workspace controller
@@ -830,6 +832,7 @@ namespace Horo::Editor {
         AI::LatticeQueryAuthoringFactory m_latticeQueryFactory{};
         const AI::QuerySchemaRegistry *m_querySchema{};
         AI::QueryContextProviderAccess m_queryContextAccess;
+        const EnvironmentQueryPreviewPhysics *m_queryPreviewPhysics{};
         UiInspectorResources *m_uiInspectorResources{};
         JobSystem *m_sourceRecoveryJobs{};
 

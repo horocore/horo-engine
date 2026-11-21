@@ -504,6 +504,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         [[nodiscard]] std::optional<Editor::EditorPlayDecisionDebugState> ReadDecisionDebugState() const noexcept override;
         [[nodiscard]] std::optional<Editor::EditorPlayAgentNavigation> ReadAgentNavigation(Runtime::EntityRef owner) const;
 
+        [[nodiscard]] Result<Editor::EnvironmentQueryPreviewPhysics::Visibility> CapturePreviewVisibility(
+            const Runtime::RuntimeSceneView &scene, const AI::QueryPhysicsVisibilityRequest &request);
+
         Result<std::shared_ptr<Gameplay::GameplayPrefabContext>> PrefabServices(const Gameplay::BehaviorRegistry &registry,
                                                                                 const Gameplay::ComponentRegistry &components) override {
             if (!prefab_.templates)

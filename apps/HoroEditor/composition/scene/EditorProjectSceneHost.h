@@ -14,6 +14,7 @@
 #include "MountedWorldHost.h"
 #include "SceneAnimationHostSelection.h"
 #include "ScenePhysicsHost.h"
+#include "EnvironmentQueryPreviewPhysics.h"
 
 #include <functional>
 #include <optional>
@@ -91,6 +92,7 @@ namespace Horo::Application::Internal {
         std::unique_ptr<Editor::EditorPlaySceneHost> owners;
         std::unique_ptr<Runtime::RuntimeSceneService> scenes;
         Physics::PhysicsRuntimeMode physicsMode; /**< Actual successfully created peer, never inferred from a schema file. */
+        Editor::EnvironmentQueryPreviewPhysics queryPreviewPhysics;
     };
 
     /** @brief Prepares explicit project preview resources without starting/publishing a Scene candidate.

@@ -1,4 +1,5 @@
 #include "EditorWorkspaceScreen.h"
+#include "EnvironmentQueryPreviewPhysics.h"
 #include "Horo/AI/EnvironmentQuerySchema.h"
 #include "Horo/Application/ProjectSourceDocument.h"
 #include "Horo/Editor/EditorSettingsService.h"
@@ -389,7 +390,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                                            .terrainAssets = services_.TryGetConst<Application::TerrainAuthoringAssetFactory>(),
                                            .latticeQueryFactory = latticeFactory ? *latticeFactory : nullptr,
                                            .querySchema = services_.TryGetConst<AI::QuerySchemaRegistry>(),
-                                           .queryContextAccess = contextAccess ? *contextAccess : AI::QueryContextProviderAccess{}};
+                                           .queryContextAccess = contextAccess ? *contextAccess : AI::QueryContextProviderAccess{},
+                                           .queryPreviewPhysics = services_.TryGetConst<EnvironmentQueryPreviewPhysics>()};
     }
 
     /** @copydoc EditorWorkspaceScreen::RestoreExtensionWorkspace */

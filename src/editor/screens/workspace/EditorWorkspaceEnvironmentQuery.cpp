@@ -1,4 +1,5 @@
 #include "AuthoredAiSourceInventory.h"
+#include "EnvironmentQueryPreviewPhysics.h"
 #include "EnvironmentQueryWorkspaceSource.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryExecution.h"
@@ -20,6 +21,7 @@
 #include <format>
 #include <limits>
 #include <set>
+#include <variant>
 
 namespace Horo::Editor {
     namespace {
@@ -150,45 +152,131 @@ namespace Horo::Editor {
             return capture.Capture(plan, schema, access.registry ? *access.registry : empty, scene, source);
         }
 
+        struct LatticePreviewDistance final {
+            AI::BuiltinPointDistanceQuery test;
+            Math::WorldCoordinate64 center;
+        };
+
+        using LatticePreviewTest = std::variant<LatticePreviewDistance, AI::QueryStageId>;
+
         /** @brief Detached native test programs and their canonical query ranking rules. */
         struct LatticePreviewScoring final {
             AI::QueryScoringPlan plan;
-            std::vector<AI::BuiltinPointDistanceQuery> tests;
+            std::vector<LatticePreviewTest> tests;
+            std::optional<AI::BuiltinPointVisibilityPlan> visibility;
         };
 
         /** @brief Admits every authored preview test before a worker can observe the Scene capture. */
         Result<LatticePreviewScoring> CaptureLatticePreviewScoring(const AI::EnvironmentQueryPlan &plan,
-                                                                   const AI::QuerySchemaRegistry &schema) {
+                                                                   const AI::QuerySchemaRegistry &schema,
+                                                                   const AI::QueryContextSnapshot &contexts) {
             using Output = Result<LatticePreviewScoring>;
             const auto authored = plan.Stages().subspan(1);
-            std::vector<AI::BuiltinPointDistanceQuery> tests;
+            std::optional<AI::BuiltinPointVisibilityPlan> visibility;
+            if (AI::UsesBuiltinPointVisibility(plan)) {
+                const auto captured = AI::CaptureBuiltinPointVisibility(plan, schema, contexts);
+                if (captured.HasError())
+                    return Output::Failure(captured.ErrorValue());
+                visibility = captured.Value();
+            }
+            std::vector<LatticePreviewTest> tests;
             std::vector<AI::QueryScoreRule> rules;
             tests.reserve(authored.size());
             rules.reserve(authored.size());
             for (const auto &stage : authored) {
+                if (visibility && stage.id == visibility->test) {
+                    rules.push_back({.stage = stage.id, .requiredFilterValue = true});
+                    tests.emplace_back(stage.id);
+                    continue;
+                }
                 auto test = AI::BuiltinPointDistanceQuery::Capture(stage, schema);
                 if (test.HasError())
                     return Output::Failure(test.ErrorValue());
+                const auto *captured = contexts.Find(test.Value().Settings().center);
+                const auto *center = captured ? std::get_if<Math::WorldCoordinate64>(&captured->value) : nullptr;
+                if (!center)
+                    return Output::Failure(MakeError(AI::AIErrors::EnvironmentQueryContextMissing));
                 rules.push_back(test.Value().Rule());
-                tests.push_back(std::move(test).Value());
+                tests.emplace_back(LatticePreviewDistance{std::move(test).Value(), *center});
             }
             auto scoring = AI::QueryScoringPlan::Capture(plan, schema, rules, AI::QueryScoreTieBreak::StableIndex);
             if (scoring.HasError())
                 return Output::Failure(scoring.ErrorValue());
-            return Output::Success({std::move(scoring).Value(), std::move(tests)});
+            return Output::Success({std::move(scoring).Value(), std::move(tests), visibility});
         }
 
         /** @brief Evaluates one bounded set of native stages without consulting mutable Scene state. */
-        Result<void> EvaluateLatticeTests(std::span<const AI::BuiltinPointDistanceQuery> tests,
-                                          std::span<const Math::WorldCoordinate64> centers, const Math::WorldCoordinate64 &point,
+        Result<void> EvaluateLatticeTests(std::span<const LatticePreviewTest> tests, const Math::WorldCoordinate64 &point, bool visible,
                                           std::span<AI::QueryTestSample> facts) {
             for (std::size_t index = 0; index < tests.size(); ++index) {
-                const auto evaluated = tests[index].Evaluate(centers[index], point);
+                if (const auto *stage = std::get_if<AI::QueryStageId>(&tests[index])) {
+                    facts[index] = {.stage = *stage, .filter = visible, .metric = visible ? 1.0 : 0.0};
+                    continue;
+                }
+                const auto &distance = std::get<LatticePreviewDistance>(tests[index]);
+                const auto evaluated = distance.test.Evaluate(distance.center, point);
                 if (evaluated.HasError())
                     return Result<void>::Failure(evaluated.ErrorValue());
                 facts[index] = evaluated.Value();
             }
             return Result<void>::Success();
+        }
+
+        struct LatticePreviewCandidates final {
+            std::vector<AI::QueryGeneratedItem> items;
+            std::size_t invalidCoordinates{};
+            EnvironmentQueryPreviewPhysics::Visibility clear{};
+        };
+
+        std::size_t PreviewCandidateIndex(std::size_t sample, std::size_t total, std::size_t count) noexcept {
+            return sample * (total - 1) / std::max<std::size_t>(1, count - 1);
+        }
+
+        Result<LatticePreviewCandidates> GenerateLatticePreview(const AI::EnvironmentQueryPlan &plan,
+                                                                const AI::QueryContextSnapshot &contexts,
+                                                                AI::QueryGeneratorProvenance origin) {
+            using Candidates = Result<LatticePreviewCandidates>;
+            constexpr auto limit = AI::EnvironmentQuerySchemaLimits::MaximumResults;
+            LatticePreviewCandidates candidates{.items = std::vector<AI::QueryGeneratedItem>(limit)};
+            const auto generated = AI::GenerateBuiltinQueryCandidates(plan, contexts, {origin, limit, candidates.items});
+            if (generated.HasError())
+                return Candidates::Failure(generated.ErrorValue());
+            candidates.items.resize(generated.Value().itemCount);
+            candidates.invalidCoordinates = generated.Value().invalidCoordinateCount;
+            return Candidates::Success(std::move(candidates));
+        }
+
+        Result<LatticePreviewCandidates> CaptureVisibilityPreview(const AI::EnvironmentQueryPlan &plan,
+                                                                  const AI::QueryContextSnapshot &contexts,
+                                                                  const AI::BuiltinPointVisibilityPlan &visibility,
+                                                                  const Runtime::RuntimeSceneView &scene, SceneObjectId anchor,
+                                                                  const EnvironmentQueryPreviewPhysics *physics) {
+            using Candidates = Result<LatticePreviewCandidates>;
+            if (!physics || !physics->capture)
+                return Candidates::Failure(MakeError(AI::AIErrors::EnvironmentQueryContextCapabilityUnavailable));
+            const auto querier = scene.Find(Runtime::SceneObjectId{anchor.value});
+            if (!querier)
+                return Candidates::Failure(MakeError(AI::AIErrors::EnvironmentQueryContextStale));
+            auto candidates = GenerateLatticePreview(plan, contexts, visibility.generator);
+            if (candidates.HasError() || candidates.Value().items.empty())
+                return candidates;
+            const auto *location = contexts.Find(AI::BuiltinQueryContextId(AI::BuiltinQueryContext::QuerierLocation));
+            const auto *eye = location ? std::get_if<Math::WorldCoordinate64>(&location->value) : nullptr;
+            if (!eye)
+                return Candidates::Failure(MakeError(AI::AIErrors::EnvironmentQueryContextMissing));
+
+            std::array<Math::WorldCoordinate64, AI::MaximumQueryPhysicsVisibilityRays> points;
+            const auto &items = candidates.Value().items;
+            const auto count = std::min(points.size(), items.size());
+            for (std::size_t index = 0; index < count; ++index)
+                points[index] = std::get<Math::WorldCoordinate64>(items[PreviewCandidateIndex(index, items.size(), count)]);
+            auto clear = physics->capture(scene, {*querier, visibility.test, *eye, std::span{points}.first(count),
+                                                  Physics::PhysicsQueryChannelId::FromBytes(visibility.channel)});
+            if (clear.HasError())
+                return Candidates::Failure(clear.ErrorValue());
+            auto output = std::move(candidates).Value();
+            output.clear = clear.Value();
+            return Candidates::Success(std::move(output));
         }
 
         /** @brief Retains a selected point and all of its stage contributions under the preview sample cap. */
@@ -307,6 +395,7 @@ namespace Horo::Editor {
         Result<AI::QueryDebugSnapshot> EvaluateLatticePreview(const AI::EnvironmentQueryPlan &plan, const AI::QueryContextSnapshot &context,
                                                               const LatticePreviewScoring &scoring,
                                                               const AI::QueryGeneratorProvenance &provenance,
+                                                              std::optional<LatticePreviewCandidates> captured,
                                                               const CancellationToken &cancel) {
             using Preview = Result<AI::QueryDebugSnapshot>;
             const auto cancelled = [] {
@@ -314,40 +403,37 @@ namespace Horo::Editor {
             };
             if (cancel.IsCancellationRequested())
                 return cancelled();
-            std::vector<AI::QueryGeneratedItem> items(AI::EnvironmentQuerySchemaLimits::MaximumResults);
-            const auto generated = AI::GenerateBuiltinQueryCandidates(plan, context, {provenance, items.size(), items});
+            auto generated = captured ? Result<LatticePreviewCandidates>::Success(std::move(*captured))
+                                      : GenerateLatticePreview(plan, context, provenance);
             if (generated.HasError())
                 return Preview::Failure(generated.ErrorValue());
+            const auto &candidates = generated.Value();
+            const auto total = candidates.items.size();
+            const auto evaluated = scoring.visibility ? std::min(total, candidates.clear.size()) : total;
             AI::QueryDebugSnapshot snapshot{.query = plan.Id(),
                                             .generator = provenance.stage,
                                             .terminalStatus = AI::QueryExecutionStatus::Completed,
-                                            .generated = generated.Value().itemCount,
-                                            .evaluated = generated.Value().itemCount,
-                                            .invalidCoordinates = generated.Value().invalidCoordinateCount};
-            const auto samples = std::min(snapshot.generated, AI::QueryDebugCaptureSettings::MaximumSamples);
+                                            .generated = total,
+                                            .evaluated = evaluated,
+                                            .invalidCoordinates = candidates.invalidCoordinates};
+            const auto samples = std::min(evaluated, AI::QueryDebugCaptureSettings::MaximumSamples);
             snapshot.candidates.reserve(samples);
             snapshot.stages.reserve(samples * scoring.tests.size());
-            std::array<Math::WorldCoordinate64, AI::EnvironmentQuerySchemaLimits::Stages> centers;
-            for (std::size_t index = 0; index < scoring.tests.size(); ++index) {
-                const auto *captured = context.Find(scoring.tests[index].Settings().center);
-                const auto *center = captured ? std::get_if<Math::WorldCoordinate64>(&captured->value) : nullptr;
-                if (!center)
-                    return Preview::Failure(MakeError(AI::AIErrors::EnvironmentQueryContextMissing));
-                centers[index] = *center;
-            }
             std::vector<AI::QueryCandidateScore> scores;
-            scores.reserve(snapshot.generated);
+            scores.reserve(evaluated);
             std::array<AI::QueryTestSample, AI::EnvironmentQuerySchemaLimits::Stages> scratch;
             auto facts = std::span{scratch}.first(scoring.tests.size());
-            for (std::uint32_t index = 0; index < snapshot.generated; ++index) {
+            for (std::size_t index = 0; index < evaluated; ++index) {
                 if (cancel.IsCancellationRequested())
                     return cancelled();
-                const auto point = std::get<Math::WorldCoordinate64>(items[index]);
-                if (const auto evaluated = EvaluateLatticeTests(scoring.tests, centers, point, facts); evaluated.HasError())
-                    return Preview::Failure(evaluated.ErrorValue());
-                scores.push_back(scoring.plan.Evaluate(index, 0, facts));
+                const auto candidate = PreviewCandidateIndex(index, total, evaluated);
+                const auto point = std::get<Math::WorldCoordinate64>(candidates.items[candidate]);
+                const bool visible = scoring.visibility && candidates.clear[index];
+                if (const auto tested = EvaluateLatticeTests(scoring.tests, point, visible, facts); tested.HasError())
+                    return Preview::Failure(tested.ErrorValue());
+                scores.push_back(scoring.plan.Evaluate(static_cast<std::uint32_t>(candidate), 0, facts));
                 const auto sampled = snapshot.candidates.size();
-                if (sampled < samples && index == sampled * (snapshot.generated - 1) / std::max<std::size_t>(1, samples - 1))
+                if (sampled < samples && index == PreviewCandidateIndex(sampled, evaluated, samples))
                     RecordLatticePreviewSample(snapshot, scoring.plan, scores.back(), point, facts);
             }
             const auto winners = scoring.plan.SelectBest(scores, plan.ResultSchema().maximumResults);
@@ -492,26 +578,33 @@ namespace Horo::Editor {
         const auto stages = plan.Value().Stages();
         if (!document.settings)
             return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
-        if (document.settings->visibility || document.settings->navigation)
+        if (document.settings->navigation)
             return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryStageUnsupported));
         const auto *generator = m_querySchema->Find(stages.front().generator);
         if (!generator)
             return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
-        auto scoring = CaptureLatticePreviewScoring(plan.Value(), *m_querySchema);
-        if (scoring.HasError())
-            return Result<void>::Failure(scoring.ErrorValue());
-
         auto contexts = CaptureLatticePreviewContext(plan.Value(), *m_querySchema, *current, pin, m_queryContextAccess);
         if (contexts.HasError())
             return Result<void>::Failure(contexts.ErrorValue());
+        auto scoring = CaptureLatticePreviewScoring(plan.Value(), *m_querySchema, *contexts.Value());
+        if (scoring.HasError())
+            return Result<void>::Failure(scoring.ErrorValue());
         const AI::QueryGeneratorProvenance origin{stages.front().id, generator->id, generator->origin.provider,
                                                   contexts.Value()->Revision()};
+        std::optional<LatticePreviewCandidates> candidates;
+        if (scoring.Value().visibility) {
+            auto visibility = CaptureVisibilityPreview(plan.Value(), *contexts.Value(), *scoring.Value().visibility, *current, pin.anchor,
+                                                       m_queryPreviewPhysics);
+            if (visibility.HasError())
+                return Result<void>::Failure(visibility.ErrorValue());
+            candidates.emplace(std::move(visibility).Value());
+        }
         auto output = std::make_shared<std::shared_ptr<const AI::QueryDebugSnapshot>>();
-        auto job =
-            m_sourceRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Cpu},
-                                               [plan = std::move(plan).Value(), contexts = std::move(contexts).Value(),
-                                                scoring = std::move(scoring).Value(), origin, output](const CancellationToken &cancel) {
-            auto evaluated = EvaluateLatticePreview(plan, *contexts, scoring, origin, cancel);
+        auto job = m_sourceRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Cpu},
+                                                      [plan = std::move(plan).Value(), contexts = std::move(contexts).Value(),
+                                                       scoring = std::move(scoring).Value(), origin, output,
+                                                       candidates = std::move(candidates)](const CancellationToken &cancel) mutable {
+            auto evaluated = EvaluateLatticePreview(plan, *contexts, scoring, origin, std::move(candidates), cancel);
             if (evaluated.HasError())
                 return Result<void>::Failure(std::move(evaluated).ErrorValue());
             *output = std::make_shared<const AI::QueryDebugSnapshot>(std::move(evaluated).Value());
@@ -1081,7 +1174,7 @@ namespace Horo::Editor {
             label(text("workspace.environment_query.perception_preview"), Theme::Muted());
             return true;
         }
-        if (opened->settings && (opened->settings->visibility || opened->settings->navigation)) {
+        if (opened->settings && opened->settings->navigation) {
             label(text("workspace.environment_query.provider_preview"), Theme::Muted());
             return true;
         }
@@ -1124,11 +1217,16 @@ namespace Horo::Editor {
         if (!preview.snapshot)
             return true;
         const auto &snapshot = *preview.snapshot;
-        label(text(query.Stages().size() == 1 ? "workspace.environment_query.preview_generator_only"
-                                              : "workspace.environment_query.preview_distance"),
-              Theme::Muted());
-        label(std::format("{} {} / {} {} / {} {} / {} {}", text("workspace.environment_query.preview_generated"), snapshot.generated,
-                          text("workspace.environment_query.preview_shown"), snapshot.candidates.size(),
+        auto previewDescription = text(query.Stages().size() == 1 ? "workspace.environment_query.preview_generator_only"
+                                                                  : "workspace.environment_query.preview_distance");
+        if (opened->settings && opened->settings->visibility)
+            previewDescription = text("workspace.environment_query.preview_visibility");
+        label(previewDescription, Theme::Muted());
+        const auto evaluated = snapshot.generated != snapshot.evaluated
+                                   ? std::format(" / {} {}", text("workspace.environment_query.preview_evaluated"), snapshot.evaluated)
+                                   : std::string{};
+        label(std::format("{} {}{} / {} {} / {} {} / {} {}", text("workspace.environment_query.preview_generated"), snapshot.generated,
+                          evaluated, text("workspace.environment_query.preview_shown"), snapshot.candidates.size(),
                           text("workspace.environment_query.preview_ranked"), snapshot.winnerCount,
                           text("workspace.environment_query.preview_invalid_coordinates"), snapshot.invalidCoordinates),
               Theme::Text());
