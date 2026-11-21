@@ -198,6 +198,14 @@ namespace Horo::AI {
                !binding_.operation.IsCancellationRequested();
     }
 
+    /** @copydoc DecisionGraphInstance::HasPendingTaskWake */
+    bool DecisionGraphInstance::HasPendingTaskWake() const noexcept {
+        if (!Available() || evaluating_ || occurrences_.size() != 1)
+            return false;
+        const auto &root = *occurrences_.front();
+        return root.active && root.tree && root.tree->HasPendingTaskWake();
+    }
+
     /** @copydoc DecisionGraphInstance::TryRetainCompatibleFlatPlan */
     Result<bool> DecisionGraphInstance::TryRetainCompatibleFlatPlan(const std::shared_ptr<const CookedDecisionPlan> &candidate) {
         using Retained = Result<bool>;

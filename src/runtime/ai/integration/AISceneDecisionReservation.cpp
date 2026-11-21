@@ -86,6 +86,10 @@ namespace Horo::AI {
                 static_cast<void>(decision_->Cancel(AiTaskCancellationReason::PlanReplaced));
             }
 
+            bool HasPendingTaskWake() const noexcept override {
+                return decision_->HasPendingTaskWake();
+            }
+
             DecisionGraphInstance &Decision() noexcept {
                 return *decision_;
             }

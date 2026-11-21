@@ -137,6 +137,11 @@ namespace Horo::AI {
         return {node, plan_->Bindings().BindingsForNode(node), blackboard, tick_, reason_};
     }
 
+    /** @copydoc BehaviorTreeInstance::HasPendingTaskWake */
+    bool BehaviorTreeInstance::HasPendingTaskWake() const noexcept {
+        return !shutdown_ && !evaluating_ && mailbox_->HasPending();
+    }
+
     /** @copydoc BehaviorTreeInstance::Evaluate */
     Result<AiTaskState> BehaviorTreeInstance::Evaluate(const std::uint64_t tick, const BlackboardSnapshot &blackboard,
                                                        const AgentHandle activeAgent, const AiTaskResumeReason reason) {

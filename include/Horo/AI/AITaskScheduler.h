@@ -168,6 +168,11 @@ namespace Horo::AI {
         virtual void CancelForReplacement() noexcept {
             Cancel();
         }
+
+        /** @brief Checks current task readiness on the scheduler lane without executing providers or consuming payloads. */
+        [[nodiscard]] virtual bool HasPendingTaskWake() const noexcept {
+            return false;
+        }
     };
 
     /** @brief Lowerable per-agent frequency, work, command and worker-admission policy. */
@@ -410,7 +415,7 @@ namespace Horo::AI {
         /** @brief Resolves periodic cadence; zero means external events only or suspension. */
         [[nodiscard]] std::uint64_t PeriodicInterval(const Entry &entry) const noexcept;
         /** @brief Builds stable priority/age/identity order into reserved storage. */
-        void Order();
+        void Order(bool admitTaskWakes);
         /** @brief Runs an eligible entry without charging a held generation or losing its wake. */
         void EvaluateReadyEntry(Entry &entry, std::uint64_t tick, AgentHandle pausedAgent);
         /** @brief Rechecks lifetime immediately around callbacks. @param entry Owned slot. @return Whether retired. */

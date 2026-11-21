@@ -112,6 +112,8 @@ namespace Horo::AI {
          * @return The same lifecycle outcome or original typed failure as Step.
          */
         [[nodiscard]] Result<AiTaskState> StepWithTrace(const DecisionGraphStepInput &input, DecisionStepTrace &trace);
+        /** @brief Tests the owner-lane mailbox of the flat tree admitted by the scheduler. */
+        [[nodiscard]] bool HasPendingTaskWake() const noexcept;
         [[nodiscard]] Result<void> Cancel(AiTaskCancellationReason reason);
         ~DecisionGraphInstance();
 

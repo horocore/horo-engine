@@ -326,6 +326,8 @@ namespace Horo::AI {
     private:
         friend class BehaviorTreeExecutionPlan;
         friend class DecisionGraphInstance;
+        /** @brief Reads the current task mailbox hint without draining native payloads. */
+        [[nodiscard]] bool HasPendingTaskWake() const noexcept;
         /** @brief Tries only the compatible no-callback branch, leaving incompatible state untouched. */
         [[nodiscard]] Result<bool> TryRetainCompatiblePlan(const std::shared_ptr<const BehaviorTreeExecutionPlan> &candidate);
         /** @brief Validates replacement ownership, schema, task range and executor binding before any cancellation. */

@@ -9,6 +9,7 @@
 #include <array>
 #include <bit>
 #include <catch2/generators/catch_generators.hpp>
+#include <thread>
 
 namespace Horo::AI {
     namespace {
@@ -261,11 +262,27 @@ namespace Horo::AI {
             CHECK(fixture.probe.lastResumeTask == task);
             CHECK(fixture.probe.lastResumeReason == AiTaskResumeReason::Event);
             CHECK(tick(4) == 0);
-            REQUIRE(scheduler->Wake(agent, {.perception = true, .task = true}).HasValue());
+            const auto continuation = fixture.probe.continuation;
+            REQUIRE(continuation.IsCurrent());
+            auto publicationResult = AiTaskPublicationDisposition::Stale;
+            {
+                const std::jthread notifier{[&] { publicationResult = continuation.NotifyEvent(); }};
+            }
+            CHECK(publicationResult == AiTaskPublicationDisposition::Accepted);
+            REQUIRE(continuation.NotifyEvent() == AiTaskPublicationDisposition::Accepted);
             CHECK(tick(5) == 1);
             CHECK(fixture.probe.resumes == 2);
             CHECK(fixture.probe.lastResumeReason == AiTaskResumeReason::Event);
             CHECK(tick(6) == 0);
+
+            AiTaskTerminalResult terminal{.state = AiTaskState::Succeeded};
+            REQUIRE(continuation.PublishTerminal(terminal).Value() == AiTaskPublicationDisposition::Accepted);
+            CHECK(tick(7) == 1);
+            CHECK(fixture.probe.resumes == 2);
+            CHECK(fixture.probe.cleanups == 1);
+            CHECK(fixture.probe.lastTerminal == AiTaskState::Succeeded);
+            CHECK(continuation.NotifyEvent() == AiTaskPublicationDisposition::Stale);
+            CHECK(tick(8) == 0);
             runtime.BeginShutdown();
         }
 

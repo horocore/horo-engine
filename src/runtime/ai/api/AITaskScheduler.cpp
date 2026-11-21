@@ -607,7 +607,7 @@ namespace Horo::AI {
     }
 
     /** @copydoc AiTaskScheduler::Order */
-    void AiTaskScheduler::Order() {
+    void AiTaskScheduler::Order(const bool admitTaskWakes) {
         order_.clear();
         for (std::size_t i = 0; i < entries_.size(); ++i) {
             auto &entry = entries_[i];
@@ -619,6 +619,12 @@ namespace Horo::AI {
                 if (!entry.pending.Any())
                     entry.waitingSince = entry.nextTick;
                 entry.pending.polling = true;
+            }
+            if (admitTaskWakes && entry.policy.intervalTicks == 0 && !entry.pending.task && entry.tier != AiSimulationTier::Suspended &&
+                entry.executor->HasPendingTaskWake()) {
+                if (!entry.pending.Any())
+                    entry.waitingSince = report_.tick;
+                entry.pending.task = true;
             }
             if (entry.pending.Any() || entry.intents)
                 order_.push_back(i);
@@ -760,7 +766,7 @@ namespace Horo::AI {
             ApplyRelevance();
         if (!closed_) {
             jobs_->Pump();
-            Order();
+            Order(true);
         }
         report_.deferred = 0;
         report_.starved = 0;
@@ -809,7 +815,7 @@ namespace Horo::AI {
         if (committed_)
             return Result<AiSchedulingReport>::Success(report_);
         inPhase_ = true;
-        Order();
+        Order(false);
         for (const auto index : order_) {
             if (closed_)
                 break;
