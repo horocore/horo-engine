@@ -1341,8 +1341,9 @@ creating the Decision executor. The graph wakes on watched Perception changes,
 including retirement of an observed source in a committed Scene update. It also
 wakes on committed Blackboard dependencies, accepted task continuation events,
 and the next fixed deadline of an active service or time limit.
-Other controllers retain their fixed-tick cadence. In Editor Play, an explicit
-`settings.ai` scheduler must select best-effort mode when the project declares
+Other controllers retain their fixed-tick cadence. In Editor Play and headless
+product launch, an explicit `settings.ai` scheduler must select best-effort mode
+when the project declares
 these watches. Its validated limits and development grants still apply.
 Projects without `settings.ai` use the mode selected by their watches.
 Deterministic headless replay requires its regular fixed-tick scheduling policy.

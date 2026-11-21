@@ -314,6 +314,22 @@ namespace Horo::Application::Internal {
             return worlds;
         }
 
+        /** @brief Admits the project scheduler and the authored Perception wake policy together. */
+        [[nodiscard]] Result<AI::AiSceneCookedDecisionExecution> ResolveProductDecisionExecution(HeadlessProjectSceneResources &resources) {
+            using Execution = Result<AI::AiSceneCookedDecisionExecution>;
+            const bool reactive = resources.perceptionPolicy && SelectsReactiveDecisions(*resources.perceptionPolicy);
+            const auto mode = reactive ? AI::AiSchedulingMode::BestEffort : AI::AiSchedulingMode::Deterministic;
+            const auto &configured = resources.decisionScheduler;
+            if (configured && configured->mode != mode)
+                return Execution::Failure(MakeError(
+                    AI::AIErrors::SchedulerPolicyInvalid, "Headless AI scheduler mode must match the authored Perception watches."));
+            AI::AiSceneCookedDecisionExecution execution{resources.jobs, configured.value_or(AI::AiTaskSchedulerSettings{}), {}};
+            execution.scheduler.mode = mode;
+            if (reactive)
+                execution.timing = AI::AiCookedDecisionTiming::BestEffortReactive;
+            return Execution::Success(std::move(execution));
+        }
+
         /** @brief Admits the project's requested Decision and replay services before composing a live world. */
         Result<void> PrepareProductDecisions(HeadlessSceneActivationInput &input, const ProductLaunch &launch,
                                              HeadlessProjectSceneResources &resources) {
@@ -326,17 +342,16 @@ namespace Horo::Application::Internal {
             if (!resources.committed)
                 return Result<void>::Failure(
                     MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI decisions require the selected committed Scene generation."));
-            if (resources.decisionScheduler.mode != AI::AiSchedulingMode::Deterministic)
-                return Result<void>::Failure(
-                    MakeError(AI::AIErrors::SchedulerPolicyInvalid, "This product launch requires a deterministic AI scheduler."));
+            auto execution = ResolveProductDecisionExecution(resources);
+            if (execution.HasError())
+                return Result<void>::Failure(execution.ErrorValue());
             auto querySchema = AI::CaptureBuiltinQuerySchema();
             if (querySchema.HasError())
                 return Result<void>::Failure(querySchema.ErrorValue());
             input.cookedDecisions = std::make_shared<const HeadlessCookedDecisionInput>(
                 HeadlessCookedDecisionInput{.committed = *resources.committed,
                                             .bindings = launch.cookedDecisionBindings,
-                                            .execution =
-                                                AI::AiSceneCookedDecisionExecution{resources.jobs, resources.decisionScheduler, {}},
+                                            .execution = std::move(execution).Value(),
                                             .provider = HeadlessDecisionProvider::SelectedNativeGameplay,
                                             .querySchema = std::make_shared<const AI::QuerySchemaRegistry>(std::move(querySchema).Value()),
                                             .queryWorkUnitsLimit = resources.queryWorkUnitsLimit});
