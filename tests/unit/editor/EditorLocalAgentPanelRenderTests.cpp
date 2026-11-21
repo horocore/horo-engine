@@ -243,6 +243,48 @@ namespace {
         }));
     }
 
+    TEST_CASE("Project reattachment abandons the old HTTP turn and accepts a fresh turn", "[.][chat-http]") {
+        const auto *endpoint = std::getenv("HORO_MODEL_TEST_ENDPOINT");
+        const auto *gateName = std::getenv("HORO_MODEL_TEST_CHAT_GATE");
+        REQUIRE(endpoint);
+        REQUIRE(gateName);
+        const auto gate = std::filesystem::path{gateName} / "project";
+        LocalAgentFixture fixture{"en-US"};
+        fixture.Draw(420);
+        fixture.Enter("##Endpoint", endpoint);
+        fixture.Enter("##Model", "editor-project-lifecycle");
+        fixture.Enter("##Prompt", "Reply for retiring workspace");
+        fixture.Activate("###ask");
+        REQUIRE(Await([&] {
+            const auto text = fixture.DrawnText();
+            return std::filesystem::is_regular_file(gate / "started") && text.find("Retiring workspace started") != std::string::npos;
+        }));
+        fixture.panels.DetachAll();
+        PanelContext replacement{.dataBus = fixture.gui.editorEvents,
+                                 .inputRouter = &fixture.gui.input,
+                                 .workspaceInputContext = &fixture.workspace,
+                                 .projectIdentity = "replacement"};
+        fixture.panels.AttachAll(replacement);
+        {
+            std::ofstream release{gate / "release"};
+            REQUIRE(release.good());
+        }
+        bool leaked = false;
+        REQUIRE(Await([&] {
+            const auto text = fixture.DrawnText();
+            leaked |= text.find("Retired workspace answer") != std::string::npos;
+            return text.find("Stop") == std::string::npos;
+        }));
+        fixture.Enter("##Prompt", "Reply for replacement workspace");
+        fixture.Activate("###ask");
+        REQUIRE(Await([&] {
+            const auto text = fixture.DrawnText();
+            leaked |= text.find("Retired workspace answer") != std::string::npos;
+            return text.find("Replacement workspace answer") != std::string::npos;
+        }));
+        CHECK_FALSE(leaked);
+    }
+
     TEST_CASE("A completed source reply opens only its exact publication for review", "[.][chat-http]") {
         const auto *endpoint = std::getenv("HORO_MODEL_TEST_ENDPOINT");
         REQUIRE(endpoint);

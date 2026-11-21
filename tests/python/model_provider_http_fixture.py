@@ -62,11 +62,13 @@ class Handler(BaseHTTPRequestHandler):
         if not cloud and payload["model"] in {"editor-local-tool", "editor-approved-tool"}:
             self.send_editor_local_tool(payload)
             return
-        if not cloud and payload["model"] == "editor-dock-lifecycle":
-            self.send_dock_lifecycle(payload)
-            return
-        if not cloud and payload["model"] == "editor-inline-patch":
-            self.send_inline_patch(payload)
+        editor_chat = {
+            "editor-dock-lifecycle": self.send_dock_lifecycle,
+            "editor-project-lifecycle": self.send_project_lifecycle,
+            "editor-inline-patch": self.send_inline_patch,
+        }.get(payload["model"])
+        if not cloud and editor_chat:
+            editor_chat(payload)
             return
         if not cloud and payload["model"] in {"editor-local-loading", "editor-local-idle"}:
             self.hold_local_response(payload["model"] == "editor-local-idle")
@@ -110,14 +112,26 @@ class Handler(BaseHTTPRequestHandler):
         self.send_records([json.dumps(frame) + "\n" for frame in frames])
 
     def send_dock_lifecycle(self, payload):
-        gate = self.server.chat_gate
+        self.send_gated_chat(payload, self.server.chat_gate, "Keep this request running", "First visible line",
+                             "Final answer after hiding the dock")
+
+    def send_project_lifecycle(self, payload):
+        messages = payload.get("messages")
+        if messages == [{"role": "user", "content": "Reply for replacement workspace"}]:
+            self.send_records(['{"message":{"content":"Replacement workspace answer"}}\n', '{"done":true}\n'])
+            return
+        gate = self.server.chat_gate / "project"
+        gate.mkdir(exist_ok=True)
+        self.send_gated_chat(payload, gate, "Reply for retiring workspace", "Retiring workspace started", "Retired workspace answer")
+
+    def send_gated_chat(self, payload, gate, prompt, streamed, completed):
         if (self.headers.get("Authorization") is not None
-                or payload.get("messages") != [{"role": "user", "content": "Keep this request running"}]
+                or payload.get("messages") != [{"role": "user", "content": prompt}]
                 or payload.get("tools") or (gate / "started").exists()):
             self.send_records(["{}"], status=400)
             return
-        first = b'{"message":{"content":"First visible line\\n"}}\n'
-        final = b'{"message":{"content":"Final answer after hiding the dock"}}\n{"done":true}\n'
+        first = (json.dumps({"message": {"content": streamed + "\n"}}) + "\n").encode("utf-8")
+        final = (json.dumps({"message": {"content": completed}}) + '\n{"done":true}\n').encode("utf-8")
         self.send_response(200)
         self.send_header("Content-Type", "application/x-ndjson")
         self.send_header("Content-Length", str(len(first) + len(final)))
