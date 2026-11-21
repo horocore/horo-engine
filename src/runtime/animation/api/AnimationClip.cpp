@@ -144,7 +144,10 @@ namespace Horo::Animation {
                 return Reject<void>(AnimationErrors::ClipMalformed, "A clip key has invalid time or transform data.");
             if (!IsKnown(key.interpolation))
                 return Reject<void>(AnimationErrors::ClipUnsupported, "A clip key uses an unknown interpolation mode.");
-            key.transform.rotation = key.transform.rotation.Normalized();
+            const auto rotation = key.transform.rotation.TryNormalized();
+            if (rotation.HasError())
+                return Reject<void>(AnimationErrors::ClipMalformed, "A clip key rotation cannot be normalized.");
+            key.transform.rotation = rotation.Value();
             return Result<void>::Success();
         }
 
@@ -350,6 +353,34 @@ namespace Horo::Animation {
             return {.translation = Math::Lerp(leftKey.transform.translation, right->transform.translation, alpha),
                     .rotation = Math::Slerp(leftKey.transform.rotation, right->transform.rotation, alpha),
                     .scale = Math::Lerp(leftKey.transform.scale, right->transform.scale, alpha)};
+        }
+
+        /** @brief Resolves the single authored root against the immutable canonical track order. */
+        [[nodiscard]] std::optional<std::size_t> ResolveRootMotionTrack(const AnimationClipData &data,
+                                                                        const SkeletonAsset &skeleton) noexcept {
+            const auto roots = skeleton.RootJoints();
+            if (!data.descriptor.hasRootMotion || data.descriptor.kind != AnimationClipKind::Absolute || roots.size() != 1)
+                return std::nullopt;
+            const auto track = std::ranges::lower_bound(data.tracks, roots.front(), {}, &AnimationJointTrack::joint);
+            if (track == data.tracks.end() || track->joint != roots.front())
+                return std::nullopt;
+            return static_cast<std::size_t>(track - data.tracks.begin());
+        }
+
+        /** @brief Appends one rigid segment without inserting motion across a loop seam. */
+        [[nodiscard]] bool AppendRootMotion(AnimationRootMotionDelta &motion, const AnimationJointTrack &track,
+                                            const AnimationClipTraversalSegment &segment) noexcept {
+            const auto from = Interpolate(track, segment.from);
+            const auto to = Interpolate(track, segment.to);
+            const auto displacement = to.translation - from.translation;
+            if (!Math::IsFinite(displacement))
+                return false;
+            // Clip key rotations are canonicalized to unit quaternions at asset creation.
+            const auto inverseFrom = from.rotation.Inverse();
+            const auto basis = (motion.rotation * inverseFrom).Normalized();
+            motion.translation += basis.Rotate(displacement);
+            motion.rotation = (basis * to.rotation).Normalized();
+            return Math::IsFinite(motion.translation);
         }
 
         [[nodiscard]] AnimationClipOutcome<void> ValidatePoseSpan(const std::span<const Math::Transform> pose, const std::size_t jointCount,
@@ -566,8 +597,9 @@ namespace Horo::Animation {
         auto jointIndices = ResolveJointIndices(candidate, skeleton);
         if (jointIndices.HasError())
             return Result<AnimationClipAsset>::Failure(jointIndices.ErrorValue());
+        const auto rootMotionTrack = ResolveRootMotionTrack(candidate, skeleton);
         return Result<AnimationClipAsset>::Success(
-            AnimationClipAsset{std::move(candidate), std::move(jointIndices).Value(), CaptureReferencePose(skeleton)});
+            AnimationClipAsset{std::move(candidate), std::move(jointIndices).Value(), CaptureReferencePose(skeleton), rootMotionTrack});
     }
 
     /** @copydoc AnimationClipAsset::Data */
@@ -685,6 +717,29 @@ namespace Horo::Animation {
         if (filled.HasError())
             return AnimationClipOutcome<AnimationClipTrace>::Failure(filled.ErrorValue());
         return AnimationClipOutcome<AnimationClipTrace>::Success({full.Value(), filled.Value()});
+    }
+
+    /** @copydoc AnimationClipAsset::ExtractRootMotionPrepared */
+    AnimationClipOutcome<AnimationClipRootMotion> AnimationClipAsset::ExtractRootMotionPrepared(
+        const AnimationClipCursor cursor, const AnimationTimeDelta delta, const AnimationClipRegion region,
+        const std::span<AnimationClipTraversalSegment> scratch, const AnimationClipLimits &limits,
+        const AnimationClipAdmissionState admission) const {
+        using Outcome = AnimationClipOutcome<AnimationClipRootMotion>;
+        if (const auto admitted = ValidateAdmission(admission); admitted.HasError())
+            return Outcome::Failure(admitted.ErrorValue());
+        if (!rootMotionTrack_.has_value())
+            return HotReject<AnimationClipRootMotion>(AnimationErrors::ClipUnsupported,
+                                                      "Root motion requires a flagged absolute clip with a single tracked root.");
+        const auto trace = TraceRegionPrepared(cursor, delta, region, scratch, limits, admission);
+        if (trace.HasError())
+            return Outcome::Failure(trace.ErrorValue());
+        AnimationClipRootMotion motion{trace.Value().traversal};
+        const auto &track = data_.tracks[*rootMotionTrack_];
+        for (const auto &segment : scratch.first(trace.Value().segments))
+            if (!AppendRootMotion(motion.delta, track, segment))
+                return HotReject<AnimationClipRootMotion>(AnimationErrors::ClipMalformed,
+                                                          "Root motion displacement exceeds the finite scene range.");
+        return Outcome::Success(motion);
     }
 
     /** @copydoc AnimationClipAsset::SamplePrepared */

@@ -800,12 +800,13 @@ any other pose query.
 Root motion produces a transform delta for one authoritative fixed-tick player
 interval from the animation clip's root joint.
 
-```cpp
-struct RootMotionDelta {
-    Vec3 translation;
-    Quat rotation;
-};
-```
+`AnimationClipAsset::ExtractRootMotionPrepared` resolves one tracked skeleton
+root for a flagged absolute clip. It reuses the directed clip traversal and
+composes translation and rotation in the starting root's frame. Each directed
+segment contributes its own endpoint displacement. Loop seams insert no jump
+from the last key to the first, and PingPong turns compose the reverse segment.
+The result includes the traversal cursor. Extraction uses caller-owned scratch
+storage and does not commit the cursor or produce a movement request.
 
 Rules:
 

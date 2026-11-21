@@ -3,7 +3,9 @@
 
 #include <array>
 #include <atomic>
+#include <catch2/catch_approx.hpp>
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <cstdlib>
 #include <limits>
 #include <new>
@@ -108,6 +110,73 @@ namespace Horo::Animation {
             CHECK(error.code.Value() == expected.code.Value());
         }
     }  // namespace
+
+    TEST_CASE("Clip root motion composes directed rigid intervals without advancing the cursor", "[animation][clip][root-motion]") {
+        const auto skeleton = ClipSkeleton();
+        auto data = ClipData();
+        data.descriptor.hasRootMotion = true;
+        auto end = Key(Duration, 10.0F);
+        end.transform.rotation = {0.0F, 2.0e38F, 0.0F, 2.0e38F};
+        data.tracks.push_back({.joint = Id<JointId>(10), .keys = {Key(0, 0.0F), end}});
+        const auto clip = AnimationClipAsset::Create(std::move(data), skeleton);
+        REQUIRE(clip.HasValue());
+
+        const AnimationClipRegion loop{{0}, {Duration}, AnimationWrapMode::Loop};
+        std::array<AnimationClipTraversalSegment, 4> scratch;
+        const auto before = HoroAnimationTestAllocationCount();
+        const auto forward = clip.Value().ExtractRootMotionPrepared({}, {2 * Duration}, loop, scratch);
+        const auto reverse = clip.Value().ExtractRootMotionPrepared({}, {-2 * Duration}, loop, scratch);
+        const auto after = HoroAnimationTestAllocationCount();
+        CHECK(before == after);
+        REQUIRE(forward.HasValue());
+        REQUIRE(reverse.HasValue());
+        CHECK(forward.Value().traversal.sampleTime == AnimationTime{0});
+        const auto &ahead = forward.Value().delta;
+        const auto &back = reverse.Value().delta;
+        CHECK(ahead.translation.x == Catch::Approx(10.0F));
+        CHECK(ahead.translation.z == Catch::Approx(-10.0F));
+        const auto net = ahead.translation + ahead.rotation.Rotate(back.translation);
+        CHECK(net.x == Catch::Approx(0.0F).margin(1e-4F));
+        CHECK(net.z == Catch::Approx(0.0F).margin(1e-4F));
+        CHECK(std::abs((ahead.rotation * back.rotation).w) == Catch::Approx(1.0F));
+
+        const AnimationClipRegion pingPong{{0}, {Duration}, AnimationWrapMode::PingPong};
+        const auto roundTrip = clip.Value().ExtractRootMotionPrepared({}, {2 * Duration}, pingPong, scratch);
+        REQUIRE(roundTrip.HasValue());
+        CHECK(roundTrip.Value().delta.translation.x == Catch::Approx(0.0F).margin(1e-4F));
+        CHECK(roundTrip.Value().delta.translation.z == Catch::Approx(0.0F).margin(1e-4F));
+        CHECK(std::abs(roundTrip.Value().delta.rotation.w) == Catch::Approx(1.0F));
+        const auto held = clip.Value().ExtractRootMotionPrepared({}, {0}, loop, {});
+        REQUIRE(held.HasValue());
+        CHECK(held.Value().delta.translation == Math::Vec3{});
+        CHECK(held.Value().delta.rotation == Math::Quaternion::Identity());
+    }
+
+    TEST_CASE("Clip root motion rejects unsupported sources and finite capacity failures", "[animation][clip][root-motion]") {
+        const auto skeleton = ClipSkeleton();
+        auto data = ClipData();
+        data.descriptor.hasRootMotion = true;
+        const auto noRoot = AnimationClipAsset::Create(data, skeleton);
+        REQUIRE(noRoot.HasValue());
+        std::array<AnimationClipTraversalSegment, 2> scratch;
+        const AnimationClipRegion loop{{0}, {Duration}, AnimationWrapMode::Loop};
+        const auto unsupported = noRoot.Value().ExtractRootMotionPrepared({}, {10}, loop, scratch);
+        REQUIRE(unsupported.HasError());
+        CHECK(unsupported.ErrorValue().failure == AnimationClipFailure::Unsupported);
+        const auto cancelled =
+            noRoot.Value().ExtractRootMotionPrepared({}, {10}, loop, scratch, {}, AnimationClipAdmissionState::CancellationRequested);
+        REQUIRE(cancelled.HasError());
+        CHECK(cancelled.ErrorValue().failure == AnimationClipFailure::Cancelled);
+        data.tracks.push_back({.joint = Id<JointId>(10), .keys = {Key(0, -2.0e38F), Key(Duration, 2.0e38F)}});
+        const auto oversized = AnimationClipAsset::Create(std::move(data), skeleton);
+        REQUIRE(oversized.HasValue());
+        const auto limited = oversized.Value().ExtractRootMotionPrepared({}, {2 * Duration}, loop, std::span{scratch}.first(1));
+        REQUIRE(limited.HasError());
+        CHECK(limited.ErrorValue().failure == AnimationClipFailure::LimitExceeded);
+        const auto overflow = oversized.Value().ExtractRootMotionPrepared({}, {Duration}, loop, scratch);
+        REQUIRE(overflow.HasError());
+        CHECK(overflow.ErrorValue().failure == AnimationClipFailure::Malformed);
+    }
 
     TEST_CASE("Clip creation canonicalizes track and key order into detached immutable data", "[unit][animation][clip][determinism]") {
         const SkeletonAsset skeleton = ClipSkeleton();
