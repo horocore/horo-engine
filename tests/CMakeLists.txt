@@ -707,12 +707,13 @@ if(HORO_BUILD_NETWORK_GNS)
     target_compile_definitions(HoroGnsNativeQualificationSupport PRIVATE VALVE_CRYPTO_ENABLE_25519 VALVE_CRYPTO_OPENSSL VALVE_CRYPTO_25519_OPENSSLEVP)
     target_link_libraries(HoroGnsNativeQualificationSupport PUBLIC HoroNetworkTransportGNSFactoryInternal
         PRIVATE HoroEngine::Platform GameNetworkingSockets::static protobuf::libprotobuf MbedTLS::mbedcrypto)
-    add_executable(HoroGnsSecureProductChild integration/network/gns/GnsSecureProductChild.cpp)
+    add_executable(HoroGnsSecureProductChild integration/network/gns/GnsSecureProductChild.cpp
+        integration/network/gns/GnsAuthoritativeAiSupport.cpp)
     target_compile_features(HoroGnsSecureProductChild PRIVATE cxx_std_20)
     target_link_libraries(HoroGnsSecureProductChild PRIVATE HoroNetworkModeHostInternal)
     target_compile_definitions(HoroGnsSecureProductChild PRIVATE HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>)
     target_include_directories(HoroGnsSecureProductChild PRIVATE ${PROJECT_SOURCE_DIR}/tests/unit/runtime/networking
-        ${PROJECT_SOURCE_DIR}/tests/unit/runtime/animation)
+        ${PROJECT_SOURCE_DIR}/tests/unit/runtime/animation ${CMAKE_CURRENT_SOURCE_DIR}/support)
     target_link_libraries(HoroGnsSecureProductChild PRIVATE HoroGnsNativeQualificationSupport HoroNetworkProductHost
         HoroEngine::NetworkTransportGNS HoroEngine::NetworkTransportNull HoroEngine::Platform HoroEngine::AnimationCookedAssets
         HoroEngine::AnimationGraphSourceCodec

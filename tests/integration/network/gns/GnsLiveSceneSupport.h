@@ -6,6 +6,7 @@
 #include "../../../unit/runtime/physics/PhysicsSceneActivationTestSupport.h"
 #include "../NetworkAdmissionProductTestSupport.h"
 #include "../NetworkProductPrefabTestSupport.h"
+#include "GnsAuthoritativeAiSupport.h"
 #include "GnsEvidenceAssertions.h"
 #include "GnsPresentationAnimationSupport.h"
 #include "HeadlessInitialStateAuthority.h"
@@ -135,8 +136,9 @@ namespace Horo::Network::NativeQualification {
         /** @brief Owns one native test module registry, authored resource boundary and observable Scene service. */
         struct Product final {
             Product(const AdmissionTests::ProductPair &fixture, const std::shared_ptr<CredentialObservation> &credentials, bool authority,
-                    Projection projection)
-                : routes(fixture), grants(std::make_shared<Grants>(credentials)), authority(authority), projection_(projection) {
+                    Projection projection, bool qualifiesAi = false)
+                : routes(fixture), grants(std::make_shared<Grants>(credentials)), authority(authority), projection_(projection),
+                  qualifiesAi_(qualifiesAi) {
                 auto settings = DefaultNetworkProjectSettings(Id<NetworkProjectSettingsId>(10)).Value();
                 settings.supportedRoles = NetworkProjectRoleSet::Client | NetworkProjectRoleSet::DedicatedServer;
                 settings.defaultRole = NetworkProjectRole::Client;
@@ -159,6 +161,8 @@ namespace Horo::Network::NativeQualification {
             [[nodiscard]] Result<App::NetworkProductComposition> Compose(NetworkModeFactories factories) {
                 const auto declaration = Declaration();
                 const auto target = AssetCookTargetId::Parse("linux-x64").Value();
+                if (qualifiesAi_)
+                    ai = std::make_unique<AuthoritativeAi>(target);
                 auto definition = Definition(target);
                 loadBoundary = {{}, std::chrono::steady_clock::now() + std::chrono::seconds(5)};
                 const auto field = declaration.schema.fields.front().id;
@@ -176,6 +180,8 @@ namespace Horo::Network::NativeQualification {
                                                                                                    declaration.schema.version,
                                                                                                    {{field, Property()}}},
                                                         .initialSceneState = state};
+                if (ai)
+                    ai->Configure(input, jobs);
                 if (projection_ == Projection::Action || (projection_ == Projection::Velocity && !authority)) {
                     input.animationTarget = target;
                     input.animationIdentities =
@@ -285,6 +291,7 @@ namespace Horo::Network::NativeQualification {
             std::shared_ptr<Grants> grants;
             std::shared_ptr<App::HeadlessInitialStateHost> state;
             INetworkModeService *scene{};  // Synchronous host-owned facade, cleared before host teardown.
+            std::unique_ptr<AuthoritativeAi> ai;
 
         private:
             [[nodiscard]] ReplicationDeclaration Declaration() const {
@@ -341,6 +348,8 @@ namespace Horo::Network::NativeQualification {
                 else if (authority)
                     entity.components.behaviors.push_back(
                         {{1}, Gameplay::BehaviorTypeId::Parse("game.tests.replicated_presentation_motion").Value()});
+                if (ai)
+                    ai->Attach(entity);
                 builder.Add(std::move(entity));
                 const auto installed = registry.Snapshot();
                 for (const auto &asset : installed.Records())
@@ -350,6 +359,7 @@ namespace Horo::Network::NativeQualification {
 
             const bool authority;
             const Projection projection_;
+            const bool qualifiesAi_;
             bool actionQueued_{};
             JobSystem jobs{{1, 8}};
             Assets::AssetRegistry registry;

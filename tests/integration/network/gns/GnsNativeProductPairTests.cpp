@@ -51,6 +51,7 @@ namespace Horo::Network::NativeQualification {
             std::atomic<bool> qualified{};
             std::atomic<bool> rejected{};
             std::atomic<bool> snapshot{};
+            std::atomic<bool> aiVerified{};
             std::atomic<bool> finished{};
             std::optional<Result<ExternalProcessResult>> result;
             std::string safeError;  // Written only by this worker; inspected only after join.
@@ -91,6 +92,8 @@ namespace Horo::Network::NativeQualification {
                     state.rejected.store(true);
                 if (line.text == (side == 0 ? "NATIVE_SNAPSHOT server" : "NATIVE_SNAPSHOT client"))
                     state.snapshot.store(true);
+                if (line.text == (side == 0 ? "NATIVE_AI authority" : "NATIVE_AI client"))
+                    state.aiVerified.store(true);
             };
             return request;
         }
@@ -147,6 +150,8 @@ namespace Horo::Network::NativeQualification {
             REQUIRE(server.ready.load());
             RequireQualified(client, expectNativeRejection, !liveProjection.empty());
             RequireQualified(server, expectNativeRejection, !liveProjection.empty());
+            CHECK(client.aiVerified.load() == (liveProjection == "--live-ai"));
+            CHECK(server.aiVerified.load() == (liveProjection == "--live-ai"));
         }
 
         void Provision(FixtureDirectory &fixture) {
@@ -199,6 +204,13 @@ namespace Horo::Network::NativeQualification {
         FixtureDirectory fixture;
         Provision(fixture);
         RunPair(fixture.root, {}, false, "--live-scene");
+    }
+
+    TEST_CASE("Two signed native ProductHost processes execute cooked AI only on the authority",
+              "[integration][network][gns][native-fixture][ai]") {
+        FixtureDirectory fixture;
+        Provision(fixture);
+        RunPair(fixture.root, {}, false, "--live-ai");
     }
 
     TEST_CASE("Two signed native ProductHost processes drive a replica pose with committed Character velocity",

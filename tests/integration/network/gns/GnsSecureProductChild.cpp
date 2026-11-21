@@ -27,6 +27,7 @@ namespace Horo::Network::NativeQualification {
             bool liveVelocity{};
             bool liveAction{};
             bool lateJoinAction{};
+            bool liveAi{};
             unsigned side{};
         } input;
 
@@ -256,8 +257,10 @@ namespace Horo::Network::NativeQualification {
                                                                               sessions,
                                                                               NetworkWorldCompositionPurpose::Gameplay,
                                                                               capture->WorldBinding(),
-                                                                              composition.fixedParticipant,
-                                                                              composition.pollRetirement},
+                                                                              std::move(composition.fixedParticipant),
+                                                                              std::move(composition.pollRetirement),
+                                                                              {},
+                                                                              std::move(composition.aiHealth)},
                                                                              std::move(composition.factories), &targetDiagnostic);
             if (created.HasError()) {
                 ReportError(created.ErrorValue());
@@ -417,7 +420,7 @@ namespace Horo::Network::NativeQualification {
                 return;
             }
             REQUIRE(owners.observation->snapshotsSent > 0);
-            if (input.liveScene) {
+            if (input.liveScene || input.liveAi) {
                 const auto y = owners.live->SceneY();
                 REQUIRE(y);
                 REQUIRE(*y < LiveScene::AuthorityStartY);
@@ -456,6 +459,14 @@ namespace Horo::Network::NativeQualification {
             if (owners.live) {
                 VerifyPresentation(owners, presentation);
                 std::cout << "NATIVE_SNAPSHOT " << (input.side == 0 ? "server" : "client") << '\n' << std::flush;
+                if (owners.live->ai) {
+                    const bool authority = input.side == 0;
+                    owners.live->ai->Verify(*owners.host,
+                                            authority ? World(NetworkModeWorldKind::AuthorityServer, 1701)
+                                                      : World(NetworkModeWorldKind::Client, 1702),
+                                            authority);
+                    std::cout << "NATIVE_AI " << (authority ? "authority" : "client") << '\n' << std::flush;
+                }
             }
             REQUIRE(owners.host->ClientConnectionTerminal() == nullptr);
             ShutdownAndVerifyReuse(owners);
@@ -468,14 +479,15 @@ namespace Horo::Network::NativeQualification {
         REQUIRE(input.side <= 1);
         REQUIRE_FALSE(input.directory.empty());
         ChildOwners owners;
-        if (input.liveScene || input.liveVelocity || input.liveAction || input.lateJoinAction) {
+        if (input.liveScene || input.liveVelocity || input.liveAction || input.lateJoinAction || input.liveAi) {
             REQUIRE_FALSE(input.rejectNativeRoot);
             auto projection = LiveScene::Projection::Transform;
             if (input.liveVelocity)
                 projection = LiveScene::Projection::Velocity;
             if (input.liveAction || input.lateJoinAction)
                 projection = LiveScene::Projection::Action;
-            owners.live = std::make_unique<LiveScene::Product>(owners.fixtures, owners.credentials, input.side == 0, projection);
+            owners.live =
+                std::make_unique<LiveScene::Product>(owners.fixtures, owners.credentials, input.side == 0, projection, input.liveAi);
         }
         CreateHost(owners);
         if (input.rejectNativeRoot)
@@ -496,7 +508,8 @@ int main(int argc, char **argv) {
                Catch::Clara::Opt(Horo::Network::NativeQualification::input.liveScene)["--live-scene"] |
                Catch::Clara::Opt(Horo::Network::NativeQualification::input.liveVelocity)["--live-velocity"] |
                Catch::Clara::Opt(Horo::Network::NativeQualification::input.liveAction)["--live-action"] |
-               Catch::Clara::Opt(Horo::Network::NativeQualification::input.lateJoinAction)["--late-join-action"];
+               Catch::Clara::Opt(Horo::Network::NativeQualification::input.lateJoinAction)["--late-join-action"] |
+               Catch::Clara::Opt(Horo::Network::NativeQualification::input.liveAi)["--live-ai"];
     session.cli(cli);
     return session.run(argc, argv);
 }
