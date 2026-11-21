@@ -337,7 +337,9 @@ namespace Horo::Editor::Proposals {
         DeleteRecovery,
         Renamed,
         RenameRecovery,
-        FileGroupRecovery
+        FileGroupRecovery,
+        CrossVolume,
+        MoveUnsupported
     };
 
     struct SourceReviewAudit;

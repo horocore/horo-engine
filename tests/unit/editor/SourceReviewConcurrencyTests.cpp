@@ -673,6 +673,7 @@ namespace {
         struct Files final : TestSupport::NativePublicationFiles {
             int failOnMove{};
             int moves{};
+            const ErrorCodeDescriptor *nativeRefusal{};
 
             Result<void> WritePrivateDurable(const std::filesystem::path &path, std::span<const std::byte> bytes, bool &created,
                                              std::filesystem::perms mode) override {
@@ -681,8 +682,11 @@ namespace {
 
             Result<void> MoveFileNoReplaceTracked(const std::filesystem::path &from, const std::filesystem::path &to,
                                                   AtomicFileReplacementReceipt &receipt) override {
+                ++moves;
+                if (moves == failOnMove && nativeRefusal)
+                    return Result<void>::Failure(MakeError(*nativeRefusal));
                 auto moved = native.MoveFileNoReplaceTracked(from, to, receipt);
-                if (++moves == failOnMove && receipt.WasCommitted())
+                if (moves == failOnMove && receipt.WasCommitted())
                     return Result<void>::Failure(MakeError(SourceDocumentErrors::ReadFailed));
                 return moved;
             }
@@ -750,6 +754,14 @@ namespace {
         SECTION("The second visible move cannot confirm durability") {
             files.failOnMove = 2;
         }
+        SECTION("A cross-volume rejection retains its message after rolling back the first move") {
+            files.failOnMove = 2;
+            files.nativeRefusal = &DurableFileErrors::CrossVolume;
+        }
+        SECTION("A filesystem without exclusive moves reports platform support") {
+            files.failOnMove = 2;
+            files.nativeRefusal = &DurableFileErrors::MoveUnsupported;
+        }
         if (includeDeletion) {
             SECTION("The Trash move fails after completing both renames") {
                 files.failOnMove = 3;
@@ -767,8 +779,13 @@ namespace {
         drain();
         const auto trash = project.directory / ".horo/local/trash";
         if (files.failOnMove) {
-            CHECK(reviews.Status().feedback == SourceTransactionFeedback::Conflict);
-            CHECK(files.moves == 2 * files.failOnMove);
+            auto expected = SourceTransactionFeedback::Conflict;
+            if (files.nativeRefusal == &DurableFileErrors::CrossVolume)
+                expected = SourceTransactionFeedback::CrossVolume;
+            if (files.nativeRefusal == &DurableFileErrors::MoveUnsupported)
+                expected = SourceTransactionFeedback::MoveUnsupported;
+            CHECK(reviews.Status().feedback == expected);
+            CHECK(files.moves == 2 * files.failOnMove - static_cast<int>(files.nativeRefusal != nullptr));
             CHECK(a.IsCurrent());
             CHECK(b.IsCurrent());
             CHECK(edit.IsCurrent());

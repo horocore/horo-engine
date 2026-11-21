@@ -855,6 +855,10 @@ renamed disk bases and the captured Trash payload identities before using
 them. Every original destination must be free. An unavailable payload, a
 new occupant, or a newer user edit prevents completion of the group. Files
 restored from Trash can be reopened through the ordinary Source route.
+Exclusive moves use the Windows, macOS, or Linux native rename primitive.
+The review reports cross-volume moves and unavailable exclusive rename support
+as distinct refusals. Recovery uses the same native primitive and does not
+copy files between volumes.
 The source owner rechecks the policy, the live publications and the saved disk
 bases before publishing one batch of buffer changes. Only accepted text ranges
 enter that batch. The workspace retains its latest receipt for a single grouped

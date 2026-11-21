@@ -25,6 +25,22 @@ namespace Horo {
     class NativeExternalProcessRunner;
     class PublicationLockAccess;
 
+    /** @brief Typed refusals for exclusive moves that cannot use a native atomic rename. */
+    namespace DurableFileErrors {
+        inline const ErrorCodeDescriptor CrossVolume{.domain = ErrorDomainId{"horo.platform.filesystem"},
+                                                     .code = ErrorCode{"filesystem.cross_volume_move"},
+                                                     .defaultSeverity = ErrorSeverity::Error,
+                                                     .summary = "An exclusive rename cannot cross filesystem volumes.",
+                                                     .remediationHint = "Choose a destination on the source volume.",
+                                                     .userActionable = true};
+        inline const ErrorCodeDescriptor MoveUnsupported{.domain = ErrorDomainId{"horo.platform.filesystem"},
+                                                         .code = ErrorCode{"filesystem.file_move_unsupported"},
+                                                         .defaultSeverity = ErrorSeverity::Error,
+                                                         .summary = "The filesystem does not support an exclusive rename.",
+                                                         .remediationHint = "Choose a filesystem with native exclusive rename support.",
+                                                         .userActionable = true};
+    }  // namespace DurableFileErrors
+
     /** @brief Reports availability of optional platform facilities for a composed host. */
     struct PlatformCapabilities {
         bool supportsProcessExecution{false}; /**< Whether the host permits process execution. */
@@ -277,7 +293,8 @@ namespace Horo {
         /** @brief Moves a regular single-link file to an absent name on the same filesystem.
          * @param source Current absolute normalized file. @param destination Absolute normalized target.
          * @param receipt Fresh commit witness. @return Result including parent-directory durability.
-         * @pre The caller holds authority for both paths. Cross-volume moves fail before commit.
+         * @pre The caller holds authority for both paths.
+         * @details Cross-volume and unsupported moves fail before commit with typed errors. No copy fallback is used.
          */
         [[nodiscard]] virtual Result<void> MoveFileNoReplaceTracked(const std::filesystem::path &source,
                                                                     const std::filesystem::path &destination,
@@ -400,11 +417,7 @@ namespace Horo {
     /** @copydoc DurableFileSystem::MoveFileNoReplaceTracked */
     inline Result<void> DurableFileSystem::MoveFileNoReplaceTracked(const std::filesystem::path &, const std::filesystem::path &,
                                                                     AtomicFileReplacementReceipt &) {
-        const ErrorCodeDescriptor unsupported{.domain = ErrorDomainId{"horo.platform.filesystem"},
-                                              .code = ErrorCode{"filesystem.file_move_unsupported"},
-                                              .defaultSeverity = ErrorSeverity::Error,
-                                              .summary = "The filesystem does not support tracked exclusive file moves."};
-        return Result<void>::Failure(MakeError(unsupported));
+        return Result<void>::Failure(MakeError(DurableFileErrors::MoveUnsupported));
     }
 
     /** @copydoc DurableFileSystem::WritePrivateDurable */

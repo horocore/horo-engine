@@ -16,14 +16,26 @@ namespace Horo::Editor {
         struct FileMove final {
             bool visible{};
             bool durable{};
+            Feedback refusal{};
         };
+
+        /** @brief Keeps a platform move refusal distinct from a stale document or occupied name. */
+        Feedback MoveRefusal(const Error &error) {
+            const auto code = error.code.Value();
+            if (code == DurableFileErrors::CrossVolume.code.Value())
+                return Feedback::CrossVolume;
+            if (code == DurableFileErrors::MoveUnsupported.code.Value())
+                return Feedback::MoveUnsupported;
+            return Feedback::None;
+        }
 
         /** @brief Calls the protected no-replace move without dropping the receipt on provider exceptions. */
         FileMove MoveObserved(DurableFileSystem &files, const std::filesystem::path &source, const std::filesystem::path &target) {
             AtomicFileReplacementReceipt receipt;
             try {
                 const auto moved = files.MoveFileNoReplaceTracked(source, target, receipt);
-                return {receipt.WasCommitted(), receipt.WasCommitted() && moved.HasValue()};
+                return {receipt.WasCommitted(), receipt.WasCommitted() && moved.HasValue(),
+                        moved.HasError() && !receipt.WasCommitted() ? MoveRefusal(moved.ErrorValue()) : Feedback::None};
             } catch (...) {
                 return {receipt.WasCommitted(), false};
             }
@@ -88,6 +100,8 @@ namespace Horo::Editor {
         /** @brief Distinguishes lost source or workspace evidence from an invalid operation. */
         Feedback FailureFeedback(const Error &error, const Feedback fallback) {
             namespace Source = SourceDocumentErrors;
+            if (const auto refusal = MoveRefusal(error); refusal != Feedback::None)
+                return refusal;
             const auto code = error.code.Value();
             if (code == Source::Cancelled.code.Value())
                 return Feedback::Cancelled;
@@ -651,6 +665,8 @@ namespace Horo::Editor {
         }
         const auto moved = MoveObserved(files, path.Value(), saved);
         if (!moved.visible) {
+            if (moved.refusal != Feedback::None)
+                feedback_ = moved.refusal;
             RetireEmptyTrash(files, manifest, trash.Value(), ownsManifest);
             return false;
         }
@@ -994,7 +1010,7 @@ namespace Horo::Editor {
             return Feedback::Undone;
         }
         if (!restored.visible)
-            return Feedback::Conflict;
+            return restored.refusal == Feedback::None ? Feedback::Conflict : restored.refusal;
         const auto returned = MoveObserved(files, deleted.original, deleted.payload);
         if (returned.durable) {
             deleted.payloadIdentity = TrashFileIdentity(files, deleted.payload);

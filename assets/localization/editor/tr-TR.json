@@ -213,6 +213,8 @@
     "workspace.local_agent.source_patch_confirm_delete": {"text": "Kabul edilen kaynağı Çöp Kutusu’na taşı"},
     "workspace.local_agent.source_patch_confirm_moves": {"text": "Dosya taşımalarını onayla ve değişiklikleri uygula"},
     "workspace.local_agent.source_patch_group_recovery": {"text": "Bazı dosya taşımaları kurtarma gerektiriyor. Yeniden denemeden önce incelenen yolları ve projenin Çöp Kutusu’nu kontrol et."},
+    "workspace.local_agent.source_patch_cross_volume": {"text": "Taşıma için dosyayla aynı disk biriminde bir hedef seç."},
+    "workspace.local_agent.source_patch_move_unsupported": {"text": "Bu dosya sistemi, mevcut dosyaların üzerine yazmadan güvenli taşıma yapmayı desteklemiyor."},
     "workspace.local_agent.source_patch_confirm_rename": {"text": "Kaynağın yeniden adlandırılmasını onayla"},
     "workspace.local_agent.source_patch_rename_complete": {"text": "Kaynak yeniden adlandırıldı. Kaydedilmemiş değişiklikleri kaydedebilirsin."},
     "workspace.local_agent.source_patch_rename_recovery": {"text": "Yeniden adlandırma kurtarma gerektiriyor. Yeniden denemeden önce her iki yolu da kontrol et."},

@@ -1030,7 +1030,7 @@ namespace Horo::Editor {
                                        state.feedback == Renamed || state.feedback == RenameRecovery;
                 if (state.feedback != Preparing && std::exchange(sourceApplyQueued_, false) && completed)
                     patchReview_.reset();
-                constexpr std::array<const char *, 13> keys{nullptr,
+                constexpr std::array<const char *, 15> keys{nullptr,
                                                             "source_patch_applied",
                                                             "source_patch_reverted",
                                                             "source_patch_apply_failed",
@@ -1042,7 +1042,9 @@ namespace Horo::Editor {
                                                             "source_patch_delete_recovery",
                                                             "source_patch_rename_complete",
                                                             "source_patch_rename_recovery",
-                                                            "source_patch_group_recovery"};
+                                                            "source_patch_group_recovery",
+                                                            "source_patch_cross_volume",
+                                                            "source_patch_move_unsupported"};
                 if (const auto *key = keys[static_cast<std::size_t>(state.feedback)])
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, key), Theme::Text(), fonts);
                 if (state.audit)

@@ -25,11 +25,73 @@
 #include <windows.h>
 #else
 #include <fcntl.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
 #endif
 
 namespace {
+    TEST_CASE("Native exclusive file moves preserve an occupied target", "[unit][platform][publication]") {
+        Horo::Tests::OwnedTestDirectory owned{"tracked-move"};
+        const auto root = std::filesystem::canonical(owned.Path());
+        REQUIRE(std::filesystem::create_directory(root / "target"));
+        const auto source = root / "source";
+        const auto target = root / "target" / "source";
+        Horo::NativeDurableFileSystem files;
+        REQUIRE(files.WriteDurable(source, std::as_bytes(std::span{"reviewed", 8})).HasValue());
+        REQUIRE(files.WriteDurable(target, std::as_bytes(std::span{"occupied", 8})).HasValue());
+        Horo::AtomicFileReplacementReceipt conflict;
+        CHECK(files.MoveFileNoReplaceTracked(source, target, conflict).HasError());
+        CHECK_FALSE(conflict.WasCommitted());
+        CHECK(std::filesystem::exists(source));
+        const auto existing = files.ReadFileBounded(target, 16);
+        REQUIRE(existing.HasValue());
+        CHECK((std::string{existing.Value().begin(), existing.Value().end()} == "occupied"));
+        REQUIRE(files.RemoveDurable(target).HasValue());
+        Horo::AtomicFileReplacementReceipt commit;
+        REQUIRE(files.MoveFileNoReplaceTracked(source, target, commit).HasValue());
+        CHECK(commit.WasCommitted());
+        CHECK_FALSE(std::filesystem::exists(source));
+        CHECK(std::filesystem::file_size(target) == 8);
+    }
+
+#if defined(__linux__)
+    TEST_CASE("Native exclusive moves report a separate filesystem volume before commit", "[unit][platform][publication]") {
+        Horo::Tests::OwnedTestDirectory owned{"cross-volume-move"};
+        const auto root = std::filesystem::canonical(owned.Path());
+        struct stat sourceVolume{};
+        struct stat alternateVolume{};
+        if (stat(root.c_str(), &sourceVolume) != 0 || stat("/dev/shm", &alternateVolume) != 0 ||
+            sourceVolume.st_dev == alternateVolume.st_dev)
+            SKIP("A distinct writable shared-memory filesystem is required.");
+        auto directory = std::string{"/dev/shm/horo-cross-volume-XXXXXX"};
+        if (!mkdtemp(directory.data()))
+            SKIP("Cannot reserve a directory on the alternate filesystem.");
+
+        struct AlternateDirectory final {
+            std::filesystem::path path;
+
+            ~AlternateDirectory() {
+                std::error_code error;
+                std::filesystem::remove(path / "moved", error);
+                std::filesystem::remove(path, error);
+            }
+        } alternate{directory};
+
+        const auto source = root / "source";
+        const auto target = alternate.path / "moved";
+        Horo::NativeDurableFileSystem files;
+        REQUIRE(files.WriteDurable(source, std::as_bytes(std::span{"reviewed", 8})).HasValue());
+        Horo::AtomicFileReplacementReceipt receipt;
+        const auto moved = files.MoveFileNoReplaceTracked(source, target, receipt);
+        REQUIRE(moved.HasError());
+        CHECK(moved.ErrorValue().code.Value() == Horo::DurableFileErrors::CrossVolume.code.Value());
+        CHECK_FALSE(receipt.WasCommitted());
+        CHECK(std::filesystem::is_regular_file(source));
+        CHECK_FALSE(std::filesystem::exists(target));
+    }
+#endif
+
 #if !defined(_WIN32)
     /** @brief Owns an exclusively created mode-0700 marker directory in the test working directory. */
     class PrivateProcessDirectory final {

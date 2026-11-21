@@ -334,13 +334,23 @@ namespace Horo::Editor {
         }
 
         /** @brief Retains native visibility even when directory synchronization fails or a provider throws. */
-        bool MoveReviewedPath(DurableFileSystem &files, const std::filesystem::path &from, const std::filesystem::path &to,
-                              AtomicFileReplacementReceipt &receipt) noexcept {
+        const ErrorCodeDescriptor *MoveReviewedPath(DurableFileSystem &files, const std::filesystem::path &from,
+                                                    const std::filesystem::path &to, AtomicFileReplacementReceipt &receipt) noexcept {
             try {
-                return files.MoveFileNoReplaceTracked(from, to, receipt).HasValue() && receipt.WasCommitted();
+                const auto moved = files.MoveFileNoReplaceTracked(from, to, receipt);
+                if (receipt.WasCommitted())
+                    return moved.HasValue() ? nullptr : &SourceDocumentErrors::ReadFailed;
+                if (moved.HasError()) {
+                    const auto code = moved.ErrorValue().code.Value();
+                    if (code == DurableFileErrors::CrossVolume.code.Value())
+                        return &DurableFileErrors::CrossVolume;
+                    if (code == DurableFileErrors::MoveUnsupported.code.Value())
+                        return &DurableFileErrors::MoveUnsupported;
+                }
             } catch (...) {
-                return false;
+                // The receipt below still records a visible move if a provider threw after publication.
             }
+            return receipt.WasCommitted() ? &SourceDocumentErrors::ReadFailed : &SourceDocumentErrors::SaveConflict;
         }
 
     }  // namespace
@@ -451,9 +461,7 @@ namespace Horo::Editor {
             } else if (move.disk->RecheckSingle(projectRoot, move.source, files, cancellation).HasError()) {
                 return cancellation.IsCancellationRequested() ? &Cancelled : &SaveConflict;
             }
-            if (MoveReviewedPath(files, move.From(), move.destination, receipt))
-                return nullptr;
-            return receipt.WasCommitted() ? &ReadFailed : &SaveConflict;
+            return MoveReviewedPath(files, move.From(), move.destination, receipt);
         } catch (const std::bad_alloc &) {
             return &TooLarge;
         } catch (...) {
@@ -490,7 +498,7 @@ namespace Horo::Editor {
         while (visible > 0) {
             const auto &move = renames[--visible];
             AtomicFileReplacementReceipt restored;
-            if (!MoveReviewedPath(files, move.destination, move.From(), restored))
+            if (MoveReviewedPath(files, move.destination, move.From(), restored))
                 failure = &SourceDocumentErrors::SaveOutcomeUnknown;
         }
         return Result<void>::Failure(MakeError(*failure));

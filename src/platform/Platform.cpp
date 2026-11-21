@@ -365,19 +365,44 @@ namespace Horo {
                    path.native().find(std::filesystem::path::value_type{}) == std::filesystem::path::string_type::npos;
         }
 
-        /** @brief Commits an exclusive sibling rename with no copy or replace fallback. */
-        bool RenameNoReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) {
+        enum class RenameOutcome {
+            Moved,
+            CrossVolume,
+            Unsupported,
+            Failed
+        };
+
+        /** @brief Commits a native exclusive rename and captures the OS outcome before further filesystem calls. */
+        RenameOutcome RenameNoReplace(const std::filesystem::path &prepared, const std::filesystem::path &destination) {
 #if defined(_WIN32)
-            return MoveFileExW(NativeApiPath(prepared).c_str(), NativeApiPath(destination).c_str(), MOVEFILE_WRITE_THROUGH) != 0;
-#elif defined(__APPLE__)
-            return renameatx_np(AT_FDCWD, prepared.c_str(), AT_FDCWD, destination.c_str(), RENAME_EXCL) == 0;
-#elif defined(__linux__) && defined(SYS_renameat2)
-            return syscall(SYS_renameat2, AT_FDCWD, prepared.c_str(), AT_FDCWD, destination.c_str(), RENAME_NOREPLACE) == 0;
+            const auto sourceName = NativeApiPath(prepared);
+            const auto targetName = NativeApiPath(destination);
+            if (MoveFileExW(sourceName.c_str(), targetName.c_str(), MOVEFILE_WRITE_THROUGH))
+                return RenameOutcome::Moved;
+            const auto error = GetLastError();
+            if (error == ERROR_NOT_SAME_DEVICE)
+                return RenameOutcome::CrossVolume;
+            if (error == ERROR_NOT_SUPPORTED || error == ERROR_INVALID_FUNCTION)
+                return RenameOutcome::Unsupported;
+#elif defined(__APPLE__) || (defined(__linux__) && defined(SYS_renameat2))
+#if defined(__APPLE__)
+            const auto result = renameatx_np(AT_FDCWD, prepared.c_str(), AT_FDCWD, destination.c_str(), RENAME_EXCL);
+#else
+            const auto result = syscall(SYS_renameat2, AT_FDCWD, prepared.c_str(), AT_FDCWD, destination.c_str(), RENAME_NOREPLACE);
+#endif
+            if (result == 0)
+                return RenameOutcome::Moved;
+            const auto error = errno;
+            if (error == EXDEV)
+                return RenameOutcome::CrossVolume;
+            if (error == ENOSYS || error == ENOTSUP || error == EOPNOTSUPP)
+                return RenameOutcome::Unsupported;
 #else
             static_cast<void>(prepared);
             static_cast<void>(destination);
-            return false;
+            return RenameOutcome::Unsupported;
 #endif
+            return RenameOutcome::Failed;
         }
 
         /** @brief Checks entry shape and commits an exclusive rename with directory durability tracking. */
@@ -393,7 +418,12 @@ namespace Horo {
             const auto &entry = source.Value();
             if (!entry || entry->kind != kind || (kind == FileEntryKind::RegularFile && entry->hardLinks != 1))
                 return Result<void>::Failure(FsError(IoFailed, prepared));
-            if (!RenameNoReplace(prepared, destination))
+            const auto moved = RenameNoReplace(prepared, destination);
+            if (!requireSibling && moved == RenameOutcome::CrossVolume)
+                return Result<void>::Failure(FsError(DurableFileErrors::CrossVolume, destination));
+            if (!requireSibling && moved == RenameOutcome::Unsupported)
+                return Result<void>::Failure(FsError(DurableFileErrors::MoveUnsupported, destination));
+            if (moved != RenameOutcome::Moved)
                 return Result<void>::Failure(FsError(IoFailed, destination));
             receipt.RecordCommitted();
             const auto target = files.SyncDirectory(destination.parent_path());
