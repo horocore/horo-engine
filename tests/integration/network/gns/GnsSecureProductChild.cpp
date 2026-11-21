@@ -461,7 +461,8 @@ namespace Horo::Network::NativeQualification {
                 std::cout << "NATIVE_SNAPSHOT " << (input.side == 0 ? "server" : "client") << '\n' << std::flush;
                 if (owners.live->ai) {
                     const bool authority = input.side == 0;
-                    owners.live->ai->Verify(*owners.host,
+                    REQUIRE(owners.live->scene);
+                    owners.live->ai->Verify(*owners.host, *owners.live->scene,
                                             authority ? World(NetworkModeWorldKind::AuthorityServer, 1701)
                                                       : World(NetworkModeWorldKind::Client, 1702),
                                             authority);

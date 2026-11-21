@@ -4,6 +4,7 @@
 #include "../../../support/assets/AssetCookOutputFixture.h"
 #include "CommittedSceneAssets.h"
 #include "HeadlessCookedDecisionAdmission.h"
+#include "Horo/AI/AIErrors.h"
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "NetworkProductHost.h"
 
@@ -80,17 +81,29 @@ namespace Horo::Network::NativeQualification {
     }
 
     /** @copydoc AuthoritativeAi::Verify */
-    void AuthoritativeAi::Verify(const App::NetworkProductHost &host, NetworkModeWorld world, bool authority) const {
+    void AuthoritativeAi::Verify(const App::NetworkProductHost &host, const INetworkModeService &scene,
+                                 NetworkModeWorld world, bool authority) const {
         const auto health = host.AiHealth(world);
+        const auto agent = Decisions::MakeIdentity<AI::AgentId>(AgentId);
+        const auto key = state_->fixture.schema->Keys().front().key;
+        const auto board = App::InspectHeadlessDecisionValue(scene, agent, key);
+        const auto &probe = state_->fixture.probe;
         if (authority) {
             REQUIRE(health);
             CHECK(health->decisionTick > 0);
             CHECK_FALSE(health->degraded);
-            CHECK(state_->fixture.probe.starts > 0);
+            CHECK(probe.starts > 0);
+            CHECK(probe.cleanups > 0);
+            CHECK(probe.lastTerminal == AI::AiTaskState::Succeeded);
+            REQUIRE(board.HasValue());
+            CHECK(board.Value() == state_->fixture.schema->Keys().front().defaultValue);
         } else {
             CHECK_FALSE(health);
-            CHECK(state_->fixture.probe.factories == 0);
-            CHECK(state_->fixture.probe.starts == 0);
+            CHECK(probe.factories == 0);
+            CHECK(probe.starts == 0);
+            CHECK(probe.cleanups == 0);
+            REQUIRE(board.HasError());
+            CHECK(board.ErrorValue().code.Value() == AI::AIErrors::RuntimeUnavailable.code.Value());
         }
     }
 }  // namespace Horo::Network::NativeQualification
