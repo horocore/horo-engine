@@ -60,10 +60,14 @@ namespace {
         }));
         REQUIRE(reply->reply.has_value());
         CHECK(reply->reply->source.SharesStateWith(snapshot));
-        CHECK(reply->message.envelope.Get().at("result").at("contents").at("value") == "hover fixture");
+        const auto projected = process.Connection().ProjectReply(*reply);
+        REQUIRE(projected.HasValue());
+        REQUIRE(std::holds_alternative<LanguageHover>(projected.Value().payload));
+        CHECK(std::get<LanguageHover>(projected.Value().payload).text == "hover fixture");
 
         REQUIRE(process.Connection().Shutdown(LspProcess::Clock::now()).HasValue());
         CHECK(source.State() == SourceLanguageSessionState::Disconnected);
+        CHECK(process.Connection().ProjectReply(*reply).HasError());
         REQUIRE(Await([&] {
             REQUIRE(process.Poll(LspProcess::Clock::now()).HasValue());
             return process.Finished();

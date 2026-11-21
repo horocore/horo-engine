@@ -210,6 +210,14 @@ UTF-16 positions derived from the synchronized snapshot. The adapter retires
 cancelled requests before queueing cancellation. A response is delivered once
 with its original source lease and only while that exact revision is current.
 
+The reply adapter translates protocol payloads into typed diagnostics, hover
+text, completions, project navigation, symbols and inert source-edit
+proposals. Position conversion uses the exact UTF-8 snapshot. Project-relative
+navigation targets still pass through native source admission before opening.
+Only current-document code-action edits with a matching version or a
+request-bound unversioned change are offered as proposals; commands and file
+operations carry no execution authority.
+
 The Platform runner exposes a worker-side raw stdin/stdout channel for
 language processes. Protocol bytes and bounded stderr logs use separate paths.
 Process-tree ownership stays with Platform, including when a queue refuses

@@ -1,0 +1,152 @@
+#include "../../support/SourceDocumentTestProject.h"
+#include "Horo/Editor/SourceFileOpenService.h"
+#include "LspConnection.h"
+#include "LspResultProjection.h"
+
+#include <catch2/catch_test_macros.hpp>
+
+namespace {
+    using namespace Horo;
+    using namespace Horo::Editor;
+    using namespace Horo::Editor::Language;
+    using enum SourceLanguageRequestKind;
+
+    /** @brief Owns the exact UTF-8 revision against which payloads are projected. */
+    struct SourceFixture final {
+        TestSupport::SourceProject project;
+        SourceFileOpenService open{project.directory};
+        SourceDocumentSnapshot source;
+
+        SourceFixture() {
+            project.Put("one\r\n\xF0\x9F\x98\x80"
+                        "letter",
+                        "test.cpp");
+            auto opened = open.Open({.path = "test.cpp"});
+            REQUIRE(opened.HasValue());
+            REQUIRE(opened.Value().sourceSnapshot.has_value());
+            source = *opened.Value().sourceSnapshot;
+        }
+
+        /** @brief Delivers a bounded payload already associated with the source request. */
+        Result<LanguageResult> Map(const SourceLanguageRequestKind kind, const std::string_view body) {
+            const auto envelope = "{\"jsonrpc\":\"2.0\",\"id\":\"1\"," + std::string{body} + "}";
+            auto decoded = DecodeLspMessage(envelope);
+            REQUIRE(decoded.HasValue());
+            const LspIncoming incoming{std::move(decoded).Value(), SourceLanguageReply{kind, source}, 1};
+            return ProjectLspReply(incoming, "file:///project");
+        }
+    };
+
+    TEST_CASE("LSP projects diagnostics and hover spans from UTF-16 to exact source bytes") {
+        SourceFixture fixture;
+        const auto diagnostic = fixture.Map(Diagnostics, R"("result":{"kind":"full","items":[
+            {"message":"warning","severity":2,"range":{"start":{"line":1,"character":2},"end":{"line":1,"character":8}}}
+        ]})");
+        REQUIRE(diagnostic.HasValue());
+        const auto &warnings = std::get<LanguageDiagnostics>(diagnostic.Value().payload).items;
+        REQUIRE(warnings.size() == 1);
+        CHECK(warnings.front().span == LanguageByteSpan{9, 15});
+        CHECK(warnings.front().severity == LanguageSeverity::Warning);
+
+        const auto hover = fixture.Map(Hover, R"("result":{"contents":["headline",{"language":"cpp","value":"int"}]})");
+        REQUIRE(hover.HasValue());
+        CHECK(std::get<LanguageHover>(hover.Value().payload).text == "headline\nint");
+        const auto splitSurrogate = fixture.Map(Hover, R"("result":{"contents":"hover",
+            "range":{"start":{"line":1,"character":1},"end":{"line":1,"character":2}}})");
+        CHECK(splitSurrogate.HasError());
+    }
+
+    TEST_CASE("LSP projects plain completion edits and rejects overlapping or out of range edits") {
+        SourceFixture fixture;
+        const auto result = fixture.Map(Completion, R"("result":{"isIncomplete":true,"items":[
+            {"label":"answer","textEdit":{"range":{"start":{"line":1,"character":2},"end":{"line":1,"character":8}},"newText":"value"}}
+        ]})");
+        REQUIRE(result.HasValue());
+        const auto &completion = std::get<LanguageCompletions>(result.Value().payload);
+        REQUIRE(completion.items.size() == 1);
+        CHECK(completion.incomplete);
+        CHECK(completion.items.front().hasExplicitTextEdit);
+        const auto &edit = completion.items.front().edits.front();
+        CHECK(edit.span == LanguageByteSpan{9, 15});
+        CHECK(edit.replacement == "value");
+        CHECK(fixture.source.Text().ends_with("letter"));
+
+        CHECK(fixture
+                  .Map(Completion, R"("result":[{"label":"bad","textEdit":{
+            "range":{"start":{"line":1,"character":2},"end":{"line":1,"character":100}},"newText":"bad"}}])")
+                  .HasError());
+        CHECK(fixture
+                  .Map(Completion, R"("result":[{"label":"bad","textEdit":{
+            "range":{"start":{"line":1,"character":2},"end":{"line":1,"character":4}},"newText":"x"},
+            "additionalTextEdits":[{"range":{"start":{"line":1,"character":3},"end":{"line":1,"character":5}},"newText":"y"}]}])")
+                  .HasError());
+    }
+
+    TEST_CASE("LSP navigation retains only project-scoped paths and carries typed coordinates") {
+        SourceFixture fixture;
+        const auto result = fixture.Map(Definition, R"("result":[
+            {"targetUri":"file:\/\/\/project/sub/a%20b.cpp","targetSelectionRange":{"start":{"line":2,"character":1},"end":{"line":2,"character":3}}},
+            {"uri":"file:\/\/\/project/%2e%2e/out.cpp","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}},
+            {"uri":"file:\/\/\/project-other/a.cpp","range":{"start":{"line":0,"character":0},"end":{"line":0,"character":1}}}
+        ])");
+        REQUIRE(result.HasValue());
+        const auto &targets = std::get<LanguageNavigation>(result.Value().payload).targets;
+        REQUIRE(targets.size() == 1);
+        CHECK(targets.front().source.Value() == "sub/a b.cpp");
+        CHECK(targets.front().start == LanguagePosition{2, 1});
+        CHECK(targets.front().end == LanguagePosition{2, 3});
+    }
+
+    TEST_CASE("LSP projects code actions as inert text edits for the exact current document") {
+        SourceFixture fixture;
+        const auto result = fixture.Map(CodeActions, R"("result":[
+            {"title":"fix","edit":{"changes":{"file:\/\/\/project/test.cpp":[
+                {"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":3}},"newText":"two"}
+            ]}}},
+            {"title":"outside","edit":{"changes":{"file:\/\/\/project/other.cpp":[]}}},
+            {"title":"command","command":"execute"}
+        ])");
+        REQUIRE(result.HasValue());
+        const auto &actions = std::get<LanguageCodeActions>(result.Value().payload).items;
+        REQUIRE(actions.size() == 3);
+        REQUIRE(actions[0].edits.size() == 1);
+        CHECK(actions[0].edits[0].span == LanguageByteSpan{0, 3});
+        CHECK(actions[0].edits[0].replacement == "two");
+        CHECK(actions[1].edits.empty());
+        CHECK(actions[2].edits.empty());
+        CHECK(fixture.source.Text().starts_with("one"));
+    }
+
+    TEST_CASE("LSP projects server errors and refuses typed results after the source changes") {
+        SourceFixture fixture;
+        const auto failure = fixture.Map(Hover, R"("error":{"code":-32800,"message":"cancelled"})");
+        REQUIRE(failure.HasValue());
+        const auto &error = std::get<LanguageServerFailure>(failure.Value().payload);
+        CHECK(error.code == -32800);
+        CHECK(error.message == "cancelled");
+        const auto symbol = fixture.Map(Symbols, R"("result":[{"name":"answer",
+            "selectionRange":{"start":{"line":0,"character":0},"end":{"line":0,"character":3}}}])");
+        REQUIRE(symbol.HasValue());
+        REQUIRE(std::get<LanguageSymbols>(symbol.Value().payload).items.size() == 1);
+        const auto instance = fixture.source.Identity().instance;
+        REQUIRE(fixture.open.Documents().Edit(instance, {fixture.source.Revision(), 0, 3, "two"}).HasValue());
+        CHECK(fixture.Map(Hover, R"("result":{"contents":"old"})").HasError());
+    }
+
+    TEST_CASE("LSP versioned code actions only expose edits for the exact source revision") {
+        SourceFixture fixture;
+        const auto revision = fixture.source.Revision();
+        for (const auto serverVersion : {revision, revision + 1}) {
+            const auto body = std::string{R"("result":[{"title":"fix","edit":{"documentChanges":[
+                {"textDocument":{"uri":"file:\/\/\/project/test.cpp","version":)"} +
+                              std::to_string(serverVersion) + R"(},"edits":[
+                {"range":{"start":{"line":0,"character":0},"end":{"line":0,"character":3}},"newText":"two"}]}
+            ]}}])";
+            const auto result = fixture.Map(CodeActions, body);
+            REQUIRE(result.HasValue());
+            const auto &actions = std::get<LanguageCodeActions>(result.Value().payload).items;
+            REQUIRE(actions.size() == 1);
+            CHECK(actions.front().edits.empty() == (serverVersion != revision));
+        }
+    }
+}  // namespace

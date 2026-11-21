@@ -5,6 +5,7 @@
 #include "Horo/Editor/SourceLanguageSession.h"
 #include "LspLifecycle.h"
 #include "LspRequests.h"
+#include "LspResultProjection.h"
 
 namespace Horo::Editor::Language {
     struct LspDocumentUpdate;
@@ -13,6 +14,7 @@ namespace Horo::Editor::Language {
     struct LspIncoming final {
         LspMessage message;
         std::optional<SourceLanguageReply> reply;
+        std::uint64_t session{};
     };
 
     /** @brief Transport operations used on the editor lane. Native process ownership stays with the host. */
@@ -80,6 +82,9 @@ namespace Horo::Editor::Language {
          * @param id Session-bound request ID. @return Success for retired or unknown IDs and queued cancellation.
          */
         [[nodiscard]] Result<void> CancelRequest(SourceLanguageRequestId id);
+
+        /** @brief Maps one returned reply while the producing connection and exact source revision remain current. */
+        [[nodiscard]] Result<LanguageResult> ProjectReply(const LspIncoming &incoming) const;
 
         /** @brief Stops new source work and queues graceful shutdown for a ready connection.
          * @param now Monotonic observation time. @return Queue admission or an error.

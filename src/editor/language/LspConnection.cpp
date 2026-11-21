@@ -99,14 +99,14 @@ namespace Horo::Editor::Language {
     /** @copydoc LspConnection::ReadFeature */
     LspConnection::Incoming LspConnection::ReadFeature(LspMessage message) {
         if (message.kind != LspMessageKind::Result && message.kind != LspMessageKind::Error)
-            return Incoming::Success(LspIncoming{std::move(message), std::nullopt});
+            return Incoming::Success(LspIncoming{std::move(message), std::nullopt, stamp_});
         const auto id = ReadLspRequestId(message);
         if (!id)
             return Incoming::Success(std::nullopt);
         auto reply = source_.Complete({stamp_, *id});
         if (reply.HasError())
             return Incoming::Success(std::nullopt);
-        return Incoming::Success(LspIncoming{std::move(message), std::move(reply).Value()});
+        return Incoming::Success(LspIncoming{std::move(message), std::move(reply).Value(), stamp_});
     }
 
     /** @copydoc LspConnection::SyncSource */
@@ -176,6 +176,13 @@ namespace Horo::Editor::Language {
         if (frame.HasError())
             return Result<void>::Failure(std::move(frame).ErrorValue());
         return Send(std::move(frame).Value());
+    }
+
+    /** @copydoc LspConnection::ProjectReply */
+    Result<LanguageResult> LspConnection::ProjectReply(const LspIncoming &incoming) const {
+        if (stamp_ == 0 || incoming.session != stamp_)
+            return Result<LanguageResult>::Failure(MakeError(SourceDocumentErrors::Stale));
+        return ProjectLspReply(incoming, rootUri_);
     }
 
     /** @copydoc LspConnection::Shutdown */
