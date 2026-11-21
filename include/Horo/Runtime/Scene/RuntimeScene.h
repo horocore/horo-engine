@@ -850,8 +850,18 @@ namespace Horo::Runtime {
         std::span<const RuntimeGroupAssetLease> resources;
     };
 
+    /** @brief Borrowed read access to the detached hierarchy during one structural preparation call. */
+    struct SceneStructuralHierarchyView final {
+        const void *context{};
+        std::optional<RuntimeEntityView> (*find)(const void *, EntityRef){};
+
+        [[nodiscard]] std::optional<RuntimeEntityView> Find(EntityRef entity) const {
+            return find ? find(context, entity) : std::nullopt;
+        }
+    };
+
     /** @brief Host structural-participant virtual contract revision; external host implementations must rebuild. */
-    inline constexpr std::uint32_t SceneStructuralParticipantContractVersion = 5;
+    inline constexpr std::uint32_t SceneStructuralParticipantContractVersion = 6;
 
     /** @brief Application-composed subsystem participant for bounded Scene group transactions. */
     class SceneStructuralParticipant {
@@ -882,6 +892,15 @@ namespace Horo::Runtime {
         [[nodiscard]] virtual Result<std::unique_ptr<SceneStructuralCandidate>> Prepare(const RuntimeSceneView &active,
                                                                                         std::span<const RuntimeEntityView> created,
                                                                                         std::span<const EntityRef> destroyed) = 0;
+
+        /** @brief Supplies exact candidate hierarchy for owners that need parent transforms before publication.
+         * The hierarchy and returned entity views are borrowed only for this call.
+         */
+        [[nodiscard]] virtual Result<std::unique_ptr<SceneStructuralCandidate>> PrepareWithHierarchy(
+            const RuntimeSceneView &active, std::span<const RuntimeEntityView> created, std::span<const EntityRef> destroyed,
+            const SceneStructuralHierarchyView &) {
+            return Prepare(active, created, destroyed);
+        }
     };
 
     /** @brief Allocation-free owner-thread Scene borrow; invalidated by structural commit or owner retirement.

@@ -420,7 +420,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 auto &capture = *playPerception_;
                 perception.emplace(
                     AI::AiScenePerceptionActivationInput{capture.spatial, capture.filtering, capture.positions.scene, capture.execution});
-                perceptionGroups.emplace(AI::AiScenePerceptionGroupInput{capture.spatial, capture.filtering, capture.positions.group});
+                perceptionGroups.emplace(AI::AiScenePerceptionGroupInput{.spatial = capture.spatial,
+                                                                         .filtering = capture.filtering,
+                                                                         .positionsWithHierarchy = capture.positions.group});
             }
             if (auto added = scenes_->AddActivationParticipant(
                     std::make_unique<AI::AiSceneActivationParticipant>(*ai_, controllers_, std::move(perception), std::move(restore)));

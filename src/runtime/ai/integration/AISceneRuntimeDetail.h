@@ -80,11 +80,10 @@ namespace Horo::AI::Detail {
                                                                              const PerceptionFilteringPolicy &filtering,
                                                                              std::span<const AgentRuntimeState> agents);
         /** @brief Projects exact new and surviving endpoints before any structural publication. */
-        [[nodiscard]] static Result<std::optional<PerceptionGroupPublication>> Prepare(const AiScenePerceptionGroupInput &input,
-                                                                                       const Runtime::RuntimeSceneView &scene,
-                                                                                       std::span<const Runtime::RuntimeEntityView> created,
-                                                                                       std::span<const Runtime::EntityRef> destroyed,
-                                                                                       std::span<const AgentRuntimeState> additions);
+        [[nodiscard]] static Result<std::optional<PerceptionGroupPublication>> Prepare(
+            const AiScenePerceptionGroupInput &input, const Runtime::RuntimeSceneView &scene,
+            std::span<const Runtime::RuntimeEntityView> created, std::span<const Runtime::EntityRef> destroyed,
+            std::span<const AgentRuntimeState> additions, const Runtime::SceneStructuralHierarchyView &hierarchy);
         /** @brief Fences a concurrent owner mutation during aggregate preparation. @return True for the same retained predecessor. */
         [[nodiscard]] bool IsCurrent() const noexcept;
         /** @brief Publishes detached spatial state while every Scene owner commits. */

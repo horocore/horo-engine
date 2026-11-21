@@ -618,7 +618,15 @@ namespace Horo::Runtime {
             for (const auto &participant : participants) {
                 if (participant->PreparationPhase() != phase)
                     continue;
-                auto prepared = participant->Prepare(scene.View(), created, destroyed);
+                const SceneStructuralHierarchyView hierarchy{this,
+                                                             [](const void *context,
+                                                                const EntityRef entity) -> std::optional<RuntimeEntityView> {
+                    const auto &applier = *static_cast<const CommandApplier *>(context);
+                    if (!applier.scene.IsValid(applier.candidate, entity))
+                        return std::nullopt;
+                    return applier.OwnerEntity(entity.entity.index);
+                }};
+                auto prepared = participant->PrepareWithHierarchy(scene.View(), created, destroyed, hierarchy);
                 if (prepared.HasError())
                     return Result<void>::Failure(prepared.ErrorValue());
                 if (!prepared.Value())

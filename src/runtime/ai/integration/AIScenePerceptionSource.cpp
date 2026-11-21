@@ -226,7 +226,7 @@ namespace Horo::AI {
     Result<std::optional<Detail::PerceptionGroupPublication>> Detail::PerceptionGroupPublication::Prepare(
         const AiScenePerceptionGroupInput &input, const Runtime::RuntimeSceneView &scene,
         const std::span<const Runtime::RuntimeEntityView> created, const std::span<const Runtime::EntityRef> destroyed,
-        const std::span<const AgentRuntimeState> additions) {
+        const std::span<const AgentRuntimeState> additions, const Runtime::SceneStructuralHierarchyView &hierarchy) {
         using Publication = Result<std::optional<PerceptionGroupPublication>>;
         const auto previous = input.spatial.Current();
         const auto retires = [destroyed](const auto &endpoint) {
@@ -259,10 +259,12 @@ namespace Horo::AI {
         std::erase_if(listeners, inactive);
         std::erase_if(sources, inactive);
         if (!prospective.empty()) {
-            if (!input.positions)
+            if (static_cast<bool>(input.positions) == static_cast<bool>(input.positionsWithHierarchy) ||
+                (input.positionsWithHierarchy && !hierarchy.find))
                 return Publication::Failure(MakeError(AIErrors::PerceptionDependencyMissing));
             std::ranges::sort(prospective, {}, &Runtime::RuntimeEntityView::entity);
-            const auto captured = input.positions(scene, prospective);
+            const auto captured = input.positionsWithHierarchy ? input.positionsWithHierarchy(scene, prospective, hierarchy)
+                                                               : input.positions(scene, prospective);
             if (captured.HasError())
                 return Publication::Failure(captured.ErrorValue());
             const auto &positions = captured.Value();

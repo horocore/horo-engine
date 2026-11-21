@@ -70,7 +70,7 @@ static_assert(!std::is_invocable_v<decltype(&Horo::Runtime::PreparedSceneCellCoo
 static_assert(!std::is_invocable_v<decltype(&Horo::Runtime::PreparedSceneCellCook::Adopt), const Horo::Runtime::PreparedSceneCellCook &>);
 
 static_assert(Horo::Runtime::SceneCellPayloadCodecVersion == 3);
-static_assert(Horo::Runtime::SceneStructuralParticipantContractVersion == 5);
+static_assert(Horo::Runtime::SceneStructuralParticipantContractVersion == 6);
 static_assert(
     std::is_same_v<decltype(&Horo::Runtime::SceneStructuralParticipant::ValidateBaselines),
                    Horo::Result<void> (Horo::Runtime::SceneStructuralParticipant::*)(

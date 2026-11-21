@@ -150,12 +150,18 @@ namespace Horo::AI::Detail {
         Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> Prepare(const Runtime::RuntimeSceneView &scene,
                                                                            const std::span<const Runtime::RuntimeEntityView> created,
                                                                            const std::span<const Runtime::EntityRef> destroyed) override {
+            return PrepareWithHierarchy(scene, created, destroyed, {});
+        }
+
+        Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareWithHierarchy(
+            const Runtime::RuntimeSceneView &scene, std::span<const Runtime::RuntimeEntityView> created,
+            std::span<const Runtime::EntityRef> destroyed, const Runtime::SceneStructuralHierarchyView &hierarchy) override {
             if (runtime_->shutdown_ || !runtime_->active_ || runtime_->active_->closed || !scene.IsCurrent() ||
                 runtime_->active_->binding.scene != scene.RuntimeId())
                 return Failure<std::unique_ptr<Runtime::SceneStructuralCandidate>>(
                     "AI structural admission requires the active Scene owner.");
             try {
-                return PrepareOwned(scene, created, destroyed);
+                return PrepareOwned(scene, created, destroyed, hierarchy);
             } catch (const std::bad_alloc &) {
                 return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(
                     MakeError(AIErrors::AgentCapacityExceeded, "AI structural preparation could not allocate bounded staging storage."));
@@ -165,7 +171,8 @@ namespace Horo::AI::Detail {
     private:
         Result<std::unique_ptr<Runtime::SceneStructuralCandidate>> PrepareOwned(const Runtime::RuntimeSceneView &scene,
                                                                                 const std::span<const Runtime::RuntimeEntityView> created,
-                                                                                const std::span<const Runtime::EntityRef> destroyed) {
+                                                                                const std::span<const Runtime::EntityRef> destroyed,
+                                                                                const Runtime::SceneStructuralHierarchyView &hierarchy) {
             auto candidate = std::make_unique<StructuralCandidate>();
             candidate->state = runtime_->active_;
             candidate->scene = scene;
@@ -217,7 +224,7 @@ namespace Horo::AI::Detail {
                 return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(capacity.ErrorValue());
             if (perception_) {
                 auto preparedPerception =
-                    PerceptionGroupPublication::Prepare(*perception_, scene, created, destroyed, candidate->additions);
+                    PerceptionGroupPublication::Prepare(*perception_, scene, created, destroyed, candidate->additions, hierarchy);
                 if (preparedPerception.HasError())
                     return Result<std::unique_ptr<Runtime::SceneStructuralCandidate>>::Failure(preparedPerception.ErrorValue());
                 candidate->perception = std::move(preparedPerception).Value();

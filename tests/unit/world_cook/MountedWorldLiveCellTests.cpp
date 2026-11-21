@@ -11,6 +11,7 @@
 #include "Horo/Runtime/Scene/RuntimeSceneCellPayload.h"
 #include "Horo/WorldStreaming/WorldArtifactErrors.h"
 #include "MountedWorldHost.h"
+#include "ProjectScenePerception.h"
 #include "WorldCookPublicationTestSupport.h"
 
 #include <algorithm>
@@ -276,12 +277,24 @@ namespace Horo::WorldCook {
 
     TEST_CASE("Mounted World streams a verified cell through the real structural cutoff and detaches only its occurrence",
               "[world_cook][native][mounted_world][live_cell]") {
-        Fixture fixture{false, false};
+        const auto parentPoint = Math::WorldCoordinate64::FromMillimeters(-1000, 0, 0);
+        const W::WorldSpatialAssignmentCandidate parent{Endpoint(3).address, Endpoint(3).revision, {parentPoint, parentPoint},
+                                                         W::TestSupport::Layer(), 0};
+        Fixture fixture{false, false, parent};
         const auto controller = AI::TestSupport::MakeFixture(813, 812, 101, 0);
-        fixture.entities.front().components.aiAgent = controller.agent.agent;
-        fixture.entities.front().components.aiController = controller.agent.controller;
+        auto agentEntity = fixture.entities.front();
+        agentEntity.components.aiAgent = controller.agent.agent;
+        agentEntity.components.aiController = controller.agent.controller;
+        agentEntity.parent = S::SceneObjectId{10};
+        agentEntity.localTransform.translation.x = 0.25F;
+        const std::array cellEntities{S::RuntimeEntityDefinition{.object = {10}, .localTransform = {.translation = {-1.0F, 0, 0}}},
+                                      agentEntity};
+        fixture.inputs.front().source.entities = cellEntities;
+        fixture.objects.emplace_back(SpatialObjectBinding{Endpoint(3), fixture.inputs.front().expected.cell, {10}});
         const auto published = fixture.Publish();
         REQUIRE(published.HasValue());
+        for (const auto &finding : published.Value().validation->findings)
+            UNSCOPED_INFO(finding.cause.message);
         REQUIRE(published.Value().publication);
         const auto release = fixture.Release();
         const auto identity = fixture.inputs.front().expected;
@@ -299,13 +312,51 @@ namespace Horo::WorldCook {
         A::MemoryAssetProvider provider;
         A::AssetLoadService loads{jobs, provider};
         A::AssetRegistry registry;
-        const std::array catalog{controller.descriptor};
+        using AI::TestSupport::MakeIdentity;
+        const AI::PerceptionDescriptorOrigin origin{AI::PerceptionDescriptorSourceKind::Native, MakeIdentity<AI::PerceptionProviderId>(91),
+                                                    1};
+        const auto sense = AI::SenseTypeIds::Sight;
+        const auto stimulus = MakeIdentity<AI::StimulusTypeId>(92);
+        const auto listener = MakeIdentity<AI::PerceptionListenerTypeId>(93);
+        const std::array senses{AI::SenseTypeDescriptor{sense, origin, "Sight"}};
+        const std::array stimuli{AI::StimulusTypeDescriptor{stimulus, origin, "Observation"}};
+        const std::array listeners{AI::PerceptionListenerDescriptor{.identity = listener,
+                                                                    .origin = origin,
+                                                                    .displayName = "Sight",
+                                                                    .sense = sense,
+                                                                    .stimuli = {{stimulus}},
+                                                                    .stimulusCount = 1}};
+        auto descriptors = AI::PerceptionDescriptorRegistry::Capture({senses, stimuli, listeners}, {});
+        REQUIRE(descriptors.HasValue());
+        const auto perception = std::make_shared<const ProjectScenePerceptionPolicy>(
+            ProjectScenePerceptionPolicy{.definition = {99},
+                                         .revision = {1},
+                                         .controllers = {{.controller = controller.descriptor.controller,
+                                                          .listeners = {listener},
+                                                          .sources = {sense}}}});
+        auto catalog =
+            BindProjectPerceptionEndpoints(*perception,
+                                           std::make_shared<const AI::PerceptionDescriptorRegistry>(std::move(descriptors).Value()),
+                                           std::array{controller.descriptor});
+        REQUIRE(catalog.HasValue());
+        const auto positions = MakeProjectPerceptionPositionSources(perception);
+        AI::PerceptionSpatialBroadphase spatial;
         auto createdAi = AI::AiSceneRuntime::Create();
         REQUIRE(createdAi.HasValue());
         auto ai = std::move(createdAi).Value();
         S::RuntimeSceneService scene{registry, loads, S::RuntimeSceneAssetLimits{}, S::SceneRuntimeId{101}};
-        REQUIRE(scene.AddActivationParticipant(std::make_unique<AI::AiSceneActivationParticipant>(ai, catalog)).HasValue());
-        REQUIRE(scene.AddStructuralParticipant(ai.MakeStructuralParticipant(catalog)).HasValue());
+        REQUIRE(
+            scene
+                .AddActivationParticipant(
+                    std::make_unique<AI::AiSceneActivationParticipant>(ai, catalog.Value(),
+                                                                       AI::AiScenePerceptionActivationInput{spatial, {}, positions.scene}))
+                .HasValue());
+        REQUIRE(scene
+                    .AddStructuralParticipant(
+                        ai.MakeStructuralParticipant(catalog.Value(),
+                                                     AI::AiScenePerceptionGroupInput{.spatial = spatial,
+                                                                                     .positionsWithHierarchy = positions.group}))
+                    .HasValue());
         S::SceneDefinitionBuilder startup{{99}, {1}};
         startup.Add({.object = {42}});
         auto definition = std::move(startup).Build();
@@ -405,6 +456,13 @@ namespace Horo::WorldCook {
         REQUIRE(original.HasValue());
         const auto originalOwner = capability.ResolveAgentOwner(original.Value());
         REQUIRE(originalOwner.HasValue());
+        const auto originalSpatial = spatial.Current();
+        REQUIRE(originalSpatial);
+        const auto originalPosition = originalSpatial->ListenerPosition(originalOwner.Value());
+        REQUIRE(originalPosition.HasValue());
+        CHECK(originalPosition.Value() == Math::WorldCoordinate64::FromMillimeters(-750, 0, 0));
+        const auto originalPolicy = originalSpatial->ReadPolicyAuthorization();
+        REQUIRE(originalPolicy->IsCurrent());
         const auto originalLifetime = capability.CaptureAgentLifetime(original.Value());
         REQUIRE(originalLifetime.HasValue());
         const auto taskId = AI::TestSupport::MakeIdentity<AI::TaskId>(814);
@@ -433,6 +491,9 @@ namespace Horo::WorldCook {
         REQUIRE_FALSE(attached());
         REQUIRE(siblingAttached());
         CHECK(originalLifetime.Value().IsCancellationRequested());
+        CHECK_FALSE(originalPolicy->IsCurrent());
+        REQUIRE(spatial.Current());
+        CHECK(spatial.Current()->ListenerPosition(originalOwner.Value()).HasError());
         CHECK(capability.ResolveAgent(authoredAgent).HasError());
         CHECK(capability.CompleteTask(original.Value(), originalTask.Value()).HasError());
         REQUIRE(scene.ActiveScene());
@@ -461,6 +522,11 @@ namespace Horo::WorldCook {
         const auto replacementOwner = capability.ResolveAgentOwner(replacement.Value());
         REQUIRE(replacementOwner.HasValue());
         CHECK(replacementOwner.Value() != originalOwner.Value());
+        REQUIRE(spatial.Current());
+        CHECK(spatial.Current()->ListenerPosition(originalOwner.Value()).HasError());
+        const auto replacementPosition = spatial.Current()->ListenerPosition(replacementOwner.Value());
+        REQUIRE(replacementPosition.HasValue());
+        CHECK(replacementPosition.Value() == originalPosition.Value());
         CHECK_FALSE(ai.Find(replacement.Value()).Value().hasRunningTask);
         CHECK(capability.CompleteTask(replacement.Value(), originalTask.Value()).HasError());
         CHECK(capability.CompleteTask(original.Value(), originalTask.Value()).HasError());

@@ -9,6 +9,7 @@
 
 #include <array>
 #include <functional>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -56,8 +57,9 @@ namespace Horo::WorldCook::PublicationTestSupport {
         std::vector<std::vector<std::uint8_t>> baseArtifacts;
         std::uint64_t attempt{};
 
-        explicit Fixture(const bool nonspatial = false, const bool hardDependency = true)
-            : assignments(Assignments(world.manifest.Descriptor(), nonspatial)), placements(Placements(assignments)),
+        explicit Fixture(const bool nonspatial = false, const bool hardDependency = true,
+                         const std::optional<W::WorldSpatialAssignmentCandidate> additionalObject = std::nullopt)
+            : assignments(Assignments(world.manifest.Descriptor(), nonspatial, additionalObject)), placements(Placements(assignments, nonspatial)),
               dependencies(Dependencies(assignments, hardDependency)), packages(Packages(nonspatial)) {
             files.root = directory.path;
             if (nonspatial) {
@@ -66,7 +68,8 @@ namespace Horo::WorldCook::PublicationTestSupport {
             }
         }
 
-        static W::WorldSpatialAssignment Assignments(const W::WorldPartitionDescriptor &partition, const bool nonspatial = false) {
+        static W::WorldSpatialAssignment Assignments(const W::WorldPartitionDescriptor &partition, const bool nonspatial = false,
+                                                       const std::optional<W::WorldSpatialAssignmentCandidate> additionalObject = std::nullopt) {
             const auto bounds = [](const std::int64_t x) {
                 const auto point = Math::WorldCoordinate64::FromMillimeters(x, 0, 0);
                 return W::WorldPartitionBounds{point, point};
@@ -77,14 +80,16 @@ namespace Horo::WorldCook::PublicationTestSupport {
                                                                       W::TestSupport::Layer(), 0}};
             if (nonspatial)
                 candidates.push_back({Endpoint(3).address, Endpoint(3).revision, partition.Bounds(), W::TestSupport::Layer(), 0});
+            if (additionalObject)
+                candidates.push_back(*additionalObject);
             auto result = W::WorldSpatialAssignment::Create(partition, candidates, {8, 8, 16});
             REQUIRE(result.HasValue());
             return std::move(result).Value();
         }
 
-        static W::WorldSpanningObjectPlan Placements(const W::WorldSpatialAssignment &assignments) {
+        static W::WorldSpanningObjectPlan Placements(const W::WorldSpatialAssignment &assignments, bool nonspatial = false) {
             std::vector<W::WorldSpanningObjectDirective> directives;
-            if (assignments.Objects().size() == 3)
+            if (nonspatial)
                 directives.push_back({Endpoint(3).address, Endpoint(3).revision, W::WorldSpanningObjectPolicy::NonSpatial, {}});
             auto result = W::WorldSpanningObjectPlan::Create(assignments, directives, {8, 1, 16});
             REQUIRE(result.HasValue());

@@ -581,8 +581,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (OwnsPerception()) {
                 activation.emplace(AI::AiScenePerceptionActivationInput{record_->perception, input.perceptionFiltering,
                                                                         input.perceptionPositions, input.perceptionExecution});
-                structural.emplace(
-                    AI::AiScenePerceptionGroupInput{record_->perception, input.perceptionFiltering, input.perceptionGroupPositions});
+                structural.emplace(AI::AiScenePerceptionGroupInput{record_->perception, input.perceptionFiltering,
+                                                                   input.perceptionGroupPositions, input.perceptionHierarchyPositions});
             }
             if (auto added = record_->scenes->AddActivationParticipant(
                     std::make_unique<AI::AiSceneActivationParticipant>(*record_->ai, catalog, std::move(activation)));

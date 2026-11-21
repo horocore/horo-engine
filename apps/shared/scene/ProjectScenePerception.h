@@ -78,7 +78,7 @@ namespace Horo::Application::Internal {
     /** @brief Builds real global position capture callbacks for the existing Scene activation and structural owners. */
     struct ProjectPerceptionPositionSources final {
         AI::AiScenePerceptionPositionSource scene;
-        AI::AiScenePerceptionGroupPositionSource group;
+        AI::AiScenePerceptionHierarchyPositionSource group;
     };
 
     /** @brief Identity of a host projection already matched to the exact committed cooked Scene. */

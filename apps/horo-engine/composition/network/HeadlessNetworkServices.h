@@ -341,6 +341,7 @@ namespace Horo::Application::Internal {
             perceptionPositions; /**< Global positions from the supplied candidate/current Scene in ascending entity order. */
         AI::PerceptionFilteringPolicy perceptionFiltering;
         AI::AiScenePerceptionGroupPositionSource perceptionGroupPositions; /**< Exact detached endpoint coordinates at admission. */
+        AI::AiScenePerceptionHierarchyPositionSource perceptionHierarchyPositions;
         std::shared_ptr<const ProjectSceneNavigationSelection> navigation;
         std::shared_ptr<const HeadlessCookedDecisionInput>
             cookedDecisions; /**< Optional explicit authoritative controller/asset catalog. */

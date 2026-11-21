@@ -70,11 +70,18 @@ namespace Horo::AI {
         std::function<Result<std::vector<AiScenePerceptionPosition>>(const Runtime::RuntimeSceneView &,
                                                                      std::span<const Runtime::RuntimeEntityView>)>;
 
+    /** @brief Captures detached endpoints using the same candidate hierarchy that will publish with them. */
+    using AiScenePerceptionHierarchyPositionSource =
+        std::function<Result<std::vector<AiScenePerceptionPosition>>(const Runtime::RuntimeSceneView &,
+                                                                     std::span<const Runtime::RuntimeEntityView>,
+                                                                     const Runtime::SceneStructuralHierarchyView &)>;
+
     /** @brief Explicit host composition for publishing spatial endpoints with the Scene structural transaction. */
     struct AiScenePerceptionGroupInput final {
         PerceptionSpatialBroadphase &spatial; /**< Owner outliving the structural participant and its candidates. */
         PerceptionFilteringPolicy filtering;
-        AiScenePerceptionGroupPositionSource positions; /**< Missing authority rejects additions and permits retirement. */
+        AiScenePerceptionGroupPositionSource positions;
+        AiScenePerceptionHierarchyPositionSource positionsWithHierarchy; /**< Used when prospective ancestors are needed. */
     };
 
     /** @brief Exact AI and RuntimeScene incarnation used by one detached activation candidate. */

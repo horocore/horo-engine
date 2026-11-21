@@ -245,7 +245,7 @@ namespace Horo::Application::Internal {
         /** @brief Composes the exact available hierarchy from live and prospective generation-fenced views. */
         Result<Math::WorldCoordinate64> CapturePosition(Math::WorldCoordinate64 origin, const Runtime::RuntimeSceneView &scene,
                                                         Runtime::RuntimeEntityView entity,
-                                                        const std::span<const Runtime::RuntimeEntityView> prospective) {
+                                                        const Runtime::SceneStructuralHierarchyView *hierarchy = nullptr) {
             using Output = Result<Math::WorldCoordinate64>;
             auto matrix = Math::Mat4::Identity();
             for (std::size_t depth = 0; depth < MaximumAncestors; ++depth) {
@@ -261,8 +261,10 @@ namespace Horo::Application::Internal {
                         return Output::Failure(point.ErrorValue());
                     return GlobalPosition(origin, point.Value());
                 }
-                const auto parent = std::ranges::lower_bound(prospective, *entity.parent, {}, &Runtime::RuntimeEntityView::entity);
-                if (parent != prospective.end() && parent->entity == *entity.parent) {
+                if (hierarchy) {
+                    const auto parent = hierarchy->Find(*entity.parent);
+                    if (!parent)
+                        return Output::Failure(MakeError(AI::AIErrors::PerceptionDependencyMissing));
                     entity = *parent;
                     continue;
                 }
@@ -446,7 +448,7 @@ namespace Horo::Application::Internal {
         const auto live = scene.Get(entity);
         if (live.HasError())
             return Result<Math::WorldCoordinate64>::Failure(live.ErrorValue());
-        return CapturePosition(origin, scene, live.Value(), {});
+        return CapturePosition(origin, scene, live.Value());
     }
 
     /** @copydoc MakeProjectPerceptionPositionSources */
@@ -463,13 +465,14 @@ namespace Horo::Application::Internal {
                 constexpr auto maximumEndpoints = AI::PerceptionSpatialLimits::Listeners + AI::PerceptionSpatialLimits::Sources;
                 if (result.size() == maximumEndpoints)
                     return Positions::Failure(MakeError(AI::AIErrors::PerceptionSpatialLimitExceeded));
-                const auto position = CapturePosition(policy->origin, scene, *entity, {});
+                const auto position = CapturePosition(policy->origin, scene, *entity);
                 if (position.HasError())
                     return Positions::Failure(position.ErrorValue());
                 result.push_back({entity->entity, position.Value()});
             }
             return Positions::Success(std::move(result));
-        }, [policy, projection](const Runtime::RuntimeSceneView &scene, const std::span<const Runtime::RuntimeEntityView> prospective) {
+        }, [policy, projection](const Runtime::RuntimeSceneView &scene, std::span<const Runtime::RuntimeEntityView> prospective,
+                                const Runtime::SceneStructuralHierarchyView &hierarchy) {
             if (!policy || !OwnsDefinition(*policy, scene, projection))
                 return Positions::Failure(MakeError(AI::AIErrors::PerceptionSpatialStale));
             std::vector<AI::AiScenePerceptionPosition> result;
@@ -477,7 +480,7 @@ namespace Horo::Application::Internal {
             for (const auto &entity : prospective) {
                 if (!Selects(*policy, entity))
                     return Positions::Failure(MakeError(AI::AIErrors::PerceptionDependencyMissing));
-                const auto position = CapturePosition(policy->origin, scene, entity, prospective);
+                const auto position = CapturePosition(policy->origin, scene, entity, &hierarchy);
                 if (position.HasError())
                     return Positions::Failure(position.ErrorValue());
                 result.push_back({entity.entity, position.Value()});

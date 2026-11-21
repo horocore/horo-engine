@@ -788,7 +788,7 @@ namespace Horo::Application::Internal {
             if (!input.perceptionProject)
                 return Result<void>::Success();
             const auto &[policy, registry, provider] = *input.perceptionProject;
-            if (!definition || !policy || input.perceptionPositions || input.perceptionGroupPositions)
+            if (!definition || !policy || input.perceptionPositions || input.perceptionGroupPositions || input.perceptionHierarchyPositions)
                 return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionDependencyMissing,
                                                        "Project Perception needs one complete position and descriptor authority."));
             switch (provider) {
@@ -814,7 +814,7 @@ namespace Horo::Application::Internal {
             }
             auto sources = MakeProjectPerceptionPositionSources(policy);
             input.perceptionPositions = std::move(sources.scene);
-            input.perceptionGroupPositions = std::move(sources.group);
+            input.perceptionHierarchyPositions = std::move(sources.group);
             return Result<void>::Success();
         }
     }  // namespace

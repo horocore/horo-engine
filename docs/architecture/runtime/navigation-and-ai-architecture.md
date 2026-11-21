@@ -1319,7 +1319,14 @@ IDs with stable listener/sense selectors and endpoint layers/masks. Provider and
 stimulus declarations still come from the admitted frozen registry. Scene position
 evidence composes the available current or prospective entity hierarchy in
 canonical local meters and adds the explicit origin after millimeter quantization.
-Missing detached ancestry or a mismatched Scene revision denies capture.
+During structural preparation the Scene owner supplies a borrowed lookup for
+the detached hierarchy. Project Perception uses it for all parent transforms,
+including transform-only parents in the same streamed cell. The lookup carries
+no mutation authority and expires when preparation returns. Missing ancestry
+or a mismatched Scene revision denies capture. Existing structural participants
+can keep implementing `Prepare`. Participants that need detached ancestors
+override `PrepareWithHierarchy`. Host binaries rebuild against Scene structural
+participant contract version 6.
 
 Standalone terminal launches can add `--game-perception-policy <project-relative path>`
 to the existing explicit native cooked controller selection. The policy uses schema
