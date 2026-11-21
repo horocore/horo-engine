@@ -283,6 +283,17 @@ namespace Horo::Editor::Proposals {
      */
     Result<ChangeSet> DecodeStructuredPatch(std::string_view text, const ProjectPolicy &policy, ProposalIdentity identity,
                                             std::span<const SourceDocumentSnapshot> sources, const Limits &limits = {});
+
+    /** @brief Converts unified text diff records into inert operations against exact offered bases.
+     * @param text Diff with paired a/ and b/ paths and original/new line ranges.
+     * @param policy Current project path policy. @param identity Host-issued proposal attribution.
+     * @param sources Immutable offered source snapshots. @param limits Finite patch limits.
+     * @return Fully validated create, edit or delete proposal, or a typed rejection.
+     * @details Plain unified diff has no rename identity. Explicit rename is admitted by the structured parser.
+     * The decoder keeps exact source bytes, checks both hunk coordinates, and performs no filesystem I/O.
+     */
+    Result<ChangeSet> DecodeUnifiedPatch(std::string_view text, const ProjectPolicy &policy, ProposalIdentity identity,
+                                         std::span<const SourceDocumentSnapshot> sources, const Limits &limits = {});
     /** @brief Serializes bounded redacted audit data, independently from recovery text. @param record Audit data.
      * @return Canonical versioned envelope or invalid record error. */
     Result<std::string> EncodeAudit(const AuditRecord &record);

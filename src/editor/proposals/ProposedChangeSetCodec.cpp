@@ -1,4 +1,5 @@
 #include "Horo/Editor/ProposedChangeSet.h"
+#include "ProposedPatchInternal.h"
 
 #include <algorithm>
 #include <limits>
@@ -168,20 +169,6 @@ namespace Horo::Editor::Proposals {
             throw InvalidWire{};
         }
 
-        /** @brief Chooses exactly one offered source snapshot, rejecting aliases or multiple candidates. */
-        const SourceDocumentSnapshot *ResolvePatchBase(const SourceDocumentId &path, std::span<const SourceDocumentSnapshot> sources) {
-            const SourceDocumentSnapshot *matched{};
-            for (const auto &source : sources) {
-                const auto identity = source.Identity();
-                if (identity.key.kind != DocumentKind::Source || identity.key.source != path)
-                    continue;
-                if (matched)
-                    return nullptr;
-                matched = &source;
-            }
-            return matched;
-        }
-
         /** @brief Validates a model's exact field set before any lookup of admitted base evidence. */
         std::string StructuredOperationKind(const Json &value) {
             const auto kind = String(value.at("kind"), 16);
@@ -208,8 +195,8 @@ namespace Horo::Editor::Proposals {
                 return Fail<FileOperation>(Errors::PolicyDenied);
             if (kind == "create")
                 return Result<FileOperation>::Success(CreateFile{std::move(path), String(value.at("text"), limits.maximumTextBytes)});
-            const auto *source = ResolvePatchBase(path, sources);
-            if (!source || !source->IsCurrent())
+            const auto *source = PatchDetail::ResolveBase(path, sources);
+            if (!source)
                 return Fail<FileOperation>(Errors::StaleBase);
             auto base = FileBase::Capture(*source);
             if (base.HasError())
@@ -462,7 +449,9 @@ namespace Horo::Editor::Proposals {
         } catch (const WireBudgetExceeded &) {
             return Fail<ChangeSet>(Errors::Bounds);
         } catch (const InvalidWire &) {
-            return Fail<ChangeSet>(Errors::Malformed);
+            return Result<ChangeSet>::Failure(MakeError(Errors::Malformed, "Structured patch does not match the operation schema"));
+        } catch (const Json::parse_error &error) {
+            return Result<ChangeSet>::Failure(MakeError(Errors::Malformed, "Structured patch near byte " + std::to_string(error.byte)));
         } catch (const Json::exception &) {
             return Fail<ChangeSet>(Errors::Malformed);
         }

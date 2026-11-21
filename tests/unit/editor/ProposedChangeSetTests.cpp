@@ -8,6 +8,7 @@
 #include <iterator>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <random>
 
 namespace {
     using namespace Horo;
@@ -170,6 +171,160 @@ TEST_CASE("Every short prefix of a structured patch fails transactionally", "[ed
         CHECK(DecodeStructuredPatch(patch.substr(0, bytes), fixture.policy, PatchIdentity(), {}).HasError());
     CHECK(DecodeStructuredPatch(patch, fixture.policy, PatchIdentity(), {}).HasValue());
     CHECK_FALSE(std::filesystem::exists(fixture.project.directory / "src"));
+}
+
+TEST_CASE("Unified patches produce exact create edit and delete operations without I/O", "[editor][proposal][patch]") {
+    Fixture fixture;
+    const std::array sources{fixture.code, fixture.removed};
+    constexpr std::string_view patch = "diff --git a/code.cpp b/code.cpp\nindex 1234567..abcdef0 100644\n"
+                                       "--- a/code.cpp\n+++ b/code.cpp\n@@ -1 +1 @@\n-int x;\n+int y;\n"
+                                       "--- /dev/null\n+++ b/src/new.cpp\n@@ -0,0 +1 @@\n+hello\n\\ No newline at end of file\n"
+                                       "--- a/remove.cpp\n+++ /dev/null\n@@ -1 +0,0 @@\n-remove\n";
+    const auto decoded = DecodeUnifiedPatch(patch, fixture.policy, PatchIdentity(), sources);
+    REQUIRE(decoded.HasValue());
+    REQUIRE(decoded.Value().Files().size() == 3);
+    const auto &edit = std::get<EditFile>(decoded.Value().Files()[0]);
+    CHECK(edit.hunks.front().offset == 0);
+    CHECK(edit.hunks.front().before == "int x;\n");
+    CHECK(edit.hunks.front().after == "int y;\n");
+    CHECK(std::get<DeleteFile>(decoded.Value().Files()[1]).base.path == Path("remove.cpp"));
+    CHECK(std::get<CreateFile>(decoded.Value().Files()[2]).text == "hello");
+    CHECK(fixture.documents.Snapshot(fixture.code.Identity().instance).Value().SharesStateWith(fixture.code));
+    CHECK(fixture.Disk("code.cpp") == "int x;\n");
+    CHECK(fixture.Disk("remove.cpp") == "remove\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.project.directory / "src"));
+}
+
+TEST_CASE("Unified patches preserve source line endings and check context", "[editor][proposal][patch]") {
+    Fixture fixture;
+    const auto changed = fixture.documents.Edit(fixture.code.Identity().instance, {fixture.code.Revision(), 0, 7, "a\r\nb\r\nc\r\n"});
+    REQUIRE(changed.HasValue());
+    const std::array sources{changed.Value()};
+    std::string patch = "--- a/code.cpp\n+++ b/code.cpp\n@@ -1,3 +1,3 @@\n a\r\n-b\r\n+new\r\n c\r\n";
+    SECTION("LF framing carries exact CRLF source bytes") {}
+    SECTION("CRLF transport preserves the offered source endings") {
+        patch = "--- a/code.cpp\r\n+++ b/code.cpp\r\n@@ -1,3 +1,3 @@\r\n a\r\n-b\r\n+new\r\n c\r\n";
+    }
+    const auto decoded = DecodeUnifiedPatch(patch, fixture.policy, PatchIdentity(), sources);
+    REQUIRE(decoded.HasValue());
+    const auto &hunk = std::get<EditFile>(decoded.Value().Files().front()).hunks.front();
+    CHECK(hunk.before == "a\r\nb\r\nc\r\n");
+    CHECK(hunk.after == "a\r\nnew\r\nc\r\n");
+    patch.replace(patch.find(" c"), 2, " z");
+    CHECK(DecodeUnifiedPatch(patch, fixture.policy, PatchIdentity(), sources).HasError());
+}
+
+TEST_CASE("Unified patches reject malformed coordinates and stale or ambiguous input", "[editor][proposal][patch]") {
+    Fixture fixture;
+    std::vector sources{fixture.code};
+    Limits limits;
+    std::string patch = "--- a/code.cpp\n+++ b/code.cpp\n@@ -1 +1 @@\n-int x;\n+int y;\n";
+    SECTION("old and new coordinates disagree") {
+        patch.replace(patch.find("+1"), 2, "+2");
+    }
+    SECTION("hunk counts do not match") {
+        patch.replace(patch.find("-1"), 2, "-1,2");
+    }
+    SECTION("range overflows") {
+        patch.replace(patch.find("-1"), 2, "-184467440737095516160");
+    }
+    SECTION("source path escapes root") {
+        patch.replace(patch.find("a/code.cpp"), 10, "a/../code.cpp");
+    }
+    SECTION("different paths are ambiguous in plain unified diff") {
+        patch.replace(patch.find("b/code.cpp"), 10, "b/old.cpp");
+    }
+    SECTION("an offered base is required") {
+        sources.clear();
+    }
+    SECTION("base candidates must be unique") {
+        sources.push_back(fixture.code);
+    }
+    SECTION("binary diff marker is unsupported") {
+        patch = "diff --git a/code.cpp b/code.cpp\nGIT binary patch\n";
+    }
+    SECTION("raw binary bytes are rejected") {
+        patch[patch.find('y')] = '\0';
+    }
+    SECTION("wire budget is checked before scanning") {
+        limits.maximumWireBytes = 32;
+    }
+    SECTION("partial deletion is not a delete-file operation") {
+        patch = "--- a/code.cpp\n+++ /dev/null\n";
+    }
+    CHECK(DecodeUnifiedPatch(patch, fixture.policy, PatchIdentity(), sources, limits).HasError());
+    CHECK(fixture.Disk("code.cpp") == "int x;\n");
+}
+
+TEST_CASE("Unified patch prefix fuzzing rejects incomplete edits", "[editor][proposal][patch]") {
+    Fixture fixture;
+    const std::array sources{fixture.code};
+    constexpr std::string_view patch = "--- a/code.cpp\n+++ b/code.cpp\n@@ -1 +1 @@\n-int x;\n+int y;\n";
+    for (std::size_t bytes = 0; bytes < patch.size(); ++bytes)
+        CHECK(DecodeUnifiedPatch(patch.substr(0, bytes), fixture.policy, PatchIdentity(), sources).HasError());
+    CHECK(DecodeUnifiedPatch(patch, fixture.policy, PatchIdentity(), sources).HasValue());
+    CHECK(fixture.Disk("code.cpp") == "int x;\n");
+}
+
+TEST_CASE("Patch diagnostics point to malformed input without exposing its contents", "[editor][proposal][patch]") {
+    Fixture fixture;
+    const std::array sources{fixture.code};
+    const auto unified =
+        DecodeUnifiedPatch("--- a/code.cpp\n+++ b/code.cpp\n@@ -1 +1 @@\n-secret\n+change\n", fixture.policy, PatchIdentity(), sources);
+    REQUIRE(unified.HasError());
+    CHECK(unified.ErrorValue().message.find("line 4") != std::string::npos);
+    CHECK(unified.ErrorValue().message.find("secret") == std::string::npos);
+    const auto structured = DecodeStructuredPatch("{\"version\":1,\"files\":secret}", fixture.policy, PatchIdentity(), sources);
+    REQUIRE(structured.HasError());
+    CHECK(structured.ErrorValue().message.find("byte") != std::string::npos);
+    CHECK(structured.ErrorValue().message.find("secret") == std::string::npos);
+}
+
+TEST_CASE("Unified hunks use original offsets across earlier insertions", "[editor][proposal][patch]") {
+    Fixture fixture;
+    const auto source = fixture.documents.Edit(fixture.code.Identity().instance, {fixture.code.Revision(), 0, 7, "a\nb\nc\nd\n"});
+    REQUIRE(source.HasValue());
+    const std::array sources{source.Value()};
+    constexpr std::string_view patch = "--- a/code.cpp\n+++ b/code.cpp\n@@ -1,0 +2 @@\n+added\n@@ -3 +4 @@\n-c\n+updated\n";
+    const auto decoded = DecodeUnifiedPatch(patch, fixture.policy, PatchIdentity(), sources);
+    REQUIRE(decoded.HasValue());
+    const auto &edit = std::get<EditFile>(decoded.Value().Files().front());
+    REQUIRE(edit.hunks.size() == 2);
+    CHECK(edit.hunks[0].offset == 2);
+    CHECK(edit.hunks[0].before.empty());
+    CHECK(edit.hunks[0].after == "added\n");
+    CHECK(edit.hunks[1].offset == 4);
+    CHECK(edit.hunks[1].before == "c\n");
+    CHECK(ValidateAgainstSnapshot(edit.base, edit.hunks, source.Value()).HasValue());
+}
+
+TEST_CASE("Seeded patch mutations never publish an unchecked edit", "[editor][proposal][patch]") {
+    Fixture fixture;
+    const std::array sources{fixture.code};
+    using Decoder = decltype(&DecodeUnifiedPatch);
+    const std::array<std::pair<Decoder, std::string_view>, 2> corpus{{
+        {&DecodeUnifiedPatch, "--- a/code.cpp\n+++ b/code.cpp\n@@ -1 +1 @@\n-int x;\n+int y;\n"},
+        {&DecodeStructuredPatch,
+         R"({"version":1,"files":[{"kind":"edit","path":"code.cpp","hunks":[{"offset":4,"before":"x","after":"y"}]}]})"},
+    }};
+    std::mt19937 random{254};
+    for (const auto &[decode, input] : corpus) {
+        for (int trial = 0; trial < 256; ++trial) {
+            std::string changed{input};
+            const auto index = std::uniform_int_distribution<std::size_t>{0, changed.size() - 1}(random);
+            changed[index] = static_cast<char>(std::uniform_int_distribution<int>{0, 255}(random));
+            const auto result = decode(changed, fixture.policy, PatchIdentity(), sources, Limits{});
+            if (result.HasError())
+                continue;
+            REQUIRE(result.Value().Files().size() == 1);
+            REQUIRE(std::holds_alternative<EditFile>(result.Value().Files().front()));
+            const auto &edit = std::get<EditFile>(result.Value().Files().front());
+            CHECK(fixture.policy.Allows(edit.base.path));
+            CHECK(ValidateAgainstSnapshot(edit.base, edit.hunks, fixture.code).HasValue());
+        }
+    }
+    CHECK(fixture.documents.Snapshot(fixture.code.Identity().instance).Value().SharesStateWith(fixture.code));
+    CHECK(fixture.Disk("code.cpp") == "int x;\n");
 }
 
 TEST_CASE("Untrusted source proposal review changes neither actual buffers history nor disk", "[editor][proposal]") {

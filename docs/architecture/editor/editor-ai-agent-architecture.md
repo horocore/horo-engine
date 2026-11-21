@@ -738,6 +738,13 @@ checks duplicate fields, finite limits, project path policy, and the original
 hunk bytes. It returns a typed proposal without opening, editing, or saving any
 file. Recovery uses its separate committed envelope.
 
+Unified text diffs use paired project-relative paths, declared old and new
+line ranges, and exact source context. The decoder accepts plain unified
+headers and matching Git text headers, preserves source line endings, and
+recognizes the missing-final-newline marker. Creates and complete deletions
+use the unified null-file sentinel. Renames are represented explicitly in the
+structured format. Git hash text supplies no source revision authority.
+
 ## Backend Providers
 
 The system supports pluggable LLM backends:
