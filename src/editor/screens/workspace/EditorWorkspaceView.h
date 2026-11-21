@@ -185,10 +185,14 @@ namespace Horo::Editor {
             Physics::PhysicsQueryChannelId queryChannel;
             bool preferPathCost{};
             double pathCostCeiling{100};
+            std::uint64_t pathCostWeight{1};
+            bool providerRoom{};
             std::string widgetId;
 
             /** @brief Checks all editable fields before narrowing user input. */
             [[nodiscard]] bool IsValid() const;
+            /** @brief Checks the draft path cost scoring settings. */
+            [[nodiscard]] bool IsPathScoringValid() const noexcept;
             /** @brief Converts the validated controls to an owning authoring request. */
             [[nodiscard]] AI::BuiltinPointQuerySettings Capture() const;
         };

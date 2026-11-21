@@ -223,7 +223,7 @@ namespace Horo::Application::Internal {
         if (navigation.HasError())
             return Execution::Failure(navigation.ErrorValue());
         std::array tests{std::move(visibility).Value(), std::move(navigation).Value()};
-        return AI::AdmitPreparedPointQuery(plan, *registry_, std::move(inputs), settings, tests);
+        return AI::AdmitBuiltinPointProviderQuery(plan, *registry_, scope_->scene, std::move(inputs), settings, tests);
     }
 
     /** @copydoc SceneDecisionQueries::PrepareVisibilityCapability */

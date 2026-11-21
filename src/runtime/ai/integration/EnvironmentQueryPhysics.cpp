@@ -189,7 +189,7 @@ namespace Horo::AI {
         if (prepared.HasError())
             return Result<std::unique_ptr<QueryExecution>>::Failure(prepared.ErrorValue());
         auto test = std::move(prepared).Value();
-        return AdmitPreparedPointQuery(plan, registry, std::move(inputs), settings, std::span{&test, 1});
+        return AdmitBuiltinPointProviderQuery(plan, registry, scene, std::move(inputs), settings, std::span{&test, 1});
     }
 
     /** @copydoc PrepareBuiltinPointVisibilityTest */

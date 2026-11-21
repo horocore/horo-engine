@@ -90,14 +90,20 @@ namespace Horo::AI {
                    actual.generator == expected.generator && actual.provider == expected.provider && actual.revision == expected.revision;
         }
 
-        /** @brief Runs two providers through one generation pass and one outstanding test reservation. */
+        /** @brief Runs bounded point stages through one generation pass and one outstanding test reservation. */
         class PointProviderSource final : public IQueryExecutionSource {
         public:
-            explicit PointProviderSource(std::span<PreparedPointQueryTest> tests)
-                : stages_{tests[0].rule.stage, tests[1].rule.stage}, sources_{std::move(tests[0].source), std::move(tests[1].source)} {}
+            explicit PointProviderSource(std::span<PreparedPointQueryTest> tests) : count_(tests.size()) {
+                for (std::size_t index = 0; index < count_; ++index) {
+                    stages_[index] = tests[index].rule.stage;
+                    sources_[index] = std::move(tests[index].source);
+                }
+            }
 
             bool IsCurrent(const QueryExecutionInputs &inputs) const noexcept override {
-                return sources_[0]->IsCurrent(inputs) && sources_[1]->IsCurrent(inputs);
+                return std::ranges::all_of(std::span{sources_}.first(count_), [&](const auto &source) {
+                    return source->IsCurrent(inputs);
+                });
             }
 
             Result<QueryGenerationResult> Generate(const QueryExecutionInputs &inputs, const QueryGeneratorOutput &output) override {
@@ -105,10 +111,11 @@ namespace Horo::AI {
             }
 
             Result<bool> StartTest(const QueryExecutionInputs &inputs, QueryStageId stage, const QueryGeneratedItem &item) override {
-                const auto found = std::ranges::find(stages_, stage);
-                if (pending_ || found == stages_.end())
+                const auto active = std::span{stages_}.first(count_);
+                const auto found = std::ranges::find(active, stage);
+                if (pending_ || found == active.end())
                     return Result<bool>::Failure(MakeError(AIErrors::EnvironmentQueryContextInvalid));
-                auto &source = *sources_[static_cast<std::size_t>(found - stages_.begin())];
+                auto &source = *sources_[static_cast<std::size_t>(found - active.begin())];
                 auto admitted = source.StartTest(inputs, stage, item);
                 if (admitted.HasValue() && admitted.Value())
                     pending_ = &source;
@@ -130,8 +137,10 @@ namespace Horo::AI {
             }
 
         private:
-            std::array<QueryStageId, 2> stages_;
-            std::array<std::unique_ptr<IQueryExecutionSource>, 2> sources_;
+            static constexpr auto MaximumTests = EnvironmentQuerySchemaLimits::Stages - 1;
+            std::size_t count_{};
+            std::array<QueryStageId, MaximumTests> stages_{};
+            std::array<std::unique_ptr<IQueryExecutionSource>, MaximumTests> sources_;
             IQueryExecutionSource *pending_{};
         };
 
@@ -199,12 +208,12 @@ namespace Horo::AI {
                                                                     QueryExecutionInputs inputs, QueryExecutionSettings settings,
                                                                     std::span<PreparedPointQueryTest> tests) {
         using Admission = Result<std::unique_ptr<QueryExecution>>;
-        if (tests.empty() || tests.size() > 2)
+        if (tests.empty() || tests.size() >= EnvironmentQuerySchemaLimits::Stages)
             return Admission::Failure(MakeError(AIErrors::EnvironmentQueryStageUnsupported));
         const auto generator = tests.front().generator;
         settings.generatorWorkUnits = tests.front().generationWorkUnits;
         settings.testWorkUnits = tests.front().testWorkUnits;
-        std::array<QueryScoreRule, 2> rules;
+        std::array<QueryScoreRule, EnvironmentQuerySchemaLimits::Stages - 1> rules;
         for (std::size_t index = 0; index < tests.size(); ++index) {
             const auto &test = tests[index];
             if (!test.source || test.generator.stage != generator.stage || test.generator.generator != generator.generator ||

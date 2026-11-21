@@ -508,11 +508,15 @@ namespace Horo::Application::CharacterSceneProductTest {
             Reachability,
             Cost,
             VisibilityFirst,
-            NavigationFirst
+            NavigationFirst,
+            DistancePriority,
+            CostPriority
         };
-        const auto scenario = GENERATE(Scenario::Reachability, Scenario::Cost, Scenario::VisibilityFirst, Scenario::NavigationFirst);
+        const auto scenario = GENERATE(Scenario::Reachability, Scenario::Cost, Scenario::VisibilityFirst, Scenario::NavigationFirst,
+                                       Scenario::DistancePriority, Scenario::CostPriority);
         const bool scoreCost = scenario != Scenario::Reachability;
-        const bool mixed = scenario == Scenario::VisibilityFirst || scenario == Scenario::NavigationFirst;
+        const bool usesDistance = scenario == Scenario::DistancePriority || scenario == Scenario::CostPriority;
+        const bool mixed = usesDistance || scenario == Scenario::VisibilityFirst || scenario == Scenario::NavigationFirst;
         std::optional<Fixture> character;
         if (mixed)
             character.emplace();
@@ -538,10 +542,15 @@ namespace Horo::Application::CharacterSceneProductTest {
             generator = AddBuiltinPointVisibilityTest(generator.Value(), MakeIdentity<QueryStageId>(7), character->channel.Bytes());
             REQUIRE(generator.HasValue());
         }
-        auto query =
-            AddBuiltinPointNavigationTest(generator.Value(), MakeIdentity<QueryStageId>(2), scoreCost ? std::optional{10.0} : std::nullopt);
+        if (usesDistance) {
+            generator = AddBuiltinPointDistanceTest(generator.Value(), MakeIdentity<QueryStageId>(8), {2'000, true, 2});
+            REQUIRE(generator.HasValue());
+        }
+        const auto weight = scenario == Scenario::CostPriority ? 100u : 1u;
+        auto query = AddBuiltinPointNavigationTest(generator.Value(), MakeIdentity<QueryStageId>(2),
+                                                   scoreCost ? std::optional{10.0} : std::nullopt, weight);
         REQUIRE(query.HasValue());
-        if (scenario == Scenario::NavigationFirst)
+        if (usesDistance || scenario == Scenario::NavigationFirst)
             query = AddBuiltinPointVisibilityTest(query.Value(), MakeIdentity<QueryStageId>(7), character->channel.Bytes());
         REQUIRE(query.HasValue());
         auto queryBytes = EnvironmentQueryCookedCodec::Encode(query.Value(), registry.Value());
@@ -665,6 +674,8 @@ namespace Horo::Application::CharacterSceneProductTest {
             scoreCost ? Math::WorldCoordinate64::FromMillimeters(1500, 0, 1500) : Math::WorldCoordinate64::FromMillimeters(5000, 0, 1000);
         if (mixed)
             expected = Math::WorldCoordinate64::FromMillimeters(1500, 0, 1000);
+        if (scenario == Scenario::DistancePriority)
+            expected = Math::WorldCoordinate64::FromMillimeters(1000, 0, 1000);
         CAPTURE(static_cast<int>(scenario), actual.Millimeters(), expected.Millimeters());
         CHECK(actual == expected);
     }

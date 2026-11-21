@@ -281,7 +281,7 @@ namespace Horo::AI {
         if (prepared.HasError())
             return Result<std::unique_ptr<QueryExecution>>::Failure(prepared.ErrorValue());
         auto test = std::move(prepared).Value();
-        return AdmitPreparedPointQuery(plan, registry, std::move(inputs), settings, std::span{&test, 1});
+        return AdmitBuiltinPointProviderQuery(plan, registry, scene, std::move(inputs), settings, std::span{&test, 1});
     }
 
     /** @copydoc PrepareBuiltinPointNavigationTest */
@@ -308,7 +308,9 @@ namespace Horo::AI {
 
         QueryScoreRule rule{.stage = captured.Value().test, .requiredFilterValue = true};
         if (const auto cost = captured.Value().maximumScoredCost)
-            rule.score = QueryScoreRange{.maximum = *cost, .direction = QueryScoreDirection::Lower};
+            rule.score = QueryScoreRange{.maximum = *cost,
+                                         .weight = static_cast<double>(captured.Value().scoreWeight),
+                                         .direction = QueryScoreDirection::Lower};
         const std::size_t width = 2U * captured.Value().lattice.outerSteps + 1U;
         auto source =
             std::make_unique<PointNavigationSource>(captured.Value(), scene, querier, *start, settings.deadlineTick, owner, *access);

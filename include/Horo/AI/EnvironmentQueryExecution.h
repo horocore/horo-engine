@@ -151,6 +151,11 @@ namespace Horo::AI {
                                                                                   QueryExecutionSettings settings,
                                                                                   std::span<PreparedPointQueryTest> tests);
 
+    /** @brief Adds the authored native distance stages to prepared Navigation and Physics stages. */
+    [[nodiscard]] Result<std::unique_ptr<QueryExecution>> AdmitBuiltinPointProviderQuery(
+        const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
+        QueryExecutionInputs inputs, QueryExecutionSettings settings, std::span<PreparedPointQueryTest> providers);
+
     /** @brief Caller-issued per-tick allowances. Sharing the same allowance charges it once. */
     struct QueryExecutionBudget final {
         AiWorkBudget &query;

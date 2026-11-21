@@ -135,7 +135,8 @@ namespace Horo::AI {
      * @param maximumScoredCost Positive finite normalization ceiling. Omit it for reachability alone.
      */
     [[nodiscard]] Result<EnvironmentQueryAsset> AddBuiltinPointNavigationTest(const EnvironmentQueryAsset &lattice, QueryStageId stage,
-                                                                              std::optional<double> maximumScoredCost = std::nullopt);
+                                                                              std::optional<double> maximumScoredCost = std::nullopt,
+                                                                              std::uint32_t scoreWeight = 1);
 
     /** @brief Native lattice and one validated Navigation path stage. */
     struct BuiltinPointNavigationPlan final {
@@ -143,6 +144,7 @@ namespace Horo::AI {
         QueryGeneratorProvenance generator;
         QueryStageId test;
         std::optional<double> maximumScoredCost;
+        std::uint32_t scoreWeight{1};
     };
 
     /** @brief Detects an authored Navigation reachability or traversal-cost stage. */

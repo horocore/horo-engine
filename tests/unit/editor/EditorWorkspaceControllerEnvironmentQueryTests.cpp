@@ -1018,9 +1018,13 @@ TEST_CASE("Environment Query New creates the first registered source from explic
         REQUIRE(document.settings->navigation);
         const auto navigation = document.settings->navigation->stage;
         CHECK(visibility != navigation);
+        CHECK(document.settings->navigation->scoreWeight == 1);
+        edit(QueryPointDistanceTest{1000, true, 2});
+        REQUIRE(document.settings->distanceTests.size() == 1);
 
         auto changed = *document.settings;
         changed.navigation->maximumScoredCost = 50.0;
+        changed.navigation->scoreWeight = 7;
         changed.visibility->channel = {2};
         changed.lattice.stepMillimeters = 350;
         edit({}, changed);
@@ -1058,6 +1062,9 @@ TEST_CASE("Environment Query New creates the first registered source from explic
         CHECK(reopened.settings->navigation->stage == navigation);
         CHECK(reopened.settings->visibility->channel == changed.visibility->channel);
         CHECK(reopened.settings->navigation->maximumScoredCost == 50.0);
+        CHECK(reopened.settings->navigation->scoreWeight == 7);
+        REQUIRE(reopened.settings->distanceTests.size() == 1);
+        CHECK(reopened.settings->distanceTests.front().test.scoreWeight == 2);
         const auto encoded = EnvironmentQueryCookedCodec::Encode(*reopened.query, registry.Value());
         REQUIRE(encoded.HasValue());
         const auto cooked = EnvironmentQueryCookedCodec::Decode(encoded.Value(), registry.Value());

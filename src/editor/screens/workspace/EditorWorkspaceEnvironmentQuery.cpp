@@ -781,10 +781,16 @@ namespace Horo::Editor {
         };
         return positiveUint32(step) && outer <= AI::MaximumQueryLatticeOuterSteps && (!annulus || inner <= outer) && maximum > 0 &&
                maximum <= AI::EnvironmentQuerySchemaLimits::MaximumResults &&
-               (!navigation || !preferPathCost || (std::isfinite(pathCostCeiling) && pathCostCeiling > 0)) &&
+               (!navigation || IsPathScoringValid()) &&
                std::ranges::all_of(distances, [positiveUint32](const Distance &distance) {
             return positiveUint32(distance.radius) && positiveUint32(distance.weight);
         });
+    }
+
+    /** @copydoc EditorWorkspaceView::EnvironmentQueryFields::IsPathScoringValid */
+    bool EditorWorkspaceView::EnvironmentQueryFields::IsPathScoringValid() const noexcept {
+        return !preferPathCost || (std::isfinite(pathCostCeiling) && pathCostCeiling > 0 && pathCostWeight > 0 &&
+                                   pathCostWeight <= std::numeric_limits<std::uint32_t>::max());
     }
 
     /** @copydoc EditorWorkspaceView::EnvironmentQueryFields::Capture */
@@ -802,7 +808,8 @@ namespace Horo::Editor {
         if (visibility)
             settings.visibility.emplace(visibility->stage, queryChannel.Bytes());
         if (navigation)
-            settings.navigation.emplace(navigation->stage, preferPathCost ? std::optional{pathCostCeiling} : std::nullopt);
+            settings.navigation.emplace(navigation->stage, preferPathCost ? std::optional{pathCostCeiling} : std::nullopt,
+                                        preferPathCost ? static_cast<std::uint32_t>(pathCostWeight) : 1);
         return settings;
     }
 
@@ -833,7 +840,7 @@ namespace Horo::Editor {
             if (button("workspace.environment_query.remove_visibility"))
                 return fields.visibility->stage;
         } else if (button("workspace.environment_query.add_visibility",
-                          fields.IsValid() &&
+                          fields.providerRoom && fields.IsValid() &&
                               std::ranges::find(channels, fields.queryChannel, &PhysicsQueryChannelChoice::id) != channels.end())) {
             return EnvironmentQueryVisibilityStageAddition{fields.queryChannel.Bytes()};
         }
@@ -842,15 +849,17 @@ namespace Horo::Editor {
         if (fields.preferPathCost) {
             Ui::FieldLabel(text("workspace.environment_query.path_cost_ceiling").c_str(), fonts);
             ImGui::InputDouble("##path_cost_ceiling", &fields.pathCostCeiling);
+            static_cast<void>(Ui::DrawUnsignedPropRow(text("workspace.environment_query.score_weight").c_str(), "##path_weight",
+                                                      fields.pathCostWeight, fonts));
         }
         if (fields.navigation) {
             if (button("workspace.environment_query.remove_navigation"))
                 return fields.navigation->stage;
         } else {
-            const bool validCost = !fields.preferPathCost || (std::isfinite(fields.pathCostCeiling) && fields.pathCostCeiling > 0);
-            if (button("workspace.environment_query.add_navigation", fields.IsValid() && validCost))
-                return EnvironmentQueryNavigationStageAddition{fields.preferPathCost ? std::optional{fields.pathCostCeiling}
-                                                                                     : std::nullopt};
+            if (button("workspace.environment_query.add_navigation", fields.providerRoom && fields.IsValid() && fields.IsPathScoringValid()))
+                return EnvironmentQueryNavigationStageAddition{fields.preferPathCost ? std::optional{fields.pathCostCeiling} : std::nullopt,
+                                                               fields.preferPathCost ? static_cast<std::uint32_t>(fields.pathCostWeight)
+                                                                                     : 1};
         }
         return {};
     }
@@ -961,6 +970,8 @@ namespace Horo::Editor {
                                                          : (channels.empty() ? Physics::PhysicsQueryChannelId{} : channels.front().id),
                       .preferPathCost = current.navigation && current.navigation->maximumScoredCost.has_value(),
                       .pathCostCeiling = current.navigation ? current.navigation->maximumScoredCost.value_or(100) : 100,
+                      .pathCostWeight = current.navigation ? current.navigation->scoreWeight : 1,
+                      .providerRoom = document.query->Stages().size() < AI::EnvironmentQuerySchemaLimits::Stages,
                       .widgetId = std::format("##EqsSettings/{}/{}", fence.instance.Value(), fence.revision)};
             fields.distances.reserve(current.distanceTests.size());
             for (const auto &entry : current.distanceTests)
@@ -979,11 +990,10 @@ namespace Horo::Editor {
         number("workspace.environment_query.create_limit", "##limit", fields.maximum);
         DrawPointContextChoice(LocalizePointContexts(m_context.localization), fonts, fields.center, current.latticeCenters);
         const auto remove = DrawEnvironmentQueryDistanceStages(fields);
-        const bool roomForStage =
-            !current.visibility && !current.navigation && document.query->Stages().size() < AI::EnvironmentQuerySchemaLimits::Stages;
+        const bool roomForStage = document.query->Stages().size() < AI::EnvironmentQuerySchemaLimits::Stages;
         if (roomForStage)
             number("workspace.environment_query.new_distance_radius", "##new_distance_radius", fields.newDistanceRadius);
-        auto change = fields.distances.empty() ? DrawEnvironmentQueryProviderStages(fields, channels) : EnvironmentQueryStageChange{};
+        auto change = DrawEnvironmentQueryProviderStages(fields, channels);
         const bool valid = fields.IsValid();
         const auto button = [&](std::string_view key, bool enabled) {
             return Ui::Button({.label = text(key).c_str(), .enabled = enabled, .font = fonts.sans});

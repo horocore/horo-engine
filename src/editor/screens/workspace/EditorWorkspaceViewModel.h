@@ -444,6 +444,7 @@ namespace Horo::Editor {
 
     struct EnvironmentQueryNavigationStageAddition final {
         std::optional<double> maximumScoredCost;
+        std::uint32_t scoreWeight{1};
     };
 
     /** @brief An optional structural edit: append a typed test or remove one exact stage. */

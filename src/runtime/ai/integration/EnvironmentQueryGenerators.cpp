@@ -10,6 +10,7 @@
 #include <cmath>
 #include <limits>
 #include <new>
+#include <ranges>
 #include <utility>
 
 namespace Horo::AI {
@@ -33,6 +34,7 @@ namespace Horo::AI {
         constexpr std::uint64_t VisibilityChannel = LatticeProvider + 12;
         constexpr std::uint64_t PointNavigationTest = LatticeProvider + 13;
         constexpr std::uint64_t NavigationMaximumScoredCost = LatticeProvider + 14;
+        constexpr std::uint64_t NavigationScoreWeight = LatticeProvider + 15;
 
         constexpr std::array NativePointCenters{BuiltinQueryContext::QuerierLocation, BuiltinQueryContext::WorldOrigin,
                                                 BuiltinQueryContext::TargetLocation};
@@ -85,25 +87,22 @@ namespace Horo::AI {
             if (first == stages.end() || first->kind != QueryStageKind::Generator || first->generator != generator ||
                 asset.ResultSchema().itemType != QueryItemTypeId::Create(PointItem).Value())
                 return false;
-            const auto test = QueryTestId::Create(PointDistanceTest).Value();
-            return std::ranges::all_of(stages, [first, test](const QueryAssetStage &stage) {
-                return &stage == &*first || (stage.kind == QueryStageKind::Test && stage.test == test);
+            return std::ranges::all_of(stages, [first](const QueryAssetStage &stage) {
+                constexpr std::array tests{PointDistanceTest, PointVisibilityTest, PointNavigationTest};
+                return &stage == &*first ||
+                       (stage.kind == QueryStageKind::Test && std::ranges::find(tests, stage.test.Value()) != tests.end());
             });
         }
 
         /** @brief Appends one external provider stage while preserving the lattice and any other provider stage. */
-        Result<EnvironmentQueryAsset> AppendPointProviderTest(const EnvironmentQueryAsset &asset, QueryAssetStage stage,
-                                                              const std::uint64_t otherProvider) {
+        Result<EnvironmentQueryAsset> AppendPointProviderTest(const EnvironmentQueryAsset &asset, QueryAssetStage stage) {
             using Edited = Result<EnvironmentQueryAsset>;
             const auto stages = asset.Stages();
-            const auto generator = std::ranges::find(stages, QueryStageKind::Generator, &QueryAssetStage::kind);
-            if (!stage.id.IsValid() || generator == stages.end() || stages.size() > 2 ||
-                generator->generator != QueryGeneratorId::Create(LatticeGenerator).Value() ||
-                asset.ResultSchema().itemType != QueryItemTypeId::Create(PointItem).Value())
+            if (!stage.id.IsValid() || !HasBuiltinLatticeStages(asset))
                 return Edited::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-            if (stages.size() == 2 && !std::ranges::any_of(stages, [otherProvider](const QueryAssetStage &candidate) {
-                return candidate.kind == QueryStageKind::Test && candidate.test.Value() == otherProvider;
-            }))
+            if (stages.size() >= EnvironmentQuerySchemaLimits::Stages)
+                return Edited::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+            if (std::ranges::find(stages, stage.test, &QueryAssetStage::test) != stages.end())
                 return Edited::Failure(MakeError(AIErrors::EnvironmentQueryStageUnsupported));
             const auto last = std::ranges::max_element(stages, {}, &QueryAssetStage::executionOrder);
             if (last->executionOrder == std::numeric_limits<std::uint32_t>::max())
@@ -120,7 +119,7 @@ namespace Horo::AI {
         const QueryPlanStage *FindPointProviderTest(const EnvironmentQueryPlan &plan, const std::uint64_t provider) {
             const auto id = QueryTestId::Create(provider).Value();
             const auto stages = plan.Stages();
-            if (stages.size() < 2 || stages.size() > 3 || std::ranges::count(stages, id, &QueryPlanStage::test) != 1)
+            if (stages.size() < 2 || std::ranges::count(stages, id, &QueryPlanStage::test) != 1)
                 return nullptr;
             return &*std::ranges::find(stages, id, &QueryPlanStage::test);
         }
@@ -159,10 +158,13 @@ namespace Horo::AI {
             return Cost::Success(*cost);
         }
 
-        std::vector<QueryPropertyValue> NavigationProperties(std::optional<double> cost) {
+        std::vector<QueryPropertyValue> NavigationProperties(std::optional<double> cost, std::uint32_t weight) {
             if (!cost)
                 return {};
-            return {{QueryPropertyId::Create(NavigationMaximumScoredCost).Value(), *cost}};
+            std::vector<QueryPropertyValue> values{{QueryPropertyId::Create(NavigationMaximumScoredCost).Value(), *cost}};
+            if (weight != 1)
+                values.emplace_back(QueryPropertyId::Create(NavigationScoreWeight).Value(), std::uint64_t{weight});
+            return values;
         }
 
         /** @brief Native origin shared by the inert registration and its exact kernels. */
@@ -186,6 +188,15 @@ namespace Horo::AI {
             if (!value || *value > std::numeric_limits<std::uint32_t>::max())
                 return {};
             return static_cast<std::uint32_t>(*value);
+        }
+
+        Result<QueryPointNavigationStageSettings> ReadNavigationSettings(const QueryPlanStage &stage) {
+            using Settings = Result<QueryPointNavigationStageSettings>;
+            const auto cost = ReadNavigationCost(stage);
+            const auto weight = UnsignedProperty(stage, QueryPropertyId::Create(NavigationScoreWeight).Value(), 1);
+            if (cost.HasError() || weight.value_or(0) == 0 || (!cost.Value() && *weight != 1))
+                return Settings::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+            return Settings::Success({stage.id, cost.Value(), *weight});
         }
 
         /** @brief Reads the exact authored property identities retained in the compiled plan. */
@@ -464,7 +475,8 @@ namespace Horo::AI {
                                    .inputItemType = item,
                                    .inputItemVersion = LatticeVersion,
                                    .contexts = {{BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation), LatticeVersion}},
-                                   .properties = {{QueryPropertyId::Create(NavigationMaximumScoredCost).Value(), Float64, false}},
+                                   .properties = {{QueryPropertyId::Create(NavigationMaximumScoredCost).Value(), Float64, false},
+                                                  {QueryPropertyId::Create(NavigationScoreWeight).Value(), Unsigned64, false}},
                                },
                                std::move(perception.test)};
         return QuerySchemaRegistry::Capture({items, contexts, generators, tests});
@@ -527,13 +539,11 @@ namespace Horo::AI {
             return byte == 0;
         }))
             return Asset::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-        return AppendPointProviderTest(lattice,
-                                       {.id = stage,
-                                        .kind = QueryStageKind::Test,
-                                        .test = QueryTestId::Create(PointVisibilityTest).Value(),
-                                        .descriptorVersion = LatticeVersion,
-                                        .properties = VisibilityProperties(channel)},
-                                       PointNavigationTest);
+        return AppendPointProviderTest(lattice, {.id = stage,
+                                                 .kind = QueryStageKind::Test,
+                                                 .test = QueryTestId::Create(PointVisibilityTest).Value(),
+                                                 .descriptorVersion = LatticeVersion,
+                                                 .properties = VisibilityProperties(channel)});
     }
 
     /** @copydoc UsesBuiltinPointVisibility */
@@ -566,16 +576,18 @@ namespace Horo::AI {
 
     /** @copydoc AddBuiltinPointNavigationTest */
     Result<EnvironmentQueryAsset> AddBuiltinPointNavigationTest(const EnvironmentQueryAsset &lattice, const QueryStageId stage,
-                                                                const std::optional<double> maximumScoredCost) {
+                                                                const std::optional<double> maximumScoredCost,
+                                                                const std::uint32_t scoreWeight) {
         using Asset = Result<EnvironmentQueryAsset>;
-        if (maximumScoredCost && (!std::isfinite(*maximumScoredCost) || *maximumScoredCost <= 0))
+        if (scoreWeight == 0 || (!maximumScoredCost && scoreWeight != 1) ||
+            (maximumScoredCost && (!std::isfinite(*maximumScoredCost) || *maximumScoredCost <= 0)))
             return Asset::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
         QueryAssetStage path{.id = stage,
                              .kind = QueryStageKind::Test,
                              .test = QueryTestId::Create(PointNavigationTest).Value(),
                              .descriptorVersion = LatticeVersion,
-                             .properties = NavigationProperties(maximumScoredCost)};
-        return AppendPointProviderTest(lattice, std::move(path), PointVisibilityTest);
+                             .properties = NavigationProperties(maximumScoredCost, scoreWeight)};
+        return AppendPointProviderTest(lattice, std::move(path));
     }
 
     /** @copydoc UsesBuiltinPointNavigation */
@@ -600,10 +612,11 @@ namespace Horo::AI {
         const auto generator = CapturePointOwnerGenerator(stages.front(), plan.ResultSchema().itemType, contexts, registry);
         if (generator.HasError())
             return Captured::Failure(generator.ErrorValue());
-        const auto ceiling = ReadNavigationCost(path);
-        if (ceiling.HasError())
-            return Captured::Failure(ceiling.ErrorValue());
-        return Captured::Success({generator.Value().lattice, generator.Value().provenance, path.id, ceiling.Value()});
+        const auto settings = ReadNavigationSettings(path);
+        if (settings.HasError())
+            return Captured::Failure(settings.ErrorValue());
+        return Captured::Success({generator.Value().lattice, generator.Value().provenance, path.id, settings.Value().maximumScoredCost,
+                                  settings.Value().scoreWeight});
     }
 
     /** @copydoc RemoveBuiltinPointDistanceTest */
@@ -646,10 +659,10 @@ namespace Horo::AI {
                 settings.visibility.emplace(stage.id, *channel);
                 return Read::Success(true);
             }
-            const auto cost = ReadNavigationCost(stage);
-            if (cost.HasError() || settings.navigation)
+            const auto navigation = ReadNavigationSettings(stage);
+            if (navigation.HasError() || settings.navigation)
                 return Read::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
-            settings.navigation.emplace(stage.id, cost.Value());
+            settings.navigation = navigation.Value();
             return Read::Success(true);
         }
 
@@ -659,7 +672,7 @@ namespace Horo::AI {
                 return;
             }
             if (stage.test.Value() == PointNavigationTest) {
-                stage.properties = NavigationProperties(settings.navigation->maximumScoredCost);
+                stage.properties = NavigationProperties(settings.navigation->maximumScoredCost, settings.navigation->scoreWeight);
                 return;
             }
             const auto entry = std::ranges::find(settings.distanceTests, stage.id, &QueryPointDistanceStageSettings::stage);
@@ -696,8 +709,6 @@ namespace Horo::AI {
             settings.distanceTests.emplace_back(stage.id, distance.Value().Settings(),
                                                 PointCenterOptions(registry.Find(stage.test)->contextChoice, registry));
         }
-        if ((settings.visibility || settings.navigation) && !settings.distanceTests.empty())
-            return Settings::Failure(MakeError(AIErrors::EnvironmentQueryStageUnsupported));
         return Settings::Success(std::move(settings));
     }
 
@@ -714,7 +725,9 @@ namespace Horo::AI {
         };
         if (!std::ranges::equal(previous.Value().distanceTests, settings.distanceTests, {}, stageId, stageId) ||
             identity(previous.Value().visibility) != identity(settings.visibility) ||
-            identity(previous.Value().navigation) != identity(settings.navigation))
+            identity(previous.Value().navigation) != identity(settings.navigation) ||
+            (settings.navigation &&
+             (settings.navigation->scoreWeight == 0 || (!settings.navigation->maximumScoredCost && settings.navigation->scoreWeight != 1))))
             return Edited::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
 
         const auto generator = std::ranges::find(asset.Stages(), QueryStageKind::Generator, &QueryAssetStage::kind);
@@ -794,6 +807,45 @@ namespace Horo::AI {
         if (!lattice)
             return Generation::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
         return GenerateQueryLattice(contexts, lattice->center, *lattice, output);
+    }
+
+    /** @copydoc AdmitBuiltinPointProviderQuery */
+    Result<std::unique_ptr<QueryExecution>> AdmitBuiltinPointProviderQuery(const EnvironmentQueryPlan &plan,
+                                                                           const QuerySchemaRegistry &registry,
+                                                                           const Runtime::RuntimeSceneView &scene,
+                                                                           QueryExecutionInputs inputs, QueryExecutionSettings settings,
+                                                                           std::span<PreparedPointQueryTest> providers) {
+        using Admission = Result<std::unique_ptr<QueryExecution>>;
+        if (!inputs.contexts || !inputs.contexts->MatchesScene(scene) || inputs.contexts->Query() != plan.Id())
+            return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
+        const auto stages = plan.Stages();
+        const auto distance = [](const QueryPlanStage &stage) {
+            return stage.test.Value() == PointDistanceTest;
+        };
+        if (std::ranges::none_of(stages, distance))
+            return AdmitPreparedPointQuery(plan, registry, std::move(inputs), settings, providers);
+        if (providers.empty() || providers.size() + std::ranges::count_if(stages, distance) >= EnvironmentQuerySchemaLimits::Stages)
+            return Admission::Failure(MakeError(AIErrors::EnvironmentQueryStageUnsupported));
+        const auto generator = CapturePointOwnerGenerator(stages.front(), plan.ResultSchema().itemType, *inputs.contexts, registry);
+        if (generator.HasError())
+            return Admission::Failure(generator.ErrorValue());
+        std::vector<PreparedPointQueryTest> tests;
+        tests.reserve(stages.size() - 1);
+        for (auto &provider : providers)
+            tests.push_back(std::move(provider));
+        const auto &captured = generator.Value();
+        const std::size_t width = 2U * captured.lattice.outerSteps + 1U;
+        const QueryOwnerWorkLimits limits{2 * width * width, 2};
+        for (const auto &stage : stages | std::views::filter(distance)) {
+            auto local = CapturePointOwnerTests(std::span{&stage, 1}, *inputs.contexts, registry);
+            if (local.HasError())
+                return Admission::Failure(local.ErrorValue());
+            auto prepared = std::move(local).Value();
+            auto source = std::make_unique<PointOwnerSource>(scene, captured.lattice, captured.center, std::move(prepared.kernels), limits);
+            tests.push_back({captured.provenance, prepared.rules.front(), limits.generationUnits, settings.maximumCandidates,
+                             limits.testUnits, std::move(source)});
+        }
+        return AdmitPreparedPointQuery(plan, registry, std::move(inputs), settings, tests);
     }
 
     /** @copydoc AdmitBuiltinPointQuery */

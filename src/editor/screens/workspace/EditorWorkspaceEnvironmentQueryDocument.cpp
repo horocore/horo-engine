@@ -98,7 +98,7 @@ namespace Horo::Editor {
             if (const auto *visibility = std::get_if<EnvironmentQueryVisibilityStageAddition>(&change))
                 return AI::AddBuiltinPointVisibilityTest(source, id.Value(), visibility->channel);
             if (const auto *navigation = std::get_if<EnvironmentQueryNavigationStageAddition>(&change))
-                return AI::AddBuiltinPointNavigationTest(source, id.Value(), navigation->maximumScoredCost);
+                return AI::AddBuiltinPointNavigationTest(source, id.Value(), navigation->maximumScoredCost, navigation->scoreWeight);
             return AI::AddBuiltinPointDistanceTest(source, id.Value(), std::get<AI::QueryPointDistanceTest>(change));
         }
 

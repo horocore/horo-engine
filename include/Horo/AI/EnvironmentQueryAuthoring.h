@@ -52,6 +52,7 @@ namespace Horo::AI {
     struct QueryPointNavigationStageSettings final {
         QueryStageId stage;
         std::optional<double> maximumScoredCost;
+        std::uint32_t scoreWeight{1};
     };
 
     /** @brief Editable settings of the admitted native lattice and its existing distance stages. */
