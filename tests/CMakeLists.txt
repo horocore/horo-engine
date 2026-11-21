@@ -3935,7 +3935,9 @@ add_executable(HoroSourceLanguageSessionTests unit/editor/SourceLanguageSessionT
 target_link_libraries(HoroSourceLanguageSessionTests PRIVATE HoroEngine::EditorServices)
 horo_register_catch_test(HoroSourceLanguageSessionTests LABELS "unit;editor;source;headless")
 
-add_executable(HoroEditorLanguageProtocolTests unit/editor/LspProtocolTests.cpp)
+add_executable(HoroEditorLanguageProtocolTests
+        unit/editor/LspLifecycleTests.cpp
+        unit/editor/LspProtocolTests.cpp)
 target_link_libraries(HoroEditorLanguageProtocolTests PRIVATE HoroEditorLanguageProtocolInternal)
 horo_register_catch_test(HoroEditorLanguageProtocolTests LABELS "unit;editor;source;headless")
 

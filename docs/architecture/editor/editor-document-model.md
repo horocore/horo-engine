@@ -186,6 +186,13 @@ oversized headers or bodies, and truncated streams fault the connection. JSON
 envelope decoding independently rejects malformed, ambiguous, or deeply nested
 messages before feature adapters inspect payloads.
 
+Each connection owns its LSP handshake. Reserved wire IDs isolate initialization
+and shutdown from document-request replies. The transport sends the initialized
+notification before feature requests and sends exit after a successful shutdown
+reply. A monotonic deadline bounds initialization, shutdown, and the final
+process exit. The transport owner retires failed connections and gives a new
+connection fresh handshake state.
+
 ### Source Save Publication (EDT-003.5)
 
 `SourceDocumentService::Save` captures one exact current revision on the owner thread.

@@ -3988,7 +3988,9 @@ add_library(HoroEngine::EditorXRSimulatorModel ALIAS HoroEditorXRSimulatorModel)
 target_compile_features(HoroEditorXRSimulatorModel PUBLIC cxx_std_20)
 target_link_libraries(HoroEditorXRSimulatorModel PUBLIC HoroEngine::XRSimulator)
 
-add_library(HoroEditorLanguageProtocolInternal STATIC editor/language/LspProtocol.cpp)
+add_library(HoroEditorLanguageProtocolInternal STATIC
+        editor/language/LspLifecycle.cpp
+        editor/language/LspProtocol.cpp)
 target_include_directories(HoroEditorLanguageProtocolInternal PUBLIC
         $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/editor/language>)
 target_link_libraries(HoroEditorLanguageProtocolInternal PUBLIC HoroEngine::Foundation HoroFoundationJsonInternal)
