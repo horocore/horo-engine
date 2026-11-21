@@ -18,6 +18,7 @@ namespace Horo::XR {
             const auto depth = std::ranges::find_if(targets, [](const auto &target) {
                 return target.role == XRExternalRenderTargetRole::ProjectionDepth;
             });
+            std::size_t colorLayer = 0;
             std::size_t depthCount = 0;
             for (const auto &target : targets) {
                 if (const auto &baseline = target.role == XRExternalRenderTargetRole::ProjectionDepth ? *depth : first;
@@ -25,14 +26,19 @@ namespace Horo::XR {
                     target.allocationExtent != first.allocationExtent || target.arrayLayerCount != first.arrayLayerCount ||
                     target.sampleCount != first.sampleCount)
                     return false;
-                if (target.role == XRExternalRenderTargetRole::ProjectionDepth) {
-                    ++depthCount;
-                    const auto color = std::ranges::find_if(targets, [&target](const auto &candidate) {
-                        return candidate.view == target.view && candidate.role == XRExternalRenderTargetRole::ProjectionColor;
-                    });
-                    if (color == targets.end() || color->arrayLayer != target.arrayLayer)
+                if (target.role == XRExternalRenderTargetRole::ProjectionColor) {
+                    // Indexed instancing addresses the array layer with the runtime view ordinal.
+                    if (target.arrayLayer != colorLayer)
                         return false;
+                    ++colorLayer;
+                    continue;
                 }
+                ++depthCount;
+                const auto color = std::ranges::find_if(targets, [&target](const auto &candidate) {
+                    return candidate.view == target.view && candidate.role == XRExternalRenderTargetRole::ProjectionColor;
+                });
+                if (color == targets.end() || color->arrayLayer != target.arrayLayer)
+                    return false;
             }
             return depthCount == 0 || depthCount == plan.Views().size();
         }

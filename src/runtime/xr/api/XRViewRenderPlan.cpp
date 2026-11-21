@@ -2,6 +2,8 @@
 
 #include "Horo/XR/XRErrors.h"
 
+#include <algorithm>
+#include <array>
 #include <cmath>
 
 namespace Horo::XR {
@@ -100,14 +102,24 @@ namespace Horo::XR {
             return Result<void>::Success();
         }
 
-        /** @brief Enforces exact semantic roles for the two deliberately narrow first-slice profiles. */
-        [[nodiscard]] bool RolesMatchAdmission(const std::span<const XRViewDescriptor> views, const XRViewAdmissionMode mode) noexcept {
+        /** @brief Validates both peripheral/inset pairs while preserving the runtime's full ordering. */
+        [[nodiscard]] bool HasQuadRoles(const std::span<const XRViewDescriptor> views) noexcept {
+            using enum XRViewRole;
+            constexpr std::array roles{PrimaryLeft, PrimaryRight, FoveatedInsetLeft, FoveatedInsetRight};
+            return std::ranges::all_of(roles, [views](const XRViewRole role) {
+                return std::ranges::find(views, role, &XRViewDescriptor::role) != views.end();
+            });
+        }
+
+        /** @brief Enforces semantic roles for the admitted view configuration. */
+        [[nodiscard]] bool RolesMatchAdmission(const XRViewRenderPlanDescriptor &descriptor, const XRViewAdmissionMode mode) noexcept {
+            const auto views = descriptor.views;
             using enum XRViewAdmissionMode;
             if (mode == SimulatorSingleView)
                 return views.front().role == XRViewRole::Primary;
             if (mode == PrimaryStereo)
                 return views[0].role == XRViewRole::PrimaryLeft && views[1].role == XRViewRole::PrimaryRight;
-            return true;
+            return descriptor.configuration.type != XRViewConfigurationType::QuadView || HasQuadRoles(views);
         }
 
         /** @brief Finds the runtime order associated with one exact view identity. */
@@ -393,7 +405,7 @@ namespace Horo::XR {
             return Result<XRViewRenderPlan>::Failure(admission.ErrorValue());
         if (auto views = ValidateViews(descriptor, activeSession, activeOriginRevision); views.HasError())
             return Result<XRViewRenderPlan>::Failure(views.ErrorValue());
-        if (!RolesMatchAdmission(descriptor.views, policy.mode))
+        if (!RolesMatchAdmission(descriptor, policy.mode))
             return Reject<XRViewRenderPlan>(XRErrors::OperationIncompatible);
         if (auto targets = ValidateTargets(descriptor, activeSession, policy); targets.HasError())
             return Result<XRViewRenderPlan>::Failure(targets.ErrorValue());

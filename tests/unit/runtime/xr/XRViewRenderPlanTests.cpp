@@ -1,3 +1,4 @@
+#include "Horo/Runtime/Render/MultiviewExtractionErrors.h"
 #include "Horo/XR/XRErrors.h"
 #include "Horo/XR/XRMultiviewScene.h"
 #include "Horo/XR/XRViewRenderPlan.h"
@@ -139,6 +140,28 @@ namespace Horo::XR {
 
             static_assert(std::is_trivially_copyable_v<XRSwapchainImageId>);
             static_assert(!std::is_same_v<XRSwapchainImageId, Render::RenderTextureHandle>);
+        }
+
+        TEST_CASE("Quad views require one peripheral and one inset per eye in runtime order", "[unit][xr][views]") {
+            PlanFixture fixture{4};
+            const XRViewAdmissionPolicy policy{.mode = XRViewAdmissionMode::BoundedNView, .maximumViews = 4};
+            SECTION("Runtime order remains authoritative") {
+                std::swap(fixture.views[0].role, fixture.views[2].role);
+                const auto plan = fixture.Create(policy);
+                REQUIRE(plan.Views().size() == 4);
+                CHECK(plan.Views()[0].role == XRViewRole::FoveatedInsetLeft);
+                CHECK(plan.Views()[2].role == XRViewRole::PrimaryLeft);
+                CHECK(plan.Targets()[0].view == plan.Views()[0].id);
+                CHECK(plan.Targets()[2].view == plan.Views()[2].id);
+            }
+            SECTION("A repeated role cannot stand in for a missing inset") {
+                fixture.views[3].role = XRViewRole::FoveatedInsetLeft;
+                RequireFailureIdentity(fixture.TryCreate(policy), XRErrors::OperationIncompatible);
+            }
+            SECTION("A generic view cannot stand in for a peripheral eye") {
+                fixture.views[0].role = XRViewRole::Auxiliary;
+                RequireFailureIdentity(fixture.TryCreate(policy), XRErrors::OperationIncompatible);
+            }
         }
 
         TEST_CASE("XR implementation admission rejects unsupported complete configurations without truncation", "[unit][xr][views]") {
@@ -395,6 +418,69 @@ namespace Horo::XR {
                     .acquiredImages = std::span{fixture.acquired}.first(fixture.acquiredCount),
                     .renderer = {1, 2, fixture.origin.Value(), fixture.revision.Value(), 3, 4},
                     .capabilities = {XRHardLimits::MaximumViews, true, true, false}};
+        }
+
+        TEST_CASE("Quad extraction keeps all projections and requires exact layer routing for instancing", "[unit][xr][multiview]") {
+            using enum Render::MultiviewExecutionPolicy;
+            PlanFixture fixture{4};
+            const XRViewAdmissionPolicy admission{.mode = XRViewAdmissionMode::BoundedNView, .maximumViews = 4};
+            fixture.views[2].projection = {-0.3F, 0.4F, -0.2F, 0.2F};
+            fixture.views[3].projection = {-0.4F, 0.3F, -0.2F, 0.2F};
+            auto active = MultiviewOwner(fixture);
+            active.capabilities.instancedTargetRouting = true;
+            const std::array origins{OriginSample(fixture, 0), OriginSample(fixture, 1),
+                                     OriginSample(fixture, 2), OriginSample(fixture, 3)};
+            const auto extract = [&](const Render::MultiviewExecutionPolicy policy) {
+                const auto plan = fixture.Create(admission);
+                return XRMultiviewScene::Create(
+                    {.plan = plan,
+                     .referenceToWorld = origins,
+                     .publication = active.renderer,
+                     .policy = policy,
+                     .limits = {.maximumViews = 4}},
+                    active);
+            };
+
+            SECTION("Canonical layers admit indexed instancing") {
+                const auto scene = extract(RequireInstanced);
+                REQUIRE(scene.HasValue());
+                CHECK(scene.Value().Scene().Mode() == Render::MultiviewExecutionMode::Instanced);
+                REQUIRE(scene.Value().Scene().Views().size() == 4);
+                CHECK(scene.Value().Scene().Views()[0].worldToClip != scene.Value().Scene().Views()[2].worldToClip);
+            }
+            SECTION("Permuted layers remain an exact multipass plan") {
+                std::swap(fixture.targets[0].arrayLayer, fixture.targets[2].arrayLayer);
+                const auto scene = extract(PreferInstanced);
+                REQUIRE(scene.HasValue());
+                CHECK(scene.Value().Scene().Mode() == Render::MultiviewExecutionMode::Multipass);
+                REQUIRE(scene.Value().Scene().Views().size() == 4);
+                CHECK(scene.Value().Plan().Targets()[0].arrayLayer == 2);
+                RequireFailureIdentity(extract(RequireInstanced), Render::MultiviewExtractionErrors::Unsupported);
+            }
+            SECTION("An independent inset image can be replaced without aliasing its old plan") {
+                for (std::size_t index = 0; index < fixture.viewCount; ++index) {
+                    auto &target = fixture.targets[index];
+                    target.target.slot.index += static_cast<std::uint32_t>(index);
+                    target.image.target = target.target;
+                    target.arrayLayer = 0;
+                    target.arrayLayerCount = 1;
+                    fixture.acquired[index] = target.image;
+                }
+                fixture.targets[2].renderRectangle = {0, 0, 512, 512};
+                fixture.acquiredCount = fixture.viewCount;
+                active.acquiredImages = std::span{fixture.acquired}.first(fixture.acquiredCount);
+                const auto scene = extract(PreferInstanced);
+                REQUIRE(scene.HasValue());
+                CHECK(scene.Value().Scene().Mode() == Render::MultiviewExecutionMode::Multipass);
+                CHECK(scene.Value().Plan().Targets()[2].renderRectangle.width == 512);
+                CHECK(scene.Value().Validate(active).HasValue());
+                ++fixture.acquired[2].slot.generation;
+                RequireFailureIdentity(scene.Value().Validate(active), XRErrors::IdentityStale);
+            }
+            SECTION("Stereo-only hardware rejects all four views") {
+                active.capabilities.maximumViews = 2;
+                RequireFailureIdentity(extract(PreferInstanced), Render::MultiviewExtractionErrors::Unsupported);
+            }
         }
 
         TEST_CASE("XR World canvas uses each live eye rectangle and one shared readable plane", "[unit][xr][multiview][world-canvas]") {
