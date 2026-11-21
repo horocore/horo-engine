@@ -922,8 +922,15 @@ horo_configure_target_header_boundary(HoroAnimationAssetCook PUBLIC_HEADERS
 horo_configure_target_header_boundary(HoroAnimationSceneIntegration PUBLIC_HEADERS
     Horo/Runtime/Scene/SceneAnimationRuntime.h
 )
+horo_configure_target_header_boundary(HoroGameplayAnimationApi PUBLIC_HEADERS
+    Horo/Gameplay/GameplayAnimationContext.h
+)
+horo_configure_target_header_boundary(HoroGameplayAnimationScene PUBLIC_HEADERS
+    Horo/Gameplay/GameplayAnimationScene.h
+)
 horo_configure_target_header_boundary(HoroAnimationApi PUBLIC_HEADERS
     Horo/Animation/AnimationGraph.h
+    Horo/Animation/AnimationGraphGameplay.h
     Horo/Animation/AnimationCompression.h
     Horo/Animation/AnimationClip.h
     Horo/Animation/AnimationComponents.h

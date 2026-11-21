@@ -4,6 +4,7 @@
 #include "AnimationGraphInstanceTestFixtures.h"
 #include "AnimationPoseCompositionTestFixtures.h"
 #include "AnimationStateGraphTestFixtures.h"
+#include "Horo/Gameplay/GameplayAnimationScene.h"
 #include "animation/AnimationRuntimeFixture.h"
 
 #include <catch2/catch_approx.hpp>
@@ -42,6 +43,85 @@ namespace Horo::Animation {
             CHECK(owner.ResolveRootMotion(entity, id, moved, context).HasError());
         }
     }  // namespace
+
+    TEST_CASE("Gameplay animation grant reads only its Scene and retires with the module", "[animation][scene][gameplay]") {
+        Test::Scene::Fixture fixture(false, true, PrepareSocketGraph);
+        CancellationSource module;
+        const Gameplay::GameplayEntityRef entity{fixture.entity.runtime.value, fixture.entity.entity.index,
+                                                 fixture.entity.entity.generation};
+        const auto grant = Test::Cook::Take(
+            Gameplay::CreateGameplayAnimationContext(fixture.forward->adapter, fixture.entity.runtime, "game.animation", module.Token()));
+        CHECK(grant->ModuleId() == "game.animation");
+        auto foreign = entity;
+        ++foreign.scene;
+        const auto denied = grant->Observe(foreign);
+        REQUIRE(denied.HasError());
+        CHECK(denied.ErrorValue().code.Value() == AnimationErrors::HandleOwnerMismatch.code.Value());
+        REQUIRE(fixture.Tick().HasValue());
+        const auto observed = Test::Cook::Take(grant->Observe(entity));
+        const auto socket = Test::Id<SkeletonSocketId>(21);
+        Tests::AllocationProbe::Measurement metrics;
+        {
+            Tests::AllocationProbe::ScopedMeasurement window;
+            const auto read = grant->SocketModelTransform(observed.actor, observed.current, socket);
+            metrics = window.Snapshot();
+            CHECK(read.HasValue());
+        }
+        CHECK(metrics.requests == 0);
+        CHECK(Test::Cook::Take(grant->SocketModelTransform(observed.actor, observed.current, socket)).At(0, 3) == 18.0F);
+        CHECK(Test::Cook::Take(grant->CopyClipEvents(observed.actor, observed.current, {})) == 0);
+        CHECK(Test::Cook::Take(grant->CopyStateEvents(observed.actor, observed.current, {})) == 0);
+        auto stale = observed.actor;
+        ++stale.instance.slot.generation;
+        const auto rejected = grant->QueueTrigger(stale, Test::Id<GraphParameterId>(1));
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == AnimationErrors::HandleStale.code.Value());
+        module.RequestCancellation();
+        const auto cancelled = grant->Observe(entity);
+        REQUIRE(cancelled.HasError());
+        CHECK(cancelled.ErrorValue().code.Value() == AnimationErrors::GraphOperationCancelled.code.Value());
+    }
+
+    TEST_CASE("Gameplay animation grant observes and releases existing authoritative actions", "[animation][scene][gameplay]") {
+        Test::Scene::Fixture fixture(false, true, [](Test::Cook::Fixture &cook) -> std::optional<AnimationAuthoringComponent> {
+            const Test::Actions::Prepared action;
+            cook.Replace(*action.skeleton, action.compileClips, action.graph);
+            return std::nullopt;
+        });
+        CancellationSource module;
+        const Gameplay::GameplayEntityRef entity{fixture.entity.runtime.value, fixture.entity.entity.index,
+                                                 fixture.entity.entity.generation};
+        const auto grant = Test::Cook::Take(
+            Gameplay::CreateGameplayAnimationContext(fixture.forward->adapter, fixture.entity.runtime, "game.animation", module.Token()));
+        const auto actor = Test::Cook::Take(grant->Observe(entity)).actor;
+        const auto request = Test::Actions::Request();
+        const auto handle = Test::Cook::Take(grant->QueueAction(actor, {request.action, request.startSection, request.queue}));
+        CHECK(Test::Cook::Take(grant->ObserveAction(actor, handle)).phase == GraphActionPhase::Pending);
+        REQUIRE(fixture.Tick().HasValue());
+        CHECK(Test::Cook::Take(grant->ObserveAction(actor, handle)).phase == GraphActionPhase::Playing);
+        REQUIRE(grant->CancelAction(actor, handle, GraphActionStopPolicy::Cut).HasValue());
+        REQUIRE(fixture.Tick().HasValue());
+        CHECK(Test::Cook::Take(grant->ObserveAction(actor, handle)).reason == GraphActionCompletionReason::Cancelled);
+        REQUIRE(grant->ReleaseAction(actor, handle).HasValue());
+        CHECK(grant->ObserveAction(actor, handle).HasError());
+    }
+
+    TEST_CASE("Gameplay animation grant copies committed root motion feedback", "[animation][scene][gameplay]") {
+        Test::Scene::Fixture fixture(false, true, PrepareRootedGraph, {}, {}, true);
+        CancellationSource module;
+        const Gameplay::GameplayEntityRef entity{fixture.entity.runtime.value, fixture.entity.entity.index,
+                                                 fixture.entity.entity.generation};
+        const auto grant = Test::Cook::Take(
+            Gameplay::CreateGameplayAnimationContext(fixture.forward->adapter, fixture.entity.runtime, "game.animation", module.Token()));
+        CHECK_FALSE(Test::Cook::Take(grant->Observe(entity)).rootMotion.has_value());
+        REQUIRE(fixture.Tick().HasValue());
+        const auto snapshot = Test::Cook::Take(grant->Observe(entity));
+        REQUIRE(snapshot.rootMotion.has_value());
+        CHECK(snapshot.rootMotion->request.instance == snapshot.actor.instance);
+        CHECK(snapshot.rootMotion->disposition == AnimationRootMotionDisposition::Unavailable);
+        CHECK(snapshot.rootMotion->requested.translation.x == 10.0F);
+        CHECK(snapshot.rootMotion->remaining.translation.x == 10.0F);
+    }
 
     TEST_CASE("Scene gameplay parameter commands affect only the next committed playback tick", "[animation][scene][parameters]") {
         Test::Scene::Fixture fixture(false, true, [](Test::Cook::Fixture &cook) -> std::optional<AnimationAuthoringComponent> {

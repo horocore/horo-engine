@@ -12,7 +12,7 @@ namespace Horo::Animation::Test::Scene {
     using Runtime::EntityRef;
 
     struct Forwarder final : Runtime::RuntimeLifecycleParticipant {
-        std::unique_ptr<Runtime::SceneAnimationRuntime> adapter;
+        std::shared_ptr<Runtime::SceneAnimationRuntime> adapter;
         bool enabled{true};
         bool evaluated{};
         std::uint64_t lastTick{};

@@ -43,8 +43,27 @@ namespace Horo::Animation::Detail {
     }
 
     namespace {
-        /** @brief Captures all defaults and exact typed overrides before any
-         * instruction runs. */
+        /** @brief Validates and copies the invocation overrides against the compiled declarations. */
+        GraphInstanceOutcome CaptureInvocationParameters(GraphInstanceState &state,
+                                                         const std::span<const GraphParameterInput> parameters) noexcept {
+            const auto declarations = state.program->Parameters();
+            for (std::size_t index = 0; index < parameters.size(); ++index) {
+                const auto &parameter = parameters[index];
+                const auto found = std::ranges::lower_bound(declarations, parameter.id, {}, &GraphParameter::id);
+                if (found == declarations.end() || found->id != parameter.id)
+                    return {GraphInstanceFailure::BindingMismatch};
+                if (const auto failure = ValidateParameterValue(*found, parameter); failure != GraphInstanceFailure::None)
+                    return {failure};
+                const auto earlier = parameters.first(index);
+                if (std::ranges::find(earlier, parameter.id, &GraphParameterInput::id) != earlier.end())
+                    return {GraphInstanceFailure::Malformed};
+                const auto destination = static_cast<std::size_t>(found - declarations.begin());
+                state.candidate.parameters[destination] = parameter.value;
+            }
+            return {};
+        }
+
+        /** @brief Assembles the candidate in default, curve, invocation and queued command order. */
         GraphInstanceOutcome CaptureParameters(GraphInstanceState &state, const GraphEvaluationInput &input) noexcept {
             const auto declarations = state.program->Parameters();
             if (input.parameters.size() > declarations.size())
@@ -53,21 +72,10 @@ namespace Horo::Animation::Detail {
                 state.candidate.parameters[index] = declarations[index].defaultValue;
             for (std::size_t index = 0; index < state.curves.publications.size(); ++index)
                 state.candidate.parameters[state.curves.parameters[index]] = state.curves.publications[index]->Sample(input.curveTime);
-            for (std::size_t index = 0; index < input.parameters.size(); ++index) {
-                const auto &parameter = input.parameters[index];
-                const auto found = std::ranges::lower_bound(declarations, parameter.id, {}, &GraphParameter::id);
-                if (found == declarations.end() || found->id != parameter.id)
-                    return {GraphInstanceFailure::BindingMismatch};
-                if (const auto failure = ValidateParameterValue(*found, parameter); failure != GraphInstanceFailure::None)
-                    return {failure};
-                for (std::size_t earlier = 0; earlier < index; ++earlier)
-                    if (input.parameters[earlier].id == parameter.id)
-                        return {GraphInstanceFailure::Malformed};
-                const auto destination = static_cast<std::size_t>(found - declarations.begin());
-                state.candidate.parameters[destination] = parameter.value;
-            }
+            if (const auto invocation = CaptureInvocationParameters(state, input.parameters); invocation.HasError())
+                return invocation;
             for (std::size_t index = 0; index < declarations.size(); ++index)
-                if (state.queuedParameters[index])
+                if (state.queuedParameters[index].has_value())
                     state.candidate.parameters[index] = *state.queuedParameters[index];
             return {};
         }

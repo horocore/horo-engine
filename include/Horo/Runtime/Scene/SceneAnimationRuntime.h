@@ -73,11 +73,7 @@ namespace Horo::Runtime {
     };
 
     /** @brief Disposition committed by Animation after the same scheduler fence as the pose. */
-    enum class SceneRootMotionDisposition : std::uint8_t {
-        Unavailable,
-        Rejected,
-        Consumed
-    };
+    using SceneRootMotionDisposition = Animation::AnimationRootMotionDisposition;
 
     /** @brief Owned feedback for one historical root motion request. */
     struct SceneRootMotionResult final {

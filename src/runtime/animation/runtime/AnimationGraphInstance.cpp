@@ -409,7 +409,7 @@ namespace Horo::Animation {
         Result<Math::Mat4> ReadJointModel(const SkeletonAsset &skeleton, const std::span<const Math::Transform> locals,
                                           const JointId joint) {
             auto index = skeleton.FindJointIndex(joint);
-            if (!index)
+            if (!index.has_value())
                 return Result<Math::Mat4>::Failure(MakeError(AnimationErrors::PoseJointMissing));
 
             auto model = Math::Mat4::Identity();
@@ -420,7 +420,7 @@ namespace Horo::Animation {
                 model = Math::Multiply(local.Value(), model);
                 const auto &parent = skeleton.Data().joints[*index].parent;
                 index = parent ? skeleton.FindJointIndex(*parent) : std::nullopt;
-            } while (index);
+            } while (index.has_value());
 
             if (!Math::IsFinite(model))
                 return Result<Math::Mat4>::Failure(MakeError(AnimationErrors::PoseTransformInvalid));

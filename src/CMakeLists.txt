@@ -2118,6 +2118,14 @@ target_link_libraries(HoroAnimationSceneIntegration
         PRIVATE HoroEngine::AnimationCookedAssets HoroAnimationGraphCommitInternal
                 HoroAnimationClipProgramInternal HoroAnimationClipPayloadBindingInternal)
 
+add_library(HoroGameplayAnimationApi INTERFACE)
+add_library(HoroEngine::GameplayAnimationApi ALIAS HoroGameplayAnimationApi)
+target_link_libraries(HoroGameplayAnimationApi INTERFACE HoroEngine::GameplayApi HoroEngine::AnimationApi)
+
+add_library(HoroGameplayAnimationScene STATIC gameplay/GameplayAnimationScene.cpp)
+add_library(HoroEngine::GameplayAnimationScene ALIAS HoroGameplayAnimationScene)
+target_compile_features(HoroGameplayAnimationScene PRIVATE cxx_std_20)
+target_link_libraries(HoroGameplayAnimationScene PUBLIC HoroEngine::GameplayAnimationApi HoroEngine::AnimationSceneIntegration)
 
 add_library(HoroPCG STATIC
         runtime/pcg/api/PCGNodeCatalog.cpp

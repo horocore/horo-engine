@@ -1,5 +1,22 @@
 # Gameplay Runtime Integration
 
+## Animation command and observation grant
+
+Native gameplay builds can request the `Animation` SDK component through
+`find_package(HoroEngineGameplay CONFIG REQUIRED COMPONENTS Animation)` and
+link `HoroEngine::GameplayAnimationApi`. The interface exposes portable Graph
+command and observation values through `GameplayAnimationContext`. Existing
+runtime includes continue to provide the same Graph types. The SDK component
+exports no Scene integration or Graph runtime target.
+
+The host factory accepts an explicit module principal and Scene incarnation
+after host policy allows animation. The grant uses the caller's module
+cancellation token and weakly references the Scene owner. Actor generations
+fence commands and queries across reloads. Parameter, trigger and action
+requests go through the existing Graph owner. Parameter, state, event, socket
+and root motion observations copy committed values while Character retains
+the authority to consume movement.
+
 ## Cooked prefab creation and retirement
 
 The explicitly selected production `GameplayWorldComposition` may grant

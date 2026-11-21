@@ -189,6 +189,11 @@ export(TARGETS ${HORO_GAMEPLAY_COMMON_SDK_TARGETS}
 export(TARGETS ${HORO_GAMEPLAY_UI_SDK_TARGETS}
        NAMESPACE HoroEngine::
        FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayRuntimeUiTargets.cmake")
+set_target_properties(HoroAnimationApi PROPERTIES EXPORT_NAME AnimationApi)
+set_target_properties(HoroGameplayAnimationApi PROPERTIES EXPORT_NAME GameplayAnimationApi)
+export(TARGETS HoroAnimationApi HoroGameplayAnimationApi
+       NAMESPACE HoroEngine::
+       FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayAnimationTargets.cmake")
 export(TARGETS HoroRuntimeConsole
        NAMESPACE HoroEngine::
        FILE "${HORO_GAMEPLAY_SDK_PACKAGE_DIR}/HoroEngineGameplayRuntimeConsoleTargets.cmake")
