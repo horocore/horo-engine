@@ -1048,6 +1048,7 @@ namespace Horo::Application::PrefabAtomicTest {
             bool runTerminal = false;
             bool captureReplay = false;
             bool captureCharacterReplay = false;
+            bool capturePerceptionReplay = false;
             bool abortReplay = false;
             auto role = NetworkProjectRole::Standalone;
             std::optional<std::uint32_t> replayReferenceGeneration;
@@ -1066,6 +1067,11 @@ namespace Horo::Application::PrefabAtomicTest {
                 executionBudget = 100;
                 captureReplay = true;
                 captureCharacterReplay = true;
+            }
+            SECTION("standalone records the published authored Perception inputs") {
+                executionBudget = 100;
+                captureReplay = true;
+                capturePerceptionReplay = true;
             }
             SECTION("standalone rejection after replay preparation cannot publish the attempted tick") {
                 executionBudget = 100;
@@ -1396,7 +1402,7 @@ namespace Horo::Application::PrefabAtomicTest {
                 records.push_back({schemaId, schemaType, ProjectPath::Parse("assets/guard.horo_bb").Value(),
                                    ProjectPath::Parse("assets/guard.horo_bb.horo").Value()});
             }
-            if (selectNativePerception)
+            if (selectNativePerception || capturePerceptionReplay)
                 controller.agent.controller->requiredCapabilities =
                     controller.agent.controller->requiredCapabilities.Union(AI::AiCapabilitySet::Of(AI::AiCapability::Perception));
             Runtime::SceneDefinitionBuilder source{SceneCook::SceneDefinitionIdForAsset(sceneId), {1}};
@@ -1556,7 +1562,9 @@ namespace Horo::Application::PrefabAtomicTest {
             Assets::AssetLoadService prefabLoader{jobs, committed.Value()->ArtifactProvider()};
             CancellationSource startup;
             const Internal::HeadlessSceneLoadBoundary load{startup.Token(), std::chrono::steady_clock::now() + std::chrono::seconds{5}};
-            const std::array catalog{controller.descriptor};
+            std::array catalog{controller.descriptor};
+            if (capturePerceptionReplay)
+                catalog.front().perceptionEndpoints = PerceptionEndpoints();
             const auto selectedController =
                 unknownController ? Decisions::MakeIdentity<AI::ControllerTypeId>(999) : controller.descriptor.controller;
             auto selected = Internal::HeadlessCookedDecisionInput{*committed.Value(),
@@ -1595,6 +1603,8 @@ namespace Horo::Application::PrefabAtomicTest {
                                                                                 : AI::AiMissingControllerPolicy::Reject},
                                                          .prefabLoads = prefabOnly ? &prefabLoader : nullptr,
                                                          .cookedDecisions = decisions};
+            if (capturePerceptionReplay)
+                input.perceptionPositions = PerceptionPositions;
             if (selectNativePerception) {
                 auto captured = CaptureProjectPerception(definition.Value(), sceneId, perception.dump());
                 REQUIRE(captured.HasValue());

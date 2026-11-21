@@ -97,6 +97,19 @@ namespace Horo::AI {
     /** @brief Immutable scene-generation snapshot borrowed by workers without any Scene pointer or callback. */
     class PerceptionSpatialSnapshot final {
     public:
+        /** @brief Frozen spatial input facts, borrowed for the lifetime of this snapshot. */
+        struct InputView final {
+            std::span<const PerceptionSpatialSource> sources;
+            std::span<const PerceptionSpatialListener> listeners;
+            const PerceptionFilteringPolicy &filtering;
+        };
+
+        /** @brief Borrows the exact input records and admission policy for diagnostics.
+         * @return Frozen source and listener records and the filtering policy used by this publication.
+         * @details Retain the snapshot while using the view. Inputs do not include provider outputs or mutable Scene data.
+         */
+        [[nodiscard]] InputView Inputs() const & noexcept;
+        InputView Inputs() const && = delete;
         /** @brief Returns the exact source scene incarnation. @return Non-zero runtime scene ID. */
         [[nodiscard]] Runtime::SceneRuntimeId Scene() const noexcept;
         /** @brief Returns the owner's non-zero safe-point publication revision. @return Revision value. */

@@ -116,6 +116,14 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(coverage.at("scene-input") == "deterministic");
             CHECK(coverage.at("decision") == "deterministic");
             CHECK(coverage.at("canonical-ai") == "deterministic");
+            CHECK(coverage.at("perception-input") == (data.perception ? "deterministic" : "omitted"));
+            if (const auto &perception = data.perception) {
+                const auto &input = artifact.at("perceptionInput");
+                CHECK(input.at("scope") == "spatial-publication");
+                CHECK(input.at("sourceCount") == 1);
+                CHECK(input.at("listenerCount") == 1);
+                CHECK(input.at("digest") == FormatSha256(perception->digest));
+            }
             REQUIRE(data.physics);
             CHECK(coverage.at("physics") == "deterministic");
             const auto &physics = artifact.at("physics");
@@ -170,6 +178,14 @@ namespace Horo::Application::PrefabAtomicTest {
             const auto equal = Internal::CompareHeadlessReplayCaptures(data, data);
             REQUIRE(equal.HasValue());
             CHECK_FALSE(equal.Value());
+            if (data.perception) {
+                auto changed = data;
+                changed.perception->digest = data.sceneInput;
+                const auto perception = Internal::CompareHeadlessReplayCaptures(data, changed);
+                REQUIRE(perception.HasValue());
+                REQUIRE(perception.Value());
+                CHECK(perception.Value()->boundary == AI::AiReplayBoundary::PerceptionInput);
+            }
             if (!data.characterMotion)
                 return;
 
@@ -206,6 +222,7 @@ namespace Horo::Application::PrefabAtomicTest {
                               std::optional<std::uint32_t> referenceGeneration) {
         using namespace Network;
         const auto definitionId = definition->Id();
+        const bool hasPerception = static_cast<bool>(input.perceptionPositions);
         const bool hasCharacter = std::ranges::any_of(definition->Entities(), [](const auto &entity) {
             return entity.components.characterController.has_value();
         });
@@ -317,6 +334,7 @@ namespace Horo::Application::PrefabAtomicTest {
         const auto &data = captured->Value();
         CHECK(data.definitionRevision == definitionRevision);
         CHECK(data.sceneInput == sceneInputDigest);
+        CHECK(data.perception.has_value() == hasPerception);
         REQUIRE(data.characterMotion.has_value() == hasCharacter);
         if (data.characterMotion)
             CHECK(data.characterMotion->size() == 1);

@@ -133,6 +133,11 @@ namespace Horo::AI {
         }
     }  // namespace
 
+    /** @copydoc PerceptionSpatialSnapshot::Inputs */
+    PerceptionSpatialSnapshot::InputView PerceptionSpatialSnapshot::Inputs() const & noexcept {
+        return {sources_, listeners_, filtering_};
+    }
+
     /** @copydoc PerceptionSpatialSnapshot::Scene */
     Runtime::SceneRuntimeId PerceptionSpatialSnapshot::Scene() const noexcept {
         return scene_;

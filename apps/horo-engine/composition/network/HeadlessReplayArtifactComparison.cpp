@@ -156,6 +156,15 @@ namespace Horo::Application::Internal {
             if (file.at("format") != "horo-ai-replay-evidence" || file.at("version") != 1)
                 return Outcome::Failure(MakeError(AI::AIErrors::CanonicalSchemaUnsupported));
             auto result = ReadRequired(file);
+            if (file.contains("perceptionInput")) {
+                const auto &input = file.at("perceptionInput");
+                if (input.at("schemaVersion") != 1 || input.at("scope") != "spatial-publication")
+                    throw InvalidEvidence{};
+                const auto &scene = result.At(SceneInput);
+                result.At(PerceptionInput) = {{AI::AiReplayCoverage::Deterministic, 1, scene.profile.content},
+                                              {{scene.observation.stamp.generation, ReadIdentity(input.at("revision"))},
+                                               ReadDigest(input.at("digest"))}};
+            }
             if (file.contains("physics")) {
                 const auto &physics = file.at("physics");
                 if (physics.at("scope") != "authored-rigid-body-motion")

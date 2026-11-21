@@ -30,6 +30,96 @@ namespace Horo::Application::Internal {
             return entity.index < authored.slots.size() && entity == authored.slots[entity.index];
         }
 
+        /** @brief Uses a fixed byte order so the hash is independent of platform layout and process addresses. */
+        void HashPerceptionWord(Sha256Builder &hash, const std::uint64_t value) noexcept {
+            std::array<std::byte, sizeof(value)> bytes;
+            for (std::size_t index = 0; index < bytes.size(); ++index)
+                bytes[index] = static_cast<std::byte>(value >> (8 * index));
+            (void)hash.Update(bytes);  // Snapshot record limits are far below the SHA-256 byte limit.
+        }
+
+        /** @brief Hashes common spatial facts followed by participant-specific admission facts. */
+        template <class Record>
+        void HashPerceptionEndpoint(Sha256Builder &hash, const Runtime::SceneObjectId object, const Record &record) {
+            HashPerceptionWord(hash, object.value);
+            for (const auto coordinate : record.position.Millimeters())
+                HashPerceptionWord(hash, static_cast<std::uint64_t>(coordinate));
+            HashPerceptionWord(hash, record.ownerCancellation.IsCancellationRequested());
+            HashPerceptionWord(hash, record.senseCount);
+            for (const auto sense : std::span{record.senses}.first(record.senseCount))
+                HashPerceptionWord(hash, sense.Value());
+        }
+
+        /** @brief Encodes every source disclosure field used by the spatial query. */
+        void HashPerceptionPolicy(Sha256Builder &hash, const AI::PerceptionSpatialSource &source) {
+            for (const auto field :
+                 {source.layers, source.affiliation, source.team.value, source.listenerMask, static_cast<std::uint64_t>(source.visibility)})
+                HashPerceptionWord(hash, field);
+        }
+
+        /** @brief Encodes the frozen listener filter and its bounded custom allowlist. */
+        void HashPerceptionPolicy(Sha256Builder &hash, const AI::PerceptionSpatialListener &listener) {
+            const auto &filter = listener.filtering;
+            const auto &admission = listener.admission;
+            for (const auto field : {filter.team.value, filter.layers, filter.mask, static_cast<std::uint64_t>(filter.visibility),
+                                     static_cast<std::uint64_t>(admission.affiliations), static_cast<std::uint64_t>(admission.teams),
+                                     static_cast<std::uint64_t>(admission.customCount)})
+                HashPerceptionWord(hash, field);
+            for (const auto custom : std::span{admission.custom}.first(admission.customCount))
+                HashPerceptionWord(hash, custom.value);
+        }
+
+        /** @brief Orders immutable participants by durable Scene ID before consuming their frozen bytes. */
+        template <class Record>
+        Result<void> HashPerceptionParticipants(Sha256Builder &hash, std::span<const Record> records,
+                                                const HeadlessNetworkDetail::ReplayAuthoredScene &authored,
+                                                const Runtime::RuntimeSceneView &scene) {
+            using Entry = std::pair<Runtime::SceneObjectId, const Record *>;
+            std::vector<Entry> ordered;
+            ordered.reserve(records.size());
+            for (const auto &record : records) {
+                const auto entity = scene.Get(record.entity);
+                if (entity.HasError() || !IsOriginalReplayEntity(authored, record.entity.entity) || !entity.Value().authoredObject)
+                    return Result<void>::Failure(MakeError(AI::AIErrors::CanonicalRestoreStale,
+                                                           "Perception replay requires original authored participant identities."));
+                ordered.emplace_back(*entity.Value().authoredObject, &record);
+            }
+            std::ranges::sort(ordered, {}, &Entry::first);
+            HashPerceptionWord(hash, ordered.size());
+            for (const auto &[object, record] : ordered) {
+                HashPerceptionEndpoint(hash, object, *record);
+                HashPerceptionPolicy(hash, *record);
+            }
+            return Result<void>::Success();
+        }
+
+        /** @brief Captures the spatial input before sensing, without running providers or exposing their payloads. */
+        Result<HeadlessReplayPerception> CapturePerceptionReplay(const AI::PerceptionSpatialSnapshot &snapshot,
+                                                                 const HeadlessNetworkDetail::ReplayAuthoredScene &authored,
+                                                                 const Runtime::RuntimeSceneView &scene) {
+            using Capture = Result<HeadlessReplayPerception>;
+            if (snapshot.Scene() != scene.RuntimeId() || !scene.SameIncarnation(authored.initialScene))
+                return Capture::Failure(MakeError(AI::AIErrors::PerceptionSpatialStale));
+            const auto input = snapshot.Inputs();
+            try {
+                Sha256Builder hash;
+                HashPerceptionWord(hash, input.filtering.relationshipCount);
+                for (const auto &relationship : std::span{input.filtering.relationships}.first(input.filtering.relationshipCount)) {
+                    HashPerceptionWord(hash, relationship.listener.value);
+                    HashPerceptionWord(hash, relationship.source.value);
+                    HashPerceptionWord(hash, static_cast<std::uint64_t>(relationship.affiliation.kind));
+                    HashPerceptionWord(hash, relationship.affiliation.custom.value);
+                }
+                if (const auto result = HashPerceptionParticipants(hash, input.sources, authored, scene); result.HasError())
+                    return Capture::Failure(result.ErrorValue());
+                if (const auto result = HashPerceptionParticipants(hash, input.listeners, authored, scene); result.HasError())
+                    return Capture::Failure(result.ErrorValue());
+                return Capture::Success({snapshot.Revision(), hash.Finalize(), input.sources.size(), input.listeners.size()});
+            } catch (const std::bad_alloc &) {
+                return Capture::Failure(MakeError(AI::AIErrors::DecisionAssetStorageUnavailable));
+            }
+        }
+
         /** @brief Resolves the exact current root authored entity; raw runtime references never enter the encoded record. */
         ReplayEntity ProjectReplayEntity(const HeadlessNetworkDetail::ReplayAuthoredScene &authored, const Runtime::RuntimeSceneView &scene,
                                          const AI::BlackboardStoredEntityReference &stored) {
@@ -56,15 +146,20 @@ namespace Horo::Application::Internal {
         /** @brief Detaches canonical reference bytes while the fixed owner still holds the exact Scene borrow. */
         HeadlessDecisionReplay::Capture EncodeReplayCapture(AI::AiSceneDecisionReplayCapture evidence,
                                                             const HeadlessNetworkDetail::ReplayAuthoredScene &authored,
-                                                            const Runtime::RuntimeSceneView &scene) {
+                                                            const Runtime::RuntimeSceneView &scene,
+                                                            const std::optional<HeadlessReplayPerception> perception) {
             auto encoded = AI::EncodeAiCanonicalStateRecord(evidence.canonical, HeadlessDecisionReplay::CanonicalBudget,
                                                             [&](const AI::BlackboardStoredEntityReference &stored) {
                 return ProjectReplayEntity(authored, scene, stored);
             });
             if (encoded.HasError())
                 return HeadlessDecisionReplay::Capture::Failure(std::move(encoded).ErrorValue());
-            return HeadlessDecisionReplay::Capture::Success(
-                {std::move(evidence), std::move(encoded).Value(), scene.DefinitionId(), authored.definitionRevision, authored.sceneInput});
+            return HeadlessDecisionReplay::Capture::Success({.evidence = std::move(evidence),
+                                                             .canonicalRecord = std::move(encoded).Value(),
+                                                             .definition = scene.DefinitionId(),
+                                                             .definitionRevision = authored.definitionRevision,
+                                                             .sceneInput = authored.sceneInput,
+                                                             .perception = perception});
         }
 
         /** @brief Copies exact solved Character results over stable authored keys without stepping a subsystem. */
@@ -208,6 +303,20 @@ namespace Horo::Application::Internal {
             return;
         attemptWorld_ = &world;
         attempt_ = context.attemptNumber;
+        perception_.reset();
+        if (const auto spatial = world.perception.Current()) {
+            const auto scene = world.scenes->ActiveScene();
+            if (!scene || !world.replayAuthoredScene) {
+                pending_ = Capture::Failure(MakeError(AI::AIErrors::PerceptionSpatialStale));
+                return;
+            }
+            const auto input = CapturePerceptionReplay(*spatial, *world.replayAuthoredScene, *scene);
+            if (input.HasError()) {
+                pending_ = Capture::Failure(input.ErrorValue());
+                return;
+            }
+            perception_ = input.Value();
+        }
         const auto native = world.native.Borrow();
         if (native.HasError()) {
             pending_ = Capture::Failure(native.ErrorValue());
@@ -243,7 +352,7 @@ namespace Horo::Application::Internal {
             return;
         }
         armedAgent_ = {};
-        auto captured = EncodeReplayCapture(std::move(evidence).Value(), *world.replayAuthoredScene, *scene);
+        auto captured = EncodeReplayCapture(std::move(evidence).Value(), *world.replayAuthoredScene, *scene, perception_);
         pending_ = captured.HasError() ? std::move(captured)
                                        : CaptureNativeReplay(std::move(captured).Value(), world.native, *world.replayAuthoredScene, *scene,
                                                              context, previousPhysicsTick_);

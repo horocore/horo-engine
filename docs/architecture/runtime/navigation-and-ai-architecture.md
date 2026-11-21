@@ -3377,9 +3377,12 @@ report carries the stable Scene and agent IDs, fixed tick, canonical AI
 digest and its record revision, and the semantic decision records from the
 original versioned trace. Stable 64-bit identifiers are decimal strings.
 Blackboard values and process-local handles stay out of the report. The report
-also records authored Scene input and the available native Physics and Character
-motion, with omitted boundaries listed in the manifest. Input playback requires
-an additional input recording.
+also records authored Scene input and the available Perception, Physics and
+Character observations, with omitted boundaries listed in the manifest. The
+Perception input digest covers frozen spatial participants, their global
+positions and disclosure policy before sensing. Provider outputs and private
+state are listed as omissions. Input playback requires an additional input
+recording.
 
 Use `horo-engine --compare-ai-replay <recorded evidence.json> <replayed evidence.json>`
 to compare two single-tick reports with matching coverage and content identities.

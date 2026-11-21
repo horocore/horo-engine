@@ -17,6 +17,7 @@ namespace Horo::Application::Internal {
     namespace {
         using Json = nlohmann::json;
         constexpr std::uint32_t SceneInputSchemaVersion = 1;
+        constexpr std::uint32_t PerceptionInputSchemaVersion = 1;
         constexpr std::uint32_t RigidBodyMotionSchemaVersion = 1;
         constexpr std::uint32_t CharacterMotionSchemaVersion = 1;
 
@@ -29,9 +30,16 @@ namespace Horo::Application::Internal {
         /** @brief Describes supported and omitted boundaries even when trace records were captured for diagnostics. */
         Json EncodeCoverage(const HeadlessDecisionReplayData &data, Json &recorded) {
             constexpr auto &names = HeadlessReplayBoundaryNames;
-            const std::array
-                deterministic{true, false, false, false, true, false, false, data.physics.has_value(), data.characterMotion.has_value(),
-                              true};
+            const std::array deterministic{true,
+                                           data.perception.has_value(),
+                                           false,
+                                           false,
+                                           true,
+                                           false,
+                                           false,
+                                           data.physics.has_value(),
+                                           data.characterMotion.has_value(),
+                                           true};
             static_assert(deterministic.size() == names.size());
             auto boundaries = Json::object();
             for (std::size_t index = 0; index < names.size(); ++index) {
@@ -153,6 +161,14 @@ namespace Horo::Application::Internal {
                                {"records", std::move(records)}}}};
                 if (data.physics)
                     payload["physics"] = EncodePhysics(*data.physics);
+                if (const auto &perception = data.perception)
+                    payload["perceptionInput"] = {{"schemaVersion", PerceptionInputSchemaVersion},
+                                                  {"scope", "spatial-publication"},
+                                                  {"omissions", {"provider-output", "provider-internal-state"}},
+                                                  {"revision", std::to_string(perception->revision)},
+                                                  {"digest", FormatSha256(perception->digest)},
+                                                  {"sourceCount", perception->sourceCount},
+                                                  {"listenerCount", perception->listenerCount}};
                 if (data.characterMotion) {
                     auto motion = EncodeCharacterMotion(*data.characterMotion);
                     payload["characterMotion"] = {{"schemaVersion", CharacterMotionSchemaVersion},
@@ -202,6 +218,9 @@ namespace Horo::Application::Internal {
             result.Observe(CanonicalAi, AI::AiCanonicalReferenceRecordVersion, data.sceneInput,
                            {data.definition.value, data.evidence.sceneStructureRevision},
                            ComputeSha256(std::as_bytes(std::span{data.canonicalRecord})));
+            if (const auto &perception = data.perception)
+                result.Observe(PerceptionInput, PerceptionInputSchemaVersion, data.sceneInput,
+                               {data.definition.value, perception->revision}, perception->digest);
             if (const auto &physics = data.physics) {
                 const AI::AiReplayStamp stamp{physics->publication.completedTick, physics->publication.publicationRevision};
                 result.Observe(Physics, RigidBodyMotionSchemaVersion, physics->settings.digest, stamp,

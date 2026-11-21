@@ -834,8 +834,6 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return JobCancelled();
             if (record_->decisionTick != 0 && record_->decisionTick == context.simulationTick)
                 return Result<void>::Success();
-            if (owners_->configured->decisionReplay && owners_->fixed && request_.world == Network::NetworkModeWorldKind::Standalone)
-                owners_->fixed->ArmDecisionReplay(*record_, context);
 
             struct ResetMotionPhase {
                 std::uint64_t &tick;
@@ -926,6 +924,9 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid));
             if (auto navigation = PrepareNavigationTick(context); navigation.HasError())
                 return navigation;
+            if (OwnsCookedDecisionExecution() && owners_->configured->decisionReplay && owners_->fixed &&
+                request_.world == Network::NetworkModeWorldKind::Standalone)
+                owners_->fixed->ArmDecisionReplay(*record_, context);
             if (const auto perception = RunConfiguredPerception(context); perception.HasError())
                 return perception;
             if (const auto decisions = RunConfiguredDecisions(context); decisions.HasError())

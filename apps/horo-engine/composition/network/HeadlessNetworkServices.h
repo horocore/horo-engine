@@ -105,6 +105,14 @@ namespace Horo::Application::Internal {
         std::vector<HeadlessReplayRigidBody> bodies;
     };
 
+    /** @brief Exact frozen Perception spatial publication, projected onto authored entity identities. */
+    struct HeadlessReplayPerception final {
+        std::uint64_t revision{};
+        Sha256Digest digest;
+        std::size_t sourceCount{};
+        std::size_t listenerCount{};
+    };
+
     /** @brief Original decision evidence and its reference-aware canonical encoding owned after fixed commit. */
     struct HeadlessDecisionReplayData final {
         AI::AiSceneDecisionReplayCapture evidence;
@@ -115,6 +123,7 @@ namespace Horo::Application::Internal {
         std::optional<std::vector<HeadlessReplayCharacterMotion>>
             characterMotion;                          /**< Empty records still cover an idle controller tick. */
         std::optional<HeadlessReplayPhysics> physics; /**< Absent for explicit Null Physics. */
+        std::optional<HeadlessReplayPerception> perception;
     };
 
     /** @brief Product-owned mailbox for one exact committed tick; no concurrent access or file storage. */
@@ -154,6 +163,7 @@ namespace Horo::Application::Internal {
         AI::AgentHandle armedAgent_;
         std::uint64_t attempt_{};
         std::optional<std::uint64_t> previousPhysicsTick_;
+        std::optional<HeadlessReplayPerception> perception_;
         std::optional<Capture> pending_;
         std::optional<Capture> committed_;
         bool published_{};
