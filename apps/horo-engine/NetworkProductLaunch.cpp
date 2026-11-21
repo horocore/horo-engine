@@ -574,7 +574,8 @@ namespace Horo::Application::Internal {
                                                binding,
                                                configured.Value().fixedParticipant,
                                                configured.Value().pollRetirement,
-                                               travelLoad},
+                                               travelLoad,
+                                               configured.Value().aiHealth},
                                               std::move(configured).Value().factories, &diagnostic, debugger);
         }
 
@@ -620,6 +621,21 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Prints one fixed-size health line per selected and published authority world. */
+        void PrintProductAiHealth(const NetworkProductHost &runtime, const ProductWorlds &worlds) {
+            for (std::size_t index = 0; index < worlds.count; ++index) {
+                const auto health = runtime.AiHealth(worlds.values[index]);
+                if (!health)
+                    continue;
+                const auto status = health->degraded ? "degraded" : "ready";
+                std::cout << "horo-engine: AI health " << status << " decision_tick=" << health->decisionTick
+                          << " evaluated=" << health->evaluated << " work_units=" << health->workUnits
+                          << " worker_submissions=" << health->workersSubmitted << " deferred=" << health->deferred
+                          << " exhausted=" << health->exhausted << " failed=" << health->failed
+                          << " perception_listeners=" << health->perceptionListeners << '\n';
+            }
+        }
+
         [[nodiscard]] int RunProductFrames(NetworkProductHost &runtime, const ProductLaunch &launch, const ProductWorlds &worlds) {
             if (auto started = runtime.Startup(); started.HasError()) {
                 std::cerr << "horo-engine: product startup failed: " << started.ErrorValue().message << '\n';
@@ -647,6 +663,7 @@ namespace Horo::Application::Internal {
                     return 3;
                 }
             }
+            PrintProductAiHealth(runtime, worlds);
             runtime.Shutdown();
             return 0;
         }

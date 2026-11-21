@@ -260,9 +260,10 @@ namespace Horo::Application::Internal {
     }  // namespace
 
     NetworkProductHost::NetworkProductHost(ConstructionKey, std::unique_ptr<Runtime::RuntimeHost> runtime, ModeParticipant *mode,
-                                           std::shared_ptr<NetworkDebuggerService> debugger,
-                                           NetworkNativeRetirementPoll retirement) noexcept
-        : pollRetirement_(std::move(retirement)), debugger_(std::move(debugger)), runtime_(std::move(runtime)), mode_(mode) {}
+                                           std::shared_ptr<NetworkDebuggerService> debugger, NetworkNativeRetirementPoll retirement,
+                                           NetworkAiHealthSource aiHealth) noexcept
+        : pollRetirement_(std::move(retirement)), aiHealth_(std::move(aiHealth)), debugger_(std::move(debugger)),
+          runtime_(std::move(runtime)), mode_(mode) {}
 
     NetworkProductHost::~NetworkProductHost() noexcept {
         try {
@@ -306,7 +307,7 @@ namespace Horo::Application::Internal {
             return Result<std::unique_ptr<NetworkProductHost>>::Failure(added.ErrorValue());
         return Result<std::unique_ptr<NetworkProductHost>>::Success(
             std::make_unique<NetworkProductHost>(ConstructionKey{}, std::move(runtime).Value(), mode, std::move(debugger),
-                                                 inputs.pollRetirement));
+                                                 inputs.pollRetirement, inputs.aiHealth));
     }
 
     Result<void> NetworkProductHost::Startup() {
@@ -363,6 +364,14 @@ namespace Horo::Application::Internal {
     Result<Network::NetworkModeRoleView> NetworkProductHost::Role(const Network::NetworkModeWorldKind world,
                                                                   const Runtime::SceneRuntimeId scene) const {
         return mode_->Mode().Role(world, scene);
+    }
+
+    /** @copydoc NetworkProductHost::AiHealth */
+    std::optional<HeadlessAiHealth> NetworkProductHost::AiHealth(const Network::NetworkModeWorld world) const {
+        if (std::this_thread::get_id() != owner_ || !aiHealth_ || world.kind == Network::NetworkModeWorldKind::Client ||
+            Role(world.kind, world.scene).HasError())
+            return std::nullopt;
+        return aiHealth_(world, runtime_->Statistics().completedSimulationTick);
     }
 
     /** @copydoc NetworkProductHost::AcquireReplication */

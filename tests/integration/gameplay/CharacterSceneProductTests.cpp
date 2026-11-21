@@ -246,7 +246,9 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                                   NetworkWorldCompositionPurpose::Gameplay,
                                                                   owners ? std::optional{owners->worldSetup} : std::nullopt,
                                                                   std::move(composed.fixedParticipant),
-                                                                  std::move(composed.pollRetirement)},
+                                                                  std::move(composed.pollRetirement),
+                                                                  {},
+                                                                  std::move(composed.aiHealth)},
                                                                  std::move(composed.factories));
                 if (host.HasError())
                     return Result<void>::Failure(std::move(host).ErrorValue());
@@ -495,6 +497,7 @@ namespace Horo::Application::CharacterSceneProductTest {
         const bool dedicated = scenario == Scenario::Dedicated;
         const bool animated = scenario == Scenario::Animated || dedicated;
         const auto role = dedicated ? Network::NetworkProjectRole::DedicatedServer : Network::NetworkProjectRole::Standalone;
+        const Network::NetworkModeWorld authority{Network::NetworkModeWorldKind::AuthorityServer, {31}};
         const auto motionTrigger = Animation::GraphParameterId::Create(2).Value();
         NavigationProductFixture fixture;
         DecisionFixture::Fixture decision;
@@ -577,6 +580,13 @@ namespace Horo::Application::CharacterSceneProductTest {
         if (started.HasError())
             UNSCOPED_INFO(started.ErrorValue().code.Value() + ": " + started.ErrorValue().message);
         REQUIRE(started.HasValue());
+        if (dedicated) {
+            const auto health = product.scheduled->AiHealth(authority);
+            REQUIRE(health);
+            CHECK(health->decisionTick == 0);
+            CHECK_FALSE(product.scheduled->AiHealth({Network::NetworkModeWorldKind::Client, authority.scene}));
+            CHECK_FALSE(product.scheduled->AiHealth({authority.kind, {32}}));
+        }
         const auto scene = Internal::InspectHeadlessScene(product.SceneService());
         REQUIRE(scene);
         const auto actor = scene->Find({3});
@@ -605,6 +615,14 @@ namespace Horo::Application::CharacterSceneProductTest {
         std::size_t graphTransitions{};
         for (std::size_t index = 0; index < 340 && decision.probe.cleanups == 0; ++index) {
             product.RunFrame();
+            if (dedicated && index == 0) {
+                const auto health = product.scheduled->AiHealth(authority);
+                REQUIRE(health);
+                CHECK(health->decisionTick == 1);
+                CHECK(health->evaluated == 1);
+                CHECK(health->workUnits > 0);
+                CHECK_FALSE(health->degraded);
+            }
             if (animated) {
                 const auto *animation = Internal::InspectHeadlessAnimation(product.SceneService());
                 REQUIRE(animation);

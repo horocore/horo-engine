@@ -272,6 +272,40 @@ namespace Horo::Application::Internal {
     }
 
     namespace {
+        /** @brief Copies only finite counters from the selected world's latest committed AI work. */
+        HeadlessAiHealth CollectAiHealth(const WorldRecord &record, const std::uint64_t committedTick) {
+            HeadlessAiHealth health;
+            if (const auto perception = record.perception.Current())
+                health.perceptionListeners = perception->ListenerCount();
+            const auto scheduler = record.ai->TaskSchedulerAtSafePoint();
+            const auto *report = scheduler.HasValue() ? scheduler.Value()->CompletedReportAtSafePoint() : nullptr;
+            if (report && report->tick == committedTick) {
+                health.decisionTick = report->tick;
+                health.evaluated = report->evaluated;
+                health.workUnits = report->workUnits;
+                health.workersSubmitted = report->workerSubmissions;
+                health.deferred = report->deferred;
+                health.exhausted = report->exhausted;
+                health.failed = report->failed;
+                health.degraded = report->failed != 0 || report->exhausted != 0 || report->firstFailure || report->firstAdvisoryFailure;
+            }
+            return health;
+        }
+
+        /** @brief Looks up the exact live authoritative record within the host's bounded world slots. */
+        std::optional<HeadlessAiHealth> ReadAiHealth(const WorldOwners &owners, const Network::NetworkModeWorld world,
+                                                     const std::uint64_t committedTick) {
+            if (std::this_thread::get_id() != owners.owner || owners.retirementStarted)
+                return std::nullopt;
+            for (const auto &slot : owners.known) {
+                const auto record = slot.lock();
+                if (record && record->request.world == world.kind && record->request.scene == world.scene && !record->closeRequested &&
+                    record->ai && record->ai->ActiveBinding().HasValue())
+                    return CollectAiHealth(*record, committedTick);
+            }
+            return std::nullopt;
+        }
+
         Result<void> ValidateConfiguredInput(const std::shared_ptr<const Runtime::RuntimeSceneDefinition> &definition,
                                              const HeadlessSceneActivationInput &input,
                                              const std::optional<GameplayWorldSelection> &gameplay) {
@@ -395,6 +429,11 @@ namespace Horo::Application::Internal {
                                               [owners](std::uint32_t maximumRecords) {
             return owners->PollRetirement(maximumRecords);
         }};
+        if (owners->configured->cookedDecisions || owners->configured->perceptionPositions) {
+            composition.aiHealth = [owners](const Network::NetworkModeWorld world, const std::uint64_t tick) {
+                return ReadAiHealth(*owners, world, tick);
+            };
+        }
         const auto &mount = owners->configured->mountedWorld;
         if (owners->configured->decisionReplay || owners->configured->animationIdentities || owners->configured->publicTransforms ||
             (mount && mount->liveCell) || (owners->gameplay && owners->gameplay->vfxScene)) {

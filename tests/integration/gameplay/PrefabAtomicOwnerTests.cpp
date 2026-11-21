@@ -1009,6 +1009,11 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(result.Value().exitCode == expected);
             const std::string_view diagnostic = expected == 0 ? "network product completed 2 frames" : options.refusal;
             CHECK(output.find(diagnostic) != std::string::npos);
+            if (expected == 0) {
+                CHECK(output.find("AI health ready decision_tick=") != std::string::npos);
+                if (!options.perceptionPolicy.empty())
+                    CHECK(output.find("perception_listeners=2") != std::string::npos);
+            }
         }
 
         TEST_CASE("Configured headless Scene admits exact committed cooked AI plans before publishing its controller",
