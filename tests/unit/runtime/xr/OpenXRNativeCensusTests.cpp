@@ -503,6 +503,48 @@ namespace Horo::Tests::OpenXR {
                 RequireFailureIdentity(advance(122), XRErrors::PermissionDenied);
                 RequireFailureIdentity(capture.Read(scope, time(122)), XRErrors::OperationUnavailable);
             }
+            SECTION("withdrawal in a native callback stops the remaining reads and permits a new grant after retirement") {
+                enum class Revocation {
+                    Poll,
+                    Complete,
+                    Geometry
+                };
+                const auto where = GENERATE(Revocation::Poll, Revocation::Complete, Revocation::Geometry);
+                const auto revoke = [&capture] {
+                    capture.Revoke();
+                };
+                if (where == Revocation::Poll)
+                    script.onPoll = revoke;
+                else if (where == Revocation::Complete)
+                    script.onCompleteScan = revoke;
+                else
+                    geometry.onQuery = revoke;
+                const auto queries = geometry.calls;
+                const auto labels = geometry.labelCalls;
+                RequireFailureIdentity(advance(122), XRErrors::PermissionDenied);
+                RequireFailureIdentity(capture.Read(scope, time(122)), XRErrors::OperationUnavailable);
+                CHECK(geometry.calls == queries + (where == Revocation::Geometry ? 1U : 0U));
+                CHECK(geometry.labelCalls == labels);
+                CHECK_FALSE(script.hasSnapshot);
+                script.onPoll = {};
+                script.onCompleteScan = {};
+                geometry.onQuery = {};
+
+                script.failDestroy = true;
+                RequireFailureIdentity(capture.Close(), XRErrors::OperationUnavailable);
+                CHECK(script.hasContext);
+                auto renewed = scope;
+                renewed.grant = IdentityValue<XRPlaneGrant>(2);
+                RequireFailureIdentity(capture.Start(attempt, renewed, world, limits, time(123)), XRErrors::OperationIncompatible);
+                script.failDestroy = false;
+                REQUIRE(capture.Close().HasValue());
+                REQUIRE(capture.Start(attempt, renewed, world, limits, time(130)).HasValue());
+                REQUIRE(capture.Advance(renewed, world, time(131)).HasValue());
+                REQUIRE(capture.Advance(renewed, world, time(140)).HasValue());
+                REQUIRE(capture.Advance(renewed, world, time(141)).HasValue());
+                REQUIRE(capture.Read(renewed, time(141)).HasValue());
+                RequireFailureIdentity(capture.Read(scope, time(141)), XRErrors::IdentityStale);
+            }
             SECTION("a different native space revokes the unchanged portable grant before polling") {
                 const auto polls = script.polls;
                 const auto queries = geometry.calls;

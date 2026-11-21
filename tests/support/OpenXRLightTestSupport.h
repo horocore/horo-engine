@@ -3,6 +3,7 @@
 #include "OpenXRCensusTestSupport.h"
 
 #include <bit>
+#include <functional>
 #include <limits>
 
 namespace Horo::Tests::OpenXR {
@@ -19,6 +20,7 @@ namespace Horo::Tests::OpenXR {
         bool directionalValid{true};
         bool malformedDirection{};
         bool sampleAtCutoff{};
+        std::function<void()> onSample;
         XrSpace expectedSpace{NativeHandle<XrSpace>(15)};
         bool failRetirement{};
         bool live{};
@@ -66,6 +68,8 @@ namespace Horo::Tests::OpenXR {
                 CHECK(info->space == active->expectedSpace);
             CHECK(info->time > 0);
             ++active->sampleCalls;
+            if (active->onSample)
+                active->onSample();
             if (active->sampleResult != XR_SUCCESS)
                 return active->sampleResult;
             estimate->state = XR_LIGHT_ESTIMATE_STATE_VALID_ANDROID;

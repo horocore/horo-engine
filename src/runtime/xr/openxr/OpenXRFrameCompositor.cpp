@@ -59,9 +59,10 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRFrameCompositor::Bind */
     Result<void> OpenXRFrameCompositor::Bind(NativeOpenXRDispatch dispatch, const NativeFramePacingPolicy &pacing,
-                                             NativeCompositorColorSpace colorSpace) {
+                                             NativeCompositorColorSpace colorSpace, const NativeFrameMetricHandles &metrics) {
         // Snapshot before foreign loader callbacks can mutate the caller-owned policy.
         const NativeFramePacingPolicy admittedPacing = pacing;
+        const NativeFrameMetricHandles admittedMetrics = metrics;
         if (thread_ != std::this_thread::get_id() || nativeFrame_.IsValid() || frames_->Snapshot().phase != XRFramePhase::Idle ||
             owner_.IsValid() || closing_)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
@@ -103,7 +104,14 @@ namespace Horo::XR::OpenXRInternal {
         wait_ = wait.Value();
         begin_ = begin.Value();
         end_ = end.Value();
+        metrics_ = admittedMetrics;
+        metrics_.frameDepth.Observe(0);
         return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRFrameCompositor::RecordOutcome */
+    void OpenXRFrameCompositor::RecordOutcome(const NativeFrameMetricOutcome outcome) const noexcept {
+        metrics_.outcomes[static_cast<std::size_t>(outcome)].Add();
     }
 
     /** @copydoc OpenXRFrameCompositor::Wait */
@@ -122,10 +130,15 @@ namespace Horo::XR::OpenXRInternal {
         const XrFrameWaitInfo info{XR_TYPE_FRAME_WAIT_INFO};
         const XrResult result = wait_(native.Value().session, &info, &state);
         if (XR_FAILED(result)) {
+            RecordOutcome(NativeFrameMetricOutcome::WaitFailed);
             static_cast<void>(frames_->CancelWait());
             return Outcome::Failure(NativeError("wait frame", result));
         }
         nativeFrame_ = reservation.frame;
+        RecordOutcome(NativeFrameMetricOutcome::WaitCompleted);
+        metrics_.frameDepth.Observe(1);
+        if (state.predictedDisplayPeriod > 0)
+            metrics_.predictedPeriod.Observe(static_cast<double>(state.predictedDisplayPeriod) / 1'000'000'000.0);
         period_ = state.predictedDisplayPeriod;
         nativeDisplayTime_ = state.predictedDisplayTime;
         const auto prediction = XRRenderPredictionTime::Create(state.predictedDisplayTime);
@@ -161,10 +174,12 @@ namespace Horo::XR::OpenXRInternal {
         const XrFrameBeginInfo info{XR_TYPE_FRAME_BEGIN_INFO};
         const XrResult result = begin_(native.Value().session, &info);
         if (XR_FAILED(result)) {
+            RecordOutcome(NativeFrameMetricOutcome::BeginFailed);
             fault_ = NativeError("begin frame", result);
             return Result<void>::Failure(*fault_);
         }
         begun_ = true;
+        RecordOutcome(result == XR_FRAME_DISCARDED ? NativeFrameMetricOutcome::BeginDiscarded : NativeFrameMetricOutcome::BeginCompleted);
         if (frames_->Begin(frame) != XRFrameStatus::Ok) {
             fault_ = MakeError(XRErrors::IdentityStale);
             return Result<void>::Failure(*fault_);
@@ -551,11 +566,14 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(dispatched.ErrorValue());
         const auto result = dispatched.Value();
         if (XR_FAILED(result)) {
+            RecordOutcome(NativeFrameMetricOutcome::EndFailed);
             fault_ = passthrough && (result == XR_ERROR_NOT_PERMITTED_PASSTHROUGH_FB || result == XR_ERROR_PERMISSION_INSUFFICIENT)
                          ? MakeError(XRErrors::PermissionDenied, "end frame")
                          : NativeError("end frame", result);
             return Result<void>::Failure(*fault_);
         }
+        RecordOutcome(projection ? NativeFrameMetricOutcome::ProjectionAccepted : NativeFrameMetricOutcome::EmptyAccepted);
+        metrics_.frameDepth.Observe(0);
         const auto ended = projection ? frames_->EndProjection(frame, *projection) : frames_->End(frame, 0);
         nativeFrame_ = {};
         begun_ = false;
@@ -592,6 +610,9 @@ namespace Horo::XR::OpenXRInternal {
     Result<void> OpenXRFrameCompositor::ResetAfterQuiescence() {
         if (thread_ != std::this_thread::get_id())
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible, "XR recovery requires its control thread."));
+        if (nativeFrame_.IsValid())
+            metrics_.frameDepth.Observe(0);
+        metrics_ = {};
         owner_ = {};
         nativeFrame_ = {};
         wait_ = nullptr;

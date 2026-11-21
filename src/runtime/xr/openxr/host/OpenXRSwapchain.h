@@ -6,6 +6,7 @@
 
 #include "Horo/Runtime/Render/RenderResourceDescriptors.h"
 #include "Horo/XR/XRReprojection.h"
+#include "OpenXRFrameTelemetry.h"
 #include "OpenXRNativeSession.h"
 
 #include <array>
@@ -225,7 +226,8 @@ namespace Horo::XR::OpenXRInternal {
     class OpenXRSwapchain final {
     public:
         /** @brief Borrows exact session and backend translator; both must outlive successful Close. */
-        OpenXRSwapchain(OpenXRNativeSession &session, IOpenXRSwapchainImages &images) noexcept;
+        OpenXRSwapchain(OpenXRNativeSession &session, IOpenXRSwapchainImages &images,
+                        const NativeSwapchainMetricHandles &metrics = {}) noexcept;
         /** @brief Enforces explicit complete retirement before session/device/port destruction. */
         ~OpenXRSwapchain();
         OpenXRSwapchain(const OpenXRSwapchain &) = delete;
@@ -399,7 +401,9 @@ namespace Horo::XR::OpenXRInternal {
         Dispatch dispatch_;
 
         OpenXRNativeSession *session_;
+        void RecordOutcome(NativeSwapchainMetricOutcome outcome) const noexcept;
         IOpenXRSwapchainImages *images_;
+        NativeSwapchainMetricHandles metrics_;
         const std::thread::id thread_{std::this_thread::get_id()};
         NativeSwapchainRequest request_{};
 

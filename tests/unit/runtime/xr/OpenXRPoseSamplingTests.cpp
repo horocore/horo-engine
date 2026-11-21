@@ -143,6 +143,21 @@ namespace Horo::Tests::OpenXRAction {
             CHECK(fixture.actions.script.tracking.spaces == 0);
             CHECK(fixture.actions.script.liveActions == 0);
         }
+        SECTION("withdrawn consent skips the native activity and location calls") {
+            REQUIRE(fixture.Prepare(std::nullopt, false, XRActionSetId{1}).HasValue());
+            fixture.Activate(4);
+            fixture.Sync();
+            bool queried = false;
+            fixture.actions.script.gaze.onActivity = [&queried] {
+                queried = true;
+            };
+            consent = false;
+            const auto denied = sample();
+            REQUIRE(denied.HasError());
+            CHECK(denied.ErrorValue().code.Value() == XRErrors::PermissionDenied.code.Value());
+            CHECK_FALSE(queried);
+            CHECK(fixture.actions.script.gaze.locationReads == 0);
+        }
     }
 
     TEST_CASE("OpenXR application dispatch composes canonical projection and preserves missing-entry rejection", "[xr][native][poses]") {

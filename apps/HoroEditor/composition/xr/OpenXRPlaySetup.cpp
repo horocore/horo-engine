@@ -393,7 +393,13 @@ namespace Horo::Application::Internal {
         auto source = ReadPlaneObservations();
         if (source.HasError())
             return Result<XR::XRSpatialHits>::Failure(source.ErrorValue());
-        return XR::QueryXRPlaneHits(source.Value(), request);
+        const auto *tracking = tracking_.Current();
+        if (!tracking)
+            return Result<XR::XRSpatialHits>::Failure(MakeError(XR::XRErrors::TrackingSnapshotStale));
+        auto liveRequest = request;
+        if (request.now.IsValid() && request.now >= source.Value().SampledAt())
+            liveRequest.now = std::max(request.now, tracking->SampledAt());
+        return XR::QueryXRPlaneHits(source.Value(), liveRequest);
     }
 
     /** @copydoc Editor::IEditorXrPlaneCapturePreview::ReadPlaneCaptureState */

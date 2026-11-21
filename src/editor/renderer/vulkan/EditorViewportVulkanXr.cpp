@@ -36,6 +36,11 @@ namespace Horo::Editor {
         return port && port->SupportsStereoCoverageReduction(viewport.device_.graphicsIdentity);
     }
 
+    /** @copydoc EditorVulkanXrViewportAccess::SupportsComfort */
+    bool EditorVulkanXrViewportAccess::SupportsComfort(const EditorViewportRendererVulkan &viewport) noexcept {
+        return viewport.owner_ == std::this_thread::get_id() && viewport.initialized_ && viewport.xrComfort_.shader.pipeline.IsValid();
+    }
+
     /** @copydoc EditorVulkanXrViewportAccess::SupportsEnvironmentLighting */
     bool EditorVulkanXrViewportAccess::SupportsEnvironmentLighting(const EditorViewportRendererVulkan &viewport) noexcept {
         return viewport.owner_ == std::this_thread::get_id() && viewport.initialized_ && viewport.xrEnvironmentLighting_;
@@ -94,10 +99,10 @@ namespace Horo::Editor {
                                                     const EditorXrProjectionAlpha alpha, const AuxiliaryImages *auxiliary,
                                                     const MultiviewEnvironmentLighting *lighting,
                                                     const std::array<MultiviewRenderRectangle, 2> *rectangles,
-                                                    const CanvasPlacement *canvas) {
+                                                    const CanvasPlacement *canvas, const float vignetteOpacity) {
         return viewport.BindXrFrame(color, views, publication, cameras, instances, motion ? &motion->frame : nullptr,
                                     motion ? motion->objects : std::span<const RenderMotionObjectId>{}, alpha, auxiliary, lighting,
-                                    rectangles, canvas);
+                                    rectangles, canvas, vignetteOpacity);
     }
 
     /** @copydoc EditorVulkanXrViewportAccess::TakePremultipliedProjection */
@@ -237,6 +242,18 @@ namespace Horo::Editor {
 
             std::optional<CanvasGraph> canvas;
 
+            /** @brief Cold resource references for one color-only overlay, without retaining a frame material binding. */
+            struct ComfortEye final {
+                RenderGraphPassRef pass;
+                RenderGraphResourceId vertices, indices, uniform;
+            };
+
+            std::array<ComfortEye, 2> comfortEyes;
+
+            [[nodiscard]] bool HasComfort() const noexcept {
+                return comfortEyes.front().pass.IsValid();
+            }
+
             /** @brief Cold scene inputs shared by standalone and sampled-canvas graph owners. */
             struct ScenePreparation final {
                 const RenderFrontend &frontend;
@@ -248,6 +265,7 @@ namespace Horo::Editor {
                 const EditorVulkanXrViewportAccess::AuxiliaryPlan *auxiliary{};
                 std::span<const DrawSlot> motionSlots;
                 const CoveragePlan *coverage{};
+                const XrComfortProgram *comfort{};
             };
 
             struct Auxiliary final {
@@ -384,16 +402,18 @@ namespace Horo::Editor {
             }
 
             /** @brief Bounds the opaque scene and optional native producers before an owner adds its own passes. */
-            static RenderGraphLimits Limits(const EditorVulkanXrViewportAccess::AuxiliaryPlan *plan, const CoveragePlan *coveragePlan) {
+            static RenderGraphLimits Limits(const EditorVulkanXrViewportAccess::AuxiliaryPlan *plan, const CoveragePlan *coveragePlan,
+                                            bool comfort) {
                 const auto drawPasses = 1U + (plan ? 1U : 0U) + (coveragePlan ? 1U : 0U);
                 const auto extraPasses = !coveragePlan                      ? 0U
                                          : coveragePlan->counters.IsValid() ? 3U
                                          : coveragePlan->readback.IsValid() ? 1U
                                                                             : 0U;
-                const auto maximumPasses = drawPasses + extraPasses;
+                const auto overlayPasses = comfort ? 2U : 0U;
+                const auto maximumPasses = drawPasses + extraPasses + overlayPasses;
                 return {.maxPasses = maximumPasses,
-                        .maxResources = MaximumReads + MaximumAttachments,
-                        .maxUsages = MaximumDraws * 3 * drawPasses + MaximumAttachments + extraPasses * 2U,
+                        .maxResources = MaximumReads + MaximumAttachments + (comfort ? 4U : 0U),
+                        .maxUsages = MaximumDraws * 3 * drawPasses + MaximumAttachments + extraPasses * 2U + overlayPasses * 4U,
                         .maxDependencies = maximumPasses};
             }
 
@@ -626,6 +646,50 @@ namespace Horo::Editor {
                 return Outcome::Success(canvas->eyes.front().pass);
             }
 
+            /** @brief Declares two ordered loads of the exact acquired color array, after the last scene/UI writer. */
+            Result<void> AuthorComfort(RenderGraphBuilder &builder, std::vector<RenderGraphImportedState> &initial,
+                                       const XrComfortProgram &program, RenderGraphPassRef previous) {
+                const RenderGraphLogicalState bufferState{RenderGraphSynchronizationAccess::Read,
+                                                          RenderGraphSynchronizationOperation::GraphicsInputBuffer,
+                                                          RenderGraphPipelineScope::Graphics, RenderGraphTextureLayout::NotApplicable,
+                                                          color.acquired.queue};
+                const auto import = [&](RenderBufferHandle handle) {
+                    auto resource = builder.ImportBuffer(handle, RenderGraphResourceClass::Persistent);
+                    if (resource.HasValue())
+                        initial.emplace_back(resource.Value(), bufferState);
+                    return resource;
+                };
+                const auto vertices = import(program.triangle.vertices);
+                if (vertices.HasError())
+                    return Result<void>::Failure(vertices.ErrorValue());
+                const auto indices = import(program.triangle.indices);
+                if (indices.HasError())
+                    return Result<void>::Failure(indices.ErrorValue());
+                for (std::size_t index = 0; index < comfortEyes.size(); ++index) {
+                    const auto uniform = import(program.eyes[index].buffer);
+                    if (uniform.HasError())
+                        return Result<void>::Failure(uniform.ErrorValue());
+                    const auto added = builder.AddPass(RenderPassKind::Graphics, RenderQueueRole::Graphics);
+                    if (added.HasError())
+                        return Result<void>::Failure(added.ErrorValue());
+                    const auto next = added.Value();
+                    using enum RenderGraphAccess;
+                    using enum RenderGraphUsageKind;
+                    const std::array uses{RenderGraphResourceUsage{next, color.resource, ReadWrite, ColorAttachment},
+                                          RenderGraphResourceUsage{next, vertices.Value(), Read, VertexBuffer},
+                                          RenderGraphResourceUsage{next, indices.Value(), Read, IndexBuffer},
+                                          RenderGraphResourceUsage{next, uniform.Value(), Read, UniformBuffer}};
+                    for (const auto &use : uses)
+                        if (const auto accepted = builder.AddUsage(use); accepted.HasError())
+                            return accepted;
+                    if (const auto ordered = builder.AddDependency({previous, next}); ordered.HasError())
+                        return ordered;
+                    comfortEyes[index] = {next, vertices.Value(), indices.Value(), uniform.Value()};
+                    previous = next;
+                }
+                return Result<void>::Success();
+            }
+
             /** @brief Authors the scene and its exact imported state without owning or finalizing the builder. */
             Result<void> AuthorScene(RenderGraphBuilder &builder, std::vector<RenderGraphImportedState> &initial,
                                      const ScenePreparation &scene) {
@@ -658,7 +722,7 @@ namespace Horo::Editor {
 
             /** @brief Warms one exact graph variant before acquiring any viewport images. */
             Result<void> Prepare(const ScenePreparation &scene) {
-                auto created = RenderGraphBuilder::Create(Limits(scene.auxiliary, scene.coverage));
+                auto created = RenderGraphBuilder::Create(Limits(scene.auxiliary, scene.coverage, scene.comfort != nullptr));
                 if (created.HasError())
                     return Result<void>::Failure(created.ErrorValue());
                 auto builder = std::move(created).Value();
@@ -666,6 +730,9 @@ namespace Horo::Editor {
                 initial.reserve(MaximumReads + MaximumAttachments);
                 if (auto authored = AuthorScene(builder, initial, scene); authored.HasError())
                     return authored;
+                if (scene.comfort)
+                    if (auto authored = AuthorComfort(builder, initial, *scene.comfort, pass); authored.HasError())
+                        return authored;
                 auto graph = builder.Finalize();
                 if (graph.HasError())
                     return Result<void>::Failure(graph.ErrorValue());
@@ -694,15 +761,18 @@ namespace Horo::Editor {
                              const EditorViewportResources &resources, std::span<const DrawSlot> slots,
                              const RenderTextureDescriptor &colorDescriptor, const RenderGraphLogicalState &acquired,
                              const RenderGraphLogicalState &requiredFinal, const bool sampled,
-                             const EditorVulkanXrViewportAccess::AuxiliaryPlan *plan, std::span<const DrawSlot> motionSlots) {
+                             const EditorVulkanXrViewportAccess::AuxiliaryPlan *plan, std::span<const DrawSlot> motionSlots,
+                             const XrComfortProgram *comfort) {
             if (auto ready = PrepareDepth(frontend, colorDescriptor, sampled); ready.HasError())
                 return ready;
             Topology::ScenePreparation scene{frontend,           resources, meshes, slots, {colorDescriptor, acquired, requiredFinal},
                                              depthTexture.handle};
+            scene.comfort = comfort;
             if (auto compiled = ordinary.Prepare(scene); compiled.HasError())
                 return compiled;
             if (!plan)
                 return Result<void>::Success();
+            scene.comfort = nullptr;
             scene.auxiliary = plan;
             scene.motionSlots = motionSlots;
             return paired.emplace().Prepare(scene);
@@ -736,6 +806,7 @@ namespace Horo::Editor {
         const Projection::Topology *active{};
         std::unique_ptr<Projection::Topology> canvas;
         std::optional<EditorVulkanXrViewportAccess::CanvasPlacement> canvasPlacement;
+        float vignetteOpacity{};
         EditorVulkanXrViewportAccess::AuxiliaryTexture allocation;
         const CompiledRenderGraphExecution *lastCanvasVariant{}; /**< Ordinary or canvas execution borrowing shared scene scratch. */
 
@@ -787,7 +858,13 @@ namespace Horo::Editor {
                     return Result<RenderGraphPassRef>::Failure(bound.ErrorValue());
                 external.push_back(candidate->color);
                 reads = candidate->reads;
-                return candidate->AuthorCanvas(builder, source, initial);
+                const auto authored = candidate->AuthorCanvas(builder, source, initial);
+                if (authored.HasError() || !sceneInputs.comfort)
+                    return authored;
+                if (auto comfort = candidate->AuthorComfort(builder, initial, *sceneInputs.comfort, candidate->canvas->eyes.back().pass);
+                    comfort.HasError())
+                    return Result<RenderGraphPassRef>::Failure(comfort.ErrorValue());
+                return authored;
             }};
             auto program = Detail::RenderFrontendResourceAccess::CreateSceneCanvas(owner.frontend_, paint, request.prototype,
                                                                                    request.textures, request.writer, recipe);
@@ -1474,7 +1551,7 @@ namespace Horo::Editor {
         storage.allocation = {color, acquired, requiredFinal};
         const auto prepare = [&](XrGraph::Projection &target, const bool sampled) {
             return target.Prepare(frontend_, meshes, resources_, xrDrawSlots_[0], color, acquired, requiredFinal, sampled, auxiliary,
-                                  xrMotionDrawSlots_);
+                                  xrMotionDrawSlots_, xrComfort_.shader.pipeline.IsValid() ? &xrComfort_ : nullptr);
         };
         const bool wantsCoverage = xrCoverageCook_ && coverageDrawCapacity > 0 && coverageDrawCapacity <= RenderMaterialPass::MaximumDraws;
         const auto prepareCoverage = [&] {
@@ -1521,12 +1598,14 @@ namespace Horo::Editor {
         auto &storage = *xrGraph_;
         if (storage.bound || (storage.lastCanvasVariant && Detail::PreparedRenderGraphTemplate::InFlight(*storage.lastCanvasVariant)))
             return Outcome::Success(false);
-        const XrGraph::Projection::Topology::ScenePreparation scene{frontend_,
-                                                                    resources_,
-                                                                    meshes,
-                                                                    xrDrawSlots_[0],
-                                                                    storage.allocation,
-                                                                    storage.CanvasOutput().depthTexture.handle};
+        XrGraph::Projection::Topology::ScenePreparation scene{frontend_,
+                                                              resources_,
+                                                              meshes,
+                                                              xrDrawSlots_[0],
+                                                              storage.allocation,
+                                                              storage.CanvasOutput().depthTexture.handle};
+        if (xrComfort_.shader.pipeline.IsValid())
+            scene.comfort = &xrComfort_;
         if (const auto ready = storage.PrepareCanvas(*this, scene, canvas); ready.HasError())
             return Outcome::Failure(ready.ErrorValue());
         return Outcome::Success(true);
@@ -1538,7 +1617,8 @@ namespace Horo::Editor {
         std::span<const MultiviewSceneView> views, std::span<const RenderStaticMeshInstance> instances, const MultiviewMotionFrame *motion,
         std::span<const RenderMotionObjectId> motionObjects, const EditorXrProjectionAlpha alpha,
         const EditorVulkanXrViewportAccess::AuxiliaryImages *auxiliary, const MultiviewEnvironmentLighting *lighting,
-        const std::array<MultiviewRenderRectangle, 2> *rectangles, const EditorVulkanXrViewportAccess::CanvasPlacement *canvas) {
+        const std::array<MultiviewRenderRectangle, 2> *rectangles, const EditorVulkanXrViewportAccess::CanvasPlacement *canvas,
+        const float vignetteOpacity) {
         if (owner_ == std::this_thread::get_id() && xrGraph_) {
             xrGraph_->bound = nullptr;
             xrGraph_->active = nullptr;
@@ -1588,6 +1668,9 @@ namespace Horo::Editor {
             return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
         auto &ordinary = auxiliary ? *projection.paired : projection.ordinary;
         auto &baseline = canvas ? *storage.canvas : ordinary;
+        if (!std::isfinite(vignetteOpacity) || vignetteOpacity < 0.0F || vignetteOpacity > 1.0F ||
+            (vignetteOpacity > 0.0F && (!baseline.HasComfort() || motion || alpha != EditorXrProjectionAlpha::Opaque)))
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
         std::array<const XrGraph::Projection::Geometry *, RenderMaterialPass::MaximumDraws> meshes{};
         auto extracted = baseline.ExtractScene(publication, views, instances, frontend_, xrDrawSlots_[0], meshes);
         if (extracted.HasError())
@@ -1653,6 +1736,7 @@ namespace Horo::Editor {
             coverage.frame = *motion;
             coverage.predecessor = prior.frame;
         }
+        storage.vignetteOpacity = vignetteOpacity;
         storage.bound = bound.Value();
         if (canvas)
             storage.canvasPlacement = *canvas;
@@ -1747,6 +1831,21 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @copydoc EditorViewportRendererVulkan::WriteXrComfort */
+    Result<void> EditorViewportRendererVulkan::WriteXrComfort(FrameToken frame, std::size_t eye, const MultiviewRenderRectangle &rectangle,
+                                                              float opacity) const {
+        std::array<std::byte, MaximumUniformBytes> scratch{};
+        const auto bytes = std::span{scratch}.first(xrComfort_.shader.uniformBytes);
+        const std::array region{static_cast<float>(rectangle.x), static_cast<float>(rectangle.y),
+                                1.0F / static_cast<float>(rectangle.width), 1.0F / static_cast<float>(rectangle.height)};
+        const std::array settings{opacity, 0.0F, 0.0F, 0.0F};
+        if (const auto packed = ProgramResources::WriteParameter(xrComfort_.shader.layout, bytes, {1}, region); packed.HasError())
+            return packed;
+        if (const auto packed = ProgramResources::WriteParameter(xrComfort_.shader.layout, bytes, {2}, settings); packed.HasError())
+            return packed;
+        return bridge_.Port()->WriteFrameBuffer(frame, xrComfort_.eyes[eye].instance, bytes);
+    }
+
     /** @copydoc EditorViewportRendererVulkan::ExecuteXrFrame */
     Result<EditorVulkanXrViewportAccess::ProjectionSubmission> EditorViewportRendererVulkan::ExecuteXrFrame(
         RenderFrameScope &frame, const PrimaryOutputAttachment &output, const EditorVulkanXrViewportAccess::CanvasSource *canvas) {
@@ -1796,7 +1895,9 @@ namespace Horo::Editor {
         if (storage.alpha.IsPremultiplied())
             projection.clearColor = {0.0F, 0.0F, 0.0F, 0.0F};
         std::array<RenderGraphPassWorkload, 6> workStorage{};
-        const auto count = canvasGraph ? 1 + canvasGraph->eyes.size() : bound->Passes().size();
+        const auto &comfortEyes = storage.active->comfortEyes;
+        const auto comfortPasses = storage.active->HasComfort() ? comfortEyes.size() : 0;
+        const auto count = canvasGraph ? 1 + canvasGraph->eyes.size() + comfortPasses : bound->Passes().size();
         auto workloads = std::span{workStorage}.first(count);
         const auto publish = [&](RenderGraphPassRef pass, RenderGraphWorkload workload) {
             const auto passes = bound->Passes().last(count);
@@ -1842,6 +1943,27 @@ namespace Horo::Editor {
                                                            .rectangles = {coverage.targets[0].rectangle, coverage.targets[1].rectangle},
                                                            .reducer = targets.reducer});
             }
+        }
+        std::array<RenderGraphMaterialDraw, 2> comfortDraws;
+        std::array<RenderGraphMaterialRead, 2> comfortReads;
+        for (std::size_t index = 0; index < comfortPasses; ++index) {
+            const auto &eye = comfortEyes[index];
+            const auto &target = storage.targets[index];
+            const auto &rectangle = target.rectangle;
+            if (const auto written = WriteXrComfort(frame.Token(), index, rectangle, storage.vignetteOpacity); written.HasError())
+                return fail(written.ErrorValue());
+            const auto &uniform = xrComfort_.eyes[index];
+            comfortDraws[index] = {xrComfort_.triangle.mesh, eye.vertices, eye.indices, uniform.material};
+            comfortReads[index] = {eye.uniform, uniform.buffer, {}};
+            publish(eye.pass,
+                    RenderGraphMaterialRaster{.color = target.color,
+                                              .colorView = target.colorView,
+                                              .extent = storage.extent,
+                                              .colorOperations = {.loadOperation = AttachmentLoadOperation::Load},
+                                              .depthClear = std::nullopt,
+                                              .region = RenderMaterialRegion{rectangle.x, rectangle.y, rectangle.width, rectangle.height},
+                                              .draws = std::span{comfortDraws}.subspan(index, 1),
+                                              .reads = std::span{comfortReads}.subspan(index, 1)});
         }
         if (canvasGraph) {
             auto clips = storage.canvasPlacement->clips;

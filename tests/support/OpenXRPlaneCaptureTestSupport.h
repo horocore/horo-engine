@@ -2,6 +2,8 @@
 /** @file OpenXRPlaneCaptureTestSupport.h @brief Scripted native plane futures shared by owner and signed Play tests. */
 #include "OpenXRCensusTestSupport.h"
 
+#include <functional>
+
 namespace Horo::Tests::OpenXR {
     struct PlaneSnapshotFixture final {
         static inline PlaneSnapshotFixture *current{};
@@ -13,6 +15,7 @@ namespace Horo::Tests::OpenXR {
         bool noTracking{};
         std::uint32_t calls{};
         std::uint32_t labelCalls{};
+        std::function<void()> onQuery;
 
         PlaneSnapshotFixture() {
             current = this;
@@ -27,6 +30,8 @@ namespace Horo::Tests::OpenXR {
             REQUIRE(snapshot != XR_NULL_HANDLE);
             REQUIRE(condition->componentTypes[0] == XR_SPATIAL_COMPONENT_TYPE_BOUNDED_2D_EXT);
             ++current->calls;
+            if (current->onQuery)
+                current->onQuery();
             if (current->result != XR_SUCCESS)
                 return current->result;
             if (condition->componentTypeCount == 2) {
@@ -72,6 +77,8 @@ namespace Horo::Tests::OpenXR {
         std::uint32_t cancels{};
         bool hasContext{};
         bool hasSnapshot{};
+        std::function<void()> onPoll;
+        std::function<void()> onCompleteScan;
 
         SpatialCaptureScript() {
             current = this;
@@ -113,6 +120,8 @@ namespace Horo::Tests::OpenXR {
             CHECK(info->future == (current->hasContext ? ScanFuture : ContextFuture));
             ++current->polls;
             value->state = current->ready ? XR_FUTURE_STATE_READY_EXT : XR_FUTURE_STATE_PENDING_EXT;
+            if (current->onPoll)
+                current->onPoll();
             return XR_SUCCESS;
         }
 
@@ -142,6 +151,8 @@ namespace Horo::Tests::OpenXR {
                 current->hasSnapshot = true;
                 value->snapshot = NativeHandle<XrSpatialSnapshotEXT>(44);
             }
+            if (current->onCompleteScan)
+                current->onCompleteScan();
             return XR_SUCCESS;
         }
 

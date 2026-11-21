@@ -428,6 +428,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 added.HasError())
                 return added;
             selectedXrHost_ = policy.xrHost;
+            xrLocomotion_ = policy.xrLocomotion;
+            commitXrLocomotion_ = policy.commitXrLocomotion;
+            cancelXrLocomotion_ = policy.cancelXrLocomotion;
             if (policy.xrHost) {
                 Editor::EditorMountedXrGeometryCapture mounted;
                 if (worldViewport_)
@@ -586,27 +589,39 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             return native_.AdvanceFixedTick(Duration::FromNanoseconds(std::llround(delta.seconds * 1'000'000'000.0)));
         }
 
-        Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context) override {
-            if (!animation_)
-                return native_.AdvanceFixedTick(context.fixedDelta);
-            if (auto evaluated = animation_->OnFixedUpdate(context); evaluated.HasError())
-                return evaluated;
+        Result<void> BeforeNativeFixedUpdate(const Runtime::FixedStepContext &context) override {
+            if (!xrLocomotion_)
+                return Result<void>::Success();
             const auto scene = scenes_->ActiveScene();
             if (!scene)
                 return Result<void>::Failure(MakeError(InvalidProjectScene));
-            return native_.StageAnimationFixedTick(*scene, *animation_, context);
+            return xrLocomotion_(native_, *scene, context);
+        }
+
+        Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context) override {
+            if (!animation_ && !xrLocomotion_)
+                return native_.AdvanceFixedTick(context.fixedDelta);
+            if (animation_)
+                if (auto evaluated = animation_->OnFixedUpdate(context); evaluated.HasError())
+                    return evaluated;
+            const auto scene = scenes_->ActiveScene();
+            if (!scene)
+                return Result<void>::Failure(MakeError(InvalidProjectScene));
+            return animation_ ? native_.StageAnimationFixedTick(*scene, *animation_, context)
+                              : native_.StageCharacterFixedTick(*scene, context);
         }
 
         Result<void> PrepareRuntimeFixedCommit(const Runtime::FixedStepContext &context) override {
-            if (!animation_)
-                return Result<void>::Success();
-            if (auto prepared = animation_->PrepareFixedCommit(context); prepared.HasError())
-                return prepared;
+            if (animation_)
+                if (auto prepared = animation_->PrepareFixedCommit(context); prepared.HasError())
+                    return prepared;
             return native_.PrepareAnimationFixedCommit(context);
         }
 
         void CommitRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
             native_.CommitAnimationFixedTick(context);
+            if (commitXrLocomotion_)
+                commitXrLocomotion_(native_, context);
             if (animation_)
                 animation_->CommitFixedUpdate(context);
             if (decisionTickPending_) {
@@ -620,6 +635,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
 
         void AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept override {
             native_.AbortAnimationFixedTick(context);
+            if (cancelXrLocomotion_)
+                cancelXrLocomotion_();
             if (animation_)
                 animation_->AbortFixedUpdate(context);
             decisionTickPending_ = false;
@@ -715,6 +732,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         }
 
         Editor::IEditorPlayXrHost *selectedXrHost_{};
+        EditorPlayXrLocomotion xrLocomotion_;
+        std::function<void(ScenePhysicsHost &, const Runtime::FixedStepContext &)> commitXrLocomotion_;
+        std::function<void()> cancelXrLocomotion_;
 
         const std::thread::id ownerLane_{std::this_thread::get_id()};
         ProjectSceneAssetOwners resources_;

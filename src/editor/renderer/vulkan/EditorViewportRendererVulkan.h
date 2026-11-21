@@ -106,6 +106,11 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<void> PrepareXrProgram(EditorVulkanMultiviewCook cooked,
                                                     EditorVulkanMultiviewProgram program = EditorVulkanMultiviewProgram::Projection);
+        /** @brief Prepares the packaged color-only comfort program before any XR image graph exists.
+         * @param cooked Exact offline shader and reflected binding pair.
+         * @return Resident program or the original shader or resource failure.
+         * @pre Initialized Vulkan viewport, owner lane and cold frame state. */
+        [[nodiscard]] Result<void> PrepareXrComfortProgram(EditorVulkanXrComfortCook cooked);
         /** @brief Retains the optional packaged motion program before any rendering begins.
          * @param cooked Optional decoded
          * bundle from the selected packaged root.
@@ -160,17 +165,15 @@ namespace Horo::Editor {
          * @return Success or original stale/capacity/tuple failure; no compilation, heap allocation or native wait.
          * @pre Previous acquisition's scene AND GUI tail references have retired. A failed bind cannot be executed.
          */
-        [[nodiscard]] Result<void> BindXrFrame(Render::RenderTextureHandle color,
-                                               const std::array<Render::RenderTextureViewHandle, 2> &eyeViews,
-                                               const Render::MultiviewPublication &publication,
-                                               std::span<const Render::MultiviewSceneView> views,
-                                               std::span<const Render::RenderStaticMeshInstance> instances,
-                                               const Render::MultiviewMotionFrame *motion,
-                                               std::span<const Render::RenderMotionObjectId> motionObjects, EditorXrProjectionAlpha alpha,
-                                               const EditorVulkanXrViewportAccess::AuxiliaryImages *auxiliary = nullptr,
-                                               const Render::MultiviewEnvironmentLighting *lighting = nullptr,
-                                               const std::array<Render::MultiviewRenderRectangle, 2> *rectangles = nullptr,
-                                               const EditorVulkanXrViewportAccess::CanvasPlacement *canvas = nullptr);
+        [[nodiscard]] Result<void> BindXrFrame(
+            Render::RenderTextureHandle color, const std::array<Render::RenderTextureViewHandle, 2> &eyeViews,
+            const Render::MultiviewPublication &publication, std::span<const Render::MultiviewSceneView> views,
+            std::span<const Render::RenderStaticMeshInstance> instances, const Render::MultiviewMotionFrame *motion,
+            std::span<const Render::RenderMotionObjectId> motionObjects, EditorXrProjectionAlpha alpha,
+            const EditorVulkanXrViewportAccess::AuxiliaryImages *auxiliary = nullptr,
+            const Render::MultiviewEnvironmentLighting *lighting = nullptr,
+            const std::array<Render::MultiviewRenderRectangle, 2> *rectangles = nullptr,
+            const EditorVulkanXrViewportAccess::CanvasPlacement *canvas = nullptr, float vignetteOpacity = 0.0F);
         /** @brief Ends current projection evidence and admits exact native projection into transform history.
          * @pre Same frame's successful native compositor end on the render owner lane.
          */
@@ -267,6 +270,9 @@ namespace Horo::Editor {
             const Render::MultiviewPublication &publication, Render::RenderTextureHandle color) noexcept;
         /** @brief Uploads exact adjacent motion matrices to the selected signed pass's cold uniform slots. */
         [[nodiscard]] Result<void> WriteXrMotionDraws(Render::FrameToken frame, const XrGraph &graph);
+        /** @brief Writes the admitted rectangle and opacity into the exact eye slot. */
+        [[nodiscard]] Result<void> WriteXrComfort(Render::FrameToken frame, std::size_t eye,
+                                                  const Render::MultiviewRenderRectangle &rectangle, float opacity) const;
         /** @brief Realizes the optional packaged coverage program for the owning Scene. */
         [[nodiscard]] Result<void> PrepareXrCoveragePipeline();
         /** @brief Drops only cold scene graph/depth resources after their canonical scene/GUI lease has drained. */
@@ -366,17 +372,35 @@ namespace Horo::Editor {
         /** @brief Creates the closed top-left UV quad shared by all program slots. */
         [[nodiscard]] Result<void> CreateCanvasQuadMesh(CanvasQuadProgram &program);
 
+        struct FullscreenTriangle final {
+            Render::RenderBufferHandle vertices, indices;
+            Render::RenderMeshHandle mesh;
+        };
+
+        struct XrComfortProgram final {
+            ShaderResources shader;
+            FullscreenTriangle triangle;
+            std::array<DrawSlot, 2> eyes;
+        };
+
+        /** @brief Creates the position-only fullscreen triangle shared by authored overlay programs. */
+        [[nodiscard]] Result<void> CreateFullscreenTriangle(FullscreenTriangle &triangle);
+        /** @brief Retires the valid prefix of the fullscreen allocation, including on cold setup failure. */
+        void RetireFullscreenTriangle(FullscreenTriangle &triangle) noexcept;
+        /** @brief Creates the exact color-only pipeline and one uniform for each eye. */
+        [[nodiscard]] Result<void> CreateXrComfortResources(XrComfortProgram &program);
+        /** @brief Releases the program and any partially allocated resources. */
+        void RetireXrComfortProgram(XrComfortProgram &program) noexcept;
+
         /** @brief Owns the distinct sampled fullscreen program and immutable resources used by the cross-fade pass. */
         struct CameraCrossFadeProgram final {
             ShaderResources shader;
-            Render::RenderBufferHandle vertices, indices;
-            Render::RenderMeshHandle mesh;
+            FullscreenTriangle triangle;
             std::array<DrawSlot, 8> draws;
             Render::RenderTextureViewHandle boundSource;
         };
 
         [[nodiscard]] Result<void> PrepareCameraCrossFadeProgram(CameraCrossFadeProgram &program);
-        [[nodiscard]] Result<void> CreateCameraCrossFadeTriangle(CameraCrossFadeProgram &program);
         [[nodiscard]] Result<void> BindCameraCrossFadeSource();
         [[nodiscard]] Result<void> PrepareCameraCrossFadeScene(std::size_t draws);
         void RetireCameraCrossFadeProgram(CameraCrossFadeProgram &program) noexcept;
@@ -545,6 +569,7 @@ namespace Horo::Editor {
         bool crossFadeSceneReady_{};
         ShaderResources shadowShader_;
         ShaderResources xrShader_;
+        XrComfortProgram xrComfort_;
         bool xrEnvironmentLighting_{};
         std::optional<EditorVulkanMultiviewCook> xrMotionCook_;
         std::optional<EditorVulkanMultiviewCook> xrCoverageCook_;

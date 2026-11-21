@@ -176,7 +176,8 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRApplicationSession::AllowsNativeLighting */
     bool OpenXRApplicationSession::AllowsNativeLighting(const XRLightEstimateScope &scope) const noexcept {
-        return policy_.lightPermission && policy_.lightPermission->Allows(scope);
+        const auto *permission = policy_.lightPermission.get();
+        return permission && permission->SupportsLightEstimation() && permission->Allows(scope);
     }
 
     /** @copydoc OpenXRApplicationSession::MayArmEyeGaze */

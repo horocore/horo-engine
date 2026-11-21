@@ -25,6 +25,8 @@ namespace Horo::Character {
         struct StagedCharacterSceneTick final {
             CharacterSceneTickAttempt attempt;
             std::uint32_t applied{};
+            std::optional<CharacterTransformPublication> teleport;
+            CancellationToken teleportLifetime;
         };
 
         /** @brief Target-private owned controller state prepared for later fixed-tick behavior. */

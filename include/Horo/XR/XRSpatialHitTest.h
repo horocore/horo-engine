@@ -3,14 +3,17 @@
 /** @file XRSpatialHitTest.h @brief Bounded World-space hit tests over admitted plane observations. */
 #include "Horo/XR/XRPlaneTracking.h"
 
+#include <optional>
+
 namespace Horo::XR {
     /** @brief Exact live plane scope and finite World-space ray segment for one read-only query. */
     struct XRSpatialHitRequest final {
         XRPlaneScope scope;
         Math::Ray ray;
-        XRRuntimeTime now;
+        XRRuntimeTime now;   /**< Consumer's query time. A live host also applies its authoritative tracking cutoff. */
         Duration maximumAge; /**< Maximum age allowed by the consumer, in the runtime clock domain. */
         std::uint32_t maximumHits{};
+        std::optional<XRRuntimeTime> expectedSampledAt{}; /**< Pins a previously observed sample when validating a placement preview. */
     };
 
     /** @brief One bounded surface hit. A hit carries no Scene mutation or placement authority. */

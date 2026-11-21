@@ -15,6 +15,7 @@
 #include "SceneAnimationHostSelection.h"
 #include "ScenePhysicsHost.h"
 
+#include <functional>
 #include <optional>
 
 namespace Horo::Application::Internal {
@@ -45,6 +46,9 @@ namespace Horo::Application::Internal {
         bool decisionDebugGranted{};
     };
 
+    using EditorPlayXrLocomotion =
+        std::function<Result<void>(ScenePhysicsHost &, const Runtime::RuntimeSceneView &, const Runtime::FixedStepContext &)>;
+
     /** @brief Application policy captured before workspace creation; no backend inference or fallback. */
     struct EditorProjectScenePolicy final {
         Physics::PhysicsRuntimeMode physicsMode{Physics::PhysicsRuntimeMode::Null};
@@ -63,6 +67,9 @@ namespace Horo::Application::Internal {
             Canonical Save setup installs its explicit bounded default only when this field is absent. */
         std::optional<EditorPlayWorldSelection> world;                /**< Play-only mount, scoped to its launch project. */
         std::optional<EditorPlayDecisionSelection> decisions;
+        EditorPlayXrLocomotion xrLocomotion;
+        std::function<void(ScenePhysicsHost &, const Runtime::FixedStepContext &)> commitXrLocomotion;
+        std::function<void()> cancelXrLocomotion;
     };
 
     /** @brief Observes the exact committed World origin through a ready Editor Play Scene owner.

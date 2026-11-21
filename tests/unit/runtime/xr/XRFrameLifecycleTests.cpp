@@ -565,11 +565,21 @@ namespace Horo::XR {
             REQUIRE(frames.LocateViews(frame, 2) == XRFrameStatus::Ok);
             const auto image = Image(session, 1);
             REQUIRE(frames.Acquire(frame, image) == XRFrameStatus::Ok);
-            REQUIRE(frames.Abort(frame) == XRFrameStatus::Ok);
-            REQUIRE(frames.End(frame, 0) == XRFrameStatus::ImageNotReleased);
-            REQUIRE(frames.Release(frame, Image(session, 2)) == XRFrameStatus::ImageNotAcquired);
-            REQUIRE(frames.Release(frame, image) == XRFrameStatus::Ok);
-            REQUIRE(frames.End(frame, 0) == XRFrameStatus::Ok);
+            SECTION("Cancellation before submission retains image debt") {
+                REQUIRE(frames.Abort(frame) == XRFrameStatus::Ok);
+                REQUIRE(frames.End(frame, 0) == XRFrameStatus::ImageNotReleased);
+                REQUIRE(frames.Release(frame, Image(session, 2)) == XRFrameStatus::ImageNotAcquired);
+                REQUIRE(frames.Release(frame, image) == XRFrameStatus::Ok);
+                REQUIRE(frames.End(frame, 0) == XRFrameStatus::Ok);
+            }
+            SECTION("Cancellation after image release suppresses the previously submitted layer") {
+                REQUIRE(frames.Submit(frame, std::array{image}) == XRFrameStatus::Ok);
+                REQUIRE(frames.Release(frame, image) == XRFrameStatus::Ok);
+                REQUIRE(frames.Snapshot().phase == XRFramePhase::ImagesReleased);
+                REQUIRE(frames.Abort(frame) == XRFrameStatus::Ok);
+                CHECK(frames.ValidateEnd(frame, 1) == XRFrameStatus::OutOfOrder);
+                REQUIRE(frames.End(frame, 0) == XRFrameStatus::Ok);
+            }
             frames.Shutdown();
             frames.Shutdown();
             REQUIRE(frames.ReserveWait(session).status == XRFrameStatus::Shutdown);

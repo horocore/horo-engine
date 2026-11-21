@@ -87,9 +87,21 @@ namespace Horo::XR::OpenXRInternal {
             }
         }
 
+        /** @brief Discards native output if the exact grant changes across a runtime callback. */
+        Result<void> QueryPlaneData(XrSpatialSnapshotEXT snapshot, PFN_xrQuerySpatialComponentDataEXT query,
+                                    const XrSpatialComponentDataQueryConditionEXT &condition, XrSpatialComponentDataQueryResultEXT &result,
+                                    NativePlaneReadAuthorization authorization) {
+            if (!authorization.AllowsRead())
+                return Result<void>::Failure(MakeError(XRErrors::PermissionDenied));
+            const auto status = query(snapshot, &condition, &result);
+            if (!authorization.AllowsRead())
+                return Result<void>::Failure(MakeError(XRErrors::PermissionDenied));
+            return status == XR_SUCCESS ? Result<void>::Success() : Result<void>::Failure(QueryError(status));
+        }
+
         /** @brief Joins the optional semantic subset by native entity identity, independent of runtime list order. */
         Result<void> ReadLabels(XrSpatialSnapshotEXT snapshot, PFN_xrQuerySpatialComponentDataEXT query, std::uint32_t capacity,
-                                std::span<NativeSpatialPlane> planes) {
+                                std::span<NativeSpatialPlane> planes, NativePlaneReadAuthorization authorization) {
             constexpr std::array types{XR_SPATIAL_COMPONENT_TYPE_BOUNDED_2D_EXT, XR_SPATIAL_COMPONENT_TYPE_PLANE_SEMANTIC_LABEL_EXT};
             const XrSpatialComponentDataQueryConditionEXT condition{XR_TYPE_SPATIAL_COMPONENT_DATA_QUERY_CONDITION_EXT, nullptr,
                                                                     static_cast<std::uint32_t>(types.size()), types.data()};
@@ -98,9 +110,8 @@ namespace Horo::XR::OpenXRInternal {
                                                              labels.data()};
             ResultShape shape{capacity};
             auto result = shape.Result(&list);
-            const auto status = query(snapshot, &condition, &result);
-            if (status != XR_SUCCESS)
-                return Result<void>::Failure(QueryError(status));
+            if (const auto queried = QueryPlaneData(snapshot, query, condition, result, authorization); queried.HasError())
+                return queried;
             if (!shape.Matches(result, &list) || list.type != XR_TYPE_SPATIAL_COMPONENT_PLANE_SEMANTIC_LABEL_LIST_EXT || list.next ||
                 list.semanticLabelCount != capacity || list.semanticLabels != labels.data())
                 return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotInvalid));
@@ -120,7 +131,8 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc ReadNativeSpatialPlanes */
     Result<NativeSpatialPlaneBatch> ReadNativeSpatialPlanes(XrSpatialSnapshotEXT snapshot, PFN_xrQuerySpatialComponentDataEXT query,
-                                                            NativePlaneCensus census, std::uint32_t maximumPlanes) {
+                                                            NativePlaneCensus census, std::uint32_t maximumPlanes,
+                                                            NativePlaneReadAuthorization authorization) {
         using Outcome = Result<NativeSpatialPlaneBatch>;
         if (census.state == XRCapabilityState::Unsupported || census.state == XRCapabilityState::DependencyMissing)
             return Outcome::Failure(MakeError(XRErrors::OperationUnsupported));
@@ -139,9 +151,8 @@ namespace Horo::XR::OpenXRInternal {
         XrSpatialComponentBounded2DListEXT list{XR_TYPE_SPATIAL_COMPONENT_BOUNDED_2D_LIST_EXT, nullptr, maximumPlanes, rectangles.data()};
         ResultShape shape{maximumPlanes};
         auto result = shape.Result(&list);
-        const auto status = query(snapshot, &condition, &result);
-        if (status != XR_SUCCESS)
-            return Outcome::Failure(QueryError(status));
+        if (const auto queried = QueryPlaneData(snapshot, query, condition, result, authorization); queried.HasError())
+            return Outcome::Failure(queried.ErrorValue());
         if (!shape.Matches(result, &list) || list.type != XR_TYPE_SPATIAL_COMPONENT_BOUNDED_2D_LIST_EXT || list.next ||
             list.boundCount != maximumPlanes || list.bounds != rectangles.data())
             return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotInvalid));
@@ -159,7 +170,7 @@ namespace Horo::XR::OpenXRInternal {
         }
         auto planes = std::span{output.planes_}.first(output.count_);
         if (census.semanticLabels && !planes.empty()) {
-            const auto semantic = ReadLabels(snapshot, query, maximumPlanes, planes);
+            const auto semantic = ReadLabels(snapshot, query, maximumPlanes, planes, authorization);
             if (semantic.HasError())
                 return Outcome::Failure(semantic.ErrorValue());
         }

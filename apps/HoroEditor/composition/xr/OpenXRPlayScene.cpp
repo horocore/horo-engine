@@ -69,6 +69,8 @@ namespace Horo::Application::Internal {
             host_->lastReferenceChange_.reset();
             state_->published = true;
             host_->input_.admitted = true;
+            const auto decision = state_->projection->plan.Decision(XRCapability::FixedFoveation);
+            host_->composition_.metrics.RecordFixedFoveationPlan(decision.state);
         }
 
         void Shutdown() noexcept override {
@@ -318,6 +320,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::Neutralize */
     void OpenXRPlayHost::Neutralize(const XRSessionId &, std::uint64_t) noexcept {
+        CancelAuthoredLocomotion();
         tracking_.Revoke();  // Input's ONE actual cutoff owns the neutral commit; callbacks cannot commit Gameplay input.
     }
 

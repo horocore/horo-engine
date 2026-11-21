@@ -6,6 +6,7 @@
 
 #include "Horo/XR/XRFrameLifecycle.h"
 #include "Horo/XR/XRPassthrough.h"
+#include "OpenXRFrameTelemetry.h"
 #include "OpenXRSwapchain.h"
 
 #include <array>
@@ -109,7 +110,8 @@ namespace Horo::XR::OpenXRInternal {
          * @param colorSpace Explicit runtime compositor primaries, requiring XR_FB_color_space for non-default.
          * @return Success or typed unsupported/invalid/native failure without publishing a partial adapter. */
         [[nodiscard]] Result<void> Bind(NativeOpenXRDispatch dispatch, const NativeFramePacingPolicy &pacing,
-                                        NativeCompositorColorSpace colorSpace = NativeCompositorColorSpace::RuntimeDefault);
+                                        NativeCompositorColorSpace colorSpace = NativeCompositorColorSpace::RuntimeDefault,
+                                        const NativeFrameMetricHandles &metrics = {});
         /** @brief Reserves before native wait and preserves every successful native wait obligation.
          * @return Frame status plus exact debt identity, or native wait failure after cancelling only its reservation. */
         [[nodiscard]] Result<XRFrameWaitOutcome> Wait();
@@ -202,6 +204,9 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<XrSwapchainSubImage> SubImage(const XRExternalRenderTargetDescriptor &target,
                                                            std::span<const NativeProjectionTarget> owners) const;
 
+        /** @brief Emits only a closed native result, without session or tracking identifiers. */
+        void RecordOutcome(NativeFrameMetricOutcome outcome) const noexcept;
+
         OpenXRNativeSession *session_;
         XRFrameLifecycle *frames_;
         IOpenXRCompositionSpace *spaces_;
@@ -209,6 +214,7 @@ namespace Horo::XR::OpenXRInternal {
         XRSessionId owner_{};
         XRFrameId nativeFrame_{};
         NativeFramePacingPolicy policy_{};
+        NativeFrameMetricHandles metrics_{};
         std::int64_t period_{};
         XrTime nativeDisplayTime_{}; /**< Exact wait result echoed only to native end, including unusable Horo prediction evidence. */
         PFN_xrWaitFrame wait_{};

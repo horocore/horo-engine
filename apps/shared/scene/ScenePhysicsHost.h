@@ -98,6 +98,14 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<Math::Vec3> ReadCharacterVelocity(Runtime::SceneRuntimeId scene, Runtime::SceneObjectId object,
                                                                Runtime::PhysicsComponentId component);
+        /** @brief Resolves a walkable surface through the published Scene's bounded Physics query. */
+        [[nodiscard]] Result<std::optional<Math::Vec3>> QueryTeleportTarget(Runtime::SceneRuntimeId scene,
+                                                                            Character::CharacterControllerHandle controller,
+                                                                            const Math::Ray &ray);
+        /** @brief Reserves one exact owner-supplied teleport for the upcoming paired Scene tick. */
+        [[nodiscard]] Result<void> QueueTeleport(Runtime::SceneRuntimeId scene, const Runtime::FixedStepContext &context,
+                                                 const Character::CharacterTeleportRequest &request, const CancellationToken &lifetime);
+
         /** @brief Copies the Character-owned collision root in the Scene's local transform convention.
          * @param scene Exact committed Scene view. @param entity Its bound Character actor.
          * @param schedulerTick Exact committed tick being published by the caller.
@@ -125,6 +133,10 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<void> AdvanceFixedTick(Duration delta);
 
+        /** @brief Stages a fixed Character update for a Scene without an Animation owner. */
+        [[nodiscard]] Result<void> StageCharacterFixedTick(const Runtime::RuntimeSceneView &scene,
+                                                           const Runtime::FixedStepContext &context);
+
         /** @brief Stages authoritative Animation requests through the exact Scene-owned Character solver.
          * @param scene Current Scene projection of this pair. @param animation Exact Animation owner of that scene.
          * @param context Actual scheduler attempt, after Animation evaluation. @return Typed staging failure or success.
@@ -132,7 +144,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> StageAnimationFixedTick(const Runtime::RuntimeSceneView &scene,
                                                            Runtime::SceneAnimationRuntime &animation,
                                                            const Runtime::FixedStepContext &context);
-        /** @brief Runs the native Physics step only after fallible Animation and Character preparation.
+        /** @brief Runs native Physics after the paired Character staging and any Animation preparation.
          * @param context Same scheduler attempt. @return Typed Physics or lifecycle failure.
          */
         [[nodiscard]] Result<void> PrepareAnimationFixedCommit(const Runtime::FixedStepContext &context);
@@ -142,6 +154,9 @@ namespace Horo::Application::Internal {
         void AbortAnimationFixedTick(const Runtime::FixedStepContext &context) noexcept;
 
     private:
+        [[nodiscard]] Result<void> StageSceneFixedTick(const Runtime::RuntimeSceneView &scene, Runtime::SceneAnimationRuntime *animation,
+                                                       const Runtime::FixedStepContext &context);
+
         ScenePhysicsIdentityRange identities_;
         std::thread::id owner_{std::this_thread::get_id()};
         Participant *participant_{};

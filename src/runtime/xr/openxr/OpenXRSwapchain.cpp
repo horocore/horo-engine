@@ -80,8 +80,13 @@ namespace Horo::XR::OpenXRInternal {
     }  // namespace
 
     /** @copydoc OpenXRSwapchain::OpenXRSwapchain */
-    OpenXRSwapchain::OpenXRSwapchain(OpenXRNativeSession &session, IOpenXRSwapchainImages &images) noexcept
-        : session_(&session), images_(&images) {}
+    OpenXRSwapchain::OpenXRSwapchain(OpenXRNativeSession &session, IOpenXRSwapchainImages &images,
+                                     const NativeSwapchainMetricHandles &metrics) noexcept
+        : session_(&session), images_(&images), metrics_(metrics) {}
+
+    void OpenXRSwapchain::RecordOutcome(const NativeSwapchainMetricOutcome outcome) const noexcept {
+        metrics_.outcomes[static_cast<std::size_t>(outcome)].Add();
+    }
 
     /** @copydoc OpenXRSwapchain::~OpenXRSwapchain */
     OpenXRSwapchain::~OpenXRSwapchain() {
@@ -349,6 +354,7 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
         const XrSwapchainImageAcquireInfo info{XR_TYPE_SWAPCHAIN_IMAGE_ACQUIRE_INFO};
         const XrResult result = dispatch_.acquire(native_, &info, &index_);
+        RecordOutcome(XR_FAILED(result) ? NativeSwapchainMetricOutcome::AcquireFailed : NativeSwapchainMetricOutcome::AcquireCompleted);
         if (XR_FAILED(result)) {
             lost_ = result == XR_ERROR_SESSION_LOST;
             return Result<void>::Failure(NativeFailure("acquire swapchain image", result));
@@ -371,12 +377,16 @@ namespace Horo::XR::OpenXRInternal {
             return Result<bool>::Failure(MakeError(XRErrors::OperationInvalid));
         const XrSwapchainImageWaitInfo info{XR_TYPE_SWAPCHAIN_IMAGE_WAIT_INFO, nullptr, timeout};
         const XrResult result = dispatch_.wait(native_, &info);
-        if (result == XR_TIMEOUT_EXPIRED)
+        if (result == XR_TIMEOUT_EXPIRED) {
+            RecordOutcome(NativeSwapchainMetricOutcome::WaitTimeout);
             return Result<bool>::Success(false);
+        }
         if (XR_FAILED(result)) {
+            RecordOutcome(NativeSwapchainMetricOutcome::WaitFailed);
             lost_ = result == XR_ERROR_SESSION_LOST;
             return Result<bool>::Failure(NativeFailure("wait swapchain image", result));
         }
+        RecordOutcome(NativeSwapchainMetricOutcome::WaitReady);
         phase_ = NativeSwapchainPhase::Ready;
         return Result<bool>::Success(true);
     }
@@ -429,6 +439,7 @@ namespace Horo::XR::OpenXRInternal {
         if (!lost_) {
             const XrSwapchainImageReleaseInfo info{XR_TYPE_SWAPCHAIN_IMAGE_RELEASE_INFO};
             const XrResult result = dispatch_.release(native_, &info);
+            RecordOutcome(XR_FAILED(result) ? NativeSwapchainMetricOutcome::ReleaseFailed : NativeSwapchainMetricOutcome::ReleaseCompleted);
             if (XR_FAILED(result)) {
                 lost_ = result == XR_ERROR_SESSION_LOST;
                 return Result<bool>::Failure(NativeFailure("release swapchain image", result));

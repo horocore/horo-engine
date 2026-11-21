@@ -15,6 +15,16 @@ namespace Horo::XR::OpenXRInternal {
         XRTrackingConfidence confidence;
     };
 
+    /** @brief Synchronous authorization check borrowed only for the duration of native sampling. */
+    struct NativePlaneReadAuthorization final {
+        const void *context{};
+        bool (*check)(const void *){};
+
+        [[nodiscard]] bool AllowsRead() const {
+            return !check || check(context);
+        }
+    };
+
     /** @brief Complete tracked rectangle evidence at one snapshot's calibrated World transform. */
     class NativeSpatialPlaneBatch final {
     public:
@@ -25,7 +35,7 @@ namespace Horo::XR::OpenXRInternal {
 
     private:
         friend Result<NativeSpatialPlaneBatch> ReadNativeSpatialPlanes(XrSpatialSnapshotEXT, PFN_xrQuerySpatialComponentDataEXT,
-                                                                       NativePlaneCensus, std::uint32_t);
+                                                                       NativePlaneCensus, std::uint32_t, NativePlaneReadAuthorization);
         std::array<NativeSpatialPlane, XRPlaneSnapshot::MaximumPlanes> planes_{};
         std::uint32_t count_{};
     };
@@ -36,9 +46,11 @@ namespace Horo::XR::OpenXRInternal {
      * @param query Official query dispatch from the exact owner.
      * @param census Admitted bounded component evidence for that owner.
      * @param maximumPlanes Finite candidate count admitted before accessing geometry.
-     * @return A complete batch or typed unavailable, capacity, or malformed native result. Never reads polygons.
+     * @param authorization Optional owner-lane check, evaluated before and after each native read.
+     * @return A complete batch or typed permission, unavailable, capacity, or malformed native result. Never reads polygons.
      */
     [[nodiscard]] Result<NativeSpatialPlaneBatch> ReadNativeSpatialPlanes(XrSpatialSnapshotEXT snapshot,
                                                                           PFN_xrQuerySpatialComponentDataEXT query,
-                                                                          NativePlaneCensus census, std::uint32_t maximumPlanes);
+                                                                          NativePlaneCensus census, std::uint32_t maximumPlanes,
+                                                                          NativePlaneReadAuthorization authorization = {});
 }  // namespace Horo::XR::OpenXRInternal

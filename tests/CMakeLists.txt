@@ -2272,7 +2272,8 @@ if(HORO_BUILD_XR_OPENXR)
     add_dependencies(HoroOpenXRProductHostTests HoroOpenXRInstalledProductFixtureConsumer)
     horo_register_catch_test(HoroOpenXRProductHostTests LABELS "unit;xr;headless;packages;host")
 
-    add_executable(HoroXROpenXRTests unit/runtime/xr/OpenXRNativeSessionTests.cpp unit/runtime/xr/OpenXRNativePreparationTests.cpp
+    add_executable(HoroXROpenXRTests unit/runtime/xr/OpenXRFrameTelemetryTests.cpp
+        unit/runtime/xr/OpenXRNativeSessionTests.cpp unit/runtime/xr/OpenXRNativePreparationTests.cpp
         unit/runtime/xr/OpenXRSessionRetirementTests.cpp
         unit/runtime/xr/OpenXRSessionEventsTests.cpp
         unit/runtime/xr/OpenXRNativeCensusTests.cpp
@@ -6937,7 +6938,7 @@ if (HORO_BUILD_RENDER_VULKAN)
         target_link_libraries(HoroScriptedOpenXRLoader PRIVATE HoroOpenXRHeaders)
         set_target_properties(HoroScriptedOpenXRLoader PROPERTIES PREFIX "" OUTPUT_NAME "horo-scripted-openxr-loader")
         target_sources(HoroRenderVulkanTests PRIVATE unit/runtime/xr/OpenXRApplicationLifecycleTests.cpp)
-        target_include_directories(HoroRenderVulkanTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}")
+        target_include_directories(HoroRenderVulkanTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/src/physics")
         target_link_libraries(HoroRenderVulkanTests PRIVATE HoroOpenXRApplicationHost HoroEngine::RenderNull HoroEngine::SceneRenderExtraction
             HoroHostSignatureDocuments HoroEditorVulkanShaderInternal HoroUiPaintShaderPackage nlohmann_json::nlohmann_json MbedTLS::mbedcrypto miniz)
         target_link_libraries(HoroRenderVulkanTests PRIVATE HoroThirdParty::ImGuiVulkan ${HORO_SDL3_TARGET})

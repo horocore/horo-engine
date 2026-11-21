@@ -203,7 +203,8 @@ namespace Horo::Application::Internal {
     OpenXRPlayHost::WriterPair::Target::Target(OpenXRPlayHost &host, OpenXRSelectedVulkanBinding &graphics,
                                                const XrGraphicsBindingVulkanKHR &binding, Render::RenderQueueId queue,
                                                Render::Detail::VulkanExternalViewDispatch dispatch)
-        : images(host.composition_.frontend, graphics, binding, queue, dispatch), owner(host.native_, images) {}
+        : images(host.composition_.frontend, graphics, binding, queue, dispatch),
+          owner(host.native_, images, host.composition_.metrics.swapchain) {}
 
     /** @brief Retains both native targets together until their exact frame and graphics obligations drain. */
     OpenXRPlayHost::WriterPair::WriterPair(OpenXRPlayHost &host, OpenXRSelectedVulkanBinding &graphics,
@@ -476,7 +477,8 @@ namespace Horo::Application::Internal {
                                           reprojection);
             configured != XRFrameStatus::Ok)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
-        if (auto bound = render_->compositor.Bind({getProc_}, {}); bound.HasError())
+        if (auto bound = render_->compositor.Bind({getProc_}, {}, NativeCompositorColorSpace::RuntimeDefault, composition_.metrics);
+            bound.HasError())
             return bound;
         if (auto bound = clock_.BindNative(); bound.HasError())
             return bound;
@@ -523,11 +525,12 @@ namespace Horo::Application::Internal {
         using enum Horo::XR::XRFramePhase;
         if (!render_ || frames_.Snapshot().phase == Idle)
             return Result<void>::Success();
-        render_->rendered = false;
-        render_->guiFinished = true;
-        if (const auto state = frames_.Snapshot(); state.renderAdmitted && state.phase != Aborting && state.phase != ImagesReleased &&
+        if (const auto state = frames_.Snapshot(); state.renderAdmitted && state.phase != Aborting &&
+                                                   (state.phase != ImagesReleased || render_->rendered) &&
                                                    frames_.Abort(state.frame) != XRFrameStatus::Ok)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
+        render_->rendered = false;
+        render_->guiFinished = true;
         return Result<void>::Success();
     }
 
@@ -538,6 +541,19 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::PrepareRenderFrame */
     Result<bool> OpenXRPlayHost::PrepareRenderFrame(const std::uint64_t frameNumber, const WorldCanvasFrame *canvas) {
+        return PrepareRenderFrame(frameNumber, canvas, 0.0F);
+    }
+
+    /** @copydoc OpenXRPlayHost::PrepareRenderFrame(const Runtime::FrameContext &, const WorldCanvasFrame *) */
+    Result<bool> OpenXRPlayHost::PrepareRenderFrame(const Runtime::FrameContext &frame, const WorldCanvasFrame *canvas) {
+        if (const auto lane = Lane(); lane.HasError())
+            return Result<bool>::Failure(lane.ErrorValue());
+        return PrepareRenderFrame(frame.frameNumber, canvas, ReadFrameComfort(frame));
+    }
+
+    /** @copydoc OpenXRPlayHost::PrepareRenderFrame(std::uint64_t, const WorldCanvasFrame *, float) */
+    Result<bool> OpenXRPlayHost::PrepareRenderFrame(const std::uint64_t frameNumber, const WorldCanvasFrame *canvas,
+                                                    const float comfortOpacity) {
         using Output = Result<bool>;
         if (auto lane = Lane(); lane.HasError())
             return Output::Failure(lane.ErrorValue());
@@ -573,7 +589,7 @@ namespace Horo::Application::Internal {
             return render_->Fail(acquired.ErrorValue());
         if (!acquired.Value())
             return Output::Success(false);
-        if (auto bound = BindRenderFrame(frameNumber, admittedCanvas.Value()); bound.HasError())
+        if (auto bound = BindRenderFrame(frameNumber, admittedCanvas.Value(), comfortOpacity); bound.HasError())
             return render_->Fail(bound.ErrorValue());
         return Output::Success(true);
     }
@@ -634,13 +650,37 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::LightingCutoff */
     std::optional<XRRuntimeTime> OpenXRPlayHost::LightingCutoff(const XRLightEstimateScope &scope) const noexcept {
-        const auto state = sessions_.Snapshot();
-        const auto *tracking = tracking_.Current();
-        if (!tracking || eventsPending_ || !state.admitsActions || state.session != scope.session || tracking->Session() != scope.session ||
-            tracking->WorldOriginRevision() != scope.space.worldOriginRevision || tracking->Focus() != XRTrackingFocusState::Focused ||
-            tracking->State() != XRTrackingState::Active || !composition_.session.AllowsNativeLighting(scope))
+        const auto read = [&]() -> std::optional<XRRuntimeTime> {
+            const auto state = sessions_.Snapshot();
+            const auto *tracking = tracking_.Current();
+            if (!tracking || pendingRevoke_ || eventsPending_ || !input_.admitted || input_.play != Editor::EditorPlayState::Playing ||
+                !state.admitsActions || state.session != scope.session || tracking->Session() != scope.session ||
+                tracking->WorldOriginRevision() != scope.space.worldOriginRevision || tracking->Focus() != XRTrackingFocusState::Focused ||
+                tracking->State() != XRTrackingState::Active)
+                return std::nullopt;
+            return tracking->SampledAt();
+        };
+        const auto observed = read();
+        if (!observed || !composition_.session.AllowsNativeLighting(scope) || read() != observed)
             return std::nullopt;
-        return tracking->SampledAt();
+        return observed;
+    }
+
+    bool OpenXRPlayHost::FrameLightingAuthorized() const noexcept {
+        const auto scope = render_->nativeLightingScope;
+        if (!scope)
+            return true;
+        const auto matches = [&] {
+            return scene_ && scene_->nativeLighting && scene_->nativeLighting->scope == *scope && scene_->nativeLighting->active;
+        };
+        return matches() && LightingCutoff(*scope).has_value() && matches();
+    }
+
+    Result<void> OpenXRPlayHost::AbortForLostFrameLighting() {
+        const auto scope = render_->nativeLightingScope;
+        if (scope && scene_ && scene_->nativeLighting && scene_->nativeLighting->scope == *scope)
+            scene_->nativeLighting->active = false;
+        return AbortRenderFrame();
     }
 
     /** @copydoc OpenXRPlayHost::ReadNativeLighting */
@@ -658,10 +698,20 @@ namespace Horo::Application::Internal {
             light.active = false;
             return std::nullopt;
         }
+        const auto advanced = native_.AdvanceLightEstimation(light.scope, space.Value(), *cutoff);
+        if (!light.active || !LightingCutoff(light.scope)) {
+            light.active = false;
+            return std::nullopt;
+        }
+
         std::optional<XRLightEstimate> estimate;
-        if (native_.AdvanceLightEstimation(light.scope, space.Value(), *cutoff).HasValue() && LightingCutoff(light.scope)) {
-            if (auto current = native_.ReadLightEstimation(light.scope, *cutoff);
-                current.HasValue() && light.active && LightingCutoff(light.scope))
+        if (advanced.HasValue()) {
+            auto current = native_.ReadLightEstimation(light.scope, *cutoff);
+            if (!light.active || !LightingCutoff(light.scope)) {
+                light.active = false;
+                return std::nullopt;
+            }
+            if (current.HasValue())
                 estimate.emplace(std::move(current).Value());
         }
         auto projected = light.projection.Update(light.scope, *cutoff, estimate ? &*estimate : nullptr);
@@ -685,7 +735,8 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc OpenXRPlayHost::BindRenderFrame */
-    Result<void> OpenXRPlayHost::BindRenderFrame(const std::uint64_t frameNumber, const WorldCanvasFrame *canvas) {
+    Result<void> OpenXRPlayHost::BindRenderFrame(const std::uint64_t frameNumber, const WorldCanvasFrame *canvas,
+                                                 const float comfortOpacity) {
         if (!scene_ || !scene_->projection || !render_->views || !render_->acquisition)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         const auto frame = frames_.Snapshot();
@@ -701,7 +752,10 @@ namespace Horo::Application::Internal {
         const Render::MultiviewPublication publication{scene_->scene.value,       frameNumber,
                                                        input_.origin.Value(),     revision.Value().Value(),
                                                        support.deviceIncarnation, support.capabilityRevision};
-        const auto reference = render_->ReferencePose(*scene_, frame, input_.origin);
+        const auto nativeReference = render_->ReferencePose(*scene_, frame, input_.origin);
+        if (nativeReference.HasError())
+            return Result<void>::Failure(nativeReference.ErrorValue());
+        const auto reference = render_->GameplayReferencePose(*scene_, nativeReference.Value());
         if (reference.HasError())
             return Result<void>::Failure(reference.ErrorValue());
         auto converted =
@@ -713,8 +767,8 @@ namespace Horo::Application::Internal {
                                                                        scene_->geometry->MotionObjects()};
         render_->passthrough.reset();
         if (const auto scope = passthroughScope_;
-            scope && HasPassthrough(*scope) && passthroughScope_ == scope && reference.Value().Target() == scope->world)
-            render_->passthrough.emplace(*scope, publication, reference.Value());
+            scope && HasPassthrough(*scope) && passthroughScope_ == scope && nativeReference.Value().Target() == scope->world)
+            render_->passthrough.emplace(*scope, publication, nativeReference.Value());
         const auto alpha = render_->passthrough ? Editor::EditorXrProjectionAlpha::Premultiplied : Editor::EditorXrProjectionAlpha::Opaque;
         using Viewport = Editor::EditorVulkanXrViewportAccess;
         const std::array images{render_->acquisition->image};
@@ -734,9 +788,12 @@ namespace Horo::Application::Internal {
             lighting ? Render::MultiviewEnvironmentLighting{lighting->ambient, lighting->directional}
                      : Render::MultiviewEnvironmentLighting{};
         const auto *environmentInput = lighting && environment.IsValid() ? &environment : nullptr;
-        // A canvas has no signed per-pixel motion writer. Only the ordinary projection represents this frame.
-        const bool prepareMotion = !placement && WantsMotionHistory(scene_->projection->plan);
-        if (!placement && render_->writer && render_->writer->coordinated)
+        const float vignette = alpha == Editor::EditorXrProjectionAlpha::Opaque ? comfortOpacity : 0.0F;
+        // A canvas or display-locked comfort effect has no signed per-pixel motion writer.
+        const bool virtualPlacement = scene_->locomotion && scene_->locomotion->worldPlacement.has_value();
+        const bool ordinaryOnly = placement.has_value() || vignette > 0.0F || virtualPlacement;
+        const bool prepareMotion = !ordinaryOnly && WantsMotionHistory(scene_->projection->plan);
+        if (!ordinaryOnly && render_->writer && render_->writer->coordinated)
             static_cast<void>(frames_.RecordReprojectionReference(frame.frame, reference.Value()));
         std::array<Render::MultiviewRenderRectangle, 2> rectangles;
         std::ranges::transform(plan.Value().Targets(), rectangles.begin(), [](const XRExternalRenderTargetDescriptor &target) {
@@ -746,20 +803,22 @@ namespace Horo::Application::Internal {
         const auto bind = [&](const Viewport::AuxiliaryImages *auxiliary) {
             return Viewport::Bind(composition_.viewport, render_->acquisition->texture, render_->eyeViews, publication,
                                   converted.Value().Scene().Views(), scene_->geometry->Instances(), prepareMotion ? &motion : nullptr,
-                                  alpha, auxiliary, environmentInput, &rectangles, placement ? &*placement : nullptr);
+                                  alpha, auxiliary, environmentInput, &rectangles, placement ? &*placement : nullptr, vignette);
         };
         if (auto baseline = bind(nullptr); baseline.HasError())
             return baseline;
-        if (const auto pair = placement ? std::nullopt : AcquireAuxiliaryProjection(frame.frame, plan.Value());
+        if (const auto pair = ordinaryOnly ? std::nullopt : AcquireAuxiliaryProjection(frame.frame, plan.Value());
             pair && bind(&*pair).HasError())
             if (auto baseline = bind(nullptr); baseline.HasError())
                 return baseline;
         if (prepareMotion)
             render_->motionFrame = motion.frame;
         render_->plan.emplace(std::move(plan).Value());
-        render_->nativeLightingBound = environmentInput && !composition_.lighting;
+        if (environmentInput && !composition_.lighting && scene_->nativeLighting)
+            render_->nativeLightingScope = scene_->nativeLighting->scope;
         render_->hostFrameNumber = frameNumber;
         render_->canvasBound = placement.has_value();
+        render_->vignetteBound = vignette > 0.0F;
         return Result<void>::Success();
     }
 
@@ -771,9 +830,8 @@ namespace Horo::Application::Internal {
         if (!UsesXrScene() || !render_ || !render_->plan || !render_->acquisition || render_->encoded)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         const Operation operation{*this};
-        if (render_->nativeLightingBound &&
-            (!scene_->nativeLighting || !scene_->nativeLighting->active || !LightingCutoff(scene_->nativeLighting->scope)))
-            return AbortRenderFrame();
+        if (!FrameLightingAuthorized())
+            return AbortForLostFrameLighting();
         auto executed =
             Editor::EditorVulkanXrViewportAccess::Execute(composition_.viewport, frame, output, render_->canvasBound ? canvas : nullptr);
         if (executed.HasError()) {
@@ -804,7 +862,10 @@ namespace Horo::Application::Internal {
             render_->hostFrameNumber != hostFrameNumber || !frame.renderAdmitted || frame.frame.session != session ||
             !frame.frame.IsValid() || (frame.phase != XRFramePhase::ImagesAcquired && frame.phase != XRFramePhase::RendererSubmitted))
             return Output::Failure(MakeError(XRErrors::IdentityStale));
-        auto pose = render_->ReferencePose(*scene_, frame, input_.origin);
+        const auto nativeReference = render_->ReferencePose(*scene_, frame, input_.origin);
+        if (nativeReference.HasError())
+            return Output::Failure(nativeReference.ErrorValue());
+        auto pose = render_->GameplayReferencePose(*scene_, nativeReference.Value());
         if (pose.HasError())
             return Output::Failure(pose.ErrorValue());
         const auto &components = pose.Value().Components();
@@ -812,6 +873,20 @@ namespace Horo::Application::Internal {
             components.orientation.validity != XRPoseComponentValidity::Tracked || components.loss != XRTrackingLossState::None)
             return Output::Failure(MakeError(XRErrors::OperationUnavailable));
         return Output::Success({frame.frame, std::move(pose).Value()});
+    }
+
+    /** @copydoc OpenXRPlayHost::RevalidateRenderLighting */
+    Result<bool> OpenXRPlayHost::RevalidateRenderLighting(const std::uint64_t frameNumber) {
+        using Allowed = Result<bool>;
+        if (auto lane = Lane(); lane.HasError())
+            return Allowed::Failure(lane.ErrorValue());
+        if (!render_ || render_->hostFrameNumber != frameNumber || frames_.Snapshot().phase == XRFramePhase::Idle)
+            return Allowed::Failure(MakeError(XRErrors::IdentityStale));
+        const Operation operation{*this};
+        if (FrameLightingAuthorized())
+            return Allowed::Success(true);
+        auto aborted = AbortForLostFrameLighting();
+        return aborted.HasError() ? Allowed::Failure(aborted.ErrorValue()) : Allowed::Success(false);
     }
 
     /** @copydoc OpenXRPlayHost::MirrorView */
@@ -832,6 +907,9 @@ namespace Horo::Application::Internal {
             return lane;
         if (!render_ || render_->guiFinished || frames_.Snapshot().phase == XRFramePhase::Idle || (accepted && !render_->encoded))
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
+        const Operation operation{*this};
+        if (accepted && !FrameLightingAuthorized())
+            return AbortForLostFrameLighting();
         render_->guiFinished = true;
         render_->rendered = accepted && render_->encoded && UsesXrScene();
         return render_->rendered ? Result<void>::Success() : AbortRenderFrame();
@@ -861,6 +939,9 @@ namespace Horo::Application::Internal {
             auto aborted = AbortRenderFrame();
             if (aborted.HasError())
                 return aborted;
+        } else if (render_->rendered && !FrameLightingAuthorized()) {
+            if (auto aborted = AbortForLostFrameLighting(); aborted.HasError())
+                return aborted;
         }
         if (const auto state = frames_.Snapshot();
             render_->encoded && state.phase != XRFramePhase::RendererSubmitted && state.phase != XRFramePhase::ImagesReleased) {
@@ -875,6 +956,7 @@ namespace Horo::Application::Internal {
             const auto polled = Editor::EditorVulkanXrViewportAccess::Poll(composition_.viewport);
             if (polled.HasError())
                 return polled;
+            render_->ObserveRenderCompletion(state.frame);
             render_->ObserveCoverage(state.frame);
         }
         const auto retired = render_->RetireImageReferences();
@@ -885,14 +967,13 @@ namespace Horo::Application::Internal {
         if (render_->acquisitionRecorded && render_->acquisition && state.phase != XRFramePhase::ImagesReleased &&
             frames_.Release(state.frame, render_->acquisition->image) != XRFrameStatus::Ok)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
-        const bool projected = render_->rendered && render_->plan && render_->acquisition;
-        Result<void> ended = Result<void>::Success();
-        if (projected)
-            ended = render_->EndRenderedProjection(state.frame);
-        else
-            ended = render_->compositor.EndEmpty(state.frame);
+        const bool hasProjection = render_->rendered && render_->plan && render_->acquisition;
+        const auto ended = hasProjection ? render_->EndRenderedProjection(state.frame) : render_->compositor.EndEmpty(state.frame);
         if (ended.HasError())
             return ended;
+        const bool projected = hasProjection && render_->rendered;
+        if (projected)
+            composition_.metrics.RecordAcceptedProjectionComfort(render_->vignetteBound);
         render_->CompleteMotion(projected);
         if (render_->writer && render_->writer->nativeSubmitted) {
             render_->writer->nativePair.reset();
@@ -905,6 +986,7 @@ namespace Horo::Application::Internal {
         render_->acquisition.reset();
         render_->plan.reset();
         render_->passthrough.reset();
+        render_->nativeLightingScope.reset();
         render_->views.reset();
         return Result<void>::Success();
     }
@@ -946,6 +1028,17 @@ namespace Horo::Application::Internal {
         if (host.frames_.Submit(frame, images) != XRFrameStatus::Ok)
             return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
         return Outcome::Success(true);
+    }
+
+    /** @copydoc OpenXRPlayHost::FrameState::ObserveRenderCompletion */
+    void OpenXRPlayHost::FrameState::ObserveRenderCompletion(const XRFrameId &frame) {
+        const auto &metrics = host.composition_.metrics;
+        if (completionTimingObserved || !rendered || !encoded || !metrics.MeasuresRenderCompletion() ||
+            !Editor::EditorVulkanXrViewportAccess::SubmissionCompleted(host.composition_.viewport, *encoded))
+            return;
+        completionTimingObserved = true;
+        const auto pacing = ObservePacing(frame);
+        metrics.RecordRenderCompletion(pacing.HasValue() ? std::optional{pacing.Value().deadline} : std::nullopt);
     }
 
     /** @copydoc OpenXRPlayHost::FrameState::ObserveCoverage */
@@ -994,7 +1087,13 @@ namespace Horo::Application::Internal {
             host.RevokePassthrough();
             host.passthroughState_ = XRCapabilityState::Denied;
         }
-        if (passthrough && host.HasPassthrough(passthrough->scope)) {
+        const bool allowPassthrough = passthrough && host.HasPassthrough(passthrough->scope);
+        if (!host.FrameLightingAuthorized()) {
+            if (auto aborted = host.AbortForLostFrameLighting(); aborted.HasError())
+                return aborted;
+            return compositor.EndEmpty(frame);
+        }
+        if (allowPassthrough && passthrough && host.MatchesPassthroughGrant(passthrough->scope)) {
             const auto receipt =
                 Editor::EditorVulkanXrViewportAccess::TakePremultipliedProjection(host.composition_.viewport, passthrough->publication,
                                                                                   acquisition->texture);

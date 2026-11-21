@@ -67,6 +67,10 @@ namespace Horo::Tests::OpenXRAction {
             XrTime locatedTime{};
             XrSpace locatedBase{XR_NULL_HANDLE};
             XrVector3f locatedPosition{1.0F, 2.0F, 3.0F};
+            std::optional<XrVector3f> headPosition;
+            XrSpace viewSpace{XR_NULL_HANDLE};
+            std::optional<std::array<XrVector3f, 2>> pairedGripPositions;
+            std::array<XrSpace, 2> gripSpaces{};
             XrSpaceLocationFlags flags{XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
                                        XR_SPACE_LOCATION_POSITION_TRACKED_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT};
             XrSpaceVelocityFlags velocityFlags{XR_SPACE_VELOCITY_LINEAR_VALID_BIT | XR_SPACE_VELOCITY_ANGULAR_VALID_BIT};
@@ -324,8 +328,11 @@ namespace Horo::Tests::OpenXRAction {
             }
             active->tracking.references.push_back(*info);
             const auto result = Script::Record("create-reference");
-            if (XR_SUCCEEDED(result))
+            if (XR_SUCCEEDED(result)) {
                 *space = NativeHandle<XrSpace>(300 + ++active->tracking.spaces);
+                if (info->referenceSpaceType == XR_REFERENCE_SPACE_TYPE_VIEW)
+                    active->tracking.viewSpace = *space;
+            }
             return result;
         }
 
@@ -345,8 +352,12 @@ namespace Horo::Tests::OpenXRAction {
             const auto result = Script::Record("create-action-space");
             if (XR_SUCCEEDED(result)) {
                 *space = NativeHandle<XrSpace>(300 + ++active->tracking.spaces);
-                if (gaze)
+                if (gaze) {
                     active->gaze.space = *space;
+                } else if (active->tracking.pairedGripPositions) {
+                    const auto side = info->subactionPath == active->Find("/user/hand/left") ? 0U : 1U;
+                    active->tracking.gripSpaces[side] = *space;
+                }
             }
             return result;
         }
@@ -366,8 +377,16 @@ namespace Horo::Tests::OpenXRAction {
             const float invalid = std::numeric_limits<float>::quiet_NaN();
             location->pose.position = {invalid, invalid, invalid};
             location->pose.orientation = {invalid, invalid, invalid, invalid};
-            if ((location->locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0)
-                location->pose.position = active->tracking.locatedPosition;
+            if ((location->locationFlags & XR_SPACE_LOCATION_POSITION_VALID_BIT) != 0) {
+                auto &tracking = active->tracking;
+                location->pose.position =
+                    source == tracking.viewSpace && tracking.headPosition ? *tracking.headPosition : tracking.locatedPosition;
+                if (tracking.pairedGripPositions) {
+                    const auto grip = std::ranges::find(tracking.gripSpaces, source);
+                    if (grip != tracking.gripSpaces.end())
+                        location->pose.position = (*tracking.pairedGripPositions)[grip - tracking.gripSpaces.begin()];
+                }
+            }
             if ((location->locationFlags & XR_SPACE_LOCATION_ORIENTATION_VALID_BIT) != 0)
                 location->pose.orientation = {0.0F, 0.0F, 0.0F, 1.0F};
             if (source == active->gaze.space) {

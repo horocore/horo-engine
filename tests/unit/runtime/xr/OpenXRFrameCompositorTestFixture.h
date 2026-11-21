@@ -88,7 +88,7 @@ namespace Horo::Tests::OpenXR {
             Images images;
             Images motionImages;
             Images synthesisDepthImages;
-            OpenXRSwapchain color{native.owner, images};
+            OpenXRSwapchain color;
             OpenXRSwapchain depthOwner{native.owner, images};
             OpenXRSwapchain motionOwner{native.owner, motionImages};
             OpenXRSwapchain synthesisDepthOwner{native.owner, synthesisDepthImages};
@@ -114,8 +114,9 @@ namespace Horo::Tests::OpenXR {
             explicit CompositorFixture(bool enableDepth = false, bool requestSpaceWarp = false, bool enableSynthesis = false,
                                        NativeReprojectionRoute route = NativeReprojectionRoute::SpaceWarpFb, bool enablePassthrough = false,
                                        std::uint32_t maximumLayers = 1,
-                                       XRReprojectionCadenceMode cadence = XRReprojectionCadenceMode::FixedInterval)
-                : synthesisRoute(route) {
+                                       XRReprojectionCadenceMode cadence = XRReprojectionCadenceMode::FixedInterval,
+                                       const NativeSwapchainMetricHandles &swapchainMetrics = {})
+                : color(native.owner, images, swapchainMetrics), synthesisRoute(route) {
                 if (enableSynthesis) {
                     native.capabilities = Capabilities(16, true);
                     native.script.resolveExtra = &ResolveSynthesisProperties;

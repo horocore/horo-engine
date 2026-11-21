@@ -54,6 +54,8 @@ namespace Horo::Tests::OpenXRApplication {
                 std::uint32_t releases{};
             };
 
+            std::function<void()> onRelease;
+
             const Allocation &Read(XrSwapchain swapchain) const {
                 const auto found = std::ranges::find(records_, swapchain, &Allocation::swapchain);
                 REQUIRE(found != records_.end());
@@ -199,8 +201,11 @@ namespace Horo::Tests::OpenXRApplication {
 
             static XRAPI_ATTR XrResult XRAPI_CALL Release(XrSwapchain handle, const XrSwapchainImageReleaseInfo *info) {
                 const auto released = OpenXR::SwapchainScript::Release(handle, info);
-                if (XR_SUCCEEDED(released))
+                if (XR_SUCCEEDED(released)) {
                     ++active_->Current(handle).releases;
+                    if (active_->onRelease)
+                        active_->onRelease();
+                }
                 return released;
             }
 
@@ -431,8 +436,14 @@ namespace Horo::Tests::OpenXRApplication {
                 }
             }
 
+            struct PublicationHooks final {
+                std::function<void()> beforePresent;
+                std::function<void()> afterPresent;
+            };
+
             void Project(const std::uint64_t number, const Host::OpenXRPlayHost::WorldCanvasFrame *canvas = nullptr,
-                         const Editor::EditorVulkanXrViewportAccess::CanvasSource *submitCanvas = nullptr) {
+                         const Editor::EditorVulkanXrViewportAccess::CanvasSource *submitCanvas = nullptr,
+                         const PublicationHooks &hooks = {}) {
                 CAPTURE(number);
                 const auto step = [](std::string_view name, auto result) {
                     INFO(name);
@@ -443,18 +454,26 @@ namespace Horo::Tests::OpenXRApplication {
                     return step("poll native WSI availability", frontend->PollPresentationAvailability(extent));
                 });
                 REQUIRE(step("prepare native prediction", play->PrepareRenderFrame(number, canvas)));
-                auto frame = step("begin Vulkan WSI frame", frontend->BeginFrame({number, extent}));
-                step("execute native Play graph", play->ExecuteRenderFrame(frame, {}, submitCanvas));
-                const auto mirror = play->MirrorView(number);
-                REQUIRE(mirror.IsValid());
-                step("begin GUI", gui->BeginFrame());
-                ImGui::NewFrame();
-                gui->BindViewportTexture(mirror);
-                ImGui::GetForegroundDrawList()->AddImage(static_cast<ImTextureID>(mirror.textureId), {0, 0}, {80, 60});
-                ImGui::Render();
-                step("record Vulkan GUI tail", frame.ComposeGui(*gui));
-                step("seal Play GUI phase", play->FinishGui(true));
-                step("submit Vulkan WSI frame", frame.Present());
+                {
+                    auto frame = step("begin Vulkan WSI frame", frontend->BeginFrame({number, extent}));
+                    step("execute native Play graph", play->ExecuteRenderFrame(frame, {}, submitCanvas));
+                    const auto mirror = play->MirrorView(number);
+                    REQUIRE(mirror.IsValid());
+                    step("begin GUI", gui->BeginFrame());
+                    ImGui::NewFrame();
+                    gui->BindViewportTexture(mirror);
+                    ImGui::GetForegroundDrawList()->AddImage(static_cast<ImTextureID>(mirror.textureId), {0, 0}, {80, 60});
+                    ImGui::Render();
+                    step("record Vulkan GUI tail", frame.ComposeGui(*gui));
+                    step("seal Play GUI phase", play->FinishGui(true));
+                    if (hooks.beforePresent)
+                        hooks.beforePresent();
+                    if (step("recheck Play before submission", play->RevalidateRenderLighting(number))) {
+                        step("submit Vulkan WSI frame", frame.Present());
+                        if (hooks.afterPresent)
+                            hooks.afterPresent();
+                    }
+                }
                 Wait([&] {
                     step("poll native compositor tail", play->ProgressRenderTail());
                     return script.frames.ends == number;
@@ -567,13 +586,14 @@ namespace Horo::Tests::OpenXRApplication {
               "[xr][application][play][native-estimator]") {
         struct Permission final : Host::IOpenXRLightPermission {
             bool SupportsLightEstimation() const noexcept override {
-                return true;
+                return supported;
             }
 
             bool Allows(const XR::XRLightEstimateScope &) const noexcept override {
                 return allowed;
             }
 
+            bool supported{true};
             bool allowed{};
         };
 
@@ -615,10 +635,59 @@ namespace Horo::Tests::OpenXRApplication {
         permission->allowed = true;
         RequireValue(fixture.play->StartNativeLighting(scope, limits, policy));
         fixture.script.frames.prediction = 120'000'000;
-        fixture.Project(1);
-        CHECK(nativeLight.sampleCalls == 1);
-        permission->allowed = false;
+        SECTION("The platform withdraws capability while the grant remains allowed") {
+            fixture.Project(1);
+            permission->supported = false;
+            CHECK_FALSE(fixture.session->AllowsNativeLighting(scope));
+        }
+        SECTION("The platform withdraws the grant while capability remains available") {
+            fixture.Project(1);
+            permission->allowed = false;
+        }
+        SECTION("Capability withdrawal inside the native sample retires that activation") {
+            nativeLight.onSample = [&] {
+                permission->supported = false;
+            };
+            fixture.Project(1);
+            nativeLight.onSample = {};
+            permission->supported = true;
+            REQUIRE(fixture.session->AllowsNativeLighting(scope));
+        }
+        SECTION("A revoked encoded frame is canceled before the GPU submission") {
+            fixture.Project(1, nullptr, nullptr, {.beforePresent = [&] {
+                permission->allowed = false;
+            }});
+            CHECK(fixture.script.frames.layers == 0);
+            permission->allowed = true;
+        }
+        SECTION("A revoked submitted frame closes with zero headset layers") {
+            fixture.Project(1, nullptr, nullptr, {.afterPresent = [&] {
+                permission->supported = false;
+            }});
+            CHECK(fixture.script.frames.layers == 0);
+            permission->supported = true;
+        }
+        SECTION("Pausing Play withdraws lighting from the encoded frame and subsequent frames") {
+            fixture.Project(1, nullptr, nullptr, {.beforePresent = [&] {
+                RequireValue(fixture.play->SetPlayState(Editor::EditorPlayState::Paused));
+            }});
+            CHECK(fixture.script.frames.layers == 0);
+            RequireValue(fixture.play->SetPlayState(Editor::EditorPlayState::Playing));
+        }
+        SECTION("Revocation during physical image release prevents the final projection") {
+            fixture.images->onRelease = [&] {
+                permission->allowed = false;
+            };
+            fixture.Project(1);
+            CHECK(fixture.script.frames.layers == 0);
+            fixture.images->onRelease = {};
+            permission->allowed = true;
+        }
+        REQUIRE(nativeLight.sampleCalls == 1);
+        fixture.script.clock.sample = fixture.script.frames.prediction;
+        // Advance the native prediction with one full period reserved for the next frame.
         fixture.script.frames.prediction += fixture.script.frames.period;
+        RequireValue(fixture.scheduler->RunFrame());
         fixture.Project(2);
         CHECK(nativeLight.sampleCalls == 1);
         RequireValue(fixture.play->StopNativeLighting());

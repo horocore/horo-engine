@@ -7,16 +7,24 @@
 #include "EditorVulkanXrViewportAccess.h"
 #include "EditorXrSceneGeometry.h"
 #include "Horo/Foundation/CancellationToken.h"
+#include "Horo/Physics/CharacterCapability.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 #include "Horo/XR/XRInteraction.h"
 #include "Horo/XR/XRLightProjection.h"
+#include "Horo/XR/XRLocomotionComfort.h"
+#include "Horo/XR/XRLocomotionPolicy.h"
 #include "OpenXRApplicationSession.h"
+#include "OpenXRFrameTelemetry.h"
 #include "OpenXRInputClock.h"
 #include "OpenXRSessionEvents.h"
 #include "XRSessionHostControl.h"
 #include "XRTrackingPublication.h"
 
 #include <chrono>
+
+namespace Horo::Character {
+    class CharacterWorld;
+}
 
 namespace Horo::Editor {
     class EditorViewportRendererVulkan;
@@ -87,9 +95,10 @@ namespace Horo::Application::Internal {
         Duration fixedStep;
         Runtime::SceneObjectId trackingRoot;
         const IOpenXRPlayLightingSource *lighting{}; /**< Optional app-owned provider, borrowed through retirement. */
+        XR::OpenXRInternal::NativeFrameMetricHandles metrics;
     };
 
-    /** @brief Fully tracked native reference relation for one exact active presentation frame. */
+    /** @brief Fully tracked reference to the gameplay World for one exact active presentation frame. */
     struct OpenXRTrackedReference final {
         XR::XRFrameId frame;
         XR::XRPoseSample referenceToWorld;
@@ -105,6 +114,16 @@ namespace Horo::Application::Internal {
         bool operator==(const OpenXRPlayInteractionScope &) const noexcept = default;
     };
 
+    /** @brief Fixed-dispatch evidence for the selected gameplay owner, with no Character or renderer authority. */
+    struct OpenXRPlayLocomotionEvidence final {
+        OpenXRPlayInteractionScope scope;
+        std::uint64_t fixedTick;
+        std::uint64_t fixedAttempt;
+        XR::XRTrackingSnapshot tracking;
+        XR::XRLocomotionComfortSettings comfort;
+        std::uint64_t assignmentRevision{};
+    };
+
     /** @brief Consumer-selected controller ray and registered digital action in an admitted Play context. */
     struct OpenXRPlayControllerPointerRequest final {
         XR::XRDeviceId device;
@@ -112,6 +131,15 @@ namespace Horo::Application::Internal {
         XR::XRControllerInteractionPose pose;
         XR::XRInteractionRayProbe ray;
         XR::XRTrackingConfidence minimumConfidence{XR::XRTrackingConfidence::None};
+    };
+
+    /** @brief Scene-owned synchronous targeting and Character staging for one admitted fixed dispatch.
+     * @pre Both callbacks run on the Play owner lane and may not reenter or retire the Play host.
+     */
+    struct OpenXRPlayTeleportStep final {
+        void *context{};
+        Result<std::optional<Math::Vec3>> (*target)(void *, const Math::Ray &){};
+        Result<void> (*stage)(void *, const Character::CharacterTeleportRequest &, const CancellationToken &){};
     };
 
     /** @brief Same-cutoff device ray and held-state evidence. The consumer owns edges, capture, and cancellation. */
@@ -296,6 +324,8 @@ namespace Horo::Application::Internal {
          * @return True for a bound acquisition, false while retirement or acquisition is pending, or the original error.
          */
         [[nodiscard]] Result<bool> PrepareRenderFrame(std::uint64_t frameNumber, const WorldCanvasFrame *canvas = nullptr);
+        /** @brief Prepares the active render dispatch, resolving only the live committed Character comfort hint. */
+        [[nodiscard]] Result<bool> PrepareRenderFrame(const Runtime::FrameContext &frame, const WorldCanvasFrame *canvas = nullptr);
         /** @brief Executes the prepared acquired-eye graph through the same App frame.
          * @param frame Exact enclosing App render scope.
          * @param output Mirror output owned by that scope.
@@ -321,6 +351,11 @@ namespace Horo::Application::Internal {
          * preserves its original error and continues the SAME owned tail even if this logical abort is fenced by loss.
          */
         [[nodiscard]] Result<void> FinishGui(bool accepted);
+        /** @brief Rechecks the exact frame's native lighting scope before mirror use or queue submission.
+         * @param frameNumber Existing RuntimeHost frame identity.
+         * @return False after the frame was canceled for lost lighting authority. All native debt remains owned.
+         */
+        [[nodiscard]] Result<bool> RevalidateRenderLighting(std::uint64_t frameNumber);
         /** @brief Borrows the exact submitted acquisition's GUI mirror for this canonical App frame.
          * @param frameNumber Same RuntimeHost frame supplied to PrepareRenderFrame; never a new counter.
          * @return Full typed GUI binding or empty for wrong lane, stale frame, loss, cancellation or retirement.
@@ -351,6 +386,39 @@ namespace Horo::Application::Internal {
          * @return Copied sources or a typed unavailable, wrong-owner, or stale failure.
          */
         [[nodiscard]] Result<OpenXRPlayInteractionSources> ReadInteractionSources(Input::PlayerId player) const;
+        /** @brief Copies the current tracking and project comfort for an explicitly bound gameplay fixed update.
+         * @details The evidence owns its storage and is issued only while gameplay can route input. Gameplay
+         * revalidates the assignment and exact fixed attempt before Character submission.
+         */
+        [[nodiscard]] Result<OpenXRPlayLocomotionEvidence> ReadLocomotionEvidence(const OpenXRPlayInteractionScope &scope,
+                                                                                  const Runtime::FixedStepContext &step) const;
+
+        /** @brief Borrows signed locomotion selection for the live Scene owner to resolve the authored Character actor.
+         * @return Installed opt-in settings, or null. No input assignment or actor grant is inferred. */
+        [[nodiscard]] const OpenXRLocomotionBinding *AuthoredLocomotion() const noexcept;
+
+        /** @brief Stages the signed XR actions for the selected Character in the current Play Scene. */
+        [[nodiscard]] Result<void> TickAuthoredCharacter(Runtime::SceneRuntimeId scene, Character::CharacterControllerHandle controller,
+                                                         Character::CharacterWorld &world, std::uint64_t characterTick,
+                                                         const Runtime::FixedStepContext &step,
+                                                         const OpenXRPlayTeleportStep *teleport = nullptr);
+        /** @brief Publishes the Character placement for the successful native and scheduler fixed attempt. */
+        void CommitAuthoredCharacter(Runtime::SceneRuntimeId scene, Character::CharacterWorld &world,
+                                     const Runtime::FixedStepContext &step) noexcept;
+        /** @brief Revokes pending authored motion and withdraws the current comfort hint. */
+        void CancelAuthoredLocomotion() noexcept;
+
+        /** @brief Routes one authored policy frame through the selected Character adapter and retains its admitted comfort hint.
+         * @param scope Exact current Play scene, player and tracking cutoff observed by gameplay.
+         * @param adapter Gameplay-owned Character command adapter for that player.
+         * @param frame Evaluated policy frame for the current fixed attempt.
+         * @param step Actual scheduler fixed dispatch.
+         * @return Original Character admission or a typed stale/unavailable owner failure. */
+        [[nodiscard]] Result<XR::XRLocomotionFrameAdmission> SubmitLocomotionFrame(const OpenXRPlayInteractionScope &scope,
+                                                                                   XR::XRCharacterLocomotionAdapter &adapter,
+                                                                                   const XR::XRLocomotionFrame &frame,
+                                                                                   const Runtime::FixedStepContext &step);
+
         /** @brief Converts the same committed XR input cutoff into geometry for a synchronous consumer.
          * @param scope Exact scope from ReadInteractionSources.
          * @param probes Consumer-supplied shapes and live controller/hand devices.
@@ -437,6 +505,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] bool HasPassthrough(XR::XRPassthroughScope scope) const noexcept;
         [[nodiscard]] Result<void> ProgressTail();
         [[nodiscard]] Result<void> AbortRenderFrame();
+        [[nodiscard]] bool FrameLightingAuthorized() const noexcept;
+        [[nodiscard]] Result<void> AbortForLostFrameLighting();
         /** @brief Prepares the canvas variant when the selected projection supports it. */
         [[nodiscard]] Result<const WorldCanvasFrame *> PrepareCanvasSource(const WorldCanvasFrame *canvas) const;
         /** @brief Reads a consented value only for this focused frame and exact World lineage. */
@@ -446,7 +516,53 @@ namespace Horo::Application::Internal {
         [[nodiscard]] std::optional<XR::XRProjectedLighting> ReadNativeLighting(const XR::XRCoordinateSpace &world);
         /** @brief Checks current focus, tracking and cached platform clearance for an exact World. */
         [[nodiscard]] std::optional<XR::XRRuntimeTime> LightingCutoff(const XR::XRLightEstimateScope &scope) const noexcept;
-        [[nodiscard]] Result<void> BindRenderFrame(std::uint64_t frameNumber, const WorldCanvasFrame *canvas);
+        [[nodiscard]] Result<void> BindRenderFrame(std::uint64_t frameNumber, const WorldCanvasFrame *canvas, float comfortOpacity);
+        /** @brief Prepares native frame resources for the resolved owner-bound presentation value. */
+        [[nodiscard]] Result<bool> PrepareRenderFrame(std::uint64_t frameNumber, const WorldCanvasFrame *canvas, float comfortOpacity);
+        /** @brief Resolves the current committed movement opacity against live Play input and the owner render phase. */
+        [[nodiscard]] float ReadFrameComfort(const Runtime::FrameContext &frame) const;
+
+        struct TeleportDispatch final {
+            const OpenXRPlayTeleportStep &scene;
+            const OpenXRPlayLocomotionEvidence &evidence;
+            Math::Quaternion heading;
+        };
+
+        struct AuthoredTeleportPorts final : XR::IXRLocomotionDestinationOwner, XR::IXRLocomotionTeleportOwner {
+            explicit AuthoredTeleportPorts(const OpenXRPlayHost &play) noexcept : play(play) {}
+
+            [[nodiscard]] Result<std::optional<XR::XRLocomotionTeleport>> Resolve(const XR::XRLocomotionSample &) const override;
+            [[nodiscard]] Result<XR::XRLocomotionAdmission> QueueTeleport(const XR::XRLocomotionIntent &,
+                                                                          const Character::CharacterTeleportRequest &request,
+                                                                          const CancellationToken &lifetime) override;
+            const OpenXRPlayHost &play;
+            const TeleportDispatch *dispatch{};
+        };
+
+        struct AuthoredCharacterDriver final {
+            Runtime::SceneRuntimeId scene;
+            XR::XRSessionId session;
+            Input::PlayerId player;
+            std::uint64_t assignment;
+            Character::CharacterControllerHandle controller;
+            Character::CharacterCapability authority;
+            XR::XRLocomotionPolicy policy;
+            XR::XRCharacterLocomotionAdapter adapter;
+            std::shared_ptr<AuthoredTeleportPorts> teleport;
+        };
+
+        [[nodiscard]] Result<void> BindAuthoredCharacter(const OpenXRPlayLocomotionEvidence &evidence,
+                                                         Character::CharacterControllerHandle controller, Character::CharacterWorld &world,
+                                                         const Runtime::FixedStepContext &step);
+        [[nodiscard]] Result<void> SubmitAuthoredSample(const XR::XRLocomotionSample &sample, const OpenXRPlayLocomotionEvidence &evidence,
+                                                        const Runtime::FixedStepContext &step, std::uint64_t characterTick,
+                                                        const OpenXRPlayTeleportStep *teleport, Math::Quaternion heading);
+        [[nodiscard]] XR::XRLocomotionSample ReadAuthoredLocomotionSample(const OpenXRPlayLocomotionEvidence &evidence,
+                                                                          float gameplayYawRadians, Duration delta) const;
+        /** @brief Submits using the admitted fixed-dispatch observations and retains the exact Character hint. */
+        [[nodiscard]] Result<XR::XRLocomotionFrameAdmission> SubmitValidatedLocomotion(
+            const OpenXRPlayLocomotionEvidence &evidence, XR::XRCharacterLocomotionAdapter &adapter, const XR::XRLocomotionFrame &frame,
+            const Runtime::FixedStepContext &step, std::optional<std::uint64_t> characterTick = std::nullopt);
         /** @brief Acquires the optional reprojection pair after the ordinary projection is bound. */
         [[nodiscard]] std::optional<Editor::EditorVulkanXrViewportAccess::AuxiliaryImages> AcquireAuxiliaryProjection(
             const XR::XRFrameId &frame, const XR::XRViewRenderPlan &plan);
@@ -479,8 +595,29 @@ namespace Horo::Application::Internal {
             bool active;
         };
 
+        struct RoomScaleTurn final {
+            Math::Vec3 pivot;
+            float previousYawRadians{};
+        };
+
+        struct PendingCharacterPlacement final {
+            Runtime::RuntimeDispatchEvidence dispatch;
+            std::uint64_t characterTick{};
+            std::optional<RoomScaleTurn> roomScaleTurn;
+        };
+
+        struct AuthoredCharacterPlacement final {
+            Character::CharacterTransformPublication initial;
+            std::optional<PendingCharacterPlacement> pending;
+            std::optional<Math::Transform> worldPlacement;
+        };
+
+        [[nodiscard]] bool IsCommittedPlacement(const PendingCharacterPlacement &pending,
+                                                const Runtime::FixedStepContext &step) const noexcept;
+
         struct SceneState final {
             Runtime::SceneRuntimeId scene;
+            std::optional<AuthoredCharacterPlacement> locomotion;
             std::optional<SceneGeometry> geometry;
             std::optional<OpenXRApplicationProjection> projection;
             std::optional<Editor::EditorVulkanXrViewportAccess::PreparedTargets> prewarmedRenderer;
@@ -564,6 +701,8 @@ namespace Horo::Application::Internal {
          * requires the router's real neutral commit. Explicit workspace RevokeInput/DetachInput also drop that borrow.
          */
         void RevokeSource() noexcept;
+        /** @brief Withdraws spatial observations before a native camera pause can re-enter the host. */
+        void RevokeSensitiveObservations() noexcept;
         /** @brief Ends one serialized foreign-call opportunity and performs deferred logical source revocation. */
         void FinishOperation() noexcept;
 
@@ -628,6 +767,8 @@ namespace Horo::Application::Internal {
             std::unique_ptr<XR::XRActionBindingCoordinator> coordinator;
             XR::XRWorldOriginRevision origin;
             std::optional<std::uint64_t> interactionAssignment;
+            std::optional<Math::Transform> sampledWorldPlacement; /**< Offset applied to the current tracking publication. */
+            std::optional<std::pair<OpenXRPlayInteractionScope, XR::XRLocomotionComfortHint>> comfortHint;
             Editor::EditorPlayState play{Editor::EditorPlayState::Idle};
             bool admitted{};
             bool neutralPending{}; /**< A suspension requires an empty committed cutoff before resampling. */
@@ -642,12 +783,14 @@ namespace Horo::Application::Internal {
             Duration fixedStep;
             Runtime::SceneObjectId trackingRoot;
             const IOpenXRPlayLightingSource *lighting;
+            XR::OpenXRInternal::NativeFrameMetricHandles metrics;
         };
 
         Parents composition_;
 
         XR::OpenXRInternal::OpenXRNativeSession &native_;
         const XR::XRLoaderPreflightAttempt discoveryAttempt_;
+        const XR::XRLocomotionComfortSettings locomotionComfort_;
         PFN_xrGetInstanceProcAddr getProc_;
         XR::XRSessionLifecycle sessions_{*this};
         XR::XRFrameLifecycle frames_{sessions_};
@@ -658,6 +801,7 @@ namespace Horo::Application::Internal {
         XR::XRSessionId retired_;              /**< Receipt assigned only after successful physical candidate retirement. */
         Runtime::SceneRuntimeId retiredScene_; /**< Exact already-drained Scene; late canonical retirement is an idempotent no-op. */
         InputState input_;
+        std::optional<AuthoredCharacterDriver> authoredCharacter_;
         std::shared_ptr<SceneState> scene_;
         Editor::EditorXrSetupReport setup_;
         std::optional<OpenXRPackagedPreflight> setupPreflight_;

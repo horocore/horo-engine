@@ -9,15 +9,18 @@
 #include "RenderExternalImages.h"
 #include "VulkanExternalImages.h"
 #include "editor/renderer/vulkan/EditorViewportRendererVulkan.h"
+#include "internal/CharacterSceneFixedAccess.h"
 #include "support/OpenXRApplicationNativeTestSupport.h"
 #include "support/OpenXRInstalledProductTestFixture.h"
 #include "support/OpenXRLightTestSupport.h"
 #include "support/OpenXRPassthroughTestSupport.h"
 #include "support/OpenXRPlaneCaptureTestSupport.h"
 #include "unit/editor/SceneDocumentHierarchyFixture.h"
+#include "unit/runtime/physics/CharacterWorldTestHelpers.h"
 
 #include <algorithm>
 #include <bit>
+#include <catch2/catch_approx.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <functional>
 #include <thread>
@@ -107,6 +110,7 @@ namespace Horo::Tests::OpenXRApplication {
 
         /** @brief Owns real installation, native preparation and canonical scene/input parents through explicit cleanup. */
         struct ApplicationFixture final {
+            static constexpr std::int64_t VignettePercent = 40;
             ApplicationNativeScript script;
             OpenXRProduct::InstalledProductFixture product;
             ConfigurationService configuration{XrSchema()};
@@ -185,6 +189,11 @@ namespace Horo::Tests::OpenXRApplication {
                 }
                 // Play reserves five canonical spaces besides any authored controller pose spaces.
                 request.invocation.emplace(SettingKey{"xr.limits.spaces"}, ConfigurationInputValue{maximumSpaces, std::nullopt});
+                if (bindings->locomotion)
+                    request.invocation.emplace(SettingKey{"xr.locomotion.maximum_vignette_percent"},
+                                               ConfigurationInputValue{VignettePercent, std::nullopt});
+                if (bindings->locomotion && std::holds_alternative<Host::OpenXRArmSwingBinding>(bindings->locomotion->translation))
+                    request.invocation.try_emplace(SettingKey{"xr.limits.devices"}, ConfigurationInputValue{std::int64_t{3}, std::nullopt});
                 REQUIRE(configuration.ResolveAndCommit(request).HasValue());
                 const auto settings = RequireValue(XR::ResolveXRProjectSettings(configuration.Snapshot()));
                 product.policy->passthroughPermission = std::move(passthrough);
@@ -982,17 +991,29 @@ namespace Horo::Tests::OpenXRApplication {
 
             void Shutdown() noexcept override {}
 
-            Result<void> OnFixedUpdate(const Runtime::FixedStepContext &) override {
+            Result<void> OnFixedUpdate(const Runtime::FixedStepContext &step) override {
+                if (onFixed)
+                    onFixed(step);
                 return Result<void>::Success();
             }
 
             Result<void> OnPhase(Runtime::RuntimePhase phase, const Runtime::FrameContext &context) override {
                 if (phase == Runtime::RuntimePhase::BuildInputSnapshot)
                     result.emplace(play_.BuildInputSnapshot(context, raw_));
+                if (phase == Runtime::RuntimePhase::RenderExecution && onRender)
+                    onRender(context);
                 return Result<void>::Success();
             }
 
+            void CommitFixedUpdate(const Runtime::FixedStepContext &step) noexcept override {
+                if (onCommit)
+                    onCommit(step);
+            }
+
             std::optional<Result<void>> result;
+            std::function<void(const Runtime::FrameContext &)> onRender;
+            std::function<void(const Runtime::FixedStepContext &)> onFixed;
+            std::function<void(const Runtime::FixedStepContext &)> onCommit;
 
         private:
             Host::OpenXRPlayHost &play_;
@@ -1331,8 +1352,17 @@ namespace Horo::Tests::OpenXRApplication {
             CHECK(hits.Hits().front().intersection.distance > 0.99F);
             CHECK(hits.Hits().front().intersection.distance < 1.01F);
             CHECK(hits.Hits().front().confidence == plane.confidence);
+            auto pinned = ray;
+            pinned.expectedSampledAt = hits.SampledAt();
+            pinned.maximumAge = Duration::FromMilliseconds(25);
+            REQUIRE(fixture.play->QueryPlaneHits(pinned).HasValue());
+            REQUIRE(sample(420'000'000).HasValue());
+            const auto expired = fixture.play->QueryPlaneHits(pinned);
+            REQUIRE(expired.HasError());
+            CHECK(expired.ErrorValue().code.Value() == XR::XRErrors::TrackingSnapshotStale.code.Value());
             CHECK(preview.ReadPlaneCaptureState() == Tracking);
             CHECK(native.scans == 1);
+            bool pendingScan = true;
             SECTION("operator revokes after the next scan is queued") {
                 CHECK(sample(620'000'000).HasValue());
                 preview.RevokePlaneCapture();
@@ -1343,11 +1373,42 @@ namespace Horo::Tests::OpenXRApplication {
                 CHECK(revocation.observed);
                 CHECK(preview.ReadPlaneCaptureState() == Unavailable);
             }
+            SECTION("operator revokes as a native snapshot completes") {
+                CHECK(sample(620'000'000).HasValue());
+                const auto queries = geometry.calls;
+                native.onCompleteScan = [&] {
+                    preview.RevokePlaneCapture();
+                };
+                CHECK(sample(630'000'000).HasError());
+                CHECK(geometry.calls == queries);
+                CHECK_FALSE(native.hasSnapshot);
+                pendingScan = false;
+            }
+            SECTION("a fresh batch invalidates a placement request pinned to the previous sample") {
+                REQUIRE(sample(620'000'000).HasValue());
+                const auto replacement = sample(630'000'000);
+                REQUIRE(replacement.HasValue());
+                REQUIRE(replacement.Value().Scope() == hits.Source());
+                REQUIRE(replacement.Value().SampledAt() != hits.SampledAt());
+                const auto stale = fixture.play->QueryPlaneHits(pinned);
+                REQUIRE(stale.HasError());
+                CHECK(stale.ErrorValue().code.Value() == XR::XRErrors::TrackingSnapshotStale.code.Value());
+                pinned.now = replacement.Value().SampledAt();
+                pinned.expectedSampledAt = replacement.Value().SampledAt();
+                REQUIRE(fixture.play->QueryPlaneHits(pinned).HasValue());
+                preview.RevokePlaneCapture();
+                pendingScan = false;
+            }
             CHECK(native.scans == 2);
             CHECK(fixture.play->QueryPlaneHits(ray).HasError());
             CHECK(fixture.play->ReadPlaneObservations().HasError());
+            native.failDestroy = true;
+            CHECK(fixture.play->PollEvents().HasError());
+            CHECK(native.hasContext);
+            CHECK(fixture.play->ReadPlaneObservations().HasError());
+            native.failDestroy = false;
             RequireValue(fixture.play->PollEvents());
-            CHECK(native.cancels == 1);
+            CHECK(native.cancels == (pendingScan ? 1U : 0U));
             CHECK_FALSE(native.hasContext);
             CHECK(preview.ArmPlaneCapture().HasError());
         } else {
@@ -1864,6 +1925,8 @@ namespace Horo::Tests::OpenXRApplication {
         sample();
         CHECK(fixture.play->ReadInteractionSources(2).HasError());
         const auto sources = RequireValue(fixture.play->ReadInteractionSources(player));
+        const CancellationToken uncancelled;
+        CHECK(fixture.play->ReadLocomotionEvidence(sources.Scope(), {.cancellation = uncancelled}).HasError());
         const auto source = [&](const XR::XRTrackedDeviceRole role) {
             const auto found = std::ranges::find(sources.Devices(), role, &XR::XRTrackedDeviceRecord::role);
             REQUIRE(found != sources.Devices().end());
@@ -1961,6 +2024,45 @@ namespace Horo::Tests::OpenXRApplication {
         const auto stale = fixture.play->ReadInteractionCandidates(sources.Scope(), probes);
         REQUIRE(stale.HasError());
         CHECK(stale.ErrorValue().code.Value() == XR::XRErrors::TrackingSnapshotStale.code.Value());
+        bool observedLocomotion{};
+        observed->onFixed = [&](const Runtime::FixedStepContext &step) {
+            const auto live = RequireValue(fixture.play->ReadInteractionSources(player));
+            const auto evidence = RequireValue(fixture.play->ReadLocomotionEvidence(live.Scope(), step));
+            CHECK(evidence.scope == live.Scope());
+            CHECK(evidence.fixedTick == step.simulationTick);
+            CHECK(evidence.fixedAttempt == step.attemptNumber);
+            CHECK(XR::DescribeXRInteractionCutoff(evidence.tracking) == live.Scope().cutoff);
+            CHECK_FALSE(evidence.comfort.reducedMotion);
+            CHECK(evidence.assignmentRevision != 0);
+            XR::XRCharacterLocomotionAdapter unbound;
+            const auto neutral = RequireValue(fixture.play->SubmitLocomotionFrame(live.Scope(), unbound, {}, step));
+            CHECK_FALSE(neutral.command);
+            CHECK_FALSE(neutral.comfort);
+            CHECK(fixture.play->SubmitLocomotionFrame(sources.Scope(), unbound, {}, step).HasError());
+            CHECK(fixture.play->ReadLocomotionEvidence(sources.Scope(), step).HasError());
+            {
+                const auto modal =
+                    fixture.router.PushContext(Input::InputContextId{"locomotion-modal"}, Input::InputContextKind::ModalRoot);
+                const auto blocked = fixture.play->ReadLocomotionEvidence(live.Scope(), step);
+                REQUIRE(blocked.HasError());
+                CHECK(blocked.ErrorValue().code.Value() == XR::XRErrors::OperationUnavailable.code.Value());
+            }
+            CHECK(fixture.play->ReadLocomotionEvidence(live.Scope(), step).HasError());
+            observedLocomotion = true;
+        };
+        fixture.schedulerClock.Advance(Duration::FromMilliseconds(10));
+        sample();
+        CHECK(observedLocomotion);
+        bool resumedLocomotion{};
+        observed->onFixed = [&](const Runtime::FixedStepContext &step) {
+            const auto live = RequireValue(fixture.play->ReadInteractionSources(player));
+            CHECK(fixture.play->ReadLocomotionEvidence(live.Scope(), step).HasValue());
+            resumedLocomotion = true;
+        };
+        fixture.schedulerClock.Advance(Duration::FromMilliseconds(10));
+        sample();
+        CHECK(resumedLocomotion);
+        observed->onFixed = {};
         fixture.script.actions.sample.active = XR_FALSE;
         sample();
         const auto inactive = RequireValue(fixture.play->ReadInteractionSources(player));
@@ -2286,6 +2388,317 @@ namespace Horo::Tests::OpenXRApplication {
         REQUIRE(fixture.play->PollEvents().HasValue());
         CHECK(fixture.play->ReadTrackedReference(session, 1).HasError());
         CHECK_FALSE(fixture.play->UsesXrScene());
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
+
+    TEST_CASE("Installed XR Play moves the tracked view and controller ray with the committed Character",
+              "[xr][application][play][locomotion]") {
+        using namespace Character::TestDetail;
+        using enum XR::XRProjectFeaturePolicy;
+        enum class TranslationMode {
+            Stick,
+            ArmSwing,
+            RoomScale
+        };
+        const auto mode = GENERATE(TranslationMode::Stick, TranslationMode::ArmSwing, TranslationMode::RoomScale);
+        const bool armSwing = mode == TranslationMode::ArmSwing;
+        const bool roomScale = mode == TranslationMode::RoomScale;
+        CAPTURE(armSwing, roomScale);
+
+        auto document = OpenXRProduct::Json::parse(OpenXRProduct::InstalledProductFixture::BindingDocument());
+        auto &route = document["locomotion"];
+        route = {{"actor", 17}, {"speedMetersPerSecond", 2.5}};
+        const auto pose = [&](XR::XRTrackedDeviceRole role, XR::XRTrackedPoseKind kind, const char *path, const char *label) {
+            document["poses"].push_back({{"profile", 1},
+                                         {"set", 1},
+                                         {"role", static_cast<unsigned>(role)},
+                                         {"kind", static_cast<unsigned>(kind)},
+                                         {"path", path},
+                                         {"label", label}});
+        };
+        const auto leftController = XR::XRTrackedDeviceRole::LeftController;
+        const auto rightController = XR::XRTrackedDeviceRole::RightController;
+        if (armSwing) {
+            route["armSwing"] = {{"gain", 1.25}, {"maximumTrackingGapMilliseconds", 120}};
+            pose(leftController, XR::XRTrackedPoseKind::Grip, "/user/hand/left/input/grip/pose", "Grip");
+            pose(rightController, XR::XRTrackedPoseKind::Grip, "/user/hand/right/input/grip/pose", "Grip");
+        } else {
+            if (roomScale) {
+                route["roomScale"] = {{"maximumSampleDistanceMeters", 0.4}, {"maximumTrackingGapMilliseconds", 120}};
+                route["snapTurn"] = {{"action", "select"}, {"angleRadians", 0.5}, {"engage", 0.7}, {"release", 0.2}};
+                const auto scalar = static_cast<unsigned>(Input::ActionValueType::Axis1D);
+                document["actions"][0]["type"] = scalar;
+                document["controls"][0]["type"] = scalar;
+                document["controls"][0]["path"] = "/user/hand/left/input/thumbstick/x";
+            } else {
+                route["moveAction"] = "select";
+                route["deadZone"] = 0.1;
+                const auto axis = static_cast<unsigned>(Input::ActionValueType::Axis2D);
+                document["actions"][0]["type"] = axis;
+                document["controls"][0]["type"] = axis;
+                document["controls"][0]["path"] = "/user/hand/left/input/thumbstick";
+            }
+            pose(leftController, XR::XRTrackedPoseKind::Aim, "/user/hand/left/input/aim/pose", "Aim");
+        }
+        ApplicationFixture fixture{true, armSwing ? 9 : 6, Unrequested, Unrequested, Unrequested, false, document.dump()};
+        const auto cooked = ApplicationVulkanFixture::CookComfort();
+        const auto reflection = RequireValue(Render::EncodeReflectedShaderArtifact(cooked.reflected));
+        INFO("Prepare the exact comfort shader and resources.");
+        RequireValue(fixture.viewport->PrepareXrComfortProgram(
+            RequireValue(Editor::LoadEditorVulkanXrComfortCook(cooked.compiled.payload, reflection))));
+        auto &commands = fixture.vulkan->native.encoded;
+        commands.alternateIndexCount = 3;
+        auto &script = fixture.script.actions;
+        script.tracking.enabled = true;
+        if (armSwing) {
+            script.tracking.suggestedPoseBindings = 2;
+            script.tracking.pairedGripPositions.emplace(std::array{script.tracking.locatedPosition, script.tracking.locatedPosition});
+        } else if (roomScale) {
+            script.tracking.headPosition = script.tracking.locatedPosition;
+            script.sample.expectedType = XR_ACTION_TYPE_FLOAT_INPUT;
+            script.sample.scalar = 0.0F;
+        } else {
+            script.sample.expectedType = XR_ACTION_TYPE_VECTOR2F_INPUT;
+            script.sample.vector = {};
+        }
+        constexpr Input::PlayerId player = 7;
+        auto scene = [&] {
+            INFO("activate the signed locomotion route");
+            return PublishPlay(fixture, player);
+        }();
+        auto character = SpawnedActiveWorldWithController();
+        const auto runtime = fixture.scene->View().RuntimeId();
+        const auto initial = RequireValue(character.world->ControllerTransform(character.controller));
+
+        auto input = std::make_unique<AppInputSample>(*fixture.play);
+        auto *observed = input.get();
+        CommandTrace movement;
+        observed->onFixed = [&](const Runtime::FixedStepContext &step) {
+            movement = {};
+            CAPTURE(step.simulationTick);
+            {
+                INFO("stage the XR Character command");
+                RequireValue(
+                    fixture.play->TickAuthoredCharacter(runtime, character.controller, *character.world, step.simulationTick, step));
+            }
+            {
+                INFO("advance the Character owner");
+                RequireValue(character.world->AdvanceFixedTick(FixedTick(step.simulationTick, movement.Observer())));
+            }
+            fixture.play->CommitAuthoredCharacter(runtime, *character.world, step);
+        };
+        observed->onCommit = [&](const Runtime::FixedStepContext &step) noexcept {
+            auto forged = step;
+            ++forged.attemptNumber;
+            fixture.play->CommitAuthoredCharacter(runtime, *character.world, forged);
+            fixture.play->CommitAuthoredCharacter(runtime, *character.world, step);
+        };
+        RequireValue(fixture.scheduler->AddParticipant(std::move(input)));
+        RequireValue(fixture.scheduler->Startup());
+        fixture.script.clock.sample = 1;
+        const auto sample = [&] {
+            fixture.script.clock.sample += 1'000'000;
+            CAPTURE(fixture.script.clock.sample);
+            {
+                INFO("run the scheduler frame");
+                RequireValue(fixture.scheduler->RunFrame());
+            }
+            REQUIRE(observed->result);
+            INFO("commit the XR Input publication");
+            RequireValue(*observed->result);
+        };
+        const auto readRay = [&] {
+            const auto sources = RequireValue(fixture.play->ReadInteractionSources(player));
+            const auto devices = sources.Devices();
+            const auto left = std::ranges::find(devices, leftController, &XR::XRTrackedDeviceRecord::role);
+            REQUIRE(left != devices.end());
+            const auto kind = armSwing ? XR::XRControllerInteractionPose::Grip : XR::XRControllerInteractionPose::Aim;
+            const std::array probes{
+                XR::XRInteractionProbe{left->id, kind, XR::XRInteractionRayProbe{{0, 0, -1}, 6}, XR::XRTrackingConfidence::High}};
+            const auto candidates = RequireValue(fixture.play->ReadInteractionCandidates(sources.Scope(), probes));
+            REQUIRE(candidates.Candidates().size() == 1);
+            return std::get<Math::Ray>(candidates.Candidates().front().shape);
+        };
+
+        sample();
+        const auto baseRay = readRay();
+        const auto session = *fixture.session->RetainedSession();
+        REQUIRE(RequireValue(fixture.play->PrepareRenderFrame(1)));
+        const auto baseReference = RequireValue(fixture.play->ReadTrackedReference(session, 1));
+        RequireValue(fixture.play->FinishGui(false));
+        RequireValue(fixture.play->ProgressRenderTail());
+        fixture.script.frames.prediction += 1'000'000;
+        fixture.schedulerClock.Advance(Duration::FromMilliseconds(10));
+        sample();  // Establishes the neutral policy baseline.
+        constexpr float swingDistance = 0.05F;
+        if (armSwing) {
+            auto &grips = *script.tracking.pairedGripPositions;
+            grips[0].z += swingDistance;
+            grips[1].z -= swingDistance;
+        } else if (roomScale) {
+            script.tracking.headPosition->z -= swingDistance;
+        } else {
+            script.sample.vector = {0.0F, 1.0F};
+        }
+        std::uint64_t comfortFrame{};
+        observed->onRender = [&](const Runtime::FrameContext &context) {
+            comfortFrame = context.frameNumber;
+            const auto first = commands.renderingCalls.size();
+            REQUIRE(RequireValue(fixture.play->PrepareRenderFrame(context)));
+            auto frame = RequireValue(fixture.frontend->BeginFrame({comfortFrame, {8, 8}}));
+            RequireValue(fixture.play->ExecuteRenderFrame(frame, {}));
+            RequireValue(fixture.play->FinishGui(true));
+            RequireValue(frame.Present());
+            fixture.vulkan->native.commandState.state.Complete();
+            RequireValue(fixture.play->ProgressRenderTail());
+            CHECK(fixture.script.frames.layers == 1);
+
+            const auto &writes = fixture.vulkan->port.comfortUniformWrites;
+            REQUIRE(writes.size() == 2);
+            CHECK(writes[0] == writes[1]);
+            CHECK(writes[0][2] > 0.0F);
+            CHECK(writes[0][3] > 0.0F);
+            if (roomScale)
+                CHECK(writes[0][4] == 0.0F);
+            else
+                CHECK(writes[0][4] > 0.0F);
+            CHECK(writes[0][4] <= static_cast<float>(ApplicationFixture::VignettePercent) / 100.0F);
+            const auto isOverlay = [](const auto &call) {
+                return !call.depth && call.colors == 1 && call.colorLoad == VK_ATTACHMENT_LOAD_OP_LOAD;
+            };
+            const auto passes = std::span{commands.renderingCalls}.subspan(first);
+            REQUIRE(passes.size() >= 2);
+            CHECK(std::ranges::count_if(passes, isOverlay) == 2);
+            CHECK(isOverlay(passes[passes.size() - 2]));
+            CHECK(isOverlay(passes.back()));
+            CHECK(passes[passes.size() - 2].colorView != passes.back().colorView);
+        };
+        fixture.schedulerClock.Advance(Duration::FromMilliseconds(10));
+        sample();
+        observed->onRender = {};
+        REQUIRE(comfortFrame > 0);
+        fixture.script.frames.prediction += 1'000'000;
+        REQUIRE(movement.movementCount == 1);
+        REQUIRE(movement.movements.front().desiredVelocityMetersPerSecond);
+        CHECK(movement.movements.front().desiredVelocityMetersPerSecond->z < 0.0F);
+        const auto final = RequireValue(character.world->ControllerTransform(character.controller));
+        const auto displacement = final.position - initial.position;
+        REQUIRE(displacement.z < 0.0F);
+        sample();  // The next Input cutoff observes the committed Character placement.
+        const auto virtualDisplacement = roomScale ? 0.0F : displacement.z;
+        CHECK(readRay().origin.z == Catch::Approx(baseRay.origin.z + virtualDisplacement + (armSwing ? swingDistance : 0.0F)));
+
+        REQUIRE(RequireValue(fixture.play->PrepareRenderFrame(comfortFrame + 1)));
+        const auto reference = RequireValue(fixture.play->ReadTrackedReference(session, comfortFrame + 1));
+        const auto &basePosition = baseReference.referenceToWorld.Components().positionMeters.value;
+        const auto &position = reference.referenceToWorld.Components().positionMeters.value;
+        REQUIRE(basePosition);
+        REQUIRE(position);
+        CHECK(position->z == Catch::Approx(basePosition->z + virtualDisplacement));
+
+        if (roomScale) {
+            RequireValue(fixture.play->FinishGui(false));
+            RequireValue(fixture.play->ProgressRenderTail());
+            fixture.script.frames.prediction += 1'000'000;
+            script.sample.scalar = 1.0F;
+            fixture.schedulerClock.Advance(Duration::FromMilliseconds(10));
+            sample();
+            REQUIRE(RequireValue(fixture.play->PrepareRenderFrame(comfortFrame + 2)));
+            const auto turned = RequireValue(fixture.play->ReadTrackedReference(session, comfortFrame + 2));
+            const auto &turnedPosition = turned.referenceToWorld.Components().positionMeters.value;
+            REQUIRE(turnedPosition);
+            const auto &head = *script.tracking.headPosition;
+            const Math::Vec3 pivot{head.x, head.y, head.z};
+            const auto turn = Math::Quaternion::FromAxisAngle({0, 1, 0}, 0.5F);
+            const auto expected = pivot + turn.Rotate(*basePosition - pivot);
+            CHECK(turnedPosition->x == Catch::Approx(expected.x).margin(0.00001F));
+            CHECK(turnedPosition->z == Catch::Approx(expected.z).margin(0.00001F));
+        }
+
+        fixture.scheduler->Shutdown();
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
+
+    TEST_CASE("Installed XR Play sends one authored teleport to the Character commit on a fresh button edge",
+              "[xr][application][play][locomotion][teleport]") {
+        using namespace Character::TestDetail;
+        using enum XR::XRProjectFeaturePolicy;
+        auto document = OpenXRProduct::Json::parse(OpenXRProduct::InstalledProductFixture::BindingDocument());
+        document["locomotion"] = {{"actor", 17},
+                                  {"speedMetersPerSecond", 2.5},
+                                  {"teleport", {{"action", "select"}, {"maximumDistanceMeters", 6.0}}}};
+        document["poses"].push_back({{"profile", 1},
+                                     {"set", 1},
+                                     {"role", static_cast<unsigned>(XR::XRTrackedDeviceRole::LeftController)},
+                                     {"kind", static_cast<unsigned>(XR::XRTrackedPoseKind::Aim)},
+                                     {"path", "/user/hand/left/input/aim/pose"},
+                                     {"label", "Aim"}});
+        ApplicationFixture fixture{true, 6, Unrequested, Unrequested, Unrequested, false, document.dump()};
+        fixture.script.actions.tracking.enabled = true;
+        fixture.script.actions.sample.boolean = XR_FALSE;
+        auto scene = PublishPlay(fixture, Input::PlayerId{7});
+        auto character = SpawnedActiveWorldWithController();
+        const auto runtime = fixture.scene->View().RuntimeId();
+        const auto before = RequireValue(character.world->ControllerTransform(character.controller));
+
+        struct DestinationProbe final {
+            Math::Vec3 target{0.25F, 1.0F, 0.5F};
+            unsigned queries{};
+            std::optional<Character::CharacterTeleportRequest> queued;
+        } probe;
+
+        const Host::OpenXRPlayTeleportStep teleport{&probe, [](void *context, const Math::Ray &ray) -> Result<std::optional<Math::Vec3>> {
+            auto &state = *static_cast<DestinationProbe *>(context);
+            CHECK(ray.maximumDistance == 6.0F);
+            ++state.queries;
+            return Result<std::optional<Math::Vec3>>::Success(state.target);
+        }, [](void *context, const Character::CharacterTeleportRequest &request, const CancellationToken &lifetime) {
+            CHECK_FALSE(lifetime.IsCancellationRequested());
+            static_cast<DestinationProbe *>(context)->queued = request;
+            return Result<void>::Success();
+        }};
+        using FixedAccess = Character::Detail::CharacterSceneFixedAccess;
+        OverlapProbe clearance{.calls = 1};
+        auto input = std::make_unique<AppInputSample>(*fixture.play);
+        auto *observed = input.get();
+        observed->onFixed = [&](const Runtime::FixedStepContext &step) {
+            const auto old = RequireValue(character.world->ControllerTransform(character.controller));
+            RequireValue(
+                fixture.play->TickAuthoredCharacter(runtime, character.controller, *character.world, step.simulationTick, step, &teleport));
+            RequireValue(FixedAccess::Stage(*character.world, {step.simulationTick, step.attemptNumber},
+                                            {.delta = step.fixedDelta,
+                                             .query = clearance.Context(character.world->Descriptor(), step.simulationTick),
+                                             .teleport = std::exchange(probe.queued, std::nullopt)}));
+            CHECK(RequireValue(character.world->ControllerTransform(character.controller)).position == old.position);
+        };
+        observed->onCommit = [&](const Runtime::FixedStepContext &step) noexcept {
+            FixedAccess::Commit(*character.world, {step.simulationTick, step.attemptNumber});
+            fixture.play->CommitAuthoredCharacter(runtime, *character.world, step);
+        };
+        RequireValue(fixture.scheduler->AddParticipant(std::move(input)));
+        RequireValue(fixture.scheduler->Startup());
+        const auto sample = [&] {
+            fixture.script.clock.sample += 1'000'000;
+            CAPTURE(fixture.script.clock.sample);
+            RequireValue(fixture.scheduler->RunFrame());
+            REQUIRE(observed->result);
+            RequireValue(*observed->result);
+            fixture.schedulerClock.Advance(Duration::FromMilliseconds(10));
+        };
+        sample();
+        sample();  // Neutral fixed sample.
+        CHECK(probe.queries == 0);
+        CHECK(RequireValue(character.world->ControllerTransform(character.controller)).position == before.position);
+
+        fixture.script.actions.sample.boolean = XR_TRUE;
+        sample();
+        CHECK(probe.queries == 1);
+        CHECK(RequireValue(character.world->ControllerTransform(character.controller)).position == probe.target);
+        sample();
+        CHECK(probe.queries == 1);
+        fixture.scheduler->Shutdown();
         scene->Shutdown();
         REQUIRE(RequireValue(fixture.ClosePlay()));
     }

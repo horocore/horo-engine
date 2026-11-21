@@ -240,6 +240,15 @@ namespace Horo::XR {
             CHECK(found.Value().Hits()[2].plane == planes[0].id);
             CHECK(found.Value().Hits()[2].intersection.distance == 2.0F);
 
+            request.expectedSampledAt = sampledAt;
+            REQUIRE(QueryXRPlaneHits(snapshot.Value(), request).HasValue());
+            const auto later = XRRuntimeTime::Create(110).Value();
+            REQUIRE(publication.Publish(scope, later, planes).HasValue());
+            const auto replacement = publication.Read(scope, later);
+            REQUIRE(replacement.HasValue());
+            RequireFailureIdentity(QueryXRPlaneHits(replacement.Value(), request), XRErrors::TrackingSnapshotStale);
+            request.expectedSampledAt.reset();
+
             request.ray.origin.x = 1.51F;
             const auto miss = QueryXRPlaneHits(snapshot.Value(), request);
             REQUIRE(miss.HasValue());

@@ -90,7 +90,7 @@ namespace Horo::Application::Internal {
 
         std::optional<PassthroughFrame> passthrough;
         std::optional<Render::MultiviewMotionFrame> motionFrame;
-        bool nativeLightingBound{}; /**< Permission is rechecked before recording an admitted observation. */
+        std::optional<XR::XRLightEstimateScope> nativeLightingScope; /**< Exact authorization for pixels in this projection. */
         std::optional<XR::XRFrameId> coverageFrame;
         OpenXRPlayCoverageStatus coverageStatus{OpenXRPlayCoverageStatus::Unobserved};
         std::optional<Editor::EditorVulkanXrViewportAccess::CoverageReduction> reduction;
@@ -103,13 +103,16 @@ namespace Horo::Application::Internal {
         bool acquisitionRecorded{};
         bool rendered{};
         bool clockBound{};
+        bool completionTimingObserved{};
+        bool vignetteBound{};
 
         FrameState(OpenXRPlayHost &owner, const XR::XRSessionId &candidate, XR::OpenXRInternal::OpenXRSelectedVulkanBinding &graphics,
                    const XrGraphicsBindingVulkanKHR &binding, const Render::Detail::VulkanEditorDevice &device,
                    Render::Detail::VulkanExternalViewDispatch viewDispatch, const Render::RenderTextureDescriptor &descriptor)
             : host(owner), session(candidate),
-              images(owner.composition_.frontend, graphics, binding, device.graphicsIdentity, viewDispatch), color(owner.native_, images),
-              compositor(owner.native_, owner.frames_, *this), allocation(descriptor) {}
+              images(owner.composition_.frontend, graphics, binding, device.graphicsIdentity, viewDispatch),
+              color(owner.native_, images, owner.composition_.metrics.swapchain), compositor(owner.native_, owner.frames_, *this),
+              allocation(descriptor) {}
 
         /** @brief Preserves the original frame failure while retaining any failed canonical abort debt. */
         Result<bool> Fail(const Error &error) {
@@ -127,6 +130,8 @@ namespace Horo::Application::Internal {
             if (!host.sessions_.Snapshot().admitsFrames)
                 return Output::Success(false);  // Real native Ready/Running events, never Scene publication, admit waits.
             rendered = false;
+            completionTimingObserved = false;
+            vignetteBound = false;
             encoded.reset();
             acquisitionRecorded = false;
             guiFinished = false;
@@ -134,7 +139,7 @@ namespace Horo::Application::Internal {
             plan.reset();
             passthrough.reset();
             motionFrame.reset();
-            nativeLightingBound = false;
+            nativeLightingScope.reset();
             reduction.reset();
             synthesisHistory.reset();
             const auto waited = compositor.Wait();
@@ -163,10 +168,8 @@ namespace Horo::Application::Internal {
         Result<bool> CheckDeadline() {
             using Output = Result<bool>;
             const auto state = host.frames_.Snapshot();
-            const auto now = host.clock_.PresentationNow();
-            if (now.HasError())
-                return Fail(now.ErrorValue());
-            const auto pacing = compositor.ObservePacing(state.frame, now.Value());
+            const auto pacing = ObservePacing(state.frame);
+            host.composition_.metrics.RecordCpuDeadline(pacing.HasValue() ? std::optional{pacing.Value().deadline} : std::nullopt);
             if (pacing.HasError())
                 return Fail(pacing.ErrorValue());
             if (pacing.Value().deadline != XR::OpenXRInternal::NativeFrameDeadline::WithinBudget) {
@@ -177,6 +180,14 @@ namespace Horo::Application::Internal {
                 return Output::Success(false);  // Actual missed prediction: finish zero-layer debt, never wait or render another camera.
             }
             return Output::Success(true);
+        }
+
+        /** @brief Resolves presentation time against this exact retained frame. */
+        [[nodiscard]] Result<XR::OpenXRInternal::NativeFramePacingObservation> ObservePacing(const XR::XRFrameId &frame) const {
+            const auto now = host.clock_.PresentationNow();
+            if (now.HasError())
+                return Result<XR::OpenXRInternal::NativeFramePacingObservation>::Failure(now.ErrorValue());
+            return compositor.ObservePacing(frame, now.Value());
         }
 
         /** @brief Captures actual runtime views once for the current canonical native prediction. */
@@ -238,6 +249,13 @@ namespace Horo::Application::Internal {
             return XR::XRPoseSample::Create(reference, session, origin);
         }
 
+        /** @brief Applies the Scene's committed Character placement to the validated eye relation. */
+        Result<XR::XRPoseSample> GameplayReferencePose(const SceneState &scene, const XR::XRPoseSample &nativeReference) const {
+            if (scene.locomotion && scene.locomotion->worldPlacement)
+                return XR::PlaceXRWorldPose(views->referenceToWorld, *scene.locomotion->worldPlacement);
+            return Result<XR::XRPoseSample>::Success(nativeReference);
+        }
+
         /** @brief Converts the validated same-frame view plan and calibrated reference into the existing scene contract. */
         Result<XR::XRMultiviewScene> ConvertScene(const XR::XRViewRenderPlan &viewPlan, const XR::XRViewConfigurationId &configuration,
                                                   XR::XRViewConfigurationRevision revision, XR::XRWorldOriginRevision origin,
@@ -291,6 +309,8 @@ namespace Horo::Application::Internal {
 
         /** @brief Consumes exact queue-observed coverage before this frame's paired writer releases its image references. */
         void ObserveCoverage(const XR::XRFrameId &frame) noexcept;
+        /** @brief Samples time once after Poll proves the exact queue-accepted projection completed. */
+        void ObserveRenderCompletion(const XR::XRFrameId &frame);
 
         /** @brief Reports the exact compositor result to the existing selected viewport after successful native end. */
         void CompleteMotion(bool projected) noexcept;

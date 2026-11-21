@@ -2,8 +2,12 @@
 
 #include "Horo/Foundation/Assertions.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "Horo/Physics/CharacterWorld.h"
 #include "OpenXRPlayFrameState.h"
 
+#include <algorithm>
+#include <cmath>
+#include <numbers>
 #include <utility>
 
 namespace Horo::Application::Internal {
@@ -19,8 +23,10 @@ namespace Horo::Application::Internal {
                        std::move(composition.dispatch),
                        composition.fixedStep,
                        composition.trackingRoot,
-                       composition.lighting},
-          native_(preparation.native), discoveryAttempt_(preparation.preflight.Attempt()), getProc_(preparation.getProc), clock_(native_) {
+                       composition.lighting,
+                       composition.metrics},
+          native_(preparation.native), discoveryAttempt_(preparation.preflight.Attempt()),
+          locomotionComfort_(preparation.settings.LocomotionComfort()), getProc_(preparation.getProc), clock_(native_) {
         input_.router = &composition.router;
         const auto version = preparation.preflight.LoaderApiVersion();
         setup_ = {.loaderMajor = version.major,
@@ -124,9 +130,7 @@ namespace Horo::Application::Internal {
             tracking_.Revoke();
             input_.neutralPending = true;
             composition_.session.RequestHapticCancellation();
-            RevokeEyeGaze();
-            RevokePlaneCapture();
-            RevokePassthrough();
+            RevokeSensitiveObservations();
         }
         if (state == Idle || state == Stopping || state == Failed)
             RevokeSource();
@@ -137,12 +141,9 @@ namespace Horo::Application::Internal {
     void OpenXRPlayHost::RevokeSource() noexcept {
         HORO_INVARIANT_MSG(std::this_thread::get_id() == lane_, "XR Play revocation requires its owner lane");
         input_.admitted = false;
+        CancelAuthoredLocomotion();
         tracking_.Revoke();
-        RevokeEyeGaze();
-        RevokePlaneCapture();
-        RevokePassthrough();
-        if (scene_ && scene_->nativeLighting)
-            scene_->nativeLighting->active = false;
+        RevokeSensitiveObservations();
         composition_.session.RequestHapticCancellation();
         if (busy_) {
             if (scene_ && !scene_->activated)
@@ -151,6 +152,15 @@ namespace Horo::Application::Internal {
             return;
         }
         composition_.session.RevokeInput();
+    }
+
+    /** @copydoc OpenXRPlayHost::RevokeSensitiveObservations */
+    void OpenXRPlayHost::RevokeSensitiveObservations() noexcept {
+        RevokeEyeGaze();
+        RevokePlaneCapture();
+        if (scene_ && scene_->nativeLighting)
+            scene_->nativeLighting->active = false;
+        RevokePassthrough();
     }
 
     /** @copydoc OpenXRPlayHost::RevokeInput */
@@ -226,11 +236,8 @@ namespace Horo::Application::Internal {
             tracking_.Revoke();
             input_.neutralPending = true;
         }
-        if (observed.actionsInterrupted) {
-            RevokeEyeGaze();
-            RevokePlaneCapture();
-            RevokePassthrough();
-        }
+        if (observed.actionsInterrupted)
+            RevokeSensitiveObservations();
         const bool invalidateOutput = inputSuspended || observed.bindingsChanged;
         if (invalidateOutput)
             composition_.session.RequestHapticCancellation();
@@ -295,7 +302,11 @@ namespace Horo::Application::Internal {
     Result<void> OpenXRPlayHost::AppendInput(const Runtime::FrameContext &context, const Input::InputCollectionFrame &frame) {
         if (!input_.coordinator)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
-        return composition_.session.AppendInput(sessions_, *input_.coordinator, tracking_, clock_, context, input_.origin, frame);
+        const auto placement = scene_ && scene_->locomotion ? scene_->locomotion->worldPlacement : std::nullopt;
+        auto sampled = composition_.session.AppendInput(sessions_, *input_.coordinator, tracking_, clock_, context, input_.origin, frame,
+                                                        placement ? &*placement : nullptr);
+        input_.sampledWorldPlacement = sampled.HasValue() ? placement : std::nullopt;
+        return sampled;
     }
 
     /** @copydoc OpenXRPlayHost::ReadReferences */
@@ -390,6 +401,383 @@ namespace Horo::Application::Internal {
                 sources.devices_[sources.count_++] = device;
         }
         return Outcome::Success(std::move(sources));
+    }
+
+    /** @copydoc OpenXRPlayHost::ReadLocomotionEvidence */
+    Result<OpenXRPlayLocomotionEvidence> OpenXRPlayHost::ReadLocomotionEvidence(const OpenXRPlayInteractionScope &scope,
+                                                                                const Runtime::FixedStepContext &step) const {
+        using Outcome = Result<OpenXRPlayLocomotionEvidence>;
+        const auto current = CurrentInteractionTracking(scope);
+        if (current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        Runtime::RuntimeDispatchFacts facts;
+        if (step.dispatchEvidence.Read(composition_.dispatch, Runtime::RuntimePhase::FixedUpdate, facts) !=
+                Runtime::RuntimeDispatchStatus::Valid ||
+            facts.fixedTick != step.simulationTick || facts.fixedAttempt != step.attemptNumber || facts.frame != step.frameNumber ||
+            facts.fixedDuration != step.fixedDelta)
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        const auto assignment = input_.port->ReadPlayerAssignmentRevision();
+        if (step.cancellation.IsCancellationRequested() || !assignment)
+            return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
+        return Outcome::Success({scope, facts.fixedTick, facts.fixedAttempt, *current.Value(), locomotionComfort_, *assignment});
+    }
+
+    /** @copydoc OpenXRPlayHost::AuthoredLocomotion */
+    const OpenXRLocomotionBinding *OpenXRPlayHost::AuthoredLocomotion() const noexcept {
+        return composition_.bindings && composition_.bindings->locomotion ? &*composition_.bindings->locomotion : nullptr;
+    }
+
+    /** @copydoc OpenXRPlayHost::CancelAuthoredLocomotion */
+    void OpenXRPlayHost::CancelAuthoredLocomotion() noexcept {
+        input_.comfortHint.reset();
+        if (scene_ && scene_->locomotion)
+            scene_->locomotion->pending.reset();
+        if (authoredCharacter_) {
+            authoredCharacter_->authority.Revoke();
+            authoredCharacter_.reset();
+        }
+    }
+
+    namespace {
+        float YawAroundWorldUp(const Math::Quaternion orientation) noexcept {
+            const auto forward = orientation.Rotate({0.0F, 0.0F, -1.0F});
+            return std::atan2(-forward.x, -forward.z);
+        }
+
+        XRLocomotionProfile MakeAuthoredProfile(const OpenXRLocomotionBinding &route, XRLocomotionComfortSettings comfort) {
+            XRLocomotionProfile profile{.comfort = comfort};
+            if (const auto *stick = std::get_if<OpenXRStickMoveBinding>(&route.translation)) {
+                profile.translation = XRSmoothMove{route.speedMetersPerSecond, stick->deadZone};
+            } else if (const auto *swing = std::get_if<OpenXRArmSwingBinding>(&route.translation)) {
+                profile.translation = XRArmSwingMove{route.speedMetersPerSecond, swing->gain};
+                profile.maximumTrackingGapNanoseconds = swing->maximumTrackingGapNanoseconds;
+            } else if (const auto *room = std::get_if<OpenXRRoomScaleBinding>(&route.translation)) {
+                profile.translation = XRRoomScaleMove{route.speedMetersPerSecond, room->maximumSampleDistanceMeters};
+                profile.maximumTrackingGapNanoseconds = room->maximumTrackingGapNanoseconds;
+            } else {
+                profile.translation = XRTeleportMove{};
+            }
+            if (const auto &turn = route.turn)
+                profile.turn.emplace(turn->angleRadians, turn->engage, turn->release);
+            return profile;
+        }
+
+        struct TrackedPosition final {
+            XRDeviceId device;
+            Math::Vec3 position;
+        };
+
+        std::optional<TrackedPosition> ReadTrackedPosition(const XRTrackingSnapshot &tracking, XRTrackedDeviceRole role,
+                                                           XRTrackedPoseKind kind) {
+            const auto devices = tracking.Devices();
+            const auto device = std::ranges::find(devices, role, &XRTrackedDeviceRecord::role);
+            if (device == devices.end() || device->state != XRTrackedDeviceState::Tracked)
+                return std::nullopt;
+            const auto poses = tracking.Poses();
+            const auto tracked = std::ranges::find_if(poses, [&](const XRTrackedPoseRecord &pose) {
+                return pose.device == device->id && pose.kind == kind;
+            });
+            if (tracked == poses.end() || tracked->sample.Target().kind != XRSpaceKind::World)
+                return std::nullopt;
+            const auto &position = tracked->sample.Components().positionMeters;
+            if (position.validity != XRPoseComponentValidity::Tracked || !position.value)
+                return std::nullopt;
+            return TrackedPosition{device->id, *position.value};
+        }
+
+        Math::Vec3 RestorePhysicalPosition(Math::Vec3 position, const std::optional<Math::Transform> &sampledPlacement) {
+            return sampledPlacement ? sampledPlacement->rotation.Inverse().Rotate(position - sampledPlacement->translation) : position;
+        }
+
+        void PopulateRoomScaleMotion(XRLocomotionSample &sample, const XRTrackingSnapshot &tracking,
+                                     const std::optional<Math::Transform> &sampledPlacement,
+                                     const std::optional<Math::Transform> &currentPlacement) {
+            const auto head = ReadTrackedPosition(tracking, XRTrackedDeviceRole::Head, XRTrackedPoseKind::Head);
+            if (!head)
+                return;
+            sample.head = RestorePhysicalPosition(head->position, sampledPlacement);
+            sample.headSource = head->device;
+            if (currentPlacement)
+                sample.trackingToGameplayYawRadians = YawAroundWorldUp(currentPlacement->rotation);
+        }
+
+        void PopulatePhysicalGripMotion(XRLocomotionSample &sample, const XRTrackingSnapshot &tracking,
+                                        const std::optional<Math::Transform> &sampledPlacement,
+                                        const std::optional<Math::Transform> &currentPlacement) {
+            const auto left = ReadTrackedPosition(tracking, XRTrackedDeviceRole::LeftController, XRTrackedPoseKind::Grip);
+            const auto right = ReadTrackedPosition(tracking, XRTrackedDeviceRole::RightController, XRTrackedPoseKind::Grip);
+            if (!left || !right)
+                return;
+            sample.leftHand = RestorePhysicalPosition(left->position, sampledPlacement);
+            sample.rightHand = RestorePhysicalPosition(right->position, sampledPlacement);
+            sample.handSources = std::array{left->device, right->device};
+            if (currentPlacement) {
+                const auto gameplay = Math::Quaternion::FromAxisAngle({0.0F, 1.0F, 0.0F}, sample.gameplayYawRadians);
+                sample.trackingYawRadians = YawAroundWorldUp(currentPlacement->rotation.Inverse() * gameplay);
+            }
+        }
+    }  // namespace
+
+    Result<void> OpenXRPlayHost::BindAuthoredCharacter(const OpenXRPlayLocomotionEvidence &evidence,
+                                                       Character::CharacterControllerHandle controller, Character::CharacterWorld &world,
+                                                       const Runtime::FixedStepContext &step) {
+        const auto &scope = evidence.scope;
+        if (authoredCharacter_ && authoredCharacter_->scene == scope.scene && authoredCharacter_->session == scope.cutoff.session &&
+            authoredCharacter_->player == scope.player && authoredCharacter_->assignment == evidence.assignmentRevision &&
+            authoredCharacter_->controller == controller)
+            return Result<void>::Success();
+
+        CancelAuthoredLocomotion();
+        const auto &route = *AuthoredLocomotion();
+        auto teleport =
+            std::holds_alternative<OpenXRTeleportBinding>(route.translation) ? std::make_shared<AuthoredTeleportPorts>(*this) : nullptr;
+        auto policy = XRLocomotionPolicy::Create(MakeAuthoredProfile(route, evidence.comfort), scope.cutoff.session, scope.player,
+                                                 evidence.assignmentRevision, teleport);
+        if (policy.HasError())
+            return Result<void>::Failure(policy.ErrorValue());
+        auto authority = world.IssueCapability();
+        if (authority.HasError())
+            return Result<void>::Failure(authority.ErrorValue());
+        const XRCharacterLocomotionBinding binding{composition_.dispatch,
+                                                   scope.cutoff.session,
+                                                   scope.player,
+                                                   evidence.assignmentRevision,
+                                                   controller,
+                                                   route.speedMetersPerSecond,
+                                                   teleport};
+        auto adapter = XRCharacterLocomotionAdapter::CreateForFixedStep(binding, authority.Value(), step);
+        if (adapter.HasError())
+            return Result<void>::Failure(adapter.ErrorValue());
+        authoredCharacter_.emplace(AuthoredCharacterDriver{scope.scene, scope.cutoff.session, scope.player, evidence.assignmentRevision,
+                                                           controller, std::move(authority).Value(), std::move(policy).Value(),
+                                                           std::move(adapter).Value(), std::move(teleport)});
+        return Result<void>::Success();
+    }
+
+    /** @copydoc OpenXRPlayHost::TickAuthoredCharacter */
+    Result<void> OpenXRPlayHost::TickAuthoredCharacter(Runtime::SceneRuntimeId scene, Character::CharacterControllerHandle controller,
+                                                       Character::CharacterWorld &world, std::uint64_t characterTick,
+                                                       const Runtime::FixedStepContext &step, const OpenXRPlayTeleportStep *teleport) {
+        if (auto lane = Lane(); lane.HasError())
+            return lane;
+        const auto player = input_.port ? input_.port->AssignedPlayer() : std::nullopt;
+        if (!AuthoredLocomotion() || !player) {
+            CancelAuthoredLocomotion();
+            return Result<void>::Success();
+        }
+        const auto tracking = CurrentInteractionTracking(*player);
+        if (tracking.HasError() || scene_->scene != scene) {
+            CancelAuthoredLocomotion();
+            return Result<void>::Success();
+        }
+        const OpenXRPlayInteractionScope scope{DescribeXRInteractionCutoff(*tracking.Value()), scene, *player,
+                                               *input_.interactionAssignment};
+        const auto evidence = ReadLocomotionEvidence(scope, step);
+        if (evidence.HasError())
+            return Result<void>::Failure(evidence.ErrorValue());
+        const auto pose = world.ControllerTransform(controller);
+        if (pose.HasError())
+            return Result<void>::Failure(pose.ErrorValue());
+        const float yaw = YawAroundWorldUp(pose.Value().heading);
+
+        if (auto bound = BindAuthoredCharacter(evidence.Value(), controller, world, step); bound.HasError())
+            return bound;
+        const auto sample = ReadAuthoredLocomotionSample(evidence.Value(), yaw, step.fixedDelta);
+        if (const auto submitted = SubmitAuthoredSample(sample, evidence.Value(), step, characterTick, teleport, pose.Value().heading);
+            submitted.HasError())
+            return submitted;
+
+        auto &placement = scene_->locomotion;
+        if (!placement || placement->initial.controller != controller)
+            placement.emplace(AuthoredCharacterPlacement{pose.Value()});
+        placement->pending.emplace(step.dispatchEvidence, characterTick);
+        if (std::holds_alternative<OpenXRRoomScaleBinding>(AuthoredLocomotion()->translation)) {
+            const auto worldFromPhysical = placement->worldPlacement.value_or(Math::Transform{});
+            const auto pivot =
+                sample.head ? worldFromPhysical.rotation.Rotate(*sample.head) + worldFromPhysical.translation : pose.Value().position;
+            placement->pending->roomScaleTurn.emplace(pivot, yaw);
+        }
+        return Result<void>::Success();
+    }
+
+    bool OpenXRPlayHost::IsCommittedPlacement(const PendingCharacterPlacement &pending,
+                                              const Runtime::FixedStepContext &step) const noexcept {
+        Runtime::RuntimeDispatchFacts facts;
+        return pending.dispatch.RefersToSameDispatch(step.dispatchEvidence) &&
+               step.dispatchEvidence.Read(composition_.dispatch, Runtime::RuntimePhase::FixedUpdate, facts) ==
+                   Runtime::RuntimeDispatchStatus::Valid &&
+               facts.committedTick == step.simulationTick && facts.committedAttempt == step.attemptNumber &&
+               facts.committedFrame == step.frameNumber && facts.committedDuration == step.fixedDelta;
+    }
+
+    /** @copydoc OpenXRPlayHost::CommitAuthoredCharacter */
+    void OpenXRPlayHost::CommitAuthoredCharacter(Runtime::SceneRuntimeId scene, Character::CharacterWorld &world,
+                                                 const Runtime::FixedStepContext &step) noexcept {
+        if (!scene_ || scene_->scene != scene || !scene_->locomotion)
+            return;
+        auto &placement = *scene_->locomotion;
+        if (!placement.pending || !IsCommittedPlacement(*placement.pending, step) ||
+            world.PublishedTick().completedTick != placement.pending->characterTick)
+            return;
+        const auto pose = world.ControllerTransform(placement.initial.controller);
+        if (pose.HasError() || pose.Value().sourceTick != placement.pending->characterTick)
+            return;
+        const auto roomScaleTurn = placement.pending->roomScaleTurn;
+        placement.pending.reset();
+        if (roomScaleTurn) {
+            // The headset already physically moved. Only a committed turn changes its placement, around the tracked head.
+            const auto yaw = YawAroundWorldUp(pose.Value().heading);
+            const auto turn = std::remainder(yaw - roomScaleTurn->previousYawRadians, 2.0F * std::numbers::pi_v<float>);
+            if (std::abs(turn) > 0.000001F) {
+                const auto rotation = Math::Quaternion::FromAxisAngle({0.0F, 1.0F, 0.0F}, turn);
+                const auto prior = placement.worldPlacement.value_or(Math::Transform{});
+                const auto &pivot = roomScaleTurn->pivot;
+                placement.worldPlacement.emplace(pivot + rotation.Rotate(prior.translation - pivot),
+                                                 (rotation * prior.rotation).Normalized());
+            }
+            return;
+        }
+        const auto &initial = placement.initial;
+        const auto &current = pose.Value();
+        if (current.position == initial.position && current.heading == initial.heading) {
+            placement.worldPlacement.reset();
+            return;
+        }
+        const auto rotation = (current.heading * initial.heading.Inverse()).Normalized();
+        placement.worldPlacement.emplace(current.position - rotation.Rotate(initial.position), rotation);
+    }
+
+    Result<void> OpenXRPlayHost::SubmitAuthoredSample(const XRLocomotionSample &sample, const OpenXRPlayLocomotionEvidence &evidence,
+                                                      const Runtime::FixedStepContext &step, std::uint64_t characterTick,
+                                                      const OpenXRPlayTeleportStep *teleport, Math::Quaternion heading) {
+        auto &driver = *authoredCharacter_;
+        if (driver.teleport && (!teleport || !teleport->target || !teleport->stage))
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnsupported));
+        const auto dispatch = teleport ? std::optional{TeleportDispatch{*teleport, evidence, heading}} : std::nullopt;
+        const auto clear = [](AuthoredTeleportPorts *ports) noexcept {
+            ports->dispatch = nullptr;
+        };
+        std::unique_ptr<AuthoredTeleportPorts, decltype(clear)> binding{driver.teleport.get(), clear};
+        if (binding)
+            binding->dispatch = &*dispatch;
+
+        const auto frame = driver.policy.EvaluateFrame(sample, evidence.tracking);
+        if (frame.HasError())
+            return Result<void>::Failure(frame.ErrorValue());
+        const auto admitted = SubmitValidatedLocomotion(evidence, driver.adapter, frame.Value(), step, characterTick);
+        return admitted.HasError() ? Result<void>::Failure(admitted.ErrorValue()) : Result<void>::Success();
+    }
+
+    Result<std::optional<XRLocomotionTeleport>> OpenXRPlayHost::AuthoredTeleportPorts::Resolve(const XRLocomotionSample &) const {
+        using Destination = Result<std::optional<XRLocomotionTeleport>>;
+        if (!dispatch)
+            return Destination::Failure(MakeError(XRErrors::OperationUnavailable));
+        const auto &route = std::get<OpenXRTeleportBinding>(play.AuthoredLocomotion()->translation);
+        const auto devices = dispatch->evidence.tracking.Devices();
+        const auto device = std::ranges::find(devices, route.role, &XRTrackedDeviceRecord::role);
+        if (device == devices.end() || device->state != XRTrackedDeviceState::Tracked)
+            return Destination::Success(std::nullopt);
+        const std::array probes{XRInteractionProbe{device->id, XRControllerInteractionPose::Aim,
+                                                   XRInteractionRayProbe{{0, 0, -1}, route.maximumDistanceMeters},
+                                                   XRTrackingConfidence::High}};
+        const auto candidates = play.ReadInteractionCandidates(dispatch->evidence.scope, probes);
+        if (candidates.HasError())
+            return Destination::Failure(candidates.ErrorValue());
+        if (candidates.Value().Candidates().empty())
+            return Destination::Success(std::nullopt);
+        const auto &candidate = candidates.Value().Candidates().front();
+        const auto &scene = dispatch->scene;
+        const auto target = scene.target(scene.context, std::get<Math::Ray>(candidate.shape));
+        if (target.HasError())
+            return Destination::Failure(target.ErrorValue());
+        if (!target.Value())
+            return Destination::Success(std::nullopt);
+        return Destination::Success(
+            XRLocomotionTeleport{candidate.space, dispatch->evidence.tracking.Revision().Value(), *target.Value(), dispatch->heading});
+    }
+
+    Result<XRLocomotionAdmission> OpenXRPlayHost::AuthoredTeleportPorts::QueueTeleport(const XRLocomotionIntent &,
+                                                                                       const Character::CharacterTeleportRequest &request,
+                                                                                       const CancellationToken &lifetime) {
+        if (!dispatch || lifetime.IsCancellationRequested())
+            return Result<XRLocomotionAdmission>::Failure(MakeError(XRErrors::OperationUnavailable));
+        const auto &scene = dispatch->scene;
+        const auto staged = scene.stage(scene.context, request, lifetime);
+        return staged.HasError() ? Result<XRLocomotionAdmission>::Failure(staged.ErrorValue())
+                                 : Result<XRLocomotionAdmission>::Success(XRLocomotionAdmission::Queued);
+    }
+
+    XRLocomotionSample OpenXRPlayHost::ReadAuthoredLocomotionSample(const OpenXRPlayLocomotionEvidence &current, float gameplayYawRadians,
+                                                                    Duration delta) const {
+        const auto &authored = *AuthoredLocomotion();
+        const auto readAxis = [this](const Input::ActionId &action) {
+            const auto axis = input_.port->ReadCollectedAxis(action).value_or(Input::ActionValue{});
+            return Math::Vec2{axis.x, axis.y};
+        };
+        XRLocomotionSample sample{.scope = {current.scope.cutoff, current.scope.player, current.assignmentRevision},
+                                  .tick = current.fixedTick,
+                                  .sequence = current.fixedTick,
+                                  .fixedStepNanoseconds = delta.ToNanoseconds(),
+                                  .turn = authored.turn ? readAxis(authored.turn->action).x : 0.0F,
+                                  .gameplayYawRadians = gameplayYawRadians};
+        const auto placement = scene_->locomotion ? scene_->locomotion->worldPlacement : std::nullopt;
+        if (const auto *stick = std::get_if<OpenXRStickMoveBinding>(&authored.translation))
+            sample.move = readAxis(stick->action);
+        else if (std::holds_alternative<OpenXRArmSwingBinding>(authored.translation))
+            PopulatePhysicalGripMotion(sample, current.tracking, input_.sampledWorldPlacement, placement);
+        else if (std::holds_alternative<OpenXRRoomScaleBinding>(authored.translation))
+            PopulateRoomScaleMotion(sample, current.tracking, input_.sampledWorldPlacement, placement);
+        else
+            sample.teleportPressed =
+                input_.port->ReadCollectedButton(std::get<OpenXRTeleportBinding>(authored.translation).action).value_or(false);
+        return sample;
+    }
+
+    /** @copydoc OpenXRPlayHost::SubmitLocomotionFrame */
+    Result<XRLocomotionFrameAdmission> OpenXRPlayHost::SubmitLocomotionFrame(const OpenXRPlayInteractionScope &scope,
+                                                                             XRCharacterLocomotionAdapter &adapter,
+                                                                             const XRLocomotionFrame &frame,
+                                                                             const Runtime::FixedStepContext &step) {
+        using Outcome = Result<XRLocomotionFrameAdmission>;
+        const auto evidence = ReadLocomotionEvidence(scope, step);
+        if (evidence.HasError())
+            return Outcome::Failure(evidence.ErrorValue());
+        return SubmitValidatedLocomotion(evidence.Value(), adapter, frame, step);
+    }
+
+    /** @copydoc OpenXRPlayHost::SubmitValidatedLocomotion */
+    Result<XRLocomotionFrameAdmission> OpenXRPlayHost::SubmitValidatedLocomotion(const OpenXRPlayLocomotionEvidence &current,
+                                                                                 XRCharacterLocomotionAdapter &adapter,
+                                                                                 const XRLocomotionFrame &frame,
+                                                                                 const Runtime::FixedStepContext &step,
+                                                                                 const std::optional<std::uint64_t> characterTick) {
+        using Outcome = Result<XRLocomotionFrameAdmission>;
+        if (frame.intent && frame.intent->scope.player != current.scope.player)
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        auto admitted = adapter.SubmitFrame(frame, current.tracking, current.assignmentRevision, step, characterTick);
+        if (admitted.HasValue()) {
+            if (const auto &hint = admitted.Value().comfort)
+                input_.comfortHint.emplace(current.scope, *hint);
+            else
+                input_.comfortHint.reset();
+        }
+        return admitted;
+    }
+
+    /** @copydoc OpenXRPlayHost::ReadFrameComfort */
+    float OpenXRPlayHost::ReadFrameComfort(const Runtime::FrameContext &frame) const {
+        if (!input_.comfortHint || locomotionComfort_.reducedMotion ||
+            !Editor::EditorVulkanXrViewportAccess::SupportsComfort(composition_.viewport))
+            return 0.0F;
+        const auto &[scope, hint] = *input_.comfortHint;
+        const auto live = CurrentInteractionTracking(scope);
+        if (live.HasError())
+            return 0.0F;
+        const auto assignment = input_.port->ReadPlayerAssignmentRevision();
+        if (!assignment)
+            return 0.0F;
+        const XRLocomotionScope owner{DescribeXRInteractionCutoff(*live.Value()), scope.player, *assignment};
+        return std::min(hint.ReadForPresentation(owner, frame).value_or(0.0F), locomotionComfort_.maximumVignetteOpacity);
     }
 
     /** @copydoc OpenXRPlayHost::ReadInteractionCandidates */
@@ -531,6 +919,10 @@ namespace Horo::Application::Internal {
             return sampled;
         }
         input_.interactionAssignment = interactionAssignment;
+        if (const auto *tracking = tracking_.Current()) {
+            if (const auto advisory = composition_.session.ReadStageBoundary(*tracking))
+                composition_.metrics.RecordStageBoundary(*advisory);
+        }
         return Result<void>::Success();
     }
 

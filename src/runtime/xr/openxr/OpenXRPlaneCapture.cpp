@@ -189,6 +189,8 @@ namespace Horo::XR::OpenXRInternal {
             publication_.Revoke();
             return Outcome::Failure(MakeError(XRErrors::OperationInvalid, "Malformed spatial future state"));
         }
+        if (const auto admitted = publication_.IsDue(scope_, now); admitted.HasError())
+            return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
         return context_ ? FinishScan(now) : FinishContext(native);
     }
 
@@ -245,7 +247,11 @@ namespace Horo::XR::OpenXRInternal {
             return Outcome::Failure(
                 CaptureError("xrCreateSpatialDiscoverySnapshotCompleteEXT", result != XR_SUCCESS ? result : completed.futureResult));
         }
-        const auto batch = ReadNativeSpatialPlanes(snapshot_, dispatch_.query, census_, limits_.maximumPlanes);
+        const NativePlaneReadAuthorization authorization{this, [](const void *context) {
+            const auto &capture = *static_cast<const OpenXRPlaneCapture *>(context);
+            return capture.publication_.IsDue(capture.scope_, capture.lastCutoff_).HasValue();
+        }};
+        const auto batch = ReadNativeSpatialPlanes(snapshot_, dispatch_.query, census_, limits_.maximumPlanes, authorization);
         const auto destroyed = ReleaseSnapshot();
         if (destroyed.HasError())
             return Outcome::Failure(destroyed.ErrorValue());

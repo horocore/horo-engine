@@ -33,6 +33,8 @@ namespace Horo::XR {
         using Outcome = Result<XRSpatialHits>;
         if (request.scope != snapshot.Scope())
             return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        if (request.expectedSampledAt && *request.expectedSampledAt != snapshot.SampledAt())
+            return Outcome::Failure(MakeError(XRErrors::TrackingSnapshotStale));
         if (!snapshot.SampledAt().IsValid() || !request.now.IsValid() || request.now < snapshot.SampledAt() ||
             request.maximumAge <= Duration{})
             return Outcome::Failure(MakeError(XRErrors::TimeDomainIncompatible));

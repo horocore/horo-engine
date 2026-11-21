@@ -274,11 +274,11 @@ namespace Horo::Editor {
         if (const auto layout = ProgramResources::CreateMaterialLayout(frontend_, shader, shader.metadata.reflection, device_.frames);
             layout.HasError())
             return layout;
-        return CreateCameraCrossFadeTriangle(program);
+        return CreateFullscreenTriangle(program.triangle);
     }
 
-    /** @copydoc EditorViewportRendererVulkan::CreateCameraCrossFadeTriangle */
-    Result<void> EditorViewportRendererVulkan::CreateCameraCrossFadeTriangle(CameraCrossFadeProgram &program) {
+    /** @copydoc EditorViewportRendererVulkan::CreateFullscreenTriangle */
+    Result<void> EditorViewportRendererVulkan::CreateFullscreenTriangle(FullscreenTriangle &triangle) {
         using namespace Render;
         using enum RenderBufferUsage;
         constexpr std::array<MeshVertex, 3> vertices{MeshVertex{{-1, -1, 0}}, MeshVertex{{3, -1, 0}}, MeshVertex{{-1, 3, 0}}};
@@ -287,26 +287,96 @@ namespace Horo::Editor {
             frontend_.CreateBuffer({sizeof(vertices), Vertex, RenderBufferAccess::HostVisible}, std::as_bytes(std::span{vertices}));
         if (vertex.HasError())
             return Result<void>::Failure(vertex.ErrorValue());
-        program.vertices = vertex.Value().handle;
+        triangle.vertices = vertex.Value().handle;
         const auto index =
             frontend_.CreateBuffer({sizeof(indices), Index, RenderBufferAccess::HostVisible}, std::as_bytes(std::span{indices}));
         if (index.HasError())
             return Result<void>::Failure(index.ErrorValue());
-        program.indices = index.Value().handle;
+        triangle.indices = index.Value().handle;
         if (auto processed = frontend_.ProcessResourceRequests(); processed.HasError())
             return Result<void>::Failure(processed.ErrorValue());
-        const auto mesh = frontend_.CreateMesh({.vertexBuffer = program.vertices,
-                                                .indexBuffer = program.indices,
+        const auto mesh = frontend_.CreateMesh({.vertexBuffer = triangle.vertices,
+                                                .indexBuffer = triangle.indices,
                                                 .vertexStride = sizeof(MeshVertex),
                                                 .vertexCount = 3,
                                                 .indexCount = 3,
                                                 .localBounds = {{-1, -1, 0}, {3, 3, 0}}});
         if (mesh.HasError())
             return Result<void>::Failure(mesh.ErrorValue());
-        program.mesh = mesh.Value().handle;
+        triangle.mesh = mesh.Value().handle;
         if (auto processed = frontend_.ProcessResourceRequests(); processed.HasError())
             return Result<void>::Failure(processed.ErrorValue());
         return frontend_.ResourceOperationResult(mesh.Value().operation);
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::RetireFullscreenTriangle */
+    void EditorViewportRendererVulkan::RetireFullscreenTriangle(FullscreenTriangle &triangle) noexcept {
+        if (triangle.mesh.IsValid())
+            static_cast<void>(frontend_.ReleaseMesh(triangle.mesh));
+        for (const auto buffer : {triangle.vertices, triangle.indices})
+            if (buffer.IsValid())
+                static_cast<void>(frontend_.ReleaseBuffer(buffer));
+        triangle = {};
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::PrepareXrComfortProgram */
+    Result<void> EditorViewportRendererVulkan::PrepareXrComfortProgram(EditorVulkanXrComfortCook cooked) {
+        if (owner_ != std::this_thread::get_id() || !initialized_ || !xrShader_.pipeline.IsValid() || xrGraph_ || recordedEver_ ||
+            xrComfort_.shader.pipeline.IsValid() || !frontend_.Capabilities().supportsMaterialRasterGraph)
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportInvalidScene));
+        const auto encoded = Render::EncodeReflectedShaderArtifact(cooked.metadata);
+        if (encoded.HasError())
+            return Result<void>::Failure(encoded.ErrorValue());
+        auto validated = LoadEditorVulkanXrComfortCook(cooked.payload, encoded.Value());
+        if (validated.HasError())
+            return Result<void>::Failure(validated.ErrorValue());
+        auto program = std::move(validated).Value();
+        XrComfortProgram candidate;
+        candidate.shader.payload = std::move(program.payload);
+        candidate.shader.metadata = std::move(program.metadata);
+        const auto ready = CreateXrComfortResources(candidate);
+        if (ready.HasError()) {
+            RetireXrComfortProgram(candidate);
+            return ready;
+        }
+        xrComfort_ = std::move(candidate);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::CreateXrComfortResources */
+    Result<void> EditorViewportRendererVulkan::CreateXrComfortResources(XrComfortProgram &program) {
+        using namespace Render;
+        auto &shader = program.shader;
+        if (const auto stages = ProgramResources::CreateProgramStages(frontend_, shader); stages.HasError())
+            return stages;
+        constexpr RenderGraphicsPipelineState state{.cull = RenderCullMode::None,
+                                                    .blend = RenderBlendMode::Alpha,
+                                                    .depthTest = false,
+                                                    .depthWrite = false,
+                                                    .depthFormat = std::nullopt};
+        const auto pipeline = ProgramResources::CreatePipelineState(frontend_, shader, EditorVulkanXrComfortShaderManifest(), state);
+        if (pipeline.HasError())
+            return Result<void>::Failure(pipeline.ErrorValue());
+        shader.pipeline = pipeline.Value();
+        if (const auto layout = ProgramResources::CreateMaterialLayout(frontend_, shader, shader.metadata.reflection, device_.frames);
+            layout.HasError())
+            return layout;
+        if (const auto triangle = CreateFullscreenTriangle(program.triangle); triangle.HasError())
+            return triangle;
+        for (std::size_t index = 0; index < program.eyes.size(); ++index) {
+            if (const auto slot = ProgramResources::CreateUniformSlot(frontend_, shader, program.eyes[index], index + 1, shader.pipeline);
+                slot.HasError())
+                return slot;
+        }
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorViewportRendererVulkan::RetireXrComfortProgram */
+    void EditorViewportRendererVulkan::RetireXrComfortProgram(XrComfortProgram &program) noexcept {
+        for (auto &eye : program.eyes)
+            RetireDraw(eye);
+        RetireFullscreenTriangle(program.triangle);
+        RetireProgram(program.shader, {});
     }
 
     /** @copydoc EditorViewportRendererVulkan::BindCameraCrossFadeSource */
@@ -360,11 +430,7 @@ namespace Horo::Editor {
     void EditorViewportRendererVulkan::RetireCameraCrossFadeProgram(CameraCrossFadeProgram &program) noexcept {
         for (auto &draw : program.draws)
             RetireDraw(draw);
-        if (program.mesh.IsValid())
-            static_cast<void>(frontend_.ReleaseMesh(program.mesh));
-        for (const auto buffer : {program.vertices, program.indices})
-            if (buffer.IsValid())
-                static_cast<void>(frontend_.ReleaseBuffer(buffer));
+        RetireFullscreenTriangle(program.triangle);
         RetireProgram(program.shader, {});
         program = {};
     }

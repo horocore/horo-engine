@@ -182,6 +182,13 @@ namespace Horo::Application::Internal {
          * @post No native session, capability availability, Ready state or frame authority is published.
          */
         [[nodiscard]] Result<void> PrepareDiscovery();
+
+        /** @brief Indicates whether the immutable project settings request the eye overlay. */
+        [[nodiscard]] bool WantsComfortOverlay() const noexcept {
+            const auto &comfort = settings_.LocomotionComfort();
+            return !comfort.reducedMotion && comfort.maximumVignetteOpacity > 0.0F;
+        }
+
         /** @brief Attaches the application's sole selected SDL loader/graphics bridge before backend creation. */
         [[nodiscard]] Result<void> AttachGraphics(Render::IVulkanLoaderPort &platform,
                                                   Render::Detail::VulkanEditorGraphicsBridge &graphics);
@@ -275,7 +282,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] bool MayArmPassthrough() const;
         /** @brief Checks the installed platform's current permission for the exact Play scope, without native I/O. */
         [[nodiscard]] bool AllowsPassthrough(const XR::XRPassthroughScope &scope) const noexcept;
-        /** @brief Reads cached platform clearance independently of the current operator grant. */
+        /** @brief Checks cached platform support and clearance for this scope without native I/O. */
         [[nodiscard]] bool AllowsNativeLighting(const XR::XRLightEstimateScope &scope) const noexcept;
         /** @brief Transfers the one-use Setup grant to the prepared Play owner. @param allowed Granted by Setup. */
         void SetPlaneCaptureConsent(bool allowed) noexcept;
@@ -347,7 +354,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> AppendInput(const XR::XRSessionLifecycle &sessions, const XR::XRActionBindingCoordinator &coordinator,
                                                XR::RuntimeInternal::XRTrackingPublication &publication, const OpenXRInputClock &clock,
                                                const Runtime::FrameContext &context, XR::XRWorldOriginRevision origin,
-                                               const Input::InputCollectionFrame &frame);
+                                               const Input::InputCollectionFrame &frame, const Math::Transform *worldPlacement = nullptr);
         /** @brief Copies candidates derived at the exact active tracking revision, or empty on revocation.
          * @param snapshot Current immutable tracking publication, borrowed on the owner lane.
          * @return Bounded hand gesture candidates with source ownership.
@@ -358,7 +365,8 @@ namespace Horo::Application::Internal {
          * @return Current observed availability or absence after revocation.
          */
         [[nodiscard]] std::optional<XR::XRCapabilityState> ReadHandAvailability(const XR::XRTrackingSnapshot &snapshot) const noexcept;
-        /** @brief Returns the advisory classification for the exact committed tracking cutoff. */
+
+        /** @brief Reports only the advisory category for the exact current owner publication. */
         [[nodiscard]] std::optional<XR::XRStageBoundaryProximity> ReadStageBoundary(const XR::XRTrackingSnapshot &snapshot) const noexcept;
         /** @brief Borrows the exact resolved preparation until input retirement; no native identity or sampling authority. */
         [[nodiscard]] const XR::XRResolvedActionBindings *PreparedBindings() const noexcept;
@@ -495,6 +503,7 @@ namespace Horo::Application::Internal {
             XR::XRWorldOriginRevision origin;
             std::uint64_t bindingRevision;
             const HandInputSample &hands;
+            const Math::Transform *worldPlacement;
         };
 
         /** @brief Publishes the same bounded cutoff through the sole tracking owner and appends without committing.
@@ -563,10 +572,10 @@ namespace Horo::Application::Internal {
                 handSamplingBlocked; /**< A denied or unsupported route stays withdrawn for this session. */
             std::optional<XR::XRPoseSample> gaze;
             XR::XRTrackingSnapshotRevision gazeRevision;
+            std::optional<StageBoundaryObservation> stageBoundary;
             bool gazeAllowed{};
             XR::XRCapabilityState handAvailability{XR::XRCapabilityState::Unsupported};
             XR::XRCapabilityState stageAvailability{XR::XRCapabilityState::Unsupported};
-            std::optional<StageBoundaryObservation> stageBoundary;
             std::array<XR::XRActiveInteractionProfile, 2> profiles{}; /**< Actual post-attachment preparation census. */
         };
 

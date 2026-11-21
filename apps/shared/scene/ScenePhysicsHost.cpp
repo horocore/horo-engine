@@ -6,8 +6,11 @@
 #include "Horo/Runtime/Scene/SceneAnimationRuntime.h"
 
 #include <algorithm>
+#include <array>
+#include <cmath>
 #include <exception>
 #include <new>
+#include <numbers>
 #include <string>
 #include <utility>
 #include <vector>
@@ -131,6 +134,15 @@ namespace Horo::Application::Internal {
         std::vector<Character::Detail::CharacterSceneRootMotion> roots;
         std::vector<Receipt> receipts;
         std::optional<Pending> pending;
+
+        struct QueuedTeleport final {
+            Runtime::SceneRuntimeId scene;
+            std::uint64_t attempt;
+            Character::CharacterTeleportRequest request;
+            CancellationToken lifetime;
+        };
+
+        std::optional<QueuedTeleport> teleport;
         std::optional<Committed> committed;
         std::optional<Runtime::SceneRuntimeId> failedScene;
 
@@ -420,10 +432,75 @@ namespace Horo::Application::Internal {
         return scope.physics.AdvanceFixedTick({.simulationTick = tick, .sceneGeneration = scope.scene.value, .fixedDelta = delta});
     }
 
+    Result<std::optional<Math::Vec3>> ScenePhysicsHost::QueryTeleportTarget(Runtime::SceneRuntimeId scene,
+                                                                            Character::CharacterControllerHandle controller,
+                                                                            const Math::Ray &ray) {
+        using Target = Result<std::optional<Math::Vec3>>;
+        const auto borrowed = Borrow();
+        if (borrowed.HasError())
+            return Target::Failure(borrowed.ErrorValue());
+        const auto &scope = borrowed.Value();
+        if (scope.scene != scene)
+            return Target::Failure(MakeError(Physics::PhysicsErrors::QuerySnapshotStale));
+        const auto descriptor = scope.character.ControllerDescriptor(controller);
+        if (descriptor.HasError())
+            return Target::Failure(descriptor.ErrorValue());
+        const auto &actor = descriptor.Value();
+        std::array<Physics::PhysicsQueryHit, 1> hits;
+        const auto hit =
+            scope.physics.Query({.world = scope.physics.Identity(),
+                                 .sceneGeneration = scene.value,
+                                 .geometry = Physics::PhysicsRayQuery{ray.origin + ray.direction * ray.minimumDistance, ray.direction,
+                                                                      ray.maximumDistance - ray.minimumDistance},
+                                 .filter = {.channel = actor.queryChannel,
+                                            .requiredLayer = actor.selectors.requiredLayer,
+                                            .requiredProfile = actor.selectors.requiredProfile,
+                                            .excludedBody = actor.selectors.excludedBody,
+                                            .blockingOnly = true}},
+                                hits);
+        if (hit.HasError())
+            return Target::Failure(hit.ErrorValue());
+        if (hit.Value().hitCount == 0 || !hits.front().normal)
+            return Target::Success(std::nullopt);
+        const auto slope = Math::Dot(*hits.front().normal, actor.up);
+        const auto walkable = std::cos(actor.maximumSlopeDegrees * std::numbers::pi_v<float> / 180.0F);
+        if (slope <= 0.0F || slope < walkable)
+            return Target::Success(std::nullopt);
+        const auto lift = actor.capsule.cylindricalHalfHeightMeters + (actor.capsule.radiusMeters + actor.skinWidthMeters) / slope;
+        return Target::Success(hits.front().position + actor.up * lift);
+    }
+
+    Result<void> ScenePhysicsHost::QueueTeleport(Runtime::SceneRuntimeId scene, const Runtime::FixedStepContext &context,
+                                                 const Character::CharacterTeleportRequest &request, const CancellationToken &lifetime) {
+        const auto borrowed = Borrow();
+        if (borrowed.HasError())
+            return Result<void>::Failure(borrowed.ErrorValue());
+        const auto &scope = borrowed.Value();
+        auto &fixed = *fixedAnimation_;
+        const auto previous = scope.physics.PublishedTick().completedTick;
+        if (fixed.teleport || scope.scene != scene || scope.physics.State() == Physics::PhysicsWorldState::ActiveNull ||
+            !fixed.MayStart(scene) || context.attemptNumber == 0 || lifetime.IsCancellationRequested() ||
+            previous == std::numeric_limits<std::uint64_t>::max() || request.tick != previous + 1)
+            return Result<void>::Failure(MakeError(Physics::PhysicsErrors::InvalidState));
+        fixed.teleport.emplace(scene, context.attemptNumber, request, lifetime);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ScenePhysicsHost::StageCharacterFixedTick */
+    Result<void> ScenePhysicsHost::StageCharacterFixedTick(const Runtime::RuntimeSceneView &scene,
+                                                           const Runtime::FixedStepContext &context) {
+        return StageSceneFixedTick(scene, nullptr, context);
+    }
+
     /** @copydoc ScenePhysicsHost::StageAnimationFixedTick */
     Result<void> ScenePhysicsHost::StageAnimationFixedTick(const Runtime::RuntimeSceneView &scene,
                                                            Runtime::SceneAnimationRuntime &animation,
                                                            const Runtime::FixedStepContext &context) {
+        return StageSceneFixedTick(scene, &animation, context);
+    }
+
+    Result<void> ScenePhysicsHost::StageSceneFixedTick(const Runtime::RuntimeSceneView &scene, Runtime::SceneAnimationRuntime *animation,
+                                                       const Runtime::FixedStepContext &context) {
         auto borrowed = Borrow();
         if (borrowed.HasError())
             return Result<void>::Failure(borrowed.ErrorValue());
@@ -438,18 +515,32 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(Physics::PhysicsErrors::GenerationExhausted));
 
         const Attempt attempt{previous + 1, context.attemptNumber};
+        const auto queued = std::exchange(fixed.teleport, std::nullopt);
+        const auto teleport =
+            queued && queued->scene == scope.scene && queued->attempt == attempt.attempt && !queued->lifetime.IsCancellationRequested()
+                ? std::optional{queued->request}
+                : std::nullopt;
         Character::CharacterPhysicsQueryAdapter adapter{scope.physics};
         const auto query = PrepareCharacterQuery(scope, adapter, attempt.tick);
         if (query.HasError())
             return Result<void>::Failure(query.ErrorValue());
-        if (const auto collected = fixed.Collect(scope, scene, animation, context); collected.HasError())
-            return collected;
+        std::span<const Character::Detail::CharacterSceneRootMotion> roots;
+        if (animation) {
+            if (const auto collected = fixed.Collect(scope, scene, *animation, context); collected.HasError())
+                return collected;
+            roots = fixed.roots;
+        }
         if (const auto staged = FixedAccess::Stage(scope.character, attempt,
-                                                   {.delta = context.fixedDelta, .query = query.Value(), .rootMotion = fixed.roots});
+                                                   {.delta = context.fixedDelta,
+                                                    .query = query.Value(),
+                                                    .rootMotion = roots,
+                                                    .teleport = teleport,
+                                                    .teleportLifetime = queued ? queued->lifetime : CancellationToken{},
+                                                    .skipUnavailableTeleport = true});
             staged.HasError())
             return staged;
         fixed.pending = AnimationFixedState::Pending{scope.scene, attempt};
-        return fixed.Resolve(scope, animation, context, attempt);
+        return animation ? fixed.Resolve(scope, *animation, context, attempt) : Result<void>::Success();
     }
 
     /** @copydoc ScenePhysicsHost::PrepareAnimationFixedCommit */
@@ -490,7 +581,11 @@ namespace Horo::Application::Internal {
 
     /** @copydoc ScenePhysicsHost::AbortAnimationFixedTick */
     void ScenePhysicsHost::AbortAnimationFixedTick(const Runtime::FixedStepContext &context) noexcept {
-        if (!fixedAnimation_ || !fixedAnimation_->pending || fixedAnimation_->pending->attempt.attempt != context.attemptNumber)
+        if (!fixedAnimation_)
+            return;
+        if (fixedAnimation_->teleport && fixedAnimation_->teleport->attempt == context.attemptNumber)
+            fixedAnimation_->teleport.reset();
+        if (!fixedAnimation_->pending || fixedAnimation_->pending->attempt.attempt != context.attemptNumber)
             return;
         const auto pending = *fixedAnimation_->pending;
         fixedAnimation_->pending.reset();

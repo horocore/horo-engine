@@ -1,6 +1,6 @@
 #include "AllocationProbe.h"
 #include "CharacterWorldTestHelpers.h"
-#include "PhysicsSceneHostAccess.h"
+#include "internal/CharacterSceneFixedAccess.h"
 
 #include <array>
 #include <barrier>
@@ -356,6 +356,121 @@ namespace Horo::Character {
             CHECK(second.Value().movement.finalHeading.y == Catch::Approx(yaw.y));
             CHECK(second.Value().movement.up == Math::Vec3{0, 1, 0});
             CHECK(second.Value().movement.rootMotion->remaining.rotation.w == Catch::Approx(1.0F));
+        }
+
+        TEST_CASE("Scene Character teleport publishes only on commit and retries after abort", "[physics][character][scene-teleport]") {
+            using Detail::CharacterSceneFixedAccess;
+            auto spawned = SpawnedActiveWorldWithController();
+            auto &world = *spawned.world;
+            const auto before = world.ControllerTransform(spawned.controller).Value();
+            OverlapProbe probe{.calls = 1};
+            const CharacterTeleportRequest request{spawned.controller, 1, {0.25F, 1, 0.5F}};
+            const Detail::CharacterSceneFixedInput input{.delta = FixedTick(1).fixedDelta,
+                                                         .query = probe.Context(world.Descriptor(), 1),
+                                                         .teleport = request};
+            REQUIRE(CharacterSceneFixedAccess::Stage(world, {1, 1}, input).HasValue());
+            CHECK(world.ControllerTransform(spawned.controller).Value().position == before.position);
+            CHECK(world.PublishedTick().completedTick == 0);
+            CHECK(world.QueueMovementCommand(Movement(spawned.controller, 1, 1)).HasError());
+
+            CharacterSceneFixedAccess::Abort(world, {1, 1});
+            CHECK(world.ControllerTransform(spawned.controller).Value().position == before.position);
+            CHECK(world.PublishedTick().completedTick == 0);
+            REQUIRE(CharacterSceneFixedAccess::Stage(world, {1, 2}, input).HasValue());
+            CharacterSceneFixedAccess::Commit(world, {1, 2});
+            const auto placed = world.ControllerTransform(spawned.controller).Value();
+            CHECK(placed.position == request.targetPosition);
+            CHECK(placed.sourceTick == 1);
+            CHECK(placed.publicationRevision == before.publicationRevision + 1);
+            CHECK(placed.groundingRevalidationRequired);
+            CHECK(world.PublishedTick().completedTick == 1);
+            CHECK(world.PublishedTick().appliedCommands == 1);
+        }
+
+        TEST_CASE("An obstructed scene teleport leaves Character state and tick available for a clear retry",
+                  "[physics][character][scene-teleport]") {
+            using Detail::CharacterSceneFixedAccess;
+            auto spawned = SpawnedActiveWorldWithController();
+            auto &world = *spawned.world;
+            const auto before = world.ControllerTransform(spawned.controller).Value();
+            OverlapProbe probe{.alwaysOverlapping = true};
+            const CharacterTeleportRequest request{spawned.controller, 1, {0.25F, 1, 0.5F}};
+            const Detail::CharacterSceneFixedInput input{.delta = FixedTick(1).fixedDelta,
+                                                         .query = probe.Context(world.Descriptor(), 1),
+                                                         .teleport = request};
+            RequireError(CharacterSceneFixedAccess::Stage(world, {1, 1}, input), CharacterErrors::PlacementInvalid);
+            CHECK(world.ControllerTransform(spawned.controller).Value().position == before.position);
+            CHECK(world.PublishedTick().completedTick == 0);
+            probe.alwaysOverlapping = false;
+            REQUIRE(CharacterSceneFixedAccess::Stage(world, {1, 2}, input).HasValue());
+            CharacterSceneFixedAccess::Commit(world, {1, 2});
+            CHECK(world.ControllerTransform(spawned.controller).Value().position == request.targetPosition);
+        }
+
+        TEST_CASE("An optional blocked teleport leaves the paired Scene tick able to commit", "[physics][character][scene-teleport]") {
+            using Detail::CharacterSceneFixedAccess;
+            auto spawned = SpawnedActiveWorldWithController();
+            auto &world = *spawned.world;
+            const auto before = world.ControllerTransform(spawned.controller).Value();
+            OverlapProbe probe{.alwaysOverlapping = true};
+            const CharacterTeleportRequest request{spawned.controller, 1, {0.25F, 1, 0.5F}};
+            const Detail::CharacterSceneFixedInput input{.delta = FixedTick(1).fixedDelta,
+                                                         .query = probe.Context(world.Descriptor(), 1),
+                                                         .teleport = request,
+                                                         .skipUnavailableTeleport = true};
+            REQUIRE(CharacterSceneFixedAccess::Stage(world, {1, 1}, input).HasValue());
+            CharacterSceneFixedAccess::Commit(world, {1, 1});
+            CHECK(world.ControllerTransform(spawned.controller).Value().position == before.position);
+            CHECK(world.PublishedTick().completedTick == 1);
+            CHECK(world.PublishedTick().appliedCommands == 0);
+        }
+
+        TEST_CASE("Cancellation after teleport staging leaves only the tick publication", "[physics][character][scene-teleport]") {
+            using Detail::CharacterSceneFixedAccess;
+            auto spawned = SpawnedActiveWorldWithController();
+            auto &world = *spawned.world;
+            const auto before = world.ControllerTransform(spawned.controller).Value();
+            OverlapProbe probe{.calls = 1};
+            CancellationSource lifetime;
+            const Detail::CharacterSceneFixedInput input{.delta = FixedTick(1).fixedDelta,
+                                                         .query = probe.Context(world.Descriptor(), 1),
+                                                         .teleport = CharacterTeleportRequest{spawned.controller, 1, {0.25F, 1, 0.5F}},
+                                                         .teleportLifetime = lifetime.Token()};
+            REQUIRE(CharacterSceneFixedAccess::Stage(world, {1, 1}, input).HasValue());
+            lifetime.RequestCancellation();
+            CharacterSceneFixedAccess::Commit(world, {1, 1});
+            const auto after = world.ControllerTransform(spawned.controller).Value();
+            CHECK(after.position == before.position);
+            CHECK(after.publicationRevision == before.publicationRevision);
+            CHECK(world.PublishedTick().completedTick == 1);
+            CHECK(world.PublishedTick().appliedCommands == 0);
+        }
+
+        TEST_CASE("Scene Character teleport rejects game and Animation movement for the same controller and tick",
+                  "[physics][character][scene-teleport]") {
+            using Detail::CharacterSceneFixedAccess;
+            auto spawned = SpawnedActiveWorldWithController();
+            auto &world = *spawned.world;
+            OverlapProbe probe{.calls = 1};
+            const auto quantum = FixedTick(1).fixedDelta;
+            const CharacterTeleportRequest request{spawned.controller, 1, {0.25F, 1, 0.5F}};
+            const std::array roots{
+                Detail::CharacterSceneRootMotion{spawned.controller, CharacterRootMotionIntent{{1, 1}, {{0.1F, 0, 0}, {}}}}};
+            Detail::CharacterSceneFixedInput input{.delta = quantum,
+                                                   .query = probe.Context(world.Descriptor(), 1),
+                                                   .rootMotion = roots,
+                                                   .teleport = request};
+            RequireError(CharacterSceneFixedAccess::Stage(world, {1, 1}, input), CharacterErrors::CommandOrderInvalid);
+            input.rootMotion = {};
+            REQUIRE(world.QueueMovementCommand(Movement(spawned.controller, 1, 1)).HasValue());
+            RequireError(CharacterSceneFixedAccess::Stage(world, {1, 2}, input), CharacterErrors::CommandOrderInvalid);
+            CHECK(probe.calls == 1);
+            CHECK(world.PublishedTick().completedTick == 0);
+            CHECK(world.TickStatistics().pendingCommands == 1);
+
+            REQUIRE(CharacterSceneFixedAccess::Stage(world, {1, 3}, {.delta = quantum}).HasValue());
+            CharacterSceneFixedAccess::Commit(world, {1, 3});
+            CHECK(world.PublishedTick().completedTick == 1);
         }
 
         TEST_CASE("Scene Character root feedback stays private until the exact attempt commits", "[physics][character][root-motion]") {

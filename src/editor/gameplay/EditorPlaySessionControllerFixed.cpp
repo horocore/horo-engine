@@ -47,6 +47,8 @@ namespace Horo::Editor {
         fixedAttempt_->decisionsAdvanced = evaluated.Value();
         if (auto gameplay = RunGameplayFixed(input, delta); gameplay.HasError())
             return RejectFixedAttempt(context, gameplay.ErrorValue());
+        if (auto staged = fixedAttempt_->scene->BeforeNativeFixedUpdate(context); staged.HasError())
+            return RejectFixedAttempt(context, staged.ErrorValue());
         if (auto native = fixedAttempt_->scene->OnRuntimeFixedUpdate(context); native.HasError())
             return RejectFixedAttempt(context, native.ErrorValue());
         return Result<void>::Success();

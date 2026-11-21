@@ -26,7 +26,10 @@ namespace Horo::Character::Detail {
         CharacterPhysicsQueryContext query;
         std::span<const Physics::PhysicsKinematicTargetCommand> platformTargets;
         std::span<const CharacterSceneRootMotion>
-            rootMotion; /**< Strictly sorted by controller, with one entry per receiving controller. */
+            rootMotion;                                   /**< Strictly sorted by controller, with one entry per receiving controller. */
+        std::optional<CharacterTeleportRequest> teleport; /**< Exclusive placement for one controller in this attempt. */
+        CancellationToken teleportLifetime;               /**< A revoked source cannot publish its staged placement. */
+        bool skipUnavailableTeleport{}; /**< Keep the tick when placement is obstructed or another motion source owns it. */
     };
 
     /** @brief Splits the existing command solver from its publication for scheduler-owned composition. */

@@ -162,7 +162,7 @@ namespace Horo::Application::Internal {
         input_.stageAvailability = stageAvailable ? XRCapabilityState::Available : XRCapabilityState::Unavailable;
         admittedTracking.alternateReferenceAvailable = wantsStage && stageAvailable;
         admittedTracking.stageBoundaryWarningMeters =
-            admittedTracking.alternateReferenceAvailable ? std::optional{settings_.StageBoundaryWarningMeters()} : std::nullopt;
+            wantsStage && stageAvailable ? std::optional{settings_.StageBoundaryWarningMeters()} : std::nullopt;
         const auto trackingSpaces = minimumSpaces + static_cast<std::size_t>(admittedTracking.alternateReferenceAvailable);
         if (gazeConsent && MayArmEyeGaze() && capacity > trackingSpaces && !bindings.setLabels.empty() &&
             bindings.PreparedActionCount() < settings_.Limits().maximumActions)
@@ -266,12 +266,12 @@ namespace Horo::Application::Internal {
     Result<void> OpenXRApplicationSession::AppendInput(const XRSessionLifecycle &sessions, const XRActionBindingCoordinator &coordinator,
                                                        RuntimeInternal::XRTrackingPublication &publication, const OpenXRInputClock &clock,
                                                        const Runtime::FrameContext &context, const XRWorldOriginRevision origin,
-                                                       const Input::InputCollectionFrame &frame) {
+                                                       const Input::InputCollectionFrame &frame, const Math::Transform *worldPlacement) {
         // Revoke prior evidence before foreign calls; a failed cutoff must not revive it.
         publication.Revoke();
+        input_.stageBoundary.reset();
         input_.gaze.reset();
         input_.gazeRevision = {};
-        input_.stageBoundary.reset();
         if (auto current = Current(); current.HasError())
             return current;
         const auto state = sessions.Snapshot();
@@ -353,9 +353,16 @@ namespace Horo::Application::Internal {
                      ErrorChainContains(observed.ErrorValue(), XRErrors::PermissionDenied.domain, XRErrors::PermissionDenied.code))
                 RevokeEyeGaze();
         }
-        const auto appended =
-            AppendPreparedInput({poses.Value(), actions.Value(), state, time.Value(), origin, bindingRevision, handSample.Value()},
-                                publication, frame);
+        if (gaze && worldPlacement) {
+            auto placed = PlaceXRWorldPose(Describe(*gaze), *worldPlacement);
+            if (placed.HasValue())
+                gaze = std::move(placed).Value();
+            else
+                gaze.reset();
+        }
+        const auto appended = AppendPreparedInput({poses.Value(), actions.Value(), state, time.Value(), origin, bindingRevision,
+                                                   handSample.Value(), worldPlacement},
+                                                  publication, frame);
         if (appended.HasValue()) {
             input_.profiles = actions.Value().Profiles();
             if (input_.gazeAllowed)
@@ -383,7 +390,7 @@ namespace Horo::Application::Internal {
     Result<void> OpenXRApplicationSession::AppendPreparedInput(const PreparedInputSample &sample,
                                                                XR::RuntimeInternal::XRTrackingPublication &publication,
                                                                const Input::InputCollectionFrame &frame) {
-        const auto &[poses, actions, state, time, origin, bindingRevision, handSample] = sample;
+        const auto &[poses, actions, state, time, origin, bindingRevision, handSample, worldPlacement] = sample;
         const auto &hands = handSample.hands;
         std::array<RuntimeInternal::TrackingPoseEvidence, 7> normalized{};
         std::size_t poseCount = 0;
@@ -394,9 +401,16 @@ namespace Horo::Application::Internal {
             if (const auto capability = NativePoseCapability(pose.kind);
                 device == devices.end() || device->state != XRTrackedDeviceState::Tracked || !device->capabilities.Has(capability))
                 continue;
-            normalized[poseCount++] = {device->id, pose.kind, pose.pose};
-            tracked |= pose.pose.components.positionMeters.validity != XRPoseComponentValidity::Invalid ||
-                       pose.pose.components.orientation.validity != XRPoseComponentValidity::Invalid;
+            auto descriptor = pose.pose;
+            if (worldPlacement) {
+                const auto placed = PlaceXRWorldPose(descriptor, *worldPlacement);
+                if (placed.HasError())
+                    return Result<void>::Failure(placed.ErrorValue());
+                descriptor.components = placed.Value().Components();
+            }
+            normalized[poseCount++] = {device->id, pose.kind, descriptor};
+            tracked |= descriptor.components.positionMeters.validity != XRPoseComponentValidity::Invalid ||
+                       descriptor.components.orientation.validity != XRPoseComponentValidity::Invalid;
         }
         std::array<XRHandJointRecord, XRHandTrackingHardLimits::MaximumJoints> joints;
         std::size_t jointCount = 0;
@@ -407,14 +421,19 @@ namespace Horo::Application::Internal {
                 if (device == devices.end() || device->state != XRTrackedDeviceState::Tracked)
                     continue;
                 const auto &hand = hands->hands[handIndex];
-                const auto &palm = hand.joints[static_cast<std::size_t>(XRHandJoint::Palm)].pose;
-                if (palm)
-                    normalized[poseCount++] = {device->id, XRTrackedPoseKind::Palm, Describe(*palm)};
                 for (std::size_t index = 0; index < hand.joints.size(); ++index) {
                     const auto &joint = hand.joints[index];
-                    if (joint.pose)
-                        joints[jointCount++] = {device->id, static_cast<XRHandedness>(handIndex), static_cast<XRHandJoint>(index),
-                                                joint.pose, joint.radiusMeters};
+                    if (!joint.pose)
+                        continue;
+                    auto pose = worldPlacement ? PlaceXRWorldPose(Describe(*joint.pose), *worldPlacement)
+                                               : Result<XRPoseSample>::Success(*joint.pose);
+                    if (pose.HasError())
+                        return Result<void>::Failure(pose.ErrorValue());
+                    const auto kind = static_cast<XRHandJoint>(index);
+                    if (kind == XRHandJoint::Palm)
+                        normalized[poseCount++] = {device->id, XRTrackedPoseKind::Palm, Describe(pose.Value())};
+                    joints[jointCount++] = {device->id, static_cast<XRHandedness>(handIndex), kind, std::move(pose).Value(),
+                                            joint.radiusMeters};
                 }
             }
             tracked |= jointCount != 0;
@@ -706,8 +725,8 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRApplicationSession::RetireInputProjection */
     void OpenXRApplicationSession::RetireInputProjection() noexcept {
-        input_.stageBoundary.reset();
         HORO_INVARIANT_MSG(std::this_thread::get_id() == lane_, "XR Input retirement requires its owner lane");
+        input_.stageBoundary.reset();
         RequestHapticCancellation();
         RevokeEyeGaze();
         RevokePlaneCapture();

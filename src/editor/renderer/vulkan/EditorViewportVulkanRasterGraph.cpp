@@ -427,7 +427,8 @@ namespace Horo::Editor {
             author.Output(pass, destination, RenderGraphUsageKind::ColorAttachment, RenderGraphAccess::ReadWrite);
             auto &input = variant.inputs[variant.count - 1];
             input.Reserve(1);
-            author.Draw(pass, input, program.mesh, program.vertices, program.indices, composite.material, composite.buffer);
+            author.Draw(pass, input, program.triangle.mesh, program.triangle.vertices, program.triangle.indices, composite.material,
+                        composite.buffer);
             author.Sample(pass, input, source, spare.colorView);
             variant.workloads[variant.count - 1] = {pass, RenderGraphMaterialRaster{.color = destination,
                                                                                     .colorView = attachments.colorView,

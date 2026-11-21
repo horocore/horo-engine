@@ -2657,6 +2657,7 @@ if(HORO_BUILD_XR_OPENXR)
         runtime/xr/openxr/OpenXRTrackingSpaces.cpp
         runtime/xr/openxr/OpenXRPoseSampling.cpp
         runtime/xr/openxr/OpenXRSwapchain.cpp runtime/xr/openxr/OpenXRFrameCompositor.cpp
+        runtime/xr/openxr/OpenXRFrameTelemetry.cpp
         runtime/xr/openxr/OpenXRSessionEvents.cpp)
     if(ANDROID)
         target_sources(HoroXROpenXR PRIVATE runtime/xr/openxr/OpenXRAndroidDiscovery.cpp)

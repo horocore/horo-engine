@@ -96,6 +96,9 @@ namespace Horo::Editor {
         [[nodiscard]] static bool CanPrepareReduction(const EditorViewportRendererVulkan &viewport,
                                                       Render::RenderTextureFormat depth) noexcept;
 
+        /** @brief Checks whether the installed eye overlay was prepared on this viewport. */
+        [[nodiscard]] static bool SupportsComfort(const EditorViewportRendererVulkan &viewport) noexcept;
+
         /** @brief Reports the actual admitted environment program for this owner and lane. */
         [[nodiscard]] static bool SupportsEnvironmentLighting(const EditorViewportRendererVulkan &viewport) noexcept;
 
@@ -161,16 +164,20 @@ namespace Horo::Editor {
          * @param lighting Optional same-frame renderer environment input. Absence uses the unlit baseline.
          * @param rectangles Exact active regions from the view plan, in view order. Absence uses the full allocation for direct consumers.
          * @param canvas Optional current canvas with the exact matching projection publication.
+         * @param vignetteOpacity Finite [0, 1] from the XR presentation owner, for ordinary opaque projection.
          * @return Original typed validation/binding outcome. On optional failure the acquisition owner may omit
          * its pair and bind the ordinary projection with no auxiliary images.
          */
-        [[nodiscard]] static Result<void> Bind(
-            EditorViewportRendererVulkan &viewport, Render::RenderTextureHandle color,
-            const std::array<Render::RenderTextureViewHandle, 2> &views, const Render::MultiviewPublication &publication,
-            std::span<const Render::MultiviewSceneView> cameras, std::span<const Render::RenderStaticMeshInstance> instances,
-            const MotionInput *motion, EditorXrProjectionAlpha alpha = EditorXrProjectionAlpha::Opaque,
-            const AuxiliaryImages *auxiliary = nullptr, const Render::MultiviewEnvironmentLighting *lighting = nullptr,
-            const std::array<Render::MultiviewRenderRectangle, 2> *rectangles = nullptr, const CanvasPlacement *canvas = nullptr);
+        [[nodiscard]] static Result<void> Bind(EditorViewportRendererVulkan &viewport, Render::RenderTextureHandle color,
+                                               const std::array<Render::RenderTextureViewHandle, 2> &views,
+                                               const Render::MultiviewPublication &publication,
+                                               std::span<const Render::MultiviewSceneView> cameras,
+                                               std::span<const Render::RenderStaticMeshInstance> instances, const MotionInput *motion,
+                                               EditorXrProjectionAlpha alpha = EditorXrProjectionAlpha::Opaque,
+                                               const AuxiliaryImages *auxiliary = nullptr,
+                                               const Render::MultiviewEnvironmentLighting *lighting = nullptr,
+                                               const std::array<Render::MultiviewRenderRectangle, 2> *rectangles = nullptr,
+                                               const CanvasPlacement *canvas = nullptr, float vignetteOpacity = 0.0F);
         /** @brief Takes the renderer's one-shot premultiplied scene evidence after observing the actual queue.
          * @param viewport Same selected renderer owner. @param publication Exact staged Scene/frame/origin/view/device.
          * @param color Exact acquired color target generation. @return Completed evidence or empty.

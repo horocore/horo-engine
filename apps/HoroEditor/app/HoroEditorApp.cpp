@@ -665,6 +665,9 @@ namespace Horo::Editor {
             Telemetry::Gauge droppedRecords;
             Telemetry::Gauge sinkFailures;
             Prefab::PrefabMetricHandles prefab;
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+            XR::OpenXRInternal::NativeFrameMetricHandles xr;
+#endif
         };
 
         [[nodiscard]] EditorTelemetry RegisterEditorTelemetry() {
@@ -685,6 +688,9 @@ namespace Horo::Editor {
                 .sinkFailures = Telemetry::Runtime::RegisterGauge(
                     {.name = "horo.observability.sink.failures", .subsystem = "Foundation.Observability", .unit = Count}),
                 .prefab = Prefab::RegisterPrefabMetricHandles(Telemetry::MetricCollectionLevel::Detailed, true),
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+                .xr = XR::OpenXRInternal::RegisterNativeFrameMetricHandles(),
+#endif
             };
         }
 
@@ -1635,6 +1641,13 @@ namespace Horo::Editor {
                         composition.xrViewport->PrepareXrProgram(std::move(selectedProjection.cook), selectedProjection.program);
                     projection.HasError())
                     return projection;
+                if (composition.xrSession->WantsComfortOverlay()) {
+                    if (auto comfort = LoadPackagedVulkanXrComfortShader(EditorAssetRoot()); comfort.HasValue()) {
+                        if (auto prepared = composition.xrViewport->PrepareXrComfortProgram(std::move(comfort).Value());
+                            prepared.HasError())
+                            return prepared;
+                    }
+                }
                 auto motion = LoadPackagedVulkanMultiviewMotionShader(EditorAssetRoot());
                 if (motion.HasValue())
                     composition.xrViewport->StageXrMotionProgram(std::move(motion).Value());
@@ -3217,6 +3230,7 @@ namespace Horo::Editor {
                 p_->presentation.viewportRenderer.FinishColorFrame(false);
                 Result<void> canceled = Result<void>::Success();
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+                frameState_.xrFrameSealed = false;
                 if (std::exchange(frameState_.xrFramePrepared, false))
                     canceled = p_->presentation.composition.xrPlay->FinishGui(false);
 #endif
@@ -3301,7 +3315,7 @@ namespace Horo::Editor {
                         if (current.Value())
                             xrCanvas.emplace(*current.Value());
                     }
-                    const auto prepared = xr.PrepareRenderFrame(context.frameNumber, xrCanvas ? &xrCanvas->canvas : nullptr);
+                    const auto prepared = xr.PrepareRenderFrame(context, xrCanvas ? &xrCanvas->canvas : nullptr);
                     if (prepared.HasError())
                         return Result<void>::Failure(prepared.ErrorValue());
                     if (const auto applied = ApplyXrCanvasCompletion(xr); applied.HasError())
@@ -3364,7 +3378,15 @@ namespace Horo::Editor {
                 auto texture = p_->presentation.viewportRenderer.TextureView();
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
                 if (frameState_.xrFramePrepared) {
-                    texture = p_->presentation.composition.xrPlay->MirrorView(pacing_.presentingFrameNumber);
+                    auto &xr = *p_->presentation.composition.xrPlay;
+                    const auto allowed = xr.RevalidateRenderLighting(pacing_.presentingFrameNumber);
+                    if (allowed.HasError())
+                        return FailRenderFrame(allowed.ErrorValue());
+                    if (!allowed.Value()) {
+                        frameState_.xrFramePrepared = false;
+                        return CancelPreparedXrFrame();
+                    }
+                    texture = xr.MirrorView(pacing_.presentingFrameNumber);
                     if (!texture.IsValid() || !texture.sampledView.IsValid())
                         return FailRenderFrame(MakeEditorRendererError("editor.xr.mirror_unavailable",
                                                                        "The selected XR mirror acquisition is stale or unavailable."));
@@ -3380,6 +3402,7 @@ namespace Horo::Editor {
                     const auto accepted = p_->presentation.composition.xrPlay->FinishGui(true);
                     if (accepted.HasError())
                         return FailRenderFrame(accepted.ErrorValue());
+                    frameState_.xrFrameSealed = true;
                 }
 #endif
                 return Result<void>::Success();
@@ -3417,6 +3440,15 @@ namespace Horo::Editor {
                 const Render::PresentationTimingRequest timingRequest{surface.Value().surface, pacing_.presentingFrameNumber,
                                                                       pacing_.clock};
                 const Duration start = pacing_.clock.MonotonicNow();
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+                if (std::exchange(frameState_.xrFrameSealed, false)) {
+                    const auto allowed = p_->presentation.composition.xrPlay->RevalidateRenderLighting(pacing_.presentingFrameNumber);
+                    if (allowed.HasError())
+                        return FailRenderFrame(allowed.ErrorValue());
+                    if (!allowed.Value())
+                        return CancelPreparedXrFrame();
+                }
+#endif
                 Result<void> result = PresentNativeFrame(pacing_.nativeFeedbackSupported ? &timingRequest : nullptr);
                 const Duration end = pacing_.clock.MonotonicNow();
                 frameState_.frame.reset();
@@ -3485,6 +3517,7 @@ namespace Horo::Editor {
                 std::optional<PreparedSceneCanvas> sceneCanvas;
 #endif
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+                bool xrFrameSealed{}; /**< The exact XR projection still needs its final publication fence. */
                 std::optional<PendingXrCanvasReceipt> xrCanvasReceipt;
 #endif
                 std::optional<Render::RenderFrameScope> frame;
@@ -3690,7 +3723,7 @@ namespace Horo::Editor {
                 }
                 auto composed = Application::Internal::OpenXRPlayHost::Create(
                     {*xrComposition.xrSession, p.inputRouter, *xrComposition.xrViewport, p.presentation.renderFrontend,
-                     p.background.xrHost->bindings, runtime.DispatchSource(), fixedStep, trackingRoot.Value()});
+                     p.background.xrHost->bindings, runtime.DispatchSource(), fixedStep, trackingRoot.Value(), nullptr, p.telemetry.xr});
                 if (composed.HasError()) {
                     LOG_ERROR("editor.xr", "Selected XR Play composition failed: %s", composed.ErrorValue().message.c_str());
                     return false;
@@ -3749,6 +3782,53 @@ namespace Horo::Editor {
             return nullptr;
 #endif
         }
+
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+        Result<void> StageEditorPlayXrLocomotion(Application::Internal::OpenXRPlayHost &xr,
+                                                 Application::Internal::ScenePhysicsHost &physics, const Runtime::RuntimeSceneView &scene,
+                                                 const Runtime::FixedStepContext &step) {
+            const auto *route = xr.AuthoredLocomotion();
+            const auto actor = route ? scene.Find(Runtime::SceneObjectId{route->actor}) : std::nullopt;
+            if (!actor) {
+                xr.CancelAuthoredLocomotion();
+                return Result<void>::Success();
+            }
+
+            auto borrowed = physics.Borrow();
+            if (borrowed.HasError())
+                return Result<void>::Failure(borrowed.ErrorValue());
+            auto &scope = borrowed.Value();
+            if (scope.physics.State() == Physics::PhysicsWorldState::ActiveNull) {
+                xr.CancelAuthoredLocomotion();
+                return Result<void>::Success();
+            }
+            const auto previous = scope.physics.PublishedTick().completedTick;
+            if (previous == (std::numeric_limits<std::uint64_t>::max)())
+                return Result<void>::Failure(MakeError(Physics::PhysicsErrors::GenerationExhausted));
+            if (scope.character.PublishedTick().completedTick != previous)
+                return Result<void>::Failure(MakeError(Physics::PhysicsErrors::InvalidState));
+
+            const auto controller = physics.ResolveCharacterController(scene, *actor);
+            if (controller.HasError())
+                return Result<void>::Failure(controller.ErrorValue());
+
+            struct SceneTeleportContext final {
+                Application::Internal::ScenePhysicsHost &physics;
+                Runtime::SceneRuntimeId scene;
+                Character::CharacterControllerHandle controller;
+                const Runtime::FixedStepContext &step;
+            } context{physics, scene.RuntimeId(), controller.Value(), step};
+
+            const Application::Internal::OpenXRPlayTeleportStep teleport{&context, [](void *opaque, const Math::Ray &ray) {
+                const auto &state = *static_cast<const SceneTeleportContext *>(opaque);
+                return state.physics.QueryTeleportTarget(state.scene, state.controller, ray);
+            }, [](void *opaque, const Character::CharacterTeleportRequest &request, const CancellationToken &lifetime) {
+                const auto &state = *static_cast<const SceneTeleportContext *>(opaque);
+                return state.physics.QueueTeleport(state.scene, state.step, request, lifetime);
+            }};
+            return xr.TickAuthoredCharacter(scene.RuntimeId(), controller.Value(), scope.character, previous + 1, step, &teleport);
+        }
+#endif
 
         struct SimulatorInputOwnerScope final {
             Application::Internal::SimulatorPlayHost *host{};
@@ -4160,6 +4240,22 @@ namespace Horo::Editor {
             Application::Internal::ConfigureEditorPlaySavePolicy(playPolicy, p.background.jobs, p.operationServices.operationStore, clock,
                                                                  wallClock);
             playPolicy.xrHost = SelectedEditorPlayHost(p.presentation.composition);
+#if defined(HORO_HAS_OPENXR_VULKAN_HOST)
+            if (auto *xr = p.presentation.composition.xrPlay.get(); xr && playPolicy.xrHost == xr && xr->AuthoredLocomotion()) {
+                playPolicy.xrLocomotion = [xr](Application::Internal::ScenePhysicsHost &physics, const Runtime::RuntimeSceneView &scene,
+                                               const Runtime::FixedStepContext &step) {
+                    return StageEditorPlayXrLocomotion(*xr, physics, scene, step);
+                };
+                playPolicy.commitXrLocomotion = [xr](Application::Internal::ScenePhysicsHost &physics,
+                                                     const Runtime::FixedStepContext &step) noexcept {
+                    if (auto scope = physics.Borrow(); scope.HasValue())
+                        xr->CommitAuthoredCharacter(scope.Value().scene, scope.Value().character, step);
+                };
+                playPolicy.cancelXrLocomotion = [xr]() noexcept {
+                    xr->CancelAuthoredLocomotion();
+                };
+            }
+#endif
             auto playSceneFactory = Application::Internal::MakeEditorProjectSceneFactory(p.background.jobs, std::move(playPolicy));
             auto prefabStageFactory = Application::Internal::MakeEditorProjectPrefabStageFactory(p.background.jobs, scenePolicy);
             // Null is explicit; canonical activation needs an exact owner receipt.

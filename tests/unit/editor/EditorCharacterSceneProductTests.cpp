@@ -12,6 +12,7 @@
 
 #include <catch2/catch_approx.hpp>
 #include <fstream>
+#include <functional>
 #endif
 
 #include <chrono>
@@ -81,8 +82,13 @@ namespace Horo::Application::CharacterSceneProductTest {
             }
 
             Result<void> OnFixedUpdate(const Runtime::FixedStepContext &context) override {
-                return play_.OnRuntimeFixedUpdate({}, context);
+                auto result = play_.OnRuntimeFixedUpdate({}, context);
+                if (result.HasError() || !afterFixedUpdate)
+                    return result;
+                return afterFixedUpdate();
             }
+
+            std::function<Result<void>()> afterFixedUpdate;
 
             Result<void> PrepareFixedCommit(const Runtime::FixedStepContext &context) override {
                 return play_.PrepareRuntimeFixedCommit(context);
@@ -290,6 +296,131 @@ return horo.behavior {
             CHECK(dedicated[tick].gameplayPosition == editor[tick].gameplayPosition);
             CHECK(dedicated[tick].characterHeight == Catch::Approx(editor[tick].characterHeight).margin(0.00001));
         }
+    }
+
+    TEST_CASE("XR Play resolves and stages a native teleport for the real scheduler without Animation",
+              "[character][scene][editor][product][canonical][xr]") {
+        bool failAfterStaging{};
+        SECTION("scheduler commits the prepared native tick") {}
+        SECTION("scheduler aborts before native Physics runs") {
+            failAfterStaging = true;
+        }
+
+        Fixture fixture;
+        Gameplay::BehaviorRegistry registry;
+        REQUIRE(registry.Freeze().HasValue());
+        Editor::EditorPlaySessionController play;
+        DeterministicClock clock;
+        auto runtime = Runtime::RuntimeHost::Create(clock);
+        REQUIRE(runtime.HasValue());
+        REQUIRE(play.BindRuntimeDispatch(runtime.Value()->DispatchSource()).HasValue());
+
+        Internal::ScenePhysicsHost *native{};
+        Character::CharacterControllerHandle controller;
+        Math::Vec3 originalPosition;
+        Math::Vec3 destination;
+        std::optional<std::uint64_t> committed;
+        std::optional<std::pair<std::uint64_t, std::uint64_t>> aborted;
+        std::optional<Math::Vec3> abortedPosition;
+        Internal::EditorProjectScenePolicy policy{.physicsMode = Physics::PhysicsRuntimeMode::Canonical,
+                                                  .cooked = Internal::SceneCookSelection{fixture.project.cooked.path,
+                                                                                         fixture.project.request.assets.target}};
+        policy.xrLocomotion = [&](Internal::ScenePhysicsHost &host, const Runtime::RuntimeSceneView &scene,
+                                  const Runtime::FixedStepContext &step) {
+            native = &host;
+            const auto actor = scene.Find(Runtime::SceneObjectId{1});
+            REQUIRE(actor);
+            const auto resolved = host.ResolveCharacterController(scene, *actor);
+            REQUIRE(resolved.HasValue());
+            controller = resolved.Value();
+            const auto scope = host.Borrow();
+            REQUIRE(scope.HasValue());
+            const auto transform = scope.Value().character.ControllerTransform(controller);
+            REQUIRE(transform.HasValue());
+            originalPosition = transform.Value().position;
+
+            const auto ray = Math::TryMakeRay({2, 3, 0}, {0, -1, 0}, 0, 5);
+            REQUIRE(ray.HasValue());
+            const auto target = host.QueryTeleportTarget(scene.RuntimeId(), controller, ray.Value());
+            REQUIRE(target.HasValue());
+            REQUIRE(target.Value());
+            destination = *target.Value();
+            CHECK(destination.x == Catch::Approx(2.0F));
+            CHECK(destination.y > 0.0F);
+            const auto shortRay = Math::TryMakeRay({2, 3, 0}, {0, -1, 0}, 0, 1);
+            REQUIRE(shortRay.HasValue());
+            const auto missing = host.QueryTeleportTarget(scene.RuntimeId(), controller, shortRay.Value());
+            REQUIRE(missing.HasValue());
+            CHECK_FALSE(missing.Value());
+
+            return host.QueueTeleport(scene.RuntimeId(), step,
+                                      {.controller = controller,
+                                       .tick = 1,
+                                       .targetPosition = destination,
+                                       .targetHeading = transform.Value().heading},
+                                      {});
+        };
+        policy.commitXrLocomotion = [&](Internal::ScenePhysicsHost &host, const Runtime::FixedStepContext &) noexcept {
+            if (auto scope = host.Borrow(); scope.HasValue())
+                committed = scope.Value().character.PublishedTick().completedTick;
+        };
+        policy.cancelXrLocomotion = [&]() noexcept {
+            if (!native)
+                return;
+            if (auto scope = native->Borrow(); scope.HasValue()) {
+                aborted.emplace(scope.Value().character.PublishedTick().completedTick, scope.Value().physics.PublishedTick().completedTick);
+                if (const auto transform = scope.Value().character.ControllerTransform(controller); transform.HasValue())
+                    abortedPosition = transform.Value().position;
+            }
+        };
+        auto actual = Internal::MakeEditorProjectSceneFactory(fixture.project.jobs, std::move(policy));
+        const auto factory = [&](Runtime::SceneRuntimeId identity, const Runtime::RuntimeSceneDefinition &definition) {
+            return actual(fixture.project.project.dir.path, identity, definition);
+        };
+        auto participant = std::make_unique<EditorAuthorityParticipant>(play);
+        bool observedStaging{};
+        participant->afterFixedUpdate = [&] {
+            REQUIRE(native);
+            const auto scope = native->Borrow();
+            REQUIRE(scope.HasValue());
+            CHECK(scope.Value().character.PublishedTick().completedTick == 0);
+            CHECK(scope.Value().physics.PublishedTick().completedTick == 0);
+            CHECK_FALSE(committed);
+            const auto transform = scope.Value().character.ControllerTransform(controller);
+            REQUIRE(transform.HasValue());
+            CHECK(transform.Value().position == originalPosition);
+            observedStaging = true;
+            return failAfterStaging ? Result<void>::Failure(MakeError(Physics::PhysicsErrors::InvalidState)) : Result<void>::Success();
+        };
+        REQUIRE(runtime.Value()->AddParticipant(std::move(participant)).HasValue());
+        REQUIRE(runtime.Value()->Startup().HasValue());
+        REQUIRE(runtime.Value()->RunFrame().HasValue());
+        RequirePlayStarted(play.Start({{1}, {1}, fixture.source.objects}, registry, factory));
+        FinishPlayPreparation(play);
+        REQUIRE(play.State() == Editor::EditorPlaySessionState::Playing);
+
+        clock.Advance(ParityStep);
+        const auto frame = runtime.Value()->RunFrame();
+        CHECK(observedStaging);
+        if (failAfterStaging) {
+            REQUIRE(frame.HasError());
+            CHECK_FALSE(committed);
+            REQUIRE(aborted);
+            CHECK(*aborted == std::pair<std::uint64_t, std::uint64_t>{0, 0});
+            CHECK(abortedPosition == originalPosition);
+            return;
+        }
+        RequirePlayStarted(frame);
+        CHECK(committed == 1);
+        CHECK_FALSE(aborted);
+        REQUIRE(native);
+        const auto scope = native->Borrow();
+        REQUIRE(scope.HasValue());
+        CHECK(scope.Value().physics.PublishedTick().completedTick == 1);
+        const auto transform = scope.Value().character.ControllerTransform(controller);
+        REQUIRE(transform.HasValue());
+        CHECK(transform.Value().position == destination);
+        runtime.Value()->Shutdown();
     }
 
     TEST_CASE("Actual configured Editor Play recovers Character before readiness and keeps authored root unchanged",

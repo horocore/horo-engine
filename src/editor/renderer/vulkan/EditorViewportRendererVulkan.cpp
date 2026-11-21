@@ -343,6 +343,11 @@ namespace Horo::Editor {
         if (xrMotionShader_.materials)
             static_cast<void>(xrMotionShader_.materials->Shutdown());
         xrMotionShader_.materials.reset();
+        for (auto &eye : xrComfort_.eyes)
+            eye.material.reset();
+        if (xrComfort_.shader.materials)
+            static_cast<void>(xrComfort_.shader.materials->Shutdown());
+        xrComfort_.shader.materials.reset();
         ReleaseXrCoverageMaterials();
         initialized_ = false;
         childAttached_ = false;
@@ -377,6 +382,7 @@ namespace Horo::Editor {
         shader_.payload = std::move(source);
         shader_.metadata = std::move(metadata);
         RetireXrProgram();
+        RetireXrComfortProgram(xrComfort_);
         for (auto &draw : xrMotionDrawSlots_)
             RetireDraw(draw);
         RetireProgram(xrMotionShader_, {});

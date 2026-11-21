@@ -328,6 +328,11 @@ namespace Horo::Editor {
         /** @brief Actual host fixed callback after gameplay; legacy native owners retain their existing numeric stepping.
          * @details An Animation-bearing application composition overrides this boundary to stage its real adapter before Physics.
          * The legacy default introduces no animation or transactional native-state claim. */
+        /** @brief Stages application-owned commands before native fixed-tick collection. */
+        [[nodiscard]] virtual Result<void> BeforeNativeFixedUpdate(const Runtime::FixedStepContext &) {
+            return Result<void>::Success();
+        }
+
         [[nodiscard]] virtual Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context) {
             return FixedUpdate(Gameplay::FixedDeltaTime{static_cast<double>(context.fixedDelta.ToNanoseconds()) / 1'000'000'000.0});
         }

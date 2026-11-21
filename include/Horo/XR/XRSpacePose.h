@@ -231,6 +231,11 @@ namespace Horo::XR {
         XRPoseComponents components_;
     };
 
+    /** @brief Applies a rigid gameplay placement to a World-targeted tracking pose without changing its observation identity.
+     * @details Rotates measured velocities and preserves component validity. Local and Stage observations remain physical.
+     * @return The validated placed sample or a typed pose or coordinate error. */
+    [[nodiscard]] Result<XRPoseSample> PlaceXRWorldPose(const XRPoseDescriptor &pose, const Math::Transform &placement);
+
     /** @brief Hard frame-hot bound for explicit coordinate conversion chains. */
     struct XRCoordinateHardLimits final {
         static constexpr std::size_t MaximumTransformHops = 8;

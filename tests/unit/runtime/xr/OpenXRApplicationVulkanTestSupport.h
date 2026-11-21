@@ -7,6 +7,7 @@
 #include "support/OpenXRApplicationNativeTestSupport.h"
 #include "support/ShaderReflectionCookTestSupport.h"
 
+#include <cstring>
 #include <functional>
 #include <utility>
 
@@ -20,7 +21,7 @@ namespace Horo::Tests::OpenXRApplication {
             driver = &state;
             state.specializationCount = 0;
             state.admittedAttributeCounts = {1, 3};
-            state.admittedUniformRanges = {1744, 64, 2624, 4096};
+            state.admittedUniformRanges = {1744, 64, 2624, 4096, 32};
         }
 
         ShaderDriverScope(const ShaderDriverScope &) = delete;
@@ -36,6 +37,7 @@ namespace Horo::Tests::OpenXRApplication {
     public:
         std::size_t multiviewUniformWrites{};
         std::size_t motionUniformWrites{};
+        std::vector<std::array<float, 8>> comfortUniformWrites;
         std::function<Result<std::shared_ptr<Render::IResidentStereoCoverageReducer>>(
             const RenderNative::VulkanStereoCoveragePreparation &)>
             prepareColdReduction;
@@ -85,7 +87,11 @@ namespace Horo::Tests::OpenXRApplication {
                                       const std::span<const std::byte> bytes) override {
             if (!native_.graph.CanWriteFrameInputs(frame))
                 return Result<void>::Failure(MakeError(XR::XRErrors::OperationIncompatible));
-            REQUIRE((bytes.size() == 1744 || bytes.size() == 64 || bytes.size() == 2624 || bytes.size() == 4096));
+            REQUIRE((bytes.size() == 1744 || bytes.size() == 64 || bytes.size() == 2624 || bytes.size() == 4096 || bytes.size() == 32));
+            if (bytes.size() == 32) {
+                auto &words = comfortUniformWrites.emplace_back();
+                std::memcpy(words.data(), bytes.data(), bytes.size());
+            }
             if (bytes.size() == 4096)
                 ++motionUniformWrites;
             if (bytes.size() == 2624) {
@@ -191,6 +197,13 @@ namespace Horo::Tests::OpenXRApplication {
                                     Render::ShaderArtifactStage{Render::ShaderStage::Fragment, "PSMain",
                                                                 Code(Render::ShaderStage::Fragment)}};
             return ShaderCook::CookFixture{multiview ? ShaderCook::MultiviewEvidence() : ShaderCook::Evidence(), stages, multiview};
+        }
+
+        static ShaderCook::CookFixture CookComfort() {
+            using enum Render::ShaderStage;
+            const std::array stages{Render::ShaderArtifactStage{Vertex, "VSMain", Code(Vertex)},
+                                    Render::ShaderArtifactStage{Fragment, "PSMain", Code(Fragment)}};
+            return {ShaderCook::CookFixtureRole::XrComfort, ShaderCook::XrComfortEvidence(), stages};
         }
 
         static ShaderCook::CookFixture CookMotion() {

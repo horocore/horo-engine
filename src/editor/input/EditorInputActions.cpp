@@ -87,6 +87,21 @@ namespace Horo::Editor {
                                     Input::InputContextId{kEditorWorkspaceInputContext},
                                     false,
                                     {AxisKey(Left, 0, -1.0F), AxisKey(Right, 0, 1.0F), AxisKey(Down, 1, -1.0F), AxisKey(Up, 1, 1.0F)}},
+            Input::ActionDescriptor{Input::ActionId{kGameplayXrMoveAction},
+                                    Input::ActionValueType::Axis2D,
+                                    Input::InputContextId{kEditorWorkspaceInputContext},
+                                    false,
+                                    {}},
+            Input::ActionDescriptor{Input::ActionId{kGameplayXrSnapTurnAction},
+                                    Input::ActionValueType::Axis1D,
+                                    Input::InputContextId{kEditorWorkspaceInputContext},
+                                    false,
+                                    {}},
+            Input::ActionDescriptor{Input::ActionId{kGameplayXrTeleportAction},
+                                    Input::ActionValueType::Digital,
+                                    Input::InputContextId{kEditorWorkspaceInputContext},
+                                    false,
+                                    {}},
         };
     }
 
