@@ -145,7 +145,7 @@ namespace Horo::AI {
         : descriptor_(descriptor), schema_(schema), schemaVersion_(schemaVersion), kind_(kind), host_(host) {}
 
     bool DecisionQueryTask::Matches(const AiTaskOperationContext &operation) const noexcept {
-        return query_ && operation.task == operation_.task && operation.agent == operation_.agent &&
+        return operation_.task.IsValid() && operation.task == operation_.task && operation.agent == operation_.agent &&
                operation.taskDefinition == descriptor_.task;
     }
 
@@ -157,10 +157,29 @@ namespace Horo::AI {
         });
     }
 
+    DecisionQueryTask::ProviderCall::ProviderCall(DecisionQueryTask &owner) noexcept : owner_(owner) {
+        owner_.providerCall_ = true;
+    }
+
+    DecisionQueryTask::ProviderCall::~ProviderCall() {
+        owner_.providerCall_ = false;
+        if (owner_.discardRequested_)
+            owner_.Discard();
+    }
+
+    bool DecisionQueryTask::InputsCurrent() noexcept {
+        const ProviderCall call{*this};
+        return query_->InputsAreCurrent() && !discardRequested_ && !operation_.IsCancellationRequested();
+    }
+
     void DecisionQueryTask::Discard() noexcept {
-        if (query_)
-            query_->Cancel();
-        query_.reset();
+        if (providerCall_) {
+            discardRequested_ = true;
+            return;
+        }
+        const ProviderCall call{*this};
+        discardRequested_ = false;
+        auto retired = std::move(query_);
         operation_ = {};
         continuation_ = {};
         wakePending_ = false;
@@ -168,6 +187,8 @@ namespace Horo::AI {
         ready_ = false;
         outputCommitted_ = false;
         outputFailure_.reset();
+        if (retired)
+            retired->Cancel();
     }
 
     /** @copydoc DecisionQueryTask::Start */
@@ -175,29 +196,40 @@ namespace Horo::AI {
                                                  const AiTaskOperationContext &operation) noexcept {
         if (operation.IsCancellationRequested())
             return Result<AiTaskState>::Success(AiTaskState::Cancelled);
-        if (query_ || !Accepts(context) || operation.taskDefinition != descriptor_.task || !operation.task.IsValid() ||
+        if (providerCall_ || query_ || !Accepts(context) || operation.taskDefinition != descriptor_.task || !operation.task.IsValid() ||
             !operation.agent.IsValid() || operation.task.incarnation != operation.agent.incarnation ||
             context.blackboard.Binding().agent != operation.agent ||
             descriptor_.timeoutTicks >= std::numeric_limits<std::uint64_t>::max() - context.tick)
             return Failure<AiTaskState>(AIErrors::EnvironmentQueryContextInvalid);
+        const ProviderCall call{*this};
+        operation_ = operation;
         try {
             const auto deadline = context.tick + descriptor_.timeoutTicks;
             auto admitted = host_.Admit(descriptor_, operation, context.tick, deadline);
             // Admission can revoke the task's owner. Release the detached query before retaining any task state.
-            if (operation.IsCancellationRequested())
+            if (discardRequested_ || operation.IsCancellationRequested()) {
+                Discard();
                 return Result<AiTaskState>::Success(AiTaskState::Cancelled);
-            if (admitted.HasError())
+            }
+            if (admitted.HasError()) {
+                Discard();
                 return Result<AiTaskState>::Failure(std::move(admitted).ErrorValue());
+            }
             auto query = std::move(admitted).Value();
-            if (!query || !query->MatchesAdmission(descriptor_.query, operation.agent, context.tick, deadline))
+            if (!query || !query->MatchesAdmission(descriptor_.query, operation.agent, context.tick, deadline)) {
+                Discard();
                 return Failure<AiTaskState>(AIErrors::EnvironmentQueryContextInvalid);
-            operation_ = operation;
+            }
             continuation_ = context.continuation;
             destination_ = context.blackboard.Binding();
             deadline_ = deadline;
             query_ = std::move(query);
             return Result<AiTaskState>::Success(AiTaskState::Running);
         } catch (...) {
+            const bool cancelled = discardRequested_ || operation.IsCancellationRequested();
+            Discard();
+            if (cancelled)
+                return Result<AiTaskState>::Success(AiTaskState::Cancelled);
             return Failure<AiTaskState>(AIErrors::EnvironmentQueryProviderFailed);
         }
     }
@@ -205,14 +237,13 @@ namespace Horo::AI {
     /** @copydoc DecisionQueryTask::Resume */
     Result<AiTaskState> DecisionQueryTask::Resume(const BehaviorTreeEvaluationContext &context,
                                                   const AiTaskOperationContext &operation) noexcept {
-        if (!Matches(operation))
+        if (providerCall_ || !query_ || !Matches(operation))
             return Result<AiTaskState>::Success(AiTaskState::Cancelled);
-        const auto *result = query_->Published();
-        if (operation.IsCancellationRequested() || !Accepts(context) || context.blackboard.Binding() != destination_ ||
-            !query_->InputsAreCurrent()) {
+        if (operation.IsCancellationRequested() || !Accepts(context) || context.blackboard.Binding() != destination_ || !InputsCurrent()) {
             Discard();
             return Result<AiTaskState>::Success(AiTaskState::Cancelled);
         }
+        const auto *result = query_->Published();
         if (outputCommitted_)
             return Result<AiTaskState>::Success(AiTaskState::Succeeded);
         if (outputFailure_)
@@ -269,13 +300,14 @@ namespace Horo::AI {
 
     /** @copydoc DecisionQueryTask::ActiveAgent */
     AgentHandle DecisionQueryTask::ActiveAgent() const noexcept {
-        return query_ && !operation_.IsCancellationRequested() ? operation_.agent : AgentHandle{};
+        return query_ && !discardRequested_ && !operation_.IsCancellationRequested() ? operation_.agent : AgentHandle{};
     }
 
     /** @copydoc DecisionQueryTask::AdvanceQuery */
     void DecisionQueryTask::AdvanceQuery(const std::uint64_t tick, const QueryExecutionBudget budget) {
-        if (!query_)
+        if (providerCall_ || !query_)
             return;
+        const ProviderCall call{*this};
         if (!operation_.IsCancellationRequested())
             query_->Advance(tick, budget);
         if (operation_.IsCancellationRequested())
@@ -284,17 +316,20 @@ namespace Horo::AI {
 
     /** @copydoc DecisionQueryTask::SyncQuery */
     void DecisionQueryTask::SyncQuery(const std::uint64_t tick, std::optional<DecisionQueryPublication> *publication) {
-        if (!query_)
+        if (providerCall_ || !query_)
             return;
-        if (!operation_.IsCancellationRequested() && query_->Sync(tick)) {
+        const ProviderCall call{*this};
+        const bool published = !operation_.IsCancellationRequested() && query_->Sync(tick);
+        if (discardRequested_ || operation_.IsCancellationRequested()) {
+            Discard();
+            return;
+        }
+        if (published) {
             wakePending_ = true;
             if (publication)
                 *publication = ObservePublication(descriptor_, *query_->Published());
         }
-        if (operation_.IsCancellationRequested())
-            Discard();
-        else
-            FlushWake();
+        FlushWake();
     }
 
     /** @copydoc DecisionQueryTask::FlushWake */
@@ -315,14 +350,30 @@ namespace Horo::AI {
     /** @copydoc DecisionQueryTask::CommitOutput */
     Result<bool> DecisionQueryTask::CommitOutput(const std::uint64_t tick, const Runtime::RuntimeSceneView &scene,
                                                  BlackboardInstance &blackboard, std::optional<DecisionQueryPublication> *publication) {
-        if (!ready_ || tick <= resolvedTick_)
+        auto prepared = PrepareOutput(tick, scene);
+        if (prepared.HasError() || !prepared.Value())
+            return prepared;
+        return CommitPreparedOutput(scene, blackboard, publication);
+    }
+
+    Result<bool> DecisionQueryTask::PrepareOutput(const std::uint64_t tick, const Runtime::RuntimeSceneView &scene) {
+        if (providerCall_ || !ready_ || tick <= resolvedTick_)
             return Result<bool>::Success(false);
-        const auto &result = *query_->Published();
-        if (tick != resolvedTick_ + 1 || operation_.IsCancellationRequested() || !query_->InputsAreCurrent() || !scene.IsCurrent() ||
-            scene.RuntimeId() != result.scene || blackboard.Binding() != destination_) {
+        if (tick != resolvedTick_ + 1 || operation_.IsCancellationRequested() || !InputsCurrent() || !scene.IsCurrent() ||
+            scene.RuntimeId() != query_->Published()->scene) {
             Discard();
             return Failure<bool>(AIErrors::EnvironmentQueryContextStale);
         }
+        return Result<bool>::Success(true);
+    }
+
+    Result<bool> DecisionQueryTask::CommitPreparedOutput(const Runtime::RuntimeSceneView &scene, BlackboardInstance &blackboard,
+                                                         std::optional<DecisionQueryPublication> *publication) {
+        if (operation_.IsCancellationRequested() || blackboard.Binding() != destination_) {
+            Discard();
+            return Failure<bool>(AIErrors::EnvironmentQueryContextStale);
+        }
+        const auto &result = *query_->Published();
         auto value = WinnerValue(result.winners.front().item, scene, kind_);
         if (value.HasError()) {
             Discard();

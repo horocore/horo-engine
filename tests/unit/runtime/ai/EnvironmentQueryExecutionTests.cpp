@@ -11,10 +11,12 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <functional>
 #include <iterator>
 #include <limits>
 #include <memory>
@@ -56,13 +58,23 @@ namespace Horo::AI {
             std::optional<Runtime::EntityRef> actor;
             std::size_t pointCount{2};
             std::optional<bool> filter;
+            std::function<void()> onCurrent;
+            std::function<void()> onTestStart;
+            std::function<void()> onPoll;
+            std::size_t destroyed{};
         };
 
         class ExecutionSource final : public IQueryExecutionSource {
         public:
             explicit ExecutionSource(ExecutionProbe &probe) : probe_(probe) {}
 
+            ~ExecutionSource() override {
+                ++probe_.destroyed;
+            }
+
             bool IsCurrent(const QueryExecutionInputs &) const noexcept override {
+                if (probe_.onCurrent)
+                    probe_.onCurrent();
                 if (probe_.revokeOnCurrent)
                     probe_.revokeOnCurrent->RequestCancellation();
                 return probe_.current;
@@ -95,6 +107,8 @@ namespace Horo::AI {
                 sample_ = {.stage = stage,
                            .filter = probe_.filter,
                            .metric = point ? static_cast<double>(point->Millimeters()[0]) / 2.0 : 1.0};
+                if (probe_.onTestStart)
+                    probe_.onTestStart();
                 if (probe_.revokeOnStart)
                     probe_.revokeOnStart->RequestCancellation();
                 return Result<bool>::Success(true);
@@ -102,6 +116,8 @@ namespace Horo::AI {
 
             Result<std::optional<QueryTestSample>> PollTest() override {
                 ++probe_.polls;
+                if (probe_.onPoll)
+                    probe_.onPoll();
                 if (probe_.revokeOnPoll)
                     probe_.revokeOnPoll->RequestCancellation();
                 if (probe_.failure == SourceFailure::Poll)
@@ -236,6 +252,7 @@ namespace Horo::AI {
             ExecutionProbe probe;
             std::size_t admissions{};
             CancellationSource *revokeAdmission{};
+            std::function<void()> onAdmission;
             std::optional<NativeQuery> native;
 
             explicit QueryTaskHost(Runtime::RuntimeScene &value) : scene(value) {}
@@ -243,6 +260,8 @@ namespace Horo::AI {
             Result<std::unique_ptr<QueryExecution>> Admit(const DecisionQueryTaskDescriptor &, const AiTaskOperationContext &operation,
                                                           std::uint64_t submittedTick, std::uint64_t deadlineTick) override {
                 ++admissions;
+                if (onAdmission)
+                    onAdmission();
                 if (native.has_value()) {
                     const auto view = scene.View();
                     auto source = Source(view);
@@ -423,6 +442,81 @@ namespace Horo::AI {
             REQUIRE(started.HasValue());
             CHECK(started.Value() == AiTaskState::Running);
             CHECK(fixture.host.admissions == 2);
+        }
+
+        TEST_CASE("EQS provider reentry cancels without destroying executing work or publishing the late winner", "[unit][ai][eqs][task]") {
+            enum class Boundary {
+                Admission,
+                AdmissionFailure,
+                Advance,
+                Poll,
+                Commit
+            };
+            const auto boundary =
+                GENERATE(Boundary::Admission, Boundary::AdmissionFailure, Boundary::Advance, Boundary::Poll, Boundary::Commit);
+            QueryTaskFixture fixture;
+            const auto tree = fixture.BuildTree(BlackboardValueKind::WorldCoordinate);
+            auto bound = fixture.Bind(*tree);
+            REQUIRE(bound.HasValue());
+            auto &executor = *bound.Value();
+            const auto snapshot = fixture.blackboard->Snapshot();
+            REQUIRE(snapshot.HasValue());
+            const auto context = [&](const std::uint64_t tick) {
+                return BehaviorTreeEvaluationContext{fixture.node, tree->Bindings().BindingsForNode(fixture.node), snapshot.Value(), tick};
+            };
+            const AiTaskOperationContext operation{.taskDefinition = fixture.task,
+                                                   .task = {fixture.agent.incarnation, {2, 1}},
+                                                   .agent = fixture.agent};
+            auto &probe = fixture.host.probe;
+            bool called = false;
+            const auto abortInProvider = [&] {
+                called = true;
+                executor.Abort(operation, AiTaskCancellationReason::Requested);
+                CHECK_FALSE(executor.ActiveAgent().IsValid());
+                CHECK(probe.destroyed == 0);
+            };
+            const bool abortOnAdmission = boundary == Boundary::Admission || boundary == Boundary::AdmissionFailure;
+            if (abortOnAdmission) {
+                fixture.host.onAdmission = [&] {
+                    abortInProvider();
+                    if (boundary == Boundary::AdmissionFailure)
+                        throw std::runtime_error("provider failed after abort");
+                };
+            }
+            const auto start = executor.Start(context(4), operation);
+            REQUIRE(start.HasValue());
+            if (abortOnAdmission) {
+                CHECK(start.Value() == AiTaskState::Cancelled);
+            } else {
+                REQUIRE(start.Value() == AiTaskState::Running);
+                executor.SyncQuery(5);
+                if (boundary == Boundary::Advance)
+                    probe.onTestStart = abortInProvider;
+                AiWorkBudget budget{256};
+                executor.AdvanceQuery(5, {budget, budget, budget});
+                if (boundary != Boundary::Advance) {
+                    executor.SyncQuery(6);
+                    executor.AdvanceQuery(6, {budget, budget, budget});
+                    std::optional<DecisionQueryPublication> publication;
+                    if (boundary == Boundary::Poll)
+                        probe.onPoll = abortInProvider;
+                    executor.SyncQuery(7, &publication);
+                    if (boundary == Boundary::Commit) {
+                        REQUIRE(publication.has_value());
+                        REQUIRE(executor.Resume(context(7), operation).Value() == AiTaskState::Running);
+                        publication.reset();
+                        probe.onCurrent = abortInProvider;
+                        ExpectError(executor.CommitOutput(8, fixture.scene->View(), *fixture.blackboard, &publication),
+                                    AIErrors::EnvironmentQueryContextStale);
+                    }
+                    CHECK_FALSE(publication.has_value());
+                }
+            }
+            CHECK(called);
+            CHECK(probe.destroyed == (boundary == Boundary::AdmissionFailure ? 0 : 1));
+            CHECK_FALSE(executor.ActiveAgent().IsValid());
+            CHECK(executor.Resume(context(8), operation).Value() == AiTaskState::Cancelled);
+            CHECK_FALSE(fixture.blackboard->Snapshot().Value().Read(fixture.output).Value().has_value());
         }
 
         TEST_CASE("Behavior tree EQS task awaits owner phases and commits the winner once", "[unit][ai][eqs][task]") {

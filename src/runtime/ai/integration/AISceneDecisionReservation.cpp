@@ -286,11 +286,20 @@ namespace Horo::AI {
         const auto owner = task.ActiveAgent();
         if (!owner.IsValid())
             return Sync::Success(false);
+        if (const auto before = DecisionAgent(*state, owner); before.HasError())
+            return Sync::Failure(before.ErrorValue());
+        task.SyncQuery(tick, publication);
+        if (task.ActiveAgent() != owner)
+            return Sync::Success(false);
+        auto ready = task.PrepareOutput(tick, scene);
+        if (ready.HasError() || !ready.Value())
+            return ready;
+        if (active_ != state || !scene.IsCurrent() || task.ActiveAgent() != owner)
+            return Sync::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
         const auto selected = DecisionAgent(*state, owner);
         if (selected.HasError())
             return Sync::Failure(selected.ErrorValue());
-        task.SyncQuery(tick, publication);
-        return task.CommitOutput(tick, scene, *selected.Value()->blackboard, publication);
+        return task.CommitPreparedOutput(scene, *selected.Value()->blackboard, publication);
     }
 
     /** @copydoc AiSceneRuntime::PrepareCookedDecisionRegistration */

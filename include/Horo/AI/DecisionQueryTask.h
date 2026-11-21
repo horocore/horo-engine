@@ -9,6 +9,7 @@
 
 namespace Horo::AI {
     struct DecisionNodeConfiguration;
+    class AiSceneRuntime;
 
     /** @brief Inert authored node and exact query result/output declaration. */
     struct DecisionQueryTaskDescriptor final {
@@ -112,11 +113,30 @@ namespace Horo::AI {
                                                 std::optional<DecisionQueryPublication> *publication = nullptr);
 
     private:
+        friend class AiSceneRuntime;
+
         /** @brief Retains only typed admission evidence and the explicit host port. */
         DecisionQueryTask(DecisionQueryTaskDescriptor descriptor, BlackboardSchemaId schema, std::uint32_t schemaVersion,
                           BlackboardValueKind kind, IDecisionQueryTaskHost &host) noexcept;
         [[nodiscard]] bool Matches(const AiTaskOperationContext &operation) const noexcept;
         [[nodiscard]] bool Accepts(const BehaviorTreeEvaluationContext &context) const noexcept;
+        [[nodiscard]] bool InputsCurrent() noexcept;
+        [[nodiscard]] Result<bool> PrepareOutput(std::uint64_t tick, const Runtime::RuntimeSceneView &scene);
+        [[nodiscard]] Result<bool> CommitPreparedOutput(const Runtime::RuntimeSceneView &scene, BlackboardInstance &blackboard,
+                                                        std::optional<DecisionQueryPublication> *publication);
+
+        /** @brief Defers provider destruction until the current synchronous callback returns. */
+        class ProviderCall final {
+        public:
+            explicit ProviderCall(DecisionQueryTask &owner) noexcept;
+            ~ProviderCall();
+            ProviderCall(const ProviderCall &) = delete;
+            ProviderCall &operator=(const ProviderCall &) = delete;
+
+        private:
+            DecisionQueryTask &owner_;
+        };
+
         /** @brief Transfers a rejected write into the next decision evaluation without failing BlackboardSync. */
         [[nodiscard]] Result<bool> RejectOutput(Error error);
         /** @brief Retries a transition wake while the exact continuation is contended. */
@@ -137,5 +157,7 @@ namespace Horo::AI {
         bool ready_{};
         bool outputCommitted_{};
         bool wakePending_{};
+        bool providerCall_{};
+        bool discardRequested_{};
     };
 }  // namespace Horo::AI
