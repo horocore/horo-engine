@@ -3378,8 +3378,14 @@ digest and its record revision, and the semantic decision records from the
 original versioned trace. Stable 64-bit identifiers are decimal strings.
 Blackboard values and process-local handles stay out of the report. The report
 also records authored Scene input and the available Perception, EQS, Physics
-and Character observations, with omitted boundaries listed in the manifest. The
-Perception input digest covers frozen spatial participants, their global
+and Character observations, with omitted boundaries listed in the manifest.
+The Scene input digest covers the encoded definition and exact payload bytes loaded
+for its declared dependencies, including collision materials. Reusing an asset
+ID with different payload bytes yields an incompatible replay profile. This
+identity covers the root Scene and its declared dependencies. Independently
+published runtime groups and streamed cells are outside this input scope.
+Reports with the earlier Scene input schema must be regenerated for comparison.
+The Perception input digest covers frozen spatial participants, their global
 positions and disclosure policy before sensing. Provider outputs and private
 state are listed as omissions. For built-in point queries, the report records
 the selected agent's terminal result and its later successful Blackboard write

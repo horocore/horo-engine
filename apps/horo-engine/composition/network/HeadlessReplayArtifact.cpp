@@ -16,7 +16,6 @@
 namespace Horo::Application::Internal {
     namespace {
         using Json = nlohmann::json;
-        constexpr std::uint32_t SceneInputSchemaVersion = 1;
         constexpr std::uint32_t PerceptionInputSchemaVersion = 1;
         constexpr std::uint32_t QueryPublicationSchemaVersion = 1;
         constexpr std::uint32_t GameplaySchemaVersion = 2;
@@ -244,7 +243,9 @@ namespace Horo::Application::Internal {
                              {"recordedBoundaries", std::move(recorded)},
                              {"manifest", std::move(coverage)},
                              {"sceneInput",
-                              {{"revision", std::to_string(data.definitionRevision.value)}, {"digest", FormatSha256(data.sceneInput)}}},
+                              {{"schemaVersion", HeadlessSceneInputSchemaVersion},
+                               {"revision", std::to_string(data.definitionRevision.value)},
+                               {"digest", FormatSha256(data.sceneInput)}}},
                              {"canonicalAi",
                               {{"recordVersion", AI::AiCanonicalReferenceRecordVersion},
                                {"sceneStructureRevision", std::to_string(capture.sceneStructureRevision)},
@@ -323,8 +324,8 @@ namespace Horo::Application::Internal {
             const auto &decision = data.evidence.trace->Header();
             result.manifest.boundaries[static_cast<std::size_t>(Decision)] = {AI::AiReplayCoverage::Deterministic, decision.version,
                                                                               decision.planDigest};
-            result.Observe(SceneInput, SceneInputSchemaVersion, data.sceneInput, {data.definition.value, data.definitionRevision.value},
-                           data.sceneInput);
+            result.Observe(SceneInput, HeadlessSceneInputSchemaVersion, data.sceneInput,
+                           {data.definition.value, data.definitionRevision.value}, data.sceneInput);
             result.Observe(CanonicalAi, AI::AiCanonicalReferenceRecordVersion, data.sceneInput,
                            {data.definition.value, data.evidence.sceneStructureRevision},
                            ComputeSha256(std::as_bytes(std::span{data.canonicalRecord})));

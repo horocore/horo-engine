@@ -25,6 +25,30 @@ namespace Horo::Application::Internal {
     namespace {
         using ReplayEntity = Result<AI::AiSavedEntityReference>;
 
+        /** @brief Hashes declared Scene inputs from the same immutable runtime payloads used during activation. */
+        Result<Sha256Digest> HashReplaySceneInput(const Runtime::RuntimeSceneDefinition &definition,
+                                                  const Runtime::RuntimeSceneView &scene) {
+            using Digest = Result<Sha256Digest>;
+            const auto encoded = SceneCook::EncodeCookedSceneDefinition(definition);
+            if (encoded.HasError())
+                return Digest::Failure(encoded.ErrorValue());
+            const auto definitionDigest = ComputeSha256(std::as_bytes(std::span{encoded.Value()}));
+            Sha256Builder hash;
+            // The definition orders required dependencies by stable ID and binds their expected types.
+            // Every fragment below has a fixed size, and the bounded runtime inventory cannot overflow this builder.
+            (void)hash.Update(std::as_bytes(std::span{definitionDigest.bytes}));
+            for (const auto &dependency : definition.AssetDependencies()) {
+                const auto asset = scene.FindAsset(dependency.id);
+                if (!asset || !asset->type || *asset->type != dependency.expectedType)
+                    return Digest::Failure(
+                        MakeError(AI::AIErrors::CanonicalStateInvalid, "Replay could not identify an admitted Scene asset payload."));
+                const auto payload = ComputeSha256(std::as_bytes(asset->bytes));
+                (void)hash.Update(std::as_bytes(std::span{dependency.id.Bytes()}));
+                (void)hash.Update(std::as_bytes(std::span{payload.bytes}));
+            }
+            return Digest::Success(hash.Finalize());
+        }
+
         /** @brief Checks that a slot still contains the original authored entity for this replay. */
         bool IsOriginalReplayEntity(const HeadlessNetworkDetail::ReplayAuthoredScene &authored, const Runtime::EntityId entity) noexcept {
             return entity.index < authored.slots.size() && entity == authored.slots[entity.index];
@@ -333,11 +357,11 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(
                 MakeError(AI::AIErrors::CanonicalStateInvalid, "Root Scene exceeds the replay identity inventory limit."));
         try {
-            const auto encoded = SceneCook::EncodeCookedSceneDefinition(definition);
-            if (encoded.HasError())
-                return Result<void>::Failure(encoded.ErrorValue());
+            const auto digest = HashReplaySceneInput(definition, *scene);
+            if (digest.HasError())
+                return Result<void>::Failure(digest.ErrorValue());
             HeadlessNetworkDetail::ReplayAuthoredScene authored{*scene, std::vector<Runtime::EntityId>(slots), definition.Revision(),
-                                                                ComputeSha256(std::as_bytes(std::span{encoded.Value()}))};
+                                                                digest.Value()};
             for (std::size_t slot = 0; slot < authored.slots.size(); ++slot) {
                 const auto entity = scene->EntityAt(slot);
                 if (entity && entity->authoredObject)

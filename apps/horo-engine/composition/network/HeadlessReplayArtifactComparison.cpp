@@ -125,13 +125,15 @@ namespace Horo::Application::Internal {
             const auto &scene = file.at("sceneInput");
             const auto &canonical = file.at("canonicalAi");
             const auto &decision = file.at("decision");
-            if (canonical.at("recordVersion") != AI::AiCanonicalReferenceRecordVersion)
+            if (scene.at("schemaVersion") != HeadlessSceneInputSchemaVersion ||
+                canonical.at("recordVersion") != AI::AiCanonicalReferenceRecordVersion)
                 throw InvalidEvidence{};
             ValidateDecision(decision);
             const auto &blackboard = decision.at("blackboard");
             const auto sceneDigest = ReadDigest(scene.at("digest"));
             PortableReplay result{ReadIdentity(file.at("tick")), ReadIdentity(file.at("agentId")), {}};
-            result.At(SceneInput) = {{deterministic, 1, sceneDigest}, {{sceneId, ReadIdentity(scene.at("revision"))}, sceneDigest}};
+            result.At(SceneInput) = {{deterministic, HeadlessSceneInputSchemaVersion, sceneDigest},
+                                     {{sceneId, ReadIdentity(scene.at("revision"))}, sceneDigest}};
             result.At(
                 CanonicalAi) = {{deterministic, AI::AiCanonicalReferenceRecordVersion, sceneDigest},
                                 {{sceneId, ReadIdentity(canonical.at("sceneStructureRevision"))}, ReadDigest(canonical.at("digest"))}};

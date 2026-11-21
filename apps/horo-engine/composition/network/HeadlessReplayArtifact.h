@@ -16,6 +16,7 @@ namespace Horo::Application::Internal {
                                          "navigation", "gameplay", "physics", "achieved-character-motion", "canonical-ai"});
     static_assert(HeadlessReplayBoundaryNames.size() == AI::AiReplayBoundaryCount);
     inline constexpr std::size_t MaximumHeadlessReplayEvidenceBytes = 128U * 1024U;
+    inline constexpr std::uint32_t HeadlessSceneInputSchemaVersion = 2;
 
     /** @brief User-selected absolute directory name for one immutable evidence publication. */
     class HeadlessReplayOutput final {

@@ -100,6 +100,14 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(incompatible.ErrorValue().code.Value() == AI::AIErrors::CanonicalSchemaUnsupported.code.Value());
             physics.at("buildDigest") = FormatSha256(configuration.build);
             physics.at("profile") = FormatSha256(configuration.Fingerprint());
+            auto &scene = artifact.at("sceneInput");
+            const auto originalSceneDigest = scene.at("digest");
+            scene.at("digest") = FormatSha256(configuration.filters);
+            writeCandidate();
+            const auto incompatibleScene = Internal::CompareHeadlessReplayArtifacts(file, candidate);
+            REQUIRE(incompatibleScene.HasError());
+            CHECK(incompatibleScene.ErrorValue().code.Value() == AI::AIErrors::CanonicalSchemaUnsupported.code.Value());
+            scene.at("digest") = originalSceneDigest;
             auto &gameplay = artifact.at("gameplay");
             const auto originalImage = gameplay.at("sourceDigest");
             gameplay.at("sourceDigest") = FormatSha256(configuration.build);
@@ -288,7 +296,7 @@ namespace Horo::Application::PrefabAtomicTest {
     void ExpectDecisionReplay(std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition,
                               Internal::HeadlessSceneActivationInput input, AI::AgentId agent, const Sha256Digest &planDigest, bool abort,
                               std::optional<std::uint32_t> referenceGeneration, std::optional<Internal::GameplayWorldSelection> gameplay,
-                              const std::uint64_t tick) {
+                              const std::uint64_t tick, const std::span<const std::uint8_t> materialPayload) {
         using namespace Network;
         const auto definitionId = definition->Id();
         const bool hasPerception = static_cast<bool>(input.perceptionPositions);
@@ -298,7 +306,17 @@ namespace Horo::Application::PrefabAtomicTest {
         const auto definitionRevision = definition->Revision();
         const auto encodedScene = SceneCook::EncodeCookedSceneDefinition(*definition);
         REQUIRE(encodedScene.HasValue());
-        const auto sceneInputDigest = ComputeSha256(std::as_bytes(std::span{encodedScene.Value()}));
+        const auto definitionDigest = ComputeSha256(std::as_bytes(std::span{encodedScene.Value()}));
+        auto sceneInputDigest = ComputeSha256(std::as_bytes(std::span{definitionDigest.bytes}));
+        const auto dependencies = definition->AssetDependencies();
+        REQUIRE(dependencies.size() == (materialPayload.empty() ? 0 : 1));
+        if (!materialPayload.empty()) {
+            const auto materialDigest = ComputeSha256(std::as_bytes(materialPayload));
+            const std::array<std::span<const std::byte>, 3> input{std::as_bytes(std::span{definitionDigest.bytes}),
+                                                                  std::as_bytes(std::span{dependencies.front().id.Bytes()}),
+                                                                  std::as_bytes(std::span{materialDigest.bytes})};
+            sceneInputDigest = ComputeSha256Fragments(input);
+        }
         Tests::OwnedTestDirectory artifactOwner{"headless-replay"};
         const auto artifactPath = artifactOwner.Path() / std::filesystem::path{u8"replay evidence ü"};
         const auto utf8 = artifactPath.u8string();

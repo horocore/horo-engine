@@ -30,7 +30,7 @@ namespace Horo::Application::PrefabAtomicTest {
     void ExpectDecisionReplay(std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition,
                               Internal::HeadlessSceneActivationInput input, AI::AgentId agent, const Sha256Digest &planDigest, bool abort,
                               std::optional<std::uint32_t> referenceGeneration, std::optional<Internal::GameplayWorldSelection> gameplay,
-                              std::uint64_t tick);
+                              std::uint64_t tick, std::span<const std::uint8_t> materialPayload);
 
     namespace {
         /** @brief Captures a declared registry for both real host and prefab admission. */
@@ -1427,10 +1427,12 @@ namespace Horo::Application::PrefabAtomicTest {
             }
             if (replayReferenceGeneration)
                 source.Add({.object = {2}});
+            std::vector<std::uint8_t> replayMaterialPayload;
             if (captureCharacterReplay) {
                 const auto material = Assets::AssetId::FromBytes({94});
                 const auto type = Physics::AssetType();
-                const auto materialDigest = Put(raw, material, type, target, Physics::CanonicalMaterialBytes(material));
+                replayMaterialPayload = Physics::CanonicalMaterialBytes(material);
+                const auto materialDigest = Put(raw, material, type, target, replayMaterialPayload);
                 auto envelope = raw.Load(material, {});
                 REQUIRE(envelope.HasValue());
                 artifacts.push_back(std::move(envelope).Value());
@@ -1629,7 +1631,7 @@ namespace Horo::Application::PrefabAtomicTest {
             auto scene = std::make_shared<const Runtime::RuntimeSceneDefinition>(std::move(definition).Value());
             if (captureReplay) {
                 ExpectDecisionReplay(std::move(scene), std::move(input), controller.agent.agent.agent, replayPlanDigest, abortReplay,
-                                     replayReferenceGeneration, std::move(gameplay), replayTick);
+                                     replayReferenceGeneration, std::move(gameplay), replayTick, replayMaterialPayload);
                 return;
             }
             std::optional<Gameplay::GameplayReplicationAdmissionPolicy> admission;
