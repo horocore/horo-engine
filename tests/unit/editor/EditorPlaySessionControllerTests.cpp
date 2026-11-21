@@ -870,11 +870,16 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     constexpr auto perceptionPath = "play-perception.json";
     bool livePerception = false;
     std::optional<AI::AiSchedulingMode> watchedScheduler;
+    bool inferWatchedScheduler = false;
     SECTION("Prepared native sensing reaches the selected agent's committed inspection memory") {
         livePerception = true;
         SECTION("Fixed scheduling retains the existing inspection contract") {}
         SECTION("Authored best-effort scheduling wakes only when a watched decision has work") {
             watchedScheduler = AI::AiSchedulingMode::BestEffort;
+        }
+        SECTION("Authored scheduler limits can omit the mode when Perception watches select it") {
+            watchedScheduler = AI::AiSchedulingMode::BestEffort;
+            inferWatchedScheduler = true;
         }
         SECTION("An explicit deterministic scheduler rejects authored reactive watches") {
             watchedScheduler = AI::AiSchedulingMode::Deterministic;
@@ -954,12 +959,11 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
         constexpr std::string_view backend = R"("renderBackend":"opengl")";
         const auto insertion = metadata.find(backend);
         REQUIRE(insertion != std::string::npos);
-        const auto scheduler = watchedScheduler == AI::AiSchedulingMode::BestEffort
-                                   ? R"("mode":"bestEffort")"
-                                   : R"("mode":"deterministic")";
+        const auto mode = watchedScheduler == AI::AiSchedulingMode::BestEffort ? "bestEffort" : "deterministic";
+        const auto writtenMode = inferWatchedScheduler ? std::string{} : std::string{R"("mode":")"} + mode + "\",";
         const auto evaluations = watchedScheduler ? 2 : 1;
-        metadata.insert(insertion + backend.size(), std::string{R"(,"ai":{"schemaVersion":1,"scheduler":{)"} + scheduler +
-                            R"(,"evaluationsPerTick":)" + std::to_string(evaluations) +
+        metadata.insert(insertion + backend.size(), std::string{R"(,"ai":{"schemaVersion":1,"scheduler":{)"} + writtenMode +
+                            R"("evaluationsPerTick":)" + std::to_string(evaluations) +
                             R"(},"development":{"liveMutation":false}})");
         project.WriteText(".horo/project.json", metadata);
     }

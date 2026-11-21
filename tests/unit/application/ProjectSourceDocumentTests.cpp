@@ -81,6 +81,7 @@ namespace {
             REQUIRE(resolved.HasValue());
             REQUIRE(resolved.Value());
             const auto &policy = *resolved.Value();
+            CHECK(policy.HasAuthoredSchedulerMode());
             CHECK(policy.Scheduler().mode == AI::AiSchedulingMode::BestEffort);
             CHECK(policy.Scheduler().maximumAgents == 64);
             CHECK(policy.Scheduler().evaluationsPerTick == 12);
@@ -94,6 +95,20 @@ namespace {
                 CHECK_FALSE(policy.AllowsDebug(AiProjectRuntimeKind::Packaged, operation));
             }
         }
+    }
+
+    TEST_CASE("Project AI can author budgets without selecting a scheduler mode", "[unit][application][source-profile][ai]") {
+        auto document = RegisteredSource();
+        document["settings"]["ai"] =
+            Json::parse(R"({"schemaVersion":1,"scheduler":{"evaluationsPerTick":3},"perception":{"maximumWorkUnitsPerTick":16}})");
+        const auto source = DecodeProjectSourceDocument(document.dump());
+        REQUIRE(source.HasValue());
+        const auto resolved = ResolveProjectAiSettings(source.Value());
+        REQUIRE(resolved.HasValue());
+        REQUIRE(resolved.Value());
+        CHECK_FALSE(resolved.Value()->HasAuthoredSchedulerMode());
+        CHECK(resolved.Value()->Scheduler().evaluationsPerTick == 3);
+        CHECK(resolved.Value()->PerceptionWorkUnitsLimit() == 16);
     }
 
     TEST_CASE("Project AI rejects invalid canonical settings before activation", "[unit][application][source-profile][ai]") {

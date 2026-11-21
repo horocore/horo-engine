@@ -58,7 +58,8 @@ namespace Horo::Application::Internal {
         Platform::ProjectReadContext sourceContext;
         std::optional<SceneSource::SceneSourceDocument> authoredSource; /**< Exact decoded admitted source, never a second parse. */
         std::optional<Network::NetworkProjectSettings> networkSettings; /**< Owner-validated snapshot captured from the same root. */
-        std::optional<AI::AiTaskSchedulerSettings> decisionScheduler; /**< Authored scheduler policy, when present. */
+        AI::AiTaskSchedulerSettings decisionScheduler; /**< Authoritative scheduler budgets from the project snapshot. */
+        bool decisionSchedulerModeAuthored{};
         std::size_t perceptionWorkUnitsLimit{AI::AiTaskSchedulerSettings::HardWorkUnits};
         std::size_t queryWorkUnitsLimit{AI::AiTaskSchedulerSettings::HardWorkUnits};
         bool developmentReplayAllowed{true}; /**< Legacy projects retain the explicit development CLI workflow. */

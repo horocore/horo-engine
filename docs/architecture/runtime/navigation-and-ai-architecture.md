@@ -1342,10 +1342,10 @@ including retirement of an observed source in a committed Scene update. It also
 wakes on committed Blackboard dependencies, accepted task continuation events,
 and the next fixed deadline of an active service or time limit.
 Other controllers retain their fixed-tick cadence. In Editor Play and headless
-product launch, an explicit `settings.ai` scheduler must select best-effort mode
-when the project declares
-these watches. Its validated limits and development grants still apply.
-Projects without `settings.ai` use the mode selected by their watches.
+product launch, an explicit `settings.ai.scheduler.mode` must be `bestEffort`
+when the project declares these watches. If omitted, the watches select the
+mode. Authored scheduler and Perception limits and development grants still
+apply.
 Deterministic headless replay requires its regular fixed-tick scheduling policy.
 
 The native public capture path rejects Script origins. The private VM admission

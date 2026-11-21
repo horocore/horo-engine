@@ -27,6 +27,11 @@ namespace Horo::Application {
             return scheduler_;
         }
 
+        /** @brief Reports whether the project explicitly selected a scheduler mode. */
+        [[nodiscard]] bool HasAuthoredSchedulerMode() const noexcept {
+            return authoredSchedulerMode_;
+        }
+
         /** @brief Returns the maximum authored Perception work units a Scene may request per tick. */
         [[nodiscard]] std::size_t PerceptionWorkUnitsLimit() const noexcept {
             return perceptionWorkUnitsLimit_;
@@ -48,15 +53,17 @@ namespace Horo::Application {
         friend Result<std::optional<ProjectAiSettings>> ResolveProjectAiSettings(const ProjectSourceDocument &);
 
         ProjectAiSettings(AI::AiTaskSchedulerSettings scheduler, std::size_t perceptionWorkUnitsLimit, std::size_t queryWorkUnitsLimit,
-                          bool mutation, bool capture)
+                          bool mutation, bool capture, bool authoredSchedulerMode)
             : scheduler_(std::move(scheduler)), perceptionWorkUnitsLimit_(perceptionWorkUnitsLimit),
-              queryWorkUnitsLimit_(queryWorkUnitsLimit), mutation_(mutation), capture_(capture) {}
+              queryWorkUnitsLimit_(queryWorkUnitsLimit), mutation_(mutation), capture_(capture),
+              authoredSchedulerMode_(authoredSchedulerMode) {}
 
         AI::AiTaskSchedulerSettings scheduler_;
         std::size_t perceptionWorkUnitsLimit_;
         std::size_t queryWorkUnitsLimit_;
         bool mutation_{};
         bool capture_{};
+        bool authoredSchedulerMode_{};
     };
 
     /** @brief Resolves versioned settings.ai from the canonical project source without creating a Scene.

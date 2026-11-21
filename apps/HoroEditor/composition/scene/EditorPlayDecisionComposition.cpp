@@ -10,9 +10,10 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
     namespace {
         /** @brief Authoritative scheduler settings and the effective development grant for one Play startup. */
         struct EditorDecisionPolicy final {
-            std::optional<AI::AiTaskSchedulerSettings> scheduler;
+            AI::AiTaskSchedulerSettings scheduler;
             bool debugGranted{};
             std::size_t perceptionWorkUnitsLimit{AI::AiTaskSchedulerSettings::HardWorkUnits};
+            bool schedulerModeAuthored{};
         };
 
         /** @brief Resolves the selected project's policy before any provider admission. */
@@ -33,7 +34,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             return Policy::Success({settings.Scheduler(),
                                     selection.decisionDebugGranted &&
                                         settings.AllowsDebug(AiProjectRuntimeKind::Development, AiProjectDebugOperation::LiveMutation),
-                                    settings.PerceptionWorkUnitsLimit()});
+                                    settings.PerceptionWorkUnitsLimit(), settings.HasAuthoredSchedulerMode()});
         }
     }  // namespace
 
@@ -306,11 +307,11 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             return controller.perceptionEndpoints && !controller.perceptionEndpoints->decisionWatches.empty();
         });
         const auto mode = reactive ? AI::AiSchedulingMode::BestEffort : AI::AiSchedulingMode::Deterministic;
-        const auto &configured = settings.Value().scheduler;
-        if (configured && configured->mode != mode)
+        const auto &configured = settings.Value();
+        if (configured.schedulerModeAuthored && configured.scheduler.mode != mode)
             return Result<void>::Failure(MakeError(
                 AI::AIErrors::SchedulerPolicyInvalid, "Editor Decision Play scheduler mode must match the authored Perception watches."));
-        AI::AiSceneCookedDecisionExecution execution{*decisionJobs_, configured.value_or(AI::AiTaskSchedulerSettings{}), {}, {}};
+        AI::AiSceneCookedDecisionExecution execution{*decisionJobs_, configured.scheduler, {}, {}};
         execution.scheduler.mode = mode;
         if (reactive)
             execution.timing = AI::AiCookedDecisionTiming::BestEffortReactive;

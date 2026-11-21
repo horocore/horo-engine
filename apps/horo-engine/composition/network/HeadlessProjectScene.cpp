@@ -187,6 +187,7 @@ namespace Horo::Application::Internal {
                 return Metadata::Failure(ai.ErrorValue());
             if (const auto &policy = ai.Value()) {
                 resources.decisionScheduler = policy->Scheduler();
+                resources.decisionSchedulerModeAuthored = policy->HasAuthoredSchedulerMode();
                 resources.perceptionWorkUnitsLimit = policy->PerceptionWorkUnitsLimit();
                 resources.queryWorkUnitsLimit = policy->QueryWorkUnitsLimit();
                 resources.developmentReplayAllowed =

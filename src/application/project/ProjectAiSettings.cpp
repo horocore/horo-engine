@@ -139,7 +139,8 @@ namespace Horo::Application {
         if (!HasOnly(root, keys) || !ReadUnsigned(root, "schemaVersion", version) || version != 1)
             return Settings::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project AI settings schema."));
         Scheduler scheduler;
-        if (const auto policy = root.find("scheduler"); policy != root.end() && !ReadScheduler(*policy, scheduler))
+        const auto policy = root.find("scheduler");
+        if (policy != root.end() && !ReadScheduler(*policy, scheduler))
             return Settings::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project AI scheduler settings."));
         if (const auto validated = AI::AiTaskScheduler::ValidateSettings(scheduler); validated.HasError())
             return Settings::Failure(validated.ErrorValue());
@@ -152,6 +153,7 @@ namespace Horo::Application {
         bool mutation{}, capture{};
         if (!ReadDevelopment(root, mutation, capture))
             return Settings::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project AI development permissions."));
-        return Settings::Success(ProjectAiSettings{std::move(scheduler), perceptionLimit, queryLimit, mutation, capture});
+        const bool authoredMode = policy != root.end() && policy->contains("mode");
+        return Settings::Success(ProjectAiSettings{std::move(scheduler), perceptionLimit, queryLimit, mutation, capture, authoredMode});
     }
 }  // namespace Horo::Application
