@@ -279,6 +279,22 @@ namespace Horo::Editor {
         virtual void RevokeSpatialAnchor() noexcept = 0;
     };
 
+    /** @brief Status of the operator's separate local anchor storage grant. */
+    enum class EditorXrAnchorStorageState : std::uint8_t {
+        Unavailable,
+        Ready,
+        Armed,
+        Granted
+    };
+
+    class IEditorXrAnchorStorageConsent {
+    public:
+        virtual ~IEditorXrAnchorStorageConsent() = default;
+        [[nodiscard]] virtual EditorXrAnchorStorageState ReadAnchorStorageState() const = 0;
+        [[nodiscard]] virtual Result<void> ArmAnchorStorage() = 0;
+        virtual void RevokeAnchorStorage() noexcept = 0;
+    };
+
     /** @brief Redacted operator state for runtime-composited passthrough. */
     enum class EditorXrPassthroughState : std::uint8_t {
         Unavailable,
@@ -323,6 +339,11 @@ namespace Horo::Editor {
 
         /** @return Optional consent control for one session-local spatial anchor. */
         [[nodiscard]] virtual IEditorXrSpatialAnchorPreview *SpatialAnchorPreview() noexcept {
+            return nullptr;
+        }
+
+        /** @return Optional local anchor storage consent on the selected host. */
+        [[nodiscard]] virtual IEditorXrAnchorStorageConsent *AnchorStorageConsent() noexcept {
             return nullptr;
         }
 

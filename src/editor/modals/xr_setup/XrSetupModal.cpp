@@ -387,6 +387,29 @@ namespace Horo::Editor {
         }
     }
 
+    void XrSetupModal::DrawAnchorStorageConsent(IEditorXrAnchorStorageConsent &consent) {
+        using enum EditorXrAnchorStorageState;
+        const auto state = consent.ReadAnchorStorageState();
+        if (state == Unavailable && !anchorStorageRejected_)
+            return;
+        const auto &fonts = context_.theme.fonts;
+        constexpr std::array keys{"anchor_storage_rejected", "anchor_storage_scope", "anchor_storage_armed", "anchor_storage_granted"};
+        const auto key = anchorStorageRejected_ ? keys.front() : keys[static_cast<std::size_t>(state)];
+        Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text(key), Theme::Muted(), fonts);
+        const bool canArm = state == Ready;
+        if (state == Unavailable || !Ui::Button({.label = Text(canArm ? "anchor_storage_allow" : "anchor_storage_revoke").c_str(),
+                                                 .variant = Ui::ButtonVariant::Secondary,
+                                                 .font = fonts.sans,
+                                                 .style = {.width = Ui::StyleWidth::FillAvailable}}))
+            return;
+        if (canArm)
+            anchorStorageRejected_ = consent.ArmAnchorStorage().HasError();
+        else {
+            consent.RevokeAnchorStorage();
+            anchorStorageRejected_ = false;
+        }
+    }
+
     /** @copydoc XrSetupModal::DrawPassthroughPreview */
     void XrSetupModal::DrawPassthroughPreview(IEditorXrPassthroughPreview &preview) {
         using enum EditorXrPassthroughState;
@@ -448,6 +471,8 @@ namespace Horo::Editor {
             DrawPlaneCapturePreview(*preview);
         if (auto *preview = setup_ ? setup_->SpatialAnchorPreview() : nullptr)
             DrawSpatialAnchorPreview(*preview);
+        if (auto *consent = setup_ ? setup_->AnchorStorageConsent() : nullptr)
+            DrawAnchorStorageConsent(*consent);
         if (auto *preview = setup_ ? setup_->EyeGazePreview() : nullptr)
             DrawEyeGazePreview(*preview);
         if (auto *preview = setup_ ? setup_->PassthroughPreview() : nullptr)

@@ -430,6 +430,7 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRSessionErrors::ActivationCancelled));
         const bool planeConsent = std::exchange(host.planesArmed_, false);
         const bool anchorConsent = std::exchange(host.spatialAnchorArmed_, false);
+        const bool anchorStorageConsent = std::exchange(host.anchorStorageArmed_, false);
         const bool gazeConsent = std::exchange(host.gazeArmed_, false);
         passthroughGrant = std::exchange(host.passthroughArmed_, std::nullopt);
         if (auto prepared = host.composition_.session.PrepareInput(*host.input_.port, *host.input_.router, *host.composition_.bindings,
@@ -439,7 +440,8 @@ namespace Horo::Application::Internal {
         if (cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(XRSessionErrors::ActivationCancelled));
         host.composition_.session.SetPlaneCaptureConsent(planeConsent);
-        if (auto consent = host.composition_.session.SetSpatialAnchorConsent(anchorConsent, host.sessions_); consent.HasError())
+        if (auto consent = host.composition_.session.SetSpatialAnchorConsent(anchorConsent, anchorStorageConsent, host.sessions_);
+            consent.HasError())
             return consent;
         auto preparedProjection = host.composition_.session.PrepareProjection(host.composition_.frontend, host.composition_.viewport,
                                                                               *host.composition_.bindings);

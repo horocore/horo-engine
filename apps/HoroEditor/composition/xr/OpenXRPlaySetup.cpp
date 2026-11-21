@@ -478,7 +478,38 @@ namespace Horo::Application::Internal {
         if (std::this_thread::get_id() != lane_)
             return;
         spatialAnchorArmed_ = false;
-        composition_.session.RevokeSpatialAnchor();
+        composition_.session.RevokeSpatialAnchorPreview();
+    }
+
+    Editor::EditorXrAnchorStorageState OpenXRPlayHost::ReadAnchorStorageState() const {
+        using enum Editor::EditorXrAnchorStorageState;
+        if (std::this_thread::get_id() != lane_ || closing_ || busy_ || instanceLost_)
+            return Unavailable;
+        if (anchorStorageArmed_)
+            return Armed;
+        if (SetupIdle() && composition_.session.MayArmSpatialAnchorStorage())
+            return Ready;
+        if (!eventsPending_ && composition_.session.HasSpatialAnchorStorageConsent())
+            return Granted;
+        return Unavailable;
+    }
+
+    Result<void> OpenXRPlayHost::ArmAnchorStorage() {
+        if (auto lane = Lane(); lane.HasError())
+            return lane;
+        if (!SetupIdle())
+            return Result<void>::Failure(MakeError(XR::XRErrors::OperationUnavailable));
+        if (!composition_.session.MayArmSpatialAnchorStorage())
+            return Result<void>::Failure(MakeError(XR::XRErrors::OperationUnsupported));
+        anchorStorageArmed_ = true;
+        return Result<void>::Success();
+    }
+
+    void OpenXRPlayHost::RevokeAnchorStorage() noexcept {
+        if (std::this_thread::get_id() != lane_)
+            return;
+        anchorStorageArmed_ = false;
+        composition_.session.RevokeSpatialAnchorStorage();
     }
 
     /** @copydoc Editor::IEditorXrPassthroughPreview::ReadPassthroughPreviewState */

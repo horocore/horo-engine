@@ -1423,7 +1423,10 @@ namespace Horo::Tests::OpenXRApplication {
 
     TEST_CASE("Signed XR Play binds durable Save only after independent store consent", "[xr][application][play][anchors][save]") {
         using enum XR::XRProjectFeaturePolicy;
-        const bool policy = GENERATE(false, true);
+        const auto mode = GENERATE(0, 1, 2, 3);
+        const bool policy = mode != 0;
+        const bool storageRequested = mode >= 2;
+        const bool previewRequested = mode != 2;
         ApplicationFixture fixture{true,        6,     Unrequested, Unrequested, Unrequested, false, std::nullopt,
                                    Unrequested, false, {},          nullptr,     true,        policy};
         constexpr std::array<std::string_view, 2> extensions{XR_MSFT_SPATIAL_ANCHOR_EXTENSION_NAME,
@@ -1433,7 +1436,15 @@ namespace Horo::Tests::OpenXRApplication {
         fixture.script.census.extraProc = &ApplicationAnchorScript::Resolve;
         fixture.CreatePlay();
         auto &preview = *fixture.play->SpatialAnchorPreview();
-        RequireValue(preview.ArmSpatialAnchor());
+        auto &storage = *fixture.play->AnchorStorageConsent();
+        using enum Editor::EditorXrAnchorStorageState;
+        CHECK(storage.ReadAnchorStorageState() == (policy ? Ready : Unavailable));
+        if (storageRequested) {
+            RequireValue(storage.ArmAnchorStorage());
+            CHECK(storage.ReadAnchorStorageState() == Armed);
+        }
+        if (previewRequested)
+            RequireValue(preview.ArmSpatialAnchor());
         auto scene = ActivatePlay(fixture, std::nullopt);
         auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
         auto *observed = cutoff.get();
@@ -1449,23 +1460,24 @@ namespace Horo::Tests::OpenXRApplication {
         const auto clock = +[]() noexcept -> std::uint64_t {
             return 60;
         };
-        CancellationSource denied;
-        denied.RequestCancellation();
-        CHECK(fixture.session->BindSpatialAnchorSave(scope, denied, clock).HasError());
+        CHECK(storage.ReadAnchorStorageState() == (storageRequested ? Granted : Unavailable));
         CHECK(std::ranges::count(fixture.script.native.calls, "app-anchor-store-open") == 0);
-        CancellationSource consent;
-        const auto admitted = fixture.session->BindSpatialAnchorSave(scope, consent, clock);
-        CHECK(admitted.HasValue() == policy);
-        CHECK(std::ranges::count(fixture.script.native.calls, "app-anchor-store-open") == (policy ? 1 : 0));
-        if (policy) {
-            REQUIRE(admitted.HasValue());
+        const auto admitted = fixture.session->BindSpatialAnchorSave(scope, clock);
+        REQUIRE(admitted.HasValue() == storageRequested);
+        CHECK(std::ranges::count(fixture.script.native.calls, "app-anchor-store-open") == (storageRequested ? 1 : 0));
+        if (storageRequested) {
             CHECK(admitted.Value().participant->Read().HasValue());
-            consent.RequestCancellation();
+            storage.RevokeAnchorStorage();
             CHECK(admitted.Value().participant->Read().HasError());
+            CHECK(storage.ReadAnchorStorageState() == Unavailable);
         }
-        preview.RevokeSpatialAnchor();
         RequireValue(fixture.play->ProgressRenderTail());
-        CHECK(std::ranges::count(fixture.script.native.calls, "app-anchor-store-close") == (policy ? 1 : 0));
+        CHECK(std::ranges::count(fixture.script.native.calls, "app-anchor-store-close") == (storageRequested ? 1 : 0));
+        if (previewRequested) {
+            CHECK(preview.ReadSpatialAnchorState() == Editor::EditorXrSpatialAnchorState::Locating);
+            preview.RevokeSpatialAnchor();
+            RequireValue(fixture.play->ProgressRenderTail());
+        }
         fixture.scheduler->Shutdown();
         scene->Shutdown();
         REQUIRE(RequireValue(fixture.ClosePlay()));

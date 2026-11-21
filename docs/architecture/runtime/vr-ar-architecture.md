@@ -1039,6 +1039,9 @@ The Editor XR session owner binds the optional World anchor Save participant on
 its control thread after the live anchor scope exists. The adapter observes
 the same calibrated World scope and loses access when the separate store grant
 or the live anchor scope is revoked.
+XR Setup offers a separate one-use storage grant for the next Play session.
+The operator can revoke storage during Play and keep an independently granted
+live preview.
 
 `HoroXRAnchorSaveIntegration` provides the separate optional local durability
 lane. The selected host binds one canonical Save participant per durable anchor

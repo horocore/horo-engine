@@ -294,13 +294,17 @@ namespace Horo::Application::Internal {
         /** @return Whether policy and exact native evidence permit requesting plane consent. */
         [[nodiscard]] bool MayArmPlaneCapture() const noexcept;
         [[nodiscard]] bool MayArmSpatialAnchor() const;
-        [[nodiscard]] Result<void> SetSpatialAnchorConsent(bool allowed, const std::shared_ptr<const XR::XRSessionLifecycle> &lifecycle);
+        [[nodiscard]] bool MayArmSpatialAnchorStorage() const;
+        [[nodiscard]] bool HasSpatialAnchorStorageConsent() const noexcept;
+        [[nodiscard]] Result<void> SetSpatialAnchorConsent(bool preview, bool storage,
+                                                           const std::shared_ptr<const XR::XRSessionLifecycle> &lifecycle);
+        void RevokeSpatialAnchorPreview() noexcept;
+        void RevokeSpatialAnchorStorage() noexcept;
         void RevokeSpatialAnchor() noexcept;
         [[nodiscard]] Result<void> ProgressSpatialAnchorRetirement();
         [[nodiscard]] XR::XRCapabilityState ReadSpatialAnchorState() const noexcept;
         /** @brief Binds optional canonical Save on the owner lane after a distinct, revocable store grant. */
         [[nodiscard]] Result<OpenXRApplicationAnchorSave> BindSpatialAnchorSave(const XR::XRAnchorStoreScope &storeScope,
-                                                                                const CancellationSource &consent,
                                                                                 std::uint64_t (*unixSeconds)() noexcept);
         /** @brief Reports whether the installed platform and negotiated extension support the next-Play request. */
         [[nodiscard]] bool MayArmPassthrough() const;
@@ -623,6 +627,9 @@ namespace Horo::Application::Internal {
             std::uint64_t grant{};
             bool allowed{};
             bool localized{};
+            bool preview{};
+            bool storeOpen{};
+            std::optional<CancellationSource> storeGrant;
         } spatialAnchor_;
 
         InputPreparation input_;

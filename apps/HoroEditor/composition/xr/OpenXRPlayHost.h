@@ -209,6 +209,7 @@ namespace Horo::Application::Internal {
                                  public Editor::IEditorXrHapticPreview,
                                  public Editor::IEditorXrPlaneCapturePreview,
                                  public Editor::IEditorXrSpatialAnchorPreview,
+                                 public Editor::IEditorXrAnchorStorageConsent,
                                  public Editor::IEditorXrEyeGazePreview,
                                  public Editor::IEditorXrPassthroughPreview,
                                  private XR::RuntimeInternal::IXRSessionRetirementResources,
@@ -270,6 +271,14 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Editor::EditorXrSpatialAnchorState ReadSpatialAnchorState() const override;
         [[nodiscard]] Result<void> ArmSpatialAnchor() override;
         void RevokeSpatialAnchor() noexcept override;
+
+        [[nodiscard]] Editor::IEditorXrAnchorStorageConsent *AnchorStorageConsent() noexcept override {
+            return this;
+        }
+
+        [[nodiscard]] Editor::EditorXrAnchorStorageState ReadAnchorStorageState() const override;
+        [[nodiscard]] Result<void> ArmAnchorStorage() override;
+        void RevokeAnchorStorage() noexcept override;
 
         [[nodiscard]] Editor::IEditorXrEyeGazePreview *EyeGazePreview() noexcept override {
             return this;
@@ -775,6 +784,7 @@ namespace Horo::Application::Internal {
         std::uint64_t nextHapticPreview_{};
         bool planesArmed_{}; /**< One-use Setup consent, consumed by an actual Play preparation. */
         bool spatialAnchorArmed_{};
+        bool anchorStorageArmed_{};
         bool gazeArmed_{}; /**< In-memory grant consumed by one actual Play preparation. */
         std::uint64_t nextPassthroughGrant_{};
         std::optional<XR::XRPassthroughGrant> passthroughArmed_;

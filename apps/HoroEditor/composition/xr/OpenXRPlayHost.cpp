@@ -158,7 +158,9 @@ namespace Horo::Application::Internal {
     void OpenXRPlayHost::RevokeSensitiveObservations() noexcept {
         RevokeEyeGaze();
         RevokePlaneCapture();
-        RevokeSpatialAnchor();
+        spatialAnchorArmed_ = false;
+        anchorStorageArmed_ = false;
+        composition_.session.RevokeSpatialAnchor();
         if (scene_ && scene_->nativeLighting)
             scene_->nativeLighting->active = false;
         RevokePassthrough();
