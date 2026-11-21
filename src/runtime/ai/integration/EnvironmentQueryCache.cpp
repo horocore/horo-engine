@@ -48,9 +48,12 @@ namespace Horo::AI {
         /** @brief Checks the fresh submission independently of retained cache bytes. */
         bool CurrentRequest(const Runtime::RuntimeSceneView &scene, const Runtime::SceneRuntimeId expectedScene,
                             const QueryExecutionInputs &inputs, const IQueryExecutionSource &source, const QueryCacheKey &key) {
-            return scene.IsCurrent() && scene.RuntimeId() == expectedScene && inputs.agent.IsValid() && inputs.contexts &&
-                   inputs.contexts->Scene() == expectedScene && inputs.contexts->Query() == key.query && ValidKey(key) &&
-                   source.IsCurrent(inputs) && std::ranges::all_of(inputs.contexts->Values(), [&](const auto &context) {
+            if (!scene.IsCurrent() || scene.RuntimeId() != expectedScene || !inputs.agent.IsValid() || !inputs.contexts ||
+                inputs.contexts->Scene() != expectedScene || inputs.contexts->Query() != key.query || !ValidKey(key) ||
+                inputs.ownerCancellation.IsCancellationRequested() || !source.IsCurrent(inputs) ||
+                inputs.ownerCancellation.IsCancellationRequested())
+                return false;
+            return std::ranges::all_of(inputs.contexts->Values(), [&](const auto &context) {
                 return CurrentContext(scene, context.value, key.sharedPointData);
             });
         }

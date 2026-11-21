@@ -49,6 +49,7 @@ namespace Horo::AI {
             int attempts{};
             int polls{};
             int cancelled{};
+            CancellationSource *revokeOnCurrent{};
             CancellationSource *revokeOnStart{};
             CancellationSource *revokeOnPoll{};
             QueryStageId lastStage;
@@ -62,6 +63,8 @@ namespace Horo::AI {
             explicit ExecutionSource(ExecutionProbe &probe) : probe_(probe) {}
 
             bool IsCurrent(const QueryExecutionInputs &) const noexcept override {
+                if (probe_.revokeOnCurrent)
+                    probe_.revokeOnCurrent->RequestCancellation();
                 return probe_.current;
             }
 
@@ -712,6 +715,28 @@ namespace Horo::AI {
                 CHECK_FALSE(cache.Lookup(otherScene->View(), inputs, authority, key, tick));
                 probe.current = false;
                 CHECK_FALSE(cache.Lookup(scene->View(), inputs, authority, key, tick));
+            }
+            SECTION("owner cancellation rejects cache access and preserves historical snapshots") {
+                for (const bool duringValidation : {false, true}) {
+                    const auto revoke = [&](CancellationSource &owner) {
+                        inputs.ownerCancellation = owner.Token();
+                        if (duringValidation)
+                            probe.revokeOnCurrent = &owner;
+                        else
+                            owner.RequestCancellation();
+                    };
+                    CancellationSource lookup;
+                    revoke(lookup);
+                    CHECK_FALSE(cache.Lookup(scene->View(), inputs, authority, key, tick));
+                    CHECK(lookup.Token().IsCancellationRequested());
+
+                    CancellationSource store;
+                    revoke(store);
+                    CHECK_FALSE(cache.Store(scene->View(), inputs, authority, key, *result, tick).Value());
+                    CHECK(store.Token().IsCancellationRequested());
+                    probe.revokeOnCurrent = nullptr;
+                }
+                CHECK(retained->winners.size() == result->winners.size());
             }
             SECTION("eviction never invalidates caller snapshots and private data cannot cross agents") {
                 auto other = inputs;
