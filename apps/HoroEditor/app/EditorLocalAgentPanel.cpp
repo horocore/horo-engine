@@ -165,6 +165,7 @@ namespace Horo::Editor {
             void OnAttach(PanelContext &context) override {
                 sceneCount_ = context.sceneObjectCount;
                 RevokeContext();
+                inputRouter_ = context.inputRouter;
                 background_->Abandon();
                 activeSource_ = context.activeSourceSnapshot;
                 activeSourceRange_ = context.activeSourceRange;
@@ -198,6 +199,10 @@ namespace Horo::Editor {
                 status_ = nullptr;
             }
 
+            void OnPresentationHidden(EditorWorkspaceViewCommandData &) override {
+                textInput_.Reset();
+            }
+
             /** @brief Advances result publication and project storage after the workspace's runtime update. */
             void Poll() {
                 if (history_.Poll()) {
@@ -224,10 +229,11 @@ namespace Horo::Editor {
                 const auto &locale = context.localization;
                 const auto &fonts = context.theme.fonts;
                 ImGui::BeginChild("##LocalAgent", size, false, ImGuiWindowFlags_NoSavedSettings);
+                textFieldActive_ = false;
                 DrawProvider(locale, fonts);
-                ImGui::TextUnformatted(LocalizedText(locale, "prompt").c_str());
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "prompt"), Theme::Text(), fonts);
                 ImGui::BeginDisabled(awaitingCheckpoint_ || contextPreview_);
-                static_cast<void>(Ui::InputTextControl("##Prompt", prompt_, 4096, fonts));
+                static_cast<void>(DrawTextField("##Prompt", prompt_, 4096, fonts));
                 ImGui::EndDisabled();
                 DrawSendActions(locale, fonts);
                 if (Busy() && Button(locale, "stop", background_->CanCancel()))
@@ -239,7 +245,8 @@ namespace Horo::Editor {
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, response_, Theme::Text(), fonts);
                 if (liveDraft_ && history_.HasRecovery() && background_->CanCancel() && Button(locale, "history_draft_offer", true))
                     history_.ReviewLiveDraft(*liveDraft_);
-                history_.Draw(context);
+                textFieldActive_ |= history_.Draw(context);
+                UpdateTextInputFocus();
                 ImGui::EndChild();
             }
 
@@ -278,6 +285,8 @@ namespace Horo::Editor {
             }
 
             void RevokeContext() noexcept {
+                textInput_.Reset();
+                inputRouter_ = nullptr;
                 if (contextLifetime_)
                     contextLifetime_->RequestCancellation();
                 contextLifetime_.reset();
@@ -300,8 +309,30 @@ namespace Horo::Editor {
             }
 
             [[nodiscard]] bool Button(const ILocalizationService &locale, const char *key, bool enabled) const {
-                const auto label = LocalizedText(locale, key) + "##" + key;
-                return Ui::Button({.label = label.c_str(), .enabled = enabled});
+                const auto &visible = LocalizedText(locale, key);
+                const auto label = visible + "###" + key;
+                const bool clicked =
+                    Ui::Button({.label = label.c_str(), .enabled = enabled, .style = {.width = Ui::StyleWidth::FillAvailable}});
+                if ((ImGui::IsItemFocused() || ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenDisabled)) &&
+                    ImGui::CalcTextSize(visible.c_str()).x + 2.0F * ImGui::GetStyle().FramePadding.x > ImGui::GetItemRectSize().x)
+                    Ui::ShowTooltip(visible.c_str());
+                return clicked;
+            }
+
+            /** @brief Tracks only the chat's own active text widgets. */
+            bool DrawTextField(const char *id, std::string &value, const std::size_t capacity, const Theme::Fonts &fonts) {
+                const bool changed = Ui::InputTextControl(id, value, capacity, fonts);
+                textFieldActive_ |= ImGui::IsItemActive();
+                return changed;
+            }
+
+            /** @brief Blocks workspace shortcuts only while the chat owns text input. */
+            void UpdateTextInputFocus() {
+                if (!textFieldActive_)
+                    textInput_.Reset();
+                else if (inputRouter_ && !textInput_.IsActive())
+                    textInput_ = inputRouter_->PushContext(Input::InputContextId{"editor.local_agent.text"},
+                                                           Input::InputContextKind::FocusedGuiWidget);
             }
 
             /** @brief Presents the actual admitted scene query's phase in the current response. */
@@ -313,9 +344,9 @@ namespace Horo::Editor {
             }
 
             void DrawProvider(const ILocalizationService &locale, const Theme::Fonts &fonts) {
-                ImGui::TextUnformatted(LocalizedText(locale, "endpoint").c_str());
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "endpoint"), Theme::Text(), fonts);
                 ImGui::BeginDisabled(Busy() || awaitingCheckpoint_ || history_.HasRecovery() || contextPreview_);
-                if (Ui::InputTextControl("##Endpoint", endpoint_, 256, fonts)) {
+                if (DrawTextField("##Endpoint", endpoint_, 256, fonts)) {
                     models_.clear();
                     selection_ = -1;
                     response_.clear();
@@ -323,8 +354,8 @@ namespace Horo::Editor {
                 }
                 if (Button(locale, "discover", !Busy() && !endpoint_.empty()))
                     static_cast<void>(Start(std::nullopt));
-                ImGui::TextUnformatted(LocalizedText(locale, "model").c_str());
-                if (Ui::InputTextControl("##Model", model_, 256, fonts))
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "model"), Theme::Text(), fonts);
+                if (DrawTextField("##Model", model_, 256, fonts))
                     selection_ = -1;
                 DrawAvailableModels(fonts);
                 ImGui::EndDisabled();
@@ -377,7 +408,8 @@ namespace Horo::Editor {
                 }
                 const auto count = sceneCount_ ? sceneCount_() : std::nullopt;
                 if (count.has_value()) {
-                    ImGui::Text("%s %zu", LocalizedText(locale, "scene_count").c_str(), *count);
+                    Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "scene_count") + " " + std::to_string(*count),
+                                    Theme::Text(), fonts);
                     if (Button(locale, "ask_with_scene_count", ready))
                         Send(prompt_, count);
                 }
@@ -528,7 +560,6 @@ namespace Horo::Editor {
                     }
                     if (Button(locale, "context_file_previous", sourcePage_ > 0))
                         --sourcePage_;
-                    ImGui::SameLine();
                     if (Button(locale, "context_file_next", sourcePage_ < lastPage))
                         ++sourcePage_;
                 }
@@ -539,7 +570,7 @@ namespace Horo::Editor {
             /** @brief Selects one saved relative path without inspecting or opening any editor tab. */
             void DrawSavedFilePicker(const ILocalizationService &locale, const Theme::Fonts &fonts) {
                 ImGui::TextWrapped("%s", LocalizedText(locale, "context_saved_file_path").c_str());
-                static_cast<void>(Ui::InputTextControl("##SavedProjectFile", savedFilePath_, 256, fonts));
+                static_cast<void>(DrawTextField("##SavedProjectFile", savedFilePath_, 256, fonts));
                 if (Button(locale, "context_file_select", !savedFilePath_.empty() && CanSendPrompt())) {
                     sourcePicker_ = SourcePickerMode::None;
                     StartSavedFileReview();
@@ -723,7 +754,6 @@ namespace Horo::Editor {
                         status_ = "context_stale";
                     return;
                 }
-                ImGui::SameLine();
                 if (Button(locale, "context_cancel", true))
                     contextPreview_.reset();
             }
@@ -912,6 +942,9 @@ namespace Horo::Editor {
             std::shared_ptr<SceneQueryProgress> sceneQuery_;
             std::size_t displayedDraftBytes_{};
             std::optional<PlainReplay> plainReplay_;
+            Input::InputRouter *inputRouter_{};
+            Input::InputContextToken textInput_;
+            bool textFieldActive_{};
             std::optional<std::string> submittedPrompt_;
             std::optional<AgentHistoryReference> submittedReference_;
             AgentHistoryProjectRevision submittedProject_;

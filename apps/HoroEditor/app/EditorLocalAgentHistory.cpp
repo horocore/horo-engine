@@ -380,14 +380,14 @@ namespace Horo::Editor {
         export_.reset();
     }
 
-    void EditorLocalAgentHistory::DrawManager(const EditorGuiContext &context, const AgentHistorySessionView &view) {
+    bool EditorLocalAgentHistory::DrawManager(const EditorGuiContext &context, const AgentHistorySessionView &view) {
         const auto &locale = context.localization;
         if (view.conversations.empty())
-            return;
+            return false;
         if (Button(locale, "history_manage"))
             managing_ = !managing_;
         if (!managing_)
-            return;
+            return false;
         const auto selected = std::ranges::find(view.conversations, selected_, &AgentConversation::id);
         if (selected == view.conversations.end())
             Select(view.conversations.back());
@@ -402,7 +402,7 @@ namespace Horo::Editor {
             Select(conversations[static_cast<std::size_t>(index)]);
         ImGui::EndDisabled();
         const auto &conversation = conversations[static_cast<std::size_t>(index)];
-        DrawActions(context, view, conversation);
+        const bool textActive = DrawActions(context, view, conversation);
         const auto messages = std::span{conversation.messages};
         if (messages.size() > 8)
             ImGui::TextUnformatted(LocalizedText(locale, "history_recent_messages").c_str());
@@ -414,15 +414,17 @@ namespace Horo::Editor {
             for (const auto reference : message.references)
                 DrawReference(locale, reference);
         }
+        return textActive;
     }
 
-    void EditorLocalAgentHistory::DrawActions(const EditorGuiContext &context, const AgentHistorySessionView &view,
+    bool EditorLocalAgentHistory::DrawActions(const EditorGuiContext &context, const AgentHistorySessionView &view,
                                               const AgentConversation &conversation) {
         const auto &locale = context.localization;
         const bool enabled = Available(view) && !pending_ && !recovery_ && !recoveryPrompt_;
         ImGui::TextUnformatted(LocalizedText(locale, "history_name").c_str());
         ImGui::BeginDisabled(!enabled);
         static_cast<void>(Ui::InputTextControl("##LocalHistoryName", title_, AgentHistoryLimits::MaximumTitleBytes, context.theme.fonts));
+        const bool textActive = ImGui::IsItemActive();
         ImGui::EndDisabled();
         if (Button(locale, "history_rename", enabled && !title_.empty() && title_ != conversation.title))
             static_cast<void>(Queue(history_.Rename(view.project, conversation.id, title_), Action::Change));
@@ -435,6 +437,7 @@ namespace Horo::Editor {
             const auto popup = LocalizedText(locale, "history_delete") + "###LocalHistoryDelete";
             ImGui::OpenPopup(popup.c_str());
         }
+        return textActive;
     }
 
     void EditorLocalAgentHistory::DrawDeletion(const ILocalizationService &locale, const AgentHistorySessionView &view) {
@@ -462,12 +465,12 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorLocalAgentHistory::Draw */
-    void EditorLocalAgentHistory::Draw(const EditorGuiContext &context) {
+    bool EditorLocalAgentHistory::Draw(const EditorGuiContext &context) {
         const auto view = history_.View();
         DrawRecovery(context.localization, view);
         DrawReview(context.localization, view);
         DrawReferenceReview(context.localization, view);
-        DrawManager(context, view);
+        const bool textActive = DrawManager(context, view);
         DrawDeletion(context.localization, view);
         if (managing_ && export_) {
             DrawText(*export_);
@@ -476,5 +479,6 @@ namespace Horo::Editor {
         }
         if (status_)
             ImGui::TextWrapped("%s", LocalizedText(context.localization, status_).c_str());
+        return textActive;
     }
 }  // namespace Horo::Editor

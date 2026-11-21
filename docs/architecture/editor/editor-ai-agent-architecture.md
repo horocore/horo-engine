@@ -1005,6 +1005,10 @@ tool turns require a new explicit selection and approval.
 The panel reports when the approved scene-count tool starts and how it settles.
 This transient status is emitted only for admitted dispatch and carries no tool
 arguments or result payload. The query can finish before the assistant response.
+The chat's text fields own workspace keyboard focus only while active. Hiding
+the panel releases that input context while the editor continues polling the
+turn. Actions use the dock's available width and expose clipped labels through
+focused and hovered tooltips.
 
 ### Activity Bar Button
 

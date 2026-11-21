@@ -4176,6 +4176,18 @@ if (HORO_BUILD_EDITOR_GUI)
             HoroEngine::AISceneIntegration
             HoroEngine::DecisionCookHost
     )
+    add_executable(HoroEditorLocalAgentPanelRenderTests
+        unit/editor/EditorLocalAgentPanelRenderTests.cpp
+        ../apps/HoroEditor/app/EditorLocalAgentPanel.cpp
+        ../apps/HoroEditor/app/EditorLocalAgentContext.cpp
+        ../apps/HoroEditor/app/EditorLocalAgentHistory.cpp)
+    target_include_directories(HoroEditorLocalAgentPanelRenderTests PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/src" "${PROJECT_SOURCE_DIR}/src/editor/screens/workspace")
+    target_link_libraries(HoroEditorLocalAgentPanelRenderTests PRIVATE
+        HoroEngine::Gui HoroEngine::Platform HoroThirdParty::ImGui HoroEngine::AISceneIntegration HoroEngine::DecisionCookHost
+        HoroMcpEditorAgentToolsInternal HoroEditorAgentHistoryInternal HoroEngine::ModelProviderAdapters)
+    horo_register_catch_test(HoroEditorLocalAgentPanelRenderTests LABELS "unit;editor;agent;gui;headless")
+
     add_executable(HoroGlobalDockPanelRenderTests
             unit/editor/GlobalDockBuildActiveRenderTests.cpp
             unit/editor/GlobalDockBuildOutputPaneTests.cpp

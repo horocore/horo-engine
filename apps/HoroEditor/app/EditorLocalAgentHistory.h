@@ -41,8 +41,10 @@ namespace Horo::Editor {
         void ReviewRecoveryAnswer(std::string_view answer, Agent::AgentHistoryUsage usage);
         /** @brief Settles a failed, cancelled or skipped response with no output payload. */
         void FinishRecovery(Agent::AgentHistoryMessageState state);
-        /** @brief Presents approved storage and bounded conversation management on the editor lane. */
-        void Draw(const EditorGuiContext &context);
+        /** @brief Presents approved storage and bounded conversation management on the editor lane.
+         * @param context Borrowed GUI services. @return True while the conversation name field owns text input.
+         */
+        [[nodiscard]] bool Draw(const EditorGuiContext &context);
 
     private:
         enum class Action {
@@ -90,9 +92,9 @@ namespace Horo::Editor {
         void DrawReference(const ILocalizationService &locale, Agent::AgentHistoryReference reference) const;
         /** @brief Displays present, bounded counts beside the text whose save the user approves. */
         void DrawTokenUsage(const ILocalizationService &locale, Agent::AgentHistoryUsage usage) const;
-        void DrawManager(const EditorGuiContext &context, const Agent::AgentHistorySessionView &view);
-        void DrawActions(const EditorGuiContext &context, const Agent::AgentHistorySessionView &view,
-                         const Agent::AgentConversation &conversation);
+        [[nodiscard]] bool DrawManager(const EditorGuiContext &context, const Agent::AgentHistorySessionView &view);
+        [[nodiscard]] bool DrawActions(const EditorGuiContext &context, const Agent::AgentHistorySessionView &view,
+                                       const Agent::AgentConversation &conversation);
         void DrawDeletion(const ILocalizationService &locale, const Agent::AgentHistorySessionView &view);
         void Select(const Agent::AgentConversation &conversation);
 
