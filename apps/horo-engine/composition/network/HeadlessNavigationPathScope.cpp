@@ -3,7 +3,10 @@
 #include "HeadlessNetworkServices.h"
 #include "Horo/Navigation/NavigationDefinition.h"
 #include "ProjectSceneNavigationComposition.h"
+#include "SceneAiNavigationMotion.h"
 
+#include <algorithm>
+#include <limits>
 #include <new>
 
 namespace Horo::Application::Internal {
@@ -64,9 +67,14 @@ namespace Horo::Application::Internal {
                 return Scope::Failure(context.ErrorValue());
             if (auto refreshed = context.Value()->Refresh({.binding = binding, .path = {.provenance = source}}); refreshed.HasError())
                 return Scope::Failure(refreshed.ErrorValue());
-            return Scope::Success(std::unique_ptr<HeadlessNavigationPathScope>{
-                new HeadlessNavigationPathScope{std::move(world), owner.coordinator, active.Value(), source, caller,
-                                                std::move(context).Value()}});
+            return Scope::Success(
+                std::unique_ptr<HeadlessNavigationPathScope>{new HeadlessNavigationPathScope{std::move(world),
+                                                                                             owner.coordinator,
+                                                                                             active.Value(),
+                                                                                             source,
+                                                                                             owner.agents,
+                                                                                             {caller},
+                                                                                             std::move(context).Value()}});
         } catch (const std::bad_alloc &) {
             return Scope::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
         }
@@ -76,10 +84,58 @@ namespace Horo::Application::Internal {
                                                              Nav::NavigationCoordinator &coordinator,
                                                              const Nav::NavigationWorldActivationDescriptor activation,
                                                              const Nav::NavigationOutcomeProvenance source,
-                                                             const Nav::NavigationPathCaller caller,
+                                                             Nav::NavigationAgentRegistry &agents,
+                                                             std::vector<Nav::NavigationPathCaller> callers,
                                                              std::shared_ptr<Gameplay::GameplayNavigationContext> context) noexcept
-        : lifecycle_(std::move(lifecycle)), coordinator_(coordinator), activation_(activation), source_(source), caller_(caller),
-          context_(std::move(context)) {}
+        : lifecycle_(std::move(lifecycle)), coordinator_(coordinator), activation_(activation), source_(source), agents_(agents),
+          callers_(std::move(callers)), context_(std::move(context)) {}
+
+    HeadlessNavigationPathScope::~HeadlessNavigationPathScope() = default;
+
+    /** @copydoc HeadlessNavigationPathScope::PrepareActors */
+    Result<void> HeadlessNavigationPathScope::PrepareActors(ScenePhysicsHost &physics, const Runtime::RuntimeSceneView &scene,
+                                                            std::span<const HeadlessNavigationActorPolicy> selected) {
+        if (selected.empty())
+            return Result<void>::Success();
+        auto population = agents_.Snapshot();
+        if (population.HasError())
+            return Result<void>::Failure(std::move(population).ErrorValue());
+        if (!actors_.empty() || selected.size() > population.Value().Agents().size())
+            return Result<void>::Failure(MakeError(Nav::NavigationErrors::AdmissionRejected));
+        try {
+            auto callers = callers_;
+            std::vector<std::unique_ptr<SceneAiNavigationActor>> actors;
+            callers.reserve(1 + selected.size());
+            actors.reserve(selected.size());
+            for (const auto &policy : selected) {
+                const auto entity = scene.Find(policy.object);
+                if (!entity || policy.principal == 0)
+                    return Result<void>::Failure(MakeError(Nav::NavigationErrors::AgentDescriptorInvalid));
+                const auto previous = callers.back().owner.Value();
+                if (previous == std::numeric_limits<std::uint64_t>::max())
+                    return Result<void>::Failure(MakeError(Nav::NavigationErrors::GenerationExhausted));
+                const Nav::NavigationPathCaller caller{Nav::NavigationDynamicOwnerId::Create(previous + 1).Value(),
+                                                       callers.front().generation};
+                auto actor = SceneAiNavigationActor::CreateForScene(agents_, *lifecycle_, coordinator_, caller, physics, scene, *entity,
+                                                                    {.identity = policy.principal,
+                                                                     .source = CharacterInput::DesiredMotionSource::ExternalIntent,
+                                                                     .permissionGranted = true});
+                if (actor.HasError())
+                    return Result<void>::Failure(std::move(actor).ErrorValue());
+                if (std::ranges::any_of(actors, [&](const auto &existing) {
+                    return existing->Agent() == actor.Value()->Agent();
+                }))
+                    return Result<void>::Failure(MakeError(Nav::NavigationErrors::AgentDescriptorInvalid));
+                actors.push_back(std::move(actor).Value());
+                callers.push_back(caller);
+            }
+            actors_ = std::move(actors);
+            callers_ = std::move(callers);
+            return Result<void>::Success();
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
+        }
+    }
 
     /** @copydoc HeadlessNavigationPathScope::Context */
     const std::shared_ptr<Gameplay::GameplayNavigationContext> &HeadlessNavigationPathScope::Context() const noexcept {
@@ -93,7 +149,7 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(current.ErrorValue());
         if (current.Value() != activation_)
             return Result<void>::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
-        static_cast<void>(coordinator_.Commit({activation_, source_, std::span{&caller_, 1}, tick}));
+        static_cast<void>(coordinator_.Commit({activation_, source_, callers_, tick}));
         return context_->Refresh({.binding = context_->Binding().scene, .path = {.provenance = source_, .tick = tick}});
     }
 
@@ -103,7 +159,8 @@ namespace Horo::Application::Internal {
     }
 
     /** @copydoc HeadlessNavigationPathScope::Revoke */
-    void HeadlessNavigationPathScope::Revoke() const noexcept {
+    void HeadlessNavigationPathScope::Revoke() noexcept {
+        actors_.clear();
         context_->Revoke();
     }
 

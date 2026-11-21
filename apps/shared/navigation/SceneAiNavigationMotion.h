@@ -8,6 +8,8 @@
 #include "Horo/Navigation/NavigationCharacterAdapter.h"
 
 namespace Horo::Application::Internal {
+    class ScenePhysicsHost;
+
     /** @brief Owns an admitted task and borrows the exact Character bridge and velocity pipeline on the Scene owner lane. */
     class SceneAiNavigationMotion final {
     public:
@@ -47,5 +49,58 @@ namespace Horo::Application::Internal {
         Navigation::NavigationVelocityPipeline &velocity_;
         Navigation::NavigationCharacterAdapter &character_;
         std::uint64_t pendingTick_{};
+    };
+
+    /** @brief Prepared per-actor Navigation, Character and task ownership for a configured Scene. */
+    class SceneAiNavigationActor final {
+    public:
+        /** @brief Resolves the registered Navigation agent and dedicated Character controller for the same live entity.
+         * @param registry Committed Navigation registrations. @param world Active Navigation provider owner.
+         * @param coordinator Existing path job and publication owner. @param caller Explicit world-local path caller.
+         * @param physics Published native Scene aggregate. @param scene Current committed Scene view.
+         * @param entity Exact actor generation. @param principal Host-selected Character producer.
+         * @return Actor ownership or original typed admission failure. Borrowed owners outlive the actor.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<SceneAiNavigationActor>> CreateForScene(
+            Navigation::NavigationAgentRegistry &registry, Navigation::NavigationWorldLifecycle &world,
+            Navigation::NavigationCoordinator &coordinator, Navigation::NavigationPathCaller caller, ScenePhysicsHost &physics,
+            const Runtime::RuntimeSceneView &scene, Runtime::EntityRef entity, CharacterInput::DesiredMotionPrincipal principal);
+
+        /** @brief Prepares the host-selected Navigation and Character owners before starting AI work.
+         * @param registry Committed Navigation registrations. @param world Active Navigation provider owner.
+         * @param coordinator Existing path job and publication owner. @param caller Explicit world-local path caller.
+         * @param agent Exact registered agent. @param character Dedicated Character grant. @param binding Exact Character owner facts.
+         * @return Actor ownership or original typed admission failure. Borrowed owners outlive the actor.
+         */
+        [[nodiscard]] static Result<std::unique_ptr<SceneAiNavigationActor>> Create(
+            Navigation::NavigationAgentRegistry &registry, Navigation::NavigationWorldLifecycle &world,
+            Navigation::NavigationCoordinator &coordinator, Navigation::NavigationPathCaller caller, Navigation::CrowdAgentHandle agent,
+            Character::CharacterCapability character, const Navigation::NavigationCharacterBinding &binding);
+
+        /** @brief Starts the staged graph task at intent dispatch. */
+        [[nodiscard]] Result<void> Admit(AI::AiRuntimeCapability ai, AI::AiTaskContinuation task,
+                                         Navigation::NavigationMovementRequest request,
+                                         const Navigation::NavigationMovementObservation &current);
+        /** @brief Borrows the active motion for this actor until the next admission or retirement. */
+        [[nodiscard]] SceneAiNavigationMotion *Motion() noexcept;
+        /** @brief Replaces the observation's root with the committed Character position. */
+        [[nodiscard]] Result<Navigation::NavigationMovementObservation> Capture(Navigation::NavigationMovementObservation current) const;
+        /** @brief Returns stable registration identity used to locate this actor in an immutable crowd capture. */
+        [[nodiscard]] Navigation::CrowdAgentHandle Agent() const noexcept;
+
+    private:
+        SceneAiNavigationActor(std::unique_ptr<Navigation::NavigationMovementController> movement,
+                               std::unique_ptr<Navigation::NavigationVelocityPipeline> velocity,
+                               Navigation::NavigationCharacterAdapter bridge, Character::CharacterCapability character,
+                               Navigation::NavigationCharacterBinding binding, Navigation::CrowdAgentHandle agent) noexcept;
+
+        std::unique_ptr<Navigation::NavigationMovementController> movement_;
+        std::unique_ptr<Navigation::NavigationVelocityPipeline> velocity_;
+        Navigation::NavigationCharacterAdapter bridge_;
+        Character::CharacterCapability character_;
+        Navigation::NavigationCharacterBinding binding_;
+        Navigation::CrowdAgentHandle agent_;
+        AI::AiTaskContinuation task_;
+        std::optional<SceneAiNavigationMotion> motion_;
     };
 }  // namespace Horo::Application::Internal

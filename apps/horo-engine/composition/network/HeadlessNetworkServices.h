@@ -128,6 +128,12 @@ namespace Horo::Application::Internal {
         }
     };
 
+    /** @brief Host-selected authored actor and its dedicated Character motion producer. */
+    struct HeadlessNavigationActorPolicy final {
+        Runtime::SceneObjectId object;
+        std::uint64_t principal{};
+    };
+
     /** @brief Maps one explicitly public authored action to a stable positive presentation tag. */
     struct HeadlessAnimationActionTag final {
         Animation::GraphActionId action;
@@ -225,6 +231,7 @@ namespace Horo::Application::Internal {
         std::shared_ptr<HeadlessInitialStateHost> initialSceneState;
         std::shared_ptr<HeadlessDecisionReplay> decisionReplay; /**< Optional explicit one-shot standalone replay capture. */
         std::optional<Runtime::SceneAnimationParallelEvaluation> animationParallel;
+        std::vector<HeadlessNavigationActorPolicy> navigationActors; /**< Explicit standalone AI movement population. */
     };
 
     /** @brief Composes actual project Scene services and their sole aggregate-owned Physics/Character pair.

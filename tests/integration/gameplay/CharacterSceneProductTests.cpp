@@ -105,7 +105,8 @@ namespace Horo::Application::CharacterSceneProductTest {
             bool stopped{};
             std::uint64_t tick{};
 
-            void Start(const NavigationProductFixture &fixture, const Internal::GameplayWorldSelection &gameplay) {
+            Result<void> Start(const NavigationProductFixture &fixture, const Internal::GameplayWorldSelection &gameplay,
+                               std::vector<Internal::HeadlessNavigationActorPolicy> actors = {}) {
                 const Internal::HeadlessProjectSceneOptions options{.projectRoot = fixture.project.project.dir.path,
                                                                     .scene = "cooked:" + fixture.project.sceneId.ToString(),
                                                                     .cookedRoot = fixture.project.cooked.path,
@@ -126,7 +127,8 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                                    .prefabLoads = nativePrefabs ? project.prefabLoads.get() : nullptr,
                                                                    .navigation = project.navigation,
                                                                    .navigationPath =
-                                                                       Internal::HeadlessNavigationPathPolicy{fixture.pathFilter, 512}},
+                                                                       Internal::HeadlessNavigationPathPolicy{fixture.pathFilter, 512},
+                                                                   .navigationActors = std::move(actors)},
                                                                   {}, gameplay);
                 REQUIRE(configured.HasValue());
                 composition.emplace(std::move(configured).Value());
@@ -141,7 +143,7 @@ namespace Horo::Application::CharacterSceneProductTest {
                 physics = makeService(Network::NetworkModeServiceKind::Physics);
                 REQUIRE(physics->Prepare().HasValue());
                 REQUIRE(scene->Activate().HasValue());
-                REQUIRE(physics->Activate().HasValue());
+                return physics->Activate();
             }
 
             void RunFrame() {
@@ -257,13 +259,23 @@ namespace Horo::Application::CharacterSceneProductTest {
     }
 
 #if HORO_TEST_NAVIGATION_NATIVE
+    TEST_CASE("Configured Navigation actor admission requires a Character on the exact cooked entity",
+              "[navigation][scene][gameplay][product]") {
+        NavigationProductFixture fixture;
+        fixture.Publish(NavigationProductFixture::Input::Valid, NavigationProductFixture::Client::Scene);
+        NativeNavigationProductWorld product;
+        const auto started = product.Start(fixture, NavigationGameplay(), {{{3}, 1}});
+        REQUIRE(started.HasError());
+        CHECK(started.ErrorValue().code.Value() == Physics::PhysicsErrors::HandleStale.code.Value());
+    }
+
     TEST_CASE("Native gameplay executes a cooked standalone path and rejects retained requests after world retirement",
               "[navigation][scene][gameplay][product]") {
         NavigationProductFixture fixture;
         fixture.Publish(NavigationProductFixture::Input::Valid, NavigationProductFixture::Client::Scene);
         const auto gameplay = NavigationGameplay();
         NativeNavigationProductWorld product;
-        product.Start(fixture, gameplay);
+        REQUIRE(product.Start(fixture, gameplay).HasValue());
 
         const auto scope = Internal::InspectHeadlessNavigationContext(*product.physics);
         REQUIRE(scope);
@@ -313,7 +325,7 @@ namespace Horo::Application::CharacterSceneProductTest {
         auto gameplay = NavigationGameplay();
         gameplay.prefabPermission = Internal::GameplayPrefabPermission::Granted;
         NativeNavigationProductWorld product;
-        product.Start(fixture, gameplay);
+        REQUIRE(product.Start(fixture, gameplay).HasValue());
         const auto moduleScope = Internal::InspectHeadlessNavigationContext(*product.physics);
         REQUIRE(moduleScope);
 

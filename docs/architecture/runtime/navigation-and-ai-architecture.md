@@ -2300,6 +2300,8 @@ then publishes committed state for variable-rate RenderExtraction.
      submitted tick until Character publishes matching feedback and hands motion-stage failures back to AI.
      The application resolves a Character controller from the published Physics aggregate using the actual
      Scene incarnation and the entity generation captured when that controller was created.
+     Standalone project startup can select its authored movement actors explicitly. It prepares the registered
+     Navigation agent and Character controller together and includes each actor's caller in path publication.
      The binding publishes Navigation admission errors, provider failures, arrival and cancellation to the original
      AI task. A superseded movement can never complete the replacement task or authorize its motion.
      For a behavior-tree node, the host binds the continuation captured during evaluation at intent dispatch.

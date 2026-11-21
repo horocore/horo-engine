@@ -1,4 +1,5 @@
 #include "AiSceneTestSupport.h"
+#include "BehaviorTreeAsyncTestSupport.h"
 #include "Horo/AI/AINavigationMovementTask.h"
 #include "SceneAiNavigationMotion.h"
 #include "navigation/NavigationRuntimeQualificationFixture.h"
@@ -69,5 +70,48 @@ namespace Horo::Navigation {
             observedFollowing |= publication.Value()->intent.state == NavigationMovementState::Following;
         }
         FAIL("The AI task did not observe arrival within its admitted movement budget.");
+    }
+
+    TEST_CASE("Prepared Scene navigation actor drives one exact behavior-tree task", "[integration][ai][navigation][character]") {
+        Qualification::Host host;
+        host.bridge.Shutdown();
+        auto ai = AI::AiSceneRuntime::Create().Value();
+        const auto authored = AI::TestSupport::MakeFixture(1, 10, host.binding.scene.Value(), 1);
+        const auto scene = AI::TestSupport::Publish(ai, authored);
+        const auto capability = ai.CapabilityAtSafePoint();
+        namespace BT = AI::BehaviorTreeTestSupport;
+        BT::Fixture tree({BT::Node(1, AI::BehaviorTreeOperation::Task)});
+        tree.agent = capability.ResolveAgent(authored.agent.agent.agent).Value();
+        tree.blackboard =
+            AI::BlackboardInstance::Create({tree.agent, tree.schema->Identity(), tree.schema->Version(), 1, 1}, tree.schema).Value();
+        tree.probe->outcome[1] = AI::AiTaskState::Running;
+        AI::BehaviorTreeAsyncTestSupport::StartedInstance running(tree);
+
+        auto selected =
+            Application::Internal::SceneAiNavigationActor::Create(host.agents, host.navigation, *host.coordinator, host.callers.front(),
+                                                                  host.agent, host.character->IssueCapability().Value(),
+                                                                  {{1, 0, CharacterInput::DesiredMotionSource::ExternalIntent, true},
+                                                                   host.controller,
+                                                                   host.binding,
+                                                                   host.characterRevision});
+        REQUIRE(selected.HasValue());
+        auto &actor = *selected.Value();
+        CHECK(actor.Agent() == host.agent);
+        REQUIRE(actor.Admit(capability, running.async->continuations[1], host.RequestTo(), host.Now(1)).HasValue());
+        REQUIRE(actor.Motion());
+
+        const auto before = host.character->ControllerTransform(host.controller).Value();
+        auto sample = host.Now(1);
+        sample.position = {5, 5, 5};
+        const auto actual = actor.Capture(sample);
+        REQUIRE(actual.HasValue());
+        CHECK(actual.Value().position == before.position);
+        const auto submitted =
+            actor.Motion()->Submit(actual.Value(), host.Capture(1), {.stepSeconds = Qualification::StepSeconds}, *host.crowd);
+        REQUIRE(submitted.HasValue());
+        REQUIRE(submitted.Value());
+        host.StepCharacter(1);
+        REQUIRE(actor.Motion()->Observe(1).HasValue());
+        host.DispatchTick(1);
     }
 }  // namespace Horo::Navigation

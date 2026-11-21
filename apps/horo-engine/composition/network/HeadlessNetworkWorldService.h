@@ -382,6 +382,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (input.navigationPath && request_.world != Network::NetworkModeWorldKind::Standalone)
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid,
                                                        "The best-effort Navigation path scope requires standalone authority."));
+            if (!input.navigationActors.empty() && (!input.navigationPath || !input.navigation || !owners_->gameplay))
+                return Result<void>::Failure(MakeError(Navigation::NavigationErrors::CapabilityUnavailable));
             if (SelectsNativePerception() && request_.world != Network::NetworkModeWorldKind::Standalone)
                 return Result<void>::Failure(
                     MakeError(Network::NetworkErrors::NetworkModeInvalid, "Native project Perception requires standalone authority."));
@@ -730,6 +732,12 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                                                              request_.scene, selected.moduleId);
             if (paths.HasError())
                 return Result<void>::Failure(paths.ErrorValue());
+            const auto scene = record_->scenes->ActiveScene();
+            if (!scene)
+                return Result<void>::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
+            if (auto actors = paths.Value()->PrepareActors(record_->native, *scene, owners_->configured->navigationActors);
+                actors.HasError())
+                return actors;
             if (auto retained = owners_->HoldNavigationRetirement(record_); retained.HasError())
                 return retained;
             record_->navigationPath = std::move(paths).Value();

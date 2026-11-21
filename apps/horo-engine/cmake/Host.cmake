@@ -28,6 +28,7 @@ target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::GameplayAnimati
 target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::Platform HoroEngine::PlatformProjectIo)
 target_link_libraries(HoroNetworkProductHost PRIVATE HoroEngine::PrefabProjectSettings HoroEngine::ProjectSurfaceSettings HoroEngine::ProjectSettings)
 target_link_libraries(HoroNetworkProductHost PRIVATE HoroProjectSceneNavigationHostInternal)
+target_link_libraries(HoroNetworkProductHost PRIVATE HoroSceneAiNavigationMotionInternal)
 target_include_directories(HoroNetworkProductHost PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/horo-engine/composition/network)
 target_link_libraries(HoroNetworkProductHost PUBLIC HoroEngine::NetworkRuntime HoroEngine::RuntimeScene
     HoroEngine::Physics HoroEngine::Runtime HoroEngine::GameplayModuleHost HoroEngine::GameplayLua

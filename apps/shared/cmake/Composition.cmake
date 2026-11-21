@@ -121,6 +121,7 @@ add_library(HoroSceneAiNavigationMotionInternal STATIC shared/navigation/SceneAi
 target_compile_features(HoroSceneAiNavigationMotionInternal PUBLIC cxx_std_20)
 target_include_directories(HoroSceneAiNavigationMotionInternal PUBLIC "${HORO_SCENE_AI_NAVIGATION_MOTION_HEADERS}")
 target_link_libraries(HoroSceneAiNavigationMotionInternal PUBLIC HoroEngine::AINavigationIntegration HoroEngine::NavigationCharacterIntegration)
+target_link_libraries(HoroSceneAiNavigationMotionInternal PRIVATE HoroScenePhysicsHost)
 
 # Non-installed identity authority shared by application Scene factories, never by copied counters.
 set(HORO_ANIMATION_HOST_IDENTITY_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/animation_host_identity_headers")
