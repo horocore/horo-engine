@@ -95,6 +95,38 @@ namespace Horo::AI {
             CHECK(replacement->evaluations == 1);
         }
 
+        TEST_CASE("AI scheduler withholds only the selected generation's decision slice", "[unit][ai][scheduler][debug]") {
+            Harness h({.maximumAgents = 2, .evaluationsPerTick = 2, .workUnitsPerTick = 2, .commandsPerTick = 2});
+            const AiAgentSchedulePolicy policy{.workUnitsPerTick = 1, .commandsPerTick = 1};
+            const auto selected = h.Register(0, policy);
+            const auto unrelated = h.Register(1, policy);
+            REQUIRE(h.scheduler->Wake(h.Handle(0), {.explicitRequest = true}).HasValue());
+
+            const auto held = h.scheduler->EvaluateAtDecisionWithPausedAgent(1, h.Handle(0));
+            REQUIRE(held.HasValue());
+            CHECK(held.Value().evaluated == 1);
+            CHECK(held.Value().workUnits == 1);
+            REQUIRE(h.scheduler->CommitAtIntentDispatch(1).HasValue());
+            CHECK(selected->evaluations == 0);
+            CHECK(unrelated->committed == 1);
+
+            unrelated->remaining = 1;
+            const AgentHandle stale{h.incarnation, {0, 2}};
+            const auto released = h.scheduler->EvaluateAtDecisionWithPausedAgent(2, stale);
+            REQUIRE(released.HasValue());
+            CHECK(released.Value().evaluated == 2);
+            REQUIRE(h.scheduler->CommitAtIntentDispatch(2).HasValue());
+            CHECK(selected->committed == 1);
+            CHECK(selected->reasons.explicitRequest);
+            CHECK(unrelated->committed == 2);
+
+            unrelated->remaining = 1;
+            REQUIRE(h.scheduler->EvaluateAtDecisionWithPausedAgent(3, h.Handle(0)).HasValue());
+            REQUIRE(h.scheduler->CommitAtIntentDispatch(3).HasValue());
+            CHECK(selected->committed == 1);
+            CHECK(unrelated->committed == 3);
+        }
+
         TEST_CASE("AI staged retirement fences evaluated intents before dispatch", "[unit][ai][scheduler][lifetime]") {
             Harness h;
             auto resident = h.Register(0);

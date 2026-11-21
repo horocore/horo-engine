@@ -691,6 +691,25 @@ namespace Horo::AI {
 
     /** @copydoc AiTaskScheduler::EvaluateAtDecision */
     Result<AiSchedulingReport> AiTaskScheduler::EvaluateAtDecision(const std::uint64_t tick) {
+        return EvaluateAtDecisionWithPausedAgent(tick, {});
+    }
+
+    /** @copydoc AiTaskScheduler::EvaluateReadyEntry */
+    void AiTaskScheduler::EvaluateReadyEntry(Entry &entry, const std::uint64_t tick, const AgentHandle pausedAgent) {
+        if (RetireIfCancelled(entry) || entry.agent == pausedAgent || entry.tier == AiSimulationTier::Suspended || !entry.pending.Any())
+            return;
+        if (tick - entry.waitingSince >= settings_.starvationTicks)
+            ++report_.starved;
+        if (entry.intents || entry.evaluatedTick == tick || report_.evaluated == settings_.evaluationsPerTick ||
+            report_.workUnits == settings_.workUnitsPerTick) {
+            ++report_.deferred;
+            return;
+        }
+        EvaluateEntry(entry);
+    }
+
+    /** @copydoc AiTaskScheduler::EvaluateAtDecisionWithPausedAgent */
+    Result<AiSchedulingReport> AiTaskScheduler::EvaluateAtDecisionWithPausedAgent(const std::uint64_t tick, const AgentHandle pausedAgent) {
         if (const auto validated = ValidateDecisionTick(tick); validated.HasError())
             return Result<AiSchedulingReport>::Failure(validated.ErrorValue());
         const bool newTick = tick != report_.tick;
@@ -714,19 +733,7 @@ namespace Horo::AI {
         for (const auto index : order_) {
             if (closed_)
                 break;
-            auto &entry = entries_[index];
-            if (RetireIfCancelled(entry))
-                continue;
-            if (entry.tier == AiSimulationTier::Suspended || !entry.pending.Any())
-                continue;
-            if (tick - entry.waitingSince >= settings_.starvationTicks)
-                ++report_.starved;
-            if (entry.intents || entry.evaluatedTick == tick || report_.evaluated == settings_.evaluationsPerTick ||
-                report_.workUnits == settings_.workUnitsPerTick) {
-                ++report_.deferred;
-                continue;
-            }
-            EvaluateEntry(entry);
+            EvaluateReadyEntry(entries_[index], tick, pausedAgent);
         }
         inPhase_ = false;
         if (closed_)

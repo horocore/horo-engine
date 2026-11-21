@@ -324,6 +324,14 @@ namespace Horo::AI {
          * next tick with SchedulerBudgetExhausted before advancing state or renewing any allowance.
          * @return Current cumulative report or typed clock/lifecycle/budget failure. */
         [[nodiscard]] Result<AiSchedulingReport> EvaluateAtDecision(std::uint64_t tick);
+        /** @brief Executes a decision phase while withholding one exact agent's next evaluation.
+         * @param tick Positive nondecreasing simulation tick.
+         * @param pausedAgent Generation to hold for this call. An invalid or retired handle has no effect.
+         * @details The held agent retains its pending wakes and consumes no evaluation allowance. Previously evaluated
+         * intents still drain normally. Only a host with explicit session policy should use this debug entry point.
+         * @return Current cumulative report or a typed clock, lifecycle or budget failure.
+         */
+        [[nodiscard]] Result<AiSchedulingReport> EvaluateAtDecisionWithPausedAgent(std::uint64_t tick, AgentHandle pausedAgent);
         /** @brief Commits bounded intents at AiIntentDispatch; no worker waits. @param tick Exact evaluated tick.
          * @return Cumulative report or typed phase/lifecycle failure. */
         [[nodiscard]] Result<AiSchedulingReport> CommitAtIntentDispatch(std::uint64_t tick);
@@ -392,6 +400,8 @@ namespace Horo::AI {
         [[nodiscard]] std::uint64_t PeriodicInterval(const Entry &entry) const noexcept;
         /** @brief Builds stable priority/age/identity order into reserved storage. */
         void Order();
+        /** @brief Runs an eligible entry without charging a held generation or losing its wake. */
+        void EvaluateReadyEntry(Entry &entry, std::uint64_t tick, AgentHandle pausedAgent);
         /** @brief Rechecks lifetime immediately around callbacks. @param entry Owned slot. @return Whether retired. */
         [[nodiscard]] bool RetireIfCancelled(Entry &entry) noexcept;
         /** @brief Fences one cancellation and releases callback inputs. @param entry Exact owned slot. */
