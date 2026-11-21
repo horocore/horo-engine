@@ -7,11 +7,15 @@
 #include "Horo/AI/EnvironmentQueryContexts.h"
 #include "Horo/AI/EnvironmentQueryExecution.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
+#include "Horo/AI/EnvironmentQuerySourceCodec.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstddef>
 #include <cstdint>
+#include <filesystem>
+#include <fstream>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <optional>
@@ -517,19 +521,27 @@ namespace Horo::AI {
                         AIErrors::EnvironmentQueryDescriptorUnavailable);
         }
 
+        /** @brief Cooks the authored patrol sample against the engine's installed query descriptors. */
+        EnvironmentQueryPlan LoadPatrolQuery(const QuerySchemaRegistry &registry) {
+            const auto asset = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "examples/gameplay-ai/Assets/PatrolPoints.horo_eqs";
+            std::ifstream input{asset, std::ios::binary};
+            REQUIRE(input.is_open());
+            const std::vector<std::uint8_t> bytes{std::istreambuf_iterator<char>{input}, std::istreambuf_iterator<char>{}};
+            const auto authored = EnvironmentQuerySourceCodec::Decode(bytes);
+            REQUIRE(authored.HasValue());
+            const auto cooked = EnvironmentQueryCookedCodec::Encode(authored.Value(), registry);
+            REQUIRE(cooked.HasValue());
+            auto compiled = EnvironmentQueryCookedCodec::Decode(cooked.Value(), registry);
+            REQUIRE(compiled.HasValue());
+            return std::move(compiled).Value();
+        }
+
         TEST_CASE("Behavior tree EQS commits the real native lattice winner to its typed output", "[unit][ai][eqs][task]") {
             QueryTaskFixture fixture;
             auto registry = CaptureBuiltinQuerySchema();
             REQUIRE(registry.HasValue());
-            const auto lattice = CreateBuiltinLatticeQuery(MakeIdentity<QueryId>(20), MakeIdentity<QueryStageId>(21),
-                                                           MakeIdentity<QueryResultSchemaId>(22), "Native points", {1000, 1}, 9);
-            REQUIRE(lattice.HasValue());
-            const auto origin = BuiltinQueryContextId(BuiltinQueryContext::WorldOrigin);
-            const auto authored = AddBuiltinPointDistanceTest(lattice.Value(), MakeIdentity<QueryStageId>(23), {1000, true, 1, origin});
-            REQUIRE(authored.HasValue());
-            auto compiled = EnvironmentQueryPlan::Compile(authored.Value(), registry.Value());
-            REQUIRE(compiled.HasValue());
-            fixture.host.native.emplace(std::move(compiled).Value(), std::move(registry).Value());
+            auto plan = LoadPatrolQuery(registry.Value());
+            fixture.host.native.emplace(std::move(plan), std::move(registry).Value());
 
             const auto tree = fixture.Start();
             REQUIRE(fixture.Evaluate(*tree, 4) == AiTaskState::Running);

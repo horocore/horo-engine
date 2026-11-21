@@ -28,6 +28,25 @@ The schema's **Target visible** key starts at `false`. To inspect that key in a
 project running this schema, launch cooked Editor Play with
 `--play-ai-inspect-key 83003 1`.
 
+`Assets/PatrolPoints.horo_eqs` generates a three-by-three grid around the
+querying agent. The points are one metre apart. The distance stage retains
+points within 1.1 metres of world origin and ranks the nearest first, returning
+up to four results. Open the asset in the query editor and preview it with a
+guard near the origin. Moving the guard changes the grid center. When the query
+has no candidates in range, move the guard closer to the origin or adjust the
+distance stage. The engine's EQS test suite cooks this asset and exercises both
+the successful Blackboard write and cancellation when the Scene changes.
+
+The same module publishes **Guard proximity** through `HORO_AI_SENSE` (sense
+`83010`, stimulus `83011`). Its listener reports candidates within three metres
+and publishes sensing loss for admitted candidates outside that radius. The
+provider uses the host's captured positions and processes at most 32 candidates
+per poll. For a cooked Editor Play project, add the sense and its stimulus to
+the Scene's native Perception policy and pass its project-relative path via
+`--play-ai-perception-policy`. Inspect the selected agent's stimuli in the Game
+panel. If no stimuli appear, check the listener's sense ID, layer and mask,
+and whether the policy's candidate radius reaches the target.
+
 If the node is unavailable, verify that the gameplay module built successfully
 and that the loaded module matches the project's SDK fingerprint. In cooked
 Editor Play, select the guard and open the Game panel's **AI agent inspector**.
