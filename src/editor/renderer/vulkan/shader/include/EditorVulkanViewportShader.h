@@ -33,7 +33,7 @@ namespace Horo::Editor {
      * @param metadata Reflection produced from the same payload.
      * @return Validated shader program or a typed package error. */
     [[nodiscard]] Result<EditorVulkanXrComfortCook> LoadEditorVulkanXrComfortCook(std::span<const std::uint8_t> payload,
-                                                                                std::span<const std::uint8_t> metadata);
+                                                                                  std::span<const std::uint8_t> metadata);
 
     /** @brief Exact cooked program for the opaque RGBA8 desktop camera compositor. */
     struct EditorVulkanCameraCrossFadeCook final {

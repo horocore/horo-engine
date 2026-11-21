@@ -205,8 +205,7 @@ namespace Horo::Editor {
                 .sourceRevision = 1,
                 .entryPoints = {{ShaderStage::Vertex, "VSMain"}, {ShaderStage::Fragment, "PSMain"}},
                 .bindings = {{{1}, ShaderResourceKind::UniformBuffer, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment}},
-                .parameters = {{{1}, {1}, ShaderValueType::Float32, 1, 4, 1},
-                               {{2}, {1}, ShaderValueType::Float32, 1, 4, 1}},
+                .parameters = {{{1}, {1}, ShaderValueType::Float32, 1, 4, 1}, {{2}, {1}, ShaderValueType::Float32, 1, 4, 1}},
                 .targets = {EditorVulkanViewportShaderTarget()}};
     }
 
@@ -217,7 +216,7 @@ namespace Horo::Editor {
 
     /** @copydoc LoadEditorVulkanXrComfortCook */
     Result<EditorVulkanXrComfortCook> LoadEditorVulkanXrComfortCook(std::span<const std::uint8_t> payload,
-                                                                  std::span<const std::uint8_t> metadata) {
+                                                                    std::span<const std::uint8_t> metadata) {
         return LoadFullscreenProgram<EditorVulkanXrComfortCook>(EditorVulkanXrComfortShaderManifest(), payload, metadata);
     }
 
