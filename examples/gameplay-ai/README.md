@@ -19,8 +19,14 @@ rtk proxy ctest --test-dir <example-build> -C Debug --output-on-failure
 
 For a single-configuration generator, set `CMAKE_BUILD_TYPE` to the SDK's
 configuration when configuring. The example uses `HORO_AI_NODE` and the SDK's
-generated descriptor bundle. The check reads that bundle and exercises the
-native task against a frozen Blackboard snapshot.
+generated descriptor bundle. The check compiles `Assets/HoldWaypoint.horo_bt`
+with the native descriptor and the authored `Assets/Guard.horo_bb` schema.
+It encodes and reloads the cooked plan, then runs the graph once per fixed
+tick against a frozen Blackboard snapshot.
+Copy each asset with its paired `.horo` identity file when reusing it.
+The schema's **Target visible** key starts at `false`. To inspect that key in a
+project running this schema, launch cooked Editor Play with
+`--play-ai-inspect-key 83003 1`.
 
 If the node is unavailable, verify that the gameplay module built successfully
 and that the loaded module matches the project's SDK fingerprint. In cooked
