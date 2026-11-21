@@ -754,6 +754,12 @@ retains the exact proposal digest and never changes source, history, or disk.
 Permissions, paths, and revision evidence are checked again by the mutation
 owner before application.
 
+The source editor projects the selected operation from that plan into its
+existing gutter and text decorations. It maps original byte coordinates to
+display coordinates and retains the exact source publication. Navigation
+only moves the caret. A newer source publication or a tentative widget edit
+retires the markers and reports a conflict until a new plan is selected.
+
 ## Backend Providers
 
 The system supports pluggable LLM backends:

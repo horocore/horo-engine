@@ -161,5 +161,6 @@ namespace Horo::Editor {
         theme.SetColor(Zep::ThemeColor::Error, Zep::toNVec4f(colors.statusError));
         theme.SetColor(Zep::ThemeColor::Warning, Zep::toNVec4f(colors.statusWarn));
         theme.SetColor(Zep::ThemeColor::Info, Zep::toNVec4f(colors.actionPrimary));
+        theme.SetColor(Zep::ThemeColor::WidgetActive, Zep::toNVec4f(colors.statusOk));
     }
 }  // namespace Horo::Editor

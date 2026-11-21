@@ -4490,6 +4490,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/source_editor/SourceEditorSession.cpp
             editor/source_editor/SourceEditorTools.cpp
             editor/source_editor/SourceEditorWidget.cpp
+            editor/source_editor/SourceReviewOverlay.cpp
             editor/source_editor/SourceSyntax.cpp
             editor/source_editor/SourceSyntaxProjection.cpp
             editor/source_editor/SourceEditorTheme.cpp

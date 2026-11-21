@@ -4099,6 +4099,7 @@ if (HORO_BUILD_EDITOR_GUI)
     add_executable(HoroSourceEditorWidgetTests
         unit/editor/SourceEditorWidgetTests.cpp
         unit/editor/SourceEditorHighlightingTests.cpp
+        unit/editor/SourceReviewOverlayTests.cpp
         unit/editor/SourceEditorSessionLifecycleTests.cpp
         unit/editor/SourceEditorWorkspaceInputTests.cpp)
     target_compile_features(HoroSourceEditorWidgetTests PRIVATE cxx_std_20)
