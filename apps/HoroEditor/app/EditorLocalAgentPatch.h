@@ -38,6 +38,8 @@ namespace Horo::Editor {
         Proposals::WorkspaceEditPlan plan;
         std::vector<EditorPatchFileCard> files;
         Proposals::ReviewDecisions decisions;
+        std::optional<std::size_t> expandedFile;
+        std::size_t displayedHunk{};
     };
 
     /** @brief Reports whether a complete reply begins with a supported patch format. */

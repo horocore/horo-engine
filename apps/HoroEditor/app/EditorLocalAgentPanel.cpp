@@ -863,6 +863,50 @@ namespace Horo::Editor {
                 status_ = result.HasError() ? "source_patch_stale" : nullptr;
             }
 
+            /** @brief Draws review decisions for one canonical file or hunk. */
+            void DrawUnitDecisions(EditorLocalAgentPatchReview &review, const Proposals::ReviewTarget target,
+                                   const Proposals::ReviewState state, const bool conflict, const ILocalizationService &locale) {
+                const auto *accept = target.hunk ? "source_patch_accept_hunk" : "source_patch_accept_file";
+                const auto *reject = target.hunk ? "source_patch_reject_hunk" : "source_patch_reject_file";
+                if (Button(locale, accept, !conflict && state != Proposals::ReviewState::Accepted))
+                    DecidePatch(review, target, Proposals::ReviewChoice::Accept);
+                if (Button(locale, reject, state != Proposals::ReviewState::Rejected))
+                    DecidePatch(review, target, Proposals::ReviewChoice::Reject);
+            }
+
+            /** @brief Navigates the bounded list while retaining the exact proposal hunk index. */
+            void DrawHunkNavigation(EditorLocalAgentPatchReview &review, const std::size_t count, const ILocalizationService &locale) {
+                if (Button(locale, "source_patch_previous_hunk", review.displayedHunk != 0))
+                    --review.displayedHunk;
+                if (Button(locale, "source_patch_next_hunk", review.displayedHunk + 1 < count))
+                    ++review.displayedHunk;
+            }
+
+            /** @brief Displays one hunk's original byte range without editing or retaining its text in the view. */
+            void DrawHunkReview(EditorLocalAgentPatchReview &review, const std::size_t file, const bool conflict,
+                                const ILocalizationService &locale, const Theme::Fonts &fonts) {
+                const auto *edit = std::get_if<Proposals::EditFile>(&review.proposal.Files()[file]);
+                if (!edit)
+                    return;
+                if (Button(locale, "source_patch_hunks", true)) {
+                    review.expandedFile = review.expandedFile == file ? std::nullopt : std::optional{file};
+                    review.displayedHunk = 0;
+                }
+                if (review.expandedFile != file)
+                    return;
+                DrawHunkNavigation(review, edit->hunks.size(), locale);
+                const auto index = review.displayedHunk;
+                const auto &hunk = edit->hunks[index];
+                const auto range =
+                    std::format("{} {}/{} · {} {}–{}", LocalizedText(locale, "source_patch_range"), index + 1, edit->hunks.size(),
+                                LocalizedText(locale, "source_patch_offset"), hunk.offset, hunk.offset + hunk.before.size());
+                const auto state = review.decisions.State({file, index}).Value();
+                const auto width = ImGui::GetContentRegionAvail().x;
+                Ui::WrappedText(width, range, Theme::Text(), fonts);
+                Ui::WrappedText(width, LocalizedText(locale, PatchDecisionLabel(state)), Theme::Muted(), fonts);
+                DrawUnitDecisions(review, {file, index}, state, conflict, locale);
+            }
+
             /** @brief Draws one file's review state and stages its operation when available. */
             void DrawPatchCard(EditorLocalAgentPatchReview &review, const std::size_t index, const ILocalizationService &locale,
                                const Theme::Fonts &fonts, EditorWorkspaceViewCommandData &command) {
@@ -877,10 +921,8 @@ namespace Horo::Editor {
                 const bool canOpen = !rejected && !conflict && file.kind != EditorPatchFileKind::Create;
                 if (Button(locale, "source_patch_review", canOpen))
                     status_ = requestSourceReview_(review.proposal, review.plan, index, command) ? nullptr : "source_patch_unavailable";
-                if (Button(locale, "source_patch_accept_file", !conflict && state != Accepted))
-                    DecidePatch(review, {index}, Proposals::ReviewChoice::Accept);
-                if (Button(locale, "source_patch_reject_file", !rejected))
-                    DecidePatch(review, {index}, Proposals::ReviewChoice::Reject);
+                DrawUnitDecisions(review, {index}, state, conflict != nullptr, locale);
+                DrawHunkReview(review, index, conflict != nullptr, locale, fonts);
             }
 
             /** @brief Shows atomic proposal actions independently of per-file decisions. */

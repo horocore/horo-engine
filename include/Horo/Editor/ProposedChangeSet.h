@@ -312,6 +312,8 @@ namespace Horo::Editor::Proposals {
         [[nodiscard]] bool Contains(ReviewTarget target) const noexcept;
         [[nodiscard]] bool Matches(const WorkspaceEditPlan &plan) const noexcept;
         [[nodiscard]] bool CanAccept(const WorkspaceEditPlan &plan, std::size_t file) const;
+        [[nodiscard]] bool AcceptancesCurrent(const WorkspaceEditPlan &plan, const Units &units) const;
+        void Publish(Units units);
         ChangeSet proposal_;
         Units units_;
         std::deque<Units> undo_;

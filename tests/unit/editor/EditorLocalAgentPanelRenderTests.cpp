@@ -490,6 +490,14 @@ namespace {
         select(fixture.ChatWindow()->GetID(1), "###source_patch_review");
         select(fixture.ChatWindow()->GetID(0), "###source_patch_review");
         CHECK(selections == std::vector{two.Identity().instance, one.Identity().instance});
+        select(fixture.ChatWindow()->GetID(0), "###source_patch_hunks");
+        CHECK(fixture.DrawnText().find("Change 1/2") != std::string::npos);
+        select(fixture.ChatWindow()->GetID(0), "###source_patch_next_hunk");
+        CHECK(fixture.DrawnText().find("Change 2/2") != std::string::npos);
+        select(fixture.ChatWindow()->GetID(0), "###source_patch_accept_hunk");
+        CHECK(fixture.DrawnText().find("Mixed decisions") != std::string::npos);
+        fixture.Activate("###source_patch_undo");
+        CHECK(fixture.DrawnText().find("Mixed decisions") == std::string::npos);
         select(fixture.ChatWindow()->GetID(0), "###source_patch_accept_file");
         CHECK(fixture.DrawnText().find("Accepted") != std::string::npos);
         fixture.Activate("###source_patch_reject");

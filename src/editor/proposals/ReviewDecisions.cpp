@@ -24,6 +24,16 @@ namespace Horo::Editor::Proposals {
             return std::ranges::find(states, ReviewState::Accepted) != states.end();
         }
 
+        /** @brief Updates a validated selection in a detached decision batch. */
+        void SetUnits(const std::span<std::vector<ReviewState>> files, const std::optional<std::size_t> hunk, const ReviewState state) {
+            if (hunk) {
+                files.front()[*hunk] = state;
+                return;
+            }
+            for (auto &file : files)
+                std::ranges::fill(file, state);
+        }
+
         /** @brief Reads unit states in the already-validated, exact proposal shape. */
         bool ReadUnits(std::string_view text, const std::span<std::vector<ReviewState>> files) {
             for (auto &file : files) {
@@ -94,6 +104,24 @@ namespace Horo::Editor::Proposals {
         return preview && CurrentFile(proposal_.Files()[file], *preview);
     }
 
+    /** @brief Revalidates every retained acceptance before a state can become active. */
+    bool ReviewDecisions::AcceptancesCurrent(const WorkspaceEditPlan &plan, const Units &units) const {
+        for (std::size_t file = 0; file < units.size(); ++file)
+            if (HasAcceptance(units[file]) && !CanAccept(plan, file))
+                return false;
+        return true;
+    }
+
+    /** @brief Publishes a complete decision change with bounded undo history. */
+    void ReviewDecisions::Publish(Units units) {
+        if (units == units_)
+            return;
+        undo_.push_back(std::move(units_));
+        units_ = std::move(units);
+        if (undo_.size() > UndoLimit)
+            undo_.pop_front();
+    }
+
     /** @copydoc ReviewDecisions::State */
     Result<ReviewState> ReviewDecisions::State(const ReviewTarget target) const {
         if (!Contains(target))
@@ -123,20 +151,11 @@ namespace Horo::Editor::Proposals {
             const auto first = target.file.value_or(0);
             const auto end = target.file ? first + 1 : units_.size();
             const auto state = choice == ReviewChoice::Accept ? ReviewState::Accepted : ReviewState::Rejected;
-            for (auto file = first; file < end; ++file) {
+            for (auto file = first; file < end; ++file)
                 if (choice == ReviewChoice::Accept && !CanAccept(plan, file))
                     return Fail<void>(Errors::StaleBase);
-                if (target.hunk)
-                    pending[file][*target.hunk] = state;
-                else
-                    std::ranges::fill(pending[file], state);
-            }
-            if (pending == units_)
-                return Result<void>::Success();
-            undo_.push_back(std::move(units_));
-            units_ = std::move(pending);
-            if (undo_.size() > UndoLimit)
-                undo_.pop_front();
+            SetUnits(std::span{pending}.subspan(first, end - first), target.hunk, state);
+            Publish(std::move(pending));
             return Result<void>::Success();
         } catch (const std::bad_alloc &) {
             return Fail<void>(Errors::Bounds);
@@ -149,11 +168,9 @@ namespace Horo::Editor::Proposals {
             return Fail<bool>(Errors::StaleBase);
         if (undo_.empty())
             return Result<bool>::Success(false);
-        const auto &previous = undo_.back();
         try {
-            for (std::size_t file = 0; file < previous.size(); ++file)
-                if (HasAcceptance(previous[file]) && !CanAccept(plan, file))
-                    return Fail<bool>(Errors::StaleBase);
+            if (!AcceptancesCurrent(plan, undo_.back()))
+                return Fail<bool>(Errors::StaleBase);
         } catch (const std::bad_alloc &) {
             return Fail<bool>(Errors::Bounds);
         }
@@ -192,9 +209,8 @@ namespace Horo::Editor::Proposals {
                 return Fail<ReviewDecisions>(Errors::Malformed);
             if (!ReadUnits(payload.substr(header.size()), review.units_))
                 return Fail<ReviewDecisions>(Errors::Malformed);
-            for (std::size_t file = 0; file < review.units_.size(); ++file)
-                if (HasAcceptance(review.units_[file]) && !review.CanAccept(plan, file))
-                    return Fail<ReviewDecisions>(Errors::StaleBase);
+            if (!review.AcceptancesCurrent(plan, review.units_))
+                return Fail<ReviewDecisions>(Errors::StaleBase);
             return Result<ReviewDecisions>::Success(std::move(review));
         } catch (const std::bad_alloc &) {
             return Fail<ReviewDecisions>(Errors::Bounds);

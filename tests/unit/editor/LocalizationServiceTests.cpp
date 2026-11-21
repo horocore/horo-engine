@@ -225,6 +225,13 @@ namespace {
             "workspace.local_agent.source_patch_reject_file",
             "workspace.local_agent.source_patch_accept_all",
             "workspace.local_agent.source_patch_undo",
+            "workspace.local_agent.source_patch_hunks",
+            "workspace.local_agent.source_patch_range",
+            "workspace.local_agent.source_patch_offset",
+            "workspace.local_agent.source_patch_previous_hunk",
+            "workspace.local_agent.source_patch_next_hunk",
+            "workspace.local_agent.source_patch_accept_hunk",
+            "workspace.local_agent.source_patch_reject_hunk",
             "workspace.local_agent.source_patch_reject",
         };
         RequireCatalogKeys(service, sourceEditingKeys);

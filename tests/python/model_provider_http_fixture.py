@@ -123,7 +123,10 @@ class Handler(BaseHTTPRequestHandler):
         patch = {"version": 1, "files": [
             {"kind": "edit", "path": "two_very_long_source_name_for_a_narrow_review_card_in_the_local_agent_panel.cpp",
              "hunks": [{"offset": 0, "before": "two", "after": "new two"}]},
-            {"kind": "edit", "path": "one.cpp", "hunks": [{"offset": 0, "before": "one", "after": "new one"}]},
+            {"kind": "edit", "path": "one.cpp", "hunks": [
+                {"offset": 0, "before": "o", "after": "O"},
+                {"offset": 2, "before": "e", "after": "E"},
+            ]},
         ]}
         frames = [{"message": {"content": json.dumps(patch)}}, {"done": True}]
         self.send_records([json.dumps(frame) + "\n" for frame in frames])

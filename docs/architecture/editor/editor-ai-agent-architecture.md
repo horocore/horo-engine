@@ -774,6 +774,9 @@ atomically. Structural operations have one file decision. Acceptance and
 undo validate current workspace evidence before publishing a decision.
 The detached review encoding retains the current unit states and proposal
 digest for recovery. It carries no source bytes or mutation authority.
+The chat shows one change range at a time for each selected edit. Its
+controls use the original byte range and the canonical hunk index for the
+decision, even if the displayed file later becomes stale.
 
 ## Backend Providers
 
