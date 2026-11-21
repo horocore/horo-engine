@@ -163,8 +163,8 @@ namespace Horo::Application::PrefabAtomicTest {
                 CHECK(omissions.at("perception-input") == nlohmann::json::array({"provider-output", "provider-internal-state"}));
                 const auto &input = artifact.at("perceptionInput");
                 CHECK(input.at("scope") == "spatial-publication");
-                CHECK(input.at("sourceCount") == 1);
-                CHECK(input.at("listenerCount") == 1);
+                CHECK(input.at("sourceCount") == perception->sourceCount);
+                CHECK(input.at("listenerCount") == perception->listenerCount);
                 CHECK(input.at("digest") == FormatSha256(perception->digest));
             }
             REQUIRE(data.physics);
@@ -262,6 +262,24 @@ namespace Horo::Application::PrefabAtomicTest {
             INFO(err.str());
             REQUIRE(err.str().empty());
             return nlohmann::json::parse(out.str());
+        }
+
+        /** @brief Checks that the terminal exposes the actual authored stimulus identity and no provider values. */
+        void ExpectStimulusTimeline(const std::filesystem::path &file) {
+            const auto timeline = ExportReplayTimeline(file, "512");
+            const auto &events = timeline.at("events");
+            const auto stimulus = std::ranges::find_if(events, [](const auto &event) {
+                return event.at("boundary") == "perception-stimulus" && !event.at("ordinal").is_null();
+            });
+            REQUIRE(stimulus != events.end());
+            CHECK(stimulus->at("tick") == "1");
+            const auto &fields = stimulus->at("operation");
+            CHECK(fields.at("sourceObjectId") == "2");
+            CHECK(fields.at("listenerId") == "91");
+            CHECK(fields.at("firstSensedTick") == "1");
+            CHECK(fields.at("lastSensedTick") == "1");
+            CHECK(fields.at("sensed") == true);
+            CHECK(fields.size() == 7);
         }
 
         /** @brief Checks exact capture ordering, export redaction, and visible overflow. */
@@ -435,6 +453,7 @@ namespace Horo::Application::PrefabAtomicTest {
         const auto [agent, tick, tickCount] = replaySelection;
         const auto definitionId = definition->Id();
         const bool hasPerception = static_cast<bool>(input.perceptionPositions);
+        const bool hasNativeSensing = input.perceptionExecution.has_value();
         const bool hasCharacter = std::ranges::any_of(definition->Entities(), [](const auto &entity) {
             return entity.components.characterController.has_value();
         });
@@ -611,6 +630,15 @@ namespace Horo::Application::PrefabAtomicTest {
         CHECK(references == (referenceGeneration ? 1 : 0));
         ExpectReplayComparison(data);
         ExpectReplayArtifact(output.Value(), data);
+        if (hasNativeSensing) {
+            REQUIRE(data.stimuli);
+            CHECK(data.stimuli->available);
+            CHECK(data.stimuli->count == 1);
+            CHECK(data.stimuli->unresolvedSources == 0);
+            ExpectStimulusTimeline(output.Value().Directory() / "evidence.json");
+        } else {
+            CHECK_FALSE(data.stimuli);
+        }
         CHECK_FALSE(replay->TakeCommitted());
         host.Value()->Shutdown();
     }

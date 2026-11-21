@@ -2,6 +2,7 @@
 #include "HeadlessReplayManifest.h"
 #include "HeadlessReplayTimeline.h"
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/PerceptionMemory.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Foundation/Utf8.h"
 #include "Horo/Physics/PhysicsWorld.h"
@@ -184,6 +185,16 @@ namespace Horo::Application::Internal {
             if (file.at("format") != "horo-ai-replay-evidence" || file.at("version") != 1)
                 throw InvalidEvidence{};
             auto result = ReadRequired(file);
+            if (const auto stimuli = file.find("perceptionStimuli"); stimuli != file.end()) {
+                const auto &records = stimuli->at("records");
+                const auto &available = stimuli->at("available");
+                const auto &unresolved = stimuli->at("unresolvedSources");
+                if (stimuli->at("schemaVersion") != HeadlessStimuliSchemaVersion || !records.is_array() ||
+                    records.size() > AI::MaximumPerceptionMemoryEntries || !available.is_boolean() || !unresolved.is_number_unsigned() ||
+                    unresolved > AI::MaximumPerceptionMemoryEntries - records.size() ||
+                    (available == false && (!records.empty() || unresolved != 0)))
+                    throw InvalidEvidence{};
+            }
             if (file.contains("navigation")) {
                 const auto &navigation = file.at("navigation");
                 const auto &records = navigation.at("results");

@@ -3443,6 +3443,13 @@ operation summaries identify the respective decision node, query, or movement
 recipient. When the evidence only identifies a publication or state hash, a
 null ordinal points to that boundary's summary row.
 
+When native Perception polls the selected agent, the timeline also includes the
+post-poll stimulus memory. Each row carries the authored source, listener,
+sense and stimulus type, its first and last sensed ticks, and the sensed flag.
+The sample counts source identities it cannot project back to the authored
+Scene and reports an unavailable read separately from empty memory. These
+observations are diagnostic and do not alter deterministic spatial comparison.
+
 ### Scene decision scheduling tiers
 
 Hosts can compose an `AiDecisionSimulationProfile` through

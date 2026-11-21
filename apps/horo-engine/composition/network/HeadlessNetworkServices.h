@@ -119,6 +119,25 @@ namespace Horo::Application::Internal {
         std::size_t listenerCount{};
     };
 
+    /** @brief Redacted identity and lifetime of one remembered stimulus after the selected agent's sense poll. */
+    struct HeadlessReplayStimulus final {
+        Runtime::SceneObjectId source;
+        AI::PerceptionListenerTypeId listener;
+        AI::SenseTypeId sense;
+        AI::StimulusTypeId stimulus;
+        std::uint64_t firstTick{};
+        std::uint64_t lastTick{};
+        bool sensed{};
+    };
+
+    /** @brief Bounded diagnostic copy of remembered stimuli, separate from deterministic spatial input. */
+    struct HeadlessReplayStimuli final {
+        std::array<HeadlessReplayStimulus, AI::MaximumPerceptionMemoryEntries> records{};
+        std::size_t count{};
+        std::size_t unresolvedSources{};
+        bool available{};
+    };
+
     /** @brief Selected agent's observed query results and Blackboard writes for a single committed tick. */
     struct HeadlessReplayQueries final {
         Sha256Digest profile;
@@ -147,6 +166,7 @@ namespace Horo::Application::Internal {
         std::optional<HeadlessReplayQueries> queries;
         std::optional<HeadlessReplayGameplay> gameplay;
         std::optional<HeadlessReplayNavigation> navigation;
+        std::optional<HeadlessReplayStimuli> stimuli;
     };
 
     /** @brief Product-owned storage for an exact committed tick window; no concurrent access or file storage. */
@@ -188,6 +208,9 @@ namespace Horo::Application::Internal {
                                                          const Runtime::FixedStepContext &) noexcept;
         /** @brief Supplies Navigation observation storage after exact fixed-attempt admission. */
         HeadlessReplayNavigation *ObserveNavigation(const HeadlessNetworkDetail::WorldRecord &, const Runtime::FixedStepContext &) noexcept;
+        /** @brief Reads selected-agent memory after the ordinary successful sense poll without advancing it. */
+        void ObserveStimuli(const HeadlessNetworkDetail::WorldRecord &, const Runtime::FixedStepContext &,
+                            const Runtime::RuntimeSceneView &);
 
         HeadlessDecisionReplaySelection selection_;
         const std::thread::id owner_{std::this_thread::get_id()};
@@ -199,6 +222,7 @@ namespace Horo::Application::Internal {
         std::optional<HeadlessReplayPerception> perception_;
         std::optional<Gameplay::BehaviorFixedEvidence> gameplay_;
         std::optional<HeadlessReplayNavigation> navigation_;
+        std::optional<HeadlessReplayStimuli> stimuli_;
         std::optional<Capture> pending_;
         std::vector<HeadlessDecisionReplayData> committed_;
         std::optional<Error> captureError_;

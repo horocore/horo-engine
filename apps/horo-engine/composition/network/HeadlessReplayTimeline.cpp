@@ -60,6 +60,17 @@ namespace Horo::Application::Internal {
             return fields;
         }
 
+        /** @brief Selects authored identities and fixed lifetime from a real post-poll stimulus. */
+        Json StimulusFields(const Json &record) {
+            auto fields =
+                SelectFields(record, {"sourceObjectId", "listenerId", "senseId", "stimulusId", "firstSensedTick", "lastSensedTick"}, {});
+            const auto &sensed = record.at("sensed");
+            if (!sensed.is_boolean())
+                throw InvalidHeadlessReplayEvidence{};
+            fields["sensed"] = sensed;
+            return fields;
+        }
+
         /** @brief Copies only a declared boundary digest and canonical revision identities. */
         Json DigestFields(const Json &section, std::initializer_list<const char *> identities) {
             auto fields = SelectFields(section, identities, {});
@@ -185,6 +196,16 @@ namespace Horo::Application::Internal {
             const auto records = RecordsFor(frame, boundary);
             for (std::size_t ordinal = 0; ordinal < records.Size(); ++ordinal)
                 Add(name, ordinal, records.project(records.values->at(ordinal)));
+            if (boundary == PerceptionInput) {
+                if (const auto stimuli = frame.find("perceptionStimuli"); stimuli != frame.end()) {
+                    auto state = SelectFields(*stimuli, {}, {"unresolvedSources"});
+                    state["available"] = stimuli->at("available");
+                    Add("perception-stimulus", std::nullopt, std::move(state));
+                    std::size_t ordinal{};
+                    for (const auto &record : stimuli->at("records"))
+                        Add("perception-stimulus", ordinal++, StimulusFields(record));
+                }
+            }
         }
     }
 

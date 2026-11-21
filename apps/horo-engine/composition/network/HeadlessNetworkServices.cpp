@@ -172,7 +172,8 @@ namespace Horo::Application::Internal {
                                                             const HeadlessNetworkDetail::ReplayAuthoredScene &authored,
                                                             const Runtime::RuntimeSceneView &scene,
                                                             const std::optional<HeadlessReplayPerception> perception,
-                                                            const std::optional<HeadlessReplayNavigation> &navigation) {
+                                                            const std::optional<HeadlessReplayNavigation> &navigation,
+                                                            const std::optional<HeadlessReplayStimuli> &stimuli) {
             if (navigation && navigation->truncated)
                 return HeadlessDecisionReplay::Capture::Failure(
                     MakeError(AI::AIErrors::CanonicalStateInvalid, "Navigation replay exceeded its outcome budget."));
@@ -188,7 +189,8 @@ namespace Horo::Application::Internal {
                                                              .definitionRevision = authored.definitionRevision,
                                                              .sceneInput = authored.sceneInput,
                                                              .perception = perception,
-                                                             .navigation = navigation});
+                                                             .navigation = navigation,
+                                                             .stimuli = stimuli});
         }
 
         /** @brief Copies exact solved Character results over stable authored keys without stepping a subsystem. */
@@ -417,6 +419,7 @@ namespace Horo::Application::Internal {
         gameplay_.reset();
         navigation_.reset();
         perception_.reset();
+        stimuli_.reset();
         if (const auto spatial = world.perception.Current()) {
             const auto scene = world.scenes->ActiveScene();
             if (!scene || !world.replayAuthoredScene) {
@@ -470,6 +473,42 @@ namespace Horo::Application::Internal {
         return &navigation_.emplace();
     }
 
+    /** @copydoc HeadlessDecisionReplay::ObserveStimuli */
+    void HeadlessDecisionReplay::ObserveStimuli(const HeadlessNetworkDetail::WorldRecord &world, const Runtime::FixedStepContext &context,
+                                                const Runtime::RuntimeSceneView &scene) {
+        if (owner_ != std::this_thread::get_id() || !armedAgent_.IsValid() || attemptWorld_ != &world ||
+            attempt_ != context.attemptNumber || !world.replayAuthoredScene)
+            return;
+        auto &observed = stimuli_.emplace();
+        try {
+            const auto owner = world.ai->ResolveDecisionQueryOwnerAtSafePoint(armedAgent_);
+            if (owner.HasError())
+                return;
+            const auto snapshot = world.ai->ReadPerceptionAtSafePoint(scene, owner.Value());
+            if (snapshot.HasError())
+                return;
+            observed.available = true;
+            for (const auto &memory : std::span{snapshot.Value().entries}.first(snapshot.Value().count)) {
+                const auto source = memory.key.source;
+                const Runtime::EntityRef reference{{source.sceneIncarnation}, {source.slot, source.generation}};
+                const auto entity = scene.Get(reference);
+                if (entity.HasError() || !entity.Value().authoredObject ||
+                    !IsOriginalReplayEntity(*world.replayAuthoredScene, reference.entity)) {
+                    ++observed.unresolvedSources;
+                    continue;
+                }
+                observed.records[observed.count++] =
+                    {*entity.Value().authoredObject, memory.key.listener,   memory.key.sense,        memory.key.stimulus,
+                     memory.firstSensedTick,         memory.lastSensedTick, memory.isCurrentlySensed};
+            }
+            std::ranges::sort(std::span{observed.records}.first(observed.count), {}, [](const auto &record) {
+                return std::tuple{record.source, record.listener, record.sense, record.stimulus};
+            });
+        } catch (const std::bad_alloc &) {
+            observed = {};
+        }
+    }
+
     void HeadlessDecisionReplay::Prepare(HeadlessNetworkDetail::WorldRecord &world, const Runtime::FixedStepContext &context) {
         if (owner_ != std::this_thread::get_id() || pending_ || attemptWorld_ != &world || attempt_ != context.attemptNumber ||
             attemptedTick_ != context.simulationTick)
@@ -484,7 +523,8 @@ namespace Horo::Application::Internal {
             return;
         }
         armedAgent_ = {};
-        auto captured = EncodeReplayCapture(std::move(evidence).Value(), *world.replayAuthoredScene, *scene, perception_, navigation_);
+        auto captured =
+            EncodeReplayCapture(std::move(evidence).Value(), *world.replayAuthoredScene, *scene, perception_, navigation_, stimuli_);
         pending_ = captured.HasError() ? std::move(captured)
                                        : CaptureNativeReplay(std::move(captured).Value(), world, *world.replayAuthoredScene, *scene,
                                                              context, previousPhysicsTick_, gameplay_);

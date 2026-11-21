@@ -64,6 +64,23 @@ namespace Horo::Application::Internal {
                     {"results", std::move(results)}};
         }
 
+        /** @brief Encodes typed stimulus identities and fixed lifetime without sensory payloads or private coordinates. */
+        Json EncodeStimuli(const HeadlessReplayStimuli &stimuli) {
+            auto records = Json::array();
+            for (const auto &entry : std::span{stimuli.records}.first(stimuli.count))
+                records.push_back({{"sourceObjectId", std::to_string(entry.source.value)},
+                                   {"listenerId", std::to_string(entry.listener.Value())},
+                                   {"senseId", std::to_string(entry.sense.Value())},
+                                   {"stimulusId", std::to_string(entry.stimulus.Value())},
+                                   {"firstSensedTick", std::to_string(entry.firstTick)},
+                                   {"lastSensedTick", std::to_string(entry.lastTick)},
+                                   {"sensed", entry.sensed}});
+            return {{"schemaVersion", HeadlessStimuliSchemaVersion},
+                    {"available", stimuli.available},
+                    {"unresolvedSources", stimuli.unresolvedSources},
+                    {"records", std::move(records)}};
+        }
+
         /** @brief Encodes terminal query outcomes or the corresponding successful Blackboard writes in owner order. */
         Json EncodeQueries(const HeadlessReplayQueries &queries, const bool blackboard) {
             auto records = Json::array();
@@ -270,6 +287,8 @@ namespace Horo::Application::Internal {
                                                   {"digest", FormatSha256(perception->digest)},
                                                   {"sourceCount", perception->sourceCount},
                                                   {"listenerCount", perception->listenerCount}};
+                if (data.stimuli)
+                    payload["perceptionStimuli"] = EncodeStimuli(*data.stimuli);
                 if (data.characterMotion) {
                     auto motion = EncodeCharacterMotion(*data.characterMotion);
                     payload["characterMotion"] = {{"schemaVersion", CharacterMotionSchemaVersion},

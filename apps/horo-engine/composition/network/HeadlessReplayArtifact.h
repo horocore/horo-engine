@@ -19,6 +19,7 @@ namespace Horo::Application::Internal {
     inline constexpr std::size_t MaximumHeadlessReplayTicks = 32;
     inline constexpr std::size_t MaximumHeadlessReplayWindowBytes = MaximumHeadlessReplayEvidenceBytes * MaximumHeadlessReplayTicks;
     inline constexpr std::uint32_t HeadlessSceneInputSchemaVersion = 2;
+    inline constexpr std::uint32_t HeadlessStimuliSchemaVersion = 1;
 
     /** @brief User-selected absolute directory name for one immutable evidence publication. */
     class HeadlessReplayOutput final {

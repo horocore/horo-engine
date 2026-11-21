@@ -1050,6 +1050,7 @@ namespace Horo::Application::PrefabAtomicTest {
             bool captureReplay = false;
             bool captureCharacterReplay = false;
             bool capturePerceptionReplay = false;
+            bool captureStimuli = false;
             bool abortReplay = false;
             auto role = NetworkProjectRole::Standalone;
             std::optional<std::uint32_t> replayReferenceGeneration;
@@ -1075,6 +1076,12 @@ namespace Horo::Application::PrefabAtomicTest {
                 executionBudget = 100;
                 captureReplay = true;
                 capturePerceptionReplay = true;
+            }
+            SECTION("standalone timeline exports post-poll native stimuli by authored source identity") {
+                executionBudget = 100;
+                captureReplay = true;
+                capturePerceptionReplay = true;
+                captureStimuli = true;
             }
             SECTION("standalone replay records a terminal query result") {
                 executionBudget = 100;
@@ -1471,7 +1478,7 @@ namespace Horo::Application::PrefabAtomicTest {
                                                                                Runtime::PhysicsSphereCollider{0.6F}})}}});
                 REQUIRE(source.RequireAsset({material, type}).HasValue());
             }
-            if (selectNativePerception) {
+            if (selectNativePerception || captureStimuli) {
                 auto peer = controller.agent.agent;
                 peer.agent = Decisions::MakeIdentity<AI::AgentId>(2);
                 source.Add({.object = {2},
@@ -1588,6 +1595,11 @@ namespace Horo::Application::PrefabAtomicTest {
             std::array catalog{controller.descriptor};
             if (capturePerceptionReplay)
                 catalog.front().perceptionEndpoints = PerceptionEndpoints();
+            std::optional<NativePerceptionFixture> replaySensing;
+            if (captureStimuli) {
+                replaySensing.emplace();
+                catalog.front().perceptionEndpoints = replaySensing->endpoints;
+            }
             const auto selectedController =
                 unknownController ? Decisions::MakeIdentity<AI::ControllerTypeId>(999) : controller.descriptor.controller;
             auto selected = Internal::HeadlessCookedDecisionInput{*committed.Value(),
@@ -1629,6 +1641,8 @@ namespace Horo::Application::PrefabAtomicTest {
                                                          .cookedDecisions = decisions};
             if (capturePerceptionReplay)
                 input.perceptionPositions = PerceptionPositions;
+            if (replaySensing)
+                input.perceptionExecution = replaySensing->execution;
             if (selectNativePerception) {
                 auto captured = CaptureProjectPerception(definition.Value(), sceneId, perception.dump());
                 REQUIRE(captured.HasValue());

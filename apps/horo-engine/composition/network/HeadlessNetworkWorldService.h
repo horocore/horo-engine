@@ -892,7 +892,10 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             const auto scene = record_->scenes->ActiveScene();
             if (!scene)
                 return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionSpatialStale));
-            return record_->ai->PollPerceptionAtSensePoll(*scene, record_->perception, context.simulationTick, context.fixedDelta);
+            auto polled = record_->ai->PollPerceptionAtSensePoll(*scene, record_->perception, context.simulationTick, context.fixedDelta);
+            if (polled.HasValue() && owners_->configured->decisionReplay)
+                owners_->configured->decisionReplay->ObserveStimuli(*record_, context, *scene);
+            return polled;
         }
 
         /** @brief Publishes path results and consumes the preceding Character result before decision evaluation. */
