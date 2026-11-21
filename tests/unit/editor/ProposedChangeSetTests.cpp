@@ -60,7 +60,117 @@ namespace {
         const auto body = root.at("payload").dump();
         root["commitment"] = FormatSha256(ComputeSha256(std::as_bytes(std::span{body})));
     }
+
+    ProposalIdentity PatchIdentity() {
+        return {"proposal.patch", 7, {"host.provider", "host.model", "host.request"}};
+    }
 }  // namespace
+
+TEST_CASE("Structured model patches bind every existing operation to offered source text", "[editor][proposal][patch]") {
+    Fixture fixture;
+    const std::array sources{fixture.code, fixture.old, fixture.removed};
+    constexpr std::string_view patch = R"({"version":1,"files":[
+        {"kind":"create","path":"src/new.cpp","text":"hello\n"},
+        {"kind":"edit","path":"code.cpp","hunks":[{"offset":4,"before":"x","after":"y"}]},
+        {"kind":"delete","path":"remove.cpp"},
+        {"kind":"rename","path":"old.cpp","destination":"src/moved.cpp","hunks":[]}]})";
+    const auto decoded = DecodeStructuredPatch(patch, fixture.policy, PatchIdentity(), sources);
+    REQUIRE(decoded.HasValue());
+    const auto &proposal = decoded.Value();
+    REQUIRE(proposal.Files().size() == 4);
+    CHECK(proposal.Values().id == "proposal.patch");
+    CHECK(proposal.Values().revision == 7);
+    CHECK(proposal.Values().provenance.provider == "host.provider");
+    const auto found = std::ranges::find_if(proposal.Files(), [](const auto &file) {
+        return std::holds_alternative<EditFile>(file);
+    });
+    REQUIRE(found != proposal.Files().end());
+    CHECK(std::get<EditFile>(*found).base.revision == fixture.code.Revision());
+    CHECK(std::get<EditFile>(*found).base.content == FileBase::Capture(fixture.code).Value().content);
+    CHECK(fixture.documents.Snapshot(fixture.code.Identity().instance).Value().SharesStateWith(fixture.code));
+    CHECK(fixture.Disk("code.cpp") == "int x;\n");
+    CHECK(fixture.Disk("old.cpp") == "old\n");
+    CHECK(fixture.Disk("remove.cpp") == "remove\n");
+    CHECK_FALSE(std::filesystem::exists(fixture.project.directory / "src"));
+}
+
+TEST_CASE("Structured model patch admission rejects stale and untrusted evidence", "[editor][proposal][patch]") {
+    Fixture fixture;
+    auto sources = std::vector{fixture.code};
+    Limits limits;
+    std::string patch = R"({"version":1,"files":[{"kind":"edit","path":"code.cpp","hunks":[{"offset":4,"before":"x","after":"y"}]}]})";
+    const ErrorCodeDescriptor *error = &Errors::Malformed;
+    SECTION("duplicate object key is ambiguous") {
+        patch.insert(1, R"("version":1,)");
+    }
+    SECTION("provider cannot issue provenance") {
+        patch.insert(1, R"("provenance":{},)");
+    }
+    SECTION("provider cannot supply base metadata") {
+        patch.insert(patch.find("\"hunks\""), R"("base":{},)");
+    }
+    SECTION("existing source must be offered") {
+        sources.clear();
+        error = &Errors::StaleBase;
+    }
+    SECTION("ambiguous base candidates fail closed") {
+        sources.push_back(fixture.code);
+        error = &Errors::StaleBase;
+    }
+    SECTION("a newer editor revision revokes the base") {
+        REQUIRE(fixture.documents.Edit(fixture.code.Identity().instance, {fixture.code.Revision(), 4, 1, "z"}).HasValue());
+        error = &Errors::StaleBase;
+    }
+    SECTION("the before text must match") {
+        patch.replace(patch.find("\"x\""), 3, "\"z\"");
+        error = &Errors::StaleBase;
+    }
+    SECTION("path traversal is malformed") {
+        patch.replace(patch.find("code.cpp"), 8, "../code.cpp");
+    }
+    SECTION("well-formed paths outside policy are denied") {
+        patch.replace(patch.find("code.cpp"), 8, "secrets.cpp");
+        error = &Errors::PolicyDenied;
+    }
+    SECTION("versions are explicit") {
+        patch[patch.find('1')] = '2';
+        error = &Errors::UnsupportedVersion;
+    }
+    SECTION("wire size is checked before parsing") {
+        limits.maximumWireBytes = 32;
+        error = &Errors::Bounds;
+    }
+    SECTION("binary replacement cannot enter the proposal model") {
+        patch.replace(patch.find("\"y\""), 3, R"("\u0000")");
+        error = &Errors::Invalid;
+    }
+    SECTION("two replacements cannot share the same base range") {
+        patch.insert(patch.find(']'), R"(,{"offset":4,"before":"x","after":"z"})");
+        error = &Errors::Invalid;
+    }
+    SECTION("oversized JSON structure is stopped during parsing") {
+        limits.maximumFiles = 1;
+        limits.maximumHunksPerFile = 1;
+        patch = R"({"version":1,"files":[)";
+        for (int index = 0; index < 100; ++index)
+            patch += "0,";
+        patch += "0]}";
+        error = &Errors::Bounds;
+    }
+    const auto decoded = DecodeStructuredPatch(patch, fixture.policy, PatchIdentity(), sources, limits);
+    REQUIRE(decoded.HasError());
+    CHECK(decoded.ErrorValue().code.Value() == error->code.Value());
+    CHECK(fixture.Disk("code.cpp") == "int x;\n");
+}
+
+TEST_CASE("Every short prefix of a structured patch fails transactionally", "[editor][proposal][patch]") {
+    Fixture fixture;
+    constexpr std::string_view patch = R"({"version":1,"files":[{"kind":"create","path":"src/new.cpp","text":"data"}]})";
+    for (std::size_t bytes = 0; bytes < patch.size(); ++bytes)
+        CHECK(DecodeStructuredPatch(patch.substr(0, bytes), fixture.policy, PatchIdentity(), {}).HasError());
+    CHECK(DecodeStructuredPatch(patch, fixture.policy, PatchIdentity(), {}).HasValue());
+    CHECK_FALSE(std::filesystem::exists(fixture.project.directory / "src"));
+}
 
 TEST_CASE("Untrusted source proposal review changes neither actual buffers history nor disk", "[editor][proposal]") {
     Fixture fixture;

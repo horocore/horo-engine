@@ -1,6 +1,7 @@
 #include "Horo/Editor/ProposedChangeSet.h"
 
 #include <algorithm>
+#include <limits>
 #include <new>
 #include <nlohmann/json.hpp>
 #include <set>
@@ -10,6 +11,8 @@ namespace Horo::Editor::Proposals {
         using Json = nlohmann::json;
 
         struct InvalidWire final {};
+
+        struct WireBudgetExceeded final {};
 
         template <class T> Result<T> Fail(const ErrorCodeDescriptor &error) {
             return Result<T>::Failure(MakeError(error));
@@ -62,9 +65,12 @@ namespace Horo::Editor::Proposals {
         }
 
         /** @brief Rejects duplicate keys and nesting beyond sixteen before retaining unbounded structure. */
-        Json Parse(std::string_view text) {
+        Json Parse(std::string_view text, std::size_t remainingEvents = std::numeric_limits<std::size_t>::max()) {
             std::vector<std::set<std::string>> objects;
-            const auto callback = [&objects](int depth, Json::parse_event_t event, const Json &value) {
+            const auto callback = [&objects, &remainingEvents](int depth, Json::parse_event_t event, const Json &value) {
+                if (remainingEvents == 0)
+                    throw WireBudgetExceeded{};
+                --remainingEvents;
                 if (depth > 16)
                     throw InvalidWire{};
                 if (event == Json::parse_event_t::object_start)
@@ -160,6 +166,63 @@ namespace Horo::Editor::Proposals {
                 return RenameFile{Base(value.at("base")), Path(value.at("destination")), Hunks(value.at("hunks"), limits)};
             }
             throw InvalidWire{};
+        }
+
+        /** @brief Chooses exactly one offered source snapshot, rejecting aliases or multiple candidates. */
+        const SourceDocumentSnapshot *ResolvePatchBase(const SourceDocumentId &path, std::span<const SourceDocumentSnapshot> sources) {
+            const SourceDocumentSnapshot *matched{};
+            for (const auto &source : sources) {
+                const auto identity = source.Identity();
+                if (identity.key.kind != DocumentKind::Source || identity.key.source != path)
+                    continue;
+                if (matched)
+                    return nullptr;
+                matched = &source;
+            }
+            return matched;
+        }
+
+        /** @brief Validates a model's exact field set before any lookup of admitted base evidence. */
+        std::string StructuredOperationKind(const Json &value) {
+            const auto kind = String(value.at("kind"), 16);
+            if (kind == "create")
+                Shape(value, {"kind", "path", "text"});
+            else if (kind == "edit")
+                Shape(value, {"kind", "path", "hunks"});
+            else if (kind == "delete")
+                Shape(value, {"kind", "path"});
+            else if (kind == "rename")
+                Shape(value, {"kind", "path", "destination", "hunks"});
+            else
+                throw InvalidWire{};
+            return kind;
+        }
+
+        /** @brief Resolves an edit against the host snapshot and checks every original-byte hunk before review. */
+        Result<FileOperation> StructuredOperation(const Json &value, const ProjectPolicy &policy,
+                                                  std::span<const SourceDocumentSnapshot> sources, const Limits &limits,
+                                                  std::vector<const SourceDocumentSnapshot *> &used) {
+            const auto kind = StructuredOperationKind(value);
+            auto path = Path(value.at("path"));
+            if (!policy.Allows(path))
+                return Fail<FileOperation>(Errors::PolicyDenied);
+            if (kind == "create")
+                return Result<FileOperation>::Success(CreateFile{std::move(path), String(value.at("text"), limits.maximumTextBytes)});
+            const auto *source = ResolvePatchBase(path, sources);
+            if (!source || !source->IsCurrent())
+                return Fail<FileOperation>(Errors::StaleBase);
+            auto base = FileBase::Capture(*source);
+            if (base.HasError())
+                return Result<FileOperation>::Failure(base.ErrorValue());
+            used.push_back(source);
+            if (kind == "delete")
+                return Result<FileOperation>::Success(DeleteFile{std::move(base).Value()});
+            auto hunks = Hunks(value.at("hunks"), limits);
+            if (const auto checked = ValidateAgainstSnapshot(base.Value(), hunks, *source); checked.HasError())
+                return Result<FileOperation>::Failure(checked.ErrorValue());
+            if (kind == "edit")
+                return Result<FileOperation>::Success(EditFile{std::move(base).Value(), std::move(hunks)});
+            return Result<FileOperation>::Success(RenameFile{std::move(base).Value(), Path(value.at("destination")), std::move(hunks)});
         }
 
         /** @brief Produces the sole canonical recovery payload and captured-policy commitment. */
@@ -353,6 +416,50 @@ namespace Horo::Editor::Proposals {
                 return Result<ChangeSet>::Failure(draft.ErrorValue());
             return ChangeSet::Capture(policy, std::move(draft).Value(), limits);
         } catch (const std::bad_alloc &) {
+            return Fail<ChangeSet>(Errors::Bounds);
+        } catch (const InvalidWire &) {
+            return Fail<ChangeSet>(Errors::Malformed);
+        } catch (const Json::exception &) {
+            return Fail<ChangeSet>(Errors::Malformed);
+        }
+    }
+
+    /** @copydoc DecodeStructuredPatch */
+    Result<ChangeSet> DecodeStructuredPatch(const std::string_view text, const ProjectPolicy &policy, ProposalIdentity identity,
+                                            const std::span<const SourceDocumentSnapshot> sources, const Limits &limits) {
+        if (!limits.IsValid() || text.size() > limits.maximumWireBytes || sources.size() > Limits{}.maximumFiles)
+            return Fail<ChangeSet>(Errors::Bounds);
+        try {
+            // Each hunk object accounts for at most eight JSON parser events.
+            const auto events = 16U + limits.maximumFiles * (24U + 8U * limits.maximumHunksPerFile);
+            const auto root = Parse(text, events);
+            Shape(root, {"version", "files"});
+            if (Number(root.at("version")) != WireVersion)
+                return Fail<ChangeSet>(Errors::UnsupportedVersion);
+            const auto &files = root.at("files");
+            if (!files.is_array())
+                return Fail<ChangeSet>(Errors::Malformed);
+            if (files.size() > limits.maximumFiles)
+                return Fail<ChangeSet>(Errors::Bounds);
+            Draft draft{std::move(identity.id), identity.revision, std::move(identity.provenance)};
+            draft.files.reserve(files.size());
+            std::vector<const SourceDocumentSnapshot *> used;
+            used.reserve(files.size());
+            for (const auto &file : files) {
+                auto parsed = StructuredOperation(file, policy, sources, limits, used);
+                if (parsed.HasError())
+                    return Result<ChangeSet>::Failure(parsed.ErrorValue());
+                draft.files.push_back(std::move(parsed).Value());
+            }
+            auto proposal = ChangeSet::Capture(policy, std::move(draft), limits);
+            if (proposal.HasValue() && std::ranges::any_of(used, [](const auto *source) {
+                return !source->IsCurrent();
+            }))
+                return Fail<ChangeSet>(Errors::StaleBase);
+            return proposal;
+        } catch (const std::bad_alloc &) {
+            return Fail<ChangeSet>(Errors::Bounds);
+        } catch (const WireBudgetExceeded &) {
             return Fail<ChangeSet>(Errors::Bounds);
         } catch (const InvalidWire &) {
             return Fail<ChangeSet>(Errors::Malformed);

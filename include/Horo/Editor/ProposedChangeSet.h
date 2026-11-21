@@ -124,6 +124,13 @@ namespace Horo::Editor::Proposals {
         std::string request;
     };
 
+    /** @brief Identity assigned by the host for one model answer, independently of its content. */
+    struct ProposalIdentity final {
+        std::string id;
+        std::uint64_t revision{};
+        Provenance provenance;
+    };
+
     /** @brief Untrusted ingress values; only ChangeSet::Capture produces an admitted immutable proposal. */
     struct Draft final {
         std::string id;
@@ -266,6 +273,16 @@ namespace Horo::Editor::Proposals {
      * @param text Bounded wire bytes. @param policy Current host policy. @param limits Finite ceilings.
      * @return Newly admitted inert proposal or malformed/version/policy/bounds failure. */
     Result<ChangeSet> DecodeRecovery(std::string_view text, const ProjectPolicy &policy, const Limits &limits = {});
+
+    /** @brief Parses the versioned structured model patch into one inert, fully checked proposal.
+     * @param text Untrusted JSON with a version and files array. @param policy Current project path policy.
+     * @param identity Host-owned attribution. @param sources Exact already-captured bases offered for this answer.
+     * @param limits Finite host ceilings. @return Complete proposal or typed denial with no partial publication.
+     * @details Existing operations resolve only against provided live snapshots. The parser never opens or edits
+     * documents, reads files, accepts provider-supplied base authority, or retains the raw reply.
+     */
+    Result<ChangeSet> DecodeStructuredPatch(std::string_view text, const ProjectPolicy &policy, ProposalIdentity identity,
+                                            std::span<const SourceDocumentSnapshot> sources, const Limits &limits = {});
     /** @brief Serializes bounded redacted audit data, independently from recovery text. @param record Audit data.
      * @return Canonical versioned envelope or invalid record error. */
     Result<std::string> EncodeAudit(const AuditRecord &record);

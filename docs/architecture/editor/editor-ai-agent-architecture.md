@@ -730,6 +730,14 @@ deterministic tools, but it cannot let model output, voice, gaze, pointing, or a
 gesture approve its own mutation. Destructive and immersive scene changes always
 retain the visible proposal and revision-bound approval boundary.
 
+Structured source patches use a versioned object with a files array. A file
+record declares an operation, its project-relative path, and the operation's
+allowed text, destination, or original-byte hunks. The editor supplies the
+proposal identity and the exact source snapshots offered to the model. Parsing
+checks duplicate fields, finite limits, project path policy, and the original
+hunk bytes. It returns a typed proposal without opening, editing, or saving any
+file. Recovery uses its separate committed envelope.
+
 ## Backend Providers
 
 The system supports pluggable LLM backends:
