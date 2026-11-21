@@ -99,6 +99,20 @@ target_sources(horo-engine PRIVATE horo-engine/cli_host/ModuleScriptCliExecution
 target_link_libraries(horo-engine PRIVATE HoroScriptModuleHostInternal HoroModuleScriptPackageInternal)
 target_compile_features(horo-engine PRIVATE cxx_std_20)
 target_include_directories(horo-engine PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/shared/xr")
+
+set(HORO_NETWORK_PRODUCT_PROFILE "Development" CACHE STRING "Runtime profile of the headless network product executable")
+set_property(CACHE HORO_NETWORK_PRODUCT_PROFILE PROPERTY STRINGS Development Packaged)
+if(NOT HORO_NETWORK_PRODUCT_PROFILE MATCHES "^(Development|Packaged)$")
+    message(FATAL_ERROR "Unsupported HORO_NETWORK_PRODUCT_PROFILE: ${HORO_NETWORK_PRODUCT_PROFILE}")
+endif()
+set(_horo_network_product_packaged 0)
+if(HORO_NETWORK_PRODUCT_PROFILE STREQUAL "Packaged")
+    set(_horo_network_product_packaged 1)
+endif()
+set_property(TARGET horo-engine PROPERTY HORO_NETWORK_PRODUCT_PACKAGED ${_horo_network_product_packaged})
+set_property(SOURCE horo-engine/NetworkProductLaunch.cpp APPEND PROPERTY COMPILE_DEFINITIONS
+    "HORO_NETWORK_PRODUCT_PACKAGED=${_horo_network_product_packaged}")
+
 # Only identity consumers depend on the changing Git revision. Keep unrelated
 # application units reusable by compiler and analysis caches across commits.
 set_property(SOURCE horo-engine/main.cpp horo-engine/NetworkProductLaunch.cpp

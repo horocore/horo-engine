@@ -744,6 +744,10 @@ namespace Horo::Application::Internal {
             std::cerr << "horo-engine: " << launch.ErrorValue().message << '\n';
             return 2;
         }
+        if (HORO_NETWORK_PRODUCT_PACKAGED && launch.Value().decisionReplay) {
+            std::cerr << "horo-engine: AI replay capture is unavailable in the packaged network product\n";
+            return 3;
+        }
         if (nativeSecurity && launch.Value().role == Net::NetworkProjectRole::Standalone) {
             std::cerr << "horo-engine: native security requires an explicit network role\n";
             return 2;

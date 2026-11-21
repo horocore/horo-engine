@@ -3540,6 +3540,10 @@ For the standalone development CLI, authored settings must grant
 `replayCapture` before an explicit AI replay request can proceed. Legacy
 projects without an AI policy retain the explicit development command.
 The permission check denies both operations for a packaged execution profile.
+Build the packaged headless executable with
+`-DHORO_NETWORK_PRODUCT_PROFILE=Packaged`. That executable rejects AI replay
+capture before loading a Scene or binding providers, even when project settings
+grant development access. Its terminal surface has no live mutation command.
 
 ### Scene decision scheduling tiers
 
