@@ -701,6 +701,34 @@ namespace Horo::AI {
             CHECK(retained->agent == inputs.agent);
             CHECK_FALSE(cache.Lookup(scene->View(), inputs, authority, key, tick + 3));
 
+            SECTION("write admission requires the exact original capture") {
+                QueryExecutionInputs recaptured;
+                auto otherQuery = MakeExecution(probe, *scene, false, false, &recaptured);
+                REQUIRE(otherQuery);
+                REQUIRE(recaptured.contexts != inputs.contexts);
+                REQUIRE(recaptured.contexts->Revision() == inputs.contexts->Revision());
+                REQUIRE(recaptured.contexts->Query() == inputs.contexts->Query());
+                CHECK_FALSE(cache.Store(scene->View(), recaptured, authority, key, *result, tick).Value());
+                CHECK(cache.Lookup(scene->View(), recaptured, authority, key, tick) == retained);
+                CHECK_FALSE(cache.Store(scene->View(), inputs, authority, key, *retained, tick).Value());
+            }
+
+            SECTION("new structural revisions require fresh request capture") {
+                Runtime::SceneCommandBuffer commands;
+                REQUIRE(commands.Create({}).IsValid());
+                REQUIRE(scene->Commit(commands).HasValue());
+                const auto current = scene->View();
+                REQUIRE(current.IsCurrent());
+                CHECK_FALSE(cache.Lookup(current, inputs, authority, key, tick));
+                CHECK_FALSE(cache.Store(current, inputs, authority, key, *result, tick).Value());
+                CHECK(retained->winners.size() == result->winners.size());
+
+                QueryExecutionInputs recaptured;
+                auto otherQuery = MakeExecution(probe, *scene, false, false, &recaptured);
+                REQUIRE(otherQuery);
+                CHECK(cache.Lookup(current, recaptured, authority, key, tick) == retained);
+            }
+
             SECTION("live dependency, authority and Scene must match") {
                 ++dependencies[0].revision;
                 CHECK_FALSE(cache.Lookup(scene->View(), inputs, authority, key, tick));

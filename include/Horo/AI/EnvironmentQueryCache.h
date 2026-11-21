@@ -50,9 +50,9 @@ namespace Horo::AI {
         QueryResultCache &operator=(QueryResultCache &&) = delete;
 
         /** @brief Copies a complete current result after admission and evicts oldest entries as needed.
-         * @param scene Fresh matching Scene view. @param inputs Exact request owner/context.
+         * @param scene Fresh matching Scene view. @param inputs Exact request owner and original execution capture.
          * @param source Live authorization for the captured inputs. @param key Complete host-owned cache identity.
-         * @param result Just-published adaptive result. @param tick Current simulation tick.
+         * @param result Just-published adaptive result from the original capture. @param tick Current simulation tick.
          * @return True if retained, false if uncacheable, or a typed storage limit failure.
          */
         [[nodiscard]] Result<bool> Store(const Runtime::RuntimeSceneView &scene, const QueryExecutionInputs &inputs,
@@ -62,7 +62,7 @@ namespace Horo::AI {
         /** @brief Reads a matching unexpired result after revalidating authorization and entity generations.
          * @param scene Fresh matching Scene view. @param inputs Exact current request owner/context.
          * @param source Live authorization for the captured inputs. @param key Complete host-owned cache identity.
-         * @param tick Current simulation tick. @return Retained immutable result or null on miss.
+         * @param tick Current simulation tick. @return Retained historical result without publication authority, or null on miss.
          */
         [[nodiscard]] std::shared_ptr<const QueryExecutionResult> Lookup(const Runtime::RuntimeSceneView &scene,
                                                                          const QueryExecutionInputs &inputs,

@@ -48,10 +48,10 @@ namespace Horo::AI {
         /** @brief Checks the fresh submission independently of retained cache bytes. */
         bool CurrentRequest(const Runtime::RuntimeSceneView &scene, const Runtime::SceneRuntimeId expectedScene,
                             const QueryExecutionInputs &inputs, const IQueryExecutionSource &source, const QueryCacheKey &key) {
-            if (!scene.IsCurrent() || scene.RuntimeId() != expectedScene || !inputs.agent.IsValid() || !inputs.contexts ||
-                inputs.contexts->Scene() != expectedScene || inputs.contexts->Query() != key.query || !ValidKey(key) ||
+            if (scene.RuntimeId() != expectedScene || !inputs.agent.IsValid() || !inputs.contexts ||
+                !inputs.contexts->MatchesScene(scene) || inputs.contexts->Query() != key.query || !ValidKey(key) ||
                 inputs.ownerCancellation.IsCancellationRequested() || !source.IsCurrent(inputs) ||
-                inputs.ownerCancellation.IsCancellationRequested())
+                inputs.ownerCancellation.IsCancellationRequested() || !scene.IsCurrent())
                 return false;
             return std::ranges::all_of(inputs.contexts->Values(), [&](const auto &context) {
                 return CurrentContext(scene, context.value, key.sharedPointData);
@@ -138,8 +138,9 @@ namespace Horo::AI {
         using Output = Result<bool>;
         if (result.status != QueryExecutionStatus::Completed || result.mode != QueryExecutionMode::AdaptiveRealtime || result.error ||
             result.publicationTick != tick || result.scene != scene_ || result.agent != inputs.agent ||
-            !CurrentRequest(scene, scene_, inputs, source, key) || result.contextRevision != inputs.contexts->Revision() ||
-            result.winners.size() > EnvironmentQuerySchemaLimits::MaximumResults || !CurrentWinners(scene, result, key.sharedPointData))
+            !CurrentRequest(scene, scene_, inputs, source, key) || result.sourceContext.lock() != inputs.contexts ||
+            result.contextRevision != inputs.contexts->Revision() || result.winners.size() > EnvironmentQuerySchemaLimits::MaximumResults ||
+            !CurrentWinners(scene, result, key.sharedPointData))
             return Output::Success(false);
         const auto contexts = inputs.contexts->Values();
         const auto charge = sizeof(QueryExecutionResult) + ContextBytes(contexts) + key.canonicalInputs.size_bytes() +
@@ -149,6 +150,7 @@ namespace Horo::AI {
             return Output::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
         try {
             auto retained = std::make_shared<QueryExecutionResult>(result);
+            retained->sourceContext.reset();
             if (key.sharedPointData)
                 retained->agent = {};
             Entry candidate{.query = key.query,

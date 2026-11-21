@@ -113,6 +113,7 @@ namespace Horo::AI {
           items_(settings.maximumCandidates), result_{.agent = inputs_.agent,
                                                       .scene = inputs_.contexts->Scene(),
                                                       .contextRevision = inputs_.contexts->Revision(),
+                                                      .sourceContext = inputs_.contexts,
                                                       .generator = provenance} {
         samples_.resize(scoring_.stages_.size());
         testOrder_.resize(samples_.size());

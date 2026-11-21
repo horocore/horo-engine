@@ -157,6 +157,7 @@ namespace Horo::AI {
         AgentHandle agent;
         Runtime::SceneRuntimeId scene;
         std::uint64_t contextRevision{};
+        std::weak_ptr<const QueryContextSnapshot> sourceContext; /**< Publication identity for cache admission; owns no context lifetime. */
         QueryGeneratorProvenance generator;
         std::size_t generated{};
         std::size_t evaluated{};
