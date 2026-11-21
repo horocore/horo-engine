@@ -123,7 +123,7 @@ namespace Horo::Application::Internal {
         bool published_{};
     };
 
-    /** @brief Exact registered traversal filter and bounded deadline for the standalone best-effort path grant. */
+    /** @brief Exact registered traversal filter and bounded deadline for an authority world's best-effort path grant. */
     struct HeadlessNavigationPathPolicy final {
         static constexpr std::uint32_t MaximumDeadlineTicks = 10'000;
         Navigation::NavigationFilterId filter;
@@ -252,7 +252,7 @@ namespace Horo::Application::Internal {
         std::shared_ptr<HeadlessInitialStateHost> initialSceneState;
         std::shared_ptr<HeadlessDecisionReplay> decisionReplay; /**< Optional explicit one-shot standalone replay capture. */
         std::optional<Runtime::SceneAnimationParallelEvaluation> animationParallel;
-        std::vector<HeadlessNavigationActorPolicy> navigationActors;            /**< Explicit standalone AI movement population. */
+        std::vector<HeadlessNavigationActorPolicy> navigationActors;            /**< Explicit authoritative AI movement population. */
         std::shared_ptr<const HeadlessNavigationMotionPolicy> navigationMotion; /**< Bounded owner-lane movement policy, when selected. */
     };
 

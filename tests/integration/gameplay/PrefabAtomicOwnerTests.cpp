@@ -1043,6 +1043,7 @@ namespace Horo::Application::PrefabAtomicTest {
             bool runTerminal = false;
             bool captureReplay = false;
             bool abortReplay = false;
+            auto role = NetworkProjectRole::Standalone;
             std::optional<std::uint32_t> replayReferenceGeneration;
             bool selectNativePerception = false;
             std::optional<AI::PerceptionSenseContract> nativeSense;
@@ -1131,6 +1132,11 @@ namespace Horo::Application::PrefabAtomicTest {
                 selectNativePerception = true;
             }
             SECTION("selected prepared image freezes inert Perception before and binds one real native provider after startup") {
+                prepareNative = true;
+                selectNativePerception = true;
+            }
+            SECTION("dedicated authority admits the same native Perception and cooked decision attachment") {
+                role = NetworkProjectRole::DedicatedServer;
                 prepareNative = true;
                 selectNativePerception = true;
             }
@@ -1555,10 +1561,18 @@ namespace Horo::Application::PrefabAtomicTest {
                                      replayReferenceGeneration);
                 return;
             }
-            const auto composed = Internal::ComposeHeadlessSceneNetworkServices(std::move(scene), std::move(input), {}, gameplay);
+            std::optional<Gameplay::GameplayReplicationAdmissionPolicy> admission;
+            const bool dedicated = role == NetworkProjectRole::DedicatedServer;
+            if (dedicated) {
+                admission.emplace();
+                admission->inventory.completeness = NetworkReplicationInventoryCompleteness::Complete;
+            }
+            const auto world = dedicated ? NetworkModeWorldKind::AuthorityServer : NetworkModeWorldKind::Standalone;
+            const auto composed =
+                Internal::ComposeHeadlessSceneNetworkServices(std::move(scene), std::move(input), {}, gameplay, admission);
             REQUIRE(composed.HasValue());
             const auto built = composed.Value().factories.services[static_cast<std::size_t>(NetworkModeServiceKind::Scene)](
-                {NetworkModeServiceKind::Scene, NetworkProjectRole::Standalone, {}, NetworkModeWorldKind::Standalone, {7}});
+                {NetworkModeServiceKind::Scene, role, {}, world, {7}});
             REQUIRE(built.HasValue());
             const auto prepared = built.Value()->Prepare();
             if (expected) {
@@ -1567,7 +1581,7 @@ namespace Horo::Application::PrefabAtomicTest {
             } else {
                 REQUIRE(prepared.HasValue());
                 const auto physics = composed.Value().factories.services[static_cast<std::size_t>(NetworkModeServiceKind::Physics)](
-                    {NetworkModeServiceKind::Physics, NetworkProjectRole::Standalone, {}, NetworkModeWorldKind::Standalone, {7}});
+                    {NetworkModeServiceKind::Physics, role, {}, world, {7}});
                 REQUIRE(physics.HasValue());
                 REQUIRE(physics.Value()->Prepare().HasValue());
                 if (nativeProbe) {
@@ -1619,6 +1633,10 @@ namespace Horo::Application::PrefabAtomicTest {
                     CHECK(ai.probe.resumes == 0);
                 }
                 physics.Value()->Shutdown();
+                if (dedicated) {
+                    CHECK(nativeProbe->module[2] == 2);
+                    CHECK((nativeProbe->decision == std::array<std::uint32_t, 3>{2, 2, 2}));
+                }
             }
             const bool ranCaptured = executionBudget && !expected && !prepareNative;
             CHECK(ai.probe.factories == (ranCaptured ? 1 : 0));

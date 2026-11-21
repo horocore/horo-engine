@@ -276,6 +276,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
 
         void Shutdown() noexcept override {
             RevokeGameplayContext();
+            RetireAi();
             RetireGameplay();
             if (IsSceneOwner())
                 CloseRecord(*record_);
@@ -325,6 +326,12 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (record_)
                 if (const auto context = record_->gameplay.lock())
                     context->Revoke();
+        }
+
+        /** @brief Cancels scheduled work and retires Scene-owned AI callbacks before the gameplay teardown. */
+        void RetireAi() const noexcept {
+            if (record_ && record_->ai)
+                record_->ai->BeginShutdown();
         }
 
         void RetireGameplay() noexcept {
@@ -390,14 +397,11 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Result<void>::Failure(
                     MakeError(Network::NetworkErrors::NetworkModeInvalid, "Each world record admits exactly one Scene candidate."));
             const auto &input = *owners_->configured;
-            if (input.navigationPath && request_.world != Network::NetworkModeWorldKind::Standalone)
+            if (input.navigationPath && !IsAuthoritativeWorld())
                 return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid,
-                                                       "The best-effort Navigation path scope requires standalone authority."));
+                                                       "The best-effort Navigation path scope requires world authority."));
             if (!input.navigationActors.empty() && (!input.navigationPath || !input.navigation || !owners_->gameplay))
                 return Result<void>::Failure(MakeError(Navigation::NavigationErrors::CapabilityUnavailable));
-            if (SelectsNativePerception() && request_.world != Network::NetworkModeWorldKind::Standalone)
-                return Result<void>::Failure(
-                    MakeError(Network::NetworkErrors::NetworkModeInvalid, "Native project Perception requires standalone authority."));
             const auto &boundary = input.load;
             record_->sceneCancellation = boundary.cancellation;
             record_->scenes = std::make_shared<Runtime::RuntimeSceneService>(input.registry, input.loads,
@@ -939,6 +943,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (advanced.HasError()) {
                 if (record_->decisionMotion)
                     record_->navigationPath->DiscardMotionFeedback();
+                RetireAi();
                 if (gameplay_)
                     gameplay_->Shutdown();
                 return advanced;

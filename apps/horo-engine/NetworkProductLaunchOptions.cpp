@@ -281,14 +281,19 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        /** @brief Identifies product modes with a single locally authoritative AI world. */
+        bool HasHeadlessAiAuthority(const Net::NetworkProjectRole role) noexcept {
+            return role == Net::NetworkProjectRole::Standalone || role == Net::NetworkProjectRole::DedicatedServer;
+        }
+
         /** @brief Validates the explicit best-effort path authority before project IO. */
         Result<void> ValidateNavigationPathPolicy(const ProductLaunch &launch) {
             if (launch.navigationPath &&
-                (launch.role != Net::NetworkProjectRole::Standalone || !launch.gameplay || launch.gameplay->nativeArtifact.empty() ||
+                (!HasHeadlessAiAuthority(launch.role) || !launch.gameplay || launch.gameplay->nativeArtifact.empty() ||
                  launch.sceneInput.navigationMode != HeadlessNavigationMode::RecastDetour || !launch.cookedDecisionBindings.empty()))
                 return Result<void>::Failure(
                     MakeError(Net::NetworkErrors::NetworkModeInvalid,
-                              "A best-effort Navigation path grant requires standalone cooked Navigation and native gameplay."));
+                              "A best-effort Navigation path grant requires authoritative cooked Navigation and native gameplay."));
             return Result<void>::Success();
         }
 
@@ -396,21 +401,20 @@ namespace Horo::Application::Internal {
             if (launch.decisionReplayOutput && !launch.decisionReplay)
                 return Result<void>::Failure(
                     MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI replay output requires --ai-replay selection."));
-            if (launch.decisionReplay && launch.cookedDecisionBindings.empty())
-                return Result<void>::Failure(
-                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI replay requires explicit cooked controller selection."));
+            if (launch.decisionReplay && (launch.role != Net::NetworkProjectRole::Standalone || launch.cookedDecisionBindings.empty()))
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                       "AI replay requires standalone mode and explicit cooked controllers."));
             if (!launch.sceneInput.perceptionPolicyPath.empty() && launch.cookedDecisionBindings.empty())
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
+                                                       "Native Perception requires explicit native cooked controller selection."));
+            if (launch.aiMissingController && (!HasHeadlessAiAuthority(launch.role) || launch.sceneInput.scene.empty()))
                 return Result<void>::Failure(
-                    MakeError(Net::NetworkErrors::NetworkModeInvalid,
-                              "Native Perception requires explicit standalone native cooked controller selection."));
-            if (launch.aiMissingController && (launch.role != Net::NetworkProjectRole::Standalone || launch.sceneInput.scene.empty()))
-                return Result<void>::Failure(
-                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI controller policy requires a configured standalone Scene."));
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI controller policy requires a configured authoritative Scene."));
             if (!launch.cookedDecisionBindings.empty() &&
-                (launch.role != Net::NetworkProjectRole::Standalone || !launch.gameplay || launch.gameplay->nativeArtifact.empty() ||
+                (!HasHeadlessAiAuthority(launch.role) || !launch.gameplay || launch.gameplay->nativeArtifact.empty() ||
                  !launch.sceneInput.scene.starts_with("cooked:") || launch.sceneInput.cookedRoot.empty()))
                 return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
-                                                       "AI decisions require standalone mode, a native gameplay module, a "
+                                                       "AI decisions require standalone or dedicated mode, a native gameplay module, a "
                                                        "cooked Scene and its committed generation."));
             if (launch.gameplay && launch.gameplay->prefabPermission != GameplayPrefabPermission::Granted &&
                 std::ranges::any_of(launch.cookedDecisionBindings, [](const auto &binding) {

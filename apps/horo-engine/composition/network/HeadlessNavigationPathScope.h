@@ -1,7 +1,7 @@
 #pragma once
 
 /** @file HeadlessNavigationPathScope.h
- * @brief Private standalone Gameplay path grant over the installed immutable cooked provider.
+ * @brief Private authoritative Gameplay path grant over the installed immutable cooked provider.
  */
 #include "Horo/Animation/AnimationGraph.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
@@ -35,7 +35,7 @@ namespace Horo::Application::Internal {
          * @param world Installed owner and its canonical coordinator. It outlives this scope.
          * @param selection The admitted cooked project policy.
          * @param policy Explicit filter/deadline settings. @param scene Exact private Scene incarnation.
-         * @param module The one selected native principal for this standalone world.
+         * @param module The one selected native principal for this authoritative world.
          * @return Prepared scope with initial observation, or original typed admission error.
          */
         [[nodiscard]] static Result<std::unique_ptr<HeadlessNavigationPathScope>> Create(ProjectSceneNavigationWorld &world,
