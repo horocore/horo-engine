@@ -2,7 +2,9 @@
 #include "GameplayRetirementTestSupport.h"
 #include "GameplayRuntimeTestSupport.h"
 #include "Horo/AI/BlackboardUsageInspection.h"
+#include "Horo/AI/DecisionGraphInstance.h"
 #include "Horo/AI/DecisionNodeRegistration.h"
+#include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Application/ProjectSourceDocument.h"
 #include "Horo/Gameplay/BehaviorRuntime.h"
 #include "Horo/Gameplay/GameModuleRetirement.h"
@@ -86,6 +88,40 @@ namespace {
         REQUIRE_FALSE(registry.HasBlockingDiagnostics());
     }
 
+    /** @brief Reads a checked-in guard example asset from the copied project. */
+    std::vector<std::uint8_t> ReadGuardAsset(const std::filesystem::path &path) {
+        std::ifstream stream{path, std::ios::binary};
+        REQUIRE(stream.is_open());
+        return {std::istreambuf_iterator<char>{stream}, std::istreambuf_iterator<char>{}};
+    }
+
+    /** @brief Installs the sample in a fresh project using its real source assets and sidecars. */
+    std::filesystem::path CopyGuardRecovery(const TemporaryProject &project) {
+        const auto sample = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "examples/gameplay-ai/Assets";
+        const auto assets = project.root / "assets";
+        for (const auto *name : {"RecoverTarget.horo_script", "RecoverTarget.horo_script.meta"}) {
+            REQUIRE(std::filesystem::copy_file(sample / "Scripts" / name, assets / "scripts" / name));
+        }
+        for (const auto *name : {"Guard.horo_bb", "Guard.horo_bb.horo", "RecoverTarget.horo_bt", "RecoverTarget.horo_bt.horo"}) {
+            REQUIRE(std::filesystem::copy_file(sample / name, assets / name));
+        }
+        return assets;
+    }
+
+    /** @brief Admits the authored recovery graph against the discovered Project provider generation. */
+    std::shared_ptr<const AI::CookedDecisionPlan> CompileGuardRecovery(const std::filesystem::path &asset,
+                                                                       const AI::DecisionCompilationEnvironment &environment) {
+        AI::DecisionGraphAssetId root;
+        const auto source = AI::DecisionPlanCodec::DecodeSource(ReadGuardAsset(asset), root);
+        REQUIRE(source.HasValue());
+        const auto compiled = AI::DecisionGraphCompiler::Compile(root, source.Value(), environment);
+        REQUIRE(compiled.HasValue());
+        for (const auto &diagnostic : compiled.Value().validation.Diagnostics())
+            UNSCOPED_INFO(diagnostic.message);
+        REQUIRE(compiled.Value().plan);
+        return compiled.Value().plan;
+    }
+
     Network::ReplicationSchemaDescriptor ScriptSchema() {
         using namespace Network;
         return {.id = ReplicationSchemaId::Create(42).Value(),
@@ -110,6 +146,52 @@ namespace {
         return source;
     }
 }  // namespace
+
+TEST_CASE("project gameplay discovers and executes the guard recovery example", "[editor][decision][lua][example]") {
+    using namespace Horo::AI;
+    TemporaryProject project;
+    const auto assets = CopyGuardRecovery(project);
+
+    const auto registry = Editor::ProjectGameplayRegistry::Discover(project.root);
+    RequireValidRegistry(*registry);
+    const auto providers = registry->AcquireDecisionAuthoringGeneration();
+    REQUIRE(providers.HasValue());
+    REQUIRE(providers.Value()->HasImplementation(DecisionNodeTypeId::Create(83013).Value()));
+    auto decoded = BlackboardSchemaSourceCodec::Decode(ReadGuardAsset(assets / "Guard.horo_bb"));
+    REQUIRE(decoded.HasValue());
+    const auto schema = std::make_shared<const BlackboardSchema>(std::move(decoded).Value().schema);
+    const auto plan = CompileGuardRecovery(assets / "RecoverTarget.horo_bt", {.nodes = providers.Value(), .schemas = {schema}});
+
+    const AgentHandle agent{AiRuntimeIncarnation::Create(1).Value(), {0, 1}};
+    const BlackboardInstanceBinding boardBinding{agent, schema->Identity(), schema->Version(), 1, 1};
+    auto board = BlackboardInstance::Create(boardBinding, schema);
+    REQUIRE(board.HasValue());
+    CancellationSource cancellation;
+    const AiTaskOperationContext operation{TaskId::Create(1).Value(), {agent.incarnation, {0, 1}}, agent, cancellation.Token()};
+    auto graph = DecisionGraphInstance::Create(plan, providers.Value(), {boardBinding, operation, 1, plan->Storage().taskSlots});
+    REQUIRE(graph.HasValue());
+    const auto step = [&](const std::uint64_t tick) {
+        const auto snapshot = board.Value()->Snapshot();
+        REQUIRE(snapshot.HasValue());
+        const auto evaluated = graph.Value()->Step({tick, boardBinding, snapshot.Value(), {}});
+        REQUIRE(evaluated.HasValue());
+        return evaluated.Value();
+    };
+    REQUIRE(step(1) == AiTaskState::Running);
+    SECTION("the guard returns to its routine after three recovery ticks") {
+        CHECK(step(2) == AiTaskState::Running);
+        CHECK(step(3) == AiTaskState::Running);
+        CHECK(step(4) == AiTaskState::Succeeded);
+    }
+    SECTION("a committed reacquisition releases recovery so chase can take priority") {
+        auto write = board.Value()->BeginWriteBatch();
+        REQUIRE(write.HasValue());
+        auto batch = std::move(write).Value();
+        REQUIRE(batch.Stage({BlackboardKeyId::Create(1).Value(), BlackboardValue{BlackboardScalarValue{true}}}).HasValue());
+        REQUIRE(board.Value()->CommitAtBlackboardSync(std::move(batch)).HasValue());
+        CHECK(step(2) == AiTaskState::Failed);
+    }
+}
 
 TEST_CASE("project gameplay registry discovers and safely reloads compatible Lua source") {
     TemporaryProject project;

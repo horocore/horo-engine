@@ -47,6 +47,16 @@ the Scene's native Perception policy and pass its project-relative path via
 panel. If no stimuli appear, check the listener's sense ID, layer and mask,
 and whether the policy's candidate radius reaches the target.
 
+Use `Assets/RecoverTarget.horo_bt` for the recovery branch after losing a
+target. Keep `Assets/Scripts/RecoverTarget.horo_script` and its `.meta` sidecar
+under the project's scripts folder. The Editor discovers the Lua node
+automatically. The script reads **Target visible** from the same Blackboard
+schema as the wait task. It succeeds after three Decision updates by default,
+so the caller can resume patrol. If the host sets the key to `true` at
+BlackboardSync during that window, the recovery branch fails and a reactive
+selector can give pursuit priority. The project's Perception-to-Blackboard
+policy supplies the key.
+
 If the node is unavailable, verify that the gameplay module built successfully
 and that the loaded module matches the project's SDK fingerprint. In cooked
 Editor Play, select the guard and open the Game panel's **AI agent inspector**.
