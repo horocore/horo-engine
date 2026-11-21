@@ -16,7 +16,8 @@ namespace Horo::Agent {
         constexpr std::size_t MaximumTitleBytes = AgentHistoryLimits::MaximumTitleBytes;
         constexpr auto MaximumTokenCount = AgentHistoryUsage::MaximumTokenCount;
         constexpr int HistoryApplication = 0x48414948;  // HAIH
-        constexpr int HistoryVersion = 1;
+        constexpr int FirstHistoryVersion = 1;
+        constexpr int HistoryVersion = 2;
         constexpr auto HistoryPath = ".horo/local/agent/conversations.sqlite";
         constexpr auto HistoryTable =
             "CREATE TABLE history(id INTEGER PRIMARY KEY CHECK(id = 1), project TEXT NOT NULL, payload TEXT NOT NULL)";
@@ -57,7 +58,7 @@ namespace Horo::Agent {
 
         /** @brief Validates bounded producer evidence without resolving any attachment. */
         bool ValidReference(const AgentHistoryReference &reference) {
-            return reference.kind <= AgentHistoryReferenceKind::ToolCall && reference.identity != 0 && reference.revision != 0;
+            return reference.kind <= AgentHistoryReferenceKind::BuildOutput && reference.identity != 0 && reference.revision != 0;
         }
 
         /** @brief Validates numeric usage without retaining provider metadata. */
@@ -114,7 +115,7 @@ namespace Horo::Agent {
             if (!node.is_array() || node.size() != 3)
                 throw std::invalid_argument{"Invalid history reference"};
             const auto kind = ReadUnsigned(node[0]);
-            if (kind > static_cast<std::uint8_t>(AgentHistoryReferenceKind::ToolCall))
+            if (kind > static_cast<std::uint8_t>(AgentHistoryReferenceKind::BuildOutput))
                 throw std::invalid_argument{"Invalid history reference kind"};
             const AgentHistoryReference reference{static_cast<AgentHistoryReferenceKind>(kind), ReadUnsigned(node[1]),
                                                   ReadUnsigned(node[2])};
@@ -282,7 +283,7 @@ namespace Horo::Agent {
             const auto version = HeaderValue(database.get(), "PRAGMA user_version");
             if (!version)
                 return StoreAvailability::Corrupt;
-            if (*version != HistoryVersion)
+            if (*version < FirstHistoryVersion || *version > HistoryVersion)
                 return StoreAvailability::UnsupportedVersion;
             if (!HasHistoryTable(database.get()))
                 return StoreAvailability::Corrupt;
@@ -453,12 +454,19 @@ namespace Horo::Agent {
             using Output = Result<AgentHistoryMessage>;
             if (!answer)
                 return Output::Success({{}, Role::Assistant, MessageState::Streaming, {}, {}, {}});
-            if (!ValidUsage(answer->usage))
+            const auto references = answer->references;
+            if (!ValidUsage(answer->usage) || references.size() > limits.referencesPerMessage ||
+                !std::ranges::all_of(references, ValidReference))
                 return Output::Failure(MakeError(AgentHistoryErrors::Invalid));
             auto admitted = Admit(AgentHistoryTextKind::AssistantMessage, answer->assistant, limits.textBytesPerMessage, true);
             if (admitted.HasError())
                 return Output::Failure(std::move(admitted).ErrorValue());
-            return Output::Success({{}, Role::Assistant, MessageState::Complete, std::move(admitted).Value(), {}, answer->usage});
+            return Output::Success({{},
+                                    Role::Assistant,
+                                    MessageState::Complete,
+                                    std::move(admitted).Value(),
+                                    {references.begin(), references.end()},
+                                    answer->usage});
         }
     };
 

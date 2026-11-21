@@ -2,6 +2,7 @@
 
 /** @file EditorLocalAgentContext.h @brief Explicitly reviewed active editor source evidence. */
 
+#include "AgentConversationStore.h"
 #include "AgentTurn.h"
 #include "Horo/Editor/SourceDocumentService.h"
 #include "Horo/Foundation/BuildOutputStore.h"
@@ -50,6 +51,11 @@ namespace Horo::Editor {
             return buildOperation_;
         }
 
+        /** @brief Returns the numeric source occurrence for optional history review. */
+        [[nodiscard]] Agent::AgentHistoryReference HistoryReference() const noexcept {
+            return historyReference_;
+        }
+
         /** @brief Reports the captured explicit selection, when reviewing a range. */
         [[nodiscard]] std::optional<SourceContextRange> Selection() const noexcept {
             return selection_;
@@ -65,12 +71,14 @@ namespace Horo::Editor {
         EditorLocalAgentContext(SourceDocumentSnapshot source, Platform::ProjectReadContext project,
                                 std::unique_ptr<Security::AgentPolicy> policy, Agent::AgentContextPreview preview,
                                 std::function<bool(const Agent::AgentContextProvenance &)> current,
-                                std::optional<SourceContextRange> selection, std::optional<OperationId> buildOperation);
+                                std::optional<SourceContextRange> selection, std::optional<OperationId> buildOperation,
+                                Agent::AgentHistoryReference historyReference);
         [[nodiscard]] static Result<EditorLocalAgentContext> Capture(const Agent::AgentContextSelection &selected,
                                                                      Agent::AgentContextReaders readers,
                                                                      Platform::ProjectReadContext project, std::uint64_t requestId,
                                                                      SourceDocumentSnapshot source, std::optional<SourceContextRange> range,
-                                                                     std::optional<OperationId> buildOperation);
+                                                                     std::optional<OperationId> buildOperation,
+                                                                     Agent::AgentHistoryReference historyReference);
 
         SourceDocumentSnapshot source_;
         Platform::ProjectReadContext project_;
@@ -79,5 +87,6 @@ namespace Horo::Editor {
         std::function<bool(const Agent::AgentContextProvenance &)> current_;
         std::optional<SourceContextRange> selection_;
         std::optional<OperationId> buildOperation_;
+        Agent::AgentHistoryReference historyReference_;
     };
 }  // namespace Horo::Editor

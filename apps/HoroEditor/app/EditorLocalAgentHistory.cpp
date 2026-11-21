@@ -44,6 +44,22 @@ namespace Horo::Editor {
             return nullptr;
         }
 
+        /** @brief Resolves a stored reference kind to a localized display label. */
+        const char *ReferenceKey(const AgentHistoryReferenceKind kind) {
+            using enum AgentHistoryReferenceKind;
+            switch (kind) {
+                case Asset:
+                    return "history_reference_asset";
+                case Document:
+                    return "history_reference_document";
+                case ToolCall:
+                    return "history_reference_tool";
+                case BuildOutput:
+                    return "history_reference_build";
+            }
+            return "history_reference_record";
+        }
+
         /** @brief Returns a nonnegative host timestamp for a completed exchange. */
         std::uint64_t WallSeconds() {
             const auto seconds =
@@ -66,6 +82,7 @@ namespace Horo::Editor {
         attached_.reset();
         history_.SelectProject(std::nullopt);
         review_.reset();
+        referenceReview_.reset();
         recoveryPrompt_.reset();
         recovery_.reset();
         pending_.reset();
@@ -158,6 +175,13 @@ namespace Horo::Editor {
     /** @copydoc EditorLocalAgentHistory::ClearReview */
     void EditorLocalAgentHistory::ClearReview() noexcept {
         review_.reset();
+        referenceReview_.reset();
+    }
+
+    /** @copydoc EditorLocalAgentHistory::ReviewReference */
+    void EditorLocalAgentHistory::ReviewReference(const AgentHistoryProjectRevision project, const AgentHistoryReference reference) {
+        if (project == Project() && Available(history_.View()))
+            referenceReview_.emplace(project, reference);
     }
 
     /** @copydoc EditorLocalAgentHistory::CanReviewRecovery */
@@ -174,7 +198,7 @@ namespace Horo::Editor {
             status_ = "history_write_error";
             return false;
         }
-        review_.reset();
+        ClearReview();
         recoveryPrompt_.emplace(std::move(prepared).Value());
         return true;
     }
@@ -323,6 +347,33 @@ namespace Horo::Editor {
             ImGui::TextWrapped("%s", LocalizedText(locale, "history_unavailable").c_str());
     }
 
+    /** @brief Shows the same reference in the review and saved history. */
+    void EditorLocalAgentHistory::DrawReference(const ILocalizationService &locale, const AgentHistoryReference reference) const {
+        DrawText(LocalizedText(locale, ReferenceKey(reference.kind)) + " #" + std::to_string(reference.identity) + " (" +
+                 LocalizedText(locale, "history_reference_revision") + " " + std::to_string(reference.revision) + ")");
+    }
+
+    /** @brief Saves only the exact project-bound reference after a separate user action. */
+    void EditorLocalAgentHistory::DrawReferenceReview(const ILocalizationService &locale, const AgentHistorySessionView &view) {
+        if (!referenceReview_)
+            return;
+        ImGui::PushID("saved-reference");
+        DrawText(LocalizedText(locale, "history_reference_review"));
+        DrawReference(locale, referenceReview_->reference);
+        if (Button(locale, "history_reference_save", Available(view) && !pending_)) {
+            const auto operation =
+                RecordApprovedHistoryReference(history_, referenceReview_->project, referenceReview_->reference,
+                                               LocalizedText(locale, "history_title"), LocalizedText(locale, "history_reference_record"),
+                                               LocalizedText(locale, "history_reference_answer"), WallSeconds());
+            if (Queue(operation, Action::Save))
+                referenceReview_.reset();
+        }
+        ImGui::SameLine();
+        if (Button(locale, "history_cancel", !pending_))
+            referenceReview_.reset();
+        ImGui::PopID();
+    }
+
     void EditorLocalAgentHistory::Select(const AgentConversation &conversation) {
         selected_ = conversation.id;
         title_ = conversation.title;
@@ -360,6 +411,8 @@ namespace Horo::Editor {
                 ImGui::TextUnformatted(LocalizedText(locale, key).c_str());
             DrawText(message.text);
             DrawTokenUsage(locale, message.usage);
+            for (const auto reference : message.references)
+                DrawReference(locale, reference);
         }
     }
 
@@ -413,6 +466,7 @@ namespace Horo::Editor {
         const auto view = history_.View();
         DrawRecovery(context.localization, view);
         DrawReview(context.localization, view);
+        DrawReferenceReview(context.localization, view);
         DrawManager(context, view);
         DrawDeletion(context.localization, view);
         if (managing_ && export_) {

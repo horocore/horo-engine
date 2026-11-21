@@ -34,7 +34,8 @@ namespace Horo::Agent {
     enum class AgentHistoryReferenceKind : std::uint8_t {
         Asset,
         Document,
-        ToolCall
+        ToolCall,
+        BuildOutput
     };
     enum class AgentHistoryTextKind : std::uint8_t {
         Title,
@@ -79,6 +80,7 @@ namespace Horo::Agent {
     struct AgentHistoryCompletedText final {
         std::string_view assistant;
         AgentHistoryUsage usage;
+        std::span<const AgentHistoryReference> references{};
     };
 
     /** @brief Sanitized history projection. This type grants no tool or provider authority. */

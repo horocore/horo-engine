@@ -23,6 +23,8 @@ namespace Horo::Editor {
         /** @brief Prepares the exact redacted pair for a subsequent explicit save. */
         void Review(Agent::AgentHistoryProjectRevision project, std::string_view prompt, std::string_view answer,
                     Agent::AgentHistoryUsage usage);
+        /** @brief Offers only the completed turn's numeric reference for separate history approval. */
+        void ReviewReference(Agent::AgentHistoryProjectRevision project, Agent::AgentHistoryReference reference);
         /** @brief Removes the previous unsaved review before a new request. */
         void ClearReview() noexcept;
         /** @brief Checks whether an explicitly reviewed recoverable ask can be offered. */
@@ -63,6 +65,11 @@ namespace Horo::Editor {
             Agent::AgentConversationId conversation;
         };
 
+        struct ReferenceReview final {
+            Agent::AgentHistoryProjectRevision project;
+            Agent::AgentHistoryReference reference;
+        };
+
         struct Recovery final {
             Agent::AgentHistoryRecoveryTurn binding;
             std::uint64_t checkpointTime{};
@@ -79,6 +86,8 @@ namespace Horo::Editor {
         /** @brief Offers one frozen redacted streaming preview for explicit approval. */
         void DrawDraft(const ILocalizationService &locale, bool enabled);
         void DrawReview(const ILocalizationService &locale, const Agent::AgentHistorySessionView &view);
+        void DrawReferenceReview(const ILocalizationService &locale, const Agent::AgentHistorySessionView &view);
+        void DrawReference(const ILocalizationService &locale, Agent::AgentHistoryReference reference) const;
         /** @brief Displays present, bounded counts beside the text whose save the user approves. */
         void DrawTokenUsage(const ILocalizationService &locale, Agent::AgentHistoryUsage usage) const;
         void DrawManager(const EditorGuiContext &context, const Agent::AgentHistorySessionView &view);
@@ -90,6 +99,7 @@ namespace Horo::Editor {
         Agent::AgentHistorySession history_;
         std::optional<Agent::AgentHistoryProject> attached_;
         std::optional<Agent::AgentHistoryExchangeReview> review_;
+        std::optional<ReferenceReview> referenceReview_;
         std::optional<Agent::AgentHistoryPromptReview> recoveryPrompt_;
         std::optional<Recovery> recovery_;
         std::optional<Pending> pending_;

@@ -125,6 +125,18 @@ namespace Horo::Agent {
         }
     }  // namespace
 
+    /** @copydoc RecordApprovedHistoryReference */
+    Result<AgentHistoryOperationId> RecordApprovedHistoryReference(AgentHistorySession &history, AgentHistoryProjectRevision project,
+                                                                   AgentHistoryReference reference, std::string_view title,
+                                                                   std::string_view promptLabel, std::string_view answerLabel,
+                                                                   std::uint64_t now) {
+        const auto exact = std::span<const AgentHistoryReference>{&reference, 1};
+        const auto none = std::span<const AgentHistoryReference>{};
+        const bool tool = reference.kind == AgentHistoryReferenceKind::ToolCall;
+        return history.RecordCompleted(project, {.title = title, .userText = promptLabel, .references = tool ? none : exact, .now = now},
+                                       {.assistant = answerLabel, .references = tool ? exact : none});
+    }
+
     /** @copydoc RedactHistoryDisplayText */
     AgentHistoryTextDecision RedactHistoryDisplayText(const AgentHistoryTextKind kind, const std::string_view visible) {
         const auto limit = kind == AgentHistoryTextKind::Title ? AgentHistoryLimits::MaximumTitleBytes : MaximumDisplayBytes;

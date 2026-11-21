@@ -48,11 +48,12 @@ namespace Horo::Agent {
             std::uint64_t now;
             std::optional<std::string> answer;
             AgentHistoryUsage usage;
+            std::vector<AgentHistoryReference> answerReferences;
 
             /** @brief Commits the user prompt and reserves the exact assistant response together. */
             [[nodiscard]] MutationResult operator()(AgentConversationStore &store) const {
                 const AgentHistoryTurnRequest request{conversation, title, userText, references, now};
-                auto started = answer ? store.RecordCompleted(request, {*answer, usage}) : store.BeginTurn(request);
+                auto started = answer ? store.RecordCompleted(request, {*answer, usage, answerReferences}) : store.BeginTurn(request);
                 if (started.HasError())
                     return MutationResult::Failure(std::move(started).ErrorValue());
                 return MutationResult::Success({.started = std::move(started).Value()});
@@ -237,7 +238,8 @@ namespace Horo::Agent {
             const auto title = request.conversation ? std::string_view{} : request.title;
             if (title.size() > AgentHistoryLimits::MaximumTitleBytes || request.userText.size() > limits.textBytesPerMessage ||
                 request.references.size() > limits.referencesPerMessage ||
-                (answer && answer->assistant.size() > limits.textBytesPerMessage))
+                (answer &&
+                 (answer->assistant.size() > limits.textBytesPerMessage || answer->references.size() > limits.referencesPerMessage)))
                 return Output::Failure(MakeError(AgentHistoryErrors::Capacity));
             TurnWork work{request.conversation,
                           std::string{title},
@@ -245,10 +247,12 @@ namespace Horo::Agent {
                           {request.references.begin(), request.references.end()},
                           request.now,
                           {},
+                          {},
                           {}};
             if (answer) {
                 work.answer.emplace(answer->assistant);
                 work.usage = answer->usage;
+                work.answerReferences.assign(answer->references.begin(), answer->references.end());
             }
             return SubmitMutation(std::move(work));
         }

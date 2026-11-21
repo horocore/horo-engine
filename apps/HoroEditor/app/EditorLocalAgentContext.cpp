@@ -27,17 +27,16 @@ namespace Horo::Editor {
                                                      std::unique_ptr<Security::AgentPolicy> policy, Agent::AgentContextPreview preview,
                                                      std::function<bool(const Agent::AgentContextProvenance &)> current,
                                                      const std::optional<SourceContextRange> selection,
-                                                     const std::optional<OperationId> buildOperation)
+                                                     const std::optional<OperationId> buildOperation,
+                                                     const Agent::AgentHistoryReference historyReference)
         : source_(std::move(source)), project_(std::move(project)), policy_(std::move(policy)), preview_(std::move(preview)),
-          current_(std::move(current)), selection_(selection), buildOperation_(buildOperation) {}
+          current_(std::move(current)), selection_(selection), buildOperation_(buildOperation), historyReference_(historyReference) {}
 
     /** @brief Creates one exclusive policy and preview without granting consent or transferring any source owners. */
-    Result<EditorLocalAgentContext> EditorLocalAgentContext::Capture(const Agent::AgentContextSelection &selected,
-                                                                     Agent::AgentContextReaders readers,
-                                                                     Platform::ProjectReadContext project, const std::uint64_t requestId,
-                                                                     SourceDocumentSnapshot source,
-                                                                     const std::optional<SourceContextRange> range,
-                                                                     const std::optional<OperationId> buildOperation) {
+    Result<EditorLocalAgentContext> EditorLocalAgentContext::Capture(
+        const Agent::AgentContextSelection &selected, Agent::AgentContextReaders readers, Platform::ProjectReadContext project,
+        const std::uint64_t requestId, SourceDocumentSnapshot source, const std::optional<SourceContextRange> range,
+        const std::optional<OperationId> buildOperation, const Agent::AgentHistoryReference historyReference) {
         using Output = Result<EditorLocalAgentContext>;
         auto policy = std::make_unique<Security::AgentPolicy>();
         // Local evidence consent grants no project trust and no tool capability.
@@ -48,7 +47,7 @@ namespace Horo::Editor {
         if (preview.HasError())
             return Output::Failure(std::move(preview).ErrorValue());
         return Output::Success(EditorLocalAgentContext{std::move(source), std::move(project), std::move(policy), std::move(preview).Value(),
-                                                       std::move(readers.isCurrent), range, buildOperation});
+                                                       std::move(readers.isCurrent), range, buildOperation, historyReference});
     }
 
     /** @copydoc EditorLocalAgentContext::Prepare */
@@ -91,7 +90,7 @@ namespace Horo::Editor {
             AgentContextTextRequest{selection ? AgentContextKind::SourceRange : AgentContextKind::File, path, revision,
                                     selection ? selection->offset : 0, selection ? selection->length : 0};
         return Capture(selected, readers, ProjectContext(std::move(projectIdentity), workspaceGeneration, std::move(lifetime)), requestId,
-                       source, selection, {});
+                       source, selection, {}, {AgentHistoryReferenceKind::Document, identity.instance.Value(), source.Revision()});
     }
 
     /** @copydoc EditorLocalAgentContext::PrepareBuildOutput */
@@ -121,7 +120,7 @@ namespace Horo::Editor {
             AgentContextAttachment{AgentContextAttachmentKind::BuildOutput, origin, revision, std::move(text), tail.truncated};
         AgentContextReaders readers{.redact = RedactEvidence, .isCurrent = std::move(current)};
         return Capture(selected, std::move(readers), ProjectContext(std::move(projectIdentity), workspaceGeneration, std::move(lifetime)),
-                       requestId, {}, {}, tail.operation);
+                       requestId, {}, {}, tail.operation, {AgentHistoryReferenceKind::BuildOutput, tail.operation, tail.lastSequence});
     }
 
     /** @copydoc EditorLocalAgentContext::Matches */

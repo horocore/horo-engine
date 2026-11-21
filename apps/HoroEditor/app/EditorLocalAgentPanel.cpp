@@ -114,6 +114,7 @@ namespace Horo::Editor {
                 liveDraft_.reset();
                 awaitingCheckpoint_ = false;
                 submittedPrompt_.reset();
+                submittedReference_.reset();
                 status_ = nullptr;
             }
 
@@ -346,6 +347,11 @@ namespace Horo::Editor {
                 request.messages.push_back({.role = ModelRole::User, .text = prompt_});
                 history_.ClearReview();
                 submittedPrompt_ = recoverable || sceneCount.has_value() || source ? std::nullopt : std::optional{prompt_};
+                submittedReference_.reset();
+                if (source)
+                    submittedReference_ = source->HistoryReference();
+                else if (sceneCount)
+                    submittedReference_ = AgentHistoryReference{AgentHistoryReferenceKind::ToolCall, turn_ + 1, contextGeneration_};
                 submittedProject_ = history_.Project();
                 if (!Start(std::move(request), sceneCount, std::move(source), recoverable) && recoverable)
                     history_.FinishRecovery(AgentHistoryMessageState::Failed);
@@ -370,6 +376,7 @@ namespace Horo::Editor {
                 }
                 status_ = "failed";
                 submittedPrompt_.reset();
+                submittedReference_.reset();
                 return false;
             }
 
@@ -386,6 +393,7 @@ namespace Horo::Editor {
                     }
                 }
                 submittedPrompt_.reset();
+                submittedReference_.reset();
             }
 
             void AdoptCompletion(BackgroundTurn::Completion &completion) {
@@ -432,17 +440,30 @@ namespace Horo::Editor {
                 if (result.status == AgentTurnStatus::Completed && !result.messages.empty()) {
                     response_ = std::move(result.messages.back().text);
                     status_ = response_.empty() ? "empty_response" : nullptr;
-                    const auto reported = result.finalUsage.value_or(ModelUsage{});
-                    const auto usage = AgentHistoryUsage::FromReported(reported.inputTokens, reported.outputTokens);
-                    if (history_.HasRecovery())
-                        history_.ReviewRecoveryAnswer(response_, usage);
-                    else if (!response_.empty() && submittedPrompt_)
-                        history_.Review(submittedProject_, *submittedPrompt_, response_, usage);
+                    ReviewCompleted(result);
                     return;
                 }
                 status_ = result.status == AgentTurnStatus::TimedOut ? "timeout" : FailureKey(result.providerError);
                 history_.FinishRecovery(result.status == AgentTurnStatus::Cancelled ? AgentHistoryMessageState::Cancelled
                                                                                     : AgentHistoryMessageState::Failed);
+            }
+
+            /** @brief Keeps context-bearing replies ephemeral and proposes only host-issued reference metadata. */
+            void ReviewCompleted(const AgentTurnResult &result) {
+                if (submittedReference_) {
+                    if (submittedReference_->kind != AgentHistoryReferenceKind::ToolCall ||
+                        std::ranges::any_of(result.messages, [](const ModelMessage &message) {
+                        return message.role == ModelRole::Tool;
+                    }))
+                        history_.ReviewReference(submittedProject_, *submittedReference_);
+                    return;
+                }
+                const auto reported = result.finalUsage.value_or(ModelUsage{});
+                const auto usage = AgentHistoryUsage::FromReported(reported.inputTokens, reported.outputTokens);
+                if (history_.HasRecovery())
+                    history_.ReviewRecoveryAnswer(response_, usage);
+                else if (!response_.empty() && submittedPrompt_)
+                    history_.Review(submittedProject_, *submittedPrompt_, response_, usage);
             }
 
             std::string endpoint_;
@@ -464,6 +485,7 @@ namespace Horo::Editor {
             EditorLocalAgentHistory history_;
             std::shared_ptr<AgentHistoryLiveDraft> liveDraft_;
             std::optional<std::string> submittedPrompt_;
+            std::optional<AgentHistoryReference> submittedReference_;
             AgentHistoryProjectRevision submittedProject_;
             int selection_{-1};
             const char *status_{};

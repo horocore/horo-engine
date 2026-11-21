@@ -39,6 +39,9 @@ namespace Horo::Editor {
         auto prepared = EditorLocalAgentContext::Prepare(edited.Value(), "project", 2, lifetime.Token(), 77);
         REQUIRE(prepared.HasValue());
         auto context = std::move(prepared).Value();
+        CHECK(context.HistoryReference().kind == AgentHistoryReferenceKind::Document);
+        CHECK(context.HistoryReference().identity == identity.instance.Value());
+        CHECK(context.HistoryReference().revision == edited.Value().Revision());
         REQUIRE(context.Items().size() == 1);
         const auto preview = context.Items().front().candidate.text;
         CHECK(preview.find("int visible;") != std::string::npos);
@@ -203,11 +206,15 @@ namespace Horo::Editor {
         auto tail = output.CaptureOperationTail(selected, 2, 256);
         REQUIRE(tail);
         CHECK(tail->truncated);
+        const auto selectedRevision = tail->lastSequence;
         CancellationSource workspace;
         auto captured = EditorLocalAgentContext::PrepareBuildOutput(std::move(*tail), "project", 3, workspace.Token(), 51);
         REQUIRE(captured.HasValue());
         auto context = std::move(captured).Value();
         CHECK(context.BuildOperation() == selected);
+        CHECK(context.HistoryReference().kind == AgentHistoryReferenceKind::BuildOutput);
+        CHECK(context.HistoryReference().identity == selected);
+        CHECK(context.HistoryReference().revision == selectedRevision);
         REQUIRE(context.Items().size() == 1);
         const auto &item = context.Items().front();
         REQUIRE(item.provenance.kind == AgentContextKind::BuildOutput);

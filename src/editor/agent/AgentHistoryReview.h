@@ -8,6 +8,22 @@
 #include <mutex>
 
 namespace Horo::Agent {
+    /** @brief Records an explicitly reviewed opaque reference with host-authored display labels only.
+     * @param history Current editor history worker.
+     * @param project Exact project revision captured when the turn was sent.
+     * @param reference One host-issued attachment or completed tool occurrence.
+     * @param title Localized history title.
+     * @param promptLabel Localized description of the reference-only record.
+     * @param answerLabel Localized description of the completed response.
+     * @param now Host epoch seconds.
+     * @return One atomic history mutation, or a typed admission denial.
+     */
+    [[nodiscard]] Result<AgentHistoryOperationId> RecordApprovedHistoryReference(AgentHistorySession &history,
+                                                                                 AgentHistoryProjectRevision project,
+                                                                                 AgentHistoryReference reference, std::string_view title,
+                                                                                 std::string_view promptLabel, std::string_view answerLabel,
+                                                                                 std::uint64_t now);
+
     /** @brief Removes recognized credential-bearing lines and rejects unsupported display text.
      * @param kind History display field being admitted.
      * @param visible Text currently visible to the editor user.

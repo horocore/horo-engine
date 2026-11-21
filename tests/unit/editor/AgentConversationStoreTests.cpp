@@ -273,6 +273,58 @@ namespace Horo::Agent {
         CHECK(project.Image() == image);
     }
 
+    TEST_CASE("Editor history upgrades a version one image when saving an approved opaque reference",
+              "[unit][agent][conversation_history]") {
+        Project project;
+        AgentConversationId prior;
+        {
+            auto store = project.Open();
+            const auto created = store.Create("Previous conversation", 1);
+            REQUIRE(created.HasValue());
+            prior = created.Value();
+        }
+        auto legacy = project.Image();
+        REQUIRE(legacy.size() >= 64);
+        legacy[63] = 1;
+        REQUIRE(project.files.WriteDurable(project.Path(), std::as_bytes(std::span{legacy})).HasValue());
+
+        JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 2, .ioWorkerCount = 1}};
+        AgentHistorySession session{jobs, project.files, RedactHistoryDisplayText};
+        session.SelectProject(AgentHistoryProject{project.root, "history-project"});
+        PollUntil(session, [&] {
+            return session.View().phase == AgentHistorySessionPhase::Settled;
+        });
+        REQUIRE(session.View().availability == Availability::Ready);
+        REQUIRE(session.View().conversations.front().id == prior);
+        CHECK(project.Image() == legacy);
+        const auto revision = session.View().project;
+        const std::array references{AgentHistoryReference{AgentHistoryReferenceKind::BuildOutput, 49, 20},
+                                    AgentHistoryReference{AgentHistoryReferenceKind::ToolCall, 17, 4}};
+        for (const auto reference : references) {
+            const auto operation =
+                RecordApprovedHistoryReference(session, revision, reference, "Reference review", "Reference only", "Reply complete", 2);
+            REQUIRE(operation.HasValue());
+            REQUIRE_FALSE(TakeMutation(session, operation.Value()).error);
+        }
+        session.Shutdown();
+        auto reopened = project.Open();
+        REQUIRE(reopened.Availability() == Availability::Ready);
+        REQUIRE(reopened.Conversations().size() == 3);
+        CHECK(reopened.Conversations()[0].id == prior);
+        for (std::size_t index = 0; index < references.size(); ++index) {
+            const auto messages = std::span{reopened.Conversations()[index + 1].messages};
+            REQUIRE(messages.size() == 2);
+            CHECK(messages[0].text == "Reference only");
+            CHECK(messages[1].text == "Reply complete");
+            REQUIRE(messages[1 - index].references.empty());
+            REQUIRE(messages[index].references.size() == 1);
+            CHECK(messages[index].references[0].kind == references[index].kind);
+            CHECK(messages[index].references[0].identity == references[index].identity);
+            CHECK(messages[index].references[0].revision == references[index].revision);
+        }
+        CHECK(project.Image()[63] == 2);
+    }
+
     TEST_CASE("Editor history switches committed projects on its I/O lane without publishing stale history",
               "[unit][agent][conversation_history]") {
         using Phase = AgentHistorySessionPhase;

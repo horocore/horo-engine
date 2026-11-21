@@ -830,6 +830,8 @@ responses reopen as incomplete. The history owner requires its own host text
 filter and keeps only admitted display text, numeric usage, and opaque typed
 attachment and tool references. Provider request envelopes and tool payloads
 remain ephemeral.
+Version 1 images remain readable. The next durable write publishes the current
+version, which adds a build output reference kind.
 
 The Local Model panel opens the committed project's history on the editor I/O
 lane. After a plain text exchange, the panel shows the exact redacted prompt
@@ -864,9 +866,12 @@ reading a file. The panel shows the redacted bytes and local destination
 before issuing one-use approval. Range approval also checks that the same
 selection still exists. Redaction checks any intersecting sensitive line
 and enclosing private-key block before clipping to the selected range.
-Source edits, close, and workspace
-detachment invalidate the preview before provider dispatch. This request and
-its reply are excluded from conversation history.
+Source edits, close, and workspace detachment invalidate the preview before
+provider dispatch. After a successful contextual turn, a separate history
+approval records only the displayed numeric document or build output reference.
+An executed scene count tool can be recorded through the same review. These
+conversation records contain localized host labels and an opaque reference
+scoped to the turn.
 
 The panel can also preview the recent output of the active gameplay build
 for the current project. It reads only the retained output for that build
