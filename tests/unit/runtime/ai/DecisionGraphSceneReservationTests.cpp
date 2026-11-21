@@ -203,7 +203,16 @@ namespace Horo::AI {
 
             Fixture fixture;
             fixture.probe.succeedTick = 100;
-            auto source = TaskTree(11);
+            const auto watched = MakeIdentity<BlackboardKeyId>(1);
+            const auto ignored = MakeIdentity<BlackboardKeyId>(2);
+            const std::array keys{BlackboardKeyDescriptor{.key = watched, .defaultValue = BlackboardValue{BlackboardScalarValue{true}}},
+                                  BlackboardKeyDescriptor{.key = ignored, .defaultValue = BlackboardValue{BlackboardScalarValue{true}}}};
+            auto schema = BlackboardSchema::Capture({SchemaId(), 1, BlackboardUnknownValuePolicy::Reject, keys});
+            REQUIRE(schema.HasValue());
+            fixture.schema = std::make_shared<const BlackboardSchema>(std::move(schema).Value());
+            auto node = TreeNode(2, DecisionControlKind::Task);
+            node.requirements = {{.key = watched, .kind = BlackboardValueKind::Boolean, .source = Location()}};
+            auto source = Tree(11, {TreeNode(1, DecisionControlKind::Root), node}, {Edge(1, 1, 2)});
             source.executionTask = MakeIdentity<TaskId>(9000);
             const auto plan = fixture.Compile(std::span{&source, 1}, 11);
             auto scene = SceneFixture(fixture, *plan);
@@ -230,15 +239,33 @@ namespace Horo::AI {
             CHECK(tick(1) == 1);
             REQUIRE(fixture.probe.tasks.size() == 1);
             const auto task = fixture.probe.tasks.front();
+            const auto capability = runtime.CapabilityAtSafePoint();
+            const auto write = [&](BlackboardKeyId key, bool value) {
+                auto opened = capability.BeginBlackboardWrite(agent);
+                REQUIRE(opened.HasValue());
+                auto batch = std::move(opened).Value();
+                REQUIRE(batch.Stage({key, BlackboardValue{BlackboardScalarValue{value}}}).HasValue());
+                const auto result = capability.CommitBlackboardWrite(agent, std::move(batch));
+                REQUIRE(result.HasValue());
+                return result.Value().changedKeyCount;
+            };
+            CHECK(write(ignored, false) == 1);
+            CHECK(write(watched, true) == 0);
             CHECK(tick(2) == 0);
             CHECK(fixture.probe.resumes == 0);
-            REQUIRE(scheduler->Wake(agent, {.blackboard = true}).HasValue());
-            REQUIRE(scheduler->Wake(agent, {.perception = true, .task = true}).HasValue());
+
+            CHECK(write(watched, false) == 1);
+            CHECK(write(watched, true) == 1);
             CHECK(tick(3) == 1);
             CHECK(fixture.probe.resumes == 1);
             CHECK(fixture.probe.lastResumeTask == task);
             CHECK(fixture.probe.lastResumeReason == AiTaskResumeReason::Event);
             CHECK(tick(4) == 0);
+            REQUIRE(scheduler->Wake(agent, {.perception = true, .task = true}).HasValue());
+            CHECK(tick(5) == 1);
+            CHECK(fixture.probe.resumes == 2);
+            CHECK(fixture.probe.lastResumeReason == AiTaskResumeReason::Event);
+            CHECK(tick(6) == 0);
             runtime.BeginShutdown();
         }
 

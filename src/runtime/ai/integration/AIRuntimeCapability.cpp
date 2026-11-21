@@ -251,9 +251,13 @@ namespace Horo::AI {
             return Result<BlackboardCommitResult>::Failure(MakeError(AIErrors::CapabilityUnavailable));
         if (state.Value()->revision == std::numeric_limits<std::uint64_t>::max())
             return Result<BlackboardCommitResult>::Failure(MakeError(AIErrors::CanonicalRestoreStale));
+        const auto plan = slot.Value()->cookedPlan;
         auto committed = slot.Value()->blackboard->CommitAtBlackboardSync(std::move(batch));
-        if (committed.HasValue() && committed.Value().changedKeyCount != 0)
-            ++state.Value()->revision;
+        if (committed.HasError() || committed.Value().Changes().empty())
+            return committed;
+        ++state.Value()->revision;
+        if (state.Value()->scheduler && plan)
+            state.Value()->scheduler->QueueBlackboardWake(agent, plan, committed.Value().Changes());
         return committed;
     }
 }  // namespace Horo::AI

@@ -10,6 +10,8 @@
 #include <span>
 
 namespace Horo::AI {
+    class CookedDecisionPlan;
+
     /** @brief Authored priority; starvation promotion precedes ordinary priority. */
     enum class AiTaskPriority : std::uint8_t {
         Background,
@@ -359,6 +361,10 @@ namespace Horo::AI {
 
     private:
         friend class AiSceneRuntime;
+        friend class AiRuntimeCapability;
+        /** @brief Queues a committed dependency of the exact reactive plan for the next decision tick. */
+        void QueueBlackboardWake(AgentHandle agent, const std::shared_ptr<const CookedDecisionPlan> &plan,
+                                 std::span<const BlackboardKeyId> changedKeys) noexcept;
         /** @brief Borrows the selected registered evaluator after the tick has completed. */
         [[nodiscard]] const IAiScheduledDecision *InspectDecision(AgentHandle agent, const std::shared_ptr<const void> &image) noexcept;
         /** @brief Borrows the evaluator only for an exact registered image at an eligible decision replacement boundary. */

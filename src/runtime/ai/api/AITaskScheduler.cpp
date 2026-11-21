@@ -1,4 +1,5 @@
 #include "Horo/AI/AITaskScheduler.h"
+#include "Horo/AI/DecisionGraphCompiler.h"
 
 #include <algorithm>
 #include <limits>
@@ -92,6 +93,7 @@ namespace Horo::AI {
         std::size_t submitted{};
         std::size_t commands{};
         bool intents{};
+        bool blackboardWakeQueued{};
     };
 
     struct AiTaskScheduler::PopulationChange::Storage final {
@@ -443,6 +445,21 @@ namespace Horo::AI {
         }
     }
 
+    /** @copydoc AiTaskScheduler::QueueBlackboardWake */
+    void AiTaskScheduler::QueueBlackboardWake(const AgentHandle agent, const std::shared_ptr<const CookedDecisionPlan> &plan,
+                                              const std::span<const BlackboardKeyId> changedKeys) noexcept {
+        if (closed_)
+            return;
+        auto *entry = FindBoundDecision(agent, plan);
+        if (!entry || entry->policy.intervalTicks != 0 || entry->tier == AiSimulationTier::Suspended || entry->blackboardWakeQueued)
+            return;
+        entry->blackboardWakeQueued = std::ranges::any_of(plan->Graphs(), [&](const DecisionCompiledGraph &graph) {
+            return std::ranges::any_of(graph.bindings->Bindings(), [&](const DecisionPlanBlackboardBinding &binding) {
+                return std::ranges::binary_search(changedKeys, binding.key);
+            });
+        });
+    }
+
     /** @copydoc AiTaskScheduler::Wake */
     Result<void> AiTaskScheduler::Wake(const AgentHandle agent, DecisionWakeReasons reasons) {
         auto *entry = Find(agent);
@@ -731,6 +748,11 @@ namespace Horo::AI {
             for (auto &entry : entries_) {
                 entry.submitted = 0;
                 entry.commands = 0;
+                if (std::exchange(entry.blackboardWakeQueued, false)) {
+                    if (!entry.pending.Any())
+                        entry.waitingSince = tick;
+                    entry.pending.blackboard = true;
+                }
             }
         }
         inPhase_ = true;
