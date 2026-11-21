@@ -40,6 +40,7 @@ namespace Horo::Application::CharacterSceneProductTest {
         struct AddedAsset final {
             Assets::AssetRecord record;
             std::vector<std::uint8_t> payload;
+            std::vector<std::uint8_t> cookedEnvelope; /**< Complete canonical envelope when already produced by its real cooker. */
         };
 
         void Publish(const Input input, const Client client = Client::None, std::span<const AddedAsset> added = {},
@@ -224,12 +225,17 @@ namespace Horo::Application::CharacterSceneProductTest {
                 envelopes.insert(envelopes.begin(), std::move(prefab));
             }
             for (const auto &asset : added) {
-                const auto hash = ComputeSha256(std::as_bytes(std::span{asset.payload}));
-                auto encoded = Assets::EncodeCookedArtifact({asset.record.id, asset.record.type, target, hash, hash, hash, asset.payload});
-                REQUIRE(encoded.HasValue());
+                auto bytes = asset.cookedEnvelope;
+                if (bytes.empty()) {
+                    const auto hash = ComputeSha256(std::as_bytes(std::span{asset.payload}));
+                    auto encoded =
+                        Assets::EncodeCookedArtifact({asset.record.id, asset.record.type, target, hash, hash, hash, asset.payload});
+                    REQUIRE(encoded.HasValue());
+                    bytes = std::move(encoded).Value();
+                }
                 const auto at = std::ranges::lower_bound(entries, asset.record.id, {}, &Assets::AssetCookManifestEntry::assetId);
-                const auto manifestEntry = entry(asset.record.id, asset.record.type, encoded.Value());
-                envelopes.insert(envelopes.begin() + (at - entries.begin()), std::move(encoded).Value());
+                const auto manifestEntry = entry(asset.record.id, asset.record.type, bytes);
+                envelopes.insert(envelopes.begin() + (at - entries.begin()), std::move(bytes));
                 entries.insert(at, manifestEntry);
             }
             auto lease = project.files.TryAcquireExclusive(project.cooked.path / ".cook-writer.lock", "Navigation product fixture");

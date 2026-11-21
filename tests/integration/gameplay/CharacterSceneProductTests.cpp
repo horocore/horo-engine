@@ -6,12 +6,20 @@
 #include "HeadlessProjectScene.h"
 #include "Horo/AI/AITaskContinuation.h"
 #include "Horo/Animation/AnimationErrors.h"
+#include "Horo/Foundation/Platform.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Navigation/Backends/RecastDetourCrowdProvider.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Platform/DynamicLibrary.h"
 #include "Horo/Platform/ExternalProcess.h"
+#include "NetworkProductHost.h"
 #include "navigation/ProjectSceneNavigationFixture.h"
+
+#if HORO_TEST_NAVIGATION_NATIVE && HORO_TEST_PHYSICS_NATIVE
+#include "../network/NetworkModeHostTestSupport.h"
+#include "AnimationStateGraphTestFixtures.h"
+#include "animation/AnimationCookFixture.h"
+#endif
 
 #include <bit>
 #include <catch2/generators/catch_generators.hpp>
@@ -111,6 +119,10 @@ namespace Horo::Application::CharacterSceneProductTest {
             std::optional<Internal::NetworkProductComposition> composition;
             std::unique_ptr<Network::INetworkModeService> scene;
             std::unique_ptr<Network::INetworkModeService> physics;
+            DeterministicClock clock;
+            std::unique_ptr<Internal::NetworkProductHost> scheduled;
+            Network::INetworkModeService *scheduledScene{};
+            Network::INetworkModeService *scheduledPhysics{};
             bool stopped{};
             std::uint64_t tick{};
 
@@ -126,7 +138,8 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                                     .physicsMode = mode,
                                                                     .navigationMode = Internal::HeadlessNavigationMode::RecastDetour};
                 auto prepared = Internal::PrepareHeadlessProjectSceneResources(options);
-                REQUIRE(prepared.HasValue());
+                if (prepared.HasError())
+                    return Result<void>::Failure(std::move(prepared).ErrorValue());
                 resources = std::move(prepared).Value();
                 auto &project = *resources;
                 const auto nativePrefabs = gameplay.prefabPermission == Internal::GameplayPrefabPermission::Granted;
@@ -145,6 +158,10 @@ namespace Horo::Application::CharacterSceneProductTest {
                 auto configured = Internal::ComposeHeadlessSceneNetworkServices(project.definition, std::move(input), {}, gameplay);
                 if (configured.HasError())
                     return Result<void>::Failure(std::move(configured).ErrorValue());
+#if HORO_TEST_PHYSICS_NATIVE
+                if (configured.Value().fixedParticipant)
+                    return StartScheduled(std::move(configured).Value());
+#endif
                 composition.emplace(std::move(configured).Value());
                 const auto makeService = [&](const Network::NetworkModeServiceKind kind) {
                     auto service = composition->factories.services[static_cast<std::size_t>(kind)](
@@ -163,7 +180,67 @@ namespace Horo::Application::CharacterSceneProductTest {
                 return physics->Activate();
             }
 
+            Network::INetworkModeService &PhysicsService() const {
+                return *(scheduled ? scheduledPhysics : physics.get());
+            }
+
+            Network::INetworkModeService &SceneService() const {
+                return *(scheduled ? scheduledScene : scene.get());
+            }
+
+#if HORO_TEST_PHYSICS_NATIVE
+            Result<void> StartScheduled(Internal::NetworkProductComposition composed) {
+                using namespace Network;
+                const auto retain = [&](NetworkModeServiceKind kind, INetworkModeService *&destination) {
+                    auto &factory = composed.factories.services[static_cast<std::size_t>(kind)];
+                    factory = [create = std::move(factory), &destination](const NetworkModeServiceRequest &request) {
+                        auto created = create(request);
+                        if (created.HasValue())
+                            destination = created.Value().get();
+                        return created;
+                    };
+                };
+                retain(NetworkModeServiceKind::Scene, scheduledScene);
+                retain(NetworkModeServiceKind::Physics, scheduledPhysics);
+                const auto settings = DefaultNetworkProjectSettings(NetworkProjectSettingsId::Create(10).Value()).Value();
+                const auto project = NetworkProjectSettings::Create(settings).Value();
+                const auto facts = ProductFacts(project, NetworkProjectRole::Standalone, false);
+                const std::array worlds{NetworkModeWorld{NetworkModeWorldKind::Standalone, {31}}};
+                auto host = Internal::NetworkProductHost::Create(clock,
+                                                                 {project,
+                                                                  facts.product,
+                                                                  facts.inventory,
+                                                                  facts.host,
+                                                                  facts.requirements,
+                                                                  facts.selection,
+                                                                  6,
+                                                                  worlds,
+                                                                  {},
+                                                                  {},
+                                                                  NetworkWorldCompositionPurpose::Gameplay,
+                                                                  {},
+                                                                  std::move(composed.fixedParticipant),
+                                                                  std::move(composed.pollRetirement)},
+                                                                 std::move(composed.factories));
+                if (host.HasError())
+                    return Result<void>::Failure(std::move(host).ErrorValue());
+                scheduled = std::move(host).Value();
+                if (auto started = scheduled->Startup(); started.HasError())
+                    return started;
+                return scheduled->RunFrame();
+            }
+#endif
+
             void RunFrame() {
+                if (scheduled) {
+                    ++tick;
+                    clock.Advance(Duration::FromNanoseconds(16'666'667));
+                    const auto frame = scheduled->RunFrame();
+                    if (frame.HasError())
+                        UNSCOPED_INFO(frame.ErrorValue().code.Value() + ": " + frame.ErrorValue().message);
+                    REQUIRE(frame.HasValue());
+                    return;
+                }
                 const auto cancellation = resources->cancellation.Token();
                 const auto result = physics->RunFixedTick({++tick, Duration::FromNanoseconds(16'666'667), cancellation});
                 if (result.HasError())
@@ -194,6 +271,8 @@ namespace Horo::Application::CharacterSceneProductTest {
             void Stop() {
                 if (std::exchange(stopped, true))
                     return;
+                if (scheduled)
+                    scheduled->Shutdown();
                 if (physics)
                     physics->Shutdown();
                 if (scene)
@@ -205,6 +284,7 @@ namespace Horo::Application::CharacterSceneProductTest {
                     resources->loads->Shutdown();
                     resources->jobs.Shutdown(ShutdownPolicy::Cancel);
                 }
+                scheduled.reset();
             }
         };
 #endif
@@ -280,9 +360,54 @@ namespace Horo::Application::CharacterSceneProductTest {
     namespace {
         namespace DecisionFixture = AI::DecisionGraphTestSupport;
 
+        /** @brief Adds generated Animation artifacts with their cooker-issued dependency identities. */
+        Animation::AnimationAuthoringComponent AddMotionGraph(NavigationProductFixture &project,
+                                                              std::vector<NavigationProductFixture::AddedAsset> &assets,
+                                                              const Animation::GraphParameterId trigger) {
+            using namespace Animation;
+            auto graph = Test::StateGraph::Data();
+            auto &machine = Test::StateGraph::Machine(graph);
+            machine.states.resize(2);
+            machine.transitions.resize(1);
+            machine.transitions.front().duration = {0};
+            machine.transitions.front().conditions = {{trigger, GraphStatePredicate::Trigger, true}};
+            Test::Instance::Prepared source(graph);
+            std::vector<AnimationClipAsset> clips;
+            for (const auto &authored : source.compileClips) {
+                auto data = authored.Data();
+                data.descriptor.duration = {AnimationTicksPerSecond};
+                for (auto &track : data.tracks)
+                    track.keys.back().time = {data.descriptor.duration.ticks};
+                clips.push_back(Test::Cook::Take(AnimationClipAsset::Create(std::move(data), *source.skeleton)));
+            }
+            Test::Cook::Fixture cook;
+            REQUIRE(cook.request.target == project.project.request.assets.target);
+            cook.Replace(*source.skeleton, clips, graph);
+            const auto output = cook.Contents(Test::Cook::Take(cook.Cook()));
+            const auto registry = cook.registry.Snapshot();
+            for (std::size_t index = 0; index < output.entries.size(); ++index) {
+                const auto found = std::ranges::find(registry.Records(), output.entries[index].assetId, &Assets::AssetRecord::id);
+                REQUIRE(found != registry.Records().end());
+                auto record = *found;
+                const std::filesystem::path authored{record.sourcePath.String()};
+                auto relative = authored;
+                relative.replace_extension(".horoasset");
+                std::filesystem::copy_file(cook.source.path / authored, project.project.project.dir.path / relative);
+                const auto sourcePath = relative.generic_string();
+                project.project.WriteText(sourcePath + ".horo", SidecarJson(record.id.ToString(), record.type.Value()));
+                record.sourcePath = ProjectPath::Parse(sourcePath).Value();
+                record.metadataPath = ProjectPath::Parse(sourcePath + ".horo").Value();
+                assets.push_back({std::move(record), {}, output.artifacts[index]});
+            }
+            return {.component = Test::Id<AnimationComponentId>(7),
+                    .skeleton = source.skeleton->Data().skeleton,
+                    .source = {AnimationSourceKind::Graph, {}, graph.id}};
+        }
+
         /** @brief Adds the canonical Character geometry and the authored decision closure to the real cooked Navigation project. */
         Assets::AssetId PublishDecisionMotionProject(NavigationProductFixture &navigation, DecisionFixture::Fixture &decision,
-                                                     const AI::DecisionGraphSource &source, const AI::AiControllerDescriptor &controller) {
+                                                     const AI::DecisionGraphSource &source, const AI::AiControllerDescriptor &controller,
+                                                     std::optional<Animation::GraphParameterId> trigger) {
             Fixture character;
             auto &project = navigation.project;
             const auto root = project.project.dir.path;
@@ -302,17 +427,18 @@ namespace Horo::Application::CharacterSceneProductTest {
             const auto type = AI::DecisionAssetType(AI::DecisionPlanKind::BehaviorTree);
             WriteFile(root / "assets/move.horo_bt", authored.Value());
             project.WriteText("assets/move.horo_bt.horo", SidecarJson(asset.ToString(), type));
-            const std::array added{NavigationProductFixture::AddedAsset{Fixture::Record(character.materialId, "core.physics_material",
-                                                                                        "assets/controller.horoasset"),
-                                                                        material},
-                                   NavigationProductFixture::AddedAsset{Fixture::Record(asset, type, "assets/move.horo_bt"),
-                                                                        payload.Value()}};
+            std::vector added{NavigationProductFixture::AddedAsset{Fixture::Record(character.materialId, "core.physics_material",
+                                                                                   "assets/controller.horoasset"),
+                                                                   material},
+                              NavigationProductFixture::AddedAsset{Fixture::Record(asset, type, "assets/move.horo_bt"), payload.Value()}};
+            const auto animation = trigger ? std::optional{AddMotionGraph(navigation, added, *trigger)} : std::nullopt;
             navigation.Publish(NavigationProductFixture::Input::Valid, NavigationProductFixture::Client::None, added,
                                [&](SceneSource::SceneSourceDocument &scene) {
                 scene.objects.front().localTransform.translation = {3, 0, 2};
                 auto &actor = scene.objects[2];
                 actor.localTransform.translation = {1, 0.495F, 1};
                 actor.components.characterController = character.source.objects[0].components.characterController;
+                actor.components.animation = animation;
                 actor.components.aiAgent = AI::AiAgentComponent{.agent = DecisionFixture::MakeIdentity<AI::AgentId>(50)};
                 actor.components.aiController = AI::AiControllerComponent{.controller = controller.controller,
                                                                           .decisionAsset = source.asset,
@@ -330,10 +456,13 @@ namespace Horo::Application::CharacterSceneProductTest {
         enum class Scenario {
             MoveTo,
             Follow,
-            MissingAnimation
+            MissingAnimation,
+            Animated
         };
-        const auto scenario = GENERATE(Scenario::MoveTo, Scenario::Follow, Scenario::MissingAnimation);
+        const auto scenario = GENERATE(Scenario::MoveTo, Scenario::Follow, Scenario::MissingAnimation, Scenario::Animated);
         const bool follows = scenario == Scenario::Follow;
+        const bool animated = scenario == Scenario::Animated;
+        const auto motionTrigger = Animation::GraphParameterId::Create(2).Value();
         NavigationProductFixture fixture;
         DecisionFixture::Fixture decision;
         decision.probe.succeedTick = std::numeric_limits<std::uint64_t>::max();
@@ -343,7 +472,8 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                             .decisionAsset = source.asset,
                                                             .decisionKind = AI::DecisionPlanKind::BehaviorTree,
                                                             .blackboardSchema = decision.schema}};
-        const auto decisionAsset = PublishDecisionMotionProject(fixture, decision, source, catalog.front());
+        const auto decisionAsset = PublishDecisionMotionProject(fixture, decision, source, catalog.front(),
+                                                                animated ? std::optional{motionTrigger} : std::nullopt);
         Math::Vec3 goal{3, 0, 2};
         std::optional<NavigationAgentOwner> target;
         bool targetVisible = true;
@@ -356,7 +486,7 @@ namespace Horo::Application::CharacterSceneProductTest {
         NativeNavigationProductWorld product;
         decision.probe.onStart = [&] {
             staged =
-                Internal::StageHeadlessNavigationMotion(*product.physics, decision.probe.continuation,
+                Internal::StageHeadlessNavigationMotion(product.PhysicsService(), decision.probe.continuation,
                                                         {.mode = follows ? NavigationMovementMode::Follow : NavigationMovementMode::MoveTo,
                                                          .destination = goal,
                                                          .entity = target,
@@ -391,8 +521,8 @@ namespace Horo::Application::CharacterSceneProductTest {
             return Target::Success(NavigationMovementTarget{owner, location, 1});
         };
         Internal::HeadlessNavigationActorPolicy actorPolicy{{3}, 1};
-        if (scenario == Scenario::MissingAnimation)
-            actorPolicy.motionStartTrigger = Animation::GraphParameterId::Create(2).Value();
+        if (animated || scenario == Scenario::MissingAnimation)
+            actorPolicy.motionStartTrigger = motionTrigger;
         const auto started = product.Start(fixture, NavigationGameplay(), {actorPolicy}, Physics::PhysicsRuntimeMode::Canonical,
                                            [&](auto &input, auto &assets) {
             input.aiControllers = catalog;
@@ -405,11 +535,16 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                                                              {.mode = AI::AiSchedulingMode::BestEffort},
                                                                                              {}}});
             input.navigationMotion = policy;
+            if (animated) {
+                input.animationTarget = fixture.project.request.assets.target;
+                input.animationIdentities =
+                    std::make_shared<Internal::AnimationRuntimeIdentitySource>(Internal::AnimationRuntimeIdentityRange{1001, 1100});
+            }
         });
         if (started.HasError())
             UNSCOPED_INFO(started.ErrorValue().code.Value() + ": " + started.ErrorValue().message);
         REQUIRE(started.HasValue());
-        const auto scene = Internal::InspectHeadlessScene(*product.scene);
+        const auto scene = Internal::InspectHeadlessScene(product.SceneService());
         REQUIRE(scene);
         const auto actor = scene->Find({3});
         REQUIRE(actor);
@@ -434,8 +569,22 @@ namespace Horo::Application::CharacterSceneProductTest {
         const auto positionReached = [&] {
             return std::hypot(position.x - goal.x, position.z - goal.z) <= 0.2F;
         };
+        std::size_t graphTransitions{};
         for (std::size_t index = 0; index < 340 && decision.probe.cleanups == 0; ++index) {
             product.RunFrame();
+            if (animated) {
+                const auto *animation = Internal::InspectHeadlessAnimation(product.SceneService());
+                REQUIRE(animation);
+                const auto pose = animation->Query(*actor);
+                REQUIRE(pose.HasValue());
+                REQUIRE(pose.Value().component);
+                std::array<Animation::GraphStateEvent, 8> events;
+                std::uint32_t written{};
+                REQUIRE(animation->CopyStateEvents(*actor, pose.Value().component->currentPose, events, written).HasValue());
+                graphTransitions +=
+                    std::ranges::count(std::span{events}.first(written), Animation::GraphStateEventKind::TransitionCompleted,
+                                       &Animation::GraphStateEvent::kind);
+            }
             if (follows && positionReached() && std::hypot(velocity.x, velocity.z) < 0.05F)
                 break;
             std::this_thread::yield();
@@ -443,6 +592,8 @@ namespace Horo::Application::CharacterSceneProductTest {
         CHECK(staged);
         CHECK(captures > 2);
         REQUIRE(positionReached());
+        if (animated)
+            CHECK(graphTransitions == 1);
         if (follows) {
             REQUIRE(decision.probe.cleanups == 0);
             product.RunFrame();
