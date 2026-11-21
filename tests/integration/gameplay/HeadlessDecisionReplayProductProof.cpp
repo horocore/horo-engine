@@ -253,6 +253,47 @@ namespace Horo::Application::PrefabAtomicTest {
             ExpectPortableComparison(file, artifact, configuration);
         }
 
+        /** @brief Invokes the terminal export for a real replay file and returns its neutral JSON. */
+        nlohmann::json ExportReplayTimeline(const std::filesystem::path &file, std::string limit) {
+            auto input = file.u8string();
+            std::array<char *, 2> arguments{reinterpret_cast<char *>(input.data()), limit.data()};
+            std::ostringstream out, err;
+            CHECK(Internal::RunHeadlessReplayTimeline(arguments, out, err) == 0);
+            INFO(err.str());
+            REQUIRE(err.str().empty());
+            return nlohmann::json::parse(out.str());
+        }
+
+        /** @brief Checks exact capture ordering, export redaction, and visible overflow. */
+        void ExpectTimelineExport(const std::filesystem::path &file) {
+            const auto timeline = ExportReplayTimeline(file, "512");
+            CHECK(timeline.at("droppedEvents") == 0);
+            const auto &events = timeline.at("events");
+            REQUIRE(events.size() > 2);
+            CHECK(events.front().at("tick") == "3");
+            CHECK(events.back().at("tick") == "4");
+            CHECK(std::ranges::is_sorted(events, {}, [](const auto &event) {
+                return event.at("tick");
+            }));
+            const auto publication = std::ranges::find_if(events, [](const auto &event) {
+                return event.at("boundary") == "query-publication";
+            });
+            const auto sync = std::ranges::find_if(events, [](const auto &event) {
+                return event.at("boundary") == "blackboard-sync";
+            });
+            REQUIRE(publication != events.end());
+            REQUIRE(sync != events.end());
+            CHECK(publication->at("tick") == "3");
+            CHECK(sync->at("tick") == "4");
+            CHECK(publication->at("operation") == sync->at("operation"));
+            const auto text = timeline.dump();
+            CHECK(text.find("positionMillimeters") == std::string::npos);
+            CHECK(text.find("fixture-private-input") == std::string::npos);
+            const auto bounded = ExportReplayTimeline(file, "1");
+            CHECK(bounded.at("droppedEvents") == events.size() - 1);
+            CHECK(bounded.at("events") == nlohmann::json::array({events.front()}));
+        }
+
         /** @brief Checks the real consecutive captures and locates a difference in the later boundary. */
         void ExpectReplayWindow(const Internal::HeadlessReplayOutput &output,
                                 std::span<const Internal::HeadlessDecisionReplayData> frames) {
@@ -280,6 +321,12 @@ namespace Horo::Application::PrefabAtomicTest {
                 changed << window;
                 REQUIRE(changed.good());
             };
+            const auto &decisions = encoded.at(0).at("decision").at("records");
+            REQUIRE_FALSE(decisions.empty());
+            encoded.at(0).at("decision").at("records").at(0)["privatePayload"] = "fixture-private-input";
+            writeCandidate();
+            ExpectTimelineExport(candidate);
+            encoded.at(0).at("decision").at("records").at(0).erase("privatePayload");
             encoded.at(1).at("canonicalAi").at("digest") = FormatSha256(frames.back().sceneInput);
             writeCandidate();
             const auto different = Internal::CompareHeadlessReplayArtifacts(file, candidate);

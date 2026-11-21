@@ -1,5 +1,6 @@
 #include "HeadlessReplayArtifact.h"
 #include "HeadlessReplayManifest.h"
+#include "HeadlessReplayTimeline.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Foundation/Utf8.h"
@@ -15,12 +16,29 @@
 #include <vector>
 
 namespace Horo::Application::Internal {
+    /** @copydoc ReadHeadlessReplayWord */
+    std::uint64_t ReadHeadlessReplayWord(const nlohmann::json &field) {
+        const auto &text = field.get_ref<const std::string &>();
+        std::uint64_t value{};
+        const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
+        if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() || (text.size() > 1 && text.front() == '0'))
+            throw InvalidHeadlessReplayEvidence{};
+        return value;
+    }
+
+    /** @copydoc ReadHeadlessReplayDigest */
+    Sha256Digest ReadHeadlessReplayDigest(const nlohmann::json &field) {
+        const auto digest = ParseSha256(field.get_ref<const std::string &>());
+        if (digest.HasError() || digest.Value() == Sha256Digest{})
+            throw InvalidHeadlessReplayEvidence{};
+        return digest.Value();
+    }
+
     namespace {
         using Json = nlohmann::json;
         using Comparison = Result<std::optional<AI::AiReplayDivergence>>;
         using enum AI::AiReplayBoundary;
-
-        struct InvalidEvidence final {};
+        using InvalidEvidence = InvalidHeadlessReplayEvidence;
 
         struct PortableBoundary final {
             AI::AiReplayBoundaryProfile profile;
@@ -37,29 +55,11 @@ namespace Horo::Application::Internal {
             }
         };
 
-        /** @brief Reads a canonical unsigned decimal string without JSON numeric rounding. */
-        std::uint64_t ReadWord(const Json &field) {
-            const auto &text = field.get_ref<const std::string &>();
-            std::uint64_t value{};
-            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), value);
-            if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() || (text.size() > 1 && text.front() == '0'))
-                throw InvalidEvidence{};
-            return value;
-        }
-
         /** @brief Reads a required nonzero owner identity or publication revision. */
         std::uint64_t ReadIdentity(const Json &field) {
-            if (const auto value = ReadWord(field); value != 0)
+            if (const auto value = ReadHeadlessReplayWord(field); value != 0)
                 return value;
             throw InvalidEvidence{};
-        }
-
-        /** @brief Rejects missing or empty content identities. */
-        Sha256Digest ReadDigest(const Json &field) {
-            const auto digest = ParseSha256(field.get_ref<const std::string &>());
-            if (digest.HasError() || digest.Value() == Sha256Digest{})
-                throw InvalidEvidence{};
-            return digest.Value();
         }
 
         /** @brief Recomputes exact hashes for portable records retained in the file. */
@@ -120,16 +120,17 @@ namespace Horo::Application::Internal {
                 throw InvalidEvidence{};
             ValidateDecision(decision);
             const auto &blackboard = decision.at("blackboard");
-            const auto sceneDigest = ReadDigest(scene.at("digest"));
+            const auto sceneDigest = ReadHeadlessReplayDigest(scene.at("digest"));
             PortableReplay result{ReadIdentity(file.at("tick")), ReadIdentity(file.at("agentId")), {}};
             result.At(SceneInput) = {{deterministic, HeadlessSceneInputSchemaVersion, sceneDigest},
                                      {{sceneId, ReadIdentity(scene.at("revision"))}, sceneDigest}};
+            result.At(CanonicalAi) = {{deterministic, AI::AiCanonicalReferenceRecordVersion, sceneDigest},
+                                      {{sceneId, ReadIdentity(canonical.at("sceneStructureRevision"))},
+                                       ReadHeadlessReplayDigest(canonical.at("digest"))}};
             result.At(
-                CanonicalAi) = {{deterministic, AI::AiCanonicalReferenceRecordVersion, sceneDigest},
-                                {{sceneId, ReadIdentity(canonical.at("sceneStructureRevision"))}, ReadDigest(canonical.at("digest"))}};
-            result.At(Decision) = {{deterministic, AI::DecisionTraceHeader::CurrentVersion, ReadDigest(decision.at("planDigest"))},
-                                   {{ReadIdentity(blackboard.at("schemaGeneration")), ReadIdentity(blackboard.at("revision"))},
-                                    HashJson(decision)}};
+                Decision) = {{deterministic, AI::DecisionTraceHeader::CurrentVersion, ReadHeadlessReplayDigest(decision.at("planDigest"))},
+                             {{ReadIdentity(blackboard.at("schemaGeneration")), ReadIdentity(blackboard.at("revision"))},
+                              HashJson(decision)}};
             return result;
         }
 
@@ -140,9 +141,9 @@ namespace Horo::Application::Internal {
             if (section.at("schemaVersion") != schema || !records.is_array() || records.size() > maximum)
                 throw InvalidEvidence{};
             const auto hash = HashJson(records);
-            if (hash != ReadDigest(section.at("digest")))
+            if (hash != ReadHeadlessReplayDigest(section.at("digest")))
                 throw InvalidEvidence{};
-            return {{AI::AiReplayCoverage::Deterministic, schema, ReadDigest(section.at("settingsDigest"))}, {stamp, hash}};
+            return {{AI::AiReplayCoverage::Deterministic, schema, ReadHeadlessReplayDigest(section.at("settingsDigest"))}, {stamp, hash}};
         }
 
         /** @brief Reconstructs and checks the solver-owned compatibility digest carried by a portable artifact. */
@@ -152,16 +153,16 @@ namespace Horo::Application::Internal {
             if (!architecture.is_number_unsigned() || architecture == 0 ||
                 architecture > static_cast<unsigned>(Physics::PhysicsStateFpArchitecture::ArmFpcr))
                 throw InvalidEvidence{};
-            const Physics::PhysicsReplayConfiguration configuration{ReadDigest(section.at("buildDigest")),
-                                                                    ReadDigest(section.at("solverDigest")),
-                                                                    ReadDigest(section.at("platformDigest")),
-                                                                    ReadDigest(section.at("filtersDigest")),
-                                                                    ReadDigest(section.at("surfacesDigest")),
-                                                                    {ReadDigest(section.at("settingsDigest"))},
+            const Physics::PhysicsReplayConfiguration configuration{ReadHeadlessReplayDigest(section.at("buildDigest")),
+                                                                    ReadHeadlessReplayDigest(section.at("solverDigest")),
+                                                                    ReadHeadlessReplayDigest(section.at("platformDigest")),
+                                                                    ReadHeadlessReplayDigest(section.at("filtersDigest")),
+                                                                    ReadHeadlessReplayDigest(section.at("surfacesDigest")),
+                                                                    {ReadHeadlessReplayDigest(section.at("settingsDigest"))},
                                                                     {architecture.get<Physics::PhysicsStateFpArchitecture>(),
-                                                                     ReadWord(fp.at("value"))}};
+                                                                     ReadHeadlessReplayWord(fp.at("value"))}};
             const auto profile = configuration.Fingerprint();
-            if (profile != ReadDigest(section.at("profile")))
+            if (profile != ReadHeadlessReplayDigest(section.at("profile")))
                 throw InvalidEvidence{};
             return profile;
         }
@@ -172,9 +173,9 @@ namespace Horo::Application::Internal {
             if (section.at("schemaVersion") != 1 || !records.is_array() || records.size() > 32)
                 throw InvalidEvidence{};
             const auto hash = HashJson(records);
-            if (hash != ReadDigest(section.at("digest")))
+            if (hash != ReadHeadlessReplayDigest(section.at("digest")))
                 throw InvalidEvidence{};
-            return {{AI::AiReplayCoverage::Deterministic, 1, ReadDigest(section.at("profile"))},
+            return {{AI::AiReplayCoverage::Deterministic, 1, ReadHeadlessReplayDigest(section.at("profile"))},
                     {{agent, ReadIdentity(section.at("revision"))}, hash}};
         }
 
@@ -188,10 +189,11 @@ namespace Horo::Application::Internal {
                 const auto &records = navigation.at("results");
                 if (navigation.at("schemaVersion") != 1 || navigation.at("scope") != "best-effort-path-publication" ||
                     !records.is_array() || records.size() > 32 || ReadIdentity(navigation.at("tick")) != result.tick ||
-                    HashJson(records) != ReadDigest(navigation.at("digest")))
+                    HashJson(records) != ReadHeadlessReplayDigest(navigation.at("digest")))
                     throw InvalidEvidence{};
                 (void)ReadIdentity(navigation.at("topology"));
-                result.At(Navigation).profile = {AI::AiReplayCoverage::Nondeterministic, 1, ReadDigest(navigation.at("profile"))};
+                result.At(Navigation).profile = {AI::AiReplayCoverage::Nondeterministic, 1,
+                                                 ReadHeadlessReplayDigest(navigation.at("profile"))};
             }
             if (file.contains("gameplay")) {
                 const auto &gameplay = file.at("gameplay");
@@ -203,10 +205,10 @@ namespace Horo::Application::Internal {
                     !records.at("callbacks").is_number_unsigned() || !records.at("sceneCommandsQueued").is_boolean())
                     throw InvalidEvidence{};
                 const auto digest = HashJson(records);
-                if (digest != ReadDigest(gameplay.at("digest")))
+                if (digest != ReadHeadlessReplayDigest(gameplay.at("digest")))
                     throw InvalidEvidence{};
-                const auto image = ReadDigest(gameplay.at("sourceDigest"));
-                const auto profile = ReadDigest(gameplay.at("profile"));
+                const auto image = ReadHeadlessReplayDigest(gameplay.at("sourceDigest"));
+                const auto profile = ReadHeadlessReplayDigest(gameplay.at("profile"));
                 const std::array<std::span<const std::byte>, 2> parts{std::as_bytes(std::span{image.bytes}),
                                                                       std::as_bytes(std::span{profile.bytes})};
                 result.At(Gameplay) = {{AI::AiReplayCoverage::Deterministic, 2, ComputeSha256Fragments(parts)},
@@ -225,7 +227,7 @@ namespace Horo::Application::Internal {
                 const auto &scene = result.At(SceneInput);
                 result.At(PerceptionInput) = {{AI::AiReplayCoverage::Deterministic, 1, scene.profile.content},
                                               {{scene.observation.stamp.generation, ReadIdentity(input.at("revision"))},
-                                               ReadDigest(input.at("digest"))}};
+                                               ReadHeadlessReplayDigest(input.at("digest"))}};
             }
             if (file.contains("physics")) {
                 const auto &physics = file.at("physics");
@@ -245,7 +247,7 @@ namespace Horo::Application::Internal {
         }
 
         /** @brief Reads a bounded regular file, preserving the legacy one-tick representation. */
-        Result<std::vector<PortableReplay>> ReadReplay(const std::filesystem::path &path) {
+        Result<std::vector<PortableReplay>> ReadReplay(const std::filesystem::path &path, HeadlessReplayTimeline *timeline = nullptr) {
             using Outcome = Result<std::vector<PortableReplay>>;
             const auto bytes = NativeDurableFileSystem{}.ReadFileBounded(path, MaximumHeadlessReplayWindowBytes);
             if (bytes.HasError())
@@ -257,8 +259,12 @@ namespace Horo::Application::Internal {
             });
             if (file.at("format") != "horo-ai-replay-evidence")
                 return Outcome::Failure(MakeError(AI::AIErrors::CanonicalSchemaUnsupported));
-            if (file.at("version") == 1 && bytes.Value().size() <= MaximumHeadlessReplayEvidenceBytes)
-                return Outcome::Success({ReadReplayFrame(file)});
+            if (file.at("version") == 1 && bytes.Value().size() <= MaximumHeadlessReplayEvidenceBytes) {
+                auto frame = ReadReplayFrame(file);
+                if (timeline)
+                    timeline->Append(file, frame.tick, frame.agent);
+                return Outcome::Success({std::move(frame)});
+            }
             if (file.at("version") != 2)
                 return Outcome::Failure(MakeError(AI::AIErrors::CanonicalSchemaUnsupported));
             const auto &frames = file.at("frames");
@@ -271,6 +277,8 @@ namespace Horo::Application::Internal {
                 if (!result.empty() &&
                     (frame.agent != result.front().agent || frame.tick <= result.back().tick || frame.tick - result.back().tick != 1))
                     throw InvalidEvidence{};
+                if (timeline)
+                    timeline->Append(encoded, frame.tick, frame.agent);
                 result.push_back(std::move(frame));
             }
             return Outcome::Success(std::move(result));
@@ -379,5 +387,42 @@ namespace Horo::Application::Internal {
             err << "Replay evidence path could not be opened.\n";
             return 2;
         }
+    }
+
+    /** @copydoc RunHeadlessReplayTimeline */
+    int RunHeadlessReplayTimeline(const std::span<char *> arguments, std::ostream &out, std::ostream &err) {
+        if (arguments.empty() || arguments.size() > 2) {
+            err << "Usage: horo-engine --ai-replay-timeline <evidence.json> [max-events]\n";
+            return 2;
+        }
+        auto limit = HeadlessReplayTimeline::DefaultEvents;
+        if (arguments.size() == 2) {
+            const std::string_view text{arguments[1]};
+            const auto parsed = std::from_chars(text.data(), text.data() + text.size(), limit);
+            if (parsed.ec != std::errc{} || parsed.ptr != text.data() + text.size() || limit == 0 ||
+                limit > HeadlessReplayTimeline::MaximumEvents) {
+                err << "Timeline event limit is out of range.\n";
+                return 2;
+            }
+        }
+        try {
+            HeadlessReplayTimeline timeline{limit};
+            const auto admitted = ReadReplay(InputPath(arguments[0]), &timeline);
+            if (admitted.HasError()) {
+                err << admitted.ErrorValue().code.Value() << ": could not read replay evidence.\n";
+                return 2;
+            }
+            out << std::move(timeline).Finish().dump() << '\n';
+            return out ? 0 : 2;
+        } catch (const InvalidEvidence &) {
+            err << "Invalid replay evidence or path.\n";
+        } catch (const Json::exception &) {
+            err << "Invalid replay evidence.\n";
+        } catch (const std::filesystem::filesystem_error &) {
+            err << "Replay evidence path could not be opened.\n";
+        } catch (const std::bad_alloc &) {
+            err << "Insufficient storage for the replay timeline.\n";
+        }
+        return 2;
     }
 }  // namespace Horo::Application::Internal

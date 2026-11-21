@@ -3430,6 +3430,14 @@ within the declared coverage, `1` indicates divergence, and `2` indicates invali
 or incompatible evidence. Reports written before comparison metadata was added
 must be regenerated for this command.
 
+Use `horo-engine --ai-replay-timeline <evidence.json> [max-events]` for a
+privacy-filtered JSON projection. It orders events by fixed tick, then boundary
+and source ordinal. Query outcomes and Blackboard writes retain their shared
+operation identity. The export includes bounded counts, stable identities and
+publication digests. It excludes raw Blackboard values, positions, paths and
+provider payloads. The event limit defaults to 512 and accepts 1 to 4096. The
+`droppedEvents` field counts every projected event beyond that limit.
+
 ### Scene decision scheduling tiers
 
 Hosts can compose an `AiDecisionSimulationProfile` through

@@ -64,4 +64,7 @@ namespace Horo::Application::Internal {
 
     /** @brief Terminal view of the first differing tick and boundary, or typed evidence failure. */
     int RunHeadlessReplayComparison(std::span<char *> arguments, std::ostream &out, std::ostream &err);
+
+    /** @brief Exports a bounded privacy-filtered timeline from admitted portable replay evidence. */
+    int RunHeadlessReplayTimeline(std::span<char *> arguments, std::ostream &out, std::ostream &err);
 }  // namespace Horo::Application::Internal
