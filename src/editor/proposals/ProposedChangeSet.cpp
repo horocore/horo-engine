@@ -1,6 +1,7 @@
 #include "Horo/Editor/ProposedChangeSet.h"
 
 #include "Horo/Foundation/Utf8.h"
+#include "ProposedPatchInternal.h"
 
 #include <algorithm>
 #include <new>
@@ -57,23 +58,10 @@ namespace Horo::Editor::Proposals {
             });
         }
 
-        /** @brief Folds only ASCII for portable alias rejection; physical Unicode alias checks belong to the host. */
-        char Lower(const char c) noexcept {
-            return c >= 'A' && c <= 'Z' ? static_cast<char>(c + ('a' - 'A')) : c;
-        }
-
-        /** @brief Owns one bounded collision key without changing the canonical source spelling. */
-        std::string Fold(std::string_view text) {
-            std::string result(text);
-            for (auto &c : result)
-                c = Lower(c);
-            return result;
-        }
-
         /** @brief Compares a portable filename stem with one lowercase reserved name without allocation. */
         bool StemEquals(const std::string_view stem, const std::string_view reserved) noexcept {
             return stem.size() == reserved.size() && std::equal(stem.begin(), stem.end(), reserved.begin(), [](char a, char b) {
-                return Lower(a) == b;
+                return PatchDetail::Lower(a) == b;
             });
         }
 
@@ -219,7 +207,7 @@ namespace Horo::Editor::Proposals {
             Result<void> Reserve(const SourceDocumentId &path) {
                 if (!policy_.Allows(path))
                     return Fail<void>(Errors::PolicyDenied);
-                if (!touched_.insert(Fold(path.Value())).second)
+                if (!touched_.insert(PatchDetail::Fold(path.Value())).second)
                     return Fail<void>(Errors::Invalid);
                 return Result<void>::Success();
             }
@@ -428,7 +416,7 @@ namespace Horo::Editor::Proposals {
             Append(identity, project);
             Append(identity, std::to_string(revision));
             for (const auto &rule : rules) {
-                if (!PortablePath(rule.path) || !paths.insert(Fold(rule.path.Value())).second)
+                if (!PortablePath(rule.path) || !paths.insert(PatchDetail::Fold(rule.path.Value())).second)
                     return Fail<ProjectPolicy>(Errors::PolicyDenied);
                 Append(identity, rule.path.Value());
                 Append(identity, rule.descendants ? "tree" : "file");

@@ -192,6 +192,59 @@ namespace Horo::Editor::Proposals {
      * @return Success or stale/invalid failure; no buffer, history, save-base or disk mutation. */
     Result<void> ValidateAgainstSnapshot(const FileBase &base, std::span<const TextHunk> hunks, const SourceDocumentSnapshot &current);
 
+    /** @brief Workspace-owned evidence for a path without a readable source snapshot. */
+    enum class SourcePathState : std::uint8_t {
+        Absent,   /**< The workspace inspected this exact spelling and found no entry. */
+        Occupied, /**< The path is in use, including by a directory or an unreadable source. */
+        Moved     /**< The workspace observed that the original file moved away. */
+    };
+
+    /** @brief One exact workspace observation. Omitted paths have unknown availability. */
+    struct SourcePathObservation final {
+        SourceDocumentId path;
+        std::variant<SourcePathState, SourceDocumentSnapshot> evidence;
+    };
+
+    /** @brief The first conflicting prerequisite of one file operation. */
+    enum class PlanConflictReason : std::uint8_t {
+        Unobserved,
+        SourceMissing,
+        SourceMoved,
+        SourceUnavailable,
+        SourceStale,
+        SourceChangedOnDisk,
+        DestinationOccupied,
+        OverlappingPaths
+    };
+
+    /** @brief Conflict reason and affected path for one operation in the proposal. */
+    struct PlanConflict final {
+        SourceDocumentId path;
+        PlanConflictReason reason;
+    };
+
+    /** @brief Detached preview. The original immutable lease is empty for creates and the result is absent for deletes. */
+    struct FilePreview final {
+        SourceDocumentSnapshot before;
+        std::optional<std::string> after;
+    };
+
+    /** @brief A read-only projection bound to the exact proposal digest. Entries follow ChangeSet::Files() order. */
+    struct WorkspaceEditPlan final {
+        Sha256Digest proposal;
+        std::vector<std::variant<FilePreview, PlanConflict>> entries;
+    };
+
+    /** @brief Projects an admitted proposal onto an explicitly observed workspace without performing I/O.
+     * @param proposal Immutable proposal being reviewed. @param policy Current captured policy for the workspace.
+     * @param observations Current workspace observations for source and destination paths. The host supplies absence and disk evidence.
+     * @param limits Finite per-file, aggregate text and operation limits.
+     * @return A deterministic preview or conflict for each operation, or a typed policy, invalid-input or budget failure.
+     * @details Retained previews can become stale. Application must revalidate permissions, paths and revisions against the owner.
+     */
+    Result<WorkspaceEditPlan> PlanWorkspaceEdits(const ChangeSet &proposal, const ProjectPolicy &policy,
+                                                 std::span<const SourcePathObservation> observations, const Limits &limits = {});
+
     enum class ReviewChoice : std::uint8_t {
         Accept,
         Reject

@@ -3,6 +3,19 @@
 #include "Horo/Editor/ProposedChangeSet.h"
 
 namespace Horo::Editor::Proposals::PatchDetail {
+    /** @brief Folds ASCII for portable alias detection without altering canonical spellings. */
+    inline char Lower(const char character) noexcept {
+        return character >= 'A' && character <= 'Z' ? static_cast<char>(character + ('a' - 'A')) : character;
+    }
+
+    /** @brief Owns a portable collision key. The workspace owner checks physical filesystem aliases. */
+    inline std::string Fold(const std::string_view text) {
+        std::string key(text);
+        for (auto &character : key)
+            character = Lower(character);
+        return key;
+    }
+
     /** @brief Resolves an exact offered source with no fallback or ambiguous selection. */
     inline const SourceDocumentSnapshot *ResolveBase(const SourceDocumentId &path, std::span<const SourceDocumentSnapshot> sources) {
         const SourceDocumentSnapshot *matched{};

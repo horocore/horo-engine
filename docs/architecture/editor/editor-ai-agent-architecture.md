@@ -745,6 +745,15 @@ recognizes the missing-final-newline marker. Creates and complete deletions
 use the unified null-file sentinel. Renames are represented explicitly in the
 structured format. Git hash text supplies no source revision authority.
 
+Workspace edit planning binds one admitted proposal to explicit read-only
+observations of its source and destination paths. Current source leases must
+match both the buffer and saved-base evidence. The workspace host supplies
+observed absence for creates and renames. The planner produces one bounded
+preview or typed conflict per operation in canonical proposal order. Its output
+retains the exact proposal digest and never changes source, history, or disk.
+Permissions, paths, and revision evidence are checked again by the mutation
+owner before application.
+
 ## Backend Providers
 
 The system supports pluggable LLM backends:

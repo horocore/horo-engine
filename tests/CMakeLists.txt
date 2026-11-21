@@ -3912,7 +3912,9 @@ add_library(HoroSourceDocumentPublicHeaderConsumer OBJECT support/SourceDocument
 target_compile_features(HoroSourceDocumentPublicHeaderConsumer PRIVATE cxx_std_20)
 target_link_libraries(HoroSourceDocumentPublicHeaderConsumer PRIVATE HoroEngine::EditorServices)
 target_sources(HoroSourceFileOpenServiceTests PRIVATE $<TARGET_OBJECTS:HoroSourceDocumentPublicHeaderConsumer>)
-add_executable(HoroProposedChangeSetTests unit/editor/ProposedChangeSetTests.cpp)
+add_executable(HoroProposedChangeSetTests
+    unit/editor/ProposedChangeSetTests.cpp
+    unit/editor/WorkspaceEditPlanTests.cpp)
 target_link_libraries(HoroProposedChangeSetTests PRIVATE HoroEngine::EditorServices HoroEngine::Security nlohmann_json::nlohmann_json)
 horo_register_catch_test(HoroProposedChangeSetTests LABELS "unit;editor;proposal;headless")
 
