@@ -117,8 +117,9 @@ namespace Horo::Editor {
         auto current = [witness = std::move(tail.witness), origin, revision](const AgentContextProvenance &provenance) {
             return witness.IsCurrent() && provenance.origin == origin && provenance.revision == revision;
         };
-        const AgentContextSelection selected =
-            AgentContextAttachment{AgentContextAttachmentKind::BuildOutput, origin, revision, std::move(text), tail.truncated};
+        const auto kind = tail.kind == BuildOutputTailKind::Diagnostics ? AgentContextAttachmentKind::BuildDiagnostics
+                                                                        : AgentContextAttachmentKind::BuildOutput;
+        const AgentContextSelection selected = AgentContextAttachment{kind, origin, revision, std::move(text), tail.truncated};
         AgentContextReaders readers{.redact = RedactEvidence, .isCurrent = std::move(current)};
         return Capture(selected, std::move(readers), ProjectContext(std::move(projectIdentity), workspaceGeneration, std::move(lifetime)),
                        requestId, {}, {}, tail.operation, {AgentHistoryReferenceKind::BuildOutput, tail.operation, tail.lastSequence});

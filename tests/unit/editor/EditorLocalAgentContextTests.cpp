@@ -231,6 +231,47 @@ namespace Horo::Editor {
         CHECK_FALSE(retained->witness.IsCurrent());
     }
 
+    TEST_CASE("The diagnostics preview sends only the approved warning and error tail for the selected build",
+              "[unit][agent][context][build_output]") {
+        using namespace Agent;
+        constexpr OperationId selected = 31;
+        BuildOutputStore output{12};
+        output.Append({.operationId = selected, .severity = DiagnosticSeverity::Warning, .message = "Earlier diagnostic"});
+        output.Append({.operationId = selected, .severity = DiagnosticSeverity::Error, .message = "Compiler error\nApi-Key: fake-secret"});
+        output.Append({.operationId = 32, .severity = DiagnosticSeverity::Fatal, .message = "Unrelated operation"});
+        output.Append({.operationId = selected, .severity = DiagnosticSeverity::Fatal, .message = "Linker failure"});
+        output.Append({.operationId = selected, .message = "Informational output"});
+        auto tail = output.CaptureOperationDiagnostics(selected, 2, 1024);
+        REQUIRE(tail);
+        CHECK(tail->truncated);
+        CHECK(tail->messages.size() == 2);
+        CHECK_FALSE(output.CaptureOperationDiagnostics(99, 2, 1024));
+
+        CancellationSource workspace;
+        auto preview = EditorLocalAgentContext::PrepareBuildOutput(std::move(*tail), "project", 3, workspace.Token(), 51);
+        REQUIRE(preview.HasValue());
+        auto context = std::move(preview).Value();
+        const auto &item = context.Items().front();
+        CHECK(item.provenance.kind == AgentContextKind::Diagnostic);
+        CHECK(item.provenance.truncated);
+        const auto text = item.candidate.text;
+        CHECK(text.find("Compiler error") != std::string::npos);
+        CHECK(text.find("[redacted]") != std::string::npos);
+        CHECK(text.find("Linker failure") != std::string::npos);
+        for (const auto *excluded : {"Earlier diagnostic", "fake-secret", "Unrelated operation", "Informational output"})
+            CHECK(text.find(excluded) == std::string::npos);
+
+        REQUIRE(context.Approve());
+        RecordingModel model;
+        AgentTurnRuntime runtime;
+        const auto dispatch = context.Dispatch();
+        const ModelRequest request{.model = "local", .messages = {{.role = ModelRole::User, .text = "Explain these diagnostics"}}};
+        const auto result = runtime.Run(model, nullptr, 51, request, {}, {}, &dispatch);
+        REQUIRE(result.status == AgentTurnStatus::Completed);
+        REQUIRE(model.sent.size() == 2);
+        CHECK(model.sent.front().text == text);
+    }
+
     TEST_CASE("Local panel build context sends the explicitly approved bounded project operation output without history",
               "[unit][agent][context][build_output]") {
         constexpr OperationId selected = 31;

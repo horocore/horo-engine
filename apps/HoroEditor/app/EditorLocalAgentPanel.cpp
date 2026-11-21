@@ -163,6 +163,12 @@ namespace Horo::Editor {
             }
 
         private:
+            enum class BuildContextChoice {
+                ActiveOutput,
+                CompletedOutput,
+                CompletedDiagnostics
+            };
+
             [[nodiscard]] bool Busy() const {
                 return background_->Busy();
             }
@@ -335,30 +341,39 @@ namespace Horo::Editor {
                 const bool enabled =
                     ready && buildOutput_ && gameplayBuilds_ && !buildRoot_.empty() && contextLifetime_ && !contextProject_.empty();
                 if (Button(locale, "context_build_offer", enabled)) {
-                    PrepareBuildReview(false);
+                    PrepareBuildReview(BuildContextChoice::ActiveOutput, "context_build_unavailable");
                     return true;
                 }
                 if (Button(locale, "context_completed_build_offer", enabled)) {
-                    PrepareBuildReview(true);
+                    PrepareBuildReview(BuildContextChoice::CompletedOutput, "context_completed_build_unavailable");
+                    return true;
+                }
+                if (Button(locale, "context_build_diagnostics_offer", enabled)) {
+                    PrepareBuildReview(BuildContextChoice::CompletedDiagnostics, "context_build_diagnostics_unavailable");
                     return true;
                 }
                 return false;
             }
 
             /** @brief Resolves the separately selected active or terminal operation within the committed project. */
-            std::optional<OperationId> BuildOperation(const bool completed) const {
-                if (completed)
+            std::optional<OperationId> BuildOperation(const BuildContextChoice choice) const {
+                if (choice != BuildContextChoice::ActiveOutput)
                     return gameplayBuilds_->QueryLatestCompletedOutput(buildRoot_);
                 const auto build = gameplayBuilds_->QueryActiveProject(buildRoot_);
                 return build ? build->operationId : std::nullopt;
             }
 
-            void PrepareBuildReview(const bool completed) {
+            void PrepareBuildReview(const BuildContextChoice choice, const char *unavailable) {
                 constexpr std::size_t Records = 8;
                 constexpr std::size_t Bytes = (3U << 10U) - Records;  // Leave room for framing each selected in-memory message.
-                const auto operation = BuildOperation(completed);
-                auto tail = operation ? buildOutput_->CaptureOperationTail(*operation, Records, Bytes) : std::nullopt;
-                const char *unavailable = completed ? "context_completed_build_unavailable" : "context_build_unavailable";
+                const auto operation = BuildOperation(choice);
+                if (!operation) {
+                    status_ = unavailable;
+                    return;
+                }
+                auto tail = choice == BuildContextChoice::CompletedDiagnostics
+                                ? buildOutput_->CaptureOperationDiagnostics(*operation, Records, Bytes)
+                                : buildOutput_->CaptureOperationTail(*operation, Records, Bytes);
                 if (!tail) {
                     status_ = unavailable;
                     return;
@@ -370,14 +385,14 @@ namespace Horo::Editor {
                     return;
                 }
                 contextPreview_.emplace(std::move(prepared).Value());
-                reviewingCompletedBuild_ = completed;
+                buildContextChoice_ = choice;
                 status_ = nullptr;
             }
 
             /** @brief Rechecks widget byte offsets only on approval, avoiding whole-document scans during preview drawing. */
             bool ReviewSelectionCurrent() const {
                 if (const auto operation = contextPreview_->BuildOperation())
-                    return BuildOperation(reviewingCompletedBuild_) == operation;
+                    return BuildOperation(buildContextChoice_) == operation;
                 const auto expected = contextPreview_->Selection();
                 if (!expected)
                     return true;
@@ -574,7 +589,7 @@ namespace Horo::Editor {
             const char *status_{};
             std::uint64_t turn_{};
             bool awaitingCheckpoint_{};
-            bool reviewingCompletedBuild_{};
+            BuildContextChoice buildContextChoice_{BuildContextChoice::ActiveOutput};
             bool browsingSources_{};
             bool reviewingOpenSource_{};
             std::size_t sourcePage_{};

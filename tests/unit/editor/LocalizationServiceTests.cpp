@@ -913,6 +913,8 @@ TEST_CASE("Local model panel copy resolves in both shipped locales", "[unit][edi
                                "context_range_unavailable",
                                "context_build_offer",
                                "context_completed_build_offer",
+                               "context_build_diagnostics_offer",
+                               "context_build_diagnostics_unavailable",
                                "context_completed_build_unavailable",
                                "context_build_unavailable",
                                "context_review",

@@ -8,6 +8,12 @@ namespace Horo {
         constexpr std::size_t MaximumOperationObservers = 8;
         constexpr std::size_t MaximumTailRecords = 16;
         constexpr std::size_t MaximumTailBytes = 32U << 10U;
+
+        /** @brief Filters records before they consume the selected operation's byte and count allowance. */
+        bool MatchesTail(const BuildOutputRecord &record, const OperationId operation, const BuildOutputTailKind kind) {
+            return record.operationId == operation && !record.message.empty() &&
+                   (kind == BuildOutputTailKind::Messages || record.severity >= DiagnosticSeverity::Warning);
+        }
     }  // namespace
 
     /** @copydoc BuildOutputOperationWitness::IsCurrent */
@@ -17,6 +23,11 @@ namespace Horo {
 
     /** @copydoc IBuildOutputQuery::CaptureOperationTail */
     std::optional<BuildOutputOperationTail> IBuildOutputQuery::CaptureOperationTail(OperationId, std::size_t, std::size_t) const {
+        return std::nullopt;
+    }
+
+    /** @copydoc IBuildOutputQuery::CaptureOperationDiagnostics */
+    std::optional<BuildOutputOperationTail> IBuildOutputQuery::CaptureOperationDiagnostics(OperationId, std::size_t, std::size_t) const {
         return std::nullopt;
     }
 
@@ -70,14 +81,29 @@ namespace Horo {
     std::optional<BuildOutputOperationTail> BuildOutputStore::CaptureOperationTail(const OperationId operation,
                                                                                    const std::size_t maximumRecords,
                                                                                    const std::size_t maximumBytes) const {
+        return CaptureOperationMessages(operation, maximumRecords, maximumBytes, BuildOutputTailKind::Messages);
+    }
+
+    /** @copydoc BuildOutputStore::CaptureOperationDiagnostics */
+    std::optional<BuildOutputOperationTail> BuildOutputStore::CaptureOperationDiagnostics(const OperationId operation,
+                                                                                          const std::size_t maximumRecords,
+                                                                                          const std::size_t maximumBytes) const {
+        return CaptureOperationMessages(operation, maximumRecords, maximumBytes, BuildOutputTailKind::Diagnostics);
+    }
+
+    /** @copydoc BuildOutputStore::CaptureOperationMessages */
+    std::optional<BuildOutputOperationTail> BuildOutputStore::CaptureOperationMessages(const OperationId operation,
+                                                                                       const std::size_t maximumRecords,
+                                                                                       const std::size_t maximumBytes,
+                                                                                       const BuildOutputTailKind kind) const {
         if (operation == 0 || maximumRecords == 0 || maximumRecords > MaximumTailRecords || maximumBytes == 0 ||
             maximumBytes > MaximumTailBytes)
             return std::nullopt;
         std::lock_guard lock(mutex_);
-        BuildOutputOperationTail tail{.operation = operation, .truncated = droppedRecordCount_ != 0};
+        BuildOutputOperationTail tail{.operation = operation, .truncated = droppedRecordCount_ != 0, .kind = kind};
         std::size_t remaining = maximumBytes;
         for (auto record = records_.rbegin(); record != records_.rend(); ++record) {
-            if (record->operationId != operation || record->message.empty())
+            if (!MatchesTail(*record, operation, kind))
                 continue;
             if (!tail.lastSequence)
                 tail.lastSequence = record->sequence;

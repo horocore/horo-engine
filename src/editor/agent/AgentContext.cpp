@@ -130,6 +130,8 @@ namespace Horo::Agent {
                     return AgentContextKind::Selection;
                 case BuildOutput:
                     return AgentContextKind::BuildOutput;
+                case BuildDiagnostics:
+                    return AgentContextKind::Diagnostic;
                 case Note:
                     return AgentContextKind::Note;
                 case Report:

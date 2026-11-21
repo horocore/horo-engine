@@ -102,6 +102,12 @@ namespace Horo {
         std::shared_ptr<const std::atomic<bool>> current_;
     };
 
+    /** @brief Which messages from the exact operation are selected for review. */
+    enum class BuildOutputTailKind : std::uint8_t {
+        Messages,
+        Diagnostics
+    };
+
     /** @brief Raw in-memory message tail with no diagnostics paths, commands, or unrelated operation records. */
     struct BuildOutputOperationTail final {
         OperationId operation{};
@@ -109,6 +115,7 @@ namespace Horo {
         bool truncated{}; /**< The capture cut off earlier records or the store has reported retention loss. */
         std::vector<std::string> messages;
         BuildOutputOperationWitness witness;
+        BuildOutputTailKind kind{BuildOutputTailKind::Messages};
     };
 
     /** @brief Read-only build-output capability exposed to presentation surfaces. */
@@ -131,6 +138,15 @@ namespace Horo {
         [[nodiscard]] virtual std::optional<BuildOutputOperationTail> CaptureOperationTail(OperationId operation,
                                                                                            std::size_t maximumRecords,
                                                                                            std::size_t maximumBytes) const;
+        /** @brief Captures warning, error and fatal messages of one authorized operation.
+         * @param operation Exact correlated operation.
+         * @param maximumRecords Positive cap, at most 16 messages.
+         * @param maximumBytes Positive raw message cap, at most 32 KiB.
+         * @return A bounded chronological diagnostic tail with a revocable witness, or no available capture.
+         */
+        [[nodiscard]] virtual std::optional<BuildOutputOperationTail> CaptureOperationDiagnostics(OperationId operation,
+                                                                                                  std::size_t maximumRecords,
+                                                                                                  std::size_t maximumBytes) const;
     };
 
     /**
@@ -167,8 +183,16 @@ namespace Horo {
         /** @copydoc IBuildOutputQuery::CaptureOperationTail */
         [[nodiscard]] std::optional<BuildOutputOperationTail> CaptureOperationTail(OperationId operation, std::size_t maximumRecords,
                                                                                    std::size_t maximumBytes) const override;
+        /** @copydoc IBuildOutputQuery::CaptureOperationDiagnostics */
+        [[nodiscard]] std::optional<BuildOutputOperationTail> CaptureOperationDiagnostics(OperationId operation, std::size_t maximumRecords,
+                                                                                          std::size_t maximumBytes) const override;
 
     private:
+        /** @brief Applies the selected message filter before reserving the bounded tail. */
+        [[nodiscard]] std::optional<BuildOutputOperationTail> CaptureOperationMessages(OperationId operation, std::size_t maximumRecords,
+                                                                                       std::size_t maximumBytes,
+                                                                                       BuildOutputTailKind kind) const;
+
         struct OperationObserver {
             OperationId operation;
             std::weak_ptr<std::atomic<bool>> current;

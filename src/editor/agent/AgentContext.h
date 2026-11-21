@@ -41,6 +41,7 @@ namespace Horo::Agent {
     enum class AgentContextAttachmentKind : std::uint8_t {
         Selection,
         BuildOutput,
+        BuildDiagnostics,
         Note,
         Report
     };

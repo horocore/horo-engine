@@ -876,6 +876,8 @@ scoped to the turn.
 The panel offers separate previews for the active gameplay build and the last
 completed build of the current project. It reads only the retained output for
 the selected operation, marks omitted output, and redacts the text before review.
+The completed build also offers a separate diagnostics preview filtered to
+warnings and errors from that operation.
 Changes to the selected operation's output invalidate its approval. Other
 builds and process logs have no effect while the selected output is retained.
 
