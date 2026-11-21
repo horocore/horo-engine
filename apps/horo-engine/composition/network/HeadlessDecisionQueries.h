@@ -12,7 +12,8 @@ namespace Horo::Application::Internal {
         /** @brief Freezes the matching query plans and allocates bounded phase state before Scene activation. */
         [[nodiscard]] static Result<std::shared_ptr<HeadlessDecisionQueries>> Create(
             HeadlessQueryPlanCatalog plans, std::shared_ptr<const AI::QuerySchemaRegistry> registry,
-            const AI::AiTaskSchedulerSettings &settings, std::size_t workUnitsLimit);
+            const AI::AiTaskSchedulerSettings &settings, std::size_t workUnitsLimit,
+            std::optional<AI::QueryResultCacheLimits> cacheLimits = std::nullopt);
 
         /** @copydoc AI::IDecisionQueryTaskBinder::BindQueryTask */
         [[nodiscard]] Result<std::unique_ptr<AI::IBehaviorTreeExecutor>> BindQueryTask(
@@ -51,6 +52,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> PublishOutputs(TickScope &scope);
         /** @brief Issues bounded allowances in round-robin occurrence order without allocating. */
         void AdvanceQueries(std::uint64_t tick);
+        /** @brief Allocates retention once per active Scene incarnation. */
+        [[nodiscard]] Result<void> PrepareCache(const Runtime::RuntimeSceneView &scene);
 
         HeadlessQueryPlanCatalog plans_;
         std::shared_ptr<const AI::QuerySchemaRegistry> registry_;
@@ -59,6 +62,8 @@ namespace Horo::Application::Internal {
         std::vector<AgentBudget> budgets_;
         std::size_t maximumActive_{};
         std::size_t workUnitsLimit_{};
+        std::optional<AI::QueryResultCacheLimits> cacheLimits_;
+        std::shared_ptr<AI::QueryResultCache> cache_;
         std::size_t cursor_{};
         TickScope *scope_{};
         AI::AgentHandle replayAgent_;

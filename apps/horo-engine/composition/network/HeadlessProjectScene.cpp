@@ -190,6 +190,7 @@ namespace Horo::Application::Internal {
                 resources.decisionSchedulerModeAuthored = policy->HasAuthoredSchedulerMode();
                 resources.perceptionWorkUnitsLimit = policy->PerceptionWorkUnitsLimit();
                 resources.queryWorkUnitsLimit = policy->QueryWorkUnitsLimit();
+                resources.queryCacheLimits = policy->QueryCacheLimits();
                 resources.developmentReplayAllowed =
                     policy->AllowsDebug(AiProjectRuntimeKind::Development, AiProjectDebugOperation::ReplayCapture);
             }

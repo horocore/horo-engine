@@ -672,6 +672,136 @@ namespace Horo::AI {
             CHECK(fixture.host.probe.cancelled == 1);
         }
 
+        void RunPointQuery(QueryExecution &execution, std::uint64_t first) {
+            for (std::uint64_t tick = first; tick < first + 39 && !execution.Published(); ++tick) {
+                if (!execution.Sync(tick)) {
+                    AiWorkBudget query{128}, owner{128}, global{128};
+                    execution.Advance(tick, {query, owner, global});
+                }
+            }
+        }
+
+        TEST_CASE("Adaptive native EQS republishes a matching shortlist before spending provider work", "[unit][ai][eqs][cache]") {
+            const auto scene = MakeScene();
+            const auto view = scene->View();
+            const auto registry = CaptureBuiltinQuerySchema().Value();
+            const auto plan = LoadPatrolQuery(registry);
+            const auto providers = QueryContextProviderRegistry::Capture({}, registry).Value();
+            auto created = QueryResultCache::Create(view, {2, 32768, 4});
+            REQUIRE(created.HasValue());
+            const auto cache = std::make_shared<QueryResultCache>(std::move(created).Value());
+            Sha256Digest artifact{};
+            artifact.bytes[0] = 1;
+            const AgentHandle agent{AiRuntimeIncarnation::Create(7).Value(), {1, 1}};
+            auto admit = [&](std::uint64_t tick, std::int64_t x, const BuiltinPointQueryReuse &reuse, const std::size_t candidates = 9,
+                             CancellationToken cancellation = {}, QueryDebugCaptureSettings debug = {}) {
+                auto source = Source(view);
+                source.executionRevision = tick;
+                source.querierLocation = Math::WorldCoordinate64::FromMillimeters(x, 0, 0);
+                QueryContextCapture capture;
+                auto contexts = capture.Capture(plan, registry, providers, view, source);
+                REQUIRE(contexts.HasValue());
+                auto execution = AdmitBuiltinPointQuery(plan, registry, view, {agent, contexts.Value(), std::move(cancellation)},
+                                                        {.submittedTick = tick,
+                                                         .deadlineTick = tick + 40,
+                                                         .maximumCandidates = candidates,
+                                                         .bestCount = 1,
+                                                         .debugCapture = debug},
+                                                        reuse);
+                REQUIRE(execution.HasValue());
+                return std::move(execution).Value();
+            };
+            auto original = admit(4, 1200, {cache, artifact});
+            RunPointQuery(*original, 5);
+            const auto *published = original->Published();
+            REQUIRE(published);
+            REQUIRE(published->status == QueryExecutionStatus::Completed);
+            REQUIRE(published->winners.size() == 1);
+            const auto tick = published->publicationTick;
+            auto hit = admit(tick, 1200, {cache, artifact});
+            REQUIRE(hit->Sync(tick + 1));
+            const auto *reused = hit->Published();
+            REQUIRE(reused);
+            CHECK(reused->mode == QueryExecutionMode::AdaptiveRealtime);
+            CHECK(reused->status == QueryExecutionStatus::Completed);
+            CHECK(reused->publicationTick == tick + 1);
+            CHECK(reused->contextRevision == tick);
+            CHECK(reused->generator.revision == tick);
+            CHECK(reused->evaluated == published->evaluated);
+            REQUIRE(reused->winners.size() == 1);
+            CHECK(reused->winners.front().item == published->winners.front().item);
+
+            auto moved = admit(tick, 1300, {cache, artifact});
+            CHECK_FALSE(moved->Sync(tick + 1));
+            auto resized = admit(tick, 1200, {cache, artifact}, 10);
+            CHECK_FALSE(resized->Sync(tick + 1));
+            auto otherArtifact = artifact;
+            otherArtifact.bytes[0] = 2;
+            auto recooked = admit(tick, 1200, {cache, otherArtifact});
+            CHECK_FALSE(recooked->Sync(tick + 1));
+            auto preview = admit(tick, 1200, {cache, artifact}, 9, {}, {.maximumSamples = 1});
+            CHECK_FALSE(preview->Sync(tick + 1));
+            auto deterministic = admit(tick, 1200, {});
+            CHECK_FALSE(deterministic->Sync(tick + 1));
+            auto expired = admit(tick + 3, 1200, {cache, artifact});
+            CHECK_FALSE(expired->Sync(tick + 4));
+            CancellationSource cancelled;
+            auto retired = admit(tick, 1200, {cache, artifact}, 9, cancelled.Token());
+            cancelled.RequestCancellation();
+            REQUIRE(retired->Sync(tick + 1));
+            CHECK(retired->Published()->status == QueryExecutionStatus::Cancelled);
+        }
+
+        TEST_CASE("Adaptive native EQS bypasses reuse with an extension context footprint", "[unit][ai][eqs][cache]") {
+            const auto scene = MakeScene();
+            const auto view = scene->View();
+            const QueryContextDescriptor custom{MakeIdentity<QueryContextId>(41),
+                                                {QueryDescriptorSourceKind::Package, MakeIdentity<QueryProviderId>(42), 1}};
+            const auto registry = CaptureBuiltinQuerySchema(std::span{&custom, 1}).Value();
+            const auto lattice =
+                CreateBuiltinLatticeQuery(MakeIdentity<QueryId>(43), MakeIdentity<QueryStageId>(44), MakeIdentity<QueryResultSchemaId>(45),
+                                          "Extension center", {.stepMillimeters = 100, .outerSteps = 1, .center = custom.id}, 9)
+                    .Value();
+            const auto plan = EnvironmentQueryPlan::Compile(lattice, registry).Value();
+            const auto captureLocation = +[](void *state, const Runtime::RuntimeSceneView &) -> Result<QueryContextValue> {
+                ++*static_cast<int *>(state);
+                return Result<QueryContextValue>::Success(Math::WorldCoordinate64::FromMillimeters(600, 0, 0));
+            };
+            auto cache = QueryResultCache::Create(view, {2, 32768, 30});
+            REQUIRE(cache.HasValue());
+            Sha256Digest artifact{};
+            artifact.bytes[0] = 1;
+            const BuiltinPointQueryReuse reuse{std::make_shared<QueryResultCache>(std::move(cache).Value()), artifact};
+            const AgentHandle agent{AiRuntimeIncarnation::Create(7).Value(), {1, 1}};
+            const auto admit = [&](std::uint64_t tick, int &providerCalls) {
+                const QueryContextProviderRegistration provider{.id = custom.id, .state = &providerCalls, .capture = captureLocation};
+                auto registered = QueryContextProviderRegistry::Capture(std::span{&provider, 1}, registry);
+                REQUIRE(registered.HasValue());
+                auto source = Source(view);
+                source.executionRevision = tick;
+                QueryContextCapture capture;
+                auto contexts = capture.Capture(plan, registry, registered.Value(), view, source);
+                REQUIRE(contexts.HasValue());
+                auto execution =
+                    AdmitBuiltinPointQuery(plan, registry, view, {agent, contexts.Value()},
+                                           {.submittedTick = tick, .deadlineTick = tick + 40, .maximumCandidates = 9, .bestCount = 1},
+                                           reuse);
+                REQUIRE(execution.HasValue());
+                return std::move(execution).Value();
+            };
+            int firstProviderCalls{}, nextProviderCalls{};
+            auto original = admit(4, firstProviderCalls);
+            RunPointQuery(*original, 5);
+            REQUIRE(original->Published());
+            REQUIRE(original->Published()->status == QueryExecutionStatus::Completed);
+
+            const auto tick = original->Published()->publicationTick;
+            auto next = admit(tick, nextProviderCalls);
+            CHECK(firstProviderCalls == 1);
+            CHECK(nextProviderCalls == 1);
+            CHECK_FALSE(next->Sync(tick + 1));
+        }
+
         TEST_CASE("EQS cache retains complete results under exact scene, dependency and owner bounds", "[unit][ai][eqs][cache]") {
             auto scene = MakeScene();
             ExecutionProbe probe;
@@ -688,7 +818,7 @@ namespace Horo::AI {
             REQUIRE(result);
             REQUIRE(result->status == QueryExecutionStatus::Completed);
             const auto tick = result->publicationTick;
-            auto created = QueryResultCache::Create(scene->View().RuntimeId(), {1, 8192, 3});
+            auto created = QueryResultCache::Create(scene->View(), {1, 8192, 3});
             REQUIRE(created.HasValue());
             auto cache = std::move(created).Value();
             std::array canonical{std::byte{1}};
@@ -700,6 +830,18 @@ namespace Horo::AI {
             REQUIRE(retained);
             CHECK(retained->agent == inputs.agent);
             CHECK_FALSE(cache.Lookup(scene->View(), inputs, authority, key, tick + 3));
+
+            SECTION("the same numeric runtime ID does not identify another Scene incarnation") {
+                auto replacement = MakeScene();
+                REQUIRE(replacement->View().RuntimeId() == scene->View().RuntimeId());
+                QueryExecutionInputs replacementInputs;
+                const auto replacementQuery = MakeExecution(probe, *replacement, false, false, &replacementInputs);
+                REQUIRE(replacementQuery);
+                CHECK_FALSE(inputs.contexts->MatchesScene(replacement->View()));
+                CHECK_FALSE(cache.IsFor(replacement->View()));
+                CHECK_FALSE(cache.Lookup(scene->View(), replacementInputs, authority, key, tick));
+                CHECK_FALSE(cache.Lookup(replacement->View(), replacementInputs, authority, key, tick));
+            }
 
             SECTION("write admission requires the exact original capture") {
                 QueryExecutionInputs recaptured;
@@ -778,7 +920,7 @@ namespace Horo::AI {
                 CHECK(retained->winners.size() == result->winners.size());
             }
             SECTION("byte budget and invalid results do not create entries") {
-                auto limited = QueryResultCache::Create(scene->View().RuntimeId(), {1, 256, 3});
+                auto limited = QueryResultCache::Create(scene->View(), {1, 256, 3});
                 REQUIRE(limited.HasValue());
                 auto small = std::move(limited).Value();
                 ExpectError(small.Store(scene->View(), inputs, authority, key, *result, tick), AIErrors::EnvironmentQueryLimitExceeded);

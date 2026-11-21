@@ -240,6 +240,15 @@ agent-private results stay isolated. The entry count, resident logical byte
 charge, and simulation-tick lifetime are explicit limits. The host charges
 insertion staging and caller-retained snapshots to the enclosing EQS budget.
 
+Headless best-effort execution opts in through `settings.ai.query.cache`.
+The project supplies `maximumEntries`, `maximumBytes`, and `lifetimeTicks`.
+The native point query uses the committed artifact identity, captured locations,
+and exact shortlist settings. Its result is private to the requesting agent.
+Point plans using extension contexts bypass reuse until those providers can
+declare a complete dependency footprint.
+A hit publishes with the new request's identity at BlackboardSync. Replay and
+deterministic execution bypass the cache.
+
 ### Cancellation, Capacity And Validation
 
 Query handles include manager/scene incarnation, slot and generation. Cancellation

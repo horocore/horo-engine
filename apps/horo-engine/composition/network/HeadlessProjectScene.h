@@ -7,6 +7,7 @@
 #include "CommittedSceneAssets.h"
 #include "HeadlessNetworkServices.h"
 #include "HeadlessSimulationAssets.h"
+#include "Horo/AI/EnvironmentQuerySchema.h"
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Platform/ProjectReadFiles.h"
@@ -62,6 +63,7 @@ namespace Horo::Application::Internal {
         bool decisionSchedulerModeAuthored{};
         std::size_t perceptionWorkUnitsLimit{AI::AiTaskSchedulerSettings::HardWorkUnits};
         std::size_t queryWorkUnitsLimit{AI::AiTaskSchedulerSettings::HardWorkUnits};
+        std::optional<AI::QueryResultCacheLimits> queryCacheLimits;
         bool developmentReplayAllowed{true}; /**< Legacy projects retain the explicit development CLI workflow. */
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition;
         Assets::AssetId sceneAsset; /**< Exact selected cooked Scene identity, including the full UUID. */

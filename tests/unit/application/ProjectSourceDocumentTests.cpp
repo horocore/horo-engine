@@ -70,7 +70,7 @@ namespace {
                 }
             },
             "perception": {"maximumWorkUnitsPerTick": 1024},
-            "query": {"maximumWorkUnitsPerTick": 2048},
+            "query": {"maximumWorkUnitsPerTick": 2048, "cache": {"maximumEntries": 16, "maximumBytes": 32768, "lifetimeTicks": 30}},
             "development": {"liveMutation": true, "replayCapture": true}
         })");
         for (const auto *backend : {"null", "vulkan", "opengl"}) {
@@ -88,6 +88,10 @@ namespace {
             CHECK(policy.Scheduler().workUnitsPerTick == 512);
             CHECK(policy.PerceptionWorkUnitsLimit() == 1024);
             CHECK(policy.QueryWorkUnitsLimit() == 2048);
+            REQUIRE(policy.QueryCacheLimits());
+            CHECK(policy.QueryCacheLimits()->maximumEntries == 16);
+            CHECK(policy.QueryCacheLimits()->maximumBytes == 32768);
+            CHECK(policy.QueryCacheLimits()->lifetimeTicks == 30);
             REQUIRE(policy.Scheduler().simulationProfile);
             CHECK(policy.Scheduler().simulationProfile->reducedIntervalTicks == 4);
             for (const auto operation : {AiProjectDebugOperation::LiveMutation, AiProjectDebugOperation::ReplayCapture}) {
@@ -109,6 +113,7 @@ namespace {
         CHECK_FALSE(resolved.Value()->HasAuthoredSchedulerMode());
         CHECK(resolved.Value()->Scheduler().evaluationsPerTick == 3);
         CHECK(resolved.Value()->PerceptionWorkUnitsLimit() == 16);
+        CHECK_FALSE(resolved.Value()->QueryCacheLimits());
     }
 
     TEST_CASE("Project AI rejects invalid canonical settings before activation", "[unit][application][source-profile][ai]") {
@@ -124,6 +129,9 @@ namespace {
             R"({"schemaVersion":1,"perception":{"maximumWorkUnitsPerTick":1048577}})",
             R"({"schemaVersion":1,"query":{"maximumWorkUnitsPerTick":0}})",
             R"({"schemaVersion":1,"query":{"maximumWorkUnitsPerTick":1048577}})",
+            R"({"schemaVersion":1,"query":{"cache":{"maximumEntries":1,"maximumBytes":4096}}})",
+            R"({"schemaVersion":1,"query":{"cache":{"maximumEntries":257,"maximumBytes":4096,"lifetimeTicks":1}}})",
+            R"({"schemaVersion":1,"query":{"cache":{"maximumEntries":1,"maximumBytes":134217729,"lifetimeTicks":1}}})",
             R"({"schemaVersion":1,"development":{"liveMutation":"true"}})",
             R"({"schemaVersion":1,"visualization":{"inspectAgent":4}})",
         };

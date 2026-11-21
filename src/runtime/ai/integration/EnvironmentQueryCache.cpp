@@ -11,8 +11,6 @@
 
 namespace Horo::AI {
     namespace {
-        constexpr std::size_t MaximumEntries = 256;
-        constexpr std::size_t MaximumBytes = 128 * 1024 * 1024;
         constexpr std::size_t MaximumCanonicalBytes = 16 * 1024;
         constexpr std::size_t MaximumDependencies = 256;
 
@@ -46,12 +44,11 @@ namespace Horo::AI {
         }
 
         /** @brief Checks the fresh submission independently of retained cache bytes. */
-        bool CurrentRequest(const Runtime::RuntimeSceneView &scene, const Runtime::SceneRuntimeId expectedScene,
-                            const QueryExecutionInputs &inputs, const IQueryExecutionSource &source, const QueryCacheKey &key) {
-            if (scene.RuntimeId() != expectedScene || !inputs.agent.IsValid() || !inputs.contexts ||
-                !inputs.contexts->MatchesScene(scene) || inputs.contexts->Query() != key.query || !ValidKey(key) ||
-                inputs.ownerCancellation.IsCancellationRequested() || !source.IsCurrent(inputs) ||
-                inputs.ownerCancellation.IsCancellationRequested() || !scene.IsCurrent())
+        bool CurrentRequest(const Runtime::RuntimeSceneView &scene, const QueryExecutionInputs &inputs, const IQueryExecutionSource &source,
+                            const QueryCacheKey &key) {
+            if (!inputs.agent.IsValid() || !inputs.contexts || !inputs.contexts->MatchesScene(scene) ||
+                inputs.contexts->Query() != key.query || !ValidKey(key) || inputs.ownerCancellation.IsCancellationRequested() ||
+                !source.IsCurrent(inputs) || inputs.ownerCancellation.IsCancellationRequested() || !scene.IsCurrent())
                 return false;
             return std::ranges::all_of(inputs.contexts->Values(), [&](const auto &context) {
                 return CurrentContext(scene, context.value, key.sharedPointData);
@@ -95,11 +92,12 @@ namespace Horo::AI {
     }  // namespace
 
     /** @copydoc QueryResultCache::Create */
-    Result<QueryResultCache> QueryResultCache::Create(const Runtime::SceneRuntimeId scene, const QueryResultCacheLimits limits) {
+    Result<QueryResultCache> QueryResultCache::Create(const Runtime::RuntimeSceneView &scene, const QueryResultCacheLimits limits) {
         using Output = Result<QueryResultCache>;
-        if (!scene.IsValid() || limits.maximumEntries == 0 || limits.maximumEntries > MaximumEntries || limits.maximumBytes == 0 ||
-            limits.maximumBytes > MaximumBytes || limits.lifetimeTicks == 0 || limits.maximumEntries > limits.maximumBytes / sizeof(Entry))
+        if (!limits.WithinHardLimits() || limits.maximumEntries > limits.maximumBytes / sizeof(Entry))
             return Output::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+        if (!scene.IsCurrent())
+            return Output::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
         try {
             return Output::Success(QueryResultCache{scene, limits});
         } catch (const std::bad_alloc &) {
@@ -108,7 +106,7 @@ namespace Horo::AI {
     }
 
     /** @copydoc QueryResultCache::QueryResultCache */
-    QueryResultCache::QueryResultCache(const Runtime::SceneRuntimeId scene, const QueryResultCacheLimits limits)
+    QueryResultCache::QueryResultCache(const Runtime::RuntimeSceneView &scene, const QueryResultCacheLimits limits)
         : scene_(scene), limits_(limits) {
         entries_.reserve(limits.maximumEntries);
         bytes_ = entries_.capacity() * sizeof(Entry);
@@ -116,6 +114,10 @@ namespace Horo::AI {
 
     QueryResultCache::QueryResultCache(QueryResultCache &&other) noexcept
         : scene_(std::exchange(other.scene_, {})), limits_(other.limits_), entries_(std::move(other.entries_)), bytes_(other.bytes_) {}
+
+    bool QueryResultCache::IsFor(const Runtime::RuntimeSceneView &scene) const noexcept {
+        return scene_.SameIncarnation(scene);
+    }
 
     /** @copydoc QueryResultCache::Expired */
     bool QueryResultCache::Expired(const Entry &entry, const std::uint64_t tick) const noexcept {
@@ -137,8 +139,8 @@ namespace Horo::AI {
                                          const std::uint64_t tick) {
         using Output = Result<bool>;
         if (result.status != QueryExecutionStatus::Completed || result.mode != QueryExecutionMode::AdaptiveRealtime || result.error ||
-            result.publicationTick != tick || result.scene != scene_ || result.agent != inputs.agent ||
-            !CurrentRequest(scene, scene_, inputs, source, key) || result.sourceContext.lock() != inputs.contexts ||
+            result.publicationTick != tick || result.scene != scene_.RuntimeId() || result.agent != inputs.agent || !IsFor(scene) ||
+            !CurrentRequest(scene, inputs, source, key) || result.sourceContext.lock() != inputs.contexts ||
             result.contextRevision != inputs.contexts->Revision() || result.winners.size() > EnvironmentQuerySchemaLimits::MaximumResults ||
             !CurrentWinners(scene, result, key.sharedPointData))
             return Output::Success(false);
@@ -148,6 +150,19 @@ namespace Horo::AI {
         const auto storage = entries_.capacity() * sizeof(Entry);
         if (storage > limits_.maximumBytes || charge > limits_.maximumBytes - storage)
             return Output::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+
+        const auto replaced = std::ranges::find_if(entries_, [&](const auto &entry) {
+            return Matches(entry, key, inputs);
+        });
+        if (replaced != entries_.end()) {
+            bytes_ -= replaced->charge;
+            entries_.erase(replaced);
+        }
+        // Make room before allocating the copy. Eviction only releases the cache's own snapshot share.
+        while (entries_.size() == limits_.maximumEntries || charge > limits_.maximumBytes - bytes_) {
+            bytes_ -= entries_.front().charge;
+            entries_.erase(entries_.begin());
+        }
         try {
             auto retained = std::make_shared<QueryExecutionResult>(result);
             retained->sourceContext.reset();
@@ -161,18 +176,6 @@ namespace Horo::AI {
                             .dependencies = std::vector(key.dependencies.begin(), key.dependencies.end()),
                             .result = std::move(retained),
                             .charge = charge};
-            const auto replaced = std::ranges::find_if(entries_, [&](const auto &entry) {
-                return Matches(entry, key, inputs);
-            });
-            if (replaced != entries_.end()) {
-                bytes_ -= replaced->charge;
-                entries_.erase(replaced);
-            }
-            // Entries stay in insertion order so eviction is stable, even across same-tick insertions.
-            while (entries_.size() == limits_.maximumEntries || charge > limits_.maximumBytes - bytes_) {
-                bytes_ -= entries_.front().charge;
-                entries_.erase(entries_.begin());
-            }
             entries_.push_back(std::move(candidate));
             bytes_ += charge;
             return Output::Success(true);
@@ -186,7 +189,7 @@ namespace Horo::AI {
                                                                          const QueryExecutionInputs &inputs,
                                                                          const IQueryExecutionSource &source, const QueryCacheKey &key,
                                                                          const std::uint64_t tick) const {
-        if (!CurrentRequest(scene, scene_, inputs, source, key))
+        if (!IsFor(scene) || !CurrentRequest(scene, inputs, source, key))
             return {};
         for (const auto &entry : entries_ | std::views::reverse) {
             if (!Expired(entry, tick) && Matches(entry, key, inputs))

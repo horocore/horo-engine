@@ -1,6 +1,7 @@
 #include "HeadlessDecisionQueries.h"
 
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/EnvironmentQueryCache.h"
 #include "ProjectScenePerception.h"
 
 #include <algorithm>
@@ -55,7 +56,8 @@ namespace Horo::Application::Internal {
     /** @copydoc HeadlessDecisionQueries::Create */
     Result<std::shared_ptr<HeadlessDecisionQueries>> HeadlessDecisionQueries::Create(
         HeadlessQueryPlanCatalog plans, std::shared_ptr<const AI::QuerySchemaRegistry> registry,
-        const AI::AiTaskSchedulerSettings &settings, const std::size_t workUnitsLimit) {
+        const AI::AiTaskSchedulerSettings &settings, const std::size_t workUnitsLimit,
+        const std::optional<AI::QueryResultCacheLimits> cacheLimits) {
         using Created = Result<std::shared_ptr<HeadlessDecisionQueries>>;
         if (!registry || plans.empty() || settings.evaluationsPerTick == 0 ||
             settings.evaluationsPerTick > AI::AiTaskSchedulerSettings::HardAgents || workUnitsLimit == 0 ||
@@ -71,6 +73,8 @@ namespace Horo::Application::Internal {
             owner->contexts_.emplace(std::move(contexts).Value());
             owner->maximumActive_ = settings.evaluationsPerTick;
             owner->workUnitsLimit_ = workUnitsLimit;
+            if (settings.mode == AI::AiSchedulingMode::BestEffort)
+                owner->cacheLimits_ = cacheLimits;
             owner->budgets_.resize(AI::MaximumAiSceneAgents);
             return Created::Success(std::move(owner));
         } catch (const std::bad_alloc &) {
@@ -135,7 +139,8 @@ namespace Horo::Application::Internal {
                                                    {.submittedTick = submitted,
                                                     .deadlineTick = deadline,
                                                     .maximumCandidates = Candidates,
-                                                    .bestCount = 1});
+                                                    .bestCount = 1},
+                                                   {cache_, plan->second.digest});
         if (admitted.HasValue())
             ++scope_->active;
         return admitted;
@@ -222,6 +227,8 @@ namespace Horo::Application::Internal {
                                                          Math::WorldCoordinate64 origin, std::uint64_t tick) {
         if (scope_ || !scene.IsCurrent() || tick == 0)
             return Result<void>::Failure(MakeError(AI::AIErrors::TaskContextInvalid));
+        if (auto prepared = PrepareCache(scene); prepared.HasError())
+            return prepared;
         std::erase_if(tasks_, [](const auto &task) {
             return task.expired();
         });
@@ -246,6 +253,21 @@ namespace Horo::Application::Internal {
         if (const auto committed = scheduler.Value()->CommitAtIntentDispatch(tick); committed.HasError())
             return Result<void>::Failure(committed.ErrorValue());
         AdvanceQueries(tick);
+        return Result<void>::Success();
+    }
+
+    Result<void> HeadlessDecisionQueries::PrepareCache(const Runtime::RuntimeSceneView &scene) {
+        if (!cacheLimits_ || (cache_ && cache_->IsFor(scene)))
+            return Result<void>::Success();
+        cache_.reset();
+        auto created = AI::QueryResultCache::Create(scene, *cacheLimits_);
+        if (created.HasError())
+            return Result<void>::Failure(created.ErrorValue());
+        try {
+            cache_ = std::make_shared<AI::QueryResultCache>(std::move(created).Value());
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(AI::AIErrors::EnvironmentQueryLimitExceeded));
+        }
         return Result<void>::Success();
     }
 }  // namespace Horo::Application::Internal

@@ -353,7 +353,8 @@ namespace Horo::Application::Internal {
                                             .execution = std::move(execution).Value(),
                                             .provider = HeadlessDecisionProvider::SelectedNativeGameplay,
                                             .querySchema = std::make_shared<const AI::QuerySchemaRegistry>(std::move(querySchema).Value()),
-                                            .queryWorkUnitsLimit = resources.queryWorkUnitsLimit});
+                                            .queryWorkUnitsLimit = resources.queryWorkUnitsLimit,
+                                            .queryCacheLimits = resources.queryCacheLimits});
             return Result<void>::Success();
         }
 

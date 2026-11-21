@@ -3,6 +3,7 @@
  * @brief Exact application-owned mapping between controller identities and committed decision assets.
  */
 #include "CookedDecisionSceneAdmission.h"
+#include "Horo/AI/EnvironmentQuerySchema.h"
 
 namespace Horo::Application::Internal {
     using HeadlessQueryPlanCatalog = CookedSceneQueryPlanCatalog;
@@ -24,6 +25,7 @@ namespace Horo::Application::Internal {
         HeadlessDecisionProvider provider{HeadlessDecisionProvider::Captured};
         std::shared_ptr<const AI::QuerySchemaRegistry> querySchema; /**< Explicit host descriptors for committed query artifacts. */
         std::size_t queryWorkUnitsLimit{AI::AiTaskSchedulerSettings::HardWorkUnits};
+        std::optional<AI::QueryResultCacheLimits> queryCacheLimits{};
     };
 
     /** @brief Builds an immutable staged descriptor catalog from authenticated plans and the exact compiler environment.

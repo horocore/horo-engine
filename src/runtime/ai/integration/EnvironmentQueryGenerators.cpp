@@ -289,6 +289,15 @@ namespace Horo::AI {
             return Tests::Success(std::move(tests));
         }
 
+        /** @brief Extension contexts have no dependency footprint in the native point-query adapter. */
+        bool HasOnlyBuiltinPointContexts(const EnvironmentQueryPlan &plan) {
+            return std::ranges::all_of(plan.RequiredContexts(), [](const auto &context) {
+                return std::ranges::any_of(NativePointCenters, [&](const auto kind) {
+                    return BuiltinQueryContextId(kind) == context.id;
+                });
+            });
+        }
+
         /** @brief Uses an explicit canonical order rather than discovery or sense order. */
         [[nodiscard]] auto SourceOrder(const PerceptionSourceRef &source) noexcept {
             return std::tuple{source.slot, source.generation};
@@ -550,7 +559,7 @@ namespace Horo::AI {
     /** @copydoc AdmitBuiltinPointQuery */
     Result<std::unique_ptr<QueryExecution>> AdmitBuiltinPointQuery(const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry,
                                                                    const Runtime::RuntimeSceneView &scene, QueryExecutionInputs inputs,
-                                                                   QueryExecutionSettings settings) {
+                                                                   QueryExecutionSettings settings, BuiltinPointQueryReuse reuse) {
         using Admission = Result<std::unique_ptr<QueryExecution>>;
         if (!inputs.contexts || inputs.contexts->Query() != plan.Id())
             return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextInvalid));
@@ -576,8 +585,12 @@ namespace Horo::AI {
         settings.generatorWorkUnits = limits.generationUnits;
         auto source =
             std::make_unique<PointOwnerSource>(scene, captured.lattice, captured.center, std::move(tests).Value().kernels, limits);
-        return QueryExecution::AdmitDeterministic(std::move(inputs), captured.provenance, std::move(scoring).Value(), settings,
-                                                  std::move(source));
+        const auto mode = reuse.cache ? QueryExecutionMode::AdaptiveRealtime : QueryExecutionMode::DeterministicWorkUnits;
+        auto admitted = QueryExecution::AdmitOwner(std::move(inputs), captured.provenance, std::move(scoring).Value(), settings,
+                                                   std::move(source), mode);
+        if (reuse.cache && admitted.HasValue() && HasOnlyBuiltinPointContexts(plan))
+            admitted.Value()->BindPointCache(scene, reuse);
+        return admitted;
     }
 
     /** @copydoc GenerateQueryPerceivedEntities */

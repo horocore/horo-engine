@@ -29,25 +29,21 @@ namespace Horo::AI {
         bool sharedPointData{}; /**< Opt-in for requester-independent point data. The default isolates exact agents. */
     };
 
-    /** @brief Explicit Scene cache allocation and eviction limits within the host's EQS budget. */
-    struct QueryResultCacheLimits final {
-        std::size_t maximumEntries{};
-        std::size_t maximumBytes{};
-        std::uint64_t lifetimeTicks{};
-    };
-
-    /** @brief Bounded owner-thread cache. No Scene, provider, or requester borrow is retained.
+    /** @brief Bounded owner-thread cache keyed by a non-owning Scene incarnation.
      * @details The host stores complete adaptive results after publication and attempts reuse after fresh input capture.
      * Caller-owned snapshots are historical and survive eviction. The host accounts for those copies separately.
      */
     class QueryResultCache final {
     public:
         /** @brief Creates the empty Scene cache with validated positive limits. @return Cache or typed limit failure. */
-        [[nodiscard]] static Result<QueryResultCache> Create(Runtime::SceneRuntimeId scene, QueryResultCacheLimits limits);
+        [[nodiscard]] static Result<QueryResultCache> Create(const Runtime::RuntimeSceneView &scene, QueryResultCacheLimits limits);
         QueryResultCache(const QueryResultCache &) = delete;
         QueryResultCache &operator=(const QueryResultCache &) = delete;
         QueryResultCache(QueryResultCache &&other) noexcept;
         QueryResultCache &operator=(QueryResultCache &&) = delete;
+
+        /** @brief Checks the exact Scene incarnation across structural revisions. */
+        [[nodiscard]] bool IsFor(const Runtime::RuntimeSceneView &scene) const noexcept;
 
         /** @brief Copies a complete current result after admission and evicts oldest entries as needed.
          * @param scene Fresh matching Scene view. @param inputs Exact request owner and original execution capture.
@@ -83,10 +79,10 @@ namespace Horo::AI {
             std::size_t charge{};
         };
 
-        QueryResultCache(Runtime::SceneRuntimeId scene, QueryResultCacheLimits limits);
+        QueryResultCache(const Runtime::RuntimeSceneView &scene, QueryResultCacheLimits limits);
         [[nodiscard]] bool Expired(const Entry &entry, std::uint64_t tick) const noexcept;
         [[nodiscard]] static bool Matches(const Entry &entry, const QueryCacheKey &key, const QueryExecutionInputs &inputs);
-        Runtime::SceneRuntimeId scene_;
+        Runtime::RuntimeSceneView scene_;
         QueryResultCacheLimits limits_;
         std::vector<Entry> entries_;
         std::size_t bytes_{};

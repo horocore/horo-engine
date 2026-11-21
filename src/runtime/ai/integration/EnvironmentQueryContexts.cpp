@@ -150,12 +150,12 @@ namespace Horo::AI {
 
     /** @copydoc QueryContextSnapshot::Scene */
     Runtime::SceneRuntimeId QueryContextSnapshot::Scene() const noexcept {
-        return scene_;
+        return scene_.RuntimeId();
     }
 
     /** @copydoc QueryContextSnapshot::MatchesScene */
     bool QueryContextSnapshot::MatchesScene(const Runtime::RuntimeSceneView &scene) const noexcept {
-        return scene.IsCurrent() && scene.RuntimeId() == scene_ && scene.StructuralRevision() == sceneStructure_;
+        return scene_.SameIncarnation(scene) && scene.IsCurrent() && scene.StructuralRevision() == sceneStructure_;
     }
 
     /** @copydoc QueryContextSnapshot::Revision */
@@ -219,17 +219,17 @@ namespace Horo::AI {
         if (!plan.Id().IsValid() || !source.availableCapabilities.IsValid() || source.executionRevision == 0)
             return SnapshotResult::Failure(MakeError(AIErrors::EnvironmentQueryContextInvalid));
         if (plan_.IsValid() && (plan_ != plan.Id() || source.executionRevision < latestRevision_ ||
-                                (latest_ != nullptr && latest_->Scene() != scene.RuntimeId())))
+                                (latest_ != nullptr && !latest_->scene_.SameIncarnation(scene))))
             return SnapshotResult::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
         const auto structure = scene.StructuralRevision();
         if (latest_ != nullptr && source.executionRevision == latestRevision_)
-            return latest_->sceneStructure_ == structure ? SnapshotResult::Success(latest_)
-                                                         : SnapshotResult::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
+            return latest_->MatchesScene(scene) ? SnapshotResult::Success(latest_)
+                                                : SnapshotResult::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
         if (const auto valid = ValidateEntity(scene, source.querier); valid.HasError())
             return SnapshotResult::Failure(valid.ErrorValue());
 
         auto captured = std::make_shared<QueryContextSnapshot>();
-        captured->scene_ = scene.RuntimeId();
+        captured->scene_ = scene;
         captured->sceneStructure_ = structure;
         captured->query_ = plan.Id();
         captured->revision_ = source.executionRevision;

@@ -80,7 +80,7 @@ namespace Horo::AI {
         friend class QueryContextCapture;
         friend class QueryExecution;
         QueryId query_;
-        Runtime::SceneRuntimeId scene_;
+        Runtime::RuntimeSceneView scene_;
         std::uint64_t sceneStructure_{};
         std::uint64_t revision_{};
         std::vector<QueryCapturedContext> values_;

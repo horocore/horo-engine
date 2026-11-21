@@ -9,10 +9,19 @@
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/AI/EnvironmentQueryScoring.h"
 #include "Horo/Foundation/CancellationToken.h"
+#include "Horo/Foundation/Sha256.h"
 
 #include <memory>
 
 namespace Horo::AI {
+    class QueryResultCache;
+
+    /** @brief Scene-owned reuse for the captured native point plan identified by its cooked artifact. */
+    struct BuiltinPointQueryReuse final {
+        std::shared_ptr<QueryResultCache> cache;
+        Sha256Digest artifact;
+    };
+
     /** @brief Exact owner and immutable query context passed to the host adapter. */
     struct QueryExecutionInputs final {
         AgentHandle agent;
@@ -263,6 +272,19 @@ namespace Horo::AI {
         [[nodiscard]] bool InputsAreCurrent() const noexcept;
 
     private:
+        friend Result<std::unique_ptr<QueryExecution>> AdmitBuiltinPointQuery(const EnvironmentQueryPlan &, const QuerySchemaRegistry &,
+                                                                              const Runtime::RuntimeSceneView &, QueryExecutionInputs,
+                                                                              QueryExecutionSettings, BuiltinPointQueryReuse);
+
+        struct CacheBinding;
+        [[nodiscard]] static Result<std::unique_ptr<QueryExecution>> AdmitOwner(QueryExecutionInputs inputs,
+                                                                                QueryGeneratorProvenance provenance,
+                                                                                QueryScoringPlan scoring, QueryExecutionSettings settings,
+                                                                                std::unique_ptr<IOwnerQueryExecutionSource> source,
+                                                                                QueryExecutionMode mode);
+        void BindPointCache(const Runtime::RuntimeSceneView &scene, const BuiltinPointQueryReuse &reuse);
+        [[nodiscard]] bool TryPublishCached();
+
         QueryExecution(QueryExecutionInputs inputs, QueryGeneratorProvenance provenance, QueryScoringPlan scoring,
                        QueryExecutionSettings settings, std::unique_ptr<IQueryExecutionSource> source);
         /** @brief Checks that the owner synchronized this tick and can advance without overlapping work. */
@@ -289,6 +311,7 @@ namespace Horo::AI {
         QueryScoringPlan scoring_;
         QueryExecutionSettings settings_;
         std::unique_ptr<IQueryExecutionSource> source_;
+        std::unique_ptr<CacheBinding> cache_;
         std::vector<QueryGeneratedItem> items_;
         std::vector<QueryTestSample> samples_;
         std::vector<std::size_t> testOrder_;
@@ -308,15 +331,14 @@ namespace Horo::AI {
         bool scoringReserved_{};
     };
 
-    /** @brief Admits a saved native lattice query to deterministic simulation-owner execution.
+    /** @brief Admits a saved native lattice query to simulation-owner execution.
      * @param plan Compiled native lattice and distance stages. @param registry Exact registry used to compile the plan.
      * @param scene Current owner view that captured the submitted locations. @param inputs Exact owner and frozen locations.
      * @param settings Candidate capacity, ranking and tick limits. Generator work units are derived from the authored lattice.
+     * @param reuse Optional Scene-owned adaptive cache and exact cooked artifact identity. Absent reuse selects deterministic execution.
      * @return A detached execution or a typed refusal. No kernels run until the host advances the admitted execution.
      */
-    [[nodiscard]] Result<std::unique_ptr<QueryExecution>> AdmitBuiltinPointQuery(const EnvironmentQueryPlan &plan,
-                                                                                 const QuerySchemaRegistry &registry,
-                                                                                 const Runtime::RuntimeSceneView &scene,
-                                                                                 QueryExecutionInputs inputs,
-                                                                                 QueryExecutionSettings settings);
+    [[nodiscard]] Result<std::unique_ptr<QueryExecution>> AdmitBuiltinPointQuery(
+        const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
+        QueryExecutionInputs inputs, QueryExecutionSettings settings, BuiltinPointQueryReuse reuse = {});
 }  // namespace Horo::AI

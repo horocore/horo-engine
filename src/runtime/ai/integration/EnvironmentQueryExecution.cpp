@@ -1,8 +1,10 @@
 #include "Horo/AI/EnvironmentQueryExecution.h"
 
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/EnvironmentQueryCache.h"
 
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <exception>
 #include <new>
@@ -107,6 +109,18 @@ namespace Horo::AI {
         }
     }  // namespace
 
+    struct QueryExecution::CacheBinding final {
+        Runtime::RuntimeSceneView scene;
+        std::weak_ptr<QueryResultCache> cache;
+        Sha256Digest artifact;
+        std::array<std::byte, 5> parameters;
+
+        [[nodiscard]] QueryCacheKey Key(QueryId query) const noexcept {
+            // Native lattice and distance kernels only read the cooked plan and captured point contexts.
+            return {query, artifact, parameters, {}, true};
+        }
+    };
+
     QueryExecution::QueryExecution(QueryExecutionInputs inputs, const QueryGeneratorProvenance provenance, QueryScoringPlan scoring,
                                    const QueryExecutionSettings settings, std::unique_ptr<IQueryExecutionSource> source)
         : inputs_(std::move(inputs)), scoring_(std::move(scoring)), settings_(settings), source_(std::move(source)),
@@ -159,6 +173,15 @@ namespace Horo::AI {
                                                                                QueryScoringPlan scoring,
                                                                                const QueryExecutionSettings settings,
                                                                                std::unique_ptr<IOwnerQueryExecutionSource> source) {
+        return AdmitOwner(std::move(inputs), provenance, std::move(scoring), settings, std::move(source),
+                          QueryExecutionMode::DeterministicWorkUnits);
+    }
+
+    Result<std::unique_ptr<QueryExecution>> QueryExecution::AdmitOwner(QueryExecutionInputs inputs,
+                                                                       const QueryGeneratorProvenance provenance, QueryScoringPlan scoring,
+                                                                       const QueryExecutionSettings settings,
+                                                                       std::unique_ptr<IOwnerQueryExecutionSource> source,
+                                                                       const QueryExecutionMode mode) {
         using Admission = Result<std::unique_ptr<QueryExecution>>;
         if (!source)
             return Admission::Failure(MakeError(AIErrors::EnvironmentQueryStageUnsupported));
@@ -169,11 +192,21 @@ namespace Horo::AI {
         auto admitted = Admit(std::move(inputs), provenance, std::move(scoring), settings, std::move(source));
         if (admitted.HasValue()) {
             auto &execution = *admitted.Value();
-            execution.result_.mode = QueryExecutionMode::DeterministicWorkUnits;
-
+            execution.result_.mode = mode;
             execution.testWorkUnits_ = work.testUnits;
         }
         return admitted;
+    }
+
+    void QueryExecution::BindPointCache(const Runtime::RuntimeSceneView &scene, const BuiltinPointQueryReuse &reuse) {
+        if (debug_ || reuse.artifact == Sha256Digest{})
+            return;
+        static_assert(EnvironmentQuerySchemaLimits::MaximumResults <= 0xffffU);
+        const auto candidates = settings_.maximumCandidates;
+        const auto winners = settings_.bestCount;
+        const std::array parameters{std::byte{1}, std::byte(candidates >> 8U), std::byte(candidates), std::byte(winners >> 8U),
+                                    std::byte(winners)};
+        cache_ = std::make_unique<CacheBinding>(CacheBinding{scene, reuse.cache, reuse.artifact, parameters});
     }
 
     /** @copydoc QueryExecution::~QueryExecution */
@@ -331,15 +364,37 @@ namespace Horo::AI {
     bool QueryExecution::Sync(const std::uint64_t tick, const bool finishEarly) {
         if (published_ || tick <= settings_.submittedTick || tick <= lastSync_)
             return false;
+        const bool firstSync = lastSync_ == 0;
         ValidateTickSequence(tick);
         lastSync_ = tick;
         if (cancelled_ || inputs_.ownerCancellation.IsCancellationRequested())
             Publish(QueryExecutionStatus::Cancelled);
         else if (stale_ || !source_->IsCurrent(inputs_))
             Publish(QueryExecutionStatus::StaleInputs);
+        else if (firstSync && tick <= settings_.deadlineTick && TryPublishCached())
+            return true;
         else if (const auto status = TerminalAt(tick, finishEarly))
             Publish(*status);
         return published_;
+    }
+
+    bool QueryExecution::TryPublishCached() {
+        const auto cache = cache_ ? cache_->cache.lock() : nullptr;
+        if (!cache)
+            return false;
+        const auto retained = cache->Lookup(cache_->scene, inputs_, *source_, cache_->Key(inputs_.contexts->Query()), lastSync_);
+        if (!retained || inputs_.ownerCancellation.IsCancellationRequested())
+            return false;
+        // The lookup has revalidated source authority. Keep the new submission's provenance and publication tick.
+        result_.generated = retained->generated;
+        result_.evaluated = retained->evaluated;
+        result_.invalidCoordinates = retained->invalidCoordinates;
+        result_.winners.assign(retained->winners.begin(), retained->winners.end());
+        result_.status = QueryExecutionStatus::Completed;
+        result_.publicationTick = lastSync_;
+        published_ = true;
+        cache_.reset();
+        return true;
     }
 
     /** @copydoc QueryExecution::ValidateTickSequence */
@@ -398,6 +453,9 @@ namespace Horo::AI {
         result_.status = status;
         result_.publicationTick = lastSync_;
         published_ = true;
+        if (const auto cache = cache_ ? cache_->cache.lock() : nullptr)
+            (void)cache->Store(cache_->scene, inputs_, *source_, cache_->Key(inputs_.contexts->Query()), result_, lastSync_);
+        cache_.reset();
     }
 
     /** @copydoc QueryExecution::Published */

@@ -4,6 +4,7 @@
  * @brief Validated project policy for gameplay AI simulation and development controls.
  */
 #include "Horo/AI/AITaskScheduler.h"
+#include "Horo/AI/EnvironmentQuerySchema.h"
 #include "Horo/Application/ProjectSourceDocument.h"
 
 namespace Horo::Application {
@@ -42,6 +43,11 @@ namespace Horo::Application {
             return queryWorkUnitsLimit_;
         }
 
+        /** @brief Returns the authored Scene cache budget for adaptive query execution. */
+        [[nodiscard]] const std::optional<AI::QueryResultCacheLimits> &QueryCacheLimits() const noexcept {
+            return queryCacheLimits_;
+        }
+
         /** @brief Checks the authored operation permission for a host-selected execution profile.
          * @param profile Exact execution profile supplied by the host.
          * @param operation Explicit operation requested by the application.
@@ -53,14 +59,16 @@ namespace Horo::Application {
         friend Result<std::optional<ProjectAiSettings>> ResolveProjectAiSettings(const ProjectSourceDocument &);
 
         ProjectAiSettings(AI::AiTaskSchedulerSettings scheduler, std::size_t perceptionWorkUnitsLimit, std::size_t queryWorkUnitsLimit,
-                          bool mutation, bool capture, bool authoredSchedulerMode)
+                          std::optional<AI::QueryResultCacheLimits> queryCacheLimits, bool mutation, bool capture,
+                          bool authoredSchedulerMode)
             : scheduler_(std::move(scheduler)), perceptionWorkUnitsLimit_(perceptionWorkUnitsLimit),
-              queryWorkUnitsLimit_(queryWorkUnitsLimit), mutation_(mutation), capture_(capture),
+              queryWorkUnitsLimit_(queryWorkUnitsLimit), queryCacheLimits_(queryCacheLimits), mutation_(mutation), capture_(capture),
               authoredSchedulerMode_(authoredSchedulerMode) {}
 
         AI::AiTaskSchedulerSettings scheduler_;
         std::size_t perceptionWorkUnitsLimit_;
         std::size_t queryWorkUnitsLimit_;
+        std::optional<AI::QueryResultCacheLimits> queryCacheLimits_;
         bool mutation_{};
         bool capture_{};
         bool authoredSchedulerMode_{};

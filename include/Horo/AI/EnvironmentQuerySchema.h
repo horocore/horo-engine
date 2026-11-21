@@ -190,6 +190,21 @@ namespace Horo::AI {
         static constexpr std::uint32_t MaximumResults = 4'096;
     };
 
+    /** @brief Project budget for completed adaptive results retained by one Scene. */
+    struct QueryResultCacheLimits final {
+        static constexpr std::size_t HardEntries = 256;
+        static constexpr std::size_t HardBytes = 128 * 1024 * 1024;
+
+        std::size_t maximumEntries{};
+        std::size_t maximumBytes{};
+        std::uint64_t lifetimeTicks{};
+
+        [[nodiscard]] constexpr bool WithinHardLimits() const noexcept {
+            return maximumEntries > 0 && maximumEntries <= HardEntries && maximumBytes > 0 && maximumBytes <= HardBytes &&
+                   lifetimeTicks > 0;
+        }
+    };
+
     /** @brief Borrowed descriptor contributions synchronously captured as inert owned metadata. */
     struct QueryDescriptorContributions final {
         std::span<const QueryItemTypeDescriptor> items;

@@ -514,9 +514,11 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 record_->admittedControllers = std::move(prepared).Value();
                 catalog = record_->admittedControllers;
                 if (OwnsCookedDecisionExecution() && !queries.empty()) {
-                    auto driver = HeadlessDecisionQueries::Create(std::move(queries), input.cookedDecisions->querySchema,
-                                                                  input.cookedDecisions->execution->scheduler,
-                                                                  input.cookedDecisions->queryWorkUnitsLimit);
+                    auto driver =
+                        HeadlessDecisionQueries::Create(std::move(queries), input.cookedDecisions->querySchema,
+                                                        input.cookedDecisions->execution->scheduler,
+                                                        input.cookedDecisions->queryWorkUnitsLimit,
+                                                        input.decisionReplay ? std::nullopt : input.cookedDecisions->queryCacheLimits);
                     if (driver.HasError())
                         return Result<void>::Failure(driver.ErrorValue());
                     record_->decisionQueries = std::move(driver).Value();
@@ -865,7 +867,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             return result;
         }
 
-        /** @brief Drives the exact Scene and its current origin through all deterministic query phases. */
+        /** @brief Drives the exact Scene and its current origin through all query phases. */
         Result<void> RunConfiguredDecisionQueries(std::uint64_t tick) const {
             const auto scene = record_->scenes->ActiveScene();
             if (!scene)

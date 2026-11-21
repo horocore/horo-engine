@@ -105,6 +105,27 @@ namespace Horo::Application {
             return HasOnly(*found, keys) && ReadUnsigned(*found, keys.front(), limit) && limit > 0 && limit <= Scheduler::HardWorkUnits;
         }
 
+        /** @brief Requires all three independent retention limits when a project opts into adaptive reuse. */
+        bool ReadQueryPolicy(const Json &root, std::size_t &work, std::optional<AI::QueryResultCacheLimits> &cache) {
+            const auto query = root.find("query");
+            if (query == root.end())
+                return true;
+            constexpr std::array<std::string_view, 2> keys{"maximumWorkUnitsPerTick", "cache"};
+            if (!HasOnly(*query, keys) || !ReadUnsigned(*query, keys.front(), work) || work == 0 || work > Scheduler::HardWorkUnits)
+                return false;
+            const auto authored = query->find("cache");
+            if (authored == query->end())
+                return true;
+            constexpr std::array<std::string_view, 3> limits{"maximumEntries", "maximumBytes", "lifetimeTicks"};
+            AI::QueryResultCacheLimits policy;
+            if (!HasOnly(*authored, limits) || !ReadUnsigned(*authored, limits[0], policy.maximumEntries) ||
+                !ReadUnsigned(*authored, limits[1], policy.maximumBytes) || !ReadUnsigned(*authored, limits[2], policy.lifetimeTicks) ||
+                !policy.WithinHardLimits())
+                return false;
+            cache = policy;
+            return true;
+        }
+
         /** @brief Reads only explicitly authorized development operations. */
         bool ReadDevelopment(const Json &root, bool &mutation, bool &capture) {
             const auto debug = root.find("development");
@@ -148,12 +169,14 @@ namespace Horo::Application {
         if (!ReadWorkUnitsLimit(root, "perception", perceptionLimit))
             return Settings::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project AI perception budget."));
         auto queryLimit = Scheduler::HardWorkUnits;
-        if (!ReadWorkUnitsLimit(root, "query", queryLimit))
+        std::optional<AI::QueryResultCacheLimits> queryCache;
+        if (!ReadQueryPolicy(root, queryLimit, queryCache))
             return Settings::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project AI query budget."));
         bool mutation{}, capture{};
         if (!ReadDevelopment(root, mutation, capture))
             return Settings::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project AI development permissions."));
         const bool authoredMode = policy != root.end() && policy->contains("mode");
-        return Settings::Success(ProjectAiSettings{std::move(scheduler), perceptionLimit, queryLimit, mutation, capture, authoredMode});
+        return Settings::Success(
+            ProjectAiSettings{std::move(scheduler), perceptionLimit, queryLimit, queryCache, mutation, capture, authoredMode});
     }
 }  // namespace Horo::Application
