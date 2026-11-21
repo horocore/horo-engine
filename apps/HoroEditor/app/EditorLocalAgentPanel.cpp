@@ -1026,10 +1026,11 @@ namespace Horo::Editor {
                     return;
                 const auto state = sourceReviewTransaction_();
                 using enum Proposals::SourceTransactionFeedback;
-                const bool completed = state.feedback == Applied || state.feedback == Deleted || state.feedback == DeleteRecovery;
+                const bool completed = state.feedback == Applied || state.feedback == Deleted || state.feedback == DeleteRecovery ||
+                                       state.feedback == Renamed || state.feedback == RenameRecovery;
                 if (state.feedback != Preparing && std::exchange(sourceApplyQueued_, false) && completed)
                     patchReview_.reset();
-                constexpr std::array<const char *, 10> keys{nullptr,
+                constexpr std::array<const char *, 12> keys{nullptr,
                                                             "source_patch_applied",
                                                             "source_patch_reverted",
                                                             "source_patch_apply_failed",
@@ -1038,7 +1039,9 @@ namespace Horo::Editor {
                                                             "source_patch_transaction_cancelled",
                                                             "source_patch_transaction_preparing",
                                                             "source_patch_delete_complete",
-                                                            "source_patch_delete_recovery"};
+                                                            "source_patch_delete_recovery",
+                                                            "source_patch_rename_complete",
+                                                            "source_patch_rename_recovery"};
                 if (const auto *key = keys[static_cast<std::size_t>(state.feedback)])
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, key), Theme::Text(), fonts);
                 if (state.audit)
@@ -1168,8 +1171,7 @@ namespace Horo::Editor {
 
             /** @brief Prevents dispatch through the text transaction when a structural decision is included. */
             bool HasAcceptedFileOperation(const EditorLocalAgentPatchReview &review) const {
-                if (review.files.size() == 1 &&
-                    (review.files.front().kind == EditorPatchFileKind::Create || review.files.front().kind == EditorPatchFileKind::Delete))
+                if (review.files.size() == 1)
                     return false;
                 for (std::size_t index = 0; index < review.files.size(); ++index) {
                     if (review.files[index].kind != EditorPatchFileKind::Edit &&
@@ -1201,15 +1203,27 @@ namespace Horo::Editor {
                 if (fileOperation)
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "source_patch_structural_preview"),
                                     Theme::Muted(), fonts);
-                const auto *action = review.files.size() == 1 && review.files.front().kind == EditorPatchFileKind::Delete
-                                         ? "source_patch_confirm_delete"
-                                         : "source_patch_apply";
+                const auto *action = PatchApplyLabel(review.files);
                 if (requestSourceReviewApply_ &&
                     Button(locale, action, !fileOperation && !writingAudit && review.decisions.HasAcceptedChanges()))
                     QueueSourceApply(review, command);
                 if (!buildRoot_.empty() && Button(locale, "source_patch_checkpoint_save", CanCheckpointPatchReview()))
                     SavePatchReview(review);
                 ImGui::EndDisabled();
+            }
+
+            /** @brief Gives native file moves an explicit confirmation action. */
+            static const char *PatchApplyLabel(std::span<const EditorPatchFileCard> files) {
+                if (files.size() != 1)
+                    return "source_patch_apply";
+                switch (files.front().kind) {
+                    case EditorPatchFileKind::Delete:
+                        return "source_patch_confirm_delete";
+                    case EditorPatchFileKind::Rename:
+                        return "source_patch_confirm_rename";
+                    default:
+                        return "source_patch_apply";
+                }
             }
 
             void Send(std::string_view prompt, std::optional<std::size_t> sceneCount = {}, bool recoverable = false,

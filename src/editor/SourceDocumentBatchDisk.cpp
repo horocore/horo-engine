@@ -105,8 +105,7 @@ namespace Horo::Editor {
         using Output = Result<std::filesystem::path>;
         if (cancellation.IsCancellationRequested())
             return Failure<std::filesystem::path>(SourceDocumentErrors::Cancelled);
-        if (!data_ || data_->authority != &files || data_->root != root || data_->items.size() != 1 || !source.IsCurrent() ||
-            source.Dirty())
+        if (!data_ || data_->authority != &files || data_->root != root || data_->items.size() != 1 || !source.IsCurrent())
             return Failure<std::filesystem::path>(SourceDocumentErrors::Stale);
         const auto &item = data_->items.front();
         if (!item.source.SharesStateWith(source) || item.entry.hardLinks != 1)

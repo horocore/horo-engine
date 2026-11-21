@@ -370,6 +370,104 @@ namespace {
         }
     }
 
+    TEST_CASE("Confirmed rename keeps the active tab, authored text and history", "[editor][source][review][rename]") {
+        struct Files final : TestSupport::NativePublicationFiles {
+            bool failAfterCommit{};
+
+            Result<void> MoveFileNoReplaceTracked(const std::filesystem::path &from, const std::filesystem::path &to,
+                                                  AtomicFileReplacementReceipt &receipt) override {
+                auto outcome = native.MoveFileNoReplaceTracked(from, to, receipt);
+                if (receipt.WasCommitted() && std::exchange(failAfterCommit, false))
+                    return Result<void>::Failure(MakeError(SourceDocumentErrors::ReadFailed));
+                return outcome;
+            }
+
+            Result<void> WritePrivateDurable(const std::filesystem::path &path, std::span<const std::byte> bytes, bool &created,
+                                             std::filesystem::perms mode) override {
+                return native.WritePrivateDurable(path, bytes, created, mode);
+            }
+        } files;
+
+        TestSupport::SourceProject project;
+        project.Put("alpha beta");
+        REQUIRE(std::filesystem::create_directory(project.directory / "nested"));
+        SourceFileOpenService open{project.directory};
+        const auto initial = *open.Open({.path = "code.cpp"}).Value().sourceSnapshot;
+        const auto identity = initial.Identity();
+        const auto edited = open.Documents().Edit(identity.instance, {initial.Revision(), 6, 4, "user"});
+        REQUIRE(edited.HasValue());
+        const auto source = edited.Value();
+        const auto destination = SourceDocumentId::Parse("nested/moved.cpp").Value();
+        WorkspacePanelHost host;
+        host.AttachDocumentIdentityRegistry(open.DocumentRegistry());
+        REQUIRE(host.OpenDocument(identity.key).HasValue());
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
+        ProjectMutationCoordinator mutations{files};
+        SourceReviewTransactions reviews;
+        CancellationSource lifetime;
+        const auto policy = ProjectPolicy::Capture("workspace", 1, {{identity.key.source, false}, {destination, false}}).Value();
+        const auto proposal =
+            ChangeSet::Capture(policy, {"proposal",
+                                        1,
+                                        {"provider", "model", "request"},
+                                        {RenameFile{FileBase::Capture(source).Value(), destination, {{0, "alpha", "renamed"}}}}})
+                .Value();
+        const std::array observed{SourcePathObservation{identity.key.source, source},
+                                  SourcePathObservation{destination, SourcePathState::Absent}};
+        const auto plan = std::make_shared<const WorkspaceEditPlan>(PlanWorkspaceEdits(proposal, policy, observed).Value());
+        ReviewDecisions decisions{proposal};
+        REQUIRE(decisions.Decide(*plan, {0}, ReviewChoice::Accept).HasValue());
+        CHECK_FALSE(std::filesystem::exists(project.directory / "nested/moved.cpp"));
+        EditorWorkspaceViewCommandData apply;
+        REQUIRE(QueueSourceReviewApplication("workspace", decisions, policy, plan, lifetime.Token(), apply));
+        REQUIRE(reviews.Process(apply, open.Documents(), &jobs, project.directory, &files, &open));
+        auto expected = SourceTransactionFeedback::Renamed;
+        SECTION("A late portable alias prevents commit") {
+            project.Put("other author", "nested/Moved.cpp");
+            expected = SourceTransactionFeedback::Conflict;
+        }
+        SECTION("Directory sync failure rolls back the move and preserves the old tab") {
+            files.failAfterCommit = true;
+            expected = SourceTransactionFeedback::Conflict;
+        }
+        SECTION("A confirmed move preserves unsaved text and its independent disk base") {}
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (reviews.Status().feedback == SourceTransactionFeedback::Preparing && std::chrono::steady_clock::now() < deadline) {
+            static_cast<void>(reviews.Poll(open.Documents(), &files, &open, &host, &mutations));
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+        REQUIRE(reviews.Status().feedback == expected);
+        host.RefreshDocuments();
+        CHECK(host.ActiveDocument() == identity.instance);
+        const auto current = open.Documents().Snapshot(identity.instance).Value();
+        if (expected != SourceTransactionFeedback::Renamed) {
+            CHECK(current.SharesStateWith(source));
+            CHECK(open.DocumentRegistry().Find(identity.instance) == identity);
+            CHECK(std::filesystem::is_regular_file(project.directory / "code.cpp"));
+            const auto foreign = project.directory / "nested/Moved.cpp";
+            if (std::filesystem::exists(foreign)) {
+                std::ifstream existing(foreign, std::ios::binary);
+                CHECK((std::string{std::istreambuf_iterator<char>{existing}, {}} == "other author"));
+            }
+            return;
+        }
+        CHECK(current.Identity().key.source == destination);
+        CHECK(host.DocumentTabs().front().identity == current.Identity());
+        CHECK(current.Text() == "renamed user");
+        CHECK(current.DiskBase() == "alpha beta");
+        CHECK(current.Dirty());
+        CHECK_FALSE(std::filesystem::exists(project.directory / "code.cpp"));
+        const auto movedPath = project.directory / "nested/moved.cpp";
+        {
+            std::ifstream disk(movedPath, std::ios::binary);
+            CHECK((std::string{std::istreambuf_iterator<char>{disk}, {}} == "alpha beta"));
+        }
+        const auto undo = open.Documents().Undo(identity.instance, current.Revision());
+        REQUIRE(undo.HasValue());
+        CHECK(undo.Value().snapshot.Text() == "alpha user");
+        CHECK(undo.Value().snapshot.Identity().key.source == destination);
+    }
+
     TEST_CASE("Overlapping review applications and group undo produce deterministic revisions", "[editor][source][review][concurrency]") {
         ReviewWorkspace workspace;
         constexpr std::uint64_t rounds = 24;

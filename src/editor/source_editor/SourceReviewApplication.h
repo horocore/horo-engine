@@ -91,12 +91,16 @@ namespace Horo::Editor {
         /** @brief Moves an explicitly confirmed clean source to project Trash before closing its tab. */
         bool CommitDelete(Proposals::PreparedSourceDelete &deletion, SourceFileOpenService *open, DurableFileSystem &files,
                           const ProjectMutationCoordinator *mutations, const CancellationToken &lifetime);
+        /** @brief Applies the confirmed rename through the source owner and its routing registry. */
+        bool CommitRename(Proposals::PreparedSourceRename &rename, SourceFileOpenService *open, DurableFileSystem &files,
+                          const ProjectMutationCoordinator *mutations, const CancellationToken &lifetime);
         SourceEditBatch batch_;
         SourceDocumentSnapshot draft_;
+        SourceDocumentSnapshot renamed_;
         std::shared_ptr<const Proposals::SourceReviewAudit> audit_;
         Proposals::SourceTransactionFeedback feedback_{};
         bool reverted_{};
-        std::optional<Proposals::SourceReviewDisposition> removal_;
+        std::optional<Proposals::SourceReviewDisposition> committedFileOutcome_;
 
         using Candidate = std::variant<Proposals::PreparedSourceReview, Proposals::PreparedSourceFileOperation>;
 

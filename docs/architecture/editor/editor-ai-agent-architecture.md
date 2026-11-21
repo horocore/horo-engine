@@ -798,6 +798,12 @@ owner rechecks the clean source and its native identity before moving it. The
 Trash entry preserves the original relative path and complete bytes. The tab
 closes after the native move reaches durability. A post-move failure attempts
 an exclusive move back to the original name, preserving any new occupant.
+Confirming a single reviewed rename moves the existing disk base with an
+exclusive same-filesystem rename. The editor rekeys the same document instance
+only after a durable move, retaining the open tab and text history. Accepted
+rename hunks and existing unsaved edits stay in the resulting buffer. A later
+source save publishes the buffer at its new name. On failure the owner keeps
+the original routing and attempts an exclusive rollback after a visible move.
 
 The Local Model panel can explicitly replace the recovery checkpoint at
 `.horo/local/agent/source-review` with the admitted proposal and its current decisions. The

@@ -234,6 +234,17 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<SourceSaveResult> SaveAs(const SourceSaveRequest &request, const std::filesystem::path &destination,
                                                       DurableFileSystem &files, CancellationToken cancellation = {});
+        /** @brief Confirms one reviewed file move and retargets the same open document instance.
+         * @param source Exact current snapshot. @param destination Approved project-relative path.
+         * @param text Reviewed buffer after the move. @param evidence Worker-observed saved bytes.
+         * @param files Native filesystem authority. @param cancellation Cooperative observer.
+         * @return Rekeyed snapshot or failure preserving the current registry.
+         * @pre The caller holds project mutation authority and the registry is quiescent.
+         */
+        [[nodiscard]] Result<SourceDocumentSnapshot> RenameReviewed(const SourceDocumentSnapshot &source,
+                                                                    const SourceDocumentId &destination, std::string text,
+                                                                    const SourceBatchDiskEvidence &evidence, DurableFileSystem &files,
+                                                                    CancellationToken cancellation = {});
         /** @brief Applies the explicit close choice; a failed or unconfirmed save keeps the session open.
          * @param request Exact source revision and optional save overwrite consent. @param decision Explicit host choice.
          * @param files Host filesystem. @return True only after text and routing ownership close together; false for Cancel.

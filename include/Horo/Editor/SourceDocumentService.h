@@ -191,7 +191,7 @@ namespace Horo::Editor {
         [[nodiscard]] static Result<SourceBatchDiskEvidence> Capture(const std::filesystem::path &root,
                                                                      std::span<const SourceDocumentSnapshot> sources,
                                                                      const DurableFileSystem &files, CancellationToken cancellation = {});
-        /** @brief Rechecks one exact clean source under the caller's publication lease.
+        /** @brief Rechecks one exact loaded source under the caller's publication lease.
          * @return Canonical single-link source path with the same worker-observed native identity, or a conflict.
          */
         [[nodiscard]] Result<std::filesystem::path> RecheckSingle(const std::filesystem::path &root, const SourceDocumentSnapshot &source,
@@ -402,6 +402,23 @@ namespace Horo::Editor {
         /** @brief Saves to a host-validated replacement identity without postcommit identity allocation. */
         [[nodiscard]] Result<SourceSaveResult> SaveTo(const SourceSaveRequest &request, DurableFileSystem &files, DocumentIdentity identity,
                                                       std::filesystem::path path, CancellationToken cancellation);
+
+        /** @brief An admitted rekey and its exact replacement buffer. */
+        struct RenameRequest final {
+            SourceDocumentSnapshot from;
+            DocumentIdentity to;
+            std::filesystem::path destination;
+            std::string text;
+        };
+
+        /** @brief Moves the exact saved source, then publishes its new identity and history without allocation.
+         * @param request Current source, reserved destination identity and reviewed text.
+         * @param evidence Worker-observed disk base. @param files Native filesystem authority.
+         * @param cancellation Cooperative observer. @return Rekeyed snapshot or typed failure.
+         * @pre The caller retains project mutation authority for both paths.
+         */
+        [[nodiscard]] Result<SourceDocumentSnapshot> RenameReviewed(RenameRequest request, const SourceBatchDiskEvidence &evidence,
+                                                                    DurableFileSystem &files, CancellationToken cancellation);
         /** @brief Checks owner-thread lifecycle before accessing service storage. */
         [[nodiscard]] Result<void> CheckAccess() const;
         struct Storage;

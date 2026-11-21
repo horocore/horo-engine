@@ -45,6 +45,24 @@ namespace Horo::Editor {
             }
         }
 
+        /** @brief Holds source routing admission until file content and registry changes are coherent. */
+        class RegistryPublication final {
+        public:
+            explicit RegistryPublication(bool &busy) noexcept : busy_(busy) {
+                busy_ = true;
+            }
+
+            ~RegistryPublication() {
+                busy_ = false;
+            }
+
+            RegistryPublication(const RegistryPublication &) = delete;
+            RegistryPublication &operator=(const RegistryPublication &) = delete;
+
+        private:
+            bool &busy_;
+        };
+
         /** @brief Keeps malformed native-path translation inside destination admission, before save callbacks or history. */
         [[nodiscard]] Result<void> AdmitSaveDestination(const SourceFileOpenService &service, const std::filesystem::path &path) {
             try {
@@ -491,22 +509,7 @@ namespace Horo::Editor {
             if (auto retargeted = registry.RetargetSource(request.instance, replacement.key); retargeted.HasError())
                 return Result<SourceSaveResult>::Failure(retargeted.ErrorValue());
 
-            struct Guard final {
-                bool *value;
-
-                explicit Guard(bool &busy) noexcept : value(&busy) {
-                    *value = true;
-                }
-
-                ~Guard() noexcept {
-                    *value = false;
-                }
-
-                Guard(const Guard &) = delete;
-                Guard &operator=(const Guard &) = delete;
-            };
-
-            Guard guard{publishing_};
+            RegistryPublication guard{publishing_};
 
             auto saved = sourceDocuments_.SaveTo(request, files, std::move(replacement), path, cancellation);
             if (saved.HasValue())
@@ -514,6 +517,41 @@ namespace Horo::Editor {
             return saved;
         } catch (const std::bad_alloc &) {
             return Result<SourceSaveResult>::Failure(MakeError(SourceDocumentErrors::TooLarge));
+        }
+    }
+
+    /** @copydoc SourceFileOpenService::RenameReviewed */
+    Result<SourceDocumentSnapshot> SourceFileOpenService::RenameReviewed(const SourceDocumentSnapshot &source,
+                                                                         const SourceDocumentId &destination, std::string text,
+                                                                         const SourceBatchDiskEvidence &evidence, DurableFileSystem &files,
+                                                                         const CancellationToken cancellation) {
+        using Output = Result<SourceDocumentSnapshot>;
+        try {
+            if (publishing_)
+                return Output::Failure(MakeError(SourceDocumentErrors::Busy));
+            if (!projectRootValid_ || !destination.IsValid())
+                return Output::Failure(MakeError(SourceOpenErrors::Unsafe));
+            const auto &name = destination.Value();
+            auto path = projectRoot_ / std::filesystem::path{std::u8string{name.begin(), name.end()}};
+            if (const auto allowed = AdmitSaveDestination(*this, path); allowed.HasError())
+                return Output::Failure(allowed.ErrorValue());
+            const auto identity = source.Identity();
+            if (!source.IsCurrent() || documentRegistry_->Find(identity.instance) != identity)
+                return Output::Failure(MakeError(SourceDocumentErrors::Stale));
+            if (LowercaseAscii(identity.key.source.Value()) == LowercaseAscii(name))
+                return Output::Failure(MakeError(SourceDocumentErrors::SaveConflict));
+            auto registry = *documentRegistry_;
+            DocumentIdentity renamed{{DocumentKind::Source, destination}, identity.instance};
+            if (const auto retargeted = registry.RetargetSource(identity.instance, renamed.key); retargeted.HasError())
+                return Output::Failure(retargeted.ErrorValue());
+            RegistryPublication guard{publishing_};
+            auto moved = sourceDocuments_.RenameReviewed({source, std::move(renamed), std::move(path), std::move(text)}, evidence, files,
+                                                         cancellation);
+            if (moved.HasValue())
+                *documentRegistry_ = std::move(registry);
+            return moved;
+        } catch (const std::bad_alloc &) {
+            return Output::Failure(MakeError(SourceDocumentErrors::TooLarge));
         }
     }
 

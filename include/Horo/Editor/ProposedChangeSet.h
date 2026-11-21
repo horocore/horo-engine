@@ -322,7 +322,9 @@ namespace Horo::Editor::Proposals {
         Cancelled,
         Preparing,
         Deleted,
-        DeleteRecovery
+        DeleteRecovery,
+        Renamed,
+        RenameRecovery
     };
 
     struct SourceReviewAudit;
@@ -365,8 +367,17 @@ namespace Horo::Editor::Proposals {
         SourceBatchDiskEvidence disk;
     };
 
+    /** @brief Exact source lease, new identity, reviewed buffer and redacted attribution. */
+    struct PreparedSourceRename final {
+        SourceDocumentSnapshot source;
+        SourceDocumentId destination;
+        std::string text;
+        std::shared_ptr<const SourceReviewAudit> audit;
+        SourceBatchDiskEvidence disk;
+    };
+
     /** @brief An owner action produced by the single-file structural review route. */
-    using PreparedSourceFileOperation = std::variant<PreparedSourceCreate, PreparedSourceDelete>;
+    using PreparedSourceFileOperation = std::variant<PreparedSourceCreate, PreparedSourceDelete, PreparedSourceRename>;
 
     /** @brief Detached accepted text and exact immutable leases, suitable for worker-to-editor handoff. */
     class PreparedSourceReview final {
@@ -432,7 +443,7 @@ namespace Horo::Editor::Proposals {
          */
         [[nodiscard]] Result<PreparedSourceReview> PrepareAccepted(const ProjectPolicy &policy, const WorkspaceEditPlan &plan,
                                                                    CancellationToken cancellation = {}) const;
-        /** @brief Prepares a single accepted creation or confirmed deletion without writing files.
+        /** @brief Prepares one accepted structural operation without writing files.
          * @return Detached structural operation, absence for other selections, or failure for stale or mixed operations.
          */
         [[nodiscard]] Result<std::optional<PreparedSourceFileOperation>> PrepareFileOperation(const ProjectPolicy &policy,

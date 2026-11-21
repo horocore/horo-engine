@@ -1,6 +1,7 @@
 #include "ProposedPatchInternal.h"
 
 #include <algorithm>
+#include <limits>
 #include <map>
 #include <new>
 #include <type_traits>
@@ -350,8 +351,7 @@ namespace Horo::Editor::Proposals {
             if (std::ranges::find(units_[index], ReviewState::Accepted) == units_[index].end())
                 continue;
             ++accepted;
-            const auto &file = proposal_.Files()[index];
-            if (std::holds_alternative<CreateFile>(file) || std::holds_alternative<DeleteFile>(file))
+            if (!std::holds_alternative<EditFile>(proposal_.Files()[index]))
                 structural = index;
         }
         if (!structural)
@@ -373,6 +373,18 @@ namespace Horo::Editor::Proposals {
                 return Output::Success(PreparedSourceFileOperation{PreparedSourceCreate{*file, std::move(audit)}});
             }
             const auto &source = std::get<FilePreview>(plan.entries[*structural]).before;
+            if (const auto *rename = std::get_if<RenameFile>(&proposal_.Files()[*structural])) {
+                if (source.Revision() == std::numeric_limits<std::uint64_t>::max())
+                    return Output::Failure(MakeError(Errors::StaleBase));
+                auto size = source.Text().size();
+                for (const auto &hunk : rename->hunks)
+                    size = size - hunk.before.size() + hunk.after.size();
+                if (size > Limits{}.maximumTextBytes)
+                    return Output::Failure(MakeError(Errors::Bounds));
+                audit->revisions.push_back({ordinal, source.Revision(), source.Revision() + 1});
+                return Output::Success(PreparedSourceFileOperation{
+                    PreparedSourceRename{source, rename->destination, Render(source.Text(), rename->hunks, size), std::move(audit), {}}});
+            }
             audit->revisions.push_back({ordinal, source.Revision(), 0});
             return Output::Success(PreparedSourceFileOperation{PreparedSourceDelete{source, std::move(audit), {}}});
         } catch (const std::bad_alloc &) {

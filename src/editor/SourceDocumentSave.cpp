@@ -321,6 +321,112 @@ namespace Horo::Editor {
         }
     }
 
+    namespace {
+        /** @brief Checks portable filename aliases while the caller holds the destination lease. */
+        Result<void> RequireFreeRenameDestination(const std::filesystem::path &path, const DurableFileSystem &files,
+                                                  const CancellationToken &stop) {
+            constexpr auto MaximumDirectoryEntries = 8192;
+            const auto entries = files.ListDirectory(path.parent_path(), MaximumDirectoryEntries, stop);
+            if (entries.HasError())
+                return Result<void>::Failure(entries.ErrorValue());
+            const auto name = path.filename().generic_u8string();
+            const auto fold = [](const char8_t byte) {
+                return byte >= u8'A' && byte <= u8'Z' ? static_cast<char8_t>(byte + (u8'a' - u8'A')) : byte;
+            };
+            if (std::ranges::any_of(entries.Value(), [&](const auto &entry) {
+                return std::ranges::equal(entry.name.generic_u8string(), name, {}, fold, fold);
+            }))
+                return Result<void>::Failure(MakeError(SourceDocumentErrors::SaveConflict));
+            return Result<void>::Success();
+        }
+
+        /** @brief Retains native visibility even when directory synchronization fails or a provider throws. */
+        bool MoveReviewedPath(DurableFileSystem &files, const std::filesystem::path &from, const std::filesystem::path &to,
+                              AtomicFileReplacementReceipt &receipt) noexcept {
+            try {
+                return files.MoveFileNoReplaceTracked(from, to, receipt).HasValue() && receipt.WasCommitted();
+            } catch (...) {
+                return false;
+            }
+        }
+
+        /** @brief Restores a failed native move without replacing a new external occupant. */
+        Result<void> RelocateReviewedFile(DurableFileSystem &files, const std::filesystem::path &from, const std::filesystem::path &to) {
+            AtomicFileReplacementReceipt moved;
+            if (MoveReviewedPath(files, from, to, moved))
+                return Result<void>::Success();
+            if (!moved.WasCommitted())
+                return Result<void>::Failure(MakeError(SourceDocumentErrors::SaveConflict));
+            AtomicFileReplacementReceipt restored;
+            if (MoveReviewedPath(files, to, from, restored))
+                return Result<void>::Failure(MakeError(SourceDocumentErrors::ReadFailed));
+            return Result<void>::Failure(MakeError(SourceDocumentErrors::SaveOutcomeUnknown));
+        }
+    }  // namespace
+
+    /** @copydoc SourceDocumentService::RenameReviewed */
+    Result<SourceDocumentSnapshot> SourceDocumentService::RenameReviewed(RenameRequest request, const SourceBatchDiskEvidence &evidence,
+                                                                         DurableFileSystem &files, const CancellationToken cancellation) {
+        using Output = Result<SourceDocumentSnapshot>;
+        try {
+            const auto current = Snapshot(request.to.instance);
+            if (current.HasError())
+                return Output::Failure(current.ErrorValue());
+            auto &record = *storage_->Find(request.to.instance);
+            if (!current.Value().SharesStateWith(request.from) || record.root->draft || record.root->saveUnconfirmed)
+                return Output::Failure(MakeError(SourceDocumentErrors::Stale));
+            const auto destination = Detail::SourcePath(storage_->projectRoot, request.to, request.destination);
+            if (destination.HasError() || destination.Value() != request.destination || record.path == request.destination)
+                return Output::Failure(MakeError(SourceDocumentErrors::SaveConflict));
+
+            const SourceTextEdit edit{request.from.Revision(), 0, request.from.Text().size(), request.text};
+            auto staged = storage_->StageBatchEdit(record, edit, cancellation, 0);
+            if (staged.HasError())
+                return Output::Failure(staged.ErrorValue());
+            auto prepared = std::move(staged).Value();
+            auto next = Detail::NextRoot(*record.root);
+            if (next.HasError())
+                return Output::Failure(next.ErrorValue());
+            auto renamed = std::move(next).Value();
+            renamed->identity = std::move(request.to);
+            renamed->text = prepared.next->text;
+            auto result = Output::Success(SourceDocumentSnapshot{renamed});
+
+            auto sourceLock = record.path;
+            sourceLock += ".horo-source.lock";
+            auto destinationLock = request.destination;
+            destinationLock += ".horo-source.lock";
+            PublicationGuard publication{storage_->saving};
+            const auto source = files.TryAcquireExclusive(sourceLock, "horo.source_document");
+            if (source.HasError())
+                return Output::Failure(source.ErrorValue());
+            // Native lock creation requires a real destination parent.
+            if (const auto free = RequireFreeRenameDestination(request.destination, files, cancellation); free.HasError())
+                return Output::Failure(free.ErrorValue());
+            const auto target = files.TryAcquireExclusive(destinationLock, "horo.source_document");
+            if (target.HasError())
+                return Output::Failure(target.ErrorValue());
+            const auto currentTarget = Detail::SourcePath(storage_->projectRoot, renamed->identity, request.destination);
+            if (currentTarget.HasError() || currentTarget.Value() != request.destination)
+                return Output::Failure(MakeError(SourceDocumentErrors::SaveConflict));
+            if (const auto free = RequireFreeRenameDestination(request.destination, files, cancellation); free.HasError())
+                return Output::Failure(free.ErrorValue());
+            if (const auto latest = evidence.RecheckSingle(storage_->projectRoot, request.from, files, cancellation); latest.HasError())
+                return Output::Failure(latest.ErrorValue());
+            if (cancellation.IsCancellationRequested())
+                return Output::Failure(MakeError(SourceDocumentErrors::Cancelled));
+            if (const auto moved = RelocateReviewedFile(files, record.path, request.destination); moved.HasError())
+                return Output::Failure(moved.ErrorValue());
+            if (prepared.history)
+                storage_->CommitHistory(record, std::move(*prepared.history));
+            record.path.swap(request.destination);
+            record.Publish(std::move(renamed));
+            return result;
+        } catch (const std::bad_alloc &) {
+            return Output::Failure(MakeError(SourceDocumentErrors::TooLarge));
+        }
+    }
+
     /** @copydoc SourceDocumentService::SaveAll */
     Result<std::vector<SourceSaveAllItem>> SourceDocumentService::SaveAll(DurableFileSystem &files, const CancellationToken cancellation) {
         try {

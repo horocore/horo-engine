@@ -112,12 +112,13 @@ namespace Horo::Editor {
         using enum Proposals::SourceReviewDisposition;
         if (reverted_)
             return Reverted;
-        if (removal_)
-            return *removal_;
-        if (draft_.Revision()) {
-            if (draft_.WasSavedInPlace())
+        if (committedFileOutcome_)
+            return *committedFileOutcome_;
+        const auto &structuralBuffer = draft_.Revision() ? draft_ : renamed_;
+        if (structuralBuffer.Revision()) {
+            if (structuralBuffer.WasSavedInPlace())
                 return Saved;
-            return draft_.IsCurrent() ? Applied : Stale;
+            return structuralBuffer.IsCurrent() ? Applied : Stale;
         }
         if (batch_.Items().empty()) {
             const auto previous = audit_ ? audit_->disposition : Historical;
@@ -189,12 +190,17 @@ namespace Horo::Editor {
                 if (operation.HasError())
                     return Result<void>::Failure(std::move(operation).ErrorValue());
                 if (auto candidate = std::move(operation).Value()) {
-                    if (auto *deletion = std::get_if<Proposals::PreparedSourceDelete>(&*candidate)) {
-                        auto disk = SourceBatchDiskEvidence::Capture(root, std::span{&deletion->source, 1}, *files, stop);
-                        if (disk.HasError())
-                            return Result<void>::Failure(std::move(disk).ErrorValue());
-                        deletion->disk = std::move(disk).Value();
-                    }
+                    const auto checked = std::visit([&](auto &file) -> Result<void> {
+                        if constexpr (requires { file.disk; }) {
+                            auto disk = SourceBatchDiskEvidence::Capture(root, std::span{&file.source, 1}, *files, stop);
+                            if (disk.HasError())
+                                return Result<void>::Failure(std::move(disk).ErrorValue());
+                            file.disk = std::move(disk).Value();
+                        }
+                        return Result<void>::Success();
+                    }, *candidate);
+                    if (checked.HasError())
+                        return checked;
                     output->emplace(std::move(*candidate));
                     return Result<void>::Success();
                 }
@@ -237,6 +243,8 @@ namespace Horo::Editor {
         if (auto *operation = std::get_if<Proposals::PreparedSourceFileOperation>(&**preparation.output)) {
             if (auto *creation = std::get_if<Proposals::PreparedSourceCreate>(operation))
                 return CommitDraft(*creation, open, host, preparation.lifetime);
+            if (auto *rename = std::get_if<Proposals::PreparedSourceRename>(operation))
+                return CommitRename(*rename, open, *files, mutations, preparation.lifetime);
             return CommitDelete(std::get<Proposals::PreparedSourceDelete>(*operation), open, *files, mutations, preparation.lifetime);
         }
         auto applied =
@@ -248,7 +256,8 @@ namespace Horo::Editor {
         auto outcome = std::move(applied).Value();
         batch_ = std::move(outcome.batch);
         draft_ = {};
-        removal_.reset();
+        renamed_ = {};
+        committedFileOutcome_.reset();
         audit_ = std::move(outcome.audit);
         reverted_ = false;
         auditSequence_ = 0;
@@ -283,8 +292,9 @@ namespace Horo::Editor {
             }
         }
         draft_ = std::move(staged).Value();
+        renamed_ = {};
         batch_ = {};
-        removal_.reset();
+        committedFileOutcome_.reset();
         audit_ = std::move(creation.audit);
         reverted_ = false;
         auditSequence_ = 0;
@@ -364,11 +374,43 @@ namespace Horo::Editor {
         }
         batch_ = {};
         draft_ = {};
-        removal_ = closed ? Proposals::SourceReviewDisposition::Saved : Proposals::SourceReviewDisposition::Stale;
+        renamed_ = {};
+        committedFileOutcome_ = closed ? Proposals::SourceReviewDisposition::Saved : Proposals::SourceReviewDisposition::Stale;
         audit_ = std::move(deletion.audit);
         reverted_ = false;
         auditSequence_ = 0;
         feedback_ = closed ? Feedback::Deleted : Feedback::DeleteRecovery;
+        return true;
+    }
+
+    /** @copydoc SourceReviewTransactions::CommitRename */
+    bool SourceReviewTransactions::CommitRename(Proposals::PreparedSourceRename &rename, SourceFileOpenService *open,
+                                                DurableFileSystem &files, const ProjectMutationCoordinator *mutations,
+                                                const CancellationToken &lifetime) {
+        feedback_ = Feedback::ApplyFailed;
+        if (!open || !mutations)
+            return false;
+        const auto lease = mutations->TryAcquire({open->ProjectRoot(), ProjectMutationOwner::Asset, "source-review-rename"});
+        if (lease.HasError())
+            return false;
+        auto moved = open->RenameReviewed(rename.source, rename.destination, std::move(rename.text), rename.disk, files, lifetime);
+        if (moved.HasError()) {
+            const auto &error = moved.ErrorValue();
+            feedback_ = error.code.Value() == SourceDocumentErrors::SaveOutcomeUnknown.code.Value()
+                            ? Feedback::RenameRecovery
+                            : FailureFeedback(error, Feedback::ApplyFailed);
+            return false;
+        }
+        batch_ = {};
+        draft_ = {};
+        renamed_ = std::move(moved).Value();
+        committedFileOutcome_.reset();
+        if (!renamed_.Dirty())
+            committedFileOutcome_ = Proposals::SourceReviewDisposition::Saved;
+        audit_ = std::move(rename.audit);
+        reverted_ = false;
+        auditSequence_ = 0;
+        feedback_ = Feedback::Renamed;
         return true;
     }
 
