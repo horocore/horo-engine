@@ -416,10 +416,25 @@ TEST_CASE("Cancellation wakes all producers sharing an ancestor without admittin
     REQUIRE(fixture.jobs.Submit({}, NoOpJob).HasValue());
     CancellationSource parent;
     CancellationSource child{parent.Token()};
-    auto first = SubmitProducer(fixture.jobs, child.Token());
-    auto second = SubmitProducer(fixture.jobs, child.Token());
+    CancellationSource caller;
+    auto token = child.Token();
+    bool cancelCaller = false;
+    SECTION("ordinary shared ancestor") {}
+    SECTION("independent caller cancels derived joined scopes") {
+        cancelCaller = true;
+        const auto merged = CancellationToken::AnyOf(child.Token(), caller.Token());
+        const CancellationSource derived{CancellationToken::AnyOf(merged, parent.Token())};
+        token = derived.Token();
+    }
+    auto first = SubmitProducer(fixture.jobs, token);
+    auto second = SubmitProducer(fixture.jobs, token);
     REQUIRE(fixture.Waiters(2));
-    parent.RequestCancellation();
+    if (cancelCaller) {
+        caller.RequestCancellation();
+        CHECK_FALSE(child.Token().IsCancellationRequested());
+    } else {
+        parent.RequestCancellation();
+    }
     REQUIRE(first.wait_for(std::chrono::milliseconds(500)) == std::future_status::ready);
     REQUIRE(second.wait_for(std::chrono::milliseconds(500)) == std::future_status::ready);
     CheckProducerPairRejected(first, second, "job.cancelled");

@@ -20,14 +20,27 @@ namespace Horo {
         bool operator==(const CancellationToken &) const noexcept = default;
 
         [[nodiscard]] bool IsCancellationRequested() const noexcept {
-            for (auto state = m_state; state; state = state->parent) {
-                if (state->requested.load())
-                    return true;
-            }
-            return false;
+            return IsRequested(m_state.get());
+        }
+
+        /** @brief Observes both scopes without transferring cancellation authority to either owner. */
+        [[nodiscard]] static CancellationToken AnyOf(const CancellationToken &first, const CancellationToken &second) {
+            if (!first.m_state)
+                return second;
+            if (!second.m_state || first == second)
+                return first;
+            auto state = std::make_shared<State>();
+            auto observed = std::make_unique<Ancestry>();
+            AppendAncestry(first.m_state, *observed);
+            AppendAncestry(second.m_state, *observed);
+            state->observed = std::move(observed);
+            return CancellationToken(std::move(state));
         }
 
     private:
+        struct State;
+        using Ancestry = std::vector<std::shared_ptr<const State>>;
+
         struct State {
             State() = default;
 
@@ -36,6 +49,7 @@ namespace Horo {
             friend class CancellationSource;
             std::atomic<bool> requested{false};
             std::shared_ptr<const State> parent;
+            std::unique_ptr<const Ancestry> observed;
             // Scheduler admission wake targets are deduplicated and weakly owned. No user callback runs on cancellation.
             // Any thread may register/request; wakeMutex protects this list independently of scheduler/record locks.
             mutable std::mutex wakeMutex;
@@ -48,6 +62,31 @@ namespace Horo {
             // A size constructor lets checked-library proxy allocation fail through the owning construction boundary.
             mutable std::vector<AdmissionWake> admissionWakes = std::vector<AdmissionWake>(std::size_t{0});
         };
+        [[nodiscard]] static bool IsRequested(const State *state) noexcept {
+            for (; state; state = state->parent.get()) {
+                if (state->requested.load())
+                    return true;
+                if (state->observed)
+                    return std::ranges::any_of(*state->observed, [](const auto &ancestor) {
+                        return ancestor->requested.load();
+                    });
+            }
+            return false;
+        }
+
+        /** @brief Flattens composed ancestry once so hot reads neither recurse nor allocate. */
+        static void AppendAncestry(std::shared_ptr<const State> state, Ancestry &states) {
+            for (; state; state = state->parent) {
+                if (std::ranges::find(states, state) != states.end())
+                    return;
+                states.push_back(state);
+                if (state->observed)
+                    for (const auto &ancestor : *state->observed)
+                        if (std::ranges::find(states, ancestor) == states.end())
+                            states.push_back(ancestor);
+            }
+        }
+
         friend class CancellationSource;
         friend class JobSystem;
 
@@ -86,8 +125,7 @@ namespace Horo {
         /** @brief Registers bounded active-wait notification leases without retaining targets after a submission returns. */
         [[nodiscard]] AdmissionWakeLease RegisterAdmissionWake(const std::shared_ptr<std::condition_variable> &wake) const {
             AdmissionWakeLease lease{wake};
-            for (auto state = m_state; state; state = state->parent)
-                lease.states_.push_back(state);
+            AppendAncestry(m_state, lease.states_);
             for (const auto &state : lease.states_) {
                 std::lock_guard lock(state->wakeMutex);
                 std::erase_if(state->admissionWakes, [](const auto &entry) {

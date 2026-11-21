@@ -103,6 +103,20 @@ namespace Horo::AI {
             state >= N::NavigationMovementState::Querying && state < N::NavigationMovementState::Arrived)
             return StartResult::Failure(MakeError(N::NavigationErrors::AdmissionRejected));
 
+        const auto lifetime = binding.ai_.CaptureAgentLifetime(binding.agent_);
+        if (lifetime.HasError())
+            return StartResult::Failure(lifetime.ErrorValue());
+        try {
+            request.cancellation = CancellationToken::AnyOf(request.cancellation, lifetime.Value());
+            if (binding.decision_) {
+                const auto &operation = binding.decision_->Operation();
+                request.cancellation = CancellationToken::AnyOf(request.cancellation, operation.cancellation);
+                request.cancellation = CancellationToken::AnyOf(request.cancellation, operation.capabilityCancellation);
+                request.cancellation = CancellationToken::AnyOf(request.cancellation, operation.ownerCancellation);
+            }
+        } catch (const std::bad_alloc &) {
+            return StartResult::Failure(MakeError(AIErrors::AgentCapacityExceeded));
+        }
         const auto accepted = movement.Start(std::move(request), current);
         if (accepted.HasError())
             return StartResult::Failure(binding.decision_ ? accepted.ErrorValue()

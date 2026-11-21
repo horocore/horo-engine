@@ -170,6 +170,29 @@ namespace Horo::AI {
         CHECK(snapshot.terminal->cancellationReason == AiTaskCancellationReason::OwnerShutdown);
     }
 
+    TEST_CASE("AI movement cancels a queued path before dispatch when either scope retires", "[ai][navigation][movement]") {
+        Fixture fixture;
+        CancellationSource caller;
+        auto request = fixture.Move();
+        request.cancellation = caller.Token();
+        auto bound = AiNavigationMovementTask::Start(fixture.capability, fixture.agent, fixture.task, *fixture.movement, request,
+                                                     fixture.At(0));
+        REQUIRE(bound.HasValue());
+        auto task = std::move(bound).Value();
+        REQUIRE(task.Advance(fixture.At(0)).Value()->state == NavigationMovementState::Querying);
+        SECTION("retiring the agent cancels its queued path") {
+            REQUIRE(fixture.ai.DisableAtSafePoint(fixture.agent).HasValue());
+            CHECK_FALSE(caller.Token().IsCancellationRequested());
+        }
+        SECTION("cancelling the caller leaves agent admission intact") {
+            caller.RequestCancellation();
+            REQUIRE(fixture.capability.ResolveAgentOwner(fixture.agent).HasValue());
+        }
+        CHECK(fixture.coordinator.Dispatch(0) == 0);
+        const std::array callers{Caller()};
+        CHECK(fixture.coordinator.Commit(Current(callers, 1)) == 1);
+    }
+
     TEST_CASE("Behavior tree consumes the original Navigation failure only on its next evaluation", "[ai][navigation][movement]") {
         namespace BT = BehaviorTreeTestSupport;
         namespace Async = BehaviorTreeAsyncTestSupport;
