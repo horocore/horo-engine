@@ -5,7 +5,9 @@ import os
 import socket
 import subprocess  # nosec B404 - this fixture executes only the validated CMake test target.
 import sys
+import tempfile
 import threading
+import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -60,6 +62,9 @@ class Handler(BaseHTTPRequestHandler):
         if not cloud and payload["model"] in {"editor-local-tool", "editor-approved-tool"}:
             self.send_editor_local_tool(payload)
             return
+        if not cloud and payload["model"] == "editor-dock-lifecycle":
+            self.send_dock_lifecycle(payload)
+            return
         if not cloud and payload["model"] in {"editor-local-loading", "editor-local-idle"}:
             self.hold_local_response(payload["model"] == "editor-local-idle")
             return
@@ -88,6 +93,31 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_records(["{}"], status=400)
                 return
         self.send_model_stream(payload["model"], cloud)
+
+    def send_dock_lifecycle(self, payload):
+        gate = self.server.chat_gate
+        if (self.headers.get("Authorization") is not None
+                or payload.get("messages") != [{"role": "user", "content": "Keep this request running"}]
+                or payload.get("tools") or (gate / "started").exists()):
+            self.send_records(["{}"], status=400)
+            return
+        first = b'{"message":{"content":"First visible line\\n"}}\n'
+        final = b'{"message":{"content":"Final answer after hiding the dock"}}\n{"done":true}\n'
+        self.send_response(200)
+        self.send_header("Content-Type", "application/x-ndjson")
+        self.send_header("Content-Length", str(len(first) + len(final)))
+        self.end_headers()
+        self.wfile.write(first)
+        self.wfile.flush()
+        (gate / "started").touch()
+        deadline = time.monotonic() + 12
+        while not (gate / "release").exists():
+            if time.monotonic() >= deadline or self.server.release_pending.wait(timeout=0.02):
+                self.close_connection = True
+                return
+        self.wfile.write(final)
+        self.wfile.flush()
+        (gate / "finished").touch()
 
     def hold_local_response(self, begin_stream):
         self.close_connection = True
@@ -162,18 +192,24 @@ def main():
         raise ValueError("CTest must supply its test binary and exact configured test directory")
     binary = Path(sys.argv[1]).resolve(strict=True)
     test_directory = Path(sys.argv[2]).resolve(strict=True)
-    if (binary.parent != test_directory
-            or binary.name not in {"HoroModelProviderTests", "HoroModelProviderTests.exe"}
-            or not binary.is_file() or not os.access(binary, os.X_OK)):
-        raise ValueError("CTest must supply the built HoroModelProviderTests executable")
+    specs = {
+        "HoroModelProviderTests": [],
+        "HoroEditorLocalAgentPanelRenderTests": ["[chat-http]"],
+    }
+    name = binary.stem if binary.suffix == ".exe" else binary.name
+    if binary.parent != test_directory or name not in specs or not binary.is_file() or not os.access(binary, os.X_OK):
+        raise ValueError("CTest must supply a configured model or chat test executable")
     server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
     server.local_restart_observed = False
     server.approved_tool_probe = False
     server.release_pending = threading.Event()
+    gate = tempfile.TemporaryDirectory(prefix="horo-chat-gate-")
+    server.chat_gate = Path(gate.name)
     worker = threading.Thread(target=server.serve_forever, daemon=True)
     worker.start()
     environment = os.environ.copy()
     environment["HORO_MODEL_TEST_ENDPOINT"] = f"http://127.0.0.1:{server.server_port}"
+    environment["HORO_MODEL_TEST_CHAT_GATE"] = gate.name
     # A proxy request would reach the fixture with an absolute URL and be rejected.
     environment["http_proxy"] = environment["HORO_MODEL_TEST_ENDPOINT"]
     environment["NO_PROXY"] = ""
@@ -184,12 +220,13 @@ def main():
             environment["HORO_MODEL_TEST_OFFLINE_ENDPOINT"] = f"http://127.0.0.1:{offline.getsockname()[1]}"
             # The executable is resolved in the exact CMake-owned test directory, including external worktree builds.
             # nosemgrep: python.lang.security.audit.dangerous-subprocess-use-audit.dangerous-subprocess-use-audit, python.lang.security.audit.dangerous-subprocess-use-tainted-env-args.dangerous-subprocess-use-tainted-env-args
-            return subprocess.run([str(binary)], env=environment, check=False).returncode  # nosec B603
+            return subprocess.run([str(binary), *specs[name]], env=environment, check=False, timeout=45).returncode  # nosec B603
     finally:
         server.release_pending.set()
         server.shutdown()
         server.server_close()
         worker.join()
+        gate.cleanup()
 
 
 if __name__ == "__main__":

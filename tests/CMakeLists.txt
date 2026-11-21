@@ -4187,6 +4187,10 @@ if (HORO_BUILD_EDITOR_GUI)
         HoroEngine::Gui HoroEngine::Platform HoroThirdParty::ImGui HoroEngine::AISceneIntegration HoroEngine::DecisionCookHost
         HoroMcpEditorAgentToolsInternal HoroEditorAgentHistoryInternal HoroEngine::ModelProviderAdapters)
     horo_register_catch_test(HoroEditorLocalAgentPanelRenderTests LABELS "unit;editor;agent;gui;headless")
+    add_test(NAME HoroEditorLocalAgentDockHttpTests
+        COMMAND "${Python3_EXECUTABLE}" "${PROJECT_SOURCE_DIR}/tests/python/model_provider_http_fixture.py"
+                "$<TARGET_FILE:HoroEditorLocalAgentPanelRenderTests>" "$<TARGET_FILE_DIR:HoroEditorLocalAgentPanelRenderTests>")
+    set_tests_properties(HoroEditorLocalAgentDockHttpTests PROPERTIES LABELS "unit;editor;agent;gui;headless" TIMEOUT 60)
 
     add_executable(HoroGlobalDockPanelRenderTests
             unit/editor/GlobalDockBuildActiveRenderTests.cpp

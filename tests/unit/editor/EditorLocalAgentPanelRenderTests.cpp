@@ -8,7 +8,10 @@
 
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
+#include <cstdlib>
+#include <fstream>
 #include <imgui_internal.h>
+#include <thread>
 
 namespace {
     using namespace Horo;
@@ -52,16 +55,24 @@ namespace {
             gui.input.BeginFrame(collector.Commit());
         }
 
-        void Draw(const float width, const bool show = true) {
+        std::string Draw(const float width, const bool show = true, const bool log = false) {
             agent.poll();
             gui.imgui.BeginFrame();
             ImGui::SetNextWindowPos({0, 0});
             ImGui::SetNextWindowSize({width, 750});
             ImGui::Begin("Chat dock fixture", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings);
+            if (log)
+                ImGui::LogToBuffer();
             if (show)
                 agent.panel->DrawPanel(ImGui::GetCursorScreenPos(), ImGui::GetContentRegionAvail(), model, command, gui.context);
+            std::string drawn;
+            if (log) {
+                drawn = ImGui::GetCurrentContext()->LogBuffer.c_str();
+                ImGui::LogFinish();
+            }
             ImGui::End();
             gui.imgui.EndFrame();
+            return drawn;
         }
 
         ImGuiWindow *ChatWindow() const {
@@ -71,7 +82,39 @@ namespace {
             }
             return nullptr;
         }
+
+        void Activate(const char *id, const bool text = false) {
+            auto *chat = ChatWindow();
+            REQUIRE(chat);
+            ImGui::FocusWindow(chat);
+            ImGui::ActivateItemByID(chat->GetID(id));
+            if (text)
+                ImGui::GetCurrentContext()->NavNextActivateFlags = ImGuiActivateFlags_PreferInput;
+            Draw(420);
+        }
+
+        void Enter(const char *id, const char *value) {
+            Activate(id, true);
+            REQUIRE(ImGui::GetActiveID() == ChatWindow()->GetID(id));
+            ImGui::GetIO().AddInputCharactersUTF8(value);
+            Draw(420);
+        }
+
+        std::string DrawnText() {
+            return Draw(420, true, true);
+        }
     };
+
+    /** @brief Pumps until an observable transport or presentation condition occurs, with a finite test deadline. */
+    template <typename Condition> bool Await(Condition condition) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        do {
+            if (condition())
+                return true;
+            std::this_thread::sleep_for(std::chrono::milliseconds{5});
+        } while (std::chrono::steady_clock::now() < deadline);
+        return false;
+    }
 
     TEST_CASE("Local chat owns keyboard input only while its text field is presented", "[editor][agent][gui]") {
         LocalAgentFixture fixture{"en-US"};
@@ -141,5 +184,55 @@ namespace {
             CHECK(chat->ContentSizeIdeal.x <= chat->InnerRect.GetWidth());
             CHECK(chat->Size.x < width);
         }
+    }
+
+    TEST_CASE("A real local model reply survives dock hiding and completes while hidden", "[.][chat-http]") {
+        const auto *endpoint = std::getenv("HORO_MODEL_TEST_ENDPOINT");
+        const auto *gateName = std::getenv("HORO_MODEL_TEST_CHAT_GATE");
+        REQUIRE(endpoint);
+        REQUIRE(gateName);
+        const std::filesystem::path gate{gateName};
+        REQUIRE(gate.is_absolute());
+        REQUIRE(std::filesystem::is_directory(gate));
+
+        LocalAgentFixture fixture{"en-US"};
+        auto &host = fixture.model.workspacePanelHost;
+        const auto id = fixture.agent.panel->GetId();
+        REQUIRE(host.OpenPanel(id, "workspace.right").Succeeded());
+        fixture.Draw(420);
+        fixture.Enter("##Endpoint", endpoint);
+        fixture.Enter("##Model", "editor-dock-lifecycle");
+        fixture.Enter("##Prompt", "Keep this request running");
+        fixture.Activate("###ask");
+        REQUIRE(Await([&] {
+            const auto text = fixture.DrawnText();
+            return std::filesystem::is_regular_file(gate / "started") && text.find("First visible line") != std::string::npos;
+        }));
+        CHECK_FALSE(std::filesystem::exists(gate / "finished"));
+
+        REQUIRE(host.ClosePanel(id).Succeeded());
+        fixture.agent.panel->OnPresentationHidden(fixture.command);
+        fixture.Draw(420, false);
+        CHECK_FALSE(fixture.ChatWindow());
+        REQUIRE(host.OpenPanel(id, "workspace.left").Succeeded());
+        CHECK(fixture.DrawnText().find("First visible line") != std::string::npos);
+        CHECK_FALSE(std::filesystem::exists(gate / "finished"));
+
+        REQUIRE(host.ClosePanel(id).Succeeded());
+        fixture.agent.panel->OnPresentationHidden(fixture.command);
+        fixture.Draw(420, false);
+        {
+            std::ofstream release{gate / "release"};
+            REQUIRE(release.good());
+        }
+        REQUIRE(Await([&] {
+            fixture.Draw(420, false);
+            return std::filesystem::is_regular_file(gate / "finished");
+        }));
+        CHECK_FALSE(fixture.ChatWindow());
+        REQUIRE(host.OpenPanel(id, "workspace.right").Succeeded());
+        REQUIRE(Await([&] {
+            return fixture.DrawnText().find("Final answer after hiding the dock") != std::string::npos;
+        }));
     }
 }  // namespace
