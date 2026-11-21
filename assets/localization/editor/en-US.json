@@ -3539,6 +3539,7 @@
     "workspace.source_language.retry": {"text": "The C++ language service did not answer. Try again once it is ready."},
     "workspace.source_language.no_definition": {"text": "No definition could be opened in this project."},
     "workspace.source_language.no_completion": {"text": "No completions available at this position."},
+    "workspace.source_language.script_error": {"text": "Go to Script Syntax Error"},
     "workspace.global_dock.operations.search": {
       "text": "Search operations..."
     },

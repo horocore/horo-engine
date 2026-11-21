@@ -1,5 +1,6 @@
 #include "EditorWorkspaceController.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "WorkspacePathText.h"
 
 namespace Horo::Editor {
     namespace {
@@ -160,25 +161,53 @@ namespace Horo::Editor {
 
     /** @copydoc EditorWorkspaceController::UpdateSourceLanguage */
     void EditorWorkspaceController::UpdateSourceLanguage() {
+        RetireStaleSourceLanguageProjections();
+        UpdateScriptSyntax();
         if (!m_sourceLanguage)
             return;
         const auto now = Language::ProjectLanguageWorkspace::Clock::now();
         ExpireSourceLanguageRequest(now);
-        RetireStaleSourceLanguageProjections();
-        auto &diagnostics = m_viewModel.sourceLanguageDiagnostics;
         for (auto &result : m_sourceLanguage->Poll(m_viewModel.sourceDocuments, now)) {
-            if (std::holds_alternative<Language::LanguageDiagnostics>(result.payload)) {
-                const auto instance = result.context.source.Identity().instance;
-                diagnostics.insert_or_assign(instance, std::make_shared<const Language::LanguageResult>(std::move(result)));
-            } else {
+            if (std::holds_alternative<Language::LanguageDiagnostics>(result.payload))
+                PublishSourceLanguageDiagnostics(std::move(result));
+            else
                 AcceptSourceLanguage(std::move(result));
-            }
         }
         if (const auto *error = m_sourceLanguage->ProviderError(Language::ClangdProviderId);
             error && !m_viewModel.sourceLanguageUnavailable) {
             m_viewModel.sourceLanguageUnavailable = true;
-            diagnostics.clear();
+            std::erase_if(m_viewModel.sourceLanguageDiagnostics, [this](const auto &entry) {
+                const auto path = WorkspaceNativePath(entry.second->context.source.Identity().key.source.Value());
+                return m_sourceOpenService.Classify(path).kind == SourceFileKind::NativeSource;
+            });
             LOG_WARN("editor.source.language", "%s", error->message.c_str());
         }
+    }
+
+    /** @copydoc EditorWorkspaceController::UpdateScriptSyntax */
+    void EditorWorkspaceController::UpdateScriptSyntax() {
+        if (!m_sourceRecoveryJobs)
+            return;
+        const auto active = m_viewModel.workspacePanelHost.ActiveDocument();
+        const auto tabs = m_viewModel.workspacePanelHost.DocumentTabs();
+        const auto found = std::ranges::find_if(tabs, [active](const WorkspaceDocumentTab &tab) {
+            return tab.identity.instance == active;
+        });
+        SourceDocumentSnapshot source;
+        if (found != tabs.end() && found->identity.key.kind == DocumentKind::Source) {
+            auto captured = m_sourceOpenService.Documents().Snapshot(found->identity.instance);
+            if (captured.HasValue())
+                source = std::move(captured).Value();
+        }
+        auto publication = m_scriptSyntax.Poll(*m_sourceRecoveryJobs, m_sourceOpenService, source);
+        if (publication)
+            PublishSourceLanguageDiagnostics(std::move(*publication));
+    }
+
+    /** @copydoc EditorWorkspaceController::PublishSourceLanguageDiagnostics */
+    void EditorWorkspaceController::PublishSourceLanguageDiagnostics(Language::LanguageResult result) {
+        const auto instance = result.context.source.Identity().instance;
+        m_viewModel.sourceLanguageDiagnostics.insert_or_assign(instance,
+                                                               std::make_shared<const Language::LanguageResult>(std::move(result)));
     }
 }  // namespace Horo::Editor

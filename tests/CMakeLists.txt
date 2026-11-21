@@ -3936,6 +3936,7 @@ target_link_libraries(HoroLanguageServerTestChild PRIVATE HoroEditorLanguageProt
 
 add_executable(HoroSourceLanguageSessionTests
         unit/editor/ClangdProviderTests.cpp
+        unit/editor/HoroScriptSyntaxTests.cpp
         unit/editor/LspConnectionTests.cpp
         unit/editor/LspProcessTests.cpp
         unit/editor/LspResultProjectionTests.cpp

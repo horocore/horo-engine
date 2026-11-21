@@ -32,6 +32,7 @@
 #include "editor/gameplay/EditorPlaySessionController.h"
 #include "editor/gameplay/ProjectGameplayRegistry.h"
 #include "editor/language/ClangdProvider.h"
+#include "editor/language/HoroScriptSyntax.h"
 #include "editor/project_model/EditorSelectionModel.h"
 #include "editor/project_model/EditorViewportModel.h"
 #include "editor/renderer/xr/EditorXrSceneGeometry.h"
@@ -773,6 +774,7 @@ namespace Horo::Editor {
         IExternalProcessRunner *m_sourceLanguageRunner{};
         Language::ClangdSettings m_clangdSettings;
         std::unique_ptr<Language::ProjectLanguageWorkspace> m_sourceLanguage;
+        Language::HoroScriptSyntaxWorkspace m_scriptSyntax;
 
         struct PendingSourceLanguage final {
             SourceLanguageIntent intent;
@@ -1271,6 +1273,10 @@ namespace Horo::Editor {
         void ExpireSourceLanguageRequest(Language::ProjectLanguageWorkspace::Clock::time_point now);
         /** @brief Releases language projections from replaced or closed source publications. */
         void RetireStaleSourceLanguageProjections();
+        /** @brief Observes the active source's background syntax check. */
+        void UpdateScriptSyntax();
+        /** @brief Stores diagnostics for the exact source revision shared by both language adapters. */
+        void PublishSourceLanguageDiagnostics(Language::LanguageResult result);
         /** @brief Consumes one matching language reply from the current request. */
         void AcceptSourceLanguage(Language::LanguageResult result);
         /** @brief Displays completion choices for their originating view and source lease. */

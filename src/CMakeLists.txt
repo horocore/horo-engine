@@ -4044,6 +4044,7 @@ add_library(HoroEditorServices STATIC
         editor/language/LspResultProjection.cpp
         editor/language/ProjectLanguageWorkspace.cpp
         editor/language/ClangdProvider.cpp
+        editor/language/HoroScriptSyntax.cpp
         editor/proposals/ProposedChangeSet.cpp
         editor/proposals/ProposedChangeSetCodec.cpp
         editor/proposals/ProposedUnifiedPatch.cpp
@@ -4161,6 +4162,7 @@ target_link_libraries(HoroEditorServices
         PRIVATE
         HoroFoundationJsonInternal
         HoroEditorLanguageProtocolInternal
+        HoroThirdParty::Lua
         HoroEngine::Security
         HoroEditorPlaySceneHostInternal
         HoroEngine::ProjectAssetRegistrySource

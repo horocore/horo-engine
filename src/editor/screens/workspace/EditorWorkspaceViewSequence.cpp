@@ -14,6 +14,23 @@
 
 namespace Horo::Editor {
     namespace {
+        /** @brief Selects the exact parser-reported byte range in the active script editor. */
+        bool DrawScriptDiagnosticJump(const EditorGuiContext &context, const SourceDocumentSnapshot &source,
+                                      const std::shared_ptr<const Language::LanguageResult> &publication, SourceEditorWidget &widget) {
+            if (!publication || !source.SharesStateWith(publication->context.source) ||
+                ClassifySourceLanguage(source.Identity().key.source.Value()) != SourceLanguage::HoroScript)
+                return false;
+            const auto *diagnostics = std::get_if<Language::LanguageDiagnostics>(&publication->payload);
+            if (!diagnostics || diagnostics->items.empty())
+                return false;
+            if (!Ui::Button({.label = context.localization.Get("editor", "workspace.source_language.script_error").c_str(),
+                             .variant = Ui::ButtonVariant::Secondary,
+                             .font = context.theme.fonts.sans}))
+                return false;
+            const auto span = diagnostics->items.front().span;
+            return source.IsCurrent() && widget.Select({span.start, span.end});
+        }
+
         /** @brief Resolves the localized notice for the active source revision. */
         const char *LanguageNotice(const SourceLanguageStatusKind kind) {
             switch (kind) {
@@ -308,13 +325,16 @@ namespace Horo::Editor {
         auto &widget = presentation->widget;
         presentation->Publish(source);
         const auto diagnostics = viewModel.sourceLanguageDiagnostics.find(instance);
-        presentation->PublishDiagnostics(source, diagnostics == viewModel.sourceLanguageDiagnostics.end() ? nullptr : diagnostics->second);
+        const auto projection = diagnostics == viewModel.sourceLanguageDiagnostics.end() ? nullptr : diagnostics->second;
+        presentation->PublishDiagnostics(source, projection);
         if (viewModel.sourceEditingResult && viewModel.sourceEditingResult->HasValue())
             static_cast<void>(widget.Restore(viewModel.sourceEditingResult->Value()));
         const bool languageFocus = presentation->ApplyLanguageFocus(source, viewModel.sourceLanguageFocus);
+        const bool scriptFocus = DrawScriptDiagnosticJump(m_context, source, projection, widget);
         DrawSourceLanguageActions(m_context, source, widget, viewModel, outCommand);
         auto toolIntent = presentation->tools.Draw(widget, source, history, viewModel.sourceEditingResult, m_context);
-        const bool focus = languageFocus || m_sourceSession.NeedsFocus(instance) || (!toolIntent && presentation->tools.TakeFocusRequest());
+        const bool focus =
+            languageFocus || scriptFocus || m_sourceSession.NeedsFocus(instance) || (!toolIntent && presentation->tools.TakeFocusRequest());
         const auto available = ImGui::GetContentRegionAvail();
         auto intent = widget.Draw({available.x, available.y, Theme::GetActiveTokens().sizes.uiScale, focus, !toolIntent,
                                    m_context.inputRouter ? &m_context.inputRouter->Profile() : &m_context.settings.settings.keymap.profile,

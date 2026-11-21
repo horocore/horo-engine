@@ -3539,6 +3539,7 @@
     "workspace.source_language.retry": {"text": "C++ dil servisi yanıt vermedi. Servis hazır olduğunda tekrar deneyin."},
     "workspace.source_language.no_definition": {"text": "Bu projede açılabilecek bir tanım bulunamadı."},
     "workspace.source_language.no_completion": {"text": "Bu konumda tamamlama önerisi bulunamadı."},
+    "workspace.source_language.script_error": {"text": "Betik Sözdizimi Hatasına Git"},
     "workspace.global_dock.operations.search": {
       "text": "İşlemlerde ara..."
     },

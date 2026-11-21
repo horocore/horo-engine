@@ -337,7 +337,7 @@ namespace {
                                                "workspace.source_language.waiting", "workspace.source_language.retry",
                                                "workspace.source_language.no_definition", "workspace.source_language.actions",
                                                "workspace.source_language.complete", "workspace.source_language.choose_completion",
-                                               "workspace.source_language.no_completion"});
+                                               "workspace.source_language.no_completion", "workspace.source_language.script_error"});
         RequireCatalogKeys(service, recoveryKeys);
         RequireCatalogKeys(service, prefabOverrideKeys);
         RequireCatalogKeys(service, projectLoadingKeys);

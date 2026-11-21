@@ -267,6 +267,14 @@ selection. Definitions open embedded project sources and select the resolved
 UTF-16 range. Completion acceptance applies the main and additional edits
 as one revision-fenced undo step. Changes of source publication retire results.
 
+### Horo Script Syntax (EDT-003.11)
+
+The active source is classified by the project source policy. The Lua 5.4
+parser checks Horo Script text on a bounded background job. It opens no
+libraries and returns only the exact source revision and typed diagnostics.
+The workspace retires a pending check when its source changes. Its marker
+range uses the original UTF-8 bytes, including any BOM and newline spelling.
+
 ### Source Save Publication (EDT-003.5)
 
 `SourceDocumentService::Save` captures one exact current revision on the owner thread.
