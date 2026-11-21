@@ -249,6 +249,22 @@ namespace Horo::XR::OpenXRInternal {
         return Result<void>::Failure(active.HasError() ? active.ErrorValue() : StoreFailure(status));
     }
 
+    Result<void> OpenXRNativeSession::DiscardSpatialAnchorWrite(const XRAnchorScope &scope, std::uint64_t generation,
+                                                                std::string_view name) {
+        if (controlThread_ != std::this_thread::get_id() || retirementCall_ || anchorCall_)
+            return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
+        const StoreCall call{anchorCall_};
+        if (!scope.grant.IsValid() || scope != anchors_.scope || generation != anchorStoreGeneration_ ||
+            anchorStore_.connection == XR_NULL_HANDLE)
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        if (!ValidName(name))
+            return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
+        if (anchorStore_.pendingRemoval && ReadName(*anchorStore_.pendingRemoval) != name)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
+        anchorStore_.pendingRemoval = NativeName(name);
+        return anchorStore_.UndoPendingWrite();
+    }
+
     Result<std::optional<XRSpatialAnchorId>> OpenXRNativeSession::RestoreSpatialAnchor(const XRAnchorScope &scope, XrSpace world,
                                                                                        XRRuntimeTime now, std::string_view name) {
         using Outcome = Result<std::optional<XRSpatialAnchorId>>;

@@ -1298,6 +1298,7 @@ namespace Horo::Tests::OpenXRApplication {
 
         struct ApplicationAnchorScript final {
             static inline std::optional<XrSpatialAnchorPersistenceNameMSFT> stored;
+            static inline bool failRemoval{};
 
             static XRAPI_ATTR XrResult XRAPI_CALL Create(XrSession, const XrSpatialAnchorCreateInfoMSFT *info, XrSpatialAnchorMSFT *out) {
                 CHECK(info->space != XR_NULL_HANDLE);
@@ -1363,8 +1364,15 @@ namespace Horo::Tests::OpenXRApplication {
                 return OpenXR::Script::Record("app-anchor-store-restore");
             }
 
-            static XRAPI_ATTR XrResult XRAPI_CALL Remove(XrSpatialAnchorStoreConnectionMSFT, const XrSpatialAnchorPersistenceNameMSFT *) {
-                return XR_ERROR_FUNCTION_UNSUPPORTED;
+            static XRAPI_ATTR XrResult XRAPI_CALL Remove(XrSpatialAnchorStoreConnectionMSFT,
+                                                         const XrSpatialAnchorPersistenceNameMSFT *name) {
+                REQUIRE(stored);
+                CHECK(std::string_view{stored->name} == name->name);
+                OpenXR::Script::Record("app-anchor-store-remove");
+                if (failRemoval)
+                    return XR_ERROR_RUNTIME_FAILURE;
+                stored.reset();
+                return XR_SUCCESS;
             }
 
             static XRAPI_ATTR XrResult XRAPI_CALL Resolve(XrInstance, const char *name, PFN_xrVoidFunction *out) {
@@ -1479,22 +1487,55 @@ namespace Horo::Tests::OpenXRApplication {
         REQUIRE(observed->result);
         RequireValue(*observed->result);
 
-        const auto world = RequireValue(Runtime::SaveWorldId::FromBytes({4}));
+        using namespace Runtime;
+        const auto world = RequireValue(SaveWorldId::FromBytes({4}));
+        auto firstSave =
+            RequireValue(CreateSaveOperation({.operation = 10, .kind = SaveOperationKind::Save, .maximumCompletionCallbacks = 2}));
+        ApplicationAnchorScript::failRemoval = false;
         AnchorTestEntropy entropy;
         CHECK(storage.ReadAnchorStorageState() == (storageRequested ? Granted : Unavailable));
         CHECK(std::ranges::count(fixture.script.native.calls, "app-anchor-store-open") == 0);
-        CHECK_FALSE(RequireValue(fixture.session->PrepareSpatialAnchorCapture(world, entropy)));
+        CHECK_FALSE(RequireValue(fixture.session->PrepareSpatialAnchorCapture(world, entropy, firstSave.Handle())));
         fixture.script.clock.sample = 220'000'000;
         RequireValue(fixture.scheduler->RunFrame());
         REQUIRE(observed->result);
         RequireValue(*observed->result);
-        const auto captured = RequireValue(fixture.session->PrepareSpatialAnchorCapture(world, entropy));
+        auto captured = RequireValue(fixture.session->PrepareSpatialAnchorCapture(world, entropy, firstSave.Handle()));
         CHECK(static_cast<bool>(captured) == storageRequested);
         CHECK(std::ranges::count(fixture.script.native.calls, "app-anchor-store-open") == (storageRequested ? 1 : 0));
         if (storageRequested) {
-            CHECK(RequireValue(fixture.session->PrepareSpatialAnchorCapture(world, entropy)) == captured);
-            CHECK(std::ranges::count(fixture.script.native.calls, "app-anchor-store-persist") == 1);
-            using namespace Runtime;
+            if (mode == 3) {
+                CHECK(firstSave.Handle().RequestCancellation() == SaveCancellationRequestResult::Requested);
+                CHECK(firstSave.ObserveCancellation() == SaveCancellationObservation::Cancelled);
+                ApplicationAnchorScript::failRemoval = true;
+                RequireValue(fixture.play->ProgressRenderTail());
+                CHECK(std::ranges::count(fixture.script.native.calls, "app-anchor-store-remove") == 0);
+                CHECK(fixture.session->SettleSpatialAnchorCapture(*firstSave.Handle().Snapshot()).HasError());
+                CHECK(ApplicationAnchorScript::stored.has_value());
+                ApplicationAnchorScript::failRemoval = false;
+                RequireValue(fixture.session->SettleSpatialAnchorCapture(*firstSave.Handle().Snapshot()));
+                CHECK_FALSE(ApplicationAnchorScript::stored);
+                CHECK(std::ranges::count(fixture.script.native.calls, "app-anchor-store-remove") == 2);
+                firstSave =
+                    RequireValue(CreateSaveOperation({.operation = 11, .kind = SaveOperationKind::Save, .maximumCompletionCallbacks = 2}));
+                captured = RequireValue(fixture.session->PrepareSpatialAnchorCapture(world, entropy, firstSave.Handle()));
+                REQUIRE(captured);
+            }
+            CHECK(RequireValue(fixture.session->PrepareSpatialAnchorCapture(world, entropy, firstSave.Handle())) == captured);
+            CHECK(std::ranges::count(fixture.script.native.calls, "app-anchor-store-persist") == (mode == 3 ? 2 : 1));
+            CHECK(firstSave.PublishProgress(SaveOperationStage::WritingTemporary, {1, 1}) == SaveOperationTransitionResult::Applied);
+            CHECK(firstSave.BeginCommit() == SaveCommitGateResult::Entered);
+            CHECK(firstSave.PublishProgress(SaveOperationStage::CommitStarted, {1, 1}) == SaveOperationTransitionResult::Applied);
+            CHECK(firstSave.Complete(SaveOperationCommitOutcome::Committed) == SaveOperationTransitionResult::Applied);
+            RequireValue(fixture.session->SettleSpatialAnchorCapture(*firstSave.Handle().Snapshot()));
+            auto cancelledLater =
+                RequireValue(CreateSaveOperation({.operation = 12, .kind = SaveOperationKind::Save, .maximumCompletionCallbacks = 2}));
+            CHECK(RequireValue(fixture.session->PrepareSpatialAnchorCapture(world, entropy, cancelledLater.Handle())) == captured);
+            CHECK(cancelledLater.Handle().RequestCancellation() == SaveCancellationRequestResult::Requested);
+            CHECK(cancelledLater.ObserveCancellation() == SaveCancellationObservation::Cancelled);
+            RequireValue(fixture.session->SettleSpatialAnchorCapture(*cancelledLater.Handle().Snapshot()));
+            CHECK(ApplicationAnchorScript::stored.has_value());
+            CHECK(std::ranges::count(fixture.script.native.calls, "app-anchor-store-remove") == (mode == 3 ? 2 : 0));
             CanonicalStateParticipantRegistry registry;
             const auto descriptor = fixture.session->SpatialAnchorSaveDescriptor();
             RequireValue(registry.Register(descriptor, captured));
@@ -1537,7 +1578,7 @@ namespace Horo::Tests::OpenXRApplication {
             CHECK(std::ranges::count(fixture.script.native.calls, "app-anchor-store-restore") == 1);
 
             storage.RevokeAnchorStorage();
-            CHECK_FALSE(RequireValue(fixture.session->PrepareSpatialAnchorCapture(world, entropy)));
+            CHECK_FALSE(RequireValue(fixture.session->PrepareSpatialAnchorCapture(world, entropy, firstSave.Handle())));
             CHECK(storage.ReadAnchorStorageState() == Unavailable);
         }
         RequireValue(fixture.play->ProgressRenderTail());

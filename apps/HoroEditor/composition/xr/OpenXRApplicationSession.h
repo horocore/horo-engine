@@ -312,7 +312,7 @@ namespace Horo::Application::Internal {
         void RevokeSpatialAnchorPreview() noexcept;
         void RevokeSpatialAnchorStorage() noexcept;
         void RevokeSpatialAnchor() noexcept;
-        [[nodiscard]] Result<void> ProgressSpatialAnchorRetirement();
+        [[nodiscard]] Result<void> ProgressSpatialAnchorRetirement(bool retiring = false);
         [[nodiscard]] XR::XRCapabilityState ReadSpatialAnchorState() const noexcept;
         /** @brief Binds optional canonical Save on the owner lane after a distinct, revocable store grant. */
         [[nodiscard]] Result<OpenXRApplicationAnchorSave> BindSpatialAnchorSave(const XR::XRAnchorStoreScope &storeScope,
@@ -320,10 +320,11 @@ namespace Horo::Application::Internal {
         [[nodiscard]] static Runtime::CanonicalStateParticipantDescriptor SpatialAnchorSaveDescriptor();
         /** @brief Prepares one protected reference for the current sandbox on an admitted Save request. */
         [[nodiscard]] Result<std::shared_ptr<const Runtime::ICanonicalStateAdapter>> PrepareSpatialAnchorCapture(
-            Runtime::SaveWorldId world, Security::SecureRandomSource &entropy);
+            Runtime::SaveWorldId world, Security::SecureRandomSource &entropy, const Runtime::SaveOperationHandle &operation);
         [[nodiscard]] Result<OpenXRApplicationAnchorRestore> StageSpatialAnchorRestore(Runtime::SaveWorldId world,
                                                                                        std::span<const std::byte> record);
         void RelocalizeRestoredAnchor() noexcept;
+        [[nodiscard]] Result<void> SettleSpatialAnchorCapture(const Runtime::SaveOperationSnapshot &operation);
         /** @brief Reports whether the installed platform and negotiated extension support the next-Play request. */
         [[nodiscard]] bool MayArmPassthrough() const;
         /** @brief Checks the installed platform's current permission for the exact Play scope, without native I/O. */
@@ -510,6 +511,7 @@ namespace Horo::Application::Internal {
         void AdvancePlaneCapture(const XR::XRTrackingSnapshot &tracking);
         void AdvanceSpatialAnchor(const XR::XRTrackingSnapshot &tracking);
         [[nodiscard]] Result<OpenXRApplicationAnchorSave> AcquireSpatialAnchorSave(Runtime::SaveWorldId world);
+        [[nodiscard]] Result<bool> SettleAnchorWrite();
         void ProgressRestoredAnchor(XrSpace world, XR::XRRuntimeTime now);
         [[nodiscard]] Result<void> RetireRestoredAnchor();
         [[nodiscard]] Result<void> StartSpatialAnchor(const XR::XRCoordinateSpace &space, XrSpace world, XR::XRRuntimeTime now);
@@ -639,6 +641,12 @@ namespace Horo::Application::Internal {
             bool allowed{};
         } planes_;
 
+        struct PendingAnchorWrite final {
+            Runtime::SaveOperationHandle operation;
+            std::shared_ptr<XR::OpenXRInternal::OpenXRProtectedAnchorStore> store;
+            XR::XRSpatialAnchorId anchor;
+        };
+
         struct SpatialAnchorPreview final {
             std::shared_ptr<XR::XRSpatialAnchors> publication;
             std::optional<XR::XRAnchorScope> scope;
@@ -654,6 +662,7 @@ namespace Horo::Application::Internal {
             std::optional<OpenXRApplicationAnchorSave> save;
             std::optional<Runtime::SaveWorldId> saveWorld;
             bool recorded{};
+            std::optional<PendingAnchorWrite> pendingWrite;
             std::optional<XR::XRSpatialAnchorId> restored;
         } spatialAnchor_;
 

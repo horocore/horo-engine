@@ -484,7 +484,7 @@ namespace Horo::Application::Internal {
         RevokeInput();
         sessionCensus_.reset();
         RevokeSpatialAnchor();
-        if (auto retired = ProgressSpatialAnchorRetirement(); retired.HasError())
+        if (auto retired = ProgressSpatialAnchorRetirement(true); retired.HasError())
             return retired;
         if (auto retired = RetirePlaneCapture(); retired.HasError())
             return retired;
@@ -527,7 +527,7 @@ namespace Horo::Application::Internal {
         RevokeInput();
         sessionCensus_.reset();
         RevokeSpatialAnchor();
-        if (auto retired = ProgressSpatialAnchorRetirement(); retired.HasError())
+        if (auto retired = ProgressSpatialAnchorRetirement(true); retired.HasError())
             return retired;
         if (auto retired = RetirePlaneCapture(); retired.HasError())
             return retired;
@@ -553,7 +553,7 @@ namespace Horo::Application::Internal {
         closing_ = true;
         RevokeInput();
         RevokeSpatialAnchor();
-        if (auto retired = ProgressSpatialAnchorRetirement(); retired.HasError())
+        if (auto retired = ProgressSpatialAnchorRetirement(true); retired.HasError())
             return retired;
         if (auto retired = RetirePlaneCapture(); retired.HasError())
             return retired;

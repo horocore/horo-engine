@@ -90,7 +90,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> ReleasePhysicsCapture();
         /** @brief Builds same-request preparation without retaining this state in detached workers. */
         [[nodiscard]] std::shared_ptr<Runtime::IRuntimeSaveCapturePreparation> CapturePreparation() const;
-        [[nodiscard]] Result<void> PrepareCaptureSources() const;
+        [[nodiscard]] Result<void> PrepareCaptureSources(const Runtime::SaveOperationHandle &operation) const;
         /** @brief Reads the same exact complete current identity map for all canonical Gameplay owners. */
         [[nodiscard]] Result<Runtime::PersistentEntityIdentityMap> CurrentIdentities() const;
         /** @brief Binds actual installed behavior sources through the real current

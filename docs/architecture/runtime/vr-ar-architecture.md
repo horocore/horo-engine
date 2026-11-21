@@ -1045,6 +1045,10 @@ live preview.
 Editor Play Save prepares the optional anchor record before canonical capture.
 A localized World anchor gets a protected lookup scoped to the Play sandbox
 world with a one-day expiry. Repeated saves in that scope reuse the lookup.
+The first native write remains provisional until that exact Save reaches a
+terminal outcome. A known unpublished result removes the write, with failed
+cleanup retried on the same connection. Committed and unknown outcomes retain
+the record because a published slot may refer to it.
 Load stages the record under the Scene restore transaction. The provider may
 start a new localization only after the Scene and anchor record commit.
 

@@ -336,6 +336,11 @@ namespace Horo::Application::Internal {
         }
         if (!current || !current->IsTerminal() || !runtime->IsSettled())
             return runtime->CommitAtSafePoint(RuntimePhase::CommitDeferredLifecycleChanges, authority->Generation(), Provenance());
+        if (!loading && environment.supplement && environment.supplement->settleCapture) {
+            const auto settled = environment.supplement->settleCapture(*current);
+            if (settled.HasError())
+                return settled;
+        }
         if (const auto acknowledged = runtime->Acknowledge(); acknowledged.HasError())
             return acknowledged;
         request.reset();

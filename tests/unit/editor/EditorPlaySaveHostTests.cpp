@@ -426,13 +426,17 @@ TEST_CASE("Play Save captures an optional subsystem and gates its publication wi
                                                          {1, 1, 1},
                                                          {},
                                                          {record}};
-    bool prepared = false;
+    OperationId prepared{};
+    std::size_t settlements{};
     bool live = false;
     bool postCommit = false;
     bool reject = false;
-    f.OpenHost(false, EditorPlaySaveSupplement{descriptor, [&](SaveWorldId world, Security::SecureRandomSource &) {
+    f.OpenHost(false,
+               EditorPlaySaveSupplement{descriptor,
+                                        [&](SaveWorldId world, Security::SecureRandomSource &, const SaveOperationHandle &operation) {
+        REQUIRE(operation.IsValid());
         REQUIRE(world.IsValid());
-        prepared = true;
+        prepared = operation.Id();
         return Result<std::shared_ptr<const ICanonicalStateAdapter>>::Success(std::make_shared<SupplementalCapture>(record));
     }, [&](SaveWorldId world, std::span<const std::byte> bytes) {
         REQUIRE(world.IsValid());
@@ -443,11 +447,18 @@ TEST_CASE("Play Save captures an optional subsystem and gates its publication wi
         return Result<EditorPlaySupplementRestore>::Success({std::move(receipt), check});
     }, [&] {
         postCommit = live;
+    }, [&](const SaveOperationSnapshot &snapshot) {
+        CHECK(snapshot.IsTerminal());
+        CHECK(snapshot.operation == prepared);
+        CHECK(snapshot.commit == SaveOperationCommitOutcome::Committed);
+        ++settlements;
+        return Result<void>::Success();
     }});
     CHECK_FALSE(prepared);
     REQUIRE(f.host->Request({.kind = Editor::PlaySaveCommandKind::SaveNew}).HasValue());
     f.Ready();
     REQUIRE(prepared);
+    CHECK(settlements == 1);
     auto page = f.Page();
     REQUIRE(page.rows.size() == 1);
     const auto command = Value(f.host->Snapshot()->manager->Command(SaveManagerCommandKind::Load, page.rows.front().slot));

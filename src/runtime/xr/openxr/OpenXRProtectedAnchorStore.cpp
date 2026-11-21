@@ -136,6 +136,25 @@ namespace Horo::XR::OpenXRInternal {
         return written;
     }
 
+    Result<void> OpenXRProtectedAnchorStore::Discard(const XRSpatialAnchorId &anchor) {
+        if (std::this_thread::get_id() != lane_)
+            return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
+        const auto owner = owner_.lock();
+        if (!owner)
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        const auto found = std::ranges::find(live_, anchor, &Entry::anchor);
+        if (!anchor.IsValid() || found == live_.end())
+            return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
+        try {
+            const auto discarded = owner->DiscardSpatialAnchorWrite(liveScope_, connection_, NativeName(scope_, found->stored));
+            if (discarded.HasValue())
+                *found = {};
+            return discarded;
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
+        }
+    }
+
     Result<XRProtectedAnchorEntry> OpenXRProtectedAnchorStore::FindLive(const XRAnchorStoreScope &scope,
                                                                         const XRSpatialAnchorId &anchor) const {
         using Outcome = Result<XRProtectedAnchorEntry>;

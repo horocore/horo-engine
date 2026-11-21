@@ -4246,8 +4246,8 @@ namespace Horo::Editor {
             std::optional<Application::Internal::EditorPlaySaveSupplement> playSaveSupplement;
 #if defined(HORO_HAS_OPENXR_VULKAN_HOST)
             if (auto *xr = p.presentation.composition.xrSession) {
-                playSaveSupplement.emplace(xr->SpatialAnchorSaveDescriptor(), [xr](auto world, auto &entropy) {
-                    return xr->PrepareSpatialAnchorCapture(world, entropy);
+                playSaveSupplement.emplace(xr->SpatialAnchorSaveDescriptor(), [xr](auto world, auto &entropy, const auto &operation) {
+                    return xr->PrepareSpatialAnchorCapture(world, entropy, operation);
                 }, [xr](auto world, auto record) -> Result<Application::Internal::EditorPlaySupplementRestore> {
                     auto staged = xr->StageSpatialAnchorRestore(world, record);
                     if (staged.HasError())
@@ -4257,6 +4257,8 @@ namespace Horo::Editor {
                         {std::move(receipt.participant), receipt.check});
                 }, [xr] {
                     xr->RelocalizeRestoredAnchor();
+                }, [xr](const auto &operation) {
+                    return xr->SettleSpatialAnchorCapture(operation);
                 });
             }
 #endif

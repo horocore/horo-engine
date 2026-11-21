@@ -106,10 +106,16 @@ namespace Horo::Application::Internal {
     }
 
     Result<std::shared_ptr<const Runtime::ICanonicalStateAdapter>> OpenXRApplicationSession::PrepareSpatialAnchorCapture(
-        Runtime::SaveWorldId world, Security::SecureRandomSource &entropy) {
+        Runtime::SaveWorldId world, Security::SecureRandomSource &entropy, const Runtime::SaveOperationHandle &operation) {
         using Outcome = Result<std::shared_ptr<const Runtime::ICanonicalStateAdapter>>;
         if (!spatialAnchor_.storeGrant || !spatialAnchor_.localized)
             return Outcome::Success({});
+        if (!operation.IsValid())
+            return Outcome::Failure(MakeError(Runtime::SaveErrors::OperationInvalid));
+        if (const auto settled = SettleAnchorWrite(); settled.HasError())
+            return Outcome::Failure(settled.ErrorValue());
+        else if (!settled.Value() && spatialAnchor_.pendingWrite->operation.Id() != operation.Id())
+            return Outcome::Failure(MakeError(Runtime::SaveErrors::OperationInProgress));
         auto acquired = AcquireSpatialAnchorSave(world);
         if (acquired.HasError())
             return Outcome::Failure(acquired.ErrorValue());
@@ -127,6 +133,7 @@ namespace Horo::Application::Internal {
             if (written.HasError())
                 return Outcome::Failure(written.ErrorValue());
             spatialAnchor_.recorded = true;
+            spatialAnchor_.pendingWrite.emplace(operation, binding.store, anchor);
         }
         const auto selected = binding.participant->RecordLocalized(spatialAnchor_.id, spatialAnchor_.cutoff);
         return selected.HasError() ? Outcome::Failure(selected.ErrorValue()) : Outcome::Success(binding.participant);
@@ -234,7 +241,43 @@ namespace Horo::Application::Internal {
             (void)spatialAnchor_.publication->Withdraw(*spatialAnchor_.scope, XRAnchorWithdrawal::AccessRevoked);
     }
 
-    Result<void> OpenXRApplicationSession::ProgressSpatialAnchorRetirement() {
+    Result<void> OpenXRApplicationSession::SettleSpatialAnchorCapture(const Runtime::SaveOperationSnapshot &operation) {
+        if (!spatialAnchor_.pendingWrite || spatialAnchor_.pendingWrite->operation.Id() != operation.operation)
+            return Result<void>::Success();
+        const auto settled = SettleAnchorWrite();
+        if (settled.HasError())
+            return Result<void>::Failure(settled.ErrorValue());
+        return settled.Value() ? Result<void>::Success() : Result<void>::Failure(MakeError(Runtime::SaveErrors::OperationInProgress));
+    }
+
+    Result<bool> OpenXRApplicationSession::SettleAnchorWrite() {
+        using Outcome = Result<bool>;
+        if (!spatialAnchor_.pendingWrite)
+            return Outcome::Success(true);
+        const auto pending = *spatialAnchor_.pendingWrite;
+        const auto outcome = pending.operation.Snapshot();
+        if (!outcome || !outcome->IsTerminal())
+            return Outcome::Success(false);
+        if (outcome->commit == Runtime::SaveOperationCommitOutcome::NotCommitted) {
+            const auto discarded = pending.store->Discard(pending.anchor);
+            if (discarded.HasError())
+                return Outcome::Failure(discarded.ErrorValue());
+            spatialAnchor_.recorded = false;
+        }
+        spatialAnchor_.pendingWrite.reset();
+        return Outcome::Success(true);
+    }
+
+    Result<void> OpenXRApplicationSession::ProgressSpatialAnchorRetirement(bool retiring) {
+        if (spatialAnchor_.pendingWrite) {
+            if (!retiring)
+                return Result<void>::Success();  // Keep the connection for the exact cold Save owner.
+            const auto settled = SettleAnchorWrite();
+            if (settled.HasError())
+                return Result<void>::Failure(settled.ErrorValue());
+            if (!settled.Value())
+                return Result<void>::Failure(MakeError(Runtime::SaveErrors::OperationInProgress));
+        }
         if (!spatialAnchor_.allowed && spatialAnchor_.scope) {
             const auto stopped = native_->StopSpatialAnchors(*spatialAnchor_.scope, XRAnchorWithdrawal::AccessRevoked);
             if (stopped.HasError())

@@ -22,10 +22,12 @@ namespace Horo::Application::Internal {
     /** @brief Fixed descriptor and owner-only preparation for an optional subsystem record. */
     struct EditorPlaySaveSupplement final {
         Runtime::CanonicalStateParticipantDescriptor descriptor;
-        std::function<Result<std::shared_ptr<const Runtime::ICanonicalStateAdapter>>(Runtime::SaveWorldId, Security::SecureRandomSource &)>
+        std::function<Result<std::shared_ptr<const Runtime::ICanonicalStateAdapter>>(Runtime::SaveWorldId, Security::SecureRandomSource &,
+                                                                                     const Runtime::SaveOperationHandle &)>
             prepareCapture;
         std::function<Result<EditorPlaySupplementRestore>(Runtime::SaveWorldId, std::span<const std::byte>)> stageRestore;
         std::function<void()> restorePublished;
+        std::function<Result<void>(const Runtime::SaveOperationSnapshot &)> settleCapture;
     };
 
     /** @brief Actual process services and immutable scope selected before activation; every service outlives settlement. */

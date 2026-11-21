@@ -460,6 +460,10 @@ namespace Horo::XR::OpenXRInternal {
         void RevokePassthrough(const XRPassthroughScope &scope) noexcept;
 
     private:
+        friend class OpenXRProtectedAnchorStore;
+
+        /** @brief Compensates an unpublished write on its exact connection, even after scope withdrawal. */
+        [[nodiscard]] Result<void> DiscardSpatialAnchorWrite(const XRAnchorScope &scope, std::uint64_t generation, std::string_view name);
         friend class OpenXRFrameCompositor;
         friend class OpenXRSessionEvents;
         friend class OpenXRHandTracking;

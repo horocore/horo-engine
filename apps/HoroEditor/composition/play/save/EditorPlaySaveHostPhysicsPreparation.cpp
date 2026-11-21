@@ -8,7 +8,7 @@ namespace Horo::Application::Internal {
          */
         class PhysicsCapturePreparation final : public Runtime::IRuntimeSaveCapturePreparation {
         public:
-            using PrepareFunction = std::function<Result<void>()>;
+            using PrepareFunction = std::function<Result<void>(const Runtime::SaveOperationHandle &)>;
             using Observe = std::function<Result<Runtime::RuntimeSaveCapturePreparationEvidence>()>;
 
             PhysicsCapturePreparation(PrepareFunction prepare, Observe observe)
@@ -24,7 +24,7 @@ namespace Horo::Application::Internal {
                     return Outcome::Failure(observed.ErrorValue());
                 if (!observed.Value().ready)
                     return observed;
-                if (auto prepared = prepare_(); prepared.HasError())
+                if (auto prepared = prepare_(context.operation); prepared.HasError())
                     return Outcome::Failure(prepared.ErrorValue());
                 return observe_();  // Re-read actual host authority after cold preparation; never echo expected values.
             }
@@ -55,7 +55,7 @@ namespace Horo::Application::Internal {
         return Result<void>::Success();
     }
 
-    Result<void> EditorPlaySaveHost::State::PrepareCaptureSources() const {
+    Result<void> EditorPlaySaveHost::State::PrepareCaptureSources(const Runtime::SaveOperationHandle &operation) const {
         if (physics) {
             auto current = CurrentIdentities();
             if (current.HasError())
@@ -65,7 +65,7 @@ namespace Horo::Application::Internal {
         }
         if (supplementCapture) {
             supplementCapture->Use({});
-            auto adapter = environment.supplement->prepareCapture(environment.storage.world, *environment.storage.entropy);
+            auto adapter = environment.supplement->prepareCapture(environment.storage.world, *environment.storage.entropy, operation);
             if (adapter.HasError())
                 return Result<void>::Failure(adapter.ErrorValue());
             supplementCapture->Use(std::move(adapter).Value());
@@ -77,10 +77,10 @@ namespace Horo::Application::Internal {
     std::shared_ptr<Runtime::IRuntimeSaveCapturePreparation> EditorPlaySaveHost::State::CapturePreparation() const {
         if (!physics && !supplementCapture)
             return {};
-        return std::make_shared<PhysicsCapturePreparation>([this]() {
+        return std::make_shared<PhysicsCapturePreparation>([this](const Runtime::SaveOperationHandle &operation) {
             if (retiring || suspending || std::this_thread::get_id() != owner)
                 return Result<void>::Failure(MakeError(Runtime::SaveErrors::LifecycleUnavailable));
-            return PrepareCaptureSources();
+            return PrepareCaptureSources(operation);
         }, [this]() {
             using Outcome = Result<Runtime::RuntimeSaveCapturePreparationEvidence>;
             if (retiring || suspending || std::this_thread::get_id() != owner)

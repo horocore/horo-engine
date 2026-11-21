@@ -22,6 +22,9 @@ namespace Horo::XR::OpenXRInternal {
         /** @brief Persists a localized anchor under a new host-minted opaque lookup ID. Cold owner lane only. */
         [[nodiscard]] Result<void> Record(const XRSpatialAnchorId &anchor, XRRuntimeTime now, XRProtectedAnchorEntry entry);
 
+        /** @brief Removes this adapter's exact unpublished write, preserving the slot if compensation needs retry. */
+        [[nodiscard]] Result<void> Discard(const XRSpatialAnchorId &anchor);
+
         /** @brief Creates a new Locating anchor after the canonical restore publishes the durable reference. */
         [[nodiscard]] Result<std::optional<XRSpatialAnchorId>> Relocalize(const XRAnchorPersistence &participant, XRRuntimeTime now) const;
 
