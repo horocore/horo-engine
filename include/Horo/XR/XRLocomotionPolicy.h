@@ -59,10 +59,10 @@ namespace Horo::XR {
         Math::Vec2 move;                     /**< Unit gameplay axis with positive Y forward. */
         float turn{};                        /**< Signed unit turn action. */
         bool teleportPressed{};
-        float gameplayYawRadians{};          /**< Gameplay's current heading around World +Y. */
-        std::optional<Math::Vec3> head;      /**< Tracked head position before presentation-late sampling. */
-        std::optional<Math::Vec3> leftHand;  /**< Tracked left hand position from the same cutoff. */
-        std::optional<Math::Vec3> rightHand; /**< Tracked right hand position from the same cutoff. */
+        float gameplayYawRadians{};                           /**< Gameplay's current heading around World +Y. */
+        std::optional<Math::Vec3> head;                       /**< Tracked head position before presentation-late sampling. */
+        std::optional<Math::Vec3> leftHand;                   /**< Tracked left hand position from the same cutoff. */
+        std::optional<Math::Vec3> rightHand;                  /**< Tracked right hand position from the same cutoff. */
         std::optional<float> trackingYawRadians;              /**< Physical analysis axis when gameplay has rotated the tracking rig. */
         std::optional<std::array<XRDeviceId, 2>> handSources; /**< Exact left and right device generations when supplied. */
         std::optional<XRDeviceId> headSource;                 /**< Generation of the independently sampled head. */
