@@ -701,29 +701,48 @@ TEST_CASE("Decision autosave preserves graph and layout without replacing regist
     CHECK_FALSE(recovery.Inspect(asset, key).Value());
 }
 
-TEST_CASE("State Machine New publishes a canonical Decision source bound to the selected saved Blackboard",
-          "[unit][editor][decision][workspace]") {
-    BlackboardWorkspaceFixture project;
-    project.Write("Observer", AI::BlackboardKeyPresence::Optional);
-    const auto makeController = [&](const EditorWorkspaceDependencies &dependencies) {
-        return std::make_unique<EditorWorkspaceController>(project.root, project.runtime, project.registry.Snapshot(), dependencies);
-    };
-    const auto controllerOwner = makeController(
-        {.assets = {.mutableAssetRegistry = &project.registry}, .mutations = &project.mutations, .durableFiles = &project.files});
-    auto &controller = *controllerOwner;
-    REQUIRE(controller.ViewModel().decisionSchemaChoices.size() == 1);
-    CHECK(controller.ViewModel().decisionSchemaChoices.front().asset == project.asset);
-    AssetBrowserInteractionSession browser;
-    browser.OpenCreateStateMachine(WorkspacePathText(project.root / "assets"));
-    auto &draft = browser.State().createStateMachine;
-    draft.name = "Terminal state";
-    CHECK_FALSE(AssetBrowserInteractionSession::ConfirmStateMachine(draft).has_value());
-    draft.schema = project.asset;
-    draft.outcome = AI::DecisionStateTerminal::Failed;
-    auto command = AssetBrowserInteractionSession::ConfirmStateMachine(draft);
-    REQUIRE(command.has_value());
-    constexpr auto path = "assets/Terminal state.horo_sm";
+namespace {
+    /** @brief Sets up a registered Blackboard and terminal state-machine creation through the editor. */
+    struct StateMachineWorkspaceFixture {
+        static constexpr auto path = "assets/Terminal state.horo_sm";
 
+        BlackboardWorkspaceFixture project;
+        std::unique_ptr<EditorWorkspaceController> controllerOwner;
+        EditorWorkspaceController &controller;
+        std::optional<EditorWorkspaceViewCommandData> command;
+
+        StateMachineWorkspaceFixture() : controllerOwner(PrepareController()), controller(*controllerOwner) {
+            REQUIRE(controller.ViewModel().decisionSchemaChoices.size() == 1);
+            CHECK(controller.ViewModel().decisionSchemaChoices.front().asset == project.asset);
+            AssetBrowserInteractionSession browser;
+            browser.OpenCreateStateMachine(WorkspacePathText(project.root / "assets"));
+            auto &draft = browser.State().createStateMachine;
+            draft.name = "Terminal state";
+            CHECK_FALSE(AssetBrowserInteractionSession::ConfirmStateMachine(draft).has_value());
+            draft.schema = project.asset;
+            draft.outcome = AI::DecisionStateTerminal::Failed;
+            command = AssetBrowserInteractionSession::ConfirmStateMachine(draft);
+            REQUIRE(command.has_value());
+        }
+
+        /** @brief Composes a separate workspace over the same registered project. */
+        std::unique_ptr<EditorWorkspaceController> makeController(const EditorWorkspaceDependencies &dependencies) {
+            return std::make_unique<EditorWorkspaceController>(project.root, project.runtime, project.registry.Snapshot(), dependencies);
+        }
+
+    private:
+        /** @brief Validates the disk-backed Blackboard choice before composing the workspace. */
+        std::unique_ptr<EditorWorkspaceController> PrepareController() {
+            project.Write("Observer", AI::BlackboardKeyPresence::Optional);
+            return makeController(
+                {.assets = {.mutableAssetRegistry = &project.registry}, .mutations = &project.mutations, .durableFiles = &project.files});
+        }
+    };
+}  // namespace
+
+TEST_CASE_METHOD(StateMachineWorkspaceFixture,
+                 "State Machine New publishes a canonical Decision source bound to the selected saved Blackboard",
+                 "[unit][editor][decision][workspace]") {
     SECTION("intrinsic topology commands validate complete drafts before undo, redo or durable save") {
         controller.ProcessCommand(*command);
         REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
@@ -1077,7 +1096,10 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
         CHECK(view.layout == accepted);
         CHECK(view.revision == revision);
     }
+}
 
+TEST_CASE_METHOD(StateMachineWorkspaceFixture, "State Machine canvas interactions use the fenced document history",
+                 "[unit][editor][decision][workspace]") {
     SECTION("a native canvas drag goes through workspace history and is fenced at mouse-down") {
         controller.ProcessCommand(*command);
         REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());
@@ -1369,7 +1391,10 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
         CHECK(*documents.front().layout == *positions);
         CHECK_FALSE(documents.front().canUndo);
     }
+}
 
+TEST_CASE_METHOD(StateMachineWorkspaceFixture, "State Machine recovery reconciles revisions over the exact registered graph and layout",
+                 "[unit][editor][decision][workspace]") {
     SECTION("autosave and explicit restart recovery retain graph and layout without writing source") {
         const bool legacyCheckpoint = GENERATE(false, true);
         controller.ProcessCommand(*command);
@@ -1804,14 +1829,22 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
             CHECK(view.dirty);
             REQUIRE(merged.states.size() == 3);
             REQUIRE(merged.transitions.size() == 2);
-            CHECK(merged.states.back().id == added);
-            CHECK(merged.transitions.back().id == addedTransition);
+            const auto addedState = std::ranges::find(merged.states, added, &AI::StateMachineState::id);
+            REQUIRE(addedState != merged.states.end());
+            CHECK(addedState->terminal == AI::DecisionStateTerminal::Failed);
+            const auto transition = std::ranges::find(merged.transitions, addedTransition, &AI::StateMachineTransition::id);
+            REQUIRE(transition != merged.transitions.end());
+            CHECK(transition->source == initial);
+            CHECK(transition->target == added);
         }
         const auto disk = Assets::CaptureAssetSource(project.root, source, AI::DecisionCodecLimits{}.maximumBytes);
         REQUIRE(disk.HasValue());
         CHECK(disk.Value().identity.digest == ComputeSha256(std::as_bytes(std::span{bytes.Value()})));
     }
+}
 
+TEST_CASE_METHOD(StateMachineWorkspaceFixture, "State Machine durable save receipts preserve graph and layout consistency",
+                 "[unit][editor][decision][workspace]") {
     SECTION("tracked save receipts distinguish layout refusal from uncertain committed replacement") {
         controller.ProcessCommand(*command);
         REQUIRE(controller.ViewModel().contentBrowserOperationError.empty());

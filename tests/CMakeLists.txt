@@ -4012,6 +4012,8 @@ if (HORO_BUILD_EDITOR_GUI)
     set_property(SOURCE unit/editor/EditorWorkspaceControllerBlackboardTests.cpp APPEND PROPERTY COMPILE_DEFINITIONS
         HORO_TEST_AI_MODULE_PATH="$<TARGET_FILE:HoroTestAiGameModule>"
         HORO_TEST_AI_MODULE_REVISION_PATH="${HORO_TEST_AI_MODULE_REVISION_FILE}")
+    set_property(SOURCE unit/editor/EditorWorkspaceControllerBlackboardTests.cpp APPEND PROPERTY
+        COMPILE_OPTIONS "$<$<CXX_COMPILER_ID:MSVC>:/bigobj>")
     add_dependencies(HoroEditorWorkspaceControllerTests HoroTestGameModule HoroTestAiGameModule)
     add_executable(HoroCameraCutEditorIntegrationTests unit/runtime/cinematic/CameraCutEditorIntegrationTests.cpp)
     target_compile_features(HoroCameraCutEditorIntegrationTests PRIVATE cxx_std_20)
