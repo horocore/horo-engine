@@ -8,6 +8,7 @@
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Assets/AssetSourcePublication.h"
+#include "Horo/Editor/DocumentRecoveryService.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Foundation/BuildOutputStore.h"
 #include "Horo/Gameplay/GameModule.h"
@@ -33,6 +34,7 @@
 #include <format>
 #include <fstream>
 #include <limits>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -537,6 +539,64 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
     auto command = AssetBrowserInteractionSession::ConfirmStateMachine(draft);
     REQUIRE(command.has_value());
     constexpr auto path = "assets/Terminal state.horo_sm";
+
+    SECTION("Decision autosave preserves graph and layout without replacing registered source") {
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .maxQueuedJobs = 8, .ioWorkerCount = 1}};
+        const auto session = Assets::AssetId::FromBytes({37});
+        EditorWorkspaceController workspace(project.root, project.runtime, project.registry.Snapshot(),
+                                            {.assets = {.mutableAssetRegistry = &project.registry},
+                                             .world = {.documentSessionOwner = session},
+                                             .mutations = &project.mutations,
+                                             .durableFiles = &project.files,
+                                             .jobs = &jobs});
+        workspace.ProcessCommand(*command);
+        REQUIRE(workspace.ViewModel().decisionGraphDocuments.size() == 1);
+        const auto &view = workspace.ViewModel().decisionGraphDocuments.front();
+        const auto node = std::get<AI::StateMachineAssetDescriptor>(view.graph->body).initial;
+        const auto instance = view.identity.instance;
+        const auto source = project.root / path;
+        const auto accepted = Assets::CaptureAssetSource(project.root, source, AI::DecisionCodecLimits{}.maximumBytes);
+        REQUIRE(accepted.HasValue());
+        workspace.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::EditDecisionLayout,
+             .decisionLayoutEdit = DecisionGraphLayoutRequest{{instance, view.revision}, DecisionLayoutOperation::Move, {{node, 4, 8}}}});
+        REQUIRE(view.dirty);
+        {
+            std::ofstream external(source, std::ios::binary | std::ios::app);
+            external.put('\n');
+            REQUIRE(static_cast<bool>(external));
+        }
+        const auto newer = Assets::CaptureAssetSource(project.root, source, AI::DecisionCodecLimits{}.maximumBytes);
+        REQUIRE(newer.HasValue());
+        REQUIRE(newer.Value().identity != accepted.Value().identity);
+        DocumentRecoveryService recovery(project.root, project.mutations, project.files);
+        workspace.UpdateAutosave(60.0F, 1);
+        for (int attempt = 0; attempt < 300; ++attempt) {
+            const auto record = recovery.Inspect(view.asset, view.identity.key);
+            REQUIRE(record.HasValue());
+            if (record.Value())
+                break;
+            std::this_thread::sleep_for(std::chrono::milliseconds{10});
+        }
+        const auto recovered = recovery.Inspect(view.asset, view.identity.key);
+        REQUIRE(recovered.HasValue());
+        REQUIRE(recovered.Value());
+        CHECK(recovered.Value()->sessionOwner == session);
+        CHECK(recovered.Value()->revision == view.revision);
+        CHECK(recovered.Value()->acceptedSource == accepted.Value().identity);
+        CHECK(recovered.Value()->state == ComputeSha256(recovered.Value()->payload));
+        CHECK(recovered.Value()->payload.size() > accepted.Value().bytes.size());
+        const auto canonical = Assets::CaptureAssetSource(project.root, source, AI::DecisionCodecLimits{}.maximumBytes);
+        REQUIRE(canonical.HasValue());
+        CHECK(canonical.Value().identity == newer.Value().identity);
+        CHECK_FALSE(std::filesystem::exists(DecisionLayoutPath(source)));
+        CHECK(view.dirty);
+
+        const auto asset = view.asset;
+        const auto key = view.identity.key;
+        REQUIRE(workspace.ResolveDecisionGraphClose({instance, view.revision}, SourceCloseDecision::Discard).HasValue());
+        CHECK_FALSE(recovery.Inspect(asset, key).Value());
+    }
 
     SECTION("intrinsic topology commands validate complete drafts before undo, redo or durable save") {
         controller.ProcessCommand(*command);

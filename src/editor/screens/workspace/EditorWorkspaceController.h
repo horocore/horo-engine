@@ -316,6 +316,8 @@ namespace Horo::Editor {
         [[nodiscard]] Result<bool> ResolveBlackboardClose(BlackboardDocumentFence fence, SourceCloseDecision decision);
         /** @brief Executes the explicit close decision only for its captured Decision document revision. */
         [[nodiscard]] Result<bool> ResolveDecisionGraphClose(DecisionGraphDocumentFence fence, SourceCloseDecision decision);
+        /** @brief Clears this workspace's checkpoints for an explicit discard-and-leave action. */
+        [[nodiscard]] Result<void> DiscardDecisionGraphAutosaves();
         /** @brief Saves or discards one exact authored Query revision through the shared close modal. */
         [[nodiscard]] Result<bool> ResolveEnvironmentQueryClose(EnvironmentQueryDocumentFence fence, SourceCloseDecision decision);
         /** @brief Captures every editable Query revision for the shared workspace leave fence. */
@@ -603,12 +605,36 @@ namespace Horo::Editor {
             Assets::AssetSourceIdentity acceptedLayout;
             std::shared_ptr<const DecisionGraphLayout> savedLayout;
             DecisionGraphDocumentHistory history;
+            std::uint64_t recoveredRevision{};
         };
 
         std::map<DocumentInstanceId, DecisionGraphDraft> m_decisionGraphDrafts;
         /** @brief Validates the latest schema and publishes the canonical registered source under its native lease. */
         Result<void> SaveDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
                                             bool saveReferenceParticipant = false);
+        /** @brief Publishes under the project write lease before any recovery cleanup. */
+        Result<void> PublishDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
+                                               bool saveReferenceParticipant);
+        /** @brief Schedules immutable Decision draft captures through the shared recovery store. */
+        void UpdateDecisionGraphAutosave(float seconds, int minutes);
+        /** @brief Checkpoints pending drafts at an explicit workspace lifecycle boundary. */
+        void FlushDecisionGraphAutosave();
+        /** @brief Joins an accepted recovery writer before its borrowed project services retire. */
+        void JoinDecisionGraphRecovery(std::optional<DocumentInstanceId> instance = {});
+        /** @brief Removes only the exact checkpoint owned by this draft after save or explicit discard. */
+        [[nodiscard]] Result<void> ClearDecisionGraphRecovery(const DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft);
+        /** @brief Observes terminal recovery and acknowledges the exact published revision. */
+        void ObserveDecisionGraphRecovery();
+
+        struct DecisionRecoveryWork final {
+            DecisionGraphDocumentFence fence;
+            JobHandle job;
+        };
+
+        std::optional<DecisionRecoveryWork> m_decisionGraphRecovery;
+        std::vector<DocumentInstanceId> m_decisionRecoveryQueue;
+        float m_decisionAutosaveSeconds{};
+        bool m_decisionAutosaveDiscarded{};
         /** @brief Projects structured Decision findings into the workspace's Build Output. */
         void PublishDecisionGraphDiagnostics(const Error &error) const;
         /** @brief Obtains the project metadata generation for the supported authoring family. */

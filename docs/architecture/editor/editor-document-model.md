@@ -648,6 +648,12 @@ the registered source and its layout before replacing the open document. A
 failed read or decode leaves the draft and its history intact. An accepted
 replacement starts a new revision with an empty undo and redo history.
 
+Decision graph autosave sends immutable graph and layout snapshots to the
+shared background recovery writer. The checkpoint records both accepted
+disk identities and never writes the registered source or layout. A
+successful save or an explicit discard removes only the workspace's own
+matching checkpoint.
+
 By default, external reload starts a new history branch, clears redo history, and prevents undo across the reload boundary. It is never injected as a hidden command. Rebase is allowed only through an explicit policy that rebuilds valid semantic history entries.
 
 ## Navigation Definition And Scene Intent

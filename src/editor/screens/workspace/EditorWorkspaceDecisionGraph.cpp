@@ -1320,6 +1320,12 @@ namespace Horo::Editor {
             return;
         }
         if (existing != documents.end()) {
+            if (const auto prior = m_decisionGraphDrafts.find(existing->identity.instance); prior != m_decisionGraphDrafts.end()) {
+                if (auto cleared = ClearDecisionGraphRecovery(*existing, prior->second); cleared.HasError()) {
+                    fail("workspace.source_open.unavailable");
+                    return;
+                }
+            }
             if (InBlackboardReferenceEdit(existing->identity.instance))
                 RetireBlackboardReferenceEdit();
             m_decisionGraphDrafts.erase(existing->identity.instance);
@@ -1351,6 +1357,14 @@ namespace Horo::Editor {
         if (HasPendingBlackboardReferenceEdit(instance)) {
             opened->diagnostic = MakeError(BlackboardDocumentErrors::ReferenceResolutionRequired);
             return true;
+        }
+        if (!opened->dirty) {
+            if (const auto draft = m_decisionGraphDrafts.find(instance); draft != m_decisionGraphDrafts.end()) {
+                if (auto cleared = ClearDecisionGraphRecovery(*opened, draft->second); cleared.HasError()) {
+                    opened->diagnostic = cleared.ErrorValue();
+                    return true;
+                }
+            }
         }
         if (const auto closed = m_viewModel.workspacePanelHost.CloseDocument(instance); closed.HasValue()) {
             if (InBlackboardReferenceEdit(instance))
@@ -1388,6 +1402,8 @@ namespace Horo::Editor {
                 return Closed::Failure(saved.ErrorValue());
             }
         }
+        if (auto cleared = ClearDecisionGraphRecovery(*document, draft->second); cleared.HasError())
+            return Closed::Failure(cleared.ErrorValue());
         const auto closed = m_viewModel.workspacePanelHost.CloseDocument(fence.instance, WorkspaceDocumentClosePolicy::DiscardChanges);
         if (closed.HasError())
             return Closed::Failure(closed.ErrorValue());
@@ -1703,6 +1719,18 @@ namespace Horo::Editor {
     /** @copydoc EditorWorkspaceController::SaveDecisionGraphDraft */
     Result<void> EditorWorkspaceController::SaveDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
                                                                    bool saveReferenceParticipant) {
+        JoinDecisionGraphRecovery();
+        auto result = PublishDecisionGraphDraft(document, draft, saveReferenceParticipant);
+        if (result.HasValue()) {
+            if (auto cleared = ClearDecisionGraphRecovery(document, draft); cleared.HasError())
+                PublishDecisionGraphDiagnostics(cleared.ErrorValue());
+        }
+        return result;
+    }
+
+    /** @copydoc EditorWorkspaceController::PublishDecisionGraphDraft */
+    Result<void> EditorWorkspaceController::PublishDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft,
+                                                                      bool saveReferenceParticipant) {
         if (!saveReferenceParticipant && HasPendingBlackboardReferenceEdit(document.identity.instance))
             return Result<void>::Failure(MakeError(BlackboardDocumentErrors::ReferenceResolutionRequired));
         document.validation.reset();
