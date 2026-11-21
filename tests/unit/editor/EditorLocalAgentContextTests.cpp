@@ -1,6 +1,7 @@
 #include "../../../apps/HoroEditor/app/EditorLocalAgentContext.h"
 #include "../../support/SourceDocumentTestProject.h"
 
+#include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <future>
 
@@ -84,6 +85,42 @@ namespace Horo::Editor {
         REQUIRE(result.messages.size() == 2);
         CHECK(result.messages.front().text == "Explain the active source");
         CHECK(result.messages.back().text == "Local response");
+    }
+
+    TEST_CASE("An explicitly selected open source keeps its own revision and loses approval when closed",
+              "[unit][agent][context][editor_source]") {
+        using namespace Agent;
+        TestSupport::SourceProject project;
+        project.Put("int foreground;");
+        project.Put("int requested;", "other.cpp");
+        SourceDocumentService owner{project.directory};
+        const auto first = owner.Open(project.Identity(), project.directory / "code.cpp");
+        const auto identity = project.Identity("other.cpp", 2);
+        const auto chosen = owner.Open(identity, project.directory / "other.cpp");
+        REQUIRE(first.HasValue());
+        REQUIRE(chosen.HasValue());
+        CancellationSource lifetime;
+        auto preview = EditorLocalAgentContext::Prepare(chosen.Value(), "project", 2, lifetime.Token(), 7);
+        REQUIRE(preview.HasValue());
+        auto context = std::move(preview).Value();
+
+        const std::array tabs{first.Value(), chosen.Value()};
+        REQUIRE(context.MatchesOpenSource(tabs));
+        CHECK_FALSE(context.MatchesOpenSource(std::span{tabs}.first(1)));
+        CHECK(context.HistoryReference().identity == identity.instance.Value());
+        const auto &text = context.Items().front().candidate.text;
+        CHECK(text.find("int requested;") != std::string::npos);
+        CHECK(text.find("int foreground;") == std::string::npos);
+        REQUIRE(context.Approve());
+        REQUIRE(owner.Close(identity.instance).HasValue());
+        CHECK_FALSE(context.MatchesOpenSource(tabs));
+        RecordingModel provider;
+        AgentTurnRuntime runtime;
+        const auto dispatch = context.Dispatch();
+        const ModelRequest request{.model = "local", .messages = {{.role = ModelRole::User, .text = "Explain the selected file"}}};
+        CHECK(runtime.Run(provider, nullptr, 7, request, {}, {}, &dispatch).status == AgentTurnStatus::ContextDenied);
+        CHECK(provider.sent.empty());
+        CHECK(owner.Snapshot(project.Identity().instance).Value().SharesStateWith(first.Value()));
     }
 
     TEST_CASE("Local panel context refuses oversized and absent source snapshots", "[unit][agent][context][editor_source]") {

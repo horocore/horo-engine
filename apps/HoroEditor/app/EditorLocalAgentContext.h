@@ -43,6 +43,8 @@ namespace Horo::Editor {
 
         /** @brief Check that this same edition of the same document is still selected in the workspace. */
         [[nodiscard]] bool Matches(const SourceDocumentSnapshot &active) const noexcept;
+        /** @brief Checks that the exact selected edition is still present among the open Source tabs. */
+        [[nodiscard]] bool MatchesOpenSource(std::span<const SourceDocumentSnapshot> open) const noexcept;
         /** @brief Checks the captured authority without accessing any editor or output owner. */
         [[nodiscard]] bool IsCurrent() const;
 

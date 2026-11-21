@@ -93,6 +93,7 @@ namespace Horo::Editor {
                 background_->Abandon();
                 activeSource_ = context.activeSourceSnapshot;
                 activeSourceRange_ = context.activeSourceRange;
+                openSources_ = context.openSourceSnapshots;
                 buildOutput_ = context.buildOutputQuery;
                 gameplayBuilds_ = context.gameplayBuilds;
                 if (context.projectFileRoot)
@@ -173,6 +174,8 @@ namespace Horo::Editor {
                 contextPreview_.reset();
                 activeSource_ = {};
                 activeSourceRange_ = {};
+                openSources_ = {};
+                browsingSources_ = false;
                 buildOutput_ = nullptr;
                 gameplayBuilds_ = nullptr;
                 buildRoot_.clear();
@@ -218,6 +221,10 @@ namespace Horo::Editor {
                     DrawContextReview(locale);
                     return;
                 }
+                if (browsingSources_) {
+                    DrawSourcePicker(locale);
+                    return;
+                }
                 const bool ready =
                     !Busy() && !awaitingCheckpoint_ && !history_.HasRecovery() && !endpoint_.empty() && !model_.empty() && !prompt_.empty();
                 if (Button(locale, "ask", ready)) {
@@ -228,15 +235,7 @@ namespace Horo::Editor {
                     awaitingCheckpoint_ = history_.ReviewRecoveryPrompt(prompt_);
                     return;
                 }
-                if (Button(locale, "context_offer", ready && activeSource_ && contextLifetime_ && !contextProject_.empty())) {
-                    PrepareSourceReview(false);
-                    return;
-                }
-                if (Button(locale, "context_range_offer", ready && activeSourceRange_ && contextLifetime_ && !contextProject_.empty())) {
-                    PrepareSourceReview(true);
-                    return;
-                }
-                if (DrawBuildContextActions(locale, ready)) {
+                if (DrawSourceContextActions(locale, ready) || DrawBuildContextActions(locale, ready)) {
                     return;
                 }
                 const auto count = sceneCount_ ? sceneCount_() : std::nullopt;
@@ -247,6 +246,66 @@ namespace Horo::Editor {
                 }
             }
 
+            /** @brief Offers the independent active-tab, active-range and open-file selections. */
+            bool DrawSourceContextActions(const ILocalizationService &locale, const bool ready) {
+                const bool enabled = ready && contextLifetime_ && !contextProject_.empty();
+                if (Button(locale, "context_offer", enabled && activeSource_)) {
+                    PrepareSourceReview(false);
+                    return true;
+                }
+                if (Button(locale, "context_range_offer", enabled && activeSourceRange_)) {
+                    PrepareSourceReview(true);
+                    return true;
+                }
+                if (Button(locale, "context_file_offer", enabled && openSources_)) {
+                    sourcePage_ = 0;
+                    browsingSources_ = true;
+                    return true;
+                }
+                return false;
+            }
+
+            /** @brief Shows the exact project-relative path and selects by the current tab's stable identity. */
+            bool DrawOpenSourceRow(const ILocalizationService &locale, const SourceDocumentSnapshot &source) const {
+                const auto identity = source.Identity();
+                const auto id = std::to_string(identity.instance.Value());
+                const auto &path = identity.key.source.Value();
+                ImGui::PushID(id.c_str());
+                ImGui::PushTextWrapPos(0);
+                ImGui::TextUnformatted(path.data(), path.data() + path.size());
+                ImGui::PopTextWrapPos();
+                const bool selected = Button(locale, "context_file_select", true);
+                ImGui::PopID();
+                return selected;
+            }
+
+            /** @brief Browses existing workspace snapshots without opening files or changing the active tab. */
+            void DrawSourcePicker(const ILocalizationService &locale) {
+                constexpr std::size_t PageSize = 5;
+                const auto sources = openSources_();
+                if (sources.empty()) {
+                    ImGui::TextWrapped("%s", LocalizedText(locale, "context_file_empty").c_str());
+                } else {
+                    const auto lastPage = (sources.size() - 1) / PageSize;
+                    sourcePage_ = std::min(sourcePage_, lastPage);
+                    const auto remaining = sources.subspan(sourcePage_ * PageSize);
+                    for (const auto &source : remaining.first(std::min(remaining.size(), PageSize))) {
+                        if (source.IsCurrent() && DrawOpenSourceRow(locale, source)) {
+                            browsingSources_ = false;
+                            PrepareSourceSnapshot(source, {}, true);
+                            return;
+                        }
+                    }
+                    if (Button(locale, "context_file_previous", sourcePage_ > 0))
+                        --sourcePage_;
+                    ImGui::SameLine();
+                    if (Button(locale, "context_file_next", sourcePage_ < lastPage))
+                        ++sourcePage_;
+                }
+                if (Button(locale, "context_cancel", true))
+                    browsingSources_ = false;
+            }
+
             void PrepareSourceReview(const bool selectedRange) {
                 SourceDocumentSnapshot active;
                 SourceContextRange range;
@@ -255,14 +314,19 @@ namespace Horo::Editor {
                     status_ = selectedRange ? "context_range_unavailable" : "context_unavailable";
                     return;
                 }
-                auto prepared =
-                    EditorLocalAgentContext::Prepare(std::move(active), contextProject_, contextGeneration_, contextLifetime_->Token(),
-                                                     turn_ + 1, selectedRange ? std::optional{range} : std::nullopt);
+                PrepareSourceSnapshot(std::move(active), selectedRange ? std::optional{range} : std::nullopt, false);
+            }
+
+            void PrepareSourceSnapshot(SourceDocumentSnapshot source, const std::optional<SourceContextRange> range,
+                                       const bool fromOpenList) {
+                auto prepared = EditorLocalAgentContext::Prepare(std::move(source), contextProject_, contextGeneration_,
+                                                                 contextLifetime_->Token(), turn_ + 1, range);
                 if (prepared.HasError()) {
-                    status_ = "context_unavailable";
+                    status_ = fromOpenList ? "context_file_unavailable" : "context_unavailable";
                     return;
                 }
                 contextPreview_.emplace(std::move(prepared).Value());
+                reviewingOpenSource_ = fromOpenList;
                 status_ = nullptr;
             }
 
@@ -326,6 +390,8 @@ namespace Horo::Editor {
             bool ContextReviewCurrent() const {
                 if (contextPreview_->BuildOperation())
                     return contextPreview_->IsCurrent();
+                if (reviewingOpenSource_)
+                    return contextPreview_->MatchesOpenSource(openSources_());
                 SourceDocumentSnapshot active;
                 return activeSource_(active) && contextPreview_->Matches(active);
             }
@@ -490,6 +556,7 @@ namespace Horo::Editor {
             std::function<std::optional<std::size_t>()> sceneCount_;
             std::function<bool(SourceDocumentSnapshot &)> activeSource_;
             std::function<bool(SourceDocumentSnapshot &, SourceContextRange &)> activeSourceRange_;
+            std::function<std::span<const SourceDocumentSnapshot>()> openSources_;
             const IBuildOutputQuery *buildOutput_{};
             const Application::GameplayBuildService *gameplayBuilds_{};
             std::filesystem::path buildRoot_;
@@ -508,6 +575,9 @@ namespace Horo::Editor {
             std::uint64_t turn_{};
             bool awaitingCheckpoint_{};
             bool reviewingCompletedBuild_{};
+            bool browsingSources_{};
+            bool reviewingOpenSource_{};
+            std::size_t sourcePage_{};
         };
     }  // namespace
 

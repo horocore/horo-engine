@@ -2,6 +2,7 @@
 
 #include "AgentHistoryReview.h"
 
+#include <algorithm>
 #include <format>
 
 namespace Horo::Editor {
@@ -127,6 +128,13 @@ namespace Horo::Editor {
     bool EditorLocalAgentContext::Matches(const SourceDocumentSnapshot &active) const noexcept {
         return source_.IsCurrent() && active.SharesStateWith(source_) && !project_.cancellation.IsCancellationRequested() &&
                std::chrono::steady_clock::now() < project_.deadline;
+    }
+
+    /** @copydoc EditorLocalAgentContext::MatchesOpenSource */
+    bool EditorLocalAgentContext::MatchesOpenSource(const std::span<const SourceDocumentSnapshot> open) const noexcept {
+        return std::ranges::any_of(open, [this](const auto &snapshot) {
+            return Matches(snapshot);
+        });
     }
 
     /** @copydoc EditorLocalAgentContext::IsCurrent */

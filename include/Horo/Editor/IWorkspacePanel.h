@@ -11,6 +11,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -88,6 +89,10 @@ namespace Horo::Editor {
         std::function<bool(SourceDocumentSnapshot &)> activeSourceSnapshot{};
         /** @brief Copies the current nonempty source selection and its exact snapshot on the owner lane. */
         std::function<bool(SourceDocumentSnapshot &, SourceContextRange &)> activeSourceRange{};
+        /** @brief Borrows the current list of open Source snapshots for a synchronous owner-lane read.
+         * @details Copy chosen snapshots before returning to the workspace. The borrow expires on the next model update.
+         */
+        std::function<std::span<const SourceDocumentSnapshot>()> openSourceSnapshots{};
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */
