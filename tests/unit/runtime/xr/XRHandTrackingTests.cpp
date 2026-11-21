@@ -160,14 +160,24 @@ namespace Horo::XR {
         CHECK(DeriveXRHandGestures(snapshot.Value(), fixture.session, Value<XRTrackingSnapshotRevision>(2), Origin(), contact).HasError());
 
         class SuppressGesture final : public IXRHandGesturePolicy {
+        public:
+            explicit SuppressGesture(const XRHandJointRecord *published) : published_(published) {}
+
+            mutable bool detached{};
+
+        private:
             std::optional<std::pair<XRHandGestureKind, XRTrackingConfidence>> Classify(
-                std::span<const XRHandJointRecord>) const noexcept override {
+                const std::span<const XRHandJointRecord> input) const noexcept override {
+                detached = input.data() != published_ && input.size() == 2;
                 return std::nullopt;
             }
-        } suppress;
+
+            const XRHandJointRecord *published_;
+        } suppress{snapshot.Value().HandJoints().data()};
 
         const auto empty = DeriveXRHandGestures(snapshot.Value(), fixture.session, descriptor.revision, Origin(), suppress);
         REQUIRE(empty.HasValue());
+        CHECK(suppress.detached);
         CHECK(empty.Value().Candidates().empty());
         CHECK(snapshot.Value().HandJoints().size() == 2);
 

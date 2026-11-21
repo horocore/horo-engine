@@ -113,7 +113,7 @@ namespace Horo::XR {
     public:
         virtual ~IXRHandGesturePolicy() = default;
         /** @brief Classifies an immutable, canonical hand at one simulation cutoff.
-         * @param joints All available records for one active hand, bounded by the known anatomy.
+         * @param joints Detached records for one active hand, borrowed only through this call.
          * @return A confidence-tagged candidate or absence. Policy execution must avoid allocation and blocking work.
          */
         [[nodiscard]] virtual std::optional<std::pair<XRHandGestureKind, XRTrackingConfidence>> Classify(

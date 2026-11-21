@@ -144,7 +144,8 @@ namespace Horo::Tests::OpenXRApplication {
                                         const bool synthesis = false, std::optional<std::string> controllerBindings = std::nullopt,
                                         const XR::XRProjectFeaturePolicy gaze = XR::XRProjectFeaturePolicy::Unrequested,
                                         const bool planePreview = false,
-                                        std::shared_ptr<const Host::IOpenXRPassthroughPermission> passthrough = {})
+                                        std::shared_ptr<const Host::IOpenXRPassthroughPermission> passthrough = {},
+                                        const XR::IXRHandGesturePolicy *handGestures = nullptr)
                 : product{HORO_TEST_OPENXR_LOADER, std::move(controllerBindings)} {
                 ConfigurationResolutionRequest request;
                 request.invocation.emplace(SettingKey{"xr.enabled"}, ConfigurationInputValue{true, std::nullopt});
@@ -194,7 +195,7 @@ namespace Horo::Tests::OpenXRApplication {
                     if (onCheckAdmission)
                         onCheckAdmission();
                     return admission ? Result<void>::Success() : Result<void>::Failure(MakeError(XR::XRErrors::RuntimeRejected));
-                }},
+                }, handGestures},
                                                                            settings, product.Candidate(), *product.policy);
                 if (render) {
                     vulkan = std::make_unique<ApplicationVulkanFixture>();
@@ -1960,6 +1961,42 @@ namespace Horo::Tests::OpenXRApplication {
         scene->Shutdown();
         REQUIRE(RequireValue(fixture.ClosePlay()));
         CHECK(fixture.play->ReadInteractionCandidates(newer.Scope(), probes).HasError());
+    }
+
+    TEST_CASE("Play retirement during hand classification rejects the revoked Input cutoff", "[xr][application][play][hands]") {
+        using enum XR::XRProjectFeaturePolicy;
+        struct RetiringPolicy final : XR::IXRHandGesturePolicy {
+            Host::OpenXRPlayHost *play{};
+            XR::XRContactPinchGesturePolicy pinch;
+
+            std::optional<std::pair<XR::XRHandGestureKind, XR::XRTrackingConfidence>> Classify(
+                const std::span<const XR::XRHandJointRecord> joints) const noexcept override {
+                if (play)
+                    play->RevokeInput();
+                return pinch.Classify(joints);
+            }
+        } policy;
+        ApplicationFixture fixture{true, 5, Unrequested, OptionalDisable, Unrequested, false, std::nullopt, Unrequested, false, {}, &policy};
+        auto scene = PublishPlay(fixture);
+        auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
+        auto *observed = cutoff.get();
+        RequireValue(fixture.scheduler->AddParticipant(std::move(cutoff)));
+        RequireValue(fixture.scheduler->Startup());
+        RequireValue(fixture.scheduler->RunFrame());
+        REQUIRE(observed->result);
+        RequireValue(*observed->result);
+        REQUIRE(fixture.play->ReadHandGestures().Candidates().size() == 1);
+
+        policy.play = fixture.play.get();
+        RequireValue(fixture.scheduler->RunFrame());
+        REQUIRE(observed->result);
+        REQUIRE(observed->result->HasError());
+        CHECK(observed->result->ErrorValue().code.Value() == XR::XRErrors::TrackingSnapshotStale.code.Value());
+        CHECK(fixture.play->ReadHandGestures().Candidates().empty());
+
+        fixture.scheduler->Shutdown();
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
     }
 
     TEST_CASE("Real installed Play samples bounded hands before Input and revokes candidates on focus or invalid evidence",

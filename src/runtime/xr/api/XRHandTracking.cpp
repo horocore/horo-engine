@@ -66,7 +66,11 @@ namespace Horo::XR {
         XRHandGestureCandidates output;
         if (snapshot.Focus() != XRTrackingFocusState::Focused || snapshot.State() != XRTrackingState::Active)
             return Outcome::Success(output);
-        auto joints = snapshot.HandJoints();
+        const auto published = snapshot.HandJoints();
+        // The policy can outlive the current publication during a synchronous owner callback.
+        std::array<XRHandJointRecord, XRHandTrackingHardLimits::MaximumJoints> captured;
+        std::ranges::copy(published, captured.begin());
+        auto joints = std::span<const XRHandJointRecord>{captured}.first(published.size());
         while (!joints.empty()) {
             const auto &source = joints.front();
             const auto end = std::ranges::find_if(joints, [&](const XRHandJointRecord &joint) {

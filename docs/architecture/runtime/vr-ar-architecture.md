@@ -872,8 +872,10 @@ cutoff. Required hand failures and shared session or clock failures still
 reject the input cutoff with their typed cause.
 The default pinch policy requires tracked thumb and index tips and uses their
 observed radii to determine contact. Host composition can supply a different
-typed policy. Raw joints and gesture candidates expire with their exact
-publication at focus loss, tracking failure, or session retirement.
+typed policy. The policy receives a bounded copy of the joint evidence and the
+host revalidates the publication before committing Input. Raw joints and gesture
+candidates expire with their exact publication at focus loss, tracking failure,
+or session retirement.
 
 ## Interaction, Runtime UI, And Comfort
 

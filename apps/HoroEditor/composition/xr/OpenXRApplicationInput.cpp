@@ -416,21 +416,27 @@ namespace Horo::Application::Internal {
         const auto *snapshot = publication.Current();
         if (!snapshot)
             return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
+        const auto revision = snapshot->Revision();
         XRHandGestureCandidates gestures;
         if (hands) {
             const auto &policy = authorities_.handGestures ? *authorities_.handGestures : pinchPolicy_;
-            auto derived = DeriveXRHandGestures(*snapshot, state.session, snapshot->Revision(), origin, policy);
+            auto derived = DeriveXRHandGestures(*snapshot, state.session, revision, origin, policy);
             if (derived.HasError()) {
                 publication.Revoke();
                 return Result<void>::Failure(derived.ErrorValue());
             }
             gestures = std::move(derived).Value();
+            snapshot = publication.Current();
+            if (!snapshot || snapshot->Revision() != revision || !input_.projection) {
+                publication.Revoke();
+                return Result<void>::Failure(MakeError(XRErrors::TrackingSnapshotStale));
+            }
         }
-        const auto appended = input_.projection->Append(*snapshot, state.session, snapshot->Revision(), origin, bindingRevision, frame);
+        const auto appended = input_.projection->Append(*snapshot, state.session, revision, origin, bindingRevision, frame);
         if (appended.HasError())
             publication.Revoke();
         else
-            input_.handCutoff.emplace(HandCutoffObservation{snapshot->Revision(), handSample.availability, std::move(gestures)});
+            input_.handCutoff.emplace(HandCutoffObservation{revision, handSample.availability, std::move(gestures)});
         return appended;
     }
 
