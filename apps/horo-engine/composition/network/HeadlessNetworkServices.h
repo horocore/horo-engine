@@ -101,6 +101,7 @@ namespace Horo::Application::Internal {
     struct HeadlessReplayPhysics final {
         Physics::PhysicsPublishedTick publication;
         Physics::PhysicsWorldSettingsIdentity settings;
+        Character::CharacterWorldSettingsIdentity characterSettings;
         std::vector<HeadlessReplayRigidBody> bodies;
     };
 

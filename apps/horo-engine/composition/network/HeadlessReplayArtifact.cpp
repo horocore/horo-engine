@@ -17,6 +17,15 @@ namespace Horo::Application::Internal {
     namespace {
         using Json = nlohmann::json;
         constexpr std::size_t MaximumEvidenceBytes = 128U * 1024U;
+        constexpr std::uint32_t SceneInputSchemaVersion = 1;
+        constexpr std::uint32_t RigidBodyMotionSchemaVersion = 1;
+        constexpr std::uint32_t CharacterMotionSchemaVersion = 1;
+
+        /** @brief Hashes the same canonical array for comparison and detached artifact publication. */
+        Sha256Digest HashRecords(const Json &records) {
+            const auto canonical = records.dump();
+            return ComputeSha256(std::as_bytes(std::span{canonical}));
+        }
 
         /** @brief Describes supported and omitted boundaries even when trace records were captured for diagnostics. */
         Json EncodeCoverage(const HeadlessDecisionReplayData &data, Json &recorded) {
@@ -56,10 +65,10 @@ namespace Horo::Application::Internal {
             return records;
         }
 
-        /** @brief Encodes only portable observations copied from the exact native body publication. */
-        Json EncodePhysics(const HeadlessReplayPhysics &physics) {
+        /** @brief Encodes portable observations copied from the exact native body publication. */
+        Json EncodeRigidBodies(std::span<const HeadlessReplayRigidBody> records) {
             auto bodies = Json::array();
-            for (const auto &body : physics.bodies) {
+            for (const auto &body : records) {
                 const auto &position = body.pose.translation;
                 const auto &rotation = body.pose.rotation;
                 const auto &linear = body.linearVelocity;
@@ -72,14 +81,19 @@ namespace Horo::Application::Internal {
                                   {"angularVelocityRadiansPerSecond", {angular.x, angular.y, angular.z}},
                                   {"activity", static_cast<std::uint8_t>(body.activity)}});
             }
-            const auto canonical = bodies.dump();
-            return {{"schemaVersion", 1},
+            return bodies;
+        }
+
+        /** @brief Adds provenance and explicit omissions to the portable body observations. */
+        Json EncodePhysics(const HeadlessReplayPhysics &physics) {
+            auto bodies = EncodeRigidBodies(physics.bodies);
+            return {{"schemaVersion", RigidBodyMotionSchemaVersion},
                     {"scope", "authored-rigid-body-motion"},
                     {"omissions", {"solver-internal-state", "solver-build-identity", "external-physics-inputs"}},
                     {"physicsTick", std::to_string(physics.publication.completedTick)},
                     {"publicationRevision", std::to_string(physics.publication.publicationRevision)},
                     {"settingsDigest", FormatSha256(physics.settings.digest)},
-                    {"digest", FormatSha256(ComputeSha256(std::as_bytes(std::span{canonical})))},
+                    {"digest", FormatSha256(HashRecords(bodies))},
                     {"bodies", std::move(bodies)}};
         }
 
@@ -143,9 +157,9 @@ namespace Horo::Application::Internal {
                     payload["physics"] = EncodePhysics(*data.physics);
                 if (data.characterMotion) {
                     auto motion = EncodeCharacterMotion(*data.characterMotion);
-                    const auto canonical = motion.dump();
-                    const auto digest = ComputeSha256(std::as_bytes(std::span{canonical.data(), canonical.size()}));
-                    payload["characterMotion"] = {{"schemaVersion", 1}, {"digest", FormatSha256(digest)}, {"records", std::move(motion)}};
+                    payload["characterMotion"] = {{"schemaVersion", CharacterMotionSchemaVersion},
+                                                  {"digest", FormatSha256(HashRecords(motion))},
+                                                  {"records", std::move(motion)}};
                 }
                 auto text = payload.dump();
                 if (text.size() >= MaximumEvidenceBytes)
@@ -155,6 +169,49 @@ namespace Horo::Application::Internal {
             } catch (const std::bad_alloc &) {
                 return Result<std::string>::Failure(MakeError(AI::AIErrors::DecisionAssetStorageUnavailable));
             }
+        }
+
+        /** @brief Product projection onto the shared typed replay comparer. The original v4 trace is borrowed. */
+        struct ComparableCapture final {
+            AI::AiReplayManifest manifest;
+            AI::AiReplayTick tick;
+
+            void Observe(AI::AiReplayBoundary boundary, std::uint32_t schema, const Sha256Digest &profile, AI::AiReplayStamp stamp,
+                         const Sha256Digest &state) noexcept {
+                const auto index = static_cast<std::size_t>(boundary);
+                manifest.boundaries[index] = {AI::AiReplayCoverage::Deterministic, schema, profile};
+                tick.observations[index] = AI::AiReplayObservation{stamp, state};
+            }
+        };
+
+        /** @brief Adapts the captured product evidence without synthesizing missing observations. */
+        Result<ComparableCapture> ProjectComparison(const HeadlessDecisionReplayData &data) {
+            if (!data.evidence.trace || data.canonicalRecord.empty() ||
+                data.canonicalRecord.size() > HeadlessDecisionReplay::CanonicalBudget || (data.characterMotion && !data.physics))
+                return Result<ComparableCapture>::Failure(MakeError(AI::AIErrors::CanonicalStateInvalid));
+
+            using enum AI::AiReplayBoundary;
+            ComparableCapture result;
+            result.tick.tick = data.evidence.tick;
+            result.tick.decision = data.evidence.Decision();
+            result.manifest.decisionSubject = data.evidence.subject;
+            const auto &decision = data.evidence.trace->Header();
+            result.manifest.boundaries[static_cast<std::size_t>(Decision)] = {AI::AiReplayCoverage::Deterministic, decision.version,
+                                                                              decision.planDigest};
+            result.Observe(SceneInput, SceneInputSchemaVersion, data.sceneInput, {data.definition.value, data.definitionRevision.value},
+                           data.sceneInput);
+            result.Observe(CanonicalAi, AI::AiCanonicalReferenceRecordVersion, data.sceneInput,
+                           {data.definition.value, data.evidence.sceneStructureRevision},
+                           ComputeSha256(std::as_bytes(std::span{data.canonicalRecord})));
+            if (const auto &physics = data.physics) {
+                const AI::AiReplayStamp stamp{physics->publication.completedTick, physics->publication.publicationRevision};
+                result.Observe(Physics, RigidBodyMotionSchemaVersion, physics->settings.digest, stamp,
+                               HashRecords(EncodeRigidBodies(physics->bodies)));
+                if (data.characterMotion)
+                    result.Observe(AchievedCharacterMotion, CharacterMotionSchemaVersion, physics->characterSettings.digest, stamp,
+                                   HashRecords(EncodeCharacterMotion(*data.characterMotion)));
+            }
+            return Result<ComparableCapture>::Success(std::move(result));
         }
 
         /** @brief Removes only its exclusively created unpublished files and directory. */
@@ -246,5 +303,23 @@ namespace Horo::Application::Internal {
         if (evidence.HasError())
             return Result<void>::Failure(std::move(evidence).ErrorValue());
         return PublishDirectory(output.Directory(), evidence.Value());
+    }
+
+    /** @copydoc CompareHeadlessReplayCaptures */
+    Result<std::optional<AI::AiReplayDivergence>> CompareHeadlessReplayCaptures(const HeadlessDecisionReplayData &recorded,
+                                                                                const HeadlessDecisionReplayData &replayed) {
+        using Comparison = Result<std::optional<AI::AiReplayDivergence>>;
+        try {
+            const auto baseline = ProjectComparison(recorded);
+            if (baseline.HasError())
+                return Comparison::Failure(baseline.ErrorValue());
+            const auto candidate = ProjectComparison(replayed);
+            if (candidate.HasError())
+                return Comparison::Failure(candidate.ErrorValue());
+            return AI::CompareAiReplayEvidence(baseline.Value().manifest, std::span{&baseline.Value().tick, 1U}, candidate.Value().manifest,
+                                               std::span{&candidate.Value().tick, 1U});
+        } catch (const std::bad_alloc &) {
+            return Comparison::Failure(MakeError(AI::AIErrors::DecisionAssetStorageUnavailable));
+        }
     }
 }  // namespace Horo::Application::Internal

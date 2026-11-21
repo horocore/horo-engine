@@ -119,6 +119,40 @@ namespace Horo::Application::PrefabAtomicTest {
             std::ifstream retained{file, std::ios::binary};
             CHECK(nlohmann::json::parse(retained) == artifact);
         }
+
+        /** @brief Verifies shared first-difference ordering using evidence from an actual committed fixed tick. */
+        void ExpectReplayComparison(const Internal::HeadlessDecisionReplayData &data) {
+            const auto equal = Internal::CompareHeadlessReplayCaptures(data, data);
+            REQUIRE(equal.HasValue());
+            CHECK_FALSE(equal.Value());
+            if (!data.characterMotion)
+                return;
+
+            REQUIRE_FALSE(data.characterMotion->empty());
+            auto changed = data;
+            changed.characterMotion->front().position.x += 0.125F;
+            const auto character = Internal::CompareHeadlessReplayCaptures(data, changed);
+            REQUIRE(character.HasValue());
+            REQUIRE(character.Value());
+            CHECK(character.Value()->tick == data.evidence.tick);
+            CHECK(character.Value()->boundary == AI::AiReplayBoundary::AchievedCharacterMotion);
+            REQUIRE(changed.physics);
+            REQUIRE_FALSE(changed.physics->bodies.empty());
+            changed.physics->bodies.back().pose.translation.y -= 1.0F;
+            ++changed.physics->publication.publicationRevision;
+            const auto physics = Internal::CompareHeadlessReplayCaptures(data, changed);
+            REQUIRE(physics.HasValue());
+            REQUIRE(physics.Value());
+            CHECK(physics.Value()->boundary == AI::AiReplayBoundary::Physics);
+            REQUIRE(physics.Value()->recorded);
+            REQUIRE(physics.Value()->replayed);
+            CHECK(physics.Value()->recorded->revision + 1 == physics.Value()->replayed->revision);
+
+            changed.physics->settings.digest = changed.sceneInput;
+            const auto incompatible = Internal::CompareHeadlessReplayCaptures(data, changed);
+            REQUIRE(incompatible.HasError());
+            CHECK(incompatible.ErrorValue().code.Value() == AI::AIErrors::CanonicalSchemaUnsupported.code.Value());
+        }
     }  // namespace
 
     /** @copydoc ExpectDecisionReplay */
@@ -263,6 +297,7 @@ namespace Horo::Application::PrefabAtomicTest {
         REQUIRE(decoded.HasValue());
         CHECK(decoded.Value() == evidence.canonical);
         CHECK(references == (referenceGeneration ? 1 : 0));
+        ExpectReplayComparison(data);
         ExpectReplayArtifact(output.Value(), data);
         CHECK_FALSE(replay->TakeCommitted());
         host.Value()->Shutdown();

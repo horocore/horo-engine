@@ -2,8 +2,7 @@
 
 /** @file HeadlessReplayArtifact.h @brief Explicit terminal output for detached gameplay AI replay evidence. */
 
-#include "Horo/Foundation/Result.h"
-#include "Horo/Foundation/Sha256.h"
+#include "Horo/AI/AIReplayEvidence.h"
 
 #include <filesystem>
 #include <string_view>
@@ -37,4 +36,11 @@ namespace Horo::Application::Internal {
      * throughout publication. On a postcommit error the published directory remains intact. */
     [[nodiscard]] Result<void> PublishHeadlessReplayArtifact(const HeadlessReplayOutput &output, const HeadlessDecisionReplayData &data,
                                                              const Sha256Digest &canonicalDigest);
+
+    /** @brief Compares committed captures using their original decision evidence and owned publication identities.
+     * @param recorded Baseline product capture. @param replayed Independently committed product capture.
+     * @return First differing observed boundary, equality within admitted coverage, or typed profile/evidence failure.
+     */
+    [[nodiscard]] Result<std::optional<AI::AiReplayDivergence>> CompareHeadlessReplayCaptures(const HeadlessDecisionReplayData &recorded,
+                                                                                              const HeadlessDecisionReplayData &replayed);
 }  // namespace Horo::Application::Internal
