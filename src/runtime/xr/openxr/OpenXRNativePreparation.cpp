@@ -107,6 +107,7 @@ namespace Horo::XR::OpenXRInternal {
         if (request.activeAttempt != selection.attempt || request.preflight.ContractVersion() != selection.contractVersion ||
             request.preflight.LoaderApiVersion() != discovery_->acceptedApi || request.preflight.LoaderSource() != selection.loaderSource ||
             request.preflight.RuntimeSelection() != selection.runtimeSelection ||
+            request.preflight.ProductMode() != selection.productMode ||
             (retainedPreflight_ && request.preflight.RuntimeGeneration() != retainedPreflight_->RuntimeGeneration()) ||
             (preparing_.IsValid() && preparing_.system.runtime != request.preflight.RuntimeGeneration()))
             return Result<void>::Failure(MakeError(XRErrors::LoaderPreflightStale));

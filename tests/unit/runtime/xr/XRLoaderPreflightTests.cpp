@@ -40,6 +40,7 @@ namespace Horo::XR {
             CHECK(snapshot.InstallRecord() == request.installRecord);
             CHECK(snapshot.ProductProfile() == request.productProfile);
             CHECK(snapshot.LoaderSource() == XRLoaderSourcePolicy::BundledVerified);
+            CHECK(snapshot.ProductMode() == XRPreflightProductMode::Shipping);
             CHECK(snapshot.RuntimeSelection() == XRRuntimeSelectionPolicy::SystemDefault);
             CHECK(snapshot.LoaderApiVersion() == XRLoaderApiVersion{1, 1, 3});
             CHECK(snapshot.RuntimeGeneration().Value() == 21);
@@ -54,6 +55,7 @@ namespace Horo::XR {
             request.developerOverrideApproved = true;
             const auto result = CreateXRLoaderPreflightSnapshot(request, AvailableEvidence());
             REQUIRE(result.HasValue());
+            CHECK(result.Value().ProductMode() == XRPreflightProductMode::Development);
             CHECK(result.Value().RuntimeSelection() == XRRuntimeSelectionPolicy::ApprovedDeveloperOverride);
 
             request.productMode = XRPreflightProductMode::Shipping;

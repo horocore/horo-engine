@@ -140,6 +140,8 @@ namespace Horo::XR {
         [[nodiscard]] XRProductProfileId ProductProfile() const noexcept;
         /** @brief Returns the exact loader source. @return Product-selected source with no fallback. */
         [[nodiscard]] XRLoaderSourcePolicy LoaderSource() const noexcept;
+        /** @brief Returns the exact product mode used for this probe. @return Immutable shipping or development policy. */
+        [[nodiscard]] XRPreflightProductMode ProductMode() const noexcept;
         /** @brief Returns the exact runtime-selection policy. @return Validated immutable selection policy. */
         [[nodiscard]] XRRuntimeSelectionPolicy RuntimeSelection() const noexcept;
         /** @brief Returns the observed loader API. @return Validated version within the admitted interval. */
@@ -164,6 +166,7 @@ namespace Horo::XR {
         XRLoaderApiVersion loaderApiVersion_;
         XRRuntimeGeneration runtimeGeneration_;
         std::uint8_t consumedProbeSteps_{};
+        XRPreflightProductMode productMode_{XRPreflightProductMode::Shipping};
     };
 
     /**

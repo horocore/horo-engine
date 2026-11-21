@@ -92,6 +92,9 @@ namespace Horo::XR {
         /** @brief Revalidates retained loader evidence against the complete current host request. */
         Result<void> ValidateLoader(const XRProjectSettings &settings, const XRProjectSettingsAdmission &admission) {
             const auto &request = admission.currentLoaderRequest;
+            if (admission.loader.ProductMode() != request.productMode)
+                return Result<void>::Failure(Failure(settings.Source(), "xr.runtime_selection", XRErrors::LoaderPreflightStale,
+                                                     "Run XR loader preflight again after changing the product mode."));
             if (const auto loader = ValidateXRLoaderPreflight(admission.loader, request.attempt, request.backend, request.installRecord,
                                                               request.productProfile);
                 loader.HasError()) {

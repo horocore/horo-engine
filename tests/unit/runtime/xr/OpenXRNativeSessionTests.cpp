@@ -393,6 +393,11 @@ namespace Horo::Tests::OpenXR {
             request.developmentLayersApproved = true;
             RequireFailureIdentity(fixture.owner.Create(request), XRErrors::RuntimeOverrideRejected);
         }
+        SECTION("preflight cannot cross product mode before native creation") {
+            request.productMode = XRPreflightProductMode::Development;
+            RequireFailureIdentity(fixture.owner.Create(request), XRErrors::LoaderPreflightStale);
+            CHECK(fixture.script.calls.empty());
+        }
         CHECK(fixture.script.liveInstances == 0);
         CHECK(fixture.script.liveSessions == 0);
     }
@@ -424,6 +429,7 @@ namespace Horo::Tests::OpenXR {
 
     TEST_CASE("OpenXR explicit development layers contribute required extensions before instance activation", "[unit][xr][native]") {
         Fixture fixture;
+        fixture.preflight = Preflight(XRPreflightProductMode::Development);
         fixture.script.advertiseLayer = true;
         const std::array<std::string_view, 1> layers{"XR_APILAYER_TEST"};
         const std::array extensions{NativeExtensionRequest{"XR_TEST_layer_extension", true}};
@@ -431,7 +437,6 @@ namespace Horo::Tests::OpenXR {
         request.layers = layers;
         request.extensions = extensions;
         request.developmentLayersApproved = true;
-        request.productMode = XRPreflightProductMode::Development;
         REQUIRE(fixture.owner.Create(request).HasValue());
         CHECK(fixture.script.enabledLayer);
         CHECK(fixture.owner.HasExtension("XR_TEST_layer_extension"));

@@ -266,6 +266,22 @@ namespace Horo::XR {
             REQUIRE(AdmitXRProjectSettings(settings, evidence.Admission()).HasError());
         }
 
+        TEST_CASE("XR settings require a fresh preflight when the product mode changes", "[unit][xr][settings]") {
+            const auto settings = Enabled();
+            Evidence evidence;
+            REQUIRE(AdmitXRProjectSettings(settings, evidence.Admission()).HasValue());
+            for (const auto productMode : {XRPreflightProductMode::Development, XRPreflightProductMode::Shipping}) {
+                evidence.request.productMode = productMode;
+                const auto changed = AdmitXRProjectSettings(settings, evidence.Admission());
+                REQUIRE(changed.HasError());
+                CHECK(changed.ErrorValue().code.Value() == XRErrors::LoaderPreflightStale.code.Value());
+                REQUIRE_FALSE(changed.ErrorValue().diagnostics.empty());
+                CHECK(changed.ErrorValue().diagnostics.front().path == "xr.runtime_selection");
+                evidence.loader = evidence.Loader();
+                REQUIRE(AdmitXRProjectSettings(settings, evidence.Admission()).HasValue());
+            }
+        }
+
         TEST_CASE("XR admission rechecks changed loader policy and capability revisions", "[unit][xr][settings]") {
             const auto settings = Enabled();
             Evidence evidence;

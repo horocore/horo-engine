@@ -429,7 +429,8 @@ namespace Horo::Application::Internal {
                                                                XRLoaderPreflightAttempt attempt) const {
         if (const auto current = Current(); current.HasError())
             return current;
-        if (!preflight_ || preflight.RuntimeGeneration() != preflight_->RuntimeGeneration() || attempt != selection_.attempt)
+        if (!preflight_ || preflight.RuntimeGeneration() != preflight_->RuntimeGeneration() ||
+            preflight.ProductMode() != selection_.productMode || attempt != selection_.attempt)
             return Result<void>::Failure(MakeError(XRErrors::LoaderPreflightStale));
         return ValidateXRLoaderPreflight(preflight, attempt, selection_.backend, installed_.identity, selection_.productProfile);
     }

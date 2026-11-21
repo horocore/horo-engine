@@ -355,6 +355,8 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible, "XR native owner requires its control thread"));
         if (!request.candidate.IsValid() || request.preflight.RuntimeGeneration() != request.candidate.system.runtime)
             return Result<void>::Failure(MakeError(XRErrors::IdentityInvalid));
+        if (request.preflight.ProductMode() != request.productMode)
+            return Result<void>::Failure(MakeError(XRErrors::LoaderPreflightStale));
         auto admitted = ValidateXRLoaderPreflight(request.preflight, request.activeAttempt, request.preflight.Backend(),
                                                   request.preflight.InstallRecord(), request.preflight.ProductProfile());
         if (admitted.HasError())

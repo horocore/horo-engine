@@ -285,11 +285,12 @@ namespace Horo::Tests::OpenXR {
         }
     };
 
-    inline XRLoaderPreflightSnapshot Preflight() {
+    inline XRLoaderPreflightSnapshot Preflight(const XRPreflightProductMode mode = XRPreflightProductMode::Shipping) {
         const XRLoaderPreflightRequest request{.attempt = IdentityValue<XRLoaderPreflightAttempt>(1),
                                                .backend = IdentityValue<XRBackendId>(2),
                                                .installRecord = IdentityValue<XRInstallRecordId>(3),
                                                .productProfile = IdentityValue<XRProductProfileId>(4),
+                                               .productMode = mode,
                                                .admittedLoaderVersions = {{1, 0, 0}, {1, 1, 63}}};
         const XRLoaderProbeEvidence evidence{.attempt = request.attempt,
                                              .loader = XRLoaderAvailability::Available,
@@ -340,7 +341,8 @@ namespace Horo::Tests::OpenXR {
                     .preflight = preflight,
                     .capabilities = capabilities,
                     .plan = plan,
-                    .activeAttempt = preflight.Attempt()};
+                    .activeAttempt = preflight.Attempt(),
+                    .productMode = preflight.ProductMode()};
         }
     };
 }  // namespace Horo::Tests::OpenXR

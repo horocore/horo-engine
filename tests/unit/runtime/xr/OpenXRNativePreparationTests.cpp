@@ -203,7 +203,7 @@ namespace Horo::Tests::OpenXR {
         CHECK(fixture.script.liveInstances == 0);
     }
 
-    TEST_CASE("OpenXR staged admission rejects stale attempt or changed installation before graphics creation", "[unit][xr][native]") {
+    TEST_CASE("OpenXR staged admission rejects stale loader selection before graphics creation", "[unit][xr][native]") {
         Fixture fixture;
         auto discovery = Discovery(fixture);
         auto preparation = Preparation(fixture);
@@ -213,8 +213,11 @@ namespace Horo::Tests::OpenXR {
         SECTION("stale attempt") {
             preparation.activeAttempt = IdentityValue<XRLoaderPreflightAttempt>(45);
         }
+        SECTION("changed product mode") {
+            discovery.selection.productMode = XRPreflightProductMode::Development;
+        }
         REQUIRE(fixture.owner.PrepareDiscovery(discovery).HasValue());
-        CHECK(fixture.owner.PrepareSession(preparation).HasError());
+        RequireFailureIdentity(fixture.owner.PrepareSession(preparation), XRErrors::LoaderPreflightStale);
         CHECK(std::ranges::count(fixture.script.calls, "graphics") == 0);
         CHECK(fixture.script.liveSessions == 0);
         CHECK_FALSE(fixture.owner.Session().IsValid());
