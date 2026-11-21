@@ -1,5 +1,6 @@
 #include "Horo/Foundation/Platform.h"
 
+#include <array>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
@@ -11,6 +12,8 @@
 #include <thread>
 
 #if defined(_WIN32)
+#include <fcntl.h>
+#include <io.h>
 #define WIN32_LEAN_AND_MEAN
 #include <windows.h>
 #else
@@ -52,6 +55,22 @@ namespace {
             std::cerr << std::string(1024, 'e') << '\n';
         }
         return 17;
+    }
+
+    /** @brief Fills the output pipe before reading input, then echoes a fixed binary transfer. */
+    int ExchangeBytes() {
+#if defined(_WIN32)
+        if (_setmode(_fileno(stdin), _O_BINARY) < 0 || _setmode(_fileno(stdout), _O_BINARY) < 0)
+            return 4;
+#endif
+        constexpr std::size_t TransferBytes = 192 * 1024;
+        std::cerr << "raw channel ready\n" << std::flush;
+        std::cout << std::string(TransferBytes, 'b') << std::flush;
+        std::array<char, TransferBytes> input{};
+        if (!std::cin.read(input.data(), static_cast<std::streamsize>(input.size())))
+            return 4;
+        std::cout.write(input.data(), static_cast<std::streamsize>(input.size())).flush();
+        return std::cout.good() ? 0 : 4;
     }
 
     [[nodiscard]] bool SpawnDescendant(const char *executable, const char *marker) {
@@ -129,6 +148,8 @@ int main(const int argc, char **argv) {
     }
     if (mode == "finite-tail")
         return WriteFiniteTail();
+    if (mode == "exchange-bytes")
+        return ExchangeBytes();
     if (mode == "descendant" && argc == 3) {
         Heartbeat(argv[2]);
     }

@@ -1,3 +1,4 @@
+#include "../ExternalProcessBytePump.h"
 #include "Horo/Foundation/Platform.h"
 #include "Horo/Platform/ExternalProcess.h"
 #include "Horo/Platform/PlatformErrors.h"
@@ -42,52 +43,6 @@ namespace Horo {
                 }
                 return *this;
             }
-        };
-
-        class LineDecoder final {
-        public:
-            LineDecoder(const ProcessOutputStream stream, const std::size_t maximum, const std::size_t outputBudget,
-                        const std::function<void(ProcessOutputLine)> &callback)
-                : stream_(stream), maximum_(std::max<std::size_t>(maximum, 1U)), outputBudget_(outputBudget), callback_(&callback) {}
-
-            void Append(const std::span<const char> bytes) {
-                for (const char value : bytes) {
-                    if (received_ >= outputBudget_) {
-                        truncated_ = true;
-                        continue;
-                    }
-                    ++received_;
-                    if (value == '\n')
-                        Emit();
-                    else if (value != '\r') {
-                        if (pending_.size() < maximum_)
-                            pending_.push_back(value);
-                        else
-                            truncated_ = true;
-                    }
-                }
-            }
-
-            void Finish() {
-                if (!pending_.empty() || truncated_)
-                    Emit();
-            }
-
-        private:
-            void Emit() {
-                if (*callback_)
-                    (*callback_)(ProcessOutputLine{stream_, std::move(pending_), truncated_});
-                pending_.clear();
-                truncated_ = false;
-            }
-
-            ProcessOutputStream stream_;
-            std::size_t maximum_;
-            std::size_t outputBudget_;
-            std::size_t received_{};
-            const std::function<void(ProcessOutputLine)> *callback_;
-            std::string pending_;
-            bool truncated_{false};
         };
 
         [[nodiscard]] Result<std::wstring> ToWide(const std::string_view text) {
@@ -175,26 +130,29 @@ namespace Horo {
             return Result<std::vector<wchar_t>>::Success(std::move(block));
         }
 
-        void DrainAvailable(const HANDLE pipe, bool &open, LineDecoder &decoder) {
+        bool DrainAvailable(const HANDLE pipe, bool &open, PlatformInternal::ProcessOutputCapture &decoder) {
             std::array<char, 4096> buffer{};
             for (std::size_t reads = 0; reads < 16; ++reads) {
                 DWORD available = 0;
                 if (!PeekNamedPipe(pipe, nullptr, 0, nullptr, &available, nullptr)) {
                     open = false;
                     decoder.Finish();
-                    return;
+                    return true;
                 }
                 if (available == 0)
-                    return;
+                    return true;
                 DWORD read = 0;
                 if (!ReadFile(pipe, buffer.data(), static_cast<DWORD>(std::min<std::size_t>(buffer.size(), available)), &read, nullptr) ||
                     read == 0) {
                     open = false;
                     decoder.Finish();
-                    return;
+                    return true;
                 }
-                decoder.Append(std::span{buffer.data(), static_cast<std::size_t>(read)});
+                const auto bytes = std::span{buffer.data(), static_cast<std::size_t>(read)};
+                if (!decoder.Append(bytes))
+                    return false;
             }
+            return true;
         }
 
         /** @brief Distinguishes a surviving descendant from a lagging accounting reference to the exited direct child. */
@@ -220,6 +178,7 @@ namespace Horo {
 
         /** @brief Owns capture, child, and Job handles across launch, monitoring, and terminal mapping. */
         struct CapturedProcess {
+            Handle stdinWrite;
             Handle stdoutRead;
             Handle stderrRead;
             Handle process;
@@ -227,6 +186,34 @@ namespace Horo {
             Handle job;
             DWORD processId{};
         };
+
+        /** @brief Preserves default null input and gives the worker a nonblocking writer in raw mode. */
+        [[nodiscard]] Handle PrepareChildInput(const bool capture, SECURITY_ATTRIBUTES &security, Handle &parentWrite) {
+            if (!capture)
+                return Handle{CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &security, OPEN_EXISTING,
+                                          FILE_ATTRIBUTE_NORMAL, nullptr)};
+            Handle childRead;
+            DWORD mode = PIPE_NOWAIT;
+            if (!CreatePipe(&childRead.value, &parentWrite.value, &security, 64 * 1024) ||
+                !SetHandleInformation(parentWrite.value, HANDLE_FLAG_INHERIT, 0) ||
+                !SetNamedPipeHandleState(parentWrite.value, &mode, nullptr, nullptr))
+                return {};
+            return childRead;
+        }
+
+        /** @brief Sends at most one bounded chunk while continuing to drain output if the input pipe fills. */
+        bool WriteChildInput(const HANDLE pipe, PlatformInternal::ProcessInputPump &input) noexcept {
+            if (!input.Refill())
+                return false;
+            const auto bytes = input.Pending();
+            if (bytes.empty())
+                return true;
+            DWORD written{};
+            if (!WriteFile(pipe, bytes.data(), static_cast<DWORD>(bytes.size()), &written, nullptr))
+                return GetLastError() == ERROR_NO_DATA;
+            input.Written(written);
+            return true;
+        }
 
         /** @brief Limits inherited handles to the standard streams and one explicit probe lease. */
         class ChildHandleAllowlist final {
@@ -333,8 +320,7 @@ namespace Horo {
             Handle stdoutWrite;
             Handle stderrWrite;
             SECURITY_ATTRIBUTES security{sizeof(SECURITY_ATTRIBUTES), nullptr, TRUE};
-            Handle stdinRead{CreateFileW(L"NUL", GENERIC_READ, FILE_SHARE_READ | FILE_SHARE_WRITE, &security, OPEN_EXISTING,
-                                         FILE_ATTRIBUTE_NORMAL, nullptr)};
+            Handle stdinRead = PrepareChildInput(request.byteChannel != nullptr, security, captured.stdinWrite);
             if (stdinRead.value == INVALID_HANDLE_VALUE)
                 return Result<CapturedProcess>::Failure(MakeError(PlatformErrors::ProcessIoFailed));
             if (!CreatePipe(&captured.stdoutRead.value, &stdoutWrite.value, &security, 0) ||
@@ -380,6 +366,7 @@ namespace Horo {
 
         /** @brief Records the terminal stop priority and escalation timestamps for one Job. */
         struct ProcessMonitorState {
+            bool ioFailed{};
             bool terminationRequested{};
             bool forceTerminated{};
             ProcessStopCause stopCause{ProcessStopCause::None};
@@ -416,9 +403,8 @@ namespace Horo {
 
         /** @brief Drains final pipe bytes only after the direct child exits, then checks the owned Job and pipes. */
         [[nodiscard]] bool CompletedAndDrained(const CapturedProcess &captured, bool &stdoutOpen, bool &stderrOpen,
-                                               LineDecoder &standardOutput, LineDecoder &standardError) {
-            DrainAvailable(captured.stdoutRead.value, stdoutOpen, standardOutput);
-            DrainAvailable(captured.stderrRead.value, stderrOpen, standardError);
+                                               PlatformInternal::ProcessOutputCapture &standardOutput,
+                                               PlatformInternal::ProcessOutputCapture &standardError) {
             DWORD stdoutAvailable = 0;
             DWORD stderrAvailable = 0;
             const bool stdoutEmpty =
@@ -439,17 +425,24 @@ namespace Horo {
         /** @brief Drives both output decoders and process-tree escalation without transferring handle ownership. */
         [[nodiscard]] ProcessMonitorState MonitorProcess(const ExternalProcessRequest &request, const CancellationToken &cancellation,
                                                          const CapturedProcess &captured) {
-            LineDecoder standardOutput{ProcessOutputStream::StandardOutput, request.maximumLineBytes, request.maximumOutputBytes,
-                                       request.onOutput};
-            LineDecoder standardError{ProcessOutputStream::StandardError, request.maximumLineBytes, request.maximumOutputBytes,
-                                      request.onOutput};
+            PlatformInternal::ProcessOutputCapture standardOutput{ProcessOutputStream::StandardOutput, request};
+            PlatformInternal::ProcessOutputCapture standardError{ProcessOutputStream::StandardError, request};
             bool stdoutOpen = true;
             bool stderrOpen = true;
             ProcessMonitorState state;
+            PlatformInternal::ProcessInputPump input{request.byteChannel};
             for (;;) {
-                DrainAvailable(captured.stdoutRead.value, stdoutOpen, standardOutput);
+                if (!DrainAvailable(captured.stdoutRead.value, stdoutOpen, standardOutput)) {
+                    state.ioFailed = true;
+                    break;
+                }
                 DrainAvailable(captured.stderrRead.value, stderrOpen, standardError);
                 const DWORD wait = WaitForSingleObject(captured.process.value, 10);
+                const bool writing = wait == WAIT_TIMEOUT && !state.terminationRequested && !cancellation.IsCancellationRequested();
+                if (writing && !WriteChildInput(captured.stdinWrite.value, input)) {
+                    state.ioFailed = true;
+                    break;
+                }
                 const auto now = std::chrono::steady_clock::now();
                 const bool descendantsActive = wait == WAIT_OBJECT_0 && JobHasActiveDescendants(captured.job.value, captured.processId);
                 UpdateTermination(request, cancellation, captured, wait, descendantsActive, now, state);
@@ -458,6 +451,10 @@ namespace Horo {
                 if (state.forceTerminated && now - state.forcedAt >= request.maximumDrainDuration)
                     break;
             }
+            if (state.ioFailed) {
+                static_cast<void>(TerminateJobObject(captured.job.value, 1));
+                static_cast<void>(WaitForSingleObject(captured.process.value, 1000));
+            }
             standardOutput.Finish();
             standardError.Finish();
             return state;
@@ -465,6 +462,8 @@ namespace Horo {
 
         /** @brief Verifies that no owned descendant survives before reporting a typed terminal process outcome. */
         [[nodiscard]] Result<ExternalProcessResult> FinalizeProcess(const CapturedProcess &captured, const ProcessMonitorState &state) {
+            if (state.ioFailed)
+                return Result<ExternalProcessResult>::Failure(MakeError(PlatformErrors::ProcessIoFailed));
             if (JobHasActiveDescendants(captured.job.value, captured.processId)) {
                 if (!TerminateJobObject(captured.job.value, 1))
                     return Result<ExternalProcessResult>::Failure(MakeError(PlatformErrors::ProcessIoFailed));

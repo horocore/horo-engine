@@ -573,6 +573,13 @@ handles and termination policy stay private to Platform. No public header change
 owner or include spelling; the generated CliHost and Platform header consumers
 continue to compile independently.
 
+Long-lived protocol adapters may supply an `IProcessByteChannel` to the same
+runner on an owned worker. The runner preserves raw stdout and partial stdin
+writes without blocking on pipe capacity. The adapter bounds its own queues
+and can refuse stdout to terminate the process tree. Stderr remains separately
+bounded by the existing line capture. Existing line-oriented callers leave the
+channel empty and keep their original behavior.
+
 ## Build-Tree Contract
 
 `cmake/HoroPublicHeaderOwnership.cmake` assigns each public header to one real
