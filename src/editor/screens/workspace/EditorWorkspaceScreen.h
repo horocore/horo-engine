@@ -284,6 +284,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         std::shared_ptr<const Application::PlatformServicesProjectSourceSnapshot> platformSources_;
         std::shared_ptr<PlatformProjectSettingsOwner> platformSettings_;
         std::shared_ptr<IXRSimulatorArtifacts> simulatorArtifacts_;
+        std::shared_ptr<const Platform::IProjectReadFiles> agentProjectFiles_;
+        std::string agentProjectReadIdentity_;
         WorkspacePanelServices panelServices_{};
         WorkspaceProjectServices projectServices_{};
         WorkspacePublishedRevisions publishedRevisions_{};

@@ -183,6 +183,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         static_cast<void>(contributions_.statusItems.Update("horo.status.document", EditorStatusItemContent{.available = false}));
         static_cast<void>(contributions_.statusItems.Update("horo.status.selection", EditorStatusItemContent{.available = false}));
         contributions_.panels.DetachAll();
+        agentProjectFiles_.reset();
+        agentProjectReadIdentity_.clear();
         settings_.SetInputProfilePaths(std::nullopt);
         input_.profilePaths.reset();
         RestoreWorkspaceInputProfile();

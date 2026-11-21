@@ -873,6 +873,12 @@ An executed scene count tool can be recorded through the same review. These
 conversation records contain localized host labels and an opaque reference
 scoped to the turn.
 
+The separate saved-file action takes an explicit project-relative path. The
+workspace's rooted read authority reads a bounded text file on the agent worker
+without opening a Source tab. The panel previews the redacted result and the
+inference worker verifies the same saved revision before using the approval.
+These saved-file attachments and responses remain ephemeral.
+
 The panel offers separate previews for the active gameplay build and the last
 completed build of the current project. It reads only the retained output for
 the selected operation, marks omitted output, and redacts the text before review.

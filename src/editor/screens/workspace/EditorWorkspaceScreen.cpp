@@ -95,6 +95,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         const auto platformSources = activation.Candidate().platformServices;
         if (auto committed = activation.Commit(); committed.HasError()) {
             contributions_.panels.DetachAll();
+            agentProjectFiles_.reset();
+            agentProjectReadIdentity_.clear();
             DetachXrInput();
             RestoreWorkspaceInputProfile();
             input_.profilePaths.reset();

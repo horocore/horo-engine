@@ -1,5 +1,6 @@
 #include "../../../apps/HoroEditor/app/EditorLocalAgentContext.h"
 #include "../../support/SourceDocumentTestProject.h"
+#include "Horo/Platform/NativeProjectReadFiles.h"
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
@@ -25,6 +26,85 @@ namespace Horo::Editor {
             }
         };
     }  // namespace
+
+    TEST_CASE("Saved project files need exact review and a fresh rooted read before local inference",
+              "[unit][agent][context][saved_project_file]") {
+        TestSupport::SourceProject project;
+        project.Put("int saved_value;\nApi-Key: private-value\n", "unopened file.cpp");
+        auto files = Platform::CreateNativeProjectReadFiles(project.directory, "workspace", 1);
+        REQUIRE(files.HasValue());
+        CancellationSource lifetime;
+        const Platform::ProjectReadContext read{"workspace", 1, lifetime.Token(),
+                                                std::chrono::steady_clock::now() + std::chrono::minutes{1}};
+        auto prepared = EditorLocalAgentContext::PrepareSavedFile(files.Value(), "unopened file.cpp", read, 76);
+        REQUIRE(prepared.HasValue());
+        auto context = std::move(prepared).Value();
+        REQUIRE(context.IsSavedFile());
+        REQUIRE_FALSE(context.HistoryReference());
+        const auto &item = context.Items().front();
+        CHECK(item.provenance.origin == "unopened file.cpp");
+        CHECK(item.candidate.text.find("int saved_value;") != std::string::npos);
+        CHECK(item.candidate.text.find("private-value") == std::string::npos);
+
+        bool shouldSend{};
+        std::stop_source worker;
+        SECTION("Matching saved bytes send only after consent") {
+            REQUIRE(context.Approve());
+            shouldSend = true;
+        }
+        SECTION("Reading a file does not itself grant consent") {}
+        SECTION("Changes after consent deny dispatch") {
+            REQUIRE(context.Approve());
+            project.Put("int other_value;\n", "unopened file.cpp");
+        }
+        SECTION("Deletion after consent denies dispatch") {
+            REQUIRE(context.Approve());
+            REQUIRE(std::filesystem::remove(project.directory / "unopened file.cpp"));
+        }
+        SECTION("Project detachment after consent denies dispatch") {
+            REQUIRE(context.Approve());
+            lifetime.RequestCancellation();
+        }
+        SECTION("Cancelled worker denies dispatch") {
+            REQUIRE(context.Approve());
+            worker.request_stop();
+        }
+        RecordingModel provider;
+        const auto dispatch = context.Dispatch(worker.get_token());
+        const ModelRequest request{.model = "local", .messages = {{.role = ModelRole::User, .text = "Explain the saved file"}}};
+        const auto result = AgentTurnRuntime{}.Run(provider, nullptr, 76, request, {}, {}, &dispatch);
+        if (!shouldSend) {
+            CHECK(result.status == AgentTurnStatus::ContextDenied);
+            CHECK(provider.sent.empty());
+            return;
+        }
+        REQUIRE(result.status == AgentTurnStatus::Completed);
+        REQUIRE(provider.sent.size() == 2);
+        CHECK(provider.sent.front().text == item.candidate.text);
+    }
+
+    TEST_CASE("Saved project file review rejects unsafe, missing, binary or oversized sources",
+              "[unit][agent][context][saved_project_file]") {
+        TestSupport::SourceProject project;
+        auto files = Platform::CreateNativeProjectReadFiles(project.directory, "workspace", 1);
+        REQUIRE(files.HasValue());
+        const Platform::ProjectReadContext read{"workspace", 1, {}, std::chrono::steady_clock::now() + std::chrono::minutes{1}};
+        const auto prepare = [&](std::string_view path) {
+            return EditorLocalAgentContext::PrepareSavedFile(files.Value(), path, read, 76);
+        };
+        CHECK(prepare("../outside.cpp").HasError());
+        CHECK(prepare("code.cpp:alternate").HasError());
+        CHECK(prepare("missing.cpp").HasError());
+        project.Put(std::string_view{"a\0b", 3}, "binary.cpp");
+        CHECK(prepare("binary.cpp").HasError());
+        project.Put(std::string(Security::AgentPolicyLimits{}.maximumItemBytes + 1, 'a'), "large.cpp");
+        CHECK(prepare("large.cpp").HasError());
+        project.Put("int visible;");
+        std::filesystem::copy_file(project.directory / "code.cpp", project.directory / std::filesystem::path{u8"örnek.cpp"});
+        CHECK(prepare("örnek.cpp").HasValue());
+        std::filesystem::create_hard_link(project.directory / "code.cpp", project.directory / "linked.cpp");
+        CHECK(prepare("linked.cpp").HasError());
+    }
 
     TEST_CASE("Local panel source consent dispatches only approved current editor bytes and leaves context out of history",
               "[unit][agent][context][editor_source]") {

@@ -21,7 +21,8 @@
 namespace Horo::Editor {
     namespace {
         using namespace Agent;
-        using Reply = std::variant<ProviderDiscovery, AgentTurnResult>;
+        using SavedFileReview = Result<EditorLocalAgentContext>;
+        using Reply = std::variant<ProviderDiscovery, AgentTurnResult, SavedFileReview>;
         using BackgroundTurn = AgentBackgroundTurn<Reply>;
 
         /** @brief Runs one user-initiated discovery or inference on an isolated worker. */
@@ -37,7 +38,7 @@ namespace Horo::Editor {
                 return provider->Discover(stop);
             AgentTurnRuntime runtime;
             if (source) {
-                const auto dispatch = source->Dispatch();
+                const auto dispatch = source->Dispatch(stop);
                 return runtime.Run(*provider, nullptr, turn, std::move(*request), {}, stop, &dispatch);
             }
             if (draft)
@@ -94,6 +95,8 @@ namespace Horo::Editor {
                 activeSource_ = context.activeSourceSnapshot;
                 activeSourceRange_ = context.activeSourceRange;
                 openSources_ = context.openSourceSnapshots;
+                projectFiles_ = context.agentProjectFiles;
+                projectReadIdentity_ = context.agentProjectReadIdentity;
                 captureSceneSelection_ = context.captureSceneSelection;
                 buildOutput_ = context.buildOutputQuery;
                 gameplayBuilds_ = context.gameplayBuilds;
@@ -150,7 +153,7 @@ namespace Horo::Editor {
                 ImGui::BeginDisabled(awaitingCheckpoint_ || contextPreview_);
                 static_cast<void>(Ui::InputTextControl("##Prompt", prompt_, 4096, fonts));
                 ImGui::EndDisabled();
-                DrawSendActions(locale);
+                DrawSendActions(locale, fonts);
                 if (Busy() && Button(locale, "stop", background_->CanCancel()))
                     background_->Cancel();
                 if (status_)
@@ -170,8 +173,20 @@ namespace Horo::Editor {
                 CompletedDiagnostics
             };
 
+            enum class SourcePickerMode {
+                None,
+                OpenTabs,
+                SavedFile
+            };
+
             [[nodiscard]] bool Busy() const {
                 return background_->Busy();
+            }
+
+            /** @brief Checks the common prerequisites for preparing or sending a user prompt. */
+            [[nodiscard]] bool CanSendPrompt() const {
+                return !Busy() && !awaitingCheckpoint_ && !history_.HasRecovery() && !endpoint_.empty() && !model_.empty() &&
+                       !prompt_.empty();
             }
 
             void RevokeContext() noexcept {
@@ -183,7 +198,10 @@ namespace Horo::Editor {
                 activeSourceRange_ = {};
                 openSources_ = {};
                 captureSceneSelection_ = {};
-                browsingSources_ = false;
+                sourcePicker_ = SourcePickerMode::None;
+                projectFiles_.reset();
+                projectReadIdentity_.clear();
+                savedFilePath_.clear();
                 buildOutput_ = nullptr;
                 gameplayBuilds_ = nullptr;
                 buildRoot_.clear();
@@ -224,17 +242,20 @@ namespace Horo::Editor {
                     model_ = models_[static_cast<std::size_t>(selection_)].id;
             }
 
-            void DrawSendActions(const ILocalizationService &locale) {
+            void DrawSendActions(const ILocalizationService &locale, const Theme::Fonts &fonts) {
                 if (contextPreview_) {
                     DrawContextReview(locale);
                     return;
                 }
-                if (browsingSources_) {
+                if (sourcePicker_ == SourcePickerMode::OpenTabs) {
                     DrawSourcePicker(locale);
                     return;
                 }
-                const bool ready =
-                    !Busy() && !awaitingCheckpoint_ && !history_.HasRecovery() && !endpoint_.empty() && !model_.empty() && !prompt_.empty();
+                if (sourcePicker_ == SourcePickerMode::SavedFile) {
+                    DrawSavedFilePicker(locale, fonts);
+                    return;
+                }
+                const bool ready = CanSendPrompt();
                 if (Button(locale, "ask", ready)) {
                     Send({});
                     return;
@@ -289,7 +310,11 @@ namespace Horo::Editor {
                 }
                 if (Button(locale, "context_file_offer", enabled && openSources_)) {
                     sourcePage_ = 0;
-                    browsingSources_ = true;
+                    sourcePicker_ = SourcePickerMode::OpenTabs;
+                    return true;
+                }
+                if (Button(locale, "context_saved_file_offer", enabled && projectFiles_ && !projectReadIdentity_.empty())) {
+                    sourcePicker_ = SourcePickerMode::SavedFile;
                     return true;
                 }
                 return false;
@@ -321,7 +346,7 @@ namespace Horo::Editor {
                     const auto remaining = sources.subspan(sourcePage_ * PageSize);
                     for (const auto &source : remaining.first(std::min(remaining.size(), PageSize))) {
                         if (source.IsCurrent() && DrawOpenSourceRow(locale, source)) {
-                            browsingSources_ = false;
+                            sourcePicker_ = SourcePickerMode::None;
                             PrepareSourceSnapshot(source, {}, true);
                             return;
                         }
@@ -333,7 +358,39 @@ namespace Horo::Editor {
                         ++sourcePage_;
                 }
                 if (Button(locale, "context_cancel", true))
-                    browsingSources_ = false;
+                    sourcePicker_ = SourcePickerMode::None;
+            }
+
+            /** @brief Selects one saved relative path without inspecting or opening any editor tab. */
+            void DrawSavedFilePicker(const ILocalizationService &locale, const Theme::Fonts &fonts) {
+                ImGui::TextWrapped("%s", LocalizedText(locale, "context_saved_file_path").c_str());
+                static_cast<void>(Ui::InputTextControl("##SavedProjectFile", savedFilePath_, 256, fonts));
+                if (Button(locale, "context_file_select", !savedFilePath_.empty() && CanSendPrompt())) {
+                    sourcePicker_ = SourcePickerMode::None;
+                    StartSavedFileReview();
+                    return;
+                }
+                if (Button(locale, "context_cancel", true))
+                    sourcePicker_ = SourcePickerMode::None;
+            }
+
+            /** @brief Reads only after explicit selection, using the same cancelled-on-detach worker slot as inference. */
+            void StartSavedFileReview() {
+                try {
+                    const auto deadline = std::chrono::steady_clock::now() + std::chrono::minutes{5};
+                    Platform::ProjectReadContext project{projectReadIdentity_, 1, contextLifetime_->Token(), deadline};
+                    BackgroundTurn::Operation task{[files = projectFiles_, path = savedFilePath_, project = std::move(project),
+                                                    requestId = turn_ + 1](std::stop_token stop) mutable -> Reply {
+                        return EditorLocalAgentContext::PrepareSavedFile(std::move(files), path, std::move(project), requestId, stop);
+                    }};
+                    if (background_->Start(std::move(task))) {
+                        status_ = "context_saved_file_reading";
+                        return;
+                    }
+                } catch (const std::bad_alloc &) {
+                    // Copying the owned worker inputs may allocate.
+                }
+                status_ = "context_saved_file_unavailable";
             }
 
             void PrepareSourceReview(const bool selectedRange) {
@@ -427,7 +484,7 @@ namespace Horo::Editor {
 
             /** @brief Validates the active tab for source previews or the exact operation's witness for output. */
             bool ContextReviewCurrent() const {
-                if (contextPreview_->BuildOperation() || contextPreview_->IsSceneSelection())
+                if (contextPreview_->BuildOperation() || contextPreview_->IsSceneSelection() || contextPreview_->IsSavedFile())
                     return contextPreview_->IsCurrent();
                 if (reviewingOpenSource_)
                     return contextPreview_->MatchesOpenSource(openSources_());
@@ -448,7 +505,7 @@ namespace Horo::Editor {
                     ImGui::TextUnformatted(payload.data(), payload.data() + payload.size());
                 }
                 ImGui::PopTextWrapPos();
-                if (Button(locale, "context_approve", !Busy())) {
+                if (Button(locale, "context_approve", CanSendPrompt())) {
                     const bool selected = ReviewSelectionCurrent();
                     auto approved = std::exchange(contextPreview_, std::nullopt);
                     if (selected && approved->Approve())
@@ -569,6 +626,16 @@ namespace Horo::Editor {
                                                                                     : AgentHistoryMessageState::Failed);
             }
 
+            /** @brief Publishes the completed worker preview for explicit consent on the editor lane. */
+            void Adopt(SavedFileReview &review) {
+                if (review.HasError()) {
+                    status_ = "context_saved_file_unavailable";
+                    return;
+                }
+                contextPreview_.emplace(std::move(review).Value());
+                status_ = nullptr;
+            }
+
             /** @brief Keeps context-bearing replies ephemeral and proposes only host-issued reference metadata. */
             void ReviewCompleted(const AgentTurnResult &result) {
                 if (submittedReference_) {
@@ -597,6 +664,9 @@ namespace Horo::Editor {
             std::function<bool(SourceDocumentSnapshot &)> activeSource_;
             std::function<bool(SourceDocumentSnapshot &, SourceContextRange &)> activeSourceRange_;
             std::function<std::span<const SourceDocumentSnapshot>()> openSources_;
+            std::shared_ptr<const Platform::IProjectReadFiles> projectFiles_;
+            std::string projectReadIdentity_;
+            std::string savedFilePath_;
             const IBuildOutputQuery *buildOutput_{};
             const Application::GameplayBuildService *gameplayBuilds_{};
             std::filesystem::path buildRoot_;
@@ -615,7 +685,7 @@ namespace Horo::Editor {
             std::uint64_t turn_{};
             bool awaitingCheckpoint_{};
             BuildContextChoice buildContextChoice_{BuildContextChoice::ActiveOutput};
-            bool browsingSources_{};
+            SourcePickerMode sourcePicker_{SourcePickerMode::None};
             bool reviewingOpenSource_{};
             std::size_t sourcePage_{};
         };

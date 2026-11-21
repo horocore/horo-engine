@@ -169,6 +169,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
                 [this] {
             return controller_->CaptureAgentSceneSelection();
         },
+            .agentProjectFiles = agentProjectFiles_,
+            .agentProjectReadIdentity = agentProjectReadIdentity_,
         };
         contributions_.panels.AttachAll(panelContext);
     }
@@ -214,6 +216,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return Result<void>::Failure(capturedSources.ErrorValue());
         auto sources = std::move(capturedSources).Value();
         auto simulatorArtifacts = sources.simulatorArtifacts;
+        auto agentProjectFiles = sources.world;
+        auto agentProjectReadIdentity = sources.owner.ToString();
         auto resources = PrepareUiInspectorResources(services_, projectRoot, sources.owner);
         if (resources.HasError())
             return Result<void>::Failure(resources.ErrorValue());
@@ -235,6 +239,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         controller_->SelectMountedWorldPlay(services_.TryGetConst<EditorMountedWorldPlaySelected>() != nullptr);
         RevokeSimulatorArtifacts();
         simulatorArtifacts_ = std::move(simulatorArtifacts);
+        agentProjectFiles_ = std::move(agentProjectFiles);
+        agentProjectReadIdentity_ = std::move(agentProjectReadIdentity);
         uiInspectorResources_ = std::move(uiInspectorResources);
         return Result<void>::Success();
     }

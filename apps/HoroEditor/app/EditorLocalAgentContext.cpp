@@ -22,6 +22,25 @@ namespace Horo::Editor {
         Platform::ProjectReadContext ProjectContext(std::string identity, const std::uint64_t generation, CancellationToken lifetime) {
             return {std::move(identity), generation, std::move(lifetime), std::chrono::steady_clock::now() + PreviewLifetime};
         }
+
+        /** @brief Reads at most one context item's bytes with both the workspace and worker stop conditions. */
+        Result<Platform::ProjectReadTextSnapshot> ReadSavedText(const Platform::IProjectReadFiles &files, std::string_view path,
+                                                                const Platform::ProjectReadContext &project, std::stop_token stop) {
+            auto reading = project;
+            reading.authorityStopped = [authority = project.authorityStopped, stop] {
+                return stop.stop_requested() || (authority && authority());
+            };
+            constexpr Platform::ProjectReadLimits limits{.maximumFileBytes = Security::AgentPolicyLimits{}.maximumItemBytes};
+            return files.Text(path, reading, limits);
+        }
+
+        /** @brief Matches the retained reader's content revision and exact workspace scope. */
+        bool MatchesSavedText(const Platform::ProjectReadTextSnapshot &snapshot, const Platform::ProjectReadContext &project,
+                              const Agent::AgentContextProvenance &item) {
+            return snapshot.text && snapshot.projectIdentity == project.projectIdentity &&
+                   snapshot.projectGeneration == project.projectGeneration && snapshot.path == item.origin &&
+                   snapshot.revision == item.revision;
+        }
     }  // namespace
 
     EditorLocalAgentContext::EditorLocalAgentContext(SourceDocumentSnapshot source, Platform::ProjectReadContext project,
@@ -49,6 +68,37 @@ namespace Horo::Editor {
             return Output::Failure(std::move(preview).ErrorValue());
         return Output::Success(EditorLocalAgentContext{std::move(source), std::move(project), std::move(policy), std::move(preview).Value(),
                                                        std::move(readers.isCurrent), range, buildOperation, historyReference});
+    }
+
+    /** @copydoc EditorLocalAgentContext::PrepareSavedFile */
+    Result<EditorLocalAgentContext> EditorLocalAgentContext::PrepareSavedFile(std::shared_ptr<const Platform::IProjectReadFiles> files,
+                                                                              const std::string_view path,
+                                                                              Platform::ProjectReadContext project,
+                                                                              const std::uint64_t requestId, std::stop_token stop) {
+        using Output = Result<EditorLocalAgentContext>;
+        using namespace Agent;
+        if (!files)
+            return Output::Failure(MakeError(Platform::ProjectReadErrors::Unavailable));
+        if (path.size() > 256 || !Platform::IsSafeProjectReadPath(path))
+            return Output::Failure(MakeError(Platform::ProjectReadErrors::UnsafePath));
+        auto read = ReadSavedText(*files, path, project, stop);
+        if (read.HasError())
+            return Output::Failure(std::move(read).ErrorValue());
+        // The caller's synchronous stop view may borrow capture state. Only the workspace token survives capture.
+        project.authorityStopped = {};
+        const auto &snapshot = read.Value();
+        const AgentContextSelection selected = AgentContextTextRequest{AgentContextKind::File, std::string{path}, snapshot.revision};
+        AgentContextReaders readers{.existingText = [&snapshot](std::string_view, const Platform::ProjectReadContext &) {
+            return Result<std::optional<Platform::ProjectReadTextSnapshot>>::Success(snapshot);
+        }, .redact = RedactEvidence, .isCurrent = [](const AgentContextProvenance &) {
+            return true;  // The same rooted reader rechecks the exact revision immediately before dispatch.
+        }};
+        auto captured = Capture(selected, std::move(readers), std::move(project), requestId, {}, {}, {}, {});
+        if (captured.HasError())
+            return Output::Failure(std::move(captured).ErrorValue());
+        auto preview = std::move(captured).Value();
+        preview.savedFiles_ = std::move(files);
+        return Output::Success(std::move(preview));
     }
 
     /** @copydoc EditorLocalAgentContext::Prepare */
@@ -178,7 +228,17 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorLocalAgentContext::Dispatch */
-    Agent::AgentTurnContext EditorLocalAgentContext::Dispatch() noexcept {
+    Agent::AgentTurnContext EditorLocalAgentContext::Dispatch(std::stop_token stop) {
+        if (savedFiles_) {
+            const auto &item = Items().front().provenance;
+            const auto live = ReadSavedText(*savedFiles_, item.origin, project_, stop);
+            if (live.HasError() || !MatchesSavedText(live.Value(), project_, item)) {
+                static const std::function<bool(const Agent::AgentContextProvenance &)> stale = [](const Agent::AgentContextProvenance &) {
+                    return false;
+                };
+                return {preview_, *policy_, project_, stale, Residence};
+            }
+        }
         return {preview_, *policy_, project_, current_, Residence};
     }
 }  // namespace Horo::Editor

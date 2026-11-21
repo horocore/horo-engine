@@ -347,7 +347,7 @@ add_executable(HoroEditorAgentTurnTests
     "${PROJECT_SOURCE_DIR}/apps/HoroEditor/app/EditorLocalAgentContext.cpp")
 target_include_directories(HoroEditorAgentTurnTests PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/unit/mcp")
 target_link_libraries(HoroEditorAgentTurnTests PRIVATE HoroMcpEditorAgentToolsInternal HoroEngine::McpController
-    HoroEngine::McpProjectCodeQuery HoroEngine::EditorServices HoroEditorAgentHistoryInternal)
+    HoroEngine::McpProjectCodeQuery HoroEngine::EditorServices HoroEditorAgentHistoryInternal HoroEngine::PlatformProjectReadFiles)
 horo_register_catch_test(HoroEditorAgentTurnTests LABELS "unit;agent;headless;ci-windows")
 
 add_executable(HoroEditorAgentHistoryTests unit/editor/AgentConversationStoreTests.cpp)

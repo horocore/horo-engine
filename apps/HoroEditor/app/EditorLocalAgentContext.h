@@ -10,8 +10,8 @@
 
 namespace Horo::Editor {
     /** @brief Owns one source preview and its exclusive policy until the approved request moves to the worker.
-     * @details The editor lane alone captures and approves. The worker observes only immutable source evidence and
-     * revocation witnesses. No source service, widget, or editor-thread callback is retained by the request.
+     * @details Approval runs on the editor lane. The worker observes immutable evidence and revocation witnesses,
+     * and rechecks saved file revisions through the rooted reader. No editor-thread callback is retained.
      */
     class EditorLocalAgentContext final {
     public:
@@ -28,6 +28,18 @@ namespace Horo::Editor {
                                                                      std::uint64_t workspaceGeneration, CancellationToken lifetime,
                                                                      std::uint64_t requestId,
                                                                      std::optional<SourceContextRange> selection = {});
+
+        /** @brief Captures explicitly selected saved project text on a worker without opening a Source tab.
+         * @param files Retained read-only authority for the current workspace.
+         * @param path Exact portable project-relative path supplied by the user.
+         * @param project Workspace reader identity, generation, lifetime and preview deadline.
+         * @param requestId Exact upcoming local turn.
+         * @param stop Cancellation for the capture operation only.
+         * @return Owned redacted preview or a typed error before any provider access.
+         */
+        [[nodiscard]] static Result<EditorLocalAgentContext> PrepareSavedFile(std::shared_ptr<const Platform::IProjectReadFiles> files,
+                                                                              std::string_view path, Platform::ProjectReadContext project,
+                                                                              std::uint64_t requestId, std::stop_token stop = {});
 
         /** @brief Prepares only the bounded, already-correlated build messages selected by the workspace.
          * @details The tail must have been acquired from the project's exact active gameplay operation.
@@ -76,6 +88,11 @@ namespace Horo::Editor {
             return !Items().empty() && Items().front().provenance.kind == Agent::AgentContextKind::Selection;
         }
 
+        /** @brief Identifies a preview of saved bytes captured through the workspace reader. */
+        [[nodiscard]] bool IsSavedFile() const noexcept {
+            return static_cast<bool>(savedFiles_);
+        }
+
         /** @brief Reports the captured explicit selection, when reviewing a range. */
         [[nodiscard]] std::optional<SourceContextRange> Selection() const noexcept {
             return selection_;
@@ -84,8 +101,10 @@ namespace Horo::Editor {
         /** @brief Record consent only after the exact preview is shown and the user explicitly approves it. */
         [[nodiscard]] bool Approve();
 
-        /** @brief Borrow the exclusive prepared context until the synchronous worker turn returns. */
-        [[nodiscard]] Agent::AgentTurnContext Dispatch() noexcept;
+        /** @brief On the inference worker, recheck saved file bytes and borrow the context for the synchronous turn.
+         * @param stop Cancellation for the inference worker. @return Owned-context borrow, denied if saved evidence changed.
+         */
+        [[nodiscard]] Agent::AgentTurnContext Dispatch(std::stop_token stop = {});
 
     private:
         EditorLocalAgentContext(SourceDocumentSnapshot source, Platform::ProjectReadContext project,
@@ -108,5 +127,6 @@ namespace Horo::Editor {
         std::optional<SourceContextRange> selection_;
         std::optional<OperationId> buildOperation_;
         Agent::AgentHistoryReference historyReference_;
+        std::shared_ptr<const Platform::IProjectReadFiles> savedFiles_;
     };
 }  // namespace Horo::Editor

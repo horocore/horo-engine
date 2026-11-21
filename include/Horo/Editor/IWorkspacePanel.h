@@ -31,6 +31,10 @@ namespace Horo::Application {
     class INetworkDebuggerControl;
 }  // namespace Horo::Application
 
+namespace Horo::Platform {
+    class IProjectReadFiles;
+}
+
 namespace Horo {
     class IBuildOutputQuery;
     class IOperationControl;
@@ -96,6 +100,9 @@ namespace Horo::Editor {
         std::function<std::span<const SourceDocumentSnapshot>()> openSourceSnapshots{};
         /** @brief Captures bounded selected Scene object IDs on the workspace owner lane. */
         std::function<std::optional<AgentSceneSelectionSnapshot>()> captureSceneSelection{};
+        /** @brief Optional rooted read authority for explicit saved-file review, bound to generation one. */
+        std::shared_ptr<const Platform::IProjectReadFiles> agentProjectFiles{};
+        std::string_view agentProjectReadIdentity{}; /**< Exact workspace reader identity, borrowed during attachment. */
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */
