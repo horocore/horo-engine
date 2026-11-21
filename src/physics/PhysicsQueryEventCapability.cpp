@@ -133,6 +133,27 @@ namespace Horo::Physics {
         return state_ ? state_->identity : PhysicsQueryEventIdentity{};
     }
 
+    Result<void> PhysicsQueryEventCapability::ValidateQueryPublication(const std::uint64_t sceneGeneration,
+                                                                       const std::uint64_t completedTick,
+                                                                       const std::uint64_t publicationRevision) const {
+        if (!state_)
+            return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityStale));
+        const auto access = ResolveAccess(*state_, state_->identity);
+        if (access.HasError())
+            return Result<void>::Failure(access.ErrorValue());
+        const auto &world = *access.Value();
+        const auto &impl = *world.impl_;
+        if (impl.state != PhysicsWorldState::ActiveSolver || impl.runtime->state != PhysicsRuntimeState::Ready)
+            return Result<void>::Failure(MakeError(PhysicsErrors::CapabilityUnavailable));
+        if (impl.stepping)
+            return Result<void>::Failure(MakeError(PhysicsErrors::InvalidState));
+        const auto published = world.PublishedTick();
+        if (published.completedTick == 0 || published.completedTick != completedTick ||
+            published.publicationRevision != publicationRevision || impl.querySceneGeneration != sceneGeneration)
+            return Result<void>::Failure(MakeError(PhysicsErrors::QuerySnapshotStale));
+        return Result<void>::Success();
+    }
+
     /** @copydoc PhysicsQueryBatchHandle::Cancel */
     bool PhysicsQueryBatchHandle::Cancel() const noexcept {
         return state_ && state_->Cancel();

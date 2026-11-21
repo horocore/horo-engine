@@ -96,6 +96,7 @@ namespace Horo::Navigation {
         [[nodiscard]] static Result<NavigationPath> ExecuteQuery(const Work &work);
 
         JobSystem &jobs;
+        NavigationCoordinator *owner{}; /**< Only the owner lane reads or changes this binding. */
         NavigationPathBatchLimits limits;
         std::vector<Slot> slots;
         std::vector<Batch> batches;

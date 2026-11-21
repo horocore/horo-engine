@@ -55,6 +55,9 @@ namespace Horo::AI {
             return Result<bool>::Failure(MakeError(AIErrors::EnvironmentQueryContextInvalid));
         if (!SameAccess(publication.identity, capability.Identity()))
             return Result<bool>::Failure(MakeError(Physics::PhysicsErrors::CapabilityStale));
+        const auto live = capability.ValidateQueryPublication(publication.sceneGeneration, publication.completedTick, publication.revision);
+        if (live.HasError())
+            return Result<bool>::Failure(live.ErrorValue());
 
         filter.blockingOnly = true;
         const Physics::PhysicsQueryCommand command{.identity = publication.identity,
@@ -71,6 +74,7 @@ namespace Horo::AI {
                 return Result<bool>::Success(false);
             return Result<bool>::Failure(admitted.ErrorValue());
         }
+        capability_ = capability;
         publication_ = publication;
         stage_ = stage;
         descriptor_ = command.descriptor;
@@ -88,14 +92,18 @@ namespace Horo::AI {
             Cancel();
             return ResultType::Failure(MakeError(Physics::PhysicsErrors::QuerySnapshotStale));
         }
-        const auto completed = pending_->Poll();
-        if (completed.HasError()) {
-            pending_.reset();
-            return ResultType::Failure(completed.ErrorValue());
+        const auto live = capability_.ValidateQueryPublication(current.sceneGeneration, current.completedTick, current.revision);
+        if (live.HasError()) {
+            Cancel();
+            return ResultType::Failure(live.ErrorValue());
         }
-        if (!completed.Value())
+        const auto completed = pending_->Poll();
+        if (completed.HasValue() && !completed.Value())
             return ResultType::Success(std::nullopt);
         pending_.reset();
+        capability_ = {};
+        if (completed.HasError())
+            return ResultType::Failure(completed.ErrorValue());
         return TranslateCompletion(*completed.Value(), publication_, descriptor_, stage_);
     }
 
@@ -104,5 +112,6 @@ namespace Horo::AI {
         if (pending_)
             (void)pending_->Cancel();
         pending_.reset();
+        capability_ = {};
     }
 }  // namespace Horo::AI

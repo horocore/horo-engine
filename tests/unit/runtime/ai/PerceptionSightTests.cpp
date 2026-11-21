@@ -202,6 +202,34 @@ namespace Horo::AI {
             CHECK_FALSE(probe.Poll(publication).Value().has_value());
         }
 
+        TEST_CASE("EQS Physics consumes only live capability results at the captured publication", "[unit][ai][sight][eqs]") {
+            SightWorld physics;
+            const auto publication = ProbePublication(physics);
+            const auto stage = QueryStageId::Create(1).Value();
+            const Physics::PhysicsRayQuery ray{.origin = {0, 0, 0}, .maximumDistanceMeters = 10};
+            const Physics::PhysicsQueryFilter filter{.channel = VisibilityChannel()};
+            QueryPhysicsProbe probe;
+            REQUIRE(probe.Start(physics.capability, publication, stage, ray, filter).Value());
+            REQUIRE(physics.world->ProcessQueryBatch().HasValue());
+
+            auto expected = Physics::PhysicsErrors::CapabilityRevoked.code.Value();
+            SECTION("explicit revocation after provider completion") {
+                REQUIRE(physics.world->RevokeQueryEventCapability(physics.capability).HasValue());
+            }
+            SECTION("destroyed world with a retained historical completion") {
+                physics.world.reset();
+                expected = Physics::PhysicsErrors::CapabilityStale.code.Value();
+            }
+            SECTION("a newer completed tick while the caller presents the old publication") {
+                physics.Advance();
+                expected = Physics::PhysicsErrors::QuerySnapshotStale.code.Value();
+            }
+            const auto retired = probe.Poll(publication);
+            REQUIRE(retired.HasError());
+            CHECK(retired.ErrorValue().code.Value() == expected);
+            CHECK_FALSE(probe.Poll(publication).Value().has_value());
+        }
+
         TEST_CASE("Sight rays preserve local separation near signed global coordinate limits", "[unit][ai][sight][canonical]") {
             SightScene scene;
             SightWorld physics;

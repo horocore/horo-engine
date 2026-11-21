@@ -368,6 +368,52 @@ namespace Horo::AI {
             CHECK(owner.coordinator.IsDrained());
         }
 
+        TEST_CASE("EQS Navigation rejects a completed path after its world retires", "[unit][ai][navigation][eqs]") {
+            ProbeOwner owner;
+            QueryNavigationProbe probe{owner.coordinator};
+            const std::array callers{Caller()};
+            REQUIRE(probe.Start(owner.world, QueryStageId::Create(1).Value(), Input(), 0).Value());
+            owner.Complete(callers, 1);
+            REQUIRE(owner.world.Unload(World()).HasValue());
+            const auto retired = probe.Poll(Current(callers));
+            REQUIRE(retired.HasError());
+            CHECK(retired.ErrorValue().code.Value() == NavigationErrors::StaleSnapshot.code.Value());
+            CHECK(owner.coordinator.IsDrained());
+        }
+
+        TEST_CASE("EQS Navigation drops stale path access while a retired coordinator's worker still runs",
+                  "[unit][ai][navigation][eqs][qualification]") {
+            ConsumerFixture owner{1, std::make_shared<Gate>()};
+            std::optional coordinator{NavigationCoordinator::Create(owner.jobs, Limits()).Value()};
+            const auto stage = QueryStageId::Create(1).Value();
+            const std::array callers{Caller()};
+            QueryNavigationProbe probe{*coordinator};
+            REQUIRE(probe.Start(owner.world, stage, Input(), 0).Value());
+            REQUIRE(coordinator->Dispatch(1) == 1);
+            REQUIRE(owner.gate->AwaitEntry());
+
+            SECTION("shutdown withdraws results and lets the probe abandon its reservation") {
+                coordinator->BeginShutdown();
+            }
+            SECTION("destruction clears the owner even while a worker retains coordinator state") {
+                coordinator.reset();
+            }
+            const auto stale = probe.Poll(Current(callers));
+            REQUIRE(stale.HasError());
+            CHECK(stale.ErrorValue().code.Value() == NavigationErrors::StaleSnapshot.code.Value());
+            const auto readmitted = probe.Start(owner.world, stage, Input(), 1);
+            REQUIRE(readmitted.HasError());
+            CHECK(readmitted.ErrorValue().code.Value() == NavigationErrors::StaleSnapshot.code.Value());
+            REQUIRE(owner.world.Unload(World()).HasValue());
+            CHECK(owner.world.RetiredCount() == 1);
+            owner.FinishWorker();
+            if (coordinator) {
+                coordinator->CollectRetiredAtSafePoint();
+                CHECK(coordinator->IsDrained());
+            }
+            CHECK(owner.world.CollectRetired() == NavigationWorldLifecycleState::Empty);
+        }
+
         TEST_CASE("EQS Navigation capacity rejection admits no probe and can retry after owner retirement", "[unit][ai][navigation][eqs]") {
             ProbeOwner owner;
             std::array<NavRequestHandle, 4> occupied;

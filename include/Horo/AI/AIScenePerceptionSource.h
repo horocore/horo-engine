@@ -103,11 +103,12 @@ namespace Horo::AI {
 
     private:
         /** @brief Retains only immutable admission evidence and the recipient's exact identity. */
-        PerceptionPublication(Runtime::EntityRef listener, BlackboardInstanceBinding binding,
+        PerceptionPublication(const Runtime::RuntimeSceneView &scene, Runtime::EntityRef listener, BlackboardInstanceBinding binding,
                               std::shared_ptr<const BlackboardSchema> schema, PerceptionBlackboardProjection projection,
                               std::size_t capacity) noexcept;
         /** @brief Checks the exact Scene recipient and the admitted blackboard generation and schema. */
         [[nodiscard]] bool MatchesBinding(const Runtime::RuntimeSceneView &scene, const BlackboardInstance &blackboard) const;
+        Runtime::RuntimeSceneView scene_;
         Runtime::EntityRef listener_;
         BlackboardInstanceBinding binding_;
         std::shared_ptr<const BlackboardSchema> schema_;

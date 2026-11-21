@@ -30,13 +30,13 @@ namespace Horo::AI {
 
     /** @brief One exclusive best-effort path request consumed by an EQS host adapter.
      * @details The host supplies exact Navigation coordinates, caller authority and pinned revisions.
-     * All methods use the coordinator owner lane. The coordinator and world outlive the probe.
+     * All methods use the coordinator owner lane. The world is borrowed for submission only.
      * The host dispatches/commits Navigation phases and collects retired work before provider shutdown.
      */
     class QueryNavigationProbe final {
     public:
         /** @brief Binds the existing Navigation owner without allocating a scheduler.
-         * @param coordinator Host-owned coordinator, which must outlive this object.
+         * @param coordinator Host-owned coordinator issuing revocable path access.
          */
         explicit QueryNavigationProbe(Navigation::NavigationCoordinator &coordinator) noexcept;
         QueryNavigationProbe(const QueryNavigationProbe &) = delete;
@@ -65,7 +65,8 @@ namespace Horo::AI {
     private:
         /** @brief Checks current host authority before attempting to consume a request. */
         [[nodiscard]] bool IsCurrent(const Navigation::NavigationPathPublication &current) const noexcept;
-        Navigation::NavigationCoordinator &coordinator_;
+        Navigation::NavigationCoordinator::PathRequests requests_;
+        CancellationToken worldCancellation_;
         Navigation::NavigationWorldActivationDescriptor activation_;
         Navigation::NavigationOutcomeProvenance source_;
         Navigation::NavigationPathCaller caller_;

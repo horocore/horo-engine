@@ -543,18 +543,19 @@ namespace Horo::AI {
         const auto capacity = projection.Validate(*schema);
         if (capacity.HasError())
             return Result<PerceptionPublication>::Failure(capacity.ErrorValue());
-        return Result<PerceptionPublication>::Success({listener, blackboard.Binding(), std::move(schema), projection, capacity.Value()});
+        return Result<PerceptionPublication>::Success(
+            {scene, listener, blackboard.Binding(), std::move(schema), projection, capacity.Value()});
     }
 
     /** @copydoc PerceptionPublication::PerceptionPublication */
-    PerceptionPublication::PerceptionPublication(const Runtime::EntityRef listener, const BlackboardInstanceBinding binding,
-                                                 std::shared_ptr<const BlackboardSchema> schema,
+    PerceptionPublication::PerceptionPublication(const Runtime::RuntimeSceneView &scene, const Runtime::EntityRef listener,
+                                                 const BlackboardInstanceBinding binding, std::shared_ptr<const BlackboardSchema> schema,
                                                  const PerceptionBlackboardProjection projection, const std::size_t capacity) noexcept
-        : listener_(listener), binding_(binding), schema_(std::move(schema)), projection_(projection), capacity_(capacity) {}
+        : scene_(scene), listener_(listener), binding_(binding), schema_(std::move(schema)), projection_(projection), capacity_(capacity) {}
 
     /** @copydoc PerceptionPublication::MatchesBinding */
     bool PerceptionPublication::MatchesBinding(const Runtime::RuntimeSceneView &scene, const BlackboardInstance &blackboard) const {
-        return scene.IsCurrent() && scene.RuntimeId() == listener_.runtime && scene.Get(listener_).HasValue() && blackboard.IsActive() &&
+        return scene_.SameIncarnation(scene) && scene.Get(listener_).HasValue() && blackboard.IsActive() &&
                blackboard.Binding() == binding_ && blackboard.SchemaAtSafePoint() == schema_;
     }
 

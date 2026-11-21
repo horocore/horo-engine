@@ -318,16 +318,17 @@ typed stale result.
 The queued Physics probe lives in AISightIntegration, which already owns the
 Physics capability dependency. It checks the exact host publication and returns
 binary clearance from a bounded, blocking-only ray or overlap. The host supplies
-local-frame geometry and retires the probe on source replacement. Capacity
-backpressure admits no request. A stale binding cancels outstanding work.
+local-frame geometry. The probe checks the original capability against the live
+Physics publication before it consumes a completion. Capacity backpressure
+admits no request. A stale binding cancels outstanding work.
 
 The Navigation adapter is owned by AINavigationIntegration, whose explicit
 dependencies are AI and NavigationRuntime. QueryNavigationProbe submits one
 bounded request to the injected NavigationCoordinator and consumes only its
 owner-published terminal record. It never dispatches or commits the coordinator,
-resets provider quotas or accesses backend storage. The host keeps the coordinator
-alive until probe cancellation/retirement, then drains provider jobs through the
-existing Navigation lifecycle. Reachable paths expose finite non-negative cost;
+resets provider quotas or accesses backend storage. Its revocable request view
+reports stale access when the coordinator retires. The host drains provider
+jobs through the existing Navigation lifecycle. Reachable paths expose finite non-negative cost;
 partial or budget-limited paths remain incomparable, while exact provider errors
 retain their original domain and code.
 

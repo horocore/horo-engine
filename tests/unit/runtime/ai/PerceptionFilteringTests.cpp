@@ -323,6 +323,24 @@ namespace Horo::AI {
             ExpectError(EvaluateQueryPerception(source, test, target), AIErrors::PerceptionSpatialStale);
         }
 
+        TEST_CASE("EQS Perception refuses a distinct Scene that reuses the source identities", "[unit][ai][eqs][perception]") {
+            PublicationFixture original;
+            const auto published = original.Sync(2);
+            REQUIRE(published.HasValue());
+            const QueryPerceptionTest test{MakeIdentity<QueryStageId>(3), original.agent, published.Value().revision,
+                                           QueryPerceptionMatch::Remembered, SenseTypeIds::Sight};
+            const auto target = original.source.entity;
+            const auto replacement = std::make_unique<PublicationFixture>();
+            REQUIRE(replacement->source.entity == target);
+            REQUIRE(replacement->listener.entity == original.listener.entity);
+            const auto view = replacement->scene->View();
+            const QueryPerceivedEntitySource mixed{view, original.Publication(), original.broadphase, *original.blackboard};
+            ExpectError(EvaluateQueryPerception(mixed, test, target), AIErrors::PerceptionSpatialStale);
+            ExpectError(original.Publication().PublishAtBlackboardSync(*replacement->scene, original.broadphase, original.memory,
+                                                                       *original.blackboard, 3),
+                        AIErrors::PerceptionSpatialStale);
+        }
+
         TEST_CASE("one perception projection issues one blackboard notification and rejects recursive publication",
                   "[unit][ai][perception][filter]") {
             PublicationFixture fixture;

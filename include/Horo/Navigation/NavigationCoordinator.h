@@ -11,6 +11,7 @@
 #include <memory>
 #include <optional>
 #include <span>
+#include <thread>
 
 namespace Horo::Navigation {
     /** @brief Compiled ceiling on owner-side full-table candidate probes in one tick. */
@@ -91,7 +92,29 @@ namespace Horo::Navigation {
      * provider code. No live Scene, gameplay callback, TaskGroup destructor wait, or new worker pool is retained.
      */
     class NavigationCoordinator final {
+        struct State;
+
     public:
+        /** @brief Non-owning path request access bound to the coordinator's owner lane. */
+        class PathRequests final {
+        public:
+            /** @brief Admits a path through the current owner or reports stale access. */
+            [[nodiscard]] Result<NavRequestHandle> Submit(const NavigationWorldLifecycle &world, NavigationPathSubmission submission,
+                                                          std::uint64_t tick) const;
+            /** @brief Reads a published result while the admitting coordinator is live and open. */
+            [[nodiscard]] Result<std::optional<NavigationPathCompletion>> Take(NavRequestHandle handle) const;
+            /** @brief Releases a retained consumer reservation, including during owner shutdown. */
+            void Abandon(NavRequestHandle handle) const noexcept;
+
+        private:
+            friend class NavigationCoordinator;
+            explicit PathRequests(const std::shared_ptr<State> &state) noexcept;
+            [[nodiscard]] std::shared_ptr<State> Resolve() const noexcept;
+
+            std::weak_ptr<State> state_;
+            std::thread::id lane_;
+        };
+
         /** @brief Prepare storage outside fixed-tick work.
          * @param jobs Process scheduler, configured with nonblocking CPU priority queues, outliving owner calls.
          * @param limits Finite request/partition/work/storage ceilings.
@@ -105,6 +128,9 @@ namespace Horo::Navigation {
         NavigationCoordinator &operator=(NavigationCoordinator &&) = delete;
         /** @brief Signal cancellation and release owner pins without waiting for workers. */
         ~NavigationCoordinator();
+
+        /** @brief Issues path access without extending the owner, provider, or worker lifetime. */
+        [[nodiscard]] PathRequests ObservePathRequests() const noexcept;
 
         /** @brief Admit an owned request without execution or publication.
          * @param world Owner-thread lifecycle issuing the exact provider lease.
@@ -164,7 +190,6 @@ namespace Horo::Navigation {
         [[nodiscard]] bool IsDrained() const noexcept;
 
     private:
-        struct State;
         explicit NavigationCoordinator(std::shared_ptr<State> state) noexcept;
         /** @brief Access owner mutation authority; unavailable on a const coordinator. @return Shared owned state. */
         [[nodiscard]] std::shared_ptr<State> &MutableState() noexcept;

@@ -98,7 +98,8 @@ namespace Horo::AI {
     }
 
     /** @copydoc QueryNavigationProbe::QueryNavigationProbe */
-    QueryNavigationProbe::QueryNavigationProbe(Navigation::NavigationCoordinator &coordinator) noexcept : coordinator_(coordinator) {}
+    QueryNavigationProbe::QueryNavigationProbe(Navigation::NavigationCoordinator &coordinator) noexcept
+        : requests_(coordinator.ObservePathRequests()) {}
 
     /** @copydoc QueryNavigationProbe::~QueryNavigationProbe */
     QueryNavigationProbe::~QueryNavigationProbe() {
@@ -112,10 +113,10 @@ namespace Horo::AI {
             return Result<bool>::Failure(MakeError(AIErrors::EnvironmentQueryContextInvalid));
         const auto source = submission.source;
         const auto caller = submission.caller;
-        const auto activation = world.ActiveDescriptor();
-        if (activation.HasError())
-            return Result<bool>::Failure(activation.ErrorValue());
-        auto accepted = coordinator_.Submit(world, std::move(submission), tick);
+        const auto lease = world.Acquire(submission.request.world);
+        if (lease.HasError())
+            return Result<bool>::Failure(lease.ErrorValue());
+        auto accepted = requests_.Submit(world, std::move(submission), tick);
         if (accepted.HasError()) {
             if (accepted.ErrorValue().code.Value() == Navigation::NavigationErrors::CapacityExceeded.code.Value() ||
                 accepted.ErrorValue().code.Value() == Navigation::NavigationErrors::AdmissionRejected.code.Value())
@@ -123,7 +124,8 @@ namespace Horo::AI {
             return Result<bool>::Failure(accepted.ErrorValue());
         }
         pending_ = accepted.Value();
-        activation_ = activation.Value();
+        activation_ = lease.Value().Descriptor();
+        worldCancellation_ = lease.Value().Cancellation();
         source_ = source;
         caller_ = caller;
         stage_ = stage;
@@ -139,10 +141,16 @@ namespace Horo::AI {
             Cancel();
             return Sample::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
         }
-        auto completed = coordinator_.Take(pending_);
+        auto received = requests_.Take(pending_);
+        if (received.HasError()) {
+            Cancel();
+            return Sample::Failure(std::move(received).ErrorValue());
+        }
+        auto completed = std::move(received).Value();
         if (!completed)
             return Sample::Success(std::nullopt);
         const auto expected = std::exchange(pending_, {});
+        worldCancellation_ = {};
         if (completed->handle != expected || completed->caller != caller_ || completed->activation != activation_ ||
             !SameRoot(completed->source, source_) || completed->source.completionTick > current.tick)
             return Sample::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
@@ -153,13 +161,14 @@ namespace Horo::AI {
 
     /** @copydoc QueryNavigationProbe::IsCurrent */
     bool QueryNavigationProbe::IsCurrent(const Navigation::NavigationPathPublication &current) const noexcept {
-        return current.activation == activation_ && SameRoot(current.source, source_) &&
+        return !worldCancellation_.IsCancellationRequested() && current.activation == activation_ && SameRoot(current.source, source_) &&
                std::ranges::find(current.callers, caller_) != current.callers.end();
     }
 
     /** @copydoc QueryNavigationProbe::Cancel */
     void QueryNavigationProbe::Cancel() noexcept {
         if (pending_.IsValid())
-            (void)coordinator_.Abandon(std::exchange(pending_, {}));
+            requests_.Abandon(std::exchange(pending_, {}));
+        worldCancellation_ = {};
     }
 }  // namespace Horo::AI

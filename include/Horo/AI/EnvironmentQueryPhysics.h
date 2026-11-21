@@ -19,7 +19,7 @@ namespace Horo::AI {
     /** @brief One exclusive queued ray or overlap test with a blocking-only filter.
      * @details Submit on the Physics owner lane outside fixed-step callbacks. Poll on the query owner
      * lane, serialized with submission, cancellation and destruction. The host supplies exact geometry
-     * in the captured Physics origin frame and cancels the probe before retiring its source.
+     * in the captured Physics origin frame. Reading a completion requires the original live capability.
      */
     class QueryPhysicsProbe final {
     public:
@@ -51,6 +51,7 @@ namespace Horo::AI {
         void Cancel() noexcept;
 
     private:
+        Physics::PhysicsQueryEventCapability capability_;
         QueryPhysicsPublication publication_;
         QueryStageId stage_;
         Physics::PhysicsQueryDescriptor descriptor_;
