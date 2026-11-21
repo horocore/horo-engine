@@ -28,10 +28,12 @@ namespace Horo::Editor::Language {
                                                     "Language server startup parameters are invalid or exceed their size limit.",
                                                     {}};
 
-        /** @brief Encodes an internally constructed bounded lifecycle notification or request. */
-        std::string Frame(const nlohmann::json &message) {
-            auto body = message.dump();
-            return "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n" + body;
+        /** @brief Encodes the next frame for an already consumed lifecycle message. */
+        Result<LspLifecycleDispatch> Respond(const nlohmann::json &message) {
+            auto frame = EncodeLspMessage(message);
+            if (frame.HasError())
+                return Result<LspLifecycleDispatch>::Failure(std::move(frame).ErrorValue());
+            return Result<LspLifecycleDispatch>::Success({true, std::move(frame).Value()});
         }
 
         /** @brief Uses an integer reserved by the opening or closing handshake, never a feature request ID. */
@@ -51,13 +53,34 @@ namespace Horo::Editor::Language {
             return encoding == capabilities->end() || *encoding == "utf-16";
         }
 
+        /** @brief Reads the legacy numeric or current structured capability without coercing JSON types. */
+        LspTextSync ReadTextSync(const nlohmann::json &capabilities) {
+            const auto sync = capabilities.find("textDocumentSync");
+            if (sync == capabilities.end())
+                return LspTextSync::Disabled;
+            auto kind = sync;
+            if (sync->is_object()) {
+                const auto openClose = sync->find("openClose");
+                kind = sync->find("change");
+                if (openClose == sync->end() || *openClose != true || kind == sync->end())
+                    return LspTextSync::Disabled;
+            }
+            if (kind->is_number_integer()) {
+                if (*kind == 1)
+                    return LspTextSync::Full;
+                if (*kind == 2)
+                    return LspTextSync::Incremental;
+            }
+            return LspTextSync::Disabled;
+        }
+
         /** @brief Produces one handshake response before the caller observes the next state. */
         Result<LspLifecycleDispatch> SendNotification(const std::string_view method, const bool emptyParams) {
             try {
                 nlohmann::json message{{"jsonrpc", "2.0"}, {"method", method}};
                 if (emptyParams)
                     message["params"] = nlohmann::json::object();
-                return Result<LspLifecycleDispatch>::Success({true, Frame(message)});
+                return Respond(message);
             } catch (const std::bad_alloc &) {
                 return Result<LspLifecycleDispatch>::Failure(MakeError(InvalidParameters));
             }
@@ -67,7 +90,7 @@ namespace Horo::Editor::Language {
         Result<LspLifecycleDispatch> DeclineStartupPrompt(const LspMessage &message) {
             try {
                 const auto &id = message.envelope.Get().at("id");
-                return Result<LspLifecycleDispatch>::Success({true, Frame({{"jsonrpc", "2.0"}, {"id", id}, {"result", nullptr}})});
+                return Respond({{"jsonrpc", "2.0"}, {"id", id}, {"result", nullptr}});
             } catch (const std::bad_alloc &) {
                 return Result<LspLifecycleDispatch>::Failure(MakeError(InvalidParameters));
             }
@@ -85,12 +108,12 @@ namespace Horo::Editor::Language {
             const nlohmann::json params{{"processId", processId ? nlohmann::json(*processId) : nlohmann::json(nullptr)},
                                         {"rootUri", rootUri.empty() ? nlohmann::json(nullptr) : nlohmann::json(rootUri)},
                                         {"capabilities", {{"general", {{"positionEncodings", nlohmann::json::array({"utf-16"})}}}}}};
-            auto frame = Frame({{"jsonrpc", "2.0"}, {"id", InitializeId}, {"method", "initialize"}, {"params", params}});
+            auto frame = EncodeLspMessage({{"jsonrpc", "2.0"}, {"id", InitializeId}, {"method", "initialize"}, {"params", params}});
+            if (frame.HasError())
+                return frame;
             state_ = LspLifecycleState::Initializing;
             deadline_ = now + InitializeTimeout;
-            return Result<std::string>::Success(std::move(frame));
-        } catch (const nlohmann::json::exception &) {
-            return Result<std::string>::Failure(MakeError(InvalidParameters));
+            return frame;
         } catch (const std::bad_alloc &) {
             return Result<std::string>::Failure(MakeError(InvalidParameters));
         }
@@ -101,10 +124,12 @@ namespace Horo::Editor::Language {
         if (state_ != LspLifecycleState::Ready)
             return Result<std::string>::Failure(MakeError(InvalidState));
         try {
-            auto frame = Frame({{"jsonrpc", "2.0"}, {"id", ShutdownId}, {"method", "shutdown"}});
+            auto frame = EncodeLspMessage({{"jsonrpc", "2.0"}, {"id", ShutdownId}, {"method", "shutdown"}});
+            if (frame.HasError())
+                return frame;
             state_ = LspLifecycleState::ShuttingDown;
             deadline_ = now + ShutdownTimeout;
-            return Result<std::string>::Success(std::move(frame));
+            return frame;
         } catch (const std::bad_alloc &) {
             return Result<std::string>::Failure(MakeError(InvalidParameters));
         }
@@ -139,6 +164,8 @@ namespace Horo::Editor::Language {
         }
         auto response = SendNotification("initialized", true);
         state_ = response.HasValue() ? LspLifecycleState::Ready : LspLifecycleState::Failed;
+        if (response.HasValue())
+            textSync_ = ReadTextSync(message.envelope.Get().at("result").at("capabilities"));
         return response;
     }
 

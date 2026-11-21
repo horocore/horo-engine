@@ -6,6 +6,8 @@
 #include "LspLifecycle.h"
 
 namespace Horo::Editor::Language {
+    struct LspDocumentUpdate;
+
     /** @brief Transport operations used on the editor lane. Native process ownership stays with the host. */
     class ILspTransport {
     public:
@@ -49,6 +51,17 @@ namespace Horo::Editor::Language {
          */
         [[nodiscard]] Result<std::optional<LspMessage>> Read(std::string_view &bytes, Clock::time_point now);
 
+        /** @brief Queues the current source revision using the peer's negotiated document synchronization mode.
+         * @param snapshot Current source lease. @param languageId Stable language ID from this project's adapter.
+         * @return Success when the revision was already synchronized or every required frame entered the queue.
+         */
+        [[nodiscard]] Result<void> SyncSource(const SourceDocumentSnapshot &snapshot, std::string_view languageId);
+
+        /** @brief Queues retirement of the last synchronized URI and invalidates its requests.
+         * @param instance Source instance being closed. @return Success if already closed or retirement was queued.
+         */
+        [[nodiscard]] Result<void> CloseSource(DocumentInstanceId instance);
+
         /** @brief Stops new source work and queues graceful shutdown for a ready connection.
          * @param now Monotonic observation time. @return Queue admission or an error.
          */
@@ -71,6 +84,8 @@ namespace Horo::Editor::Language {
         [[nodiscard]] Incoming Dispatch(LspMessage message, Clock::time_point now);
         /** @brief Queues an owned frame, retiring the connection on backpressure or failure. */
         [[nodiscard]] Result<void> Send(std::string frame);
+        /** @brief Sends a rekey's close before the new open, retiring the connection after either refusal. */
+        [[nodiscard]] Result<void> SendUpdate(LspDocumentUpdate update);
         /** @brief Retires the connection once and requests asynchronous cancellation. */
         void Abort() noexcept;
         /** @brief Releases only this connection's source session stamp. */
@@ -80,6 +95,7 @@ namespace Horo::Editor::Language {
         ILspTransport &transport_;
         LspFrameReader reader_;
         LspLifecycle lifecycle_;
+        std::string rootUri_;
         std::uint64_t stamp_{};
         bool stopped_{};
     };

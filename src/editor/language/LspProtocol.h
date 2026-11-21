@@ -56,4 +56,10 @@ namespace Horo::Editor::Language {
      * @return An owned envelope or a typed refusal for malformed or over-budget input.
      */
     [[nodiscard]] Result<LspMessage> DecodeLspMessage(std::string_view body);
+
+    /** @brief Frames a locally constructed envelope subject to the outbound byte limit.
+     * @param message Trusted, size-limited JSON object constructed by the adapter.
+     * @return One owned wire frame or a typed encoding or size failure.
+     */
+    [[nodiscard]] Result<std::string> EncodeLspMessage(const nlohmann::json &message);
 }  // namespace Horo::Editor::Language

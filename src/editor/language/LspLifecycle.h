@@ -18,6 +18,13 @@ namespace Horo::Editor::Language {
         Failed
     };
 
+    /** @brief Negotiated strategy for writable source documents. */
+    enum class LspTextSync {
+        Disabled,
+        Full,
+        Incremental
+    };
+
     /** @brief Reports whether a message belonged to the handshake and the next frame, if any. */
     struct LspLifecycleDispatch final {
         bool handled{};
@@ -43,6 +50,11 @@ namespace Horo::Editor::Language {
         /** @brief Returns the current stage for this transport. */
         [[nodiscard]] LspLifecycleState State() const noexcept {
             return state_;
+        }
+
+        /** @brief Returns the server's negotiated document synchronization strategy. */
+        [[nodiscard]] LspTextSync TextSync() const noexcept {
+            return textSync_;
         }
 
         /** @brief Creates the first request for the connection.
@@ -84,6 +96,7 @@ namespace Horo::Editor::Language {
         [[nodiscard]] Result<LspLifecycleDispatch> HandleShutdown(const LspMessage &message, Clock::time_point now);
 
         LspLifecycleState state_{LspLifecycleState::Idle};
+        LspTextSync textSync_{LspTextSync::Disabled};
         std::optional<Clock::time_point> deadline_;
     };
 }  // namespace Horo::Editor::Language

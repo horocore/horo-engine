@@ -1,5 +1,8 @@
 #include "LspConnection.h"
 
+#include "LspDocumentSync.h"
+
+#include <new>
 #include <utility>
 
 namespace Horo::Editor::Language {
@@ -35,6 +38,12 @@ namespace Horo::Editor::Language {
         if (frame.HasError()) {
             Abort();
             return Result<std::uint64_t>::Failure(std::move(frame).ErrorValue());
+        }
+        try {
+            rootUri_ = rootUri;
+        } catch (const std::bad_alloc &) {
+            Abort();
+            return Result<std::uint64_t>::Failure(MakeError(SourceDocumentErrors::TooLarge));
         }
         auto sent = Send(std::move(frame).Value());
         if (sent.HasError())
@@ -86,6 +95,45 @@ namespace Horo::Editor::Language {
         return Incoming::Success(std::nullopt);
     }
 
+    /** @copydoc LspConnection::SyncSource */
+    Result<void> LspConnection::SyncSource(const SourceDocumentSnapshot &snapshot, const std::string_view languageId) {
+        if (stopped_ || lifecycle_.State() != LspLifecycleState::Ready || !snapshot.IsCurrent())
+            return Result<void>::Failure(MakeError(SourceDocumentErrors::Stale));
+        try {
+            const auto previous = source_.SynchronizedSource(stamp_, snapshot.Identity().instance);
+            if (previous && previous->SharesStateWith(snapshot))
+                return Result<void>::Success();
+            auto outgoing = BuildLspDocumentUpdate(rootUri_, languageId, snapshot, previous, lifecycle_.TextSync());
+            if (outgoing.HasError())
+                return Result<void>::Failure(std::move(outgoing).ErrorValue());
+            auto sync = source_.Sync(stamp_, snapshot);
+            if (sync.HasError())
+                return Result<void>::Failure(std::move(sync).ErrorValue());
+            return SendUpdate(std::move(outgoing).Value());
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(SourceDocumentErrors::TooLarge));
+        }
+    }
+
+    /** @copydoc LspConnection::CloseSource */
+    Result<void> LspConnection::CloseSource(const DocumentInstanceId instance) {
+        const auto source = source_.SynchronizedSource(stamp_, instance);
+        if (!source)
+            return Result<void>::Success();
+        try {
+            auto closing = BuildLspDocumentClose(rootUri_, source->Identity().key.source);
+            if (closing.HasError()) {
+                Abort();
+                return Result<void>::Failure(std::move(closing).ErrorValue());
+            }
+            source_.Close(stamp_, instance);
+            return Send(std::move(closing).Value());
+        } catch (const std::bad_alloc &) {
+            Abort();
+            return Result<void>::Failure(MakeError(SourceDocumentErrors::TooLarge));
+        }
+    }
+
     /** @copydoc LspConnection::Shutdown */
     Result<void> LspConnection::Shutdown(const Clock::time_point now) {
         if (stopped_)
@@ -130,10 +178,25 @@ namespace Horo::Editor::Language {
 
     /** @copydoc LspConnection::Send */
     Result<void> LspConnection::Send(std::string frame) {
-        auto sent = transport_.Enqueue(std::move(frame));
-        if (sent.HasError())
+        try {
+            auto sent = transport_.Enqueue(std::move(frame));
+            if (sent.HasError())
+                Abort();
+            return sent;
+        } catch (const std::bad_alloc &) {
             Abort();
-        return sent;
+            return Result<void>::Failure(MakeError(SourceDocumentErrors::TooLarge));
+        }
+    }
+
+    /** @copydoc LspConnection::SendUpdate */
+    Result<void> LspConnection::SendUpdate(LspDocumentUpdate update) {
+        if (update.close) {
+            auto sent = Send(std::move(*update.close));
+            if (sent.HasError())
+                return sent;
+        }
+        return Send(std::move(update.update));
     }
 
     /** @copydoc LspConnection::Abort */

@@ -81,6 +81,17 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc SourceLanguageSession::SynchronizedSource */
+    std::optional<SourceDocumentSnapshot> SourceLanguageSession::SynchronizedSource(const std::uint64_t session,
+                                                                                    const DocumentInstanceId instance) const noexcept {
+        if (!IsReady(session))
+            return std::nullopt;
+        const auto found = documents_.find(instance);
+        if (found == documents_.end())
+            return std::nullopt;
+        return found->second;
+    }
+
     /** @copydoc SourceLanguageSession::Close */
     bool SourceLanguageSession::Close(const std::uint64_t session, const DocumentInstanceId instance) noexcept {
         if (!IsReady(session) || documents_.erase(instance) == 0)

@@ -89,6 +89,12 @@ namespace Horo::Editor {
          * @return Sync action or a refusal without replacing the previous lease.
          */
         [[nodiscard]] Result<SourceLanguageSync> Sync(std::uint64_t session, const SourceDocumentSnapshot &source);
+        /** @brief Returns the exact snapshot last accepted for this connection and instance.
+         * @param session Expected connection. @param instance Synchronized source instance.
+         * @return Retained protocol baseline, including when a later edit made it stale in the source owner.
+         */
+        [[nodiscard]] std::optional<SourceDocumentSnapshot> SynchronizedSource(std::uint64_t session,
+                                                                               DocumentInstanceId instance) const noexcept;
         /** @brief Retires a synchronized instance, including its pending requests.
          * @param session Expected connection. @param instance Closed source session.
          * @return True when an admitted document was retired.

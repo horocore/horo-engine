@@ -1,5 +1,6 @@
 #include "../../support/SourceDocumentTestProject.h"
 #include "Horo/Editor/SourceFileOpenService.h"
+#include "Horo/Foundation/Platform.h"
 #include "LspConnection.h"
 
 #include <catch2/catch_test_macros.hpp>
@@ -13,6 +14,9 @@ namespace {
     constexpr auto Now = LspConnection::Clock::time_point{};
     constexpr std::string_view InitializeResult = R"({"jsonrpc":"2.0","id":-1,"result":{"capabilities":{}}})";
     constexpr std::string_view ShutdownResult = R"({"jsonrpc":"2.0","id":-2,"result":null})";
+    constexpr std::string_view FullSync = R"({"jsonrpc":"2.0","id":-1,"result":{"capabilities":{"textDocumentSync":1}}})";
+    constexpr std::string_view IncrementalSync =
+        R"({"jsonrpc":"2.0","id":-1,"result":{"capabilities":{"textDocumentSync":{"openClose":true,"change":2}}}})";
 
     /** @brief Records the complete frames offered to the process worker. */
     struct TestTransport final : ILspTransport {
@@ -48,6 +52,18 @@ namespace {
         REQUIRE(result.HasValue());
         REQUIRE(result.Value().sourceSnapshot.has_value());
         return *result.Value().sourceSnapshot;
+    }
+
+    /** @brief Decodes a frame admitted by the transport through the actual wire codec. */
+    LspMessage Inspect(std::string_view bytes) {
+        LspFrameReader reader;
+        auto frame = reader.Consume(bytes);
+        REQUIRE(frame.HasValue());
+        REQUIRE(frame.Value().has_value());
+        CHECK(bytes.empty());
+        auto decoded = DecodeLspMessage(*frame.Value());
+        REQUIRE(decoded.HasValue());
+        return std::move(decoded).Value();
     }
 
     TEST_CASE("LSP transport gates feature dispatch until initialized is queued and retires work during shutdown") {
@@ -149,5 +165,115 @@ namespace {
         CHECK(truncated.TransportStopped(true).HasError());
         CHECK(source.State() == SourceLanguageSessionState::Disconnected);
         CHECK(truncatedTransport.cancellations == 0);
+    }
+
+    TEST_CASE("LSP source synchronization sends full or UTF-16 incremental updates as negotiated") {
+        for (const auto capability : {FullSync, IncrementalSync}) {
+            CAPTURE(capability);
+            TestSupport::SourceProject project;
+            SourceFileOpenService open{project.directory};
+            const std::string_view original = "one\r\n\xF0\x9F\x98\x80\xC4\xB1";
+            project.Put(original, "source #%.cpp");
+            const auto opened = open.Open({.path = "source #%.cpp"});
+            REQUIRE(opened.HasValue());
+            REQUIRE(opened.Value().sourceSnapshot.has_value());
+            const auto snapshot = *opened.Value().sourceSnapshot;
+            const auto instance = snapshot.Identity().instance;
+
+            SourceLanguageSession source;
+            TestTransport transport;
+            LspConnection connection{source, transport};
+            const auto stamp = connection.Start("file:///project%20root", std::nullopt, Now);
+            REQUIRE(stamp.HasValue());
+            CHECK(connection.SyncSource(snapshot, "cpp").HasError());
+            REQUIRE(Deliver(connection, capability).HasValue());
+            REQUIRE(connection.SyncSource(snapshot, "cpp").HasValue());
+            const auto didOpen = Inspect(transport.writes.back());
+            CHECK(didOpen.envelope.Get().at("method") == "textDocument/didOpen");
+            const auto &document = didOpen.envelope.Get().at("params").at("textDocument");
+            CHECK(document.at("uri") == "file:///project%20root/source%20%23%25.cpp");
+            CHECK(document.at("languageId") == "cpp");
+            CHECK(document.at("text").get_ref<const std::string &>() == original);
+            CHECK(document.at("version") == snapshot.Revision());
+            REQUIRE(connection.SyncSource(snapshot, "cpp").HasValue());
+            CHECK(transport.writes.size() == 3);
+
+            const auto request = source.Request(stamp.Value(), SourceLanguageRequestKind::Hover, snapshot);
+            REQUIRE(request.HasValue());
+            const auto changed = open.Documents().Edit(instance, {snapshot.Revision(), 0, original.size(), "new text"});
+            REQUIRE(changed.HasValue());
+            REQUIRE(connection.SyncSource(changed.Value(), "cpp").HasValue());
+            const auto didChange = Inspect(transport.writes.back());
+            CHECK(didChange.envelope.Get().at("method") == "textDocument/didChange");
+            const auto &change = didChange.envelope.Get().at("params").at("contentChanges").at(0);
+            CHECK(change.at("text") == "new text");
+            if (capability == IncrementalSync) {
+                CHECK(change.at("range").at("end").at("line") == 1);
+                CHECK(change.at("range").at("end").at("character") == 3);
+            } else {
+                CHECK_FALSE(change.contains("range"));
+            }
+            CHECK(source.Complete(request.Value()).HasError());
+        }
+    }
+
+    TEST_CASE("LSP rekeys close the previous URI before opening the new one") {
+        TestSupport::SourceProject project;
+        SourceFileOpenService open{project.directory};
+        const auto snapshot = OpenSource(project, open);
+        const auto instance = snapshot.Identity().instance;
+        SourceLanguageSession source;
+        TestTransport transport;
+        LspConnection connection{source, transport};
+        const auto stamp = connection.Start("file:///project%20root/", std::nullopt, Now);
+        REQUIRE(stamp.HasValue());
+        REQUIRE(Deliver(connection, FullSync).HasValue());
+        REQUIRE(connection.SyncSource(snapshot, "cpp").HasValue());
+        const auto request = source.Request(stamp.Value(), SourceLanguageRequestKind::Hover, snapshot);
+        REQUIRE(request.HasValue());
+
+        NativeDurableFileSystem files;
+        REQUIRE(open.SaveAs({instance, snapshot.Revision()}, project.directory / "new name.cpp", files).HasValue());
+        const auto renamed = open.Documents().Snapshot(instance);
+        REQUIRE(renamed.HasValue());
+        REQUIRE(connection.SyncSource(renamed.Value(), "cpp").HasValue());
+        REQUIRE(transport.writes.size() == 5);
+        const auto didRekeyClose = Inspect(transport.writes[3]);
+        CHECK(didRekeyClose.envelope.Get().at("method") == "textDocument/didClose");
+        CHECK(didRekeyClose.envelope.Get().at("params").at("textDocument").at("uri") == "file:///project%20root/source.cpp");
+        const auto didRekeyOpen = Inspect(transport.writes[4]);
+        CHECK(didRekeyOpen.envelope.Get().at("method") == "textDocument/didOpen");
+        CHECK(didRekeyOpen.envelope.Get().at("params").at("textDocument").at("uri") == "file:///project%20root/new%20name.cpp");
+        CHECK(source.Complete(request.Value()).HasError());
+
+        REQUIRE(connection.CloseSource(instance).HasValue());
+        CHECK_FALSE(source.SynchronizedSource(stamp.Value(), instance));
+        CHECK(Inspect(transport.writes.back()).envelope.Get().at("method") == "textDocument/didClose");
+        REQUIRE(connection.CloseSource(instance).HasValue());
+        CHECK(transport.writes.size() == 6);
+    }
+
+    TEST_CASE("LSP synchronization leaves the peer baseline intact when a replacement exceeds the wire budget") {
+        TestSupport::SourceProject project;
+        SourceFileOpenService open{project.directory};
+        const auto snapshot = OpenSource(project, open);
+        SourceLanguageSession source;
+        TestTransport transport;
+        LspConnection connection{source, transport};
+        const auto stamp = connection.Start("file:///project", std::nullopt, Now);
+        REQUIRE(stamp.HasValue());
+        REQUIRE(Deliver(connection, FullSync).HasValue());
+        REQUIRE(connection.SyncSource(snapshot, "cpp").HasValue());
+        const auto instance = snapshot.Identity().instance;
+        const auto oversized = open.Documents().Edit(instance, {snapshot.Revision(), 0, snapshot.Text().size(),
+                                                                std::string(MaximumLspBodyBytes / 2 + 1, '\t')});
+        REQUIRE(oversized.HasValue());
+        CHECK(connection.SyncSource(oversized.Value(), "cpp").HasError());
+        const auto baseline = source.SynchronizedSource(stamp.Value(), instance);
+        REQUIRE(baseline.has_value());
+        CHECK(baseline->SharesStateWith(snapshot));
+        CHECK(source.State() == SourceLanguageSessionState::Ready);
+        CHECK(transport.writes.size() == 3);
+        CHECK(transport.cancellations == 0);
     }
 }  // namespace

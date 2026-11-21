@@ -254,4 +254,20 @@ namespace Horo::Editor::Language {
             return Result<LspMessage>::Failure(MakeError(MessageLimit));
         }
     }
+
+    /** @copydoc EncodeLspMessage */
+    Result<std::string> EncodeLspMessage(const nlohmann::json &message) {
+        try {
+            const auto body = message.dump();
+            if (body.size() > MaximumLspBodyBytes)
+                return Result<std::string>::Failure(MakeError(MessageLimit));
+            auto frame = "Content-Length: " + std::to_string(body.size()) + "\r\n\r\n";
+            frame += body;
+            return Result<std::string>::Success(std::move(frame));
+        } catch (const nlohmann::json::exception &) {
+            return Result<std::string>::Failure(MakeError(InvalidMessage));
+        } catch (const std::bad_alloc &) {
+            return Result<std::string>::Failure(MakeError(MessageLimit));
+        }
+    }
 }  // namespace Horo::Editor::Language

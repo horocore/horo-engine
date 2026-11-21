@@ -199,6 +199,12 @@ shutdown retire the exact source session before further feature dispatch. The
 transport only queues owned frames on the editor lane. Its process and callbacks
 are owned by the host.
 
+The connection queues document open, change, and close notifications using
+the peer's negotiated synchronization mode. Incremental updates replace the
+extent of the exact previously synchronized text using UTF-16 positions.
+Rekeys close the previous URI before opening the new one. Frame preparation
+validates the byte budget before changing the synchronized baseline.
+
 ### Source Save Publication (EDT-003.5)
 
 `SourceDocumentService::Save` captures one exact current revision on the owner thread.
