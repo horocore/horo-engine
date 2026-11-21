@@ -1026,16 +1026,19 @@ namespace Horo::Editor {
                     return;
                 const auto state = sourceReviewTransaction_();
                 using enum Proposals::SourceTransactionFeedback;
-                if (state.feedback != Preparing && std::exchange(sourceApplyQueued_, false) && state.feedback == Applied)
+                const bool completed = state.feedback == Applied || state.feedback == Deleted || state.feedback == DeleteRecovery;
+                if (state.feedback != Preparing && std::exchange(sourceApplyQueued_, false) && completed)
                     patchReview_.reset();
-                constexpr std::array<const char *, 8> keys{nullptr,
-                                                           "source_patch_applied",
-                                                           "source_patch_reverted",
-                                                           "source_patch_apply_failed",
-                                                           "source_patch_revert_failed",
-                                                           "source_patch_transaction_conflict",
-                                                           "source_patch_transaction_cancelled",
-                                                           "source_patch_transaction_preparing"};
+                constexpr std::array<const char *, 10> keys{nullptr,
+                                                            "source_patch_applied",
+                                                            "source_patch_reverted",
+                                                            "source_patch_apply_failed",
+                                                            "source_patch_revert_failed",
+                                                            "source_patch_transaction_conflict",
+                                                            "source_patch_transaction_cancelled",
+                                                            "source_patch_transaction_preparing",
+                                                            "source_patch_delete_complete",
+                                                            "source_patch_delete_recovery"};
                 if (const auto *key = keys[static_cast<std::size_t>(state.feedback)])
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, key), Theme::Text(), fonts);
                 if (state.audit)
@@ -1165,8 +1168,8 @@ namespace Horo::Editor {
 
             /** @brief Prevents dispatch through the text transaction when a structural decision is included. */
             bool HasAcceptedFileOperation(const EditorLocalAgentPatchReview &review) const {
-                // One creation can be staged as a normal unsaved document.
-                if (review.files.size() == 1 && review.files.front().kind == EditorPatchFileKind::Create)
+                if (review.files.size() == 1 &&
+                    (review.files.front().kind == EditorPatchFileKind::Create || review.files.front().kind == EditorPatchFileKind::Delete))
                     return false;
                 for (std::size_t index = 0; index < review.files.size(); ++index) {
                     if (review.files[index].kind != EditorPatchFileKind::Edit &&
@@ -1198,8 +1201,11 @@ namespace Horo::Editor {
                 if (fileOperation)
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "source_patch_structural_preview"),
                                     Theme::Muted(), fonts);
+                const auto *action = review.files.size() == 1 && review.files.front().kind == EditorPatchFileKind::Delete
+                                         ? "source_patch_confirm_delete"
+                                         : "source_patch_apply";
                 if (requestSourceReviewApply_ &&
-                    Button(locale, "source_patch_apply", !fileOperation && !writingAudit && review.decisions.HasAcceptedChanges()))
+                    Button(locale, action, !fileOperation && !writingAudit && review.decisions.HasAcceptedChanges()))
                     QueueSourceApply(review, command);
                 if (!buildRoot_.empty() && Button(locale, "source_patch_checkpoint_save", CanCheckpointPatchReview()))
                     SavePatchReview(review);

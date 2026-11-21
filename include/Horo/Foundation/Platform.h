@@ -274,6 +274,14 @@ namespace Horo {
         [[nodiscard]] virtual Result<void> PublishFileNoReplaceTracked(const std::filesystem::path &prepared,
                                                                        const std::filesystem::path &destination,
                                                                        AtomicFileReplacementReceipt &receipt);
+        /** @brief Moves a regular single-link file to an absent name on the same filesystem.
+         * @param source Current absolute normalized file. @param destination Absolute normalized target.
+         * @param receipt Fresh commit witness. @return Result including parent-directory durability.
+         * @pre The caller holds authority for both paths. Cross-volume moves fail before commit.
+         */
+        [[nodiscard]] virtual Result<void> MoveFileNoReplaceTracked(const std::filesystem::path &source,
+                                                                    const std::filesystem::path &destination,
+                                                                    AtomicFileReplacementReceipt &receipt);
     };
 
     /** @brief Native Windows/macOS/Linux durable filesystem implementation. */
@@ -342,6 +350,9 @@ namespace Horo {
         [[nodiscard]] Result<void> PublishFileNoReplaceTracked(const std::filesystem::path &prepared,
                                                                const std::filesystem::path &destination,
                                                                AtomicFileReplacementReceipt &receipt) override;
+        /** @copydoc DurableFileSystem::MoveFileNoReplaceTracked */
+        [[nodiscard]] Result<void> MoveFileNoReplaceTracked(const std::filesystem::path &source, const std::filesystem::path &destination,
+                                                            AtomicFileReplacementReceipt &receipt) override;
         /** @copydoc DurableFileSystem::SyncDirectory */
         [[nodiscard]] Result<void> SyncDirectory(const std::filesystem::path &path) override;
 
@@ -383,6 +394,16 @@ namespace Horo {
                                               .code = ErrorCode{"filesystem.file_publication_unsupported"},
                                               .defaultSeverity = ErrorSeverity::Error,
                                               .summary = "The filesystem does not support tracked exclusive file publication."};
+        return Result<void>::Failure(MakeError(unsupported));
+    }
+
+    /** @copydoc DurableFileSystem::MoveFileNoReplaceTracked */
+    inline Result<void> DurableFileSystem::MoveFileNoReplaceTracked(const std::filesystem::path &, const std::filesystem::path &,
+                                                                    AtomicFileReplacementReceipt &) {
+        const ErrorCodeDescriptor unsupported{.domain = ErrorDomainId{"horo.platform.filesystem"},
+                                              .code = ErrorCode{"filesystem.file_move_unsupported"},
+                                              .defaultSeverity = ErrorSeverity::Error,
+                                              .summary = "The filesystem does not support tracked exclusive file moves."};
         return Result<void>::Failure(MakeError(unsupported));
     }
 

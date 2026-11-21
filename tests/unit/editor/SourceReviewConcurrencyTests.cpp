@@ -1,3 +1,4 @@
+#include "../../support/NativePublicationFiles.h"
 #include "../../support/SourceDocumentTestProject.h"
 #include "Horo/Editor/SourceFileOpenService.h"
 #include "Horo/Foundation/Platform.h"
@@ -249,6 +250,123 @@ namespace {
             REQUIRE(reviews.Process(undo, open.Documents(), &jobs, project.directory, &files, &open));
             CHECK(reviews.Status().feedback == SourceTransactionFeedback::Conflict);
             CHECK(open.Documents().Snapshot(id->instance).Value().Text() == "authored");
+        }
+    }
+
+    TEST_CASE("A confirmed deletion moves only the exact clean source and rolls back a failed move", "[editor][source][review][delete]") {
+        struct Files final : TestSupport::NativePublicationFiles {
+            bool failAfterCommit{};
+            bool replaceSourceBeforeRollback{};
+            bool failEveryDirectorySync{};
+
+            Result<void> WritePrivateDurable(const std::filesystem::path &path, std::span<const std::byte> bytes, bool &created,
+                                             std::filesystem::perms mode) override {
+                return native.WritePrivateDurable(path, bytes, created, mode);
+            }
+
+            Result<void> MoveFileNoReplaceTracked(const std::filesystem::path &from, const std::filesystem::path &to,
+                                                  AtomicFileReplacementReceipt &receipt) override {
+                auto outcome = native.MoveFileNoReplaceTracked(from, to, receipt);
+                if (receipt.WasCommitted() && (std::exchange(failAfterCommit, false) || failEveryDirectorySync)) {
+                    if (replaceSourceBeforeRollback)
+                        std::ofstream(from, std::ios::binary) << "new occupant";
+                    return Result<void>::Failure(MakeError(SourceDocumentErrors::ReadFailed));
+                }
+                return outcome;
+            }
+        } files;
+
+        TestSupport::SourceProject project;
+        project.Put("saved content");
+        SourceFileOpenService open{project.directory};
+        const auto opened = open.Open({.path = "code.cpp"}).Value();
+        const auto source = *opened.sourceSnapshot;
+        const auto identity = source.Identity();
+        const auto native = project.directory / "code.cpp";
+        WorkspacePanelHost host;
+        host.AttachDocumentIdentityRegistry(open.DocumentRegistry());
+        REQUIRE(host.OpenDocument(identity.key).HasValue());
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
+        ProjectMutationCoordinator mutations{files};
+        SourceReviewTransactions reviews;
+        CancellationSource lifetime;
+        const auto policy = ProjectPolicy::Capture("workspace", 1, {{identity.key.source, false}}).Value();
+        const auto proposal =
+            ChangeSet::Capture(policy, {"proposal", 1, {"provider", "model", "request"}, {DeleteFile{FileBase::Capture(source).Value()}}})
+                .Value();
+        const std::array observed{SourcePathObservation{identity.key.source, source}};
+        const auto plan = std::make_shared<const WorkspaceEditPlan>(PlanWorkspaceEdits(proposal, policy, observed).Value());
+        ReviewDecisions decisions{proposal};
+        REQUIRE(decisions.Decide(*plan, {0}, ReviewChoice::Accept).HasValue());
+        CHECK(std::filesystem::is_regular_file(native));
+        CHECK(source.IsCurrent());
+        EditorWorkspaceViewCommandData apply;
+        REQUIRE(QueueSourceReviewApplication("workspace", decisions, policy, plan, lifetime.Token(), apply));
+        REQUIRE(reviews.Process(apply, open.Documents(), &jobs, project.directory, &files, &open));
+        auto expected = SourceTransactionFeedback::Deleted;
+        SECTION("A newer user edit prevents removal") {
+            REQUIRE(open.Documents().Edit(identity.instance, {source.Revision(), 0, 0, "authored "}).HasValue());
+            expected = SourceTransactionFeedback::Conflict;
+        }
+        SECTION("A failed directory durability check restores the original path") {
+            files.failAfterCommit = true;
+            expected = SourceTransactionFeedback::ApplyFailed;
+        }
+        SECTION("A new occupant survives a failed rollback") {
+            files.failAfterCommit = true;
+            files.replaceSourceBeforeRollback = true;
+            expected = SourceTransactionFeedback::DeleteRecovery;
+        }
+        SECTION("A visible rollback with unconfirmed durability keeps its manifest") {
+            files.failEveryDirectorySync = true;
+            expected = SourceTransactionFeedback::DeleteRecovery;
+        }
+        SECTION("Confirmation moves the exact saved source to Trash") {}
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+        while (reviews.Status().feedback == SourceTransactionFeedback::Preparing && std::chrono::steady_clock::now() < deadline) {
+            static_cast<void>(reviews.Poll(open.Documents(), &files, &open, &host, &mutations));
+            std::this_thread::sleep_for(std::chrono::milliseconds{1});
+        }
+        CHECK(reviews.Status().feedback == expected);
+        const auto trash = project.directory / ".horo/local/trash";
+        if (files.failEveryDirectorySync) {
+            CHECK(open.DocumentRegistry().Find(identity.instance) == identity);
+            std::ifstream original(native, std::ios::binary);
+            CHECK((std::string{std::istreambuf_iterator<char>{original}, {}} == "saved content"));
+            REQUIRE(std::filesystem::is_directory(trash));
+            const auto first = std::filesystem::directory_iterator{trash};
+            REQUIRE(first != std::filesystem::directory_iterator{});
+            const auto &entry = first->path();
+            CHECK(std::filesystem::is_regular_file(entry / "source-review-manifest"));
+            CHECK_FALSE(std::filesystem::exists(entry / "payload"));
+            return;
+        }
+        if (expected == SourceTransactionFeedback::Deleted || expected == SourceTransactionFeedback::DeleteRecovery) {
+            if (expected == SourceTransactionFeedback::Deleted) {
+                CHECK_FALSE(std::filesystem::exists(native));
+                CHECK_FALSE(open.DocumentRegistry().Find(identity.instance));
+                CHECK(reviews.Status().disposition == SourceReviewDisposition::Saved);
+            } else {
+                CHECK(open.DocumentRegistry().Find(identity.instance) == identity);
+                CHECK(reviews.Status().disposition == SourceReviewDisposition::Stale);
+                std::ifstream occupant(native, std::ios::binary);
+                CHECK((std::string{std::istreambuf_iterator<char>{occupant}, {}} == "new occupant"));
+            }
+            REQUIRE(reviews.Status().audit);
+            CHECK(EncodeSourceReviewAudit(*reviews.Status().audit).HasValue());
+            REQUIRE(std::filesystem::is_directory(trash));
+            const auto first = std::filesystem::directory_iterator{trash};
+            REQUIRE(first != std::filesystem::directory_iterator{});
+            const auto &item = first->path();
+            std::ifstream saved(item / "payload", std::ios::binary);
+            CHECK((std::string{std::istreambuf_iterator<char>{saved}, {}} == "saved content"));
+            CHECK(std::filesystem::is_regular_file(item / "source-review-manifest"));
+        } else {
+            CHECK(open.DocumentRegistry().Find(identity.instance) == identity);
+            CHECK(std::filesystem::is_regular_file(native));
+            std::ifstream original(native, std::ios::binary);
+            CHECK((std::string{std::istreambuf_iterator<char>{original}, {}} == "saved content"));
+            CHECK_FALSE((std::filesystem::exists(trash) && !std::filesystem::is_empty(trash)));
         }
     }
 

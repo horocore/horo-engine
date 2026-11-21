@@ -320,7 +320,9 @@ namespace Horo::Editor::Proposals {
         UndoFailed,
         Conflict,
         Cancelled,
-        Preparing
+        Preparing,
+        Deleted,
+        DeleteRecovery
     };
 
     struct SourceReviewAudit;
@@ -355,6 +357,16 @@ namespace Horo::Editor::Proposals {
         CreateFile file;
         std::shared_ptr<const SourceReviewAudit> audit;
     };
+
+    /** @brief Exact clean lease and audit of one explicitly chosen source removal. */
+    struct PreparedSourceDelete final {
+        SourceDocumentSnapshot source;
+        std::shared_ptr<const SourceReviewAudit> audit;
+        SourceBatchDiskEvidence disk;
+    };
+
+    /** @brief An owner action produced by the single-file structural review route. */
+    using PreparedSourceFileOperation = std::variant<PreparedSourceCreate, PreparedSourceDelete>;
 
     /** @brief Detached accepted text and exact immutable leases, suitable for worker-to-editor handoff. */
     class PreparedSourceReview final {
@@ -420,11 +432,12 @@ namespace Horo::Editor::Proposals {
          */
         [[nodiscard]] Result<PreparedSourceReview> PrepareAccepted(const ProjectPolicy &policy, const WorkspaceEditPlan &plan,
                                                                    CancellationToken cancellation = {}) const;
-        /** @brief Prepares the exact single accepted creation for the owner to stage without writing files.
-         * @return A detached draft, absence for a text-only review, or failure for stale or mixed create decisions.
+        /** @brief Prepares a single accepted creation or confirmed deletion without writing files.
+         * @return Detached structural operation, absence for other selections, or failure for stale or mixed operations.
          */
-        [[nodiscard]] Result<std::optional<PreparedSourceCreate>> PrepareCreate(const ProjectPolicy &policy, const WorkspaceEditPlan &plan,
-                                                                                CancellationToken cancellation = {}) const;
+        [[nodiscard]] Result<std::optional<PreparedSourceFileOperation>> PrepareFileOperation(const ProjectPolicy &policy,
+                                                                                              const WorkspaceEditPlan &plan,
+                                                                                              CancellationToken cancellation = {}) const;
         /** @brief Applies only accepted text hunks through the current source owner.
          * @param documents Owner of the live source snapshots. @param policy Active captured policy for this proposal.
          * @param plan Exact proposal preview with current source evidence. @param cancellation Cooperative observer.

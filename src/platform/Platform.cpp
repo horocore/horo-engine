@@ -380,12 +380,12 @@ namespace Horo {
 #endif
         }
 
-        /** @brief Checks staging shape and publishes without giving an existence check overwrite authority. */
-        Result<void> PublishSibling(NativeDurableFileSystem &files, const std::filesystem::path &prepared,
-                                    const std::filesystem::path &destination, const FileEntryKind kind,
-                                    AtomicFileReplacementReceipt &receipt) {
+        /** @brief Checks entry shape and commits an exclusive rename with directory durability tracking. */
+        Result<void> PublishPath(NativeDurableFileSystem &files, const std::filesystem::path &prepared,
+                                 const std::filesystem::path &destination, const FileEntryKind kind, AtomicFileReplacementReceipt &receipt,
+                                 const bool requireSibling = true) {
             if (receipt.WasCommitted() || !PublicationPath(prepared) || !PublicationPath(destination) || prepared == destination ||
-                prepared.parent_path() != destination.parent_path())
+                (requireSibling && prepared.parent_path() != destination.parent_path()))
                 return Result<void>::Failure(FsError(IoFailed, destination));
             const auto source = files.InspectEntry(prepared);
             if (source.HasError())
@@ -396,7 +396,13 @@ namespace Horo {
             if (!RenameNoReplace(prepared, destination))
                 return Result<void>::Failure(FsError(IoFailed, destination));
             receipt.RecordCommitted();
-            return files.SyncDirectory(destination.parent_path());
+            const auto target = files.SyncDirectory(destination.parent_path());
+            if (!requireSibling && prepared.parent_path() != destination.parent_path()) {
+                auto original = files.SyncDirectory(prepared.parent_path());
+                if (target.HasValue())
+                    return original;
+            }
+            return target;
         }
     }  // namespace
 
@@ -404,14 +410,21 @@ namespace Horo {
     Result<void> NativeDurableFileSystem::PublishDirectoryNoReplaceTracked(const std::filesystem::path &prepared,
                                                                            const std::filesystem::path &destination,
                                                                            AtomicFileReplacementReceipt &receipt) {
-        return PublishSibling(*this, prepared, destination, FileEntryKind::Directory, receipt);
+        return PublishPath(*this, prepared, destination, FileEntryKind::Directory, receipt);
     }
 
     /** @copydoc NativeDurableFileSystem::PublishFileNoReplaceTracked */
     Result<void> NativeDurableFileSystem::PublishFileNoReplaceTracked(const std::filesystem::path &prepared,
                                                                       const std::filesystem::path &destination,
                                                                       AtomicFileReplacementReceipt &receipt) {
-        return PublishSibling(*this, prepared, destination, FileEntryKind::RegularFile, receipt);
+        return PublishPath(*this, prepared, destination, FileEntryKind::RegularFile, receipt);
+    }
+
+    /** @copydoc NativeDurableFileSystem::MoveFileNoReplaceTracked */
+    Result<void> NativeDurableFileSystem::MoveFileNoReplaceTracked(const std::filesystem::path &source,
+                                                                   const std::filesystem::path &destination,
+                                                                   AtomicFileReplacementReceipt &receipt) {
+        return PublishPath(*this, source, destination, FileEntryKind::RegularFile, receipt, false);
     }
 
     /** @copydoc DurableFileSystem::RemoveDurable */

@@ -97,6 +97,31 @@ namespace Horo::Editor {
         }
     }
 
+    /** @copydoc SourceBatchDiskEvidence::RecheckSingle */
+    Result<std::filesystem::path> SourceBatchDiskEvidence::RecheckSingle(const std::filesystem::path &root,
+                                                                         const SourceDocumentSnapshot &source,
+                                                                         const DurableFileSystem &files,
+                                                                         const CancellationToken cancellation) const {
+        using Output = Result<std::filesystem::path>;
+        if (cancellation.IsCancellationRequested())
+            return Failure<std::filesystem::path>(SourceDocumentErrors::Cancelled);
+        if (!data_ || data_->authority != &files || data_->root != root || data_->items.size() != 1 || !source.IsCurrent() ||
+            source.Dirty())
+            return Failure<std::filesystem::path>(SourceDocumentErrors::Stale);
+        const auto &item = data_->items.front();
+        if (!item.source.SharesStateWith(source) || item.entry.hardLinks != 1)
+            return Failure<std::filesystem::path>(SourceDocumentErrors::Stale);
+        const auto path = Detail::SourcePath(root, source.Identity(), item.path);
+        if (path.HasError() || path.Value() != item.path)
+            return Failure<std::filesystem::path>(SourceDocumentErrors::SaveConflict);
+        const auto current = ObserveBatchEntry(files, item.path);
+        if (current.HasError())
+            return Output::Failure(current.ErrorValue());
+        if (!SameBatchEntry(item.entry, current.Value()))
+            return Failure<std::filesystem::path>(SourceDocumentErrors::SaveConflict);
+        return path;
+    }
+
     /** @copydoc SourceDocumentService::Storage::VerifyBatchEvidence */
     Result<void> SourceDocumentService::Storage::VerifyBatchEvidence(const StagedBatch &batch, const SourceBatchDiskEvidence &evidence,
                                                                      const DurableFileSystem &files,

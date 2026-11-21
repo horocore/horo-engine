@@ -792,6 +792,12 @@ disk base. Even an empty draft stays dirty until an explicit Save or Save All
 publishes the file with an exclusive rename. The grouped Undo action can close
 the exact unchanged draft. A later user edit or save retires that undo
 authority, and rejected creation leaves the live document registry intact.
+An accepted deletion requires an explicit move to project Trash. The worker
+captures the exact saved bytes. Under the project and source writer leases the
+owner rechecks the clean source and its native identity before moving it. The
+Trash entry preserves the original relative path and complete bytes. The tab
+closes after the native move reaches durability. A post-move failure attempts
+an exclusive move back to the original name, preserving any new occupant.
 
 The Local Model panel can explicitly replace the recovery checkpoint at
 `.horo/local/agent/source-review` with the admitted proposal and its current decisions. The

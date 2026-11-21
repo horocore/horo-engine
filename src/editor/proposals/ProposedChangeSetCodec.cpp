@@ -406,16 +406,23 @@ namespace Horo::Editor::Proposals {
         bool SourceReviewRevisionsValid(const SourceReviewAudit &audit) {
             auto revision = audit.revisions.begin();
             auto creations = audit.proposal.operationCounts[0];
+            auto deletions = audit.proposal.operationCounts[2];
             for (std::size_t file = 0; file < audit.choices.size(); ++file) {
                 const auto &choices = audit.choices[file];
                 if (std::ranges::find(choices, ReviewState::Accepted) == choices.end())
                     continue;
-                if (revision == audit.revisions.end() || revision->file != file || revision->after < revision->before)
+                if (revision == audit.revisions.end() || revision->file != file)
                     return false;
                 if (!revision->before) {
                     if (!creations || revision->after != 1 || choices.size() != 1)
                         return false;
                     --creations;
+                } else if (!revision->after) {
+                    if (!deletions || choices.size() != 1)
+                        return false;
+                    --deletions;
+                } else if (revision->after < revision->before) {
+                    return false;
                 }
                 ++revision;
             }

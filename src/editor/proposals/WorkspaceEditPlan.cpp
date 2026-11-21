@@ -339,34 +339,42 @@ namespace Horo::Editor::Proposals {
         return Output::Success(std::move(audit));
     }
 
-    /** @copydoc ReviewDecisions::PrepareCreate */
-    Result<std::optional<PreparedSourceCreate>> ReviewDecisions::PrepareCreate(const ProjectPolicy &policy, const WorkspaceEditPlan &plan,
-                                                                               const CancellationToken cancellation) const {
-        using Output = Result<std::optional<PreparedSourceCreate>>;
-        std::optional<std::size_t> creation;
+    /** @copydoc ReviewDecisions::PrepareFileOperation */
+    Result<std::optional<PreparedSourceFileOperation>> ReviewDecisions::PrepareFileOperation(const ProjectPolicy &policy,
+                                                                                             const WorkspaceEditPlan &plan,
+                                                                                             const CancellationToken cancellation) const {
+        using Output = Result<std::optional<PreparedSourceFileOperation>>;
+        std::optional<std::size_t> structural;
         std::size_t accepted{};
         for (std::size_t index = 0; index < units_.size(); ++index) {
             if (std::ranges::find(units_[index], ReviewState::Accepted) == units_[index].end())
                 continue;
             ++accepted;
-            if (std::holds_alternative<CreateFile>(proposal_.Files()[index]))
-                creation = index;
+            const auto &file = proposal_.Files()[index];
+            if (std::holds_alternative<CreateFile>(file) || std::holds_alternative<DeleteFile>(file))
+                structural = index;
         }
-        if (!creation)
+        if (!structural)
             return Output::Success(std::nullopt);
         if (accepted != 1 || proposal_.PolicyDigest() != policy.Digest())
             return Output::Failure(MakeError(Errors::PolicyDenied));
         try {
             if (cancellation.IsCancellationRequested())
                 return Output::Failure(MakeError(SourceDocumentErrors::Cancelled));
-            if (!Matches(plan) || !CanAccept(plan, *creation))
+            if (!Matches(plan) || !CanAccept(plan, *structural))
                 return Output::Failure(MakeError(Errors::StaleBase));
             auto attributed = BuildAudit();
             if (attributed.HasError())
                 return Output::Failure(attributed.ErrorValue());
             auto audit = std::move(attributed).Value();
-            audit->revisions.push_back({static_cast<std::uint32_t>(*creation), 0, 1});
-            return Output::Success(PreparedSourceCreate{std::get<CreateFile>(proposal_.Files()[*creation]), std::move(audit)});
+            const auto ordinal = static_cast<std::uint32_t>(*structural);
+            if (const auto *file = std::get_if<CreateFile>(&proposal_.Files()[*structural])) {
+                audit->revisions.push_back({ordinal, 0, 1});
+                return Output::Success(PreparedSourceFileOperation{PreparedSourceCreate{*file, std::move(audit)}});
+            }
+            const auto &source = std::get<FilePreview>(plan.entries[*structural]).before;
+            audit->revisions.push_back({ordinal, source.Revision(), 0});
+            return Output::Success(PreparedSourceFileOperation{PreparedSourceDelete{source, std::move(audit), {}}});
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(Errors::Bounds));
         }

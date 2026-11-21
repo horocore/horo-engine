@@ -39,10 +39,11 @@ namespace Horo::Editor {
          * @param documents Current source owner. @param files Host filesystem authority.
          * @param open Source and registry owner for staged file operations.
          * @param host Workspace presentation using the same registry, when present.
+         * @param mutations Project mutation authority for explicit file moves.
          * @return True if a source draft or buffer group was published.
          */
-        bool Poll(SourceDocumentService &documents, const DurableFileSystem *files, SourceFileOpenService *open = nullptr,
-                  WorkspacePanelHost *host = nullptr);
+        bool Poll(SourceDocumentService &documents, DurableFileSystem *files, SourceFileOpenService *open = nullptr,
+                  WorkspacePanelHost *host = nullptr, const ProjectMutationCoordinator *mutations = nullptr);
         /** @brief Polls history jobs and requests the initial read once for this workspace.
          * @param jobs Host job system. @param root Authorized project root.
          * @param mutations Shared project mutation owner. @param files Tracked filesystem.
@@ -87,13 +88,17 @@ namespace Horo::Editor {
         /** @brief Stages and presents one draft or retires the draft if the workspace rejects its tab. */
         bool CommitDraft(Proposals::PreparedSourceCreate &creation, SourceFileOpenService *open, WorkspacePanelHost *host,
                          const CancellationToken &lifetime);
+        /** @brief Moves an explicitly confirmed clean source to project Trash before closing its tab. */
+        bool CommitDelete(Proposals::PreparedSourceDelete &deletion, SourceFileOpenService *open, DurableFileSystem &files,
+                          const ProjectMutationCoordinator *mutations, const CancellationToken &lifetime);
         SourceEditBatch batch_;
         SourceDocumentSnapshot draft_;
         std::shared_ptr<const Proposals::SourceReviewAudit> audit_;
         Proposals::SourceTransactionFeedback feedback_{};
         bool reverted_{};
+        std::optional<Proposals::SourceReviewDisposition> removal_;
 
-        using Candidate = std::variant<Proposals::PreparedSourceReview, Proposals::PreparedSourceCreate>;
+        using Candidate = std::variant<Proposals::PreparedSourceReview, Proposals::PreparedSourceFileOperation>;
 
         struct Preparation final {
             JobHandle job;

@@ -186,6 +186,9 @@ still exists and commits only when that name is absent. Both entry points
 record native visibility before parent-directory synchronization. Alternate
 filesystem providers can leave exclusive file publication unsupported and
 must fail before any destination mutation in that case.
+The tracked regular-file move also accepts a different parent directory on
+the same filesystem. It synchronizes both parents after native commit. A
+cross-volume request fails rather than copying the file or removing its source.
 
 The `ExclusiveFileLock` value wrapper and its public observation symbols belong
 to Foundation. Its incomplete state is implemented by Platform through the

@@ -191,6 +191,12 @@ namespace Horo::Editor {
         [[nodiscard]] static Result<SourceBatchDiskEvidence> Capture(const std::filesystem::path &root,
                                                                      std::span<const SourceDocumentSnapshot> sources,
                                                                      const DurableFileSystem &files, CancellationToken cancellation = {});
+        /** @brief Rechecks one exact clean source under the caller's publication lease.
+         * @return Canonical single-link source path with the same worker-observed native identity, or a conflict.
+         */
+        [[nodiscard]] Result<std::filesystem::path> RecheckSingle(const std::filesystem::path &root, const SourceDocumentSnapshot &source,
+                                                                  const DurableFileSystem &files,
+                                                                  CancellationToken cancellation = {}) const;
 
     private:
         friend class SourceDocumentService;
