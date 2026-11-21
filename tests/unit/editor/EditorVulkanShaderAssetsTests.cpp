@@ -120,12 +120,14 @@ TEST_CASE("XR comfort accepts only its complete fullscreen shader bundle", "[edi
             REQUIRE(json.good());
             REQUIRE(spirv.good());
             reflection[i].json.assign(std::istreambuf_iterator<char>{json}, {});
-            stages[i] = {reflection[i].stage, reflection[i].entryPoint,
+            stages[i] = {reflection[i].stage,
+                         reflection[i].entryPoint,
                          {std::istreambuf_iterator<char>{spirv}, std::istreambuf_iterator<char>{}}};
             REQUIRE_FALSE(stages[i].bytes.empty());
         }
     }
-    const auto native = stages.front().bytes.empty() ? std::span<const ShaderArtifactStage>{} : std::span<const ShaderArtifactStage>{stages};
+    const auto native =
+        stages.front().bytes.empty() ? std::span<const ShaderArtifactStage>{} : std::span<const ShaderArtifactStage>{stages};
     const CookFixture comfort{CookFixtureRole::XrComfort, reflection, native};
     bundle.Write("xr-comfort-vulkan.horoshdr", comfort.compiled.payload, "runtime");
     CHECK(LoadPackagedVulkanXrComfortShader(bundle.root).HasError());
