@@ -28,6 +28,62 @@ namespace Horo::Editor {
         };
     }  // namespace
 
+    TEST_CASE("The exact redacted clipboard copy becomes a one-turn note or report", "[unit][agent][context][clipboard]") {
+        auto type = AgentContextAttachmentKind::Note;
+        auto expected = AgentContextKind::Note;
+        SECTION("Note remains a note") {}
+        SECTION("Report remains a report") {
+            type = AgentContextAttachmentKind::Report;
+            expected = AgentContextKind::Report;
+        }
+        CancellationSource lifetime;
+        std::string text{"Selected context\nApi-Key: clipboard-value\n"};
+        auto prepared = EditorLocalAgentContext::PrepareClipboardAttachment(type, text, "project", 3, lifetime.Token(), 76);
+        REQUIRE(prepared.HasValue());
+        auto context = std::move(prepared).Value();
+        auto different = EditorLocalAgentContext::PrepareClipboardAttachment(type, "Different copy", "project", 3, lifetime.Token(), 76);
+        REQUIRE(different.HasValue());
+        const auto &item = context.Items().front();
+        CHECK(item.provenance.kind == expected);
+        CHECK(item.provenance.origin == "clipboard");
+        CHECK(item.provenance.capturedBytes == text.size());
+        CHECK(item.provenance.revision != different.Value().Items().front().provenance.revision);
+        CHECK_FALSE(context.RequiresOpenSource());
+        CHECK_FALSE(context.HistoryReference());
+        CHECK(item.candidate.text.find("Selected context") != std::string::npos);
+        CHECK(item.candidate.text.find("clipboard-value") == std::string::npos);
+
+        text = "Clipboard changed";
+        REQUIRE(context.Approve());
+        const auto dispatch = context.Dispatch();
+        const ModelRequest prompt{.model = "local", .messages = {{.role = ModelRole::User, .text = "Explain this"}}};
+        RecordingModel provider;
+        AgentTurnRuntime runtime;
+        REQUIRE(runtime.Run(provider, nullptr, 76, prompt, {}, {}, &dispatch).status == AgentTurnStatus::Completed);
+        REQUIRE(provider.sent.size() == 2);
+        CHECK(provider.sent.front().text == item.candidate.text);
+        provider.sent.clear();
+        CHECK(runtime.Run(provider, nullptr, 76, prompt, {}, {}, &dispatch).status == AgentTurnStatus::ContextDenied);
+        CHECK(provider.sent.empty());
+    }
+
+    TEST_CASE("Clipboard consent rejects missing, binary, oversized and unsupported attachment input",
+              "[unit][agent][context][clipboard]") {
+        const auto prepare = [](std::string_view text, AgentContextAttachmentKind kind = AgentContextAttachmentKind::Note) {
+            return EditorLocalAgentContext::PrepareClipboardAttachment(kind, text, "project", 3, {}, 76);
+        };
+        CHECK(prepare("").HasError());
+        CHECK(prepare(std::string_view{"a\0b", 3}).HasError());
+        CHECK(prepare(std::string(Security::AgentPolicyLimits{}.maximumItemBytes + 1, 'a')).HasError());
+        CHECK(prepare("One item", AgentContextAttachmentKind::BuildOutput).HasError());
+        CancellationSource workspace;
+        auto prepared = EditorLocalAgentContext::PrepareClipboardAttachment(AgentContextAttachmentKind::Report, "Report", "project", 3,
+                                                                            workspace.Token(), 76);
+        REQUIRE(prepared.HasValue());
+        workspace.RequestCancellation();
+        CHECK_FALSE(std::move(prepared).Value().Approve());
+    }
+
     TEST_CASE("Saved project files need exact review and a fresh rooted read before local inference",
               "[unit][agent][context][saved_project_file]") {
         TestSupport::SourceProject project;

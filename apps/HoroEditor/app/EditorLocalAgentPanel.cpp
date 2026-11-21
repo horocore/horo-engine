@@ -30,6 +30,18 @@ namespace Horo::Editor {
         using Reply = std::variant<ProviderDiscovery, AgentTurnResult, ContextReview>;
         using BackgroundTurn = AgentBackgroundTurn<Reply>;
 
+        /** @brief Admits a complete bounded clipboard string after an explicit user action. */
+        std::string_view CaptureClipboardText() {
+            const auto *clipboard = ImGui::GetClipboardText();
+            if (!clipboard)
+                return {};
+            constexpr auto Maximum = Security::AgentPolicyLimits{}.maximumItemBytes;
+            std::size_t size{};
+            while (size <= Maximum && clipboard[size] != '\0')
+                ++size;
+            return size <= Maximum ? std::string_view{clipboard, size} : std::string_view{};
+        }
+
         /** @brief Runs one user-initiated discovery or inference on an isolated worker. */
         Reply RunLocalOperation(std::string endpoint, std::optional<ModelRequest> request, std::optional<std::size_t> sceneCount,
                                 std::optional<EditorLocalAgentContext> source, std::uint64_t turn,
@@ -270,7 +282,8 @@ namespace Horo::Editor {
                     awaitingCheckpoint_ = history_.ReviewRecoveryPrompt(prompt_);
                     return;
                 }
-                if (DrawSourceContextActions(locale, ready) || DrawBuildContextActions(locale, ready)) {
+                if (DrawSourceContextActions(locale, ready) || DrawBuildContextActions(locale, ready) ||
+                    DrawClipboardActions(locale, ready)) {
                     return;
                 }
                 const bool sceneAvailable = ready && captureSceneSelection_ && contextLifetime_ && !contextProject_.empty();
@@ -284,6 +297,33 @@ namespace Horo::Editor {
                     if (Button(locale, "ask_with_scene_count", ready))
                         Send(count);
                 }
+            }
+
+            /** @brief Keeps clipboard reads behind one of the two explicit attachment choices. */
+            bool DrawClipboardActions(const ILocalizationService &locale, const bool ready) {
+                const bool enabled = ready && contextLifetime_ && !contextProject_.empty();
+                if (Button(locale, "context_clipboard_note", enabled)) {
+                    PrepareClipboardReview(AgentContextAttachmentKind::Note);
+                    return true;
+                }
+                if (Button(locale, "context_clipboard_report", enabled)) {
+                    PrepareClipboardReview(AgentContextAttachmentKind::Report);
+                    return true;
+                }
+                return false;
+            }
+
+            /** @brief Freezes the selected clipboard bytes for redaction and one-request consent on the editor lane. */
+            void PrepareClipboardReview(const AgentContextAttachmentKind kind) {
+                auto prepared =
+                    EditorLocalAgentContext::PrepareClipboardAttachment(kind, CaptureClipboardText(), contextProject_, contextGeneration_,
+                                                                        contextLifetime_->Token(), turn_ + 1);
+                if (prepared.HasError()) {
+                    status_ = "context_clipboard_unavailable";
+                    return;
+                }
+                contextPreview_.emplace(std::move(prepared).Value());
+                status_ = nullptr;
             }
 
             /** @brief Requests only the current bounded scene selection from the workspace owner. */
@@ -524,7 +564,7 @@ namespace Horo::Editor {
 
             /** @brief Validates the active tab for source previews or the exact operation's witness for output. */
             bool ContextReviewCurrent() const {
-                if (contextPreview_->BuildOperation() || contextPreview_->IsSceneSelection() || contextPreview_->IsSavedFile())
+                if (!contextPreview_->RequiresOpenSource())
                     return contextPreview_->IsCurrent();
                 if (reviewingOpenSource_)
                     return contextPreview_->MatchesOpenSource(openSources_());

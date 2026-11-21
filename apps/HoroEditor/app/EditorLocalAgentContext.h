@@ -79,6 +79,18 @@ namespace Horo::Editor {
                                                                                    std::uint64_t workspaceGeneration,
                                                                                    CancellationToken lifetime, std::uint64_t requestId);
 
+        /** @brief Prepares a note or report explicitly copied from the clipboard by the user.
+         * @param kind Note or Report chosen in the panel. @param text Borrowed complete clipboard text.
+         * @param projectIdentity Current project identity. @param workspaceGeneration Nonzero attachment generation.
+         * @param lifetime Workspace revocation witness. @param requestId Exact upcoming local turn.
+         * @return An owned redacted preview or a typed failure. No clipboard borrow survives capture.
+         */
+        [[nodiscard]] static Result<EditorLocalAgentContext> PrepareClipboardAttachment(Agent::AgentContextAttachmentKind kind,
+                                                                                        std::string_view text, std::string projectIdentity,
+                                                                                        std::uint64_t workspaceGeneration,
+                                                                                        CancellationToken lifetime,
+                                                                                        std::uint64_t requestId);
+
         /** @brief Observe the exact bytes to present before asking for consent. */
         [[nodiscard]] std::span<const Agent::AgentContextPreviewItem> Items() const noexcept {
             return preview_.Items();
@@ -88,6 +100,12 @@ namespace Horo::Editor {
         [[nodiscard]] bool Matches(const SourceDocumentSnapshot &active) const noexcept;
         /** @brief Checks that the exact selected edition is still present among the open Source tabs. */
         [[nodiscard]] bool MatchesOpenSource(std::span<const SourceDocumentSnapshot> open) const noexcept;
+
+        /** @brief Reports whether the preview requires an already-open Source tab to stay present. */
+        [[nodiscard]] bool RequiresOpenSource() const noexcept {
+            return source_.Revision() != 0;
+        }
+
         /** @brief Checks the captured authority without accessing any editor or output owner. */
         [[nodiscard]] bool IsCurrent() const;
 

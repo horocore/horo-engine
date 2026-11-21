@@ -2,6 +2,7 @@
 
 #include "AgentHistoryReview.h"
 #include "AgentTurnMcp.h"
+#include "Horo/Foundation/Sha256.h"
 
 #include <algorithm>
 #include <format>
@@ -232,6 +233,29 @@ namespace Horo::Editor {
         AgentContextReaders readers{.redact = RedactEvidence,
                                     .isCurrent = [witness = selection.lifetime, revision](const AgentContextProvenance &item) {
             return !witness.IsCancellationRequested() && item.kind == AgentContextKind::Selection && item.revision == revision;
+        }};
+        return Capture(selected, std::move(readers), ProjectContext(std::move(projectIdentity), workspaceGeneration, std::move(lifetime)),
+                       requestId, {}, {}, {}, {});
+    }
+
+    /** @copydoc EditorLocalAgentContext::PrepareClipboardAttachment */
+    Result<EditorLocalAgentContext> EditorLocalAgentContext::PrepareClipboardAttachment(const Agent::AgentContextAttachmentKind kind,
+                                                                                        std::string_view text, std::string projectIdentity,
+                                                                                        const std::uint64_t workspaceGeneration,
+                                                                                        CancellationToken lifetime,
+                                                                                        const std::uint64_t requestId) {
+        using namespace Agent;
+        using Output = Result<EditorLocalAgentContext>;
+        if ((kind != AgentContextAttachmentKind::Note && kind != AgentContextAttachmentKind::Report) || text.empty())
+            return Output::Failure(MakeError(Application::CodeQueryErrors::Invalid));
+        if (text.size() > Security::AgentPolicyLimits{}.maximumItemBytes)
+            return Output::Failure(MakeError(Application::CodeQueryErrors::Capacity));
+
+        const auto revision = FormatSha256(ComputeSha256(std::as_bytes(std::span{text.data(), text.size()})));
+        const AgentContextSelection selected = AgentContextAttachment{kind, "clipboard", revision, std::string{text}};
+        const auto expectedKind = kind == AgentContextAttachmentKind::Note ? AgentContextKind::Note : AgentContextKind::Report;
+        AgentContextReaders readers{.redact = RedactEvidence, .isCurrent = [revision, expectedKind](const AgentContextProvenance &item) {
+            return item.kind == expectedKind && item.origin == "clipboard" && item.revision == revision;
         }};
         return Capture(selected, std::move(readers), ProjectContext(std::move(projectIdentity), workspaceGeneration, std::move(lifetime)),
                        requestId, {}, {}, {}, {});

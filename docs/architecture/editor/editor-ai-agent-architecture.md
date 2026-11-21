@@ -879,6 +879,12 @@ without opening a Source tab. The panel previews the redacted result and the
 inference worker verifies the same saved revision before using the approval.
 These saved-file attachments and responses remain ephemeral.
 
+The user can explicitly capture bounded clipboard text as a note or report.
+The panel freezes the selected bytes at capture, identifies the attachment type
+and revision, and displays the redacted preview before consent. Later clipboard
+changes have no effect on the frozen preview. The clipboard is read only on
+that selection, and the attachment and response remain out of conversation history.
+
 The panel offers separate previews for the active gameplay build and the last
 completed build of the current project. It reads only the retained output for
 the selected operation, marks omitted output, and redacts the text before review.
