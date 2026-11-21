@@ -135,6 +135,12 @@ namespace Horo::Editor {
             std::filesystem::path destination;
             ExclusiveFileLock sourceLease;
             ExclusiveFileLock destinationLease;
+            const SourceReviewTrashRestore *restore{};
+
+            /** @brief Returns the leased source operand in either direction. */
+            [[nodiscard]] const std::filesystem::path &From() const noexcept {
+                return restore ? restore->payload : edit.record->path;
+            }
         };
 
         struct StagedBatchUndo final {
@@ -210,10 +216,13 @@ namespace Horo::Editor {
                                                      std::size_t reservedBytes);
         /** @brief Stages one clean deletion to its reserved Trash payload. */
         [[nodiscard]] Result<StagedMove> StageDelete(const DeleteRequest &request);
+        /** @brief Stages a witnessed payload for restoration to its original source path. */
+        [[nodiscard]] Result<StagedMove> StageTrashRestore(const SourceReviewTrashRestore &restore) const;
         /** @brief Stages the group's file moves beside its text edits and acquires their writer leases. */
         [[nodiscard]] Result<std::vector<StagedMove>> StageMoves(std::span<const RenameRequest> renames,
                                                                  std::span<const DeleteRequest> deletions, const StagedBatch &batch,
-                                                                 DurableFileSystem &files, CancellationToken cancellation);
+                                                                 DurableFileSystem &files, CancellationToken cancellation,
+                                                                 std::span<const SourceReviewTrashRestore> restores = {});
         /** @brief Acquires source and destination publication leases for a staged rename. */
         [[nodiscard]] Result<void> LockMove(StagedMove &rename, DurableFileSystem &files, CancellationToken cancellation) const;
         /** @brief Rechecks leased operands and preserves native visibility on every failure path. */
@@ -222,7 +231,7 @@ namespace Horo::Editor {
                                                                CancellationToken cancellation) const noexcept;
         /** @brief Moves a group under its leases and restores visible moves in reverse order on failure. */
         [[nodiscard]] Result<void> MoveSources(std::span<StagedMove> renames, DurableFileSystem &files, CancellationToken cancellation,
-                                               const SourceBatchDiskEvidence &evidence, const StagedBatch *edits = nullptr) const;
+                                               const SourceBatchDiskEvidence *evidence = nullptr, const StagedBatch *edits = nullptr) const;
         /** @brief Publishes rekeys and retires deleted records after every physical move reaches durability. */
         void PublishMoves(std::span<StagedMove> moves) noexcept;
         /** @brief Reserves disk read scratch alongside the staged text, then verifies every original disk base. */

@@ -11,6 +11,16 @@ namespace Horo::Editor {
     class SourceFileOpenService;
     class WorkspacePanelHost;
 
+    /** @brief Native evidence and project paths retained for a reviewed deletion. */
+    struct SourceReviewTrashEntry final {
+        SourceDocumentSnapshot source;
+        std::filesystem::path original;
+        std::filesystem::path payload;
+        std::filesystem::path manifest;
+        std::optional<FileEntryIdentity> payloadIdentity;
+        std::optional<FileEntryIdentity> manifestIdentity;
+    };
+
     /** @brief Owns the exact review decisions and evidence until the workspace safely dispatches the command. */
     struct SourceReviewApplication final {
         Proposals::ReviewDecisions decisions;
@@ -91,6 +101,9 @@ namespace Horo::Editor {
         /** @brief Reverts the exact edit and draft receipt together. */
         void UndoDraftGroup(const std::shared_ptr<const SourceFileReviewBatch> &receipt, SourceFileOpenService *open,
                             const CancellationToken &lifetime);
+        /** @brief Captures current disk evidence for every reverse rename on the I/O worker. */
+        void StartGroupRestore(const std::shared_ptr<const SourceFileReviewBatch> &receipt, const JobSystem *jobs,
+                               const std::filesystem::path &root, const DurableFileSystem *files, const CancellationToken &lifetime);
         /** @brief Restores the current review's owned Trash payload without overwriting an existing file. */
         void UndoDelete(const SourceDocumentSnapshot &receipt, SourceFileOpenService *open, DurableFileSystem *files,
                         const ProjectMutationCoordinator *mutations, const CancellationToken &lifetime);
@@ -113,24 +126,26 @@ namespace Horo::Editor {
             SourceBatchDiskEvidence disk;
         };
 
+        /** @brief The exact applied group bound to new disk evidence for its reverse moves. */
+        struct GroupRestore final {
+            std::shared_ptr<const SourceFileReviewBatch> receipt;
+            std::vector<SourceBatchDiskEvidence> disk;
+        };
+
         /** @brief Reverses a confirmed rename after its live document and disk evidence are rechecked. */
         bool CommitRenameRestore(const RenameRestore &restore, SourceFileOpenService *open, DurableFileSystem &files,
                                  const ProjectMutationCoordinator *mutations, const CancellationToken &lifetime);
+        /** @brief Restores the group's names, buffers and draft state under one project mutation lease. */
+        bool CommitGroupRestore(const GroupRestore &restore, SourceFileOpenService *open, DurableFileSystem &files,
+                                const ProjectMutationCoordinator *mutations, const CancellationToken &lifetime);
         SourceEditBatch batch_;
         SourceDocumentSnapshot draft_;
         std::shared_ptr<const SourceFileReviewBatch> fileGroup_;
+        std::vector<SourceReviewTrashEntry> fileGroupTrash_;
         SourceDocumentSnapshot renamed_;
         SourceDocumentSnapshot beforeRename_;
 
-        /** @brief Owns the Trash paths and native identities observed by a completed deletion. */
-        struct DeletedSource final {
-            SourceDocumentSnapshot source;
-            std::filesystem::path original;
-            std::filesystem::path payload;
-            std::filesystem::path manifest;
-            std::optional<FileEntryIdentity> payloadIdentity;
-            std::optional<FileEntryIdentity> manifestIdentity;
-        };
+        using DeletedSource = SourceReviewTrashEntry;
 
         /** @brief Restores a witnessed payload, or returns the resulting conflict or recovery disposition. */
         static Proposals::SourceTransactionFeedback RestoreDeletedFile(DeletedSource &deleted, SourceFileOpenService &open,
@@ -143,7 +158,7 @@ namespace Horo::Editor {
         bool reverted_{};
         std::optional<Proposals::SourceReviewDisposition> committedFileOutcome_;
 
-        using Candidate = std::variant<Proposals::PreparedSourceReview, RenameRestore>;
+        using Candidate = std::variant<Proposals::PreparedSourceReview, RenameRestore, GroupRestore>;
 
         struct Preparation final {
             JobHandle job;

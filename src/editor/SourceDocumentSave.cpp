@@ -382,23 +382,40 @@ namespace Horo::Editor {
         return Output::Success({{record, {}, {}}, request.from, &request.disk, request.payload, {}, {}});
     }
 
+    /** @copydoc SourceDocumentService::Storage::StageTrashRestore */
+    Result<SourceDocumentService::Storage::StagedMove> SourceDocumentService::Storage::StageTrashRestore(
+        const SourceReviewTrashRestore &restore) const {
+        using Output = Result<StagedMove>;
+        const auto original = restore.original.Identity();
+        if (restore.original.IsCurrent() || !original.IsValid() || !IsSourceTrashPayload(projectRoot, restore.payload))
+            return Output::Failure(MakeError(SourceDocumentErrors::SaveConflict));
+        const auto &name = original.key.source.Value();
+        auto target = projectRoot / std::u8string{name.begin(), name.end()};
+        const auto allowed = Detail::SourcePath(projectRoot, original, target);
+        if (allowed.HasError() || allowed.Value() != target)
+            return Output::Failure(MakeError(SourceDocumentErrors::SaveConflict));
+        return Output::Success({{}, restore.original, nullptr, std::move(target), {}, {}, &restore});
+    }
+
     /** @copydoc SourceDocumentService::Storage::LockMove */
     Result<void> SourceDocumentService::Storage::LockMove(StagedMove &rename, DurableFileSystem &files,
                                                           const CancellationToken cancellation) const {
         const auto free = RequireFreeRenameDestination(rename.destination, files, cancellation);
         if (free.HasError())
             return free;
-        auto sourceLock = rename.edit.record->path;
-        sourceLock += ".horo-source.lock";
+        if (!rename.restore) {
+            auto sourceLock = rename.From();
+            sourceLock += ".horo-source.lock";
+            auto source = files.TryAcquireExclusive(sourceLock, "horo.source_document");
+            if (source.HasError())
+                return Result<void>::Failure(source.ErrorValue());
+            rename.sourceLease = std::move(source).Value();
+        }
+        // A Trash attempt is privately reserved by the project mutation owner.
+        if (!rename.edit.next && !rename.restore)
+            return Result<void>::Success();
         auto targetLock = rename.destination;
         targetLock += ".horo-source.lock";
-        auto source = files.TryAcquireExclusive(sourceLock, "horo.source_document");
-        if (source.HasError())
-            return Result<void>::Failure(source.ErrorValue());
-        rename.sourceLease = std::move(source).Value();
-        // A Trash attempt is privately reserved by the project mutation owner.
-        if (!rename.edit.next)
-            return Result<void>::Success();
         auto target = files.TryAcquireExclusive(targetLock, "horo.source_document");
         if (target.HasError())
             return Result<void>::Failure(target.ErrorValue());
@@ -414,17 +431,27 @@ namespace Horo::Editor {
         try {
             if (cancellation.IsCancellationRequested())
                 return &Cancelled;
-            if (move.edit.next) {
-                const auto destination = Detail::SourcePath(projectRoot, move.edit.next->identity, move.destination);
+            if (move.edit.next || move.restore) {
+                const auto identity = move.restore ? move.source.Identity() : move.edit.next->identity;
+                const auto destination = Detail::SourcePath(projectRoot, identity, move.destination);
                 if (destination.HasError() || destination.Value() != move.destination)
                     return &SaveConflict;
             } else if (!IsSourceTrashPayload(projectRoot, move.destination)) {
                 return &SaveConflict;
             }
-            if (RequireFreeRenameDestination(move.destination, files, cancellation).HasError() ||
-                move.disk->RecheckSingle(projectRoot, move.source, files, cancellation).HasError())
+            if (RequireFreeRenameDestination(move.destination, files, cancellation).HasError())
                 return cancellation.IsCancellationRequested() ? &Cancelled : &SaveConflict;
-            if (MoveReviewedPath(files, move.edit.record->path, move.destination, receipt))
+            if (move.restore) {
+                if (!IsSourceTrashPayload(projectRoot, move.From()))
+                    return &SaveConflict;
+                const auto entry = files.InspectEntry(move.From());
+                if (entry.HasError() || !entry.Value() || entry.Value()->kind != FileEntryKind::RegularFile ||
+                    entry.Value()->hardLinks != 1 || entry.Value()->identity != move.restore->identity)
+                    return &SaveConflict;
+            } else if (move.disk->RecheckSingle(projectRoot, move.source, files, cancellation).HasError()) {
+                return cancellation.IsCancellationRequested() ? &Cancelled : &SaveConflict;
+            }
+            if (MoveReviewedPath(files, move.From(), move.destination, receipt))
                 return nullptr;
             return receipt.WasCommitted() ? &ReadFailed : &SaveConflict;
         } catch (const std::bad_alloc &) {
@@ -436,7 +463,7 @@ namespace Horo::Editor {
 
     /** @copydoc SourceDocumentService::Storage::MoveSources */
     Result<void> SourceDocumentService::Storage::MoveSources(const std::span<StagedMove> renames, DurableFileSystem &files,
-                                                             const CancellationToken cancellation, const SourceBatchDiskEvidence &evidence,
+                                                             const CancellationToken cancellation, const SourceBatchDiskEvidence *evidence,
                                                              const StagedBatch *edits) const {
         std::size_t visible{};
         const ErrorCodeDescriptor *failure{};
@@ -449,7 +476,7 @@ namespace Horo::Editor {
         }
         if (!failure && edits && !edits->items.empty()) {
             try {
-                if (VerifyBatchEvidence(*edits, evidence, files, cancellation).HasError())
+                if (VerifyBatchEvidence(*edits, *evidence, files, cancellation).HasError())
                     failure =
                         cancellation.IsCancellationRequested() ? &SourceDocumentErrors::Cancelled : &SourceDocumentErrors::SaveConflict;
             } catch (...) {
@@ -463,7 +490,7 @@ namespace Horo::Editor {
         while (visible > 0) {
             const auto &move = renames[--visible];
             AtomicFileReplacementReceipt restored;
-            if (!MoveReviewedPath(files, move.destination, move.edit.record->path, restored))
+            if (!MoveReviewedPath(files, move.destination, move.From(), restored))
                 failure = &SourceDocumentErrors::SaveOutcomeUnknown;
         }
         return Result<void>::Failure(MakeError(*failure));
@@ -473,6 +500,8 @@ namespace Horo::Editor {
     void SourceDocumentService::Storage::PublishMoves(const std::span<StagedMove> moves) noexcept {
         bool deleted{};
         for (auto &rename : moves) {
+            if (rename.restore)
+                continue;
             auto &edit = rename.edit;
             if (!edit.next) {
                 deleted = true;
@@ -513,7 +542,7 @@ namespace Horo::Editor {
             if (const auto locked = storage_->LockMove(rename, files, cancellation); locked.HasError())
                 return Output::Failure(locked.ErrorValue());
             const std::span group{&rename, 1};
-            if (const auto moved = storage_->MoveSources(group, files, cancellation, request.disk); moved.HasError())
+            if (const auto moved = storage_->MoveSources(group, files, cancellation); moved.HasError())
                 return Output::Failure(moved.ErrorValue());
             storage_->PublishMoves(group);
             return result;

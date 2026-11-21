@@ -849,6 +849,12 @@ every rename is durable. A later failure rolls visible moves back in reverse
 order using exclusive moves. If an original name is now occupied, recovery
 keeps the source review and Trash evidence available. The workspace keeps
 the pre-application document roots.
+After a successful group, Undo restores the prior names and working buffers,
+replays the text edits, and closes the unsaved drafts. It verifies the
+renamed disk bases and the captured Trash payload identities before using
+them. Every original destination must be free. An unavailable payload, a
+new occupant, or a newer user edit prevents completion of the group. Files
+restored from Trash can be reopened through the ordinary Source route.
 The source owner rechecks the policy, the live publications and the saved disk
 bases before publishing one batch of buffer changes. Only accepted text ranges
 enter that batch. The workspace retains its latest receipt for a single grouped

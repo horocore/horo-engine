@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <iterator>
 #include <thread>
@@ -667,6 +668,8 @@ namespace {
     }
 
     TEST_CASE("Reviewed deletions and renames publish together or restore every original path", "[editor][source][review][move]") {
+        const bool includeDeletion = GENERATE(true, false);
+
         struct Files final : TestSupport::NativePublicationFiles {
             int failOnMove{};
             int moves{};
@@ -725,6 +728,14 @@ namespace {
         const auto plan = std::make_shared<const WorkspaceEditPlan>(PlanWorkspaceEdits(proposal, policy, observed).Value());
         ReviewDecisions decisions{proposal};
         REQUIRE(decisions.Decide(*plan, {}, ReviewChoice::Accept).HasValue());
+        if (!includeDeletion) {
+            const auto filesInReview = proposal.Files();
+            const auto removal = std::ranges::find_if(filesInReview, [](const auto &file) {
+                return std::holds_alternative<DeleteFile>(file);
+            });
+            REQUIRE(removal != filesInReview.end());
+            REQUIRE(decisions.Decide(*plan, {static_cast<std::size_t>(removal - filesInReview.begin())}, ReviewChoice::Reject).HasValue());
+        }
         JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
         ProjectMutationCoordinator mutations{files};
         SourceReviewTransactions reviews;
@@ -739,16 +750,21 @@ namespace {
         SECTION("The second visible move cannot confirm durability") {
             files.failOnMove = 2;
         }
-        SECTION("The Trash move fails after completing both renames") {
-            files.failOnMove = 3;
+        if (includeDeletion) {
+            SECTION("The Trash move fails after completing both renames") {
+                files.failOnMove = 3;
+            }
         }
         SECTION("Every move reaches durability") {}
-        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
-        while (reviews.Status().feedback == SourceTransactionFeedback::Preparing && std::chrono::steady_clock::now() < deadline) {
-            static_cast<void>(reviews.Poll(open.Documents(), &files, &open, &host, &mutations));
-            std::this_thread::sleep_for(std::chrono::milliseconds{1});
-        }
-        host.RefreshDocuments();
+        const auto drain = [&] {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+            while (reviews.Status().feedback == SourceTransactionFeedback::Preparing && std::chrono::steady_clock::now() < deadline) {
+                static_cast<void>(reviews.Poll(open.Documents(), &files, &open, &host, &mutations));
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+            host.RefreshDocuments();
+        };
+        drain();
         const auto trash = project.directory / ".horo/local/trash";
         if (files.failOnMove) {
             CHECK(reviews.Status().feedback == SourceTransactionFeedback::Conflict);
@@ -765,11 +781,11 @@ namespace {
             CHECK_FALSE(std::filesystem::exists(project.directory / "new-a.cpp"));
             CHECK_FALSE(std::filesystem::exists(project.directory / "new-b.cpp"));
             CHECK(std::filesystem::is_regular_file(project.directory / "delete.cpp"));
-            CHECK(std::filesystem::is_empty(trash));
+            CHECK((!std::filesystem::exists(trash) || std::filesystem::is_empty(trash)));
             return;
         }
         REQUIRE(reviews.Status().feedback == SourceTransactionFeedback::Applied);
-        CHECK(files.moves == 3);
+        CHECK(files.moves == (includeDeletion ? 3 : 2));
         CHECK(open.DocumentRegistry().Find(a.Identity().instance)->key.source == aPath);
         CHECK(open.DocumentRegistry().Find(b.Identity().instance)->key.source == bPath);
         CHECK(host.DocumentTabs().front().identity.key.source == aPath);
@@ -780,15 +796,62 @@ namespace {
         CHECK_FALSE(std::filesystem::exists(project.directory / "draft.cpp"));
         CHECK(std::filesystem::is_regular_file(project.directory / "new-a.cpp"));
         CHECK(std::filesystem::is_regular_file(project.directory / "new-b.cpp"));
-        CHECK_FALSE(open.DocumentRegistry().Find(deletion.Identity().instance));
-        CHECK_FALSE(deletion.IsCurrent());
-        CHECK_FALSE(std::filesystem::exists(project.directory / "delete.cpp"));
-        const auto attempt = std::filesystem::directory_iterator{trash};
-        REQUIRE(attempt != std::filesystem::directory_iterator{});
-        std::ifstream file(attempt->path() / "payload", std::ios::binary);
-        CHECK((std::string{std::istreambuf_iterator<char>{file}, {}} == "remove"));
         REQUIRE(reviews.Status().audit);
         CHECK(EncodeSourceReviewAudit(*reviews.Status().audit).HasValue());
+        const auto deletedPath = project.directory / "delete.cpp";
+        if (includeDeletion) {
+            CHECK_FALSE(open.DocumentRegistry().Find(deletion.Identity().instance));
+            CHECK_FALSE(deletion.IsCurrent());
+            CHECK_FALSE(std::filesystem::exists(deletedPath));
+            const auto attempt = std::filesystem::directory_iterator{trash};
+            REQUIRE(attempt != std::filesystem::directory_iterator{});
+            std::ifstream file(attempt->path() / "payload", std::ios::binary);
+            CHECK((std::string{std::istreambuf_iterator<char>{file}, {}} == "remove"));
+        }
+        const auto undo = [&] {
+            EditorWorkspaceViewCommandData reverse;
+            REQUIRE(reviews.QueueUndo(lifetime.Token(), reverse));
+            REQUIRE(reviews.Process(reverse, open.Documents(), &jobs, project.directory, &files, &open));
+            drain();
+        };
+        project.Put("new occupant", "b.cpp");
+        undo();
+        REQUIRE(reviews.Status().feedback == SourceTransactionFeedback::Conflict);
+        CHECK(files.moves == (includeDeletion ? 3 : 2));
+        {
+            std::ifstream file(project.directory / "b.cpp", std::ios::binary);
+            CHECK((std::string{std::istreambuf_iterator<char>{file}, {}} == "new occupant"));
+        }
+        REQUIRE(std::filesystem::remove(project.directory / "b.cpp"));
+        files.failOnMove = files.moves + 2;
+        undo();
+        REQUIRE(reviews.Status().feedback == SourceTransactionFeedback::Conflict);
+        CHECK(open.DocumentRegistry().Find(a.Identity().instance)->key.source == aPath);
+        CHECK(open.DocumentRegistry().Find(b.Identity().instance)->key.source == bPath);
+        CHECK(open.DocumentRegistry().Find({DocumentKind::Source, draft}).has_value());
+        CHECK(open.Documents().Snapshot(edit.Identity().instance).Value().Text() == "edited");
+        CHECK(std::filesystem::is_regular_file(project.directory / "new-a.cpp"));
+        CHECK(std::filesystem::is_regular_file(project.directory / "new-b.cpp"));
+        CHECK(std::filesystem::exists(deletedPath) != includeDeletion);
+        files.failOnMove = 0;
+        undo();
+        REQUIRE(reviews.Status().feedback == SourceTransactionFeedback::Undone);
+        CHECK(open.DocumentRegistry().IsCurrent(a.Identity()));
+        CHECK(open.DocumentRegistry().IsCurrent(b.Identity()));
+        CHECK_FALSE(open.DocumentRegistry().Find({DocumentKind::Source, draft}));
+        CHECK(open.Documents().Snapshot(a.Identity().instance).Value().Text() == "alpha");
+        CHECK(open.Documents().Snapshot(edit.Identity().instance).Value().Text() == "base");
+        CHECK(std::filesystem::is_regular_file(project.directory / "a.cpp"));
+        CHECK(std::filesystem::is_regular_file(project.directory / "b.cpp"));
+        CHECK_FALSE(std::filesystem::exists(project.directory / "new-a.cpp"));
+        CHECK_FALSE(std::filesystem::exists(project.directory / "new-b.cpp"));
+        CHECK(std::filesystem::is_regular_file(deletedPath));
+        if (includeDeletion) {
+            CHECK(std::filesystem::is_empty(trash));
+            CHECK_FALSE(open.DocumentRegistry().Find(deletion.Identity().instance));
+            std::ifstream file(deletedPath, std::ios::binary);
+            CHECK((std::string{std::istreambuf_iterator<char>{file}, {}} == "remove"));
+        }
     }
 
     TEST_CASE("Overlapping review applications and group undo produce deterministic revisions", "[editor][source][review][concurrency]") {

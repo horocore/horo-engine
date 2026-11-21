@@ -620,13 +620,17 @@ namespace Horo::Editor {
         }
     }
 
-    /** @copydoc SourceFileOpenService::UndoReviewedDrafts */
-    Result<void> SourceFileOpenService::UndoReviewedDrafts(const SourceFileReviewBatch &receipt, const CancellationToken cancellation) {
+    /** @copydoc SourceFileOpenService::UndoReviewedFiles */
+    Result<void> SourceFileOpenService::UndoReviewedFiles(const SourceFileReviewBatch &receipt, const CancellationToken cancellation,
+                                                          const std::span<const SourceBatchDiskEvidence> disk, DurableFileSystem *files,
+                                                          const std::span<const SourceReviewTrashRestore> restores) {
         using Output = Result<void>;
         try {
             if (publishing_)
                 return Output::Failure(MakeError(SourceDocumentErrors::Busy));
-            if (receipt.drafts.empty() || !receipt.renames.empty() || receipt.deletions)
+            if (receipt.deletions != restores.size() || receipt.renames.size() != disk.size() ||
+                receipt.renamedFrom.size() != disk.size() || (receipt.drafts.empty() && receipt.renames.empty() && restores.empty()) ||
+                ((!disk.empty() || !restores.empty()) && !files))
                 return Output::Failure(MakeError(SourceDocumentErrors::Invalid));
             auto registry = *documentRegistry_;
             for (const auto &draft : receipt.drafts) {
@@ -636,8 +640,26 @@ namespace Horo::Editor {
                 if (const auto closed = registry.Close(identity.instance); closed.HasError())
                     return Output::Failure(closed.ErrorValue());
             }
+            std::vector<SourceDocumentService::RenameRequest> moves;
+            moves.reserve(disk.size());
+            for (std::size_t index = 0; index < disk.size(); ++index) {
+                const auto &from = receipt.renames[index];
+                const auto &original = receipt.renamedFrom[index];
+                auto to = original.Identity();
+                if (!registry.IsCurrent(from.Identity()) || to.instance != from.Identity().instance)
+                    return Output::Failure(MakeError(SourceDocumentErrors::Stale));
+                if (const auto retarget = registry.RetargetSource(to.instance, to.key); retarget.HasError())
+                    return Output::Failure(retarget.ErrorValue());
+                const auto &name = to.key.source.Value();
+                auto path = projectRoot_ / std::u8string{name.begin(), name.end()};
+                moves.push_back({from, std::move(to), std::move(path), original.Text(), disk[index]});
+            }
+            for (const auto &restore : restores) {
+                if (registry.Find(restore.original.Identity().key))
+                    return Output::Failure(MakeError(SourceDocumentErrors::SaveConflict));
+            }
             RegistryPublication guard{publishing_};
-            const auto undone = sourceDocuments_.UndoWithDrafts(receipt.edits, receipt.drafts, cancellation);
+            const auto undone = sourceDocuments_.UndoWithDrafts(receipt.edits, receipt.drafts, cancellation, moves, files, restores);
             if (undone.HasError())
                 return Output::Failure(undone.ErrorValue());
             *documentRegistry_ = std::move(registry);

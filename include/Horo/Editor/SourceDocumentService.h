@@ -19,7 +19,8 @@
 
 namespace Horo {
     class DurableFileSystem;
-}
+    struct FileEntryIdentity;
+}  // namespace Horo
 
 namespace Horo::Editor {
     namespace SourceDocumentErrors {
@@ -246,6 +247,7 @@ namespace Horo::Editor {
         SourceEditBatch edits;
         std::vector<SourceDocumentSnapshot> drafts;
         std::vector<SourceDocumentSnapshot> renames;
+        std::vector<SourceDocumentSnapshot> renamedFrom;
         std::size_t deletions{};
     };
 
@@ -254,6 +256,13 @@ namespace Horo::Editor {
         SourceDocumentSnapshot source;
         std::filesystem::path payload;
         const SourceBatchDiskEvidence &disk;
+    };
+
+    /** @brief A retired source and the exact native Trash payload observed at deletion. */
+    struct SourceReviewTrashRestore final {
+        SourceDocumentSnapshot original;
+        std::filesystem::path payload;
+        const FileEntryIdentity &identity;
     };
 
     /** @brief One history publication plus originating view metadata.
@@ -442,7 +451,10 @@ namespace Horo::Editor {
         /** @brief Replays edit history and retires unchanged drafts only after validating the complete receipt. */
         [[nodiscard]] Result<std::vector<SourceDocumentSnapshot>> UndoWithDrafts(const SourceEditBatch &batch,
                                                                                  std::span<const SourceDocumentSnapshot> drafts,
-                                                                                 CancellationToken cancellation);
+                                                                                 CancellationToken cancellation,
+                                                                                 std::span<const RenameRequest> reverseRenames = {},
+                                                                                 DurableFileSystem *files = nullptr,
+                                                                                 std::span<const SourceReviewTrashRestore> restores = {});
         friend class SourceFileOpenService;
         /** @brief Prepares a history replay completely before changing its cursor or publishing. */
         [[nodiscard]] Result<SourceHistoryResult> ReplayHistory(DocumentInstanceId instance, std::uint64_t expectedRevision, bool redo,

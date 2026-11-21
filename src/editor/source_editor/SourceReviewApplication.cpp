@@ -176,12 +176,14 @@ namespace Horo::Editor {
 
         /** @brief Prepares one owned Trash payload per accepted deletion while holding project authority. */
         Result<Proposals::SourceReviewApplied> ApplyWithTrash(const Proposals::PreparedSourceReview &review, SourceFileOpenService &open,
-                                                              DurableFileSystem &files, const CancellationToken &lifetime) {
+                                                              DurableFileSystem &files, const CancellationToken &lifetime,
+                                                              std::vector<SourceReviewTrashEntry> &entries) {
             using Output = Result<Proposals::SourceReviewApplied>;
             try {
                 ReviewTrash trash{files};
                 std::vector<SourceReviewDeletion> deletions;
                 deletions.reserve(review.FileOperations().size());
+                entries.reserve(review.FileOperations().size());
                 for (const auto &operation : review.FileOperations()) {
                     const auto *deletion = std::get_if<Proposals::PreparedSourceDelete>(&operation);
                     if (!deletion)
@@ -191,11 +193,19 @@ namespace Horo::Editor {
                     auto payload = trash.Reserve(open.ProjectRoot(), deletion->source.Identity().key.source);
                     if (payload.HasError())
                         return Output::Failure(std::move(payload).ErrorValue());
-                    deletions.push_back({deletion->source, std::move(payload).Value(), deletion->disk});
+                    auto target = std::move(payload).Value();
+                    auto manifest = target.parent_path() / "source-review-manifest";
+                    const auto witness = TrashFileIdentity(files, manifest);
+                    entries.push_back({deletion->source, {}, target, std::move(manifest), {}, witness});
+                    deletions.push_back({deletion->source, std::move(target), deletion->disk});
                 }
                 auto applied = review.CommitFileGroup(open, files, lifetime, deletions);
                 if (applied.HasValue() || applied.ErrorValue().code.Value() == SourceDocumentErrors::SaveOutcomeUnknown.code.Value())
                     trash.Preserve();
+                if (applied.HasValue()) {
+                    for (auto &entry : entries)
+                        entry.payloadIdentity = TrashFileIdentity(files, entry.payload);
+                }
                 return applied;
             } catch (const std::bad_alloc &) {
                 return Output::Failure(MakeError(Proposals::Errors::Bounds));
@@ -206,7 +216,8 @@ namespace Horo::Editor {
         Result<Proposals::SourceReviewApplied> CommitReviewedFileGroup(const Proposals::PreparedSourceReview &review,
                                                                        SourceFileOpenService &open, DurableFileSystem &files,
                                                                        const ProjectMutationCoordinator *mutations,
-                                                                       const CancellationToken &lifetime) {
+                                                                       const CancellationToken &lifetime,
+                                                                       std::vector<SourceReviewTrashEntry> &entries) {
             const bool physical = std::ranges::any_of(review.FileOperations(), [](const auto &operation) {
                 return !std::holds_alternative<Proposals::PreparedSourceCreate>(operation);
             });
@@ -218,18 +229,25 @@ namespace Horo::Editor {
             const auto lease = mutations->TryAcquire({open.ProjectRoot(), ProjectMutationOwner::Asset, "source-review-group"});
             if (lease.HasError())
                 return Output::Failure(lease.ErrorValue());
-            return ApplyWithTrash(review, open, files, lifetime);
+            return ApplyWithTrash(review, open, files, lifetime, entries);
+        }
+
+        /** @brief Requires witness authority for every Trash payload retained by the exact group. */
+        bool TrashReceiptsCurrent(const SourceFileReviewBatch &receipt, const std::span<const SourceReviewTrashEntry> entries) noexcept {
+            return receipt.deletions == entries.size() && std::ranges::all_of(entries, [](const auto &entry) {
+                return entry.payloadIdentity.has_value();
+            });
         }
 
         /** @brief Checks that every effective edit and opened draft still belongs to the latest group. */
-        bool CanUndoDrafts(const SourceFileReviewBatch &receipt) noexcept {
-            if (!receipt.renames.empty() || receipt.deletions)
-                return false;
+        bool CanUndoFileGroup(const SourceFileReviewBatch &receipt) noexcept {
             const auto edits = receipt.edits.Items();
             return (receipt.edits.CanUndo() || !std::ranges::any_of(edits, &SourceBatchItem::changed)) &&
-                   std::ranges::all_of(edits, [](const auto &item) {
+                   std::ranges::all_of(edits,
+                                       [](const auto &item) {
                 return !item.changed || item.snapshot.IsCurrent();
-            }) && std::ranges::all_of(receipt.drafts, &SourceDocumentSnapshot::IsCurrent);
+            }) && std::ranges::all_of(receipt.drafts, &SourceDocumentSnapshot::IsCurrent) &&
+                   std::ranges::all_of(receipt.renames, &SourceDocumentSnapshot::IsCurrent);
         }
 
         /** @brief Reports durable save only when every changed buffer and draft was saved. */
@@ -274,7 +292,7 @@ namespace Horo::Editor {
             return !item.changed || item.snapshot.IsCurrent();
         });
         const bool renameUndo = renamed_.IsCurrent() && feedback_ != Feedback::RenameRecovery;
-        const bool fileGroupUndo = fileGroup_ && CanUndoDrafts(*fileGroup_);
+        const bool fileGroupUndo = fileGroup_ && CanUndoFileGroup(*fileGroup_) && TrashReceiptsCurrent(*fileGroup_, fileGroupTrash_);
         return {feedback_,
                 !preparing_ && (groupUndo || draft_.IsCurrent() || fileGroupUndo || renameUndo || deleted_.has_value()),
                 audit_,
@@ -344,9 +362,12 @@ namespace Horo::Editor {
             case EditorWorkspaceViewCommand::UndoSourceReview:
                 if (preparing_)
                     return true;
-                if (command.sourceReviewDraftGroupUndo)
-                    UndoDraftGroup(command.sourceReviewDraftGroupUndo, open, command.sourceReviewLifetime);
-                else if (command.sourceReviewDraftUndo.Revision())
+                if (const auto &group = command.sourceReviewDraftGroupUndo) {
+                    if (group->renames.empty() && !group->deletions)
+                        UndoDraftGroup(group, open, command.sourceReviewLifetime);
+                    else
+                        StartGroupRestore(group, jobs, root, files, command.sourceReviewLifetime);
+                } else if (command.sourceReviewDraftUndo.Revision())
                     UndoDraft(command.sourceReviewDraftUndo, open, command.sourceReviewLifetime);
                 else if (command.sourceReviewRenameUndo.Revision())
                     StartRenameRestore(command.sourceReviewRenameUndo, jobs, root, files, command.sourceReviewLifetime);
@@ -395,6 +416,41 @@ namespace Horo::Editor {
             }
         } catch (const std::bad_alloc &) {
             // A rejected preparation retains the last committed rename receipt.
+        }
+    }
+
+    /** @copydoc SourceReviewTransactions::StartGroupRestore */
+    void SourceReviewTransactions::StartGroupRestore(const std::shared_ptr<const SourceFileReviewBatch> &receipt, const JobSystem *jobs,
+                                                     const std::filesystem::path &root, const DurableFileSystem *files,
+                                                     const CancellationToken &lifetime) {
+        feedback_ = Feedback::Conflict;
+        if (fileGroup_ != receipt || !CanUndoFileGroup(*receipt) || !TrashReceiptsCurrent(*receipt, fileGroupTrash_))
+            return;
+        feedback_ = lifetime.IsCancellationRequested() ? Feedback::Cancelled : Feedback::UndoFailed;
+        if (!jobs || !files || feedback_ == Feedback::Cancelled)
+            return;
+        try {
+            auto output = std::make_shared<std::optional<Candidate>>();
+            auto job =
+                jobs->SubmitResult({.parentCancellation = lifetime, .priority = JobPriority::Interactive, .resource = JobResource::Io},
+                                   [receipt, output, root, files](const CancellationToken &stop) {
+                GroupRestore restore{receipt, {}};
+                restore.disk.reserve(receipt->renames.size());
+                for (const auto &source : receipt->renames) {
+                    auto disk = SourceBatchDiskEvidence::Capture(root, std::span{&source, 1}, *files, stop);
+                    if (disk.HasError())
+                        return Result<void>::Failure(std::move(disk).ErrorValue());
+                    restore.disk.push_back(std::move(disk).Value());
+                }
+                output->emplace(std::move(restore));
+                return Result<void>::Success();
+            });
+            if (job.HasValue()) {
+                preparing_.emplace(Preparation{std::move(job).Value(), lifetime, std::move(output), Feedback::UndoFailed});
+                feedback_ = Feedback::Preparing;
+            }
+        } catch (const std::bad_alloc &) {
+            // The live group is still available after preparation failure.
         }
     }
 
@@ -450,6 +506,8 @@ namespace Horo::Editor {
         }
         if (const auto *restore = std::get_if<RenameRestore>(&**preparation.output))
             return CommitRenameRestore(*restore, open, *files, mutations, preparation.lifetime);
+        if (const auto *restore = std::get_if<GroupRestore>(&**preparation.output))
+            return CommitGroupRestore(*restore, open, *files, mutations, preparation.lifetime);
         auto &review = std::get<Proposals::PreparedSourceReview>(**preparation.output);
         if (auto operation = std::move(review).TakeSingleFileOperation()) {
             if (auto *creation = std::get_if<Proposals::PreparedSourceCreate>(&*operation))
@@ -459,6 +517,7 @@ namespace Horo::Editor {
             return CommitDelete(std::get<Proposals::PreparedSourceDelete>(*operation), open, *files, mutations, preparation.lifetime);
         }
         std::shared_ptr<SourceFileReviewBatch> fileGroup;
+        std::vector<SourceReviewTrashEntry> trash;
         if (!review.FileOperations().empty()) {
             feedback_ = Feedback::ApplyFailed;
             if (!open)
@@ -469,7 +528,7 @@ namespace Horo::Editor {
                 return false;
             }
         }
-        auto applied = fileGroup ? CommitReviewedFileGroup(review, *open, *files, mutations, preparation.lifetime)
+        auto applied = fileGroup ? CommitReviewedFileGroup(review, *open, *files, mutations, preparation.lifetime, trash)
                                  : review.CommitObserved(documents, *files, preparation.lifetime);
         if (applied.HasError()) {
             const auto &error = applied.ErrorValue();
@@ -480,9 +539,11 @@ namespace Horo::Editor {
         }
         auto outcome = std::move(applied).Value();
         if (fileGroup)
-            *fileGroup = {std::move(outcome.batch), std::move(outcome.drafts), std::move(outcome.renames), outcome.deletions};
+            *fileGroup = {std::move(outcome.batch), std::move(outcome.drafts), std::move(outcome.renames), std::move(outcome.renamedFrom),
+                          outcome.deletions};
         batch_ = fileGroup ? SourceEditBatch{} : std::move(outcome.batch);
         fileGroup_ = std::move(fileGroup);
+        fileGroupTrash_.swap(trash);
         draft_ = {};
         renamed_ = {};
         beforeRename_ = {};
@@ -527,6 +588,7 @@ namespace Horo::Editor {
         }
         draft_ = std::move(staged).Value();
         fileGroup_.reset();
+        fileGroupTrash_.clear();
         renamed_ = {};
         beforeRename_ = {};
         deleted_.reset();
@@ -615,6 +677,7 @@ namespace Horo::Editor {
         batch_ = {};
         draft_ = {};
         fileGroup_.reset();
+        fileGroupTrash_.clear();
         renamed_ = {};
         beforeRename_ = {};
         deleted_.reset();
@@ -644,6 +707,7 @@ namespace Horo::Editor {
         batch_ = {};
         draft_ = {};
         fileGroup_.reset();
+        fileGroupTrash_.clear();
         renamed_ = std::move(moved).Value();
         beforeRename_ = std::move(rename.source);
         deleted_.reset();
@@ -683,6 +747,54 @@ namespace Horo::Editor {
         } catch (const std::bad_alloc &) {
             return false;
         }
+    }
+
+    /** @copydoc SourceReviewTransactions::CommitGroupRestore */
+    bool SourceReviewTransactions::CommitGroupRestore(const GroupRestore &restore, SourceFileOpenService *open, DurableFileSystem &files,
+                                                      const ProjectMutationCoordinator *mutations, const CancellationToken &lifetime) {
+        feedback_ = Feedback::Conflict;
+        if (fileGroup_ != restore.receipt || !CanUndoFileGroup(*restore.receipt) ||
+            !TrashReceiptsCurrent(*restore.receipt, fileGroupTrash_))
+            return false;
+        feedback_ = Feedback::UndoFailed;
+        if (!open || !mutations)
+            return false;
+        const auto lease = mutations->TryAcquire({open->ProjectRoot(), ProjectMutationOwner::Asset, "source-review-group"});
+        if (lease.HasError())
+            return false;
+        std::vector<SourceReviewTrashRestore> trash;
+        try {
+            trash.reserve(fileGroupTrash_.size());
+            for (const auto &entry : fileGroupTrash_)
+                trash.push_back({entry.source, entry.payload, *entry.payloadIdentity});
+        } catch (const std::bad_alloc &) {
+            return false;
+        }
+        const auto undone = open->UndoReviewedFiles(*restore.receipt, lifetime, restore.disk, &files, trash);
+        if (undone.HasError()) {
+            const auto &error = undone.ErrorValue();
+            feedback_ = FailureFeedback(error, Feedback::UndoFailed);
+            if (error.code.Value() == SourceDocumentErrors::SaveOutcomeUnknown.code.Value()) {
+                feedback_ = Feedback::FileGroupRecovery;
+                committedFileOutcome_ = Proposals::SourceReviewDisposition::Stale;
+                fileGroup_.reset();
+                fileGroupTrash_.clear();
+            }
+            return false;
+        }
+        for (const auto &entry : fileGroupTrash_) {
+            try {
+                const bool ownsManifest = entry.manifestIdentity && TrashFileIdentity(files, entry.manifest) == entry.manifestIdentity;
+                RetireEmptyTrash(files, entry.manifest, entry.payload.parent_path(), ownsManifest);
+            } catch (...) {
+                // Already-restored files stay published if Trash metadata cannot be retired.
+            }
+        }
+        fileGroup_.reset();
+        fileGroupTrash_.clear();
+        reverted_ = true;
+        feedback_ = Feedback::Undone;
+        return true;
     }
 
     /** @copydoc SourceReviewTransactions::UpdateAuditHistory */
@@ -837,12 +949,13 @@ namespace Horo::Editor {
         feedback_ = Feedback::Conflict;
         if (!open || !receipt || fileGroup_ != receipt)
             return;
-        const auto undone = open->UndoReviewedDrafts(*receipt, lifetime);
+        const auto undone = open->UndoReviewedFiles(*receipt, lifetime);
         if (undone.HasError()) {
             feedback_ = FailureFeedback(undone.ErrorValue(), Feedback::UndoFailed);
             return;
         }
         fileGroup_.reset();
+        fileGroupTrash_.clear();
         reverted_ = true;
         feedback_ = Feedback::Undone;
     }

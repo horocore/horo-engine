@@ -596,7 +596,7 @@ namespace Horo::Editor::Proposals {
             const auto items = batch.Items();
             for (std::size_t index = 0; index < items.size(); ++index)
                 audit->revisions[index].after = items[index].snapshot.Revision();
-            return Output::Success({std::move(batch), std::move(audit), {}, {}});
+            return Output::Success({std::move(batch), std::move(audit), {}, {}, {}});
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(Errors::Bounds));
         }
@@ -649,8 +649,8 @@ namespace Horo::Editor::Proposals {
                 if (edit < items.size() && revision.file == edits_[edit].file)
                     revision.after = items[edit++].snapshot.Revision();
             }
-            return Output::Success(
-                {std::move(result.edits), std::move(audit), std::move(result.drafts), std::move(result.renames), result.deletions});
+            return Output::Success({std::move(result.edits), std::move(audit), std::move(result.drafts), std::move(result.renames),
+                                    std::move(result.renamedFrom), result.deletions});
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(Errors::Bounds));
         }

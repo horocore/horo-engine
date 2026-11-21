@@ -273,11 +273,16 @@ namespace Horo::Editor {
                                                                          std::span<const SourceReviewDeletion> deletions,
                                                                          const SourceBatchDiskEvidence &evidence, DurableFileSystem &files,
                                                                          CancellationToken cancellation = {});
-        /** @brief Replays edits and closes unchanged unsaved drafts from the same group.
+        /** @brief Replays edits, closes unchanged drafts and restores renamed sources together.
          * @param receipt Exact live group. @param cancellation Cooperative observer.
-         * @return Success or a refusal preserving all document and registry state.
+         * @param disk New worker observations in rename order. @param files Filesystem authority for physical restoration.
+         * @param restores Original sources and witnessed project Trash payloads.
+         * @return Success or a refusal preserving document and registry state.
+         * @pre The caller holds project mutation authority for all reverse moves.
          */
-        [[nodiscard]] Result<void> UndoReviewedDrafts(const SourceFileReviewBatch &receipt, CancellationToken cancellation = {});
+        [[nodiscard]] Result<void> UndoReviewedFiles(const SourceFileReviewBatch &receipt, CancellationToken cancellation = {},
+                                                     std::span<const SourceBatchDiskEvidence> disk = {}, DurableFileSystem *files = nullptr,
+                                                     std::span<const SourceReviewTrashRestore> restores = {});
         /** @brief Applies the explicit close choice; a failed or unconfirmed save keeps the session open.
          * @param request Exact source revision and optional save overwrite consent. @param decision Explicit host choice.
          * @param files Host filesystem. @return True only after text and routing ownership close together; false for Cancel.

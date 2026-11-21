@@ -367,6 +367,7 @@ namespace Horo::Editor::Proposals {
         std::shared_ptr<const SourceReviewAudit> audit;
         std::vector<SourceDocumentSnapshot> drafts;
         std::vector<SourceDocumentSnapshot> renames;
+        std::vector<SourceDocumentSnapshot> renamedFrom;
         std::size_t deletions{};
     };
 
