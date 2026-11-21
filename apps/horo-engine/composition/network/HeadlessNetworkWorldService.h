@@ -795,7 +795,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             if (!policy)
                 return Result<void>::Success();
             auto paths = HeadlessNavigationPathScope::Create(*record_->navigation, *owners_->configured->navigation, *policy,
-                                                             request_.scene, selected.moduleId);
+                                                             request_.scene, selected.moduleId,
+                                                             record_->decisionQueries && record_->decisionQueries->UsesNavigation());
             if (paths.HasError())
                 return Result<void>::Failure(paths.ErrorValue());
             const auto scene = record_->scenes->ActiveScene();
@@ -885,7 +886,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                     return Result<void>::Failure(frame.ErrorValue());
                 origin = frame.Value().Origin();
             }
-            return record_->decisionQueries->RunAtFixedTick(*record_->ai, *scene, origin, tick, &record_->native);
+            return record_->decisionQueries->RunAtFixedTick(*record_->ai, *scene, origin, tick, &record_->native,
+                                                            record_->navigationPath.get());
         }
 
         /** @brief Executes the registered decision phases for worlds without authored query tasks. */

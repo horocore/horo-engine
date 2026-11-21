@@ -131,6 +131,28 @@ namespace Horo::AI {
                                                                                    const QuerySchemaRegistry &registry,
                                                                                    const QueryContextSnapshot &contexts);
 
+    /** @brief Adds a reachability filter with optional lower-is-better traversal cost to a native lattice.
+     * @param maximumScoredCost Positive finite normalization ceiling. Omit it for reachability alone.
+     */
+    [[nodiscard]] Result<EnvironmentQueryAsset> AddBuiltinPointNavigationTest(const EnvironmentQueryAsset &lattice, QueryStageId stage,
+                                                                              std::optional<double> maximumScoredCost = std::nullopt);
+
+    /** @brief Native lattice and one validated Navigation path stage. */
+    struct BuiltinPointNavigationPlan final {
+        QueryPointLattice lattice;
+        QueryGeneratorProvenance generator;
+        QueryStageId test;
+        std::optional<double> maximumScoredCost;
+    };
+
+    /** @brief Detects an authored Navigation reachability or traversal-cost stage. */
+    [[nodiscard]] bool UsesBuiltinPointNavigation(const EnvironmentQueryPlan &plan) noexcept;
+
+    /** @brief Resolves the native lattice and path stage without reading Navigation state. */
+    [[nodiscard]] Result<BuiltinPointNavigationPlan> CaptureBuiltinPointNavigation(const EnvironmentQueryPlan &plan,
+                                                                                   const QuerySchemaRegistry &registry,
+                                                                                   const QueryContextSnapshot &contexts);
+
     /** @brief Removes a native point-distance stage while retaining all other source data.
      * @param lattice Detached source containing the stage. @param stage Stable identity of the test to remove.
      * @return Detached source or a typed refusal when the identity is absent or selects a different stage kind.

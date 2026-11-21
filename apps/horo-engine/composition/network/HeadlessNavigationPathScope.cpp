@@ -85,7 +85,7 @@ namespace Horo::Application::Internal {
     /** @copydoc HeadlessNavigationPathScope::Create */
     Result<std::unique_ptr<HeadlessNavigationPathScope>> HeadlessNavigationPathScope::Create(
         ProjectSceneNavigationWorld &owner, const ProjectSceneNavigationSelection &selection, const HeadlessNavigationPathPolicy &policy,
-        const Runtime::SceneRuntimeId scene, const std::string_view module) {
+        const Runtime::SceneRuntimeId scene, const std::string_view module, const bool tacticalQueries) {
         using Scope = Result<std::unique_ptr<HeadlessNavigationPathScope>>;
         if (!policy.IsValid() || !selection.catalog || selection.policy.MaximumQuery().query != Nav::NavigationQueryKind::Path)
             return Scope::Failure(MakeError(Nav::NavigationErrors::CapabilityDescriptorInvalid));
@@ -123,8 +123,21 @@ namespace Horo::Application::Internal {
         const Nav::NavigationPathCaller caller{Nav::NavigationDynamicOwnerId::Create(active.Value().world.Value()).Value(),
                                                Nav::NavigationDynamicOwnerGeneration::Create(active.Value().sceneGeneration.Value())
                                                    .Value()};
+        const auto tacticalId = std::numeric_limits<std::uint64_t>::max();
+        if (tacticalQueries && caller.owner.Value() == tacticalId)
+            return Scope::Failure(MakeError(Nav::NavigationErrors::GenerationExhausted));
         const Nav::NavigationAgentSceneBinding binding{active.Value().world, active.Value().scene, active.Value().sceneGeneration};
         try {
+            std::vector callers{caller};
+            std::optional<Nav::NavigationPathSubmission> tacticalPolicy;
+            if (tacticalQueries) {
+                const Nav::NavigationPathCaller tacticalCaller{Nav::NavigationDynamicOwnerId::Create(tacticalId).Value(),
+                                                               caller.generation};
+                callers.push_back(tacticalCaller);
+                tacticalPolicy = Nav::NavigationPathSubmission{.caller = tacticalCaller,
+                                                               .request = {.filter = policy.filter, .requirement = requirement},
+                                                               .deadlineTick = policy.deadlineTicks};
+            }
             auto context = Gameplay::GameplayNavigationContext::CreateWithBehaviorAgentPaths({std::string{module}, binding, true, false},
                                                                                              *world, owner.coordinator, owner.agents,
                                                                                              {.caller = caller,
@@ -138,13 +151,8 @@ namespace Horo::Application::Internal {
             if (auto refreshed = context.Value()->Refresh({.binding = binding, .path = {.provenance = source}}); refreshed.HasError())
                 return Scope::Failure(refreshed.ErrorValue());
             return Scope::Success(std::unique_ptr<HeadlessNavigationPathScope>{
-                new HeadlessNavigationPathScope{std::move(world),
-                                                owner.coordinator,
-                                                active.Value(),
-                                                source,
-                                                owner.agents,
-                                                {caller},
-                                                std::move(context).Value(),
+                new HeadlessNavigationPathScope{std::move(world), owner.coordinator, active.Value(), source, owner.agents,
+                                                std::move(callers), std::move(tacticalPolicy), std::move(context).Value(),
                                                 CaptureNavigationProfile(owner, selection, policy)}});
         } catch (const std::bad_alloc &) {
             return Scope::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
@@ -155,9 +163,11 @@ namespace Horo::Application::Internal {
         std::shared_ptr<Nav::NavigationWorldLifecycle> lifecycle, Nav::NavigationCoordinator &coordinator,
         const Nav::NavigationWorldActivationDescriptor activation, const Nav::NavigationOutcomeProvenance source,
         Nav::NavigationAgentRegistry &agents, std::vector<Nav::NavigationPathCaller> callers,
-        std::shared_ptr<Gameplay::GameplayNavigationContext> context, const Sha256Digest replayProfile) noexcept
+        std::optional<Nav::NavigationPathSubmission> tacticalPolicy, std::shared_ptr<Gameplay::GameplayNavigationContext> context,
+        const Sha256Digest replayProfile) noexcept
         : lifecycle_(std::move(lifecycle)), coordinator_(coordinator), activation_(activation), source_(source), agents_(agents),
-          callers_(std::move(callers)), context_(std::move(context)), replayProfile_(replayProfile) {}
+          callers_(std::move(callers)), tacticalPolicy_(std::move(tacticalPolicy)), context_(std::move(context)),
+          replayProfile_(replayProfile) {}
 
     HeadlessNavigationPathScope::~HeadlessNavigationPathScope() = default;
 
@@ -173,8 +183,11 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(Nav::NavigationErrors::AdmissionRejected));
         try {
             auto callers = callers_;
+            const auto lastActorId = std::numeric_limits<std::uint64_t>::max() - (tacticalPolicy_ ? 1 : 0);
+            if (tacticalPolicy_)
+                callers.pop_back();
             std::vector<Actor> actors;
-            callers.reserve(1 + selected.size());
+            callers.reserve(callers.size() + selected.size());
             actors.reserve(selected.size());
             samples_.reserve(selected.size());
             for (const auto &policy : selected) {
@@ -182,7 +195,7 @@ namespace Horo::Application::Internal {
                 if (!entity || policy.principal == 0 || (policy.motionStartTrigger && !policy.motionStartTrigger->IsValid()))
                     return Result<void>::Failure(MakeError(Nav::NavigationErrors::AgentDescriptorInvalid));
                 const auto previous = callers.back().owner.Value();
-                if (previous == std::numeric_limits<std::uint64_t>::max())
+                if (previous >= lastActorId)
                     return Result<void>::Failure(MakeError(Nav::NavigationErrors::GenerationExhausted));
                 const Nav::NavigationPathCaller caller{Nav::NavigationDynamicOwnerId::Create(previous + 1).Value(),
                                                        callers.front().generation};
@@ -199,6 +212,8 @@ namespace Horo::Application::Internal {
                 actors.push_back({std::move(actor).Value(), {}, policy.motionStartTrigger});
                 callers.push_back(caller);
             }
+            if (tacticalPolicy_)
+                callers.push_back(tacticalPolicy_->caller);
             actors_ = std::move(actors);
             callers_ = std::move(callers);
             return Result<void>::Success();
@@ -358,6 +373,22 @@ namespace Horo::Application::Internal {
         return context_->Refresh({.binding = context_->Binding().scene, .path = {.provenance = source_, .tick = tick}});
     }
 
+    /** @copydoc HeadlessNavigationPathScope::ReadQueryAccess */
+    std::optional<AI::QueryNavigationAccess> HeadlessNavigationPathScope::ReadQueryAccess(const std::uint64_t tick) const noexcept {
+        if (!tacticalPolicy_ || revoked_ || lifecycle_->State() != Nav::NavigationWorldLifecycleState::Active)
+            return std::nullopt;
+        const auto active = lifecycle_->ActiveDescriptor();
+        if (active.HasError() || active.Value() != activation_)
+            return std::nullopt;
+        return AI::QueryNavigationAccess{*lifecycle_,
+                                         coordinator_.ObservePathRequests(),
+                                         {activation_, source_, callers_, tick},
+                                         tacticalPolicy_->caller,
+                                         tacticalPolicy_->request.filter,
+                                         tacticalPolicy_->request.requirement,
+                                         tacticalPolicy_->deadlineTick};
+    }
+
     /** @copydoc HeadlessNavigationPathScope::DispatchAtFixedTick */
     void HeadlessNavigationPathScope::DispatchAtFixedTick(const std::uint64_t tick) const {
         static_cast<void>(coordinator_.Dispatch(tick));
@@ -365,6 +396,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc HeadlessNavigationPathScope::Revoke */
     void HeadlessNavigationPathScope::Revoke() noexcept {
+        revoked_ = true;
         actors_.clear();
         context_->Revoke();
     }

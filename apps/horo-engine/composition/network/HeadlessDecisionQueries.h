@@ -4,6 +4,7 @@
 #include "HeadlessCookedDecisionAdmission.h"
 #include "Horo/AI/DecisionNodeRegistration.h"
 #include "Horo/AI/DecisionQueryTask.h"
+#include "Horo/AI/EnvironmentQueryNavigation.h"
 #include "Horo/AI/EnvironmentQueryPhysics.h"
 
 namespace Horo::Physics {
@@ -12,11 +13,13 @@ namespace Horo::Physics {
 
 namespace Horo::Application::Internal {
     class ScenePhysicsHost;
+    class HeadlessNavigationPathScope;
 
     /** @brief Owns the query binding and fixed-step phases for one authoritative runtime world. */
     class HeadlessDecisionQueries final : public AI::IDecisionQueryTaskBinder,
                                           private AI::IDecisionQueryTaskHost,
-                                          private AI::IQueryPhysicsVisibilityOwner {
+                                          private AI::IQueryPhysicsVisibilityOwner,
+                                          private AI::IQueryNavigationOwner {
     public:
         /** @brief Freezes the matching query plans and allocates bounded phase state before Scene activation. */
         [[nodiscard]] static Result<std::shared_ptr<HeadlessDecisionQueries>> Create(
@@ -30,7 +33,8 @@ namespace Horo::Application::Internal {
 
         /** @brief Publishes eligible results, evaluates decisions, and advances admitted queries on the same fixed tick. */
         [[nodiscard]] Result<void> RunAtFixedTick(AI::AiSceneRuntime &runtime, const Runtime::RuntimeSceneView &scene,
-                                                  Math::WorldCoordinate64 origin, std::uint64_t tick, ScenePhysicsHost *physics = nullptr);
+                                                  Math::WorldCoordinate64 origin, std::uint64_t tick, ScenePhysicsHost *physics = nullptr,
+                                                  const HeadlessNavigationPathScope *navigation = nullptr);
 
         /** @brief Observes terminal results for one exact live agent and tick without changing query execution. */
         void ArmReplay(AI::AgentHandle agent, std::uint64_t tick) noexcept;
@@ -38,6 +42,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<std::span<const AI::DecisionQueryPublication>> ReadReplay(std::uint64_t tick) const;
         /** @brief Identifies the cooked query inventory in stable query ID order and its effective work budget. */
         [[nodiscard]] Sha256Digest ReplayProfile() const noexcept;
+        /** @brief Reports whether the frozen query inventory needs a Navigation caller. */
+        [[nodiscard]] bool UsesNavigation() const noexcept;
 
     private:
         struct TickScope final {
@@ -46,6 +52,7 @@ namespace Horo::Application::Internal {
             Math::WorldCoordinate64 origin;
             std::uint64_t tick;
             ScenePhysicsHost *physics;
+            const HeadlessNavigationPathScope *navigation;
             std::size_t active{};
         };
 
@@ -68,6 +75,8 @@ namespace Horo::Application::Internal {
         /** @copydoc AI::IQueryPhysicsVisibilityOwner::CaptureVisibility */
         [[nodiscard]] Result<std::optional<AI::QueryPhysicsVisibilityResult>> CaptureVisibility(
             const AI::QueryPhysicsVisibilityRequest &request) override;
+        [[nodiscard]] std::optional<AI::QueryNavigationAccess> ReadQueryNavigation(
+            const Runtime::RuntimeSceneView &scene) const noexcept override;
         /** @brief Acquires a revocable capability only when the exact published Scene or Physics world changes. */
         [[nodiscard]] Result<void> PrepareVisibilityCapability(Physics::PhysicsWorld &world);
         /** @brief Publishes at most one result per active query through the Scene-owned BlackboardSync lane. */

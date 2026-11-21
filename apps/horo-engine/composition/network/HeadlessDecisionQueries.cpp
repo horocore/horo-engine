@@ -1,5 +1,6 @@
 #include "HeadlessDecisionQueries.h"
 
+#include "HeadlessNavigationPathScope.h"
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryCache.h"
 #include "Horo/AI/EnvironmentQueryPerception.h"
@@ -123,7 +124,7 @@ namespace Horo::Application::Internal {
         const auto plan = plans_.find(output->query);
         if (plan == plans_.end())
             return Executor::Failure(MakeError(AI::AIErrors::EnvironmentQueryDescriptorUnavailable));
-        if (AI::UsesBuiltinPointVisibility(*plan->second.plan) && !bestEffort_)
+        if (!bestEffort_ && (AI::UsesBuiltinPointVisibility(*plan->second.plan) || AI::UsesBuiltinPointNavigation(*plan->second.plan)))
             return Executor::Failure(MakeError(AI::AIErrors::EnvironmentQueryStageUnsupported));
         if (tasks_.size() == AI::AiTaskSchedulerSettings::HardAgents) {
             std::erase_if(tasks_, [](const auto &task) {
@@ -183,6 +184,8 @@ namespace Horo::Application::Internal {
         if (AI::UsesBuiltinPointVisibility(*plan.plan))
             return AI::AdmitBuiltinPointVisibilityQuery(*plan.plan, *registry_, scope_->scene, owner.Value(), std::move(inputs), settings,
                                                         *this);
+        if (AI::UsesBuiltinPointNavigation(*plan.plan))
+            return AI::AdmitBuiltinPointNavigationQuery(*plan.plan, *registry_, scope_->scene, std::move(inputs), settings, *this);
         if (!perception)
             return AI::AdmitBuiltinPointQuery(*plan.plan, *registry_, scope_->scene, std::move(inputs), settings, {cache_, plan.digest});
 
@@ -345,9 +348,24 @@ namespace Horo::Application::Internal {
         cursor_ = (cursor_ + 1) % tasks_.size();
     }
 
+    std::optional<AI::QueryNavigationAccess> HeadlessDecisionQueries::ReadQueryNavigation(
+        const Runtime::RuntimeSceneView &scene) const noexcept {
+        if (!scope_ || !scope_->navigation || !scope_->scene.SameIncarnation(scene))
+            return std::nullopt;
+        return scope_->navigation->ReadQueryAccess(scope_->tick);
+    }
+
+    /** @copydoc HeadlessDecisionQueries::UsesNavigation */
+    bool HeadlessDecisionQueries::UsesNavigation() const noexcept {
+        return std::ranges::any_of(plans_, [](const auto &entry) {
+            return AI::UsesBuiltinPointNavigation(*entry.second.plan);
+        });
+    }
+
     /** @copydoc HeadlessDecisionQueries::RunAtFixedTick */
     Result<void> HeadlessDecisionQueries::RunAtFixedTick(AI::AiSceneRuntime &runtime, const Runtime::RuntimeSceneView &scene,
-                                                         Math::WorldCoordinate64 origin, std::uint64_t tick, ScenePhysicsHost *physics) {
+                                                         Math::WorldCoordinate64 origin, std::uint64_t tick, ScenePhysicsHost *physics,
+                                                         const HeadlessNavigationPathScope *navigation) {
         if (scope_ || !scene.IsCurrent() || tick == 0)
             return Result<void>::Failure(MakeError(AI::AIErrors::TaskContextInvalid));
         if (auto prepared = PrepareCache(scene); prepared.HasError())
@@ -355,7 +373,7 @@ namespace Horo::Application::Internal {
         std::erase_if(tasks_, [](const auto &task) {
             return task.expired();
         });
-        TickScope current{runtime, scene, origin, tick, physics};
+        TickScope current{runtime, scene, origin, tick, physics, navigation};
 
         struct Reset final {
             TickScope *&slot;

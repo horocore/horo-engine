@@ -3,6 +3,7 @@
 /** @file HeadlessNavigationPathScope.h
  * @brief Private authoritative Gameplay path grant over the installed immutable cooked provider.
  */
+#include "Horo/AI/EnvironmentQueryNavigation.h"
 #include "Horo/Animation/AnimationGraph.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
@@ -63,7 +64,7 @@ namespace Horo::Application::Internal {
                                                                                          const ProjectSceneNavigationSelection &selection,
                                                                                          const HeadlessNavigationPathPolicy &policy,
                                                                                          Runtime::SceneRuntimeId scene,
-                                                                                         std::string_view module);
+                                                                                         std::string_view module, bool tacticalQueries);
 
         /** @brief Borrows the only module scope bound to the exact published static world. */
         [[nodiscard]] const std::shared_ptr<Gameplay::GameplayNavigationContext> &Context() const noexcept;
@@ -84,6 +85,8 @@ namespace Horo::Application::Internal {
         void DiscardMotionFeedback() noexcept;
         /** @brief Commits terminal results and refreshes the native scope on the fixed owner lane. */
         [[nodiscard]] Result<void> CommitAtFixedTick(std::uint64_t tick, HeadlessReplayNavigation *replay = nullptr) const;
+        /** @brief Grants tactical tests access to this exact world and its bounded path caller. */
+        [[nodiscard]] std::optional<AI::QueryNavigationAccess> ReadQueryAccess(std::uint64_t tick) const noexcept;
         /** @brief Dispatches only after gameplay has submitted from the same fixed owner lane. */
         void DispatchAtFixedTick(std::uint64_t tick) const;
         /** @brief Closes native admission before the Scene provider retires. */
@@ -106,6 +109,7 @@ namespace Horo::Application::Internal {
                                     Navigation::NavigationWorldActivationDescriptor activation,
                                     Navigation::NavigationOutcomeProvenance source, Navigation::NavigationAgentRegistry &agents,
                                     std::vector<Navigation::NavigationPathCaller> callers,
+                                    std::optional<Navigation::NavigationPathSubmission> tacticalPolicy,
                                     std::shared_ptr<Gameplay::GameplayNavigationContext> context, Sha256Digest replayProfile) noexcept;
 
         std::shared_ptr<Navigation::NavigationWorldLifecycle> lifecycle_;
@@ -114,6 +118,8 @@ namespace Horo::Application::Internal {
         Navigation::NavigationOutcomeProvenance source_;
         Navigation::NavigationAgentRegistry &agents_;
         std::vector<Navigation::NavigationPathCaller> callers_;
+        std::optional<Navigation::NavigationPathSubmission> tacticalPolicy_;
+        bool revoked_{};
         std::vector<Actor> actors_;
         std::vector<Navigation::NavigationCrowdMotionSample> samples_;
         std::uint64_t motionTick_{};

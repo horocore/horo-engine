@@ -1,6 +1,7 @@
 #include "Horo/AI/EnvironmentQueryNavigation.h"
 
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/EnvironmentQueryExecution.h"
 #include "Horo/Navigation/NavigationErrors.h"
 
 #include <algorithm>
@@ -63,6 +64,100 @@ namespace Horo::AI {
             }
             return Sample::Success(sample);
         }
+
+        /** @brief Converts canonical global millimeters to the static cooked provider's meter frame. */
+        Math::Vec3 StaticNavigationPoint(const Math::WorldCoordinate64 &point) noexcept {
+            const auto axes = point.Millimeters();
+            return {static_cast<float>(static_cast<double>(axes[0]) / 1000.0), static_cast<float>(static_cast<double>(axes[1]) / 1000.0),
+                    static_cast<float>(static_cast<double>(axes[2]) / 1000.0)};
+        }
+
+        class PointNavigationSource final : public IQueryExecutionSource {
+        public:
+            PointNavigationSource(BuiltinPointNavigationPlan plan, Runtime::RuntimeSceneView scene, Math::WorldCoordinate64 start,
+                                  std::uint64_t deadline, const IQueryNavigationOwner &owner, const QueryNavigationAccess &access)
+                : plan_(plan), scene_(scene), start_(StaticNavigationPoint(start)), deadline_(deadline), owner_(owner),
+                  activation_(access.publication.activation), root_(access.publication.source), caller_(access.caller),
+                  probe_(access.requests) {}
+
+            bool IsCurrent(const QueryExecutionInputs &inputs) const noexcept override {
+                return inputs.contexts->MatchesScene(scene_) && CurrentAccess().has_value();
+            }
+
+            Result<QueryGenerationResult> Generate(const QueryExecutionInputs &inputs, const QueryGeneratorOutput &output) override {
+                return GenerateQueryLattice(*inputs.contexts, plan_.lattice.center, plan_.lattice, output);
+            }
+
+            Result<bool> StartTest(const QueryExecutionInputs &inputs, const QueryStageId stage, const QueryGeneratedItem &item) override {
+                const auto *point = std::get_if<Math::WorldCoordinate64>(&item);
+                if (stage != plan_.test || !point)
+                    return Result<bool>::Failure(MakeError(AIErrors::EnvironmentQueryContextInvalid));
+                const auto current = CurrentAccess();
+                if (!current)
+                    return Result<bool>::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
+                const auto tick = current->publication.tick;
+                if (tick >= deadline_)
+                    return Result<bool>::Success(false);
+                const auto deadline = tick + std::min(current->deadlineTicks, deadline_ - tick);
+                Navigation::NavigationPathSubmission submission{.caller = caller_,
+                                                                .request = {.world = root_.world,
+                                                                            .topology = root_.topology,
+                                                                            .start = start_,
+                                                                            .destination = StaticNavigationPoint(*point),
+                                                                            .filter = current->filter,
+                                                                            .requirement = current->requirement},
+                                                                .source = root_,
+                                                                .capabilityRevision = root_.profileRevision,
+                                                                .targetTick = tick + 1,
+                                                                .deadlineTick = deadline,
+                                                                .cancellation = inputs.ownerCancellation};
+                return probe_.Start(current->world, stage, std::move(submission), tick);
+            }
+
+            Result<std::optional<QueryTestSample>> PollTest() override {
+                using Sample = Result<std::optional<QueryTestSample>>;
+                const auto current = CurrentAccess();
+                if (!current) {
+                    probe_.Cancel();
+                    return Sample::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
+                }
+                auto sample = probe_.Poll(current->publication);
+                if (sample.HasValue())
+                    return sample;
+                // Only faults local to one request are comparable to the other candidates' independent samples.
+                const auto code = sample.ErrorValue().code.Value();
+                if (code == Navigation::NavigationErrors::NoNavigationData.code.Value())
+                    return Sample::Success(QueryTestSample{.stage = plan_.test, .availability = QueryTestAvailability::Unavailable});
+                if (code == Navigation::NavigationErrors::ProviderFailed.code.Value())
+                    return Sample::Success(QueryTestSample{.stage = plan_.test, .availability = QueryTestAvailability::Failed});
+                if (code == Navigation::NavigationErrors::CapacityExceeded.code.Value())
+                    return Sample::Success(QueryTestSample{.stage = plan_.test, .availability = QueryTestAvailability::Incomparable});
+                return sample;
+            }
+
+            void CancelTest() noexcept override {
+                probe_.Cancel();
+            }
+
+        private:
+            std::optional<QueryNavigationAccess> CurrentAccess() const noexcept {
+                const auto access = owner_.ReadQueryNavigation(scene_);
+                if (!access || access->publication.activation != activation_ || !SameRoot(access->publication.source, root_) ||
+                    access->caller != caller_)
+                    return std::nullopt;
+                return access;
+            }
+
+            BuiltinPointNavigationPlan plan_;
+            Runtime::RuntimeSceneView scene_;
+            Math::Vec3 start_;
+            std::uint64_t deadline_;
+            const IQueryNavigationOwner &owner_;
+            Navigation::NavigationWorldActivationDescriptor activation_;
+            Navigation::NavigationOutcomeProvenance root_;
+            Navigation::NavigationPathCaller caller_;
+            QueryNavigationProbe probe_;
+        };
     }  // namespace
 
     /** @copydoc GenerateQueryNavigationSurface */
@@ -99,7 +194,10 @@ namespace Horo::AI {
 
     /** @copydoc QueryNavigationProbe::QueryNavigationProbe */
     QueryNavigationProbe::QueryNavigationProbe(Navigation::NavigationCoordinator &coordinator) noexcept
-        : requests_(coordinator.ObservePathRequests()) {}
+        : QueryNavigationProbe(coordinator.ObservePathRequests()) {}
+
+    QueryNavigationProbe::QueryNavigationProbe(Navigation::NavigationCoordinator::PathRequests requests) noexcept
+        : requests_(std::move(requests)) {}
 
     /** @copydoc QueryNavigationProbe::~QueryNavigationProbe */
     QueryNavigationProbe::~QueryNavigationProbe() {
@@ -170,5 +268,40 @@ namespace Horo::AI {
         if (pending_.IsValid())
             requests_.Abandon(std::exchange(pending_, {}));
         worldCancellation_ = {};
+    }
+
+    /** @copydoc AdmitBuiltinPointNavigationQuery */
+    Result<std::unique_ptr<QueryExecution>> AdmitBuiltinPointNavigationQuery(const EnvironmentQueryPlan &plan,
+                                                                             const QuerySchemaRegistry &registry,
+                                                                             const Runtime::RuntimeSceneView &scene,
+                                                                             QueryExecutionInputs inputs, QueryExecutionSettings settings,
+                                                                             const IQueryNavigationOwner &owner) {
+        using Admission = Result<std::unique_ptr<QueryExecution>>;
+        if (!inputs.contexts || !inputs.contexts->MatchesScene(scene))
+            return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
+        const auto captured = CaptureBuiltinPointNavigation(plan, registry, *inputs.contexts);
+        if (captured.HasError())
+            return Admission::Failure(captured.ErrorValue());
+        const auto *context = inputs.contexts->Find(BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation));
+        const auto *start = context ? std::get_if<Math::WorldCoordinate64>(&context->value) : nullptr;
+        if (!start)
+            return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextMissing));
+        const auto access = owner.ReadQueryNavigation(scene);
+        if (!access)
+            return Admission::Failure(MakeError(Navigation::NavigationErrors::NoNavigationData));
+        if (access->deadlineTicks == 0 || !access->filter.IsValid() || !access->publication.activation.IsValid())
+            return Admission::Failure(MakeError(Navigation::NavigationErrors::CapabilityDescriptorInvalid));
+
+        QueryScoreRule rule{.stage = captured.Value().test, .requiredFilterValue = true};
+        if (const auto cost = captured.Value().maximumScoredCost)
+            rule.score = QueryScoreRange{.maximum = *cost, .direction = QueryScoreDirection::Lower};
+        auto scoring = QueryScoringPlan::Capture(plan, registry, std::span{&rule, 1}, QueryScoreTieBreak::StableIndex);
+        if (scoring.HasError())
+            return Admission::Failure(scoring.ErrorValue());
+        const std::size_t width = 2U * captured.Value().lattice.outerSteps + 1U;
+        settings.generatorWorkUnits = 2U * width * width;
+        auto source = std::make_unique<PointNavigationSource>(captured.Value(), scene, *start, settings.deadlineTick, owner, *access);
+        return QueryExecution::Admit(std::move(inputs), captured.Value().generator, std::move(scoring).Value(), settings,
+                                     std::move(source));
     }
 }  // namespace Horo::AI

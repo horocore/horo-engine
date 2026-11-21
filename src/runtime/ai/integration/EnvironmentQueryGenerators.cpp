@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <array>
 #include <bit>
+#include <cmath>
 #include <limits>
 #include <new>
 #include <utility>
@@ -30,6 +31,8 @@ namespace Horo::AI {
         constexpr std::uint64_t PointCenter = LatticeProvider + 10;
         constexpr std::uint64_t PointVisibilityTest = LatticeProvider + 11;
         constexpr std::uint64_t VisibilityChannel = LatticeProvider + 12;
+        constexpr std::uint64_t PointNavigationTest = LatticeProvider + 13;
+        constexpr std::uint64_t NavigationMaximumScoredCost = LatticeProvider + 14;
 
         constexpr std::array NativePointCenters{BuiltinQueryContext::QuerierLocation, BuiltinQueryContext::WorldOrigin,
                                                 BuiltinQueryContext::TargetLocation};
@@ -381,6 +384,14 @@ namespace Horo::AI {
                                    .contexts = {{BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation), LatticeVersion}},
                                    .properties = {{QueryPropertyId::Create(VisibilityChannel).Value(), CanonicalBytes, true, 16}},
                                },
+                               QueryTestDescriptor{
+                                   .id = QueryTestId::Create(PointNavigationTest).Value(),
+                                   .origin = origin,
+                                   .inputItemType = item,
+                                   .inputItemVersion = LatticeVersion,
+                                   .contexts = {{BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation), LatticeVersion}},
+                                   .properties = {{QueryPropertyId::Create(NavigationMaximumScoredCost).Value(), Float64, false}},
+                               },
                                std::move(perception.test)};
         return QuerySchemaRegistry::Capture({items, contexts, generators, tests});
     }
@@ -497,6 +508,63 @@ namespace Horo::AI {
             return std::to_integer<std::uint8_t>(value);
         });
         return Captured::Success({generator.Value().lattice, generator.Value().provenance, stages.back().id, channel});
+    }
+
+    /** @copydoc AddBuiltinPointNavigationTest */
+    Result<EnvironmentQueryAsset> AddBuiltinPointNavigationTest(const EnvironmentQueryAsset &lattice, const QueryStageId stage,
+                                                                const std::optional<double> maximumScoredCost) {
+        using Asset = Result<EnvironmentQueryAsset>;
+        if (!stage.IsValid() || lattice.Stages().size() != 1 || !HasBuiltinLatticeStages(lattice))
+            return Asset::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+        if (maximumScoredCost && (!std::isfinite(*maximumScoredCost) || *maximumScoredCost <= 0))
+            return Asset::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+        const auto &generator = lattice.Stages().front();
+        if (generator.executionOrder == std::numeric_limits<std::uint32_t>::max())
+            return Asset::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+        QueryAssetStage path{.id = stage,
+                             .kind = QueryStageKind::Test,
+                             .executionOrder = generator.executionOrder + 1,
+                             .test = QueryTestId::Create(PointNavigationTest).Value(),
+                             .descriptorVersion = LatticeVersion};
+        if (maximumScoredCost)
+            path.properties.emplace_back(QueryPropertyId::Create(NavigationMaximumScoredCost).Value(), *maximumScoredCost);
+        return EnvironmentQueryAsset::Capture({.id = lattice.Id(),
+                                               .displayName = lattice.DisplayName(),
+                                               .result = lattice.ResultSchema(),
+                                               .stages = {generator, std::move(path)}});
+    }
+
+    /** @copydoc UsesBuiltinPointNavigation */
+    bool UsesBuiltinPointNavigation(const EnvironmentQueryPlan &plan) noexcept {
+        return std::ranges::any_of(plan.Stages(), [](const QueryPlanStage &stage) {
+            return stage.test == QueryTestId::Create(PointNavigationTest).Value();
+        });
+    }
+
+    /** @copydoc CaptureBuiltinPointNavigation */
+    Result<BuiltinPointNavigationPlan> CaptureBuiltinPointNavigation(const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry,
+                                                                     const QueryContextSnapshot &contexts) {
+        using Captured = Result<BuiltinPointNavigationPlan>;
+        const auto stages = plan.Stages();
+        if (stages.size() != 2 || contexts.Query() != plan.Id() || stages.back().test != QueryTestId::Create(PointNavigationTest).Value())
+            return Captured::Failure(MakeError(AIErrors::EnvironmentQueryStageUnsupported));
+        const auto &path = stages.back();
+        const auto *descriptor = registry.Find(path.test);
+        if (!descriptor || descriptor->origin != BuiltinOrigin())
+            return Captured::Failure(MakeError(AIErrors::EnvironmentQueryDescriptorUnavailable));
+        const auto generator = CapturePointOwnerGenerator(stages.front(), plan.ResultSchema().itemType, contexts, registry);
+        if (generator.HasError())
+            return Captured::Failure(generator.ErrorValue());
+        const auto property =
+            std::ranges::find(path.properties, QueryPropertyId::Create(NavigationMaximumScoredCost).Value(), &QueryPropertyValue::id);
+        std::optional<double> ceiling;
+        if (property != path.properties.end()) {
+            const auto *cost = std::get_if<double>(&property->value);
+            if (!cost || !std::isfinite(*cost) || *cost <= 0)
+                return Captured::Failure(MakeError(AIErrors::EnvironmentQuerySchemaInvalid));
+            ceiling = *cost;
+        }
+        return Captured::Success({generator.Value().lattice, generator.Value().provenance, path.id, ceiling});
     }
 
     /** @copydoc RemoveBuiltinPointDistanceTest */

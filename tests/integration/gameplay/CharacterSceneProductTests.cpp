@@ -6,8 +6,11 @@
 #include "HeadlessProjectScene.h"
 #include "HeadlessReplayArtifact.h"
 #include "Horo/AI/AITaskContinuation.h"
+#include "Horo/AI/DecisionPlanCodec.h"
+#include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Animation/AnimationErrors.h"
 #include "Horo/Foundation/Platform.h"
+#include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Navigation/Backends/RecastDetourCrowdProvider.h"
 #include "Horo/Physics/PhysicsErrors.h"
@@ -491,6 +494,139 @@ namespace Horo::Application::CharacterSceneProductTest {
             return asset;
         }
     }  // namespace
+
+    TEST_CASE("Cooked tactical path tests publish the reachable or lowest-cost point through headless Navigation",
+              "[ai][navigation][character][product][eqs]") {
+        using namespace AI;
+        using DecisionFixture::MakeIdentity;
+        const bool scoreCost = GENERATE(false, true);
+        const auto agent = MakeIdentity<AgentId>(50);
+        const auto controller = MakeIdentity<ControllerTypeId>(49);
+        const auto key = MakeIdentity<BlackboardKeyId>(4);
+        const std::array keys{
+            BlackboardKeyDescriptor{.key = key, .kind = BlackboardValueKind::WorldCoordinate, .presence = BlackboardKeyPresence::Optional}};
+        auto schema = BlackboardSchema::Capture({.identity = DecisionFixture::SchemaId(), .keys = keys});
+        REQUIRE(schema.HasValue());
+        const auto blackboardSchema = std::make_shared<const BlackboardSchema>(std::move(schema).Value());
+
+        auto registry = CaptureBuiltinQuerySchema();
+        REQUIRE(registry.HasValue());
+        auto generator = CreateBuiltinLatticeQuery(MakeIdentity<QueryId>(1), MakeIdentity<QueryStageId>(1),
+                                                   MakeIdentity<QueryResultSchemaId>(1), "Tactical path",
+                                                   {.stepMillimeters = scoreCost ? 500u : 4'000u,
+                                                    .outerSteps = 1,
+                                                    .innerSteps = scoreCost ? std::nullopt : std::optional<std::uint32_t>{1}},
+                                                   1);
+        REQUIRE(generator.HasValue());
+        auto query =
+            AddBuiltinPointNavigationTest(generator.Value(), MakeIdentity<QueryStageId>(2), scoreCost ? std::optional{10.0} : std::nullopt);
+        REQUIRE(query.HasValue());
+        auto queryBytes = EnvironmentQueryCookedCodec::Encode(query.Value(), registry.Value());
+        REQUIRE(queryBytes.HasValue());
+
+        Internal::GameplayWorldSelection gameplay;
+        gameplay.moduleId = "game.ai.tests";
+        gameplay.nativeArtifact = HORO_TEST_AI_MODULE_PATH;
+        gameplay.moduleRetirements = std::make_shared<Gameplay::GameModuleRetirementQueue>();
+        std::ifstream revision{HORO_TEST_AI_MODULE_REVISION_PATH};
+        REQUIRE((revision >> gameplay.descriptorRevision));
+        auto image =
+            Gameplay::GameModuleHost::PrepareImage(gameplay.nativeArtifact, {gameplay.moduleId, Gameplay::CurrentGameplayBuildFingerprint(),
+                                                                             gameplay.descriptorRevision});
+        REQUIRE(image.HasValue());
+        auto cookImage = std::move(image).Value();
+
+        auto task = DecisionFixture::TreeNode(2, DecisionControlKind::Task);
+        task.type = MakeIdentity<BehaviorTreeNodeTypeId>(102);
+        task.requirements = {{.key = key,
+                              .kind = BlackboardValueKind::WorldCoordinate,
+                              .access = BlackboardKeyAccess::ReadWrite,
+                              .source = DecisionFixture::Location()}};
+        const auto &result = query.Value().ResultSchema();
+        task.properties.emplace_back(MakeIdentity<BehaviorTreePropertyId>(10), "output", BehaviorTreePropertyKind::QueryOutput,
+                                     BehaviorTreeQueryOutput{query.Value().Id(), result.id, result.version, result.itemType, key, 120});
+        auto graph = DecisionFixture::Tree(11, {DecisionFixture::TreeNode(1, DecisionControlKind::Root), std::move(task)},
+                                           {DecisionFixture::Edge(1, 1, 2)});
+        graph.executionTask = MakeIdentity<TaskId>(9000);
+        auto nodes = cookImage->AcquireDecisionNodes();
+        REQUIRE(nodes.HasValue());
+        auto compiled = DecisionGraphCompiler::Compile(graph.asset, std::span{&graph, 1},
+                                                        {std::move(nodes).Value(), {blackboardSchema}, {}, 1});
+        REQUIRE(compiled.HasValue());
+        REQUIRE(compiled.Value().plan);
+        auto graphBytes = DecisionPlanCodec::EncodeCooked(*compiled.Value().plan);
+        cookImage.reset();
+        if (graphBytes.HasError())
+            UNSCOPED_INFO(graphBytes.ErrorValue().code.Value() << ": " << graphBytes.ErrorValue().message);
+        REQUIRE(graphBytes.HasValue());
+        auto schemaBytes = BlackboardSchemaCodec::Encode(*blackboardSchema);
+        REQUIRE(schemaBytes.HasValue());
+
+        NavigationProductFixture fixture;
+        const auto add = [&](const std::uint8_t serial, const std::string_view type, const std::string &path,
+                             std::vector<std::uint8_t> bytes) {
+            const auto id = Assets::AssetId::FromBytes({serial});
+            fixture.project.WriteText(path, "Cooked fixture source");
+            fixture.project.WriteText(path + ".horo", SidecarJson(id.ToString(), type));
+            return NavigationProductFixture::AddedAsset{{id, Type(type), ProjectPath::Parse(path).Value(),
+                                                         ProjectPath::Parse(path + ".horo").Value()},
+                                                        std::move(bytes)};
+        };
+        const std::array assets{add(120, DecisionAssetType(DecisionPlanKind::BehaviorTree), "assets/path.horo_bt",
+                                    std::move(graphBytes).Value()),
+                                add(121, BlackboardSchemaAssetType, "assets/path.horo_bb", std::move(schemaBytes).Value()),
+                                add(122, EnvironmentQuerySourceAssetType, "assets/path.horo_eqs", std::move(queryBytes).Value())};
+        fixture.Publish(NavigationProductFixture::Input::Valid, NavigationProductFixture::Client::None, assets, [&](auto &source) {
+            auto &actor = source.objects.front();
+            actor.localTransform.translation = {1, 0, 1};
+            actor.components.aiAgent = AiAgentComponent{.agent = agent};
+            actor.components.aiController = AiControllerComponent{.controller = controller,
+                                                                  .decisionAsset = graph.asset,
+                                                                  .blackboardSchema = blackboardSchema->Identity()};
+        });
+
+        NativeNavigationProductWorld product;
+        const auto started = product.Start(fixture, gameplay, {}, Physics::PhysicsRuntimeMode::Null, [&](auto &input, auto &project) {
+            input.cookedDecisions = std::make_shared<const Internal::HeadlessCookedDecisionInput>(
+                Internal::HeadlessCookedDecisionInput{.committed = *project.committed,
+                                                      .bindings = {{controller, assets.front().record.id}},
+                                                      .execution = AiSceneCookedDecisionExecution{project.jobs,
+                                                                                                  {.mode = AiSchedulingMode::BestEffort},
+                                                                                                  {}},
+                                                      .provider = Internal::HeadlessDecisionProvider::SelectedNativeGameplay,
+                                                      .querySchema =
+                                                          std::make_shared<const QuerySchemaRegistry>(std::move(registry).Value())});
+        });
+        if (started.HasError())
+            UNSCOPED_INFO(started.ErrorValue().code.Value() << ": " << started.ErrorValue().message);
+        REQUIRE(started.HasValue());
+        product.RunFrame();
+        product.RunFrame();
+        auto read = [&] {
+            return Internal::InspectHeadlessDecisionValue(product.PhysicsService(), agent, key);
+        };
+        CHECK_FALSE(read().Value());
+        std::optional<BlackboardValue> winner;
+        for (std::size_t attempt = 0; attempt < 80 && !winner; ++attempt) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            product.RunFrame();
+            const auto failure = Internal::InspectHeadlessDecisionFailure(product.PhysicsService());
+            REQUIRE(failure.HasValue());
+            if (failure.Value())
+                UNSCOPED_INFO(failure.Value()->error.code.Value() << ": " << failure.Value()->error.message);
+            REQUIRE_FALSE(failure.Value());
+            auto value = read();
+            REQUIRE(value.HasValue());
+            winner = std::move(value).Value();
+        }
+        REQUIRE(winner);
+        const auto actual = std::get<Math::WorldCoordinate64>(std::get<BlackboardScalarValue>(*winner));
+        // This Detour provider scores through the cooked triangle's center, so the upper corner of the small lattice costs least.
+        const auto expected =
+            scoreCost ? Math::WorldCoordinate64::FromMillimeters(1500, 0, 1500) : Math::WorldCoordinate64::FromMillimeters(5000, 0, 1000);
+        CAPTURE(scoreCost, actual.Millimeters(), expected.Millimeters());
+        CHECK(actual == expected);
+    }
 
     TEST_CASE("Cooked AI replay records terminal best-effort Navigation outcomes", "[ai][navigation][character][product]") {
         NavigationProductFixture fixture;

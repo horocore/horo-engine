@@ -9,6 +9,9 @@
 #include "Horo/Navigation/NavigationCoordinator.h"
 
 namespace Horo::AI {
+    class QueryExecution;
+    struct QueryExecutionInputs;
+    struct QueryExecutionSettings;
     /** @brief Captured Navigation-owned samples in provider order, paired with their exact coordinate frame. */
     struct QueryNavigationSurfaceSource final {
         const Navigation::NavigationSamplePositionResult &samples;
@@ -39,6 +42,7 @@ namespace Horo::AI {
          * @param coordinator Host-owned coordinator issuing revocable path access.
          */
         explicit QueryNavigationProbe(Navigation::NavigationCoordinator &coordinator) noexcept;
+        explicit QueryNavigationProbe(Navigation::NavigationCoordinator::PathRequests requests) noexcept;
         QueryNavigationProbe(const QueryNavigationProbe &) = delete;
         QueryNavigationProbe &operator=(const QueryNavigationProbe &) = delete;
         /** @brief Abandons any retained result reservation without waiting for provider work. */
@@ -73,4 +77,28 @@ namespace Horo::AI {
         Navigation::NavRequestHandle pending_;
         QueryStageId stage_;
     };
+
+    /** @brief Current owner-lane path grant for one committed Scene. All borrowed state is call-scoped. */
+    struct QueryNavigationAccess final {
+        const Navigation::NavigationWorldLifecycle &world;
+        Navigation::NavigationCoordinator::PathRequests requests;
+        Navigation::NavigationPathPublication publication;
+        Navigation::NavigationPathCaller caller;
+        Navigation::NavigationFilterId filter;
+        Navigation::NavigationQueryRequirement requirement;
+        std::uint64_t deadlineTicks{};
+    };
+
+    /** @brief Supplies Navigation authority only while the exact Scene owner's query phases are active. */
+    class IQueryNavigationOwner {
+    public:
+        virtual ~IQueryNavigationOwner() = default;
+        [[nodiscard]] virtual std::optional<QueryNavigationAccess> ReadQueryNavigation(
+            const Runtime::RuntimeSceneView &scene) const noexcept = 0;
+    };
+
+    /** @brief Admits the native path test through the existing asynchronous Navigation coordinator. */
+    [[nodiscard]] Result<std::unique_ptr<QueryExecution>> AdmitBuiltinPointNavigationQuery(
+        const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
+        QueryExecutionInputs inputs, QueryExecutionSettings settings, const IQueryNavigationOwner &owner);
 }  // namespace Horo::AI
