@@ -237,6 +237,13 @@ consume a final message before retiring the session. Project switches cancel or
 shut down the old connection and poll it to completion before releasing its
 worker. Host teardown cancels and joins any remaining worker.
 
+An explicit project language workspace selects providers from host-approved
+descriptors. It admits one lazy worker per provider, shares it across matching
+open sources, and retires closed documents before opening replacements.
+Provider failure leaves other providers and source editing available. A restart
+uses a new transport incarnation and an explicit host request. Executable paths
+and arguments enter only through the host's configuration.
+
 ### Source Save Publication (EDT-003.5)
 
 `SourceDocumentService::Save` captures one exact current revision on the owner thread.

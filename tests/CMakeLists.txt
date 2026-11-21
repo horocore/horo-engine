@@ -3938,6 +3938,7 @@ add_executable(HoroSourceLanguageSessionTests
         unit/editor/LspConnectionTests.cpp
         unit/editor/LspProcessTests.cpp
         unit/editor/LspResultProjectionTests.cpp
+        unit/editor/ProjectLanguageWorkspaceTests.cpp
         unit/editor/SourceLanguageSessionTests.cpp)
 target_link_libraries(HoroSourceLanguageSessionTests PRIVATE HoroEngine::EditorServices HoroEditorLanguageProtocolInternal)
 target_compile_definitions(HoroSourceLanguageSessionTests PRIVATE HORO_LANGUAGE_SERVER_CHILD="$<TARGET_FILE:HoroLanguageServerTestChild>")

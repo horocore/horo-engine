@@ -63,21 +63,29 @@ namespace {
              {"params", {{"uri", document.at("uri")}, {"version", document.at("version")}, {"diagnostics", nlohmann::json::array()}}}});
     }
 
+    /** @brief Serves document notifications and hover until the project begins shutdown. */
+    bool ServeDocuments() {
+        while (const auto message = ReadMessage()) {
+            const auto &method = message->envelope.Get().at("method");
+            if (method == "shutdown")
+                return Respond(*message, nullptr) && Expect("exit").has_value();
+            if (method == "textDocument/didOpen" || method == "textDocument/didChange") {
+                if (!Publish(*message))
+                    return false;
+            } else if (method == "textDocument/hover") {
+                if (!Respond(*message, {{"contents", {{"kind", "plaintext"}, {"value", "hover fixture"}}}}))
+                    return false;
+            }
+        }
+        return false;
+    }
+
     /** @brief Runs one complete project and source request lifecycle over raw stdio. */
     bool Serve() {
         const auto initialize = Expect("initialize");
         if (!initialize || !Respond(*initialize, {{"capabilities", {{"textDocumentSync", 1}, {"hoverProvider", true}}}}))
             return false;
-        if (!Expect("initialized"))
-            return false;
-        const auto opened = Expect("textDocument/didOpen");
-        if (!opened || !Publish(*opened))
-            return false;
-        const auto request = Expect("textDocument/hover");
-        if (!request || !Respond(*request, {{"contents", {{"kind", "plaintext"}, {"value", "hover fixture"}}}}))
-            return false;
-        const auto shutdown = Expect("shutdown");
-        return shutdown && Respond(*shutdown, nullptr) && Expect("exit").has_value();
+        return Expect("initialized").has_value() && ServeDocuments();
     }
 }  // namespace
 
