@@ -60,6 +60,9 @@ runs:
         "$COOK_BUILD_DIR/apps/HoroEditorVulkanShaderCook" assets/shaders/runtime/ui_paint.hlsl \
           "$asset_root/shaders/runtime/ui-paint-vulkan" "$RUNNER_TEMP/runtime-ui-paint-cook-scratch" \
           "${executables[0]}" "${executables[1]}" "${executables[2]}" --runtime-ui-paint
+        "$COOK_BUILD_DIR/apps/HoroEditorVulkanShaderCook" assets/shaders/runtime/xr_comfort_vignette.hlsl \
+          "$asset_root/shaders/runtime/xr-comfort-vulkan" "$RUNNER_TEMP/xr-comfort-cook-scratch" \
+          "${executables[0]}" "${executables[1]}" "${executables[2]}" --xr-comfort
         if [[ -n "$COOK_QUALIFICATION_ROOT" ]]; then
           mkdir -p "$COOK_QUALIFICATION_ROOT"
           "$COOK_BUILD_DIR/apps/HoroEditorVulkanShaderCook" assets/shaders/runtime/multiview_mesh.hlsl \

@@ -130,6 +130,11 @@ namespace Horo::Editor {
         return LoadPackagedProgram(assetRoot / "shaders/runtime/multiview-motion-vulkan", &LoadEditorVulkanMultiviewMotionCook);
     }
 
+    /** @copydoc LoadPackagedVulkanXrComfortShader */
+    Result<EditorVulkanXrComfortCook> LoadPackagedVulkanXrComfortShader(const std::filesystem::path &assetRoot) {
+        return LoadPackagedProgram(assetRoot / "shaders/runtime/xr-comfort-vulkan", &LoadEditorVulkanXrComfortCook);
+    }
+
     /** @copydoc LoadPackagedVulkanMultiviewCoverageShader */
     Result<EditorVulkanMultiviewCook> LoadPackagedVulkanMultiviewCoverageShader(const std::filesystem::path &assetRoot) {
         return LoadPackagedProgram(assetRoot / "shaders/runtime/multiview-coverage-vulkan", &LoadEditorVulkanMultiviewCoverageCook);

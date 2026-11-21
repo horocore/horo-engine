@@ -101,12 +101,23 @@ namespace Horo::Tests::ShaderCook {
                  {ShaderStage::Fragment, "PSMain", R"({"entryPoints":[{"name":"PSMain","mode":"frag"}]})"}}};
     }
 
+    /** @brief Scripted fullscreen vertex input and fragment-only rectangle/opacity block. */
+    inline std::array<SpirvReflectionStage, 2> XrComfortEvidence() {
+        return {{{ShaderStage::Vertex, "VSMain", R"({"entryPoints":[{"name":"VSMain","mode":"vert"}],
+          "inputs":[{"name":"position","type":"vec3","location":0}]})"},
+                 {ShaderStage::Fragment, "PSMain", R"({"entryPoints":[{"name":"PSMain","mode":"frag"}],
+          "outputs":[{"name":"color","type":"vec4","location":0}],
+          "types":{"_comfort":{"members":[{"name":"EyeRegion","type":"vec4","offset":0},{"name":"Comfort","type":"vec4","offset":16}]}},
+          "ubos":[{"name":"type.XrComfortParameters","type":"_comfort","set":0,"binding":0,"block_size":32}]})"}}};
+    }
+
     enum class CookFixtureRole {
         Viewport,
         SceneLinear,
         Multiview,
         MultiviewMotion,
         MultiviewCoverage,
+        XrComfort,
         Shadow
     };
 
@@ -124,6 +135,8 @@ namespace Horo::Tests::ShaderCook {
                 return EditorVulkanMultiviewCoverageShaderManifest();
             case CookFixtureRole::Shadow:
                 return EditorVulkanShadowShaderManifest();
+            case CookFixtureRole::XrComfort:
+                return EditorVulkanXrComfortShaderManifest();
         }
         return {};
     }
@@ -141,6 +154,8 @@ namespace Horo::Tests::ShaderCook {
                 return EditorVulkanMultiviewCoverageReflectionNames();
             case CookFixtureRole::Shadow:
                 return EditorVulkanShadowReflectionNames();
+            case CookFixtureRole::XrComfort:
+                return EditorVulkanXrComfortReflectionNames();
         }
         return {};
     }
@@ -163,7 +178,7 @@ namespace Horo::Tests::ShaderCook {
             const auto payload =
                 PackageShaderArtifactStages(ShaderTargetBackend::Vulkan, ShaderPayloadFormat::SpirV16,
                                             nativeStages.empty() ? std::span<const ShaderArtifactStage>{packageStages} : nativeStages,
-                                            1024);
+                                            4096);
             REQUIRE(payload.HasValue());
             compiled = {.backend = ShaderTargetBackend::Vulkan,
                         .payloadFormat = ShaderPayloadFormat::SpirV16,

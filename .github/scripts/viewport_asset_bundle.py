@@ -11,11 +11,12 @@ REFLECTION = 'shaders/editor/viewport-vulkan.reflection.json'
 SHADOW_PAYLOAD = 'shaders/editor/viewport-shadow-vulkan.horoshdr'
 SHADOW_REFLECTION = 'shaders/editor/viewport-shadow-vulkan.reflection.json'
 CATALOG_SOURCE = 'src/runtime/renderer/toolchain/ShaderCompilerToolchainCatalog.cpp'
-CANVAS_PREFIXES = ('shaders/editor/viewport-world-canvas-vulkan', 'shaders/runtime/ui-paint-vulkan')
-REFLECTIONS = (REFLECTION, SHADOW_REFLECTION, *(f'{prefix}.reflection.json' for prefix in CANVAS_PREFIXES))
-PAYLOADS = (PAYLOAD, SHADOW_PAYLOAD, *(f'{prefix}.horoshdr' for prefix in CANVAS_PREFIXES))
+PROGRAM_PREFIXES = ('shaders/editor/viewport-world-canvas-vulkan', 'shaders/runtime/ui-paint-vulkan',
+                    'shaders/runtime/xr-comfort-vulkan')
+REFLECTIONS = (REFLECTION, SHADOW_REFLECTION, *(f'{prefix}.reflection.json' for prefix in PROGRAM_PREFIXES))
+PAYLOADS = (PAYLOAD, SHADOW_PAYLOAD, *(f'{prefix}.horoshdr' for prefix in PROGRAM_PREFIXES))
 FILES = (*PAYLOADS, *REFLECTIONS, 'catalog.tsv')
-SCHEMA = 3
+SCHEMA = 4
 
 
 def digest(path):
@@ -62,7 +63,7 @@ def inspect(root, source):
     expected = set(FILES) | {'provenance.json'}
     actual = bundle_entries(root)
     if not set(FILES) <= actual or actual - expected:
-        raise ValueError('Bundle must contain only the required viewport and canvas artifacts, catalog and provenance')
+        raise ValueError('Bundle must contain only the required viewport, canvas and XR comfort artifacts, catalog and provenance')
     hashes = {name: digest(root / name) for name in FILES}
     if (root / 'catalog.tsv').read_text(encoding='utf-8') != canonical_catalog(source):
         raise ValueError('Bundle catalog differs from checkout canonical lock')

@@ -45,6 +45,9 @@ namespace Horo::Editor {
      * @return The exact motion program or a typed missing, altered or foreign-program error.
      */
     [[nodiscard]] Result<EditorVulkanMultiviewCook> LoadPackagedVulkanMultiviewMotionShader(const std::filesystem::path &assetRoot);
+    /** @brief Loads the exact offline-cooked program for the XR comfort overlay from the selected runtime asset root. */
+    [[nodiscard]] Result<EditorVulkanXrComfortCook> LoadPackagedVulkanXrComfortShader(const std::filesystem::path &assetRoot);
+
     /** @brief Loads the optional Vulkan stereo depth coverage program and its exact reflected sidecar. */
     [[nodiscard]] Result<EditorVulkanMultiviewCook> LoadPackagedVulkanMultiviewCoverageShader(const std::filesystem::path &assetRoot);
     /** @brief Loads the optional stereo counter reducer only from the exact installed payload and reflection pair. */

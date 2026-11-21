@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
+#include <iterator>
 #include <vector>
 
 namespace {
@@ -100,6 +101,42 @@ TEST_CASE("Packaged Vulkan stereo coverage binds the separate reflected artifact
     CHECK(loaded.Value().metadata.cookedArtifactKey == coverage.reflected.cookedArtifactKey);
     bundle.WriteCook(prefix, CookFixture{CookFixtureRole::MultiviewMotion, MultiviewMotionEvidence()}, "runtime");
     CHECK(LoadPackagedVulkanMultiviewCoverageShader(bundle.root).HasError());
+}
+
+TEST_CASE("XR comfort accepts only its complete fullscreen shader bundle", "[editor][shader-cook][assets][xr]") {
+    Bundle bundle;
+    constexpr std::string_view prefix = "xr-comfort-vulkan";
+    std::filesystem::create_directories(bundle.root / "shaders/runtime");
+    CHECK(LoadPackagedVulkanXrComfortShader(bundle.root).HasError());
+
+    auto reflection = XrComfortEvidence();
+    std::array<ShaderArtifactStage, 2> stages;
+    if (const auto *directory = std::getenv("HORO_TEST_XR_COMFORT_SPIRV_DIR")) {
+        constexpr std::array names{"vs", "ps"};
+        for (std::size_t i = 0; i < names.size(); ++i) {
+            const auto base = std::filesystem::path{directory} / names[i];
+            std::ifstream json(base.string() + ".json", std::ios::binary);
+            std::ifstream spirv(base.string() + ".spv", std::ios::binary);
+            REQUIRE(json.good());
+            REQUIRE(spirv.good());
+            reflection[i].json.assign(std::istreambuf_iterator<char>{json}, {});
+            stages[i] = {reflection[i].stage, reflection[i].entryPoint,
+                         {std::istreambuf_iterator<char>{spirv}, std::istreambuf_iterator<char>{}}};
+            REQUIRE_FALSE(stages[i].bytes.empty());
+        }
+    }
+    const auto native = stages.front().bytes.empty() ? std::span<const ShaderArtifactStage>{} : std::span<const ShaderArtifactStage>{stages};
+    const CookFixture comfort{CookFixtureRole::XrComfort, reflection, native};
+    bundle.Write("xr-comfort-vulkan.horoshdr", comfort.compiled.payload, "runtime");
+    CHECK(LoadPackagedVulkanXrComfortShader(bundle.root).HasError());
+    bundle.WriteCook(prefix, comfort, "runtime");
+    const auto loaded = LoadPackagedVulkanXrComfortShader(bundle.root);
+    REQUIRE(loaded.HasValue());
+    CHECK(loaded.Value().metadata.cookedArtifactKey == comfort.reflected.cookedArtifactKey);
+
+    const CookFixture scene{CookFixtureRole::Multiview, MultiviewEvidence()};
+    bundle.WriteCook(prefix, scene, "runtime");
+    CHECK(LoadPackagedVulkanXrComfortShader(bundle.root).HasError());
 }
 
 TEST_CASE("Packaged Vulkan full-eye reduction requires the closed compute bundle", "[editor][shader-cook][assets][xr]") {

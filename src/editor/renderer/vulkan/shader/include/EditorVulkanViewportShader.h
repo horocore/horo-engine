@@ -18,6 +18,23 @@ namespace Horo::Editor {
     [[nodiscard]] Render::ShaderManifest EditorVulkanViewportShaderManifest();
     [[nodiscard]] std::vector<Render::ShaderReflectionBindingName> EditorVulkanViewportReflectionNames();
 
+    /** @brief An exact graphics pair for the eye-wide comfort overlay. */
+    struct EditorVulkanXrComfortCook final {
+        std::vector<std::uint8_t> payload;
+        Render::ReflectedShaderArtifact metadata;
+    };
+
+    /** @brief Returns the Vulkan interface for the independent eye-wide vignette. */
+    [[nodiscard]] Render::ShaderManifest EditorVulkanXrComfortShaderManifest();
+    /** @brief Returns the exact reflected names for the eye rectangle and opacity parameters. */
+    [[nodiscard]] std::vector<Render::ShaderReflectionBindingName> EditorVulkanXrComfortReflectionNames();
+    /** @brief Validates the packaged vignette payload and reflection against their own manifest.
+     * @param payload Exact offline-compiled graphics payload.
+     * @param metadata Reflection produced from the same payload.
+     * @return Validated shader program or a typed package error. */
+    [[nodiscard]] Result<EditorVulkanXrComfortCook> LoadEditorVulkanXrComfortCook(std::span<const std::uint8_t> payload,
+                                                                                std::span<const std::uint8_t> metadata);
+
     /** @brief Exact cooked program for the opaque RGBA8 desktop camera compositor. */
     struct EditorVulkanCameraCrossFadeCook final {
         std::vector<std::uint8_t> payload;

@@ -164,29 +164,61 @@ namespace Horo::Editor {
         return {{{1}, "type.CameraCrossFadeParameters", {{{1}, "DestinationWeight"}}}, {{2}, "SourceColor", {}}};
     }
 
+    namespace {
+        /** @brief Loads a standalone fullscreen program with position input and one RGBA output. */
+        template <typename Cook>
+        Result<Cook> LoadFullscreenProgram(const Render::ShaderManifest &manifest, std::span<const std::uint8_t> payload,
+                                           std::span<const std::uint8_t> metadata) {
+            using namespace Render;
+            using Outcome = Result<Cook>;
+            const auto target = EditorVulkanViewportShaderTarget();
+            if (const auto valid = ValidateViewportStageEntries(manifest, target, payload); valid.HasError())
+                return Outcome::Failure(valid.ErrorValue());
+            auto decoded = DecodeReflectedShaderArtifact(manifest, target, payload, metadata);
+            if (decoded.HasError())
+                return Outcome::Failure(decoded.ErrorValue());
+            const auto attributes = std::span{decoded.Value().reflection.stageInterface};
+            const auto exact = [&](ShaderStage stage, ShaderInterfaceDirection direction, std::uint32_t columns) {
+                return std::ranges::count_if(attributes, [=](const auto &value) {
+                    return value.stage == stage && value.direction == direction && value.location == 0 && value.rows == 1 &&
+                           value.columns == columns && value.type == ShaderValueType::Float32 && value.arrayCount == 1;
+                }) == 1;
+            };
+            if (attributes.size() != 2 || !exact(ShaderStage::Vertex, ShaderInterfaceDirection::Input, 3) ||
+                !exact(ShaderStage::Fragment, ShaderInterfaceDirection::Output, 4))
+                return Outcome::Failure(MakeError(ShaderReflectionErrors::StageInterfaceMismatch));
+            return Outcome::Success({{payload.begin(), payload.end()}, std::move(decoded).Value()});
+        }
+    }  // namespace
+
     /** @copydoc LoadEditorVulkanCameraCrossFadeCook */
     Result<EditorVulkanCameraCrossFadeCook> LoadEditorVulkanCameraCrossFadeCook(std::span<const std::uint8_t> payload,
                                                                                 std::span<const std::uint8_t> metadata) {
+        return LoadFullscreenProgram<EditorVulkanCameraCrossFadeCook>(EditorVulkanCameraCrossFadeShaderManifest(), payload, metadata);
+    }
+
+    /** @copydoc EditorVulkanXrComfortShaderManifest */
+    Render::ShaderManifest EditorVulkanXrComfortShaderManifest() {
         using namespace Render;
-        using Outcome = Result<EditorVulkanCameraCrossFadeCook>;
-        const auto manifest = EditorVulkanCameraCrossFadeShaderManifest();
-        const auto target = EditorVulkanViewportShaderTarget();
-        if (const auto valid = ValidateViewportStageEntries(manifest, target, payload); valid.HasError())
-            return Outcome::Failure(valid.ErrorValue());
-        auto decoded = DecodeReflectedShaderArtifact(manifest, target, payload, metadata);
-        if (decoded.HasError())
-            return Outcome::Failure(decoded.ErrorValue());
-        const auto attributes = std::span{decoded.Value().reflection.stageInterface};
-        const auto exact = [&](ShaderStage stage, ShaderInterfaceDirection direction, std::uint32_t columns) {
-            return std::ranges::count_if(attributes, [=](const auto &value) {
-                return value.stage == stage && value.direction == direction && value.location == 0 && value.rows == 1 &&
-                       value.columns == columns && value.type == ShaderValueType::Float32 && value.arrayCount == 1;
-            }) == 1;
-        };
-        if (attributes.size() != 2 || !exact(ShaderStage::Vertex, ShaderInterfaceDirection::Input, 3) ||
-            !exact(ShaderStage::Fragment, ShaderInterfaceDirection::Output, 4))
-            return Outcome::Failure(MakeError(ShaderReflectionErrors::StageInterfaceMismatch));
-        return Outcome::Success({{payload.begin(), payload.end()}, std::move(decoded).Value()});
+        return {.schemaVersion = 1,
+                .sourceIdentity = "assets/shaders/runtime/xr_comfort_vignette.hlsl",
+                .sourceRevision = 1,
+                .entryPoints = {{ShaderStage::Vertex, "VSMain"}, {ShaderStage::Fragment, "PSMain"}},
+                .bindings = {{{1}, ShaderResourceKind::UniformBuffer, ShaderResourceAccess::ReadOnly, 1, ShaderStageVisibility::Fragment}},
+                .parameters = {{{1}, {1}, ShaderValueType::Float32, 1, 4, 1},
+                               {{2}, {1}, ShaderValueType::Float32, 1, 4, 1}},
+                .targets = {EditorVulkanViewportShaderTarget()}};
+    }
+
+    /** @copydoc EditorVulkanXrComfortReflectionNames */
+    std::vector<Render::ShaderReflectionBindingName> EditorVulkanXrComfortReflectionNames() {
+        return {{{1}, "type.XrComfortParameters", {{{1}, "EyeRegion"}, {{2}, "Comfort"}}}};
+    }
+
+    /** @copydoc LoadEditorVulkanXrComfortCook */
+    Result<EditorVulkanXrComfortCook> LoadEditorVulkanXrComfortCook(std::span<const std::uint8_t> payload,
+                                                                  std::span<const std::uint8_t> metadata) {
+        return LoadFullscreenProgram<EditorVulkanXrComfortCook>(EditorVulkanXrComfortShaderManifest(), payload, metadata);
     }
 
     /** @copydoc EditorVulkanWorldCanvasShaderManifest */

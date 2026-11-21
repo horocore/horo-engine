@@ -180,7 +180,9 @@ def test_bundle_rejects_stale_source_or_other_run(bundle, field):
                                   'shaders/editor/viewport-world-canvas-vulkan.horoshdr',
                                   'shaders/editor/viewport-world-canvas-vulkan.reflection.json',
                                   'shaders/runtime/ui-paint-vulkan.horoshdr',
-                                  'shaders/runtime/ui-paint-vulkan.reflection.json', 'catalog.tsv'])
+                                  'shaders/runtime/ui-paint-vulkan.reflection.json',
+                                  'shaders/runtime/xr-comfort-vulkan.horoshdr',
+                                  'shaders/runtime/xr-comfort-vulkan.reflection.json', 'catalog.tsv'])
 def test_bundle_rejects_missing_required_data(bundle, name):
     module, root, expected = bundle
     (root / name).unlink()
@@ -222,6 +224,14 @@ def test_offline_action_cooks_the_canvas_pair_in_the_staged_editor_root():
     qualification = action.index('if [[ -n "$COOK_QUALIFICATION_ROOT" ]]')
     assert action.index('"$asset_root/shaders/editor/viewport-world-canvas-vulkan"') < qualification
     assert action.index('"$asset_root/shaders/runtime/ui-paint-vulkan"') < qualification
+
+
+def test_offline_action_cooks_xr_comfort_before_bundle_provenance():
+    action = (ROOT / '.github/actions/cook-vulkan-viewport/action.yml').read_text()
+    cook = action.index('assets/shaders/runtime/xr_comfort_vignette.hlsl')
+    target = action.index('"$asset_root/shaders/runtime/xr-comfort-vulkan"', cook)
+    mode = action.index('--xr-comfort', target)
+    assert mode < action.index('viewport_asset_bundle.py create')
 
 
 def test_bundle_rejects_catalog_substitution_even_with_rehashed_provenance(bundle):

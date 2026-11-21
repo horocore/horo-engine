@@ -25,6 +25,7 @@ namespace {
     enum class CookMode {
         Viewport,
         CameraCrossFade,
+        XrComfort,
         WorldCanvas,
         RuntimeUiPaint,
         SceneLinear,
@@ -54,6 +55,8 @@ namespace {
                 return Editor::EditorVulkanViewportShaderManifest();
             case CameraCrossFade:
                 return Editor::EditorVulkanCameraCrossFadeShaderManifest();
+            case XrComfort:
+                return Editor::EditorVulkanXrComfortShaderManifest();
             case WorldCanvas:
                 return Editor::EditorVulkanWorldCanvasShaderManifest();
             case RuntimeUiPaint:
@@ -86,6 +89,8 @@ namespace {
                 return Editor::EditorVulkanViewportReflectionNames();
             case CameraCrossFade:
                 return Editor::EditorVulkanCameraCrossFadeReflectionNames();
+            case XrComfort:
+                return Editor::EditorVulkanXrComfortReflectionNames();
             case WorldCanvas:
                 return Editor::EditorVulkanWorldCanvasReflectionNames();
             case RuntimeUiPaint:
@@ -118,6 +123,7 @@ namespace {
 
     /** @brief Closed names for standalone optional cook roles, shared by parsing and diagnosis. */
     constexpr std::array NamedCookModes{NamedCookMode{CookMode::CameraCrossFade, "camera-cross-fade"},
+                                        NamedCookMode{CookMode::XrComfort, "xr-comfort"},
                                         NamedCookMode{CookMode::WorldCanvas, "world-canvas"},
                                         NamedCookMode{CookMode::RuntimeUiPaint, "runtime-ui-paint"},
                                         NamedCookMode{CookMode::SceneLinear, "scene-linear"},
@@ -217,6 +223,8 @@ namespace {
                 return Admit(Editor::LoadEditorVulkanViewportCook(artifact.payload, metadata));
             case CameraCrossFade:
                 return Admit(Editor::LoadEditorVulkanCameraCrossFadeCook(artifact.payload, metadata));
+            case XrComfort:
+                return Admit(Editor::LoadEditorVulkanXrComfortCook(artifact.payload, metadata));
             case WorldCanvas:
                 return Admit(Editor::LoadEditorVulkanWorldCanvasCook(artifact.payload, metadata));
             case RuntimeUiPaint: {
@@ -409,7 +417,7 @@ int main(int argc, char **argv) {
                      "[--scene-linear|--multiview|--multiview-environment|--multiview-motion|--multiview-coverage|"
                      "--multiview-coverage-reduction|--shadow|--"
                      "temporal-linear-depth|"
-                     "--temporal-motion|--camera-cross-fade|--world-canvas|--runtime-ui-paint]\n"
+                     "--temporal-motion|--camera-cross-fade|--xr-comfort|--world-canvas|--runtime-ui-paint]\n"
                      "       HoroEditorVulkanShaderCook source.hlsl absolute-new-stage scratch-root dxc spirv-val spirv-cross "
                      "--native-reconstruction candidate-id [--scene-linear-source viewport.hlsl]\n"
                      "       HoroEditorVulkanShaderCook repository absolute-new-stage scratch-root dxc spirv-val spirv-cross "
