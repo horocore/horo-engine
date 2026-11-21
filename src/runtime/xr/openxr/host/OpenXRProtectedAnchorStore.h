@@ -17,7 +17,7 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] static Result<std::shared_ptr<OpenXRProtectedAnchorStore>> Open(const std::shared_ptr<OpenXRNativeSession> &owner,
                                                                                       const XRAnchorScope &liveScope, XrSpace world,
                                                                                       const XRAnchorStoreScope &storeScope,
-                                                                                      CancellationToken consent, Clock clock);
+                                                                                      const CancellationSource &consent, Clock clock);
 
         /** @brief Persists a localized anchor under a new host-minted opaque lookup ID. Cold owner lane only. */
         [[nodiscard]] Result<void> Record(const XRSpatialAnchorId &anchor, XRRuntimeTime now, XRProtectedAnchorEntry entry);

@@ -129,6 +129,9 @@ namespace Horo::XR {
          */
         [[nodiscard]] Result<XRDurableAnchorState> Read() const;
 
+        /** @brief Reads a committed restore for the exact bound provider connection. */
+        [[nodiscard]] Result<XRDurableAnchorState> ReadRestored(const IXRProtectedAnchorStore &store) const;
+
         /** @copydoc Runtime::ICanonicalStateAdapter::Capture */
         [[nodiscard]] Result<Runtime::CanonicalCaptureDisposition> Capture(const Runtime::CanonicalCaptureContext &context,
                                                                            Runtime::ICanonicalCaptureSink &sink) const override;
@@ -160,5 +163,6 @@ namespace Horo::XR {
         mutable std::uint64_t lastUnixSeconds_{}; /**< Owner-lane floor prevents a clock correction from reviving expiry. */
         XRDurableAnchorState active_;
         std::uint64_t revision_{1};
+        bool restored_{};
     };
 }  // namespace Horo::XR

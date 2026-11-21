@@ -74,7 +74,7 @@ namespace Horo::XR::OpenXRInternal {
         }
     }  // namespace
 
-    Result<void> OpenXRNativeSession::OpenSpatialAnchorStore(const XRAnchorScope &scope, XrSpace world, CancellationToken consent) {
+    Result<void> OpenXRNativeSession::OpenSpatialAnchorStore(const XRAnchorScope &scope, XrSpace world, const CancellationSource &grant) {
         if (controlThread_ != std::this_thread::get_id() || retirementCall_ || anchorCall_)
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
         const StoreCall call{anchorCall_};
@@ -82,6 +82,7 @@ namespace Horo::XR::OpenXRInternal {
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         if (anchorStoreGeneration_ == std::numeric_limits<std::uint64_t>::max())
             return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
+        auto consent = grant.Token();
         if (consent.IsCancellationRequested())
             return Result<void>::Failure(MakeError(XRErrors::PermissionDenied));
         const auto publication = BorrowAnchorPublication(scope, world);

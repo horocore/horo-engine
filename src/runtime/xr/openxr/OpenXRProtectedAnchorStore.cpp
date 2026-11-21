@@ -55,7 +55,7 @@ namespace Horo::XR::OpenXRInternal {
     Result<std::shared_ptr<OpenXRProtectedAnchorStore>> OpenXRProtectedAnchorStore::Open(const std::shared_ptr<OpenXRNativeSession> &owner,
                                                                                          const XRAnchorScope &liveScope, XrSpace world,
                                                                                          const XRAnchorStoreScope &storeScope,
-                                                                                         CancellationToken consent, Clock clock) {
+                                                                                         const CancellationSource &consent, Clock clock) {
         using Outcome = Result<std::shared_ptr<OpenXRProtectedAnchorStore>>;
         if (!owner || !clock || !storeScope.partition.IsValid() || storeScope.accessRevision == 0)
             return Outcome::Failure(MakeError(XRErrors::OperationInvalid));
@@ -66,7 +66,7 @@ namespace Horo::XR::OpenXRInternal {
                 std::shared_ptr<OpenXRProtectedAnchorStore>{new OpenXRProtectedAnchorStore(owner, liveScope, world, storeScope, clock)};
             if (store->CurrentUnixSeconds() == 0)
                 return Outcome::Failure(MakeError(XRErrors::TimeDomainIncompatible));
-            const auto opened = owner->OpenSpatialAnchorStore(liveScope, world, std::move(consent));
+            const auto opened = owner->OpenSpatialAnchorStore(liveScope, world, consent);
             if (opened.HasError())
                 return Outcome::Failure(opened.ErrorValue());
             const auto connection = owner->CheckSpatialAnchorStore(liveScope, world);
@@ -167,7 +167,7 @@ namespace Horo::XR::OpenXRInternal {
         const auto owner = Borrow(scope_);
         if (owner.HasError())
             return Outcome::Failure(owner.ErrorValue());
-        const auto published = participant.Read();
+        const auto published = participant.ReadRestored(*this);
         if (published.HasError())
             return Outcome::Failure(published.ErrorValue());
         const auto &restored = published.Value();

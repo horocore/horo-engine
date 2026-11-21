@@ -405,7 +405,7 @@ namespace Horo::XR::OpenXRInternal {
         [[nodiscard]] Result<void> StopSpatialAnchors(const XRAnchorScope &scope, XRAnchorWithdrawal reason);
 
         /** @brief Opens cold access after the host grants separate protected-local persistence consent. */
-        [[nodiscard]] Result<void> OpenSpatialAnchorStore(const XRAnchorScope &scope, XrSpace world, CancellationToken consent);
+        [[nodiscard]] Result<void> OpenSpatialAnchorStore(const XRAnchorScope &scope, XrSpace world, const CancellationSource &grant);
         /** @brief Checks exact live store authority without enumerating or reading durable storage. */
         [[nodiscard]] Result<std::uint64_t> CheckSpatialAnchorStore(const XRAnchorScope &scope, XrSpace world);
         /** @brief Saves one freshly localized anchor under a host-created opaque name. */

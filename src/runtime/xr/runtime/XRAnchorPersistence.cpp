@@ -128,6 +128,7 @@ namespace Horo::XR {
             if (!armed_)
                 std::terminate();  // A registered host must bind the exact publication port to the aggregate.
             owner_->active_ = *candidate_;
+            owner_->restored_ = true;
             ++owner_->revision_;
             RollbackPrepared();
         }
@@ -259,6 +260,7 @@ namespace Horo::XR {
         if (!entry.reference.IsValid() || entry.expiresAtUnixSeconds <= current.Value())
             return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
         active_ = {XRDurableAnchorStatus::Unlocalized, entry.reference, entry.expiresAtUnixSeconds};
+        restored_ = false;
         ++revision_;
         return Result<void>::Success();
     }
@@ -268,6 +270,16 @@ namespace Horo::XR {
         using Outcome = Result<XRDurableAnchorState>;
         const auto now = CheckCurrent();
         return now.HasError() ? Outcome::Failure(now.ErrorValue()) : Outcome::Success(AtTime(active_, now.Value()));
+    }
+
+    Result<XRDurableAnchorState> XRAnchorPersistence::ReadRestored(const IXRProtectedAnchorStore &store) const {
+        using Outcome = Result<XRDurableAnchorState>;
+        if (&store != store_.get())
+            return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
+        const auto current = Read();
+        if (current.HasError() || restored_)
+            return current;
+        return Outcome::Success({});
     }
 
     /** @copydoc XRAnchorPersistence::Capture */

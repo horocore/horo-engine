@@ -265,7 +265,7 @@ namespace Horo::Tests::OpenXR {
         RequireFailureIdentity(fixture.owner.PersistSpatialAnchor(scope, world, anchor.Value(), observedAt, "key-one"),
                                XRErrors::OperationUnavailable);
         CancellationSource consent;
-        REQUIRE(fixture.owner.OpenSpatialAnchorStore(scope, world, consent.Token()).HasValue());
+        REQUIRE(fixture.owner.OpenSpatialAnchorStore(scope, world, consent).HasValue());
         RequireFailureIdentity(fixture.owner.PersistSpatialAnchor(scope, world, anchor.Value(), observedAt, "key-one"),
                                XRErrors::OperationUnavailable);
         REQUIRE(fixture.owner.SampleSpatialAnchor(scope, world, anchor.Value(), observedAt).HasValue());
@@ -290,7 +290,7 @@ namespace Horo::Tests::OpenXR {
             replacementScope.space.id.session = request.candidate;
             replacementScope.grant = IdentityValue<XRAnchorGrant>(2);
             REQUIRE(fixture.owner.StartSpatialAnchors(replacementScope, world, {1, Duration::FromNanoseconds(30)}, publication).HasValue());
-            REQUIRE(fixture.owner.OpenSpatialAnchorStore(replacementScope, world, consent.Token()).HasValue());
+            REQUIRE(fixture.owner.OpenSpatialAnchorStore(replacementScope, world, consent).HasValue());
             const auto missing = fixture.owner.RestoreSpatialAnchor(replacementScope, world, observedAt, "absent");
             REQUIRE(missing.HasValue());
             CHECK_FALSE(missing.Value());
@@ -376,7 +376,7 @@ namespace Horo::Tests::OpenXR {
             return 60;
         };
         CancellationSource consent;
-        auto store = AnchorValue(OpenXRProtectedAnchorStore::Open(owner, scope, world, storeScope, consent.Token(), clock));
+        auto store = AnchorValue(OpenXRProtectedAnchorStore::Open(owner, scope, world, storeScope, consent, clock));
         REQUIRE(store->Record(anchor, now, {reference, 100}).HasValue());
         auto foreign = storeScope;
         foreign.partition = AnchorValue(XRAnchorStorePartition::FromBytes({9}));
@@ -386,6 +386,7 @@ namespace Horo::Tests::OpenXR {
         const auto record = AnchorValue(SaveRecordId::FromBytes({4}));
         auto source = AnchorValue(XRAnchorPersistence::Bind(participant, record, publication, scope, storeScope, store));
         REQUIRE(source->RecordLocalized(anchor, now).HasValue());
+        CHECK_FALSE(AnchorValue(store->Relocalize(*source, now)));
         CanonicalStateParticipantRegistry captureBindings;
         REQUIRE(captureBindings.Register(source->Descriptor(), source).HasValue());
         const auto captureRegistry = AnchorValue(captureBindings.Snapshot());
@@ -408,8 +409,9 @@ namespace Horo::Tests::OpenXR {
 
         REQUIRE(owner->RetireSpatialAnchor(scope, world, anchor).HasValue());
         REQUIRE(owner->CloseSpatialAnchorStore(scope).HasValue());
-        auto reopened = AnchorValue(OpenXRProtectedAnchorStore::Open(owner, scope, world, storeScope, consent.Token(), clock));
+        auto reopened = AnchorValue(OpenXRProtectedAnchorStore::Open(owner, scope, world, storeScope, consent, clock));
         RequireFailureIdentity(store->Admit(storeScope), XRErrors::IdentityStale);
+        RequireFailureIdentity(reopened->Relocalize(*source, now), XRErrors::PermissionDenied);
         auto target = AnchorValue(XRAnchorPersistence::Bind(participant, record, publication, scope, storeScope, reopened));
         CanonicalStateParticipantRegistry restoreBindings;
         REQUIRE(restoreBindings.Register(target->Descriptor(), target).HasValue());
