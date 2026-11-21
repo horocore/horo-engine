@@ -5,6 +5,7 @@
  */
 
 #include "Horo/AI/AIRuntimeCapability.h"
+#include "Horo/AI/AITaskContinuation.h"
 #include "Horo/Navigation/NavigationVelocityPipeline.h"
 
 namespace Horo::AI {
@@ -20,6 +21,19 @@ namespace Horo::AI {
          * @param current Committed pre-movement observation. @return Bound operation or original admission error.
          */
         [[nodiscard]] static Result<AiNavigationMovementTask> Start(AiRuntimeCapability ai, AgentHandle agent, TaskHandle task,
+                                                                    Navigation::NavigationMovementController &movement,
+                                                                    Navigation::NavigationMovementRequest request,
+                                                                    const Navigation::NavigationMovementObservation &current);
+
+        /** @brief Binds a behavior-tree task continuation at intent dispatch.
+         * @param ai Exact Scene authority for resolving the decision agent.
+         * @param decision Live task continuation captured from the decision callback.
+         * @param movement Existing controller for the same live entity. @param request Authored movement intent.
+         * @param current Committed pre-movement observation.
+         * @return Bound operation or original admission error for the dispatching owner to deliver. Once bound, the
+         * original tree consumes terminal results from its continuation.
+         */
+        [[nodiscard]] static Result<AiNavigationMovementTask> Start(AiRuntimeCapability ai, AiTaskContinuation decision,
                                                                     Navigation::NavigationMovementController &movement,
                                                                     Navigation::NavigationMovementRequest request,
                                                                     const Navigation::NavigationMovementObservation &current);
@@ -54,15 +68,25 @@ namespace Horo::AI {
             const Navigation::NavigationCrowdSnapshot &snapshot, Navigation::NavigationAvoidanceRequest request);
 
         /** @brief Cancels the operation and its exact AI execution.
-         * @return Original AI lifecycle transition or typed owner/identity failure.
+         * @return Original AI lifecycle transition, decision mailbox admission, or typed owner/identity failure.
+         * @details A contended decision mailbox keeps the terminal candidate for retry at the next advancement.
          */
         [[nodiscard]] Result<AiTaskTransitionDisposition> Cancel();
 
     private:
         AiNavigationMovementTask(AiRuntimeCapability ai, AgentHandle agent, TaskHandle task,
-                                 Navigation::NavigationMovementController &movement) noexcept;
+                                 Navigation::NavigationMovementController &movement,
+                                 std::optional<AiTaskContinuation> decision = {}) noexcept;
+        /** @brief Checks exact Scene ownership and starts one operation without replacing existing motion. */
+        [[nodiscard]] static Result<AiNavigationMovementTask> StartBound(AiNavigationMovementTask binding,
+                                                                         Navigation::NavigationMovementRequest request,
+                                                                         const Navigation::NavigationMovementObservation &current);
         /** @brief Admit advancement only for the exact active execution and operation. */
         [[nodiscard]] Result<bool> CanAdvance();
+        /** @brief Publish through the existing tree mailbox or the admitted scene-task lifecycle. */
+        [[nodiscard]] Result<AiTaskTransitionDisposition> Finish(AiTaskTerminalResult terminal);
+        /** @brief Retry one detached terminal candidate without advancing Navigation. */
+        [[nodiscard]] Result<AiTaskTransitionDisposition> OfferDecisionTerminal();
         /** @brief Publishes original Navigation error as the canonical AI terminal cause. */
         [[nodiscard]] Error RecordFailure(AiTaskFailureKind kind, Error cause);
         /** @brief Projects terminal Navigation state into the existing AI task lifecycle. */
@@ -76,5 +100,8 @@ namespace Horo::AI {
         Navigation::NavigationMovementController *movement_{};
         Navigation::NavigationMovementId operation_;
         const std::thread::id owner_;
+        std::optional<AiTaskContinuation> decision_;
+        std::optional<AiTaskTerminalResult> pendingTerminal_;
+        bool decisionFinished_{};
     };
 }  // namespace Horo::AI

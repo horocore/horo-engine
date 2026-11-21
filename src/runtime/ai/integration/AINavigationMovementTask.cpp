@@ -37,18 +37,21 @@ namespace Horo::AI {
     }  // namespace
 
     AiNavigationMovementTask::AiNavigationMovementTask(AiRuntimeCapability ai, const AgentHandle agent, const TaskHandle task,
-                                                       N::NavigationMovementController &movement) noexcept
-        : ai_(std::move(ai)), agent_(agent), task_(task), movement_(&movement), owner_(std::this_thread::get_id()) {}
+                                                       N::NavigationMovementController &movement,
+                                                       std::optional<AiTaskContinuation> decision) noexcept
+        : ai_(std::move(ai)), agent_(agent), task_(task), movement_(&movement), owner_(std::this_thread::get_id()),
+          decision_(std::move(decision)) {}
 
     AiNavigationMovementTask::AiNavigationMovementTask(AiNavigationMovementTask &&other) noexcept
         : ai_(std::move(other.ai_)), agent_(other.agent_), task_(other.task_), movement_(std::exchange(other.movement_, nullptr)),
-          operation_(other.operation_), owner_(other.owner_) {}
+          operation_(other.operation_), owner_(other.owner_), decision_(std::move(other.decision_)),
+          pendingTerminal_(std::move(other.pendingTerminal_)), decisionFinished_(other.decisionFinished_) {}
 
     AiNavigationMovementTask::~AiNavigationMovementTask() {
         if (!CancelMotion())
             return;
         try {
-            (void)ai_.CancelTask(agent_, task_, AiTaskCancellationReason::OwnerShutdown);
+            (void)Finish({.state = AiTaskState::Cancelled, .cancellationReason = AiTaskCancellationReason::OwnerShutdown});
         } catch (const std::bad_alloc &) {
             // Navigation is already retired. A rejected AI publication can only allocate diagnostic storage here.
         }
@@ -60,27 +63,50 @@ namespace Horo::AI {
                                                                      N::NavigationMovementRequest request,
                                                                      const N::NavigationMovementObservation &current) {
         using StartResult = Result<AiNavigationMovementTask>;
-        const auto owner = ai.ResolveAgentOwner(agent);
-        if (owner.HasError())
-            return StartResult::Failure(owner.ErrorValue());
-        const auto nav = movement.Owner();
-        const auto entity = owner.Value();
-        if (nav.scene.Value() != entity.runtime.value || nav.entityIndex != entity.entity.index ||
-            nav.entityGeneration != entity.entity.generation)
-            return StartResult::Failure(MakeError(AIErrors::TaskContextInvalid));
         const auto execution = ai.InspectTask(agent, task);
         if (execution.HasError())
             return StartResult::Failure(execution.ErrorValue());
         if (execution.Value().state != AiTaskState::Running)
             return StartResult::Failure(MakeError(AIErrors::TaskTransitionInvalid));
+        return StartBound(AiNavigationMovementTask(std::move(ai), agent, task, movement), std::move(request), current);
+    }
+
+    /** @copydoc
+     * AiNavigationMovementTask::Start(AiRuntimeCapability,AiTaskContinuation,Navigation::NavigationMovementController&,Navigation::NavigationMovementRequest,const
+     * Navigation::NavigationMovementObservation&) */
+    Result<AiNavigationMovementTask> AiNavigationMovementTask::Start(AiRuntimeCapability ai, AiTaskContinuation decision,
+                                                                     N::NavigationMovementController &movement,
+                                                                     N::NavigationMovementRequest request,
+                                                                     const N::NavigationMovementObservation &current) {
+        if (!decision.IsCurrent())
+            return Result<AiNavigationMovementTask>::Failure(MakeError(AIErrors::TaskContextInvalid));
+        const auto agent = decision.Operation().agent;
+        const auto task = decision.Operation().task;
+        return StartBound(AiNavigationMovementTask(std::move(ai), agent, task, movement, std::move(decision)), std::move(request), current);
+    }
+
+    /** @copydoc AiNavigationMovementTask::StartBound */
+    Result<AiNavigationMovementTask> AiNavigationMovementTask::StartBound(AiNavigationMovementTask binding,
+                                                                          N::NavigationMovementRequest request,
+                                                                          const N::NavigationMovementObservation &current) {
+        using StartResult = Result<AiNavigationMovementTask>;
+        const auto owner = binding.ai_.ResolveAgentOwner(binding.agent_);
+        if (owner.HasError())
+            return StartResult::Failure(owner.ErrorValue());
+        auto &movement = *binding.movement_;
+        const auto nav = movement.Owner();
+        const auto entity = owner.Value();
+        if (nav.scene.Value() != entity.runtime.value || nav.entityIndex != entity.entity.index ||
+            nav.entityGeneration != entity.entity.generation)
+            return StartResult::Failure(MakeError(AIErrors::TaskContextInvalid));
         if (const auto state = movement.Status().state;
             state >= N::NavigationMovementState::Querying && state < N::NavigationMovementState::Arrived)
             return StartResult::Failure(MakeError(N::NavigationErrors::AdmissionRejected));
 
-        AiNavigationMovementTask binding(std::move(ai), agent, task, movement);
         const auto accepted = movement.Start(std::move(request), current);
         if (accepted.HasError())
-            return StartResult::Failure(binding.RecordFailure(AiTaskFailureKind::Admission, accepted.ErrorValue()));
+            return StartResult::Failure(binding.decision_ ? accepted.ErrorValue()
+                                                          : binding.RecordFailure(AiTaskFailureKind::Admission, accepted.ErrorValue()));
         binding.operation_ = accepted.Value().accepted;
         return StartResult::Success(std::move(binding));
     }
@@ -89,17 +115,25 @@ namespace Horo::AI {
     Result<bool> AiNavigationMovementTask::CanAdvance() {
         if (!movement_ || owner_ != std::this_thread::get_id())
             return Result<bool>::Failure(MakeError(AIErrors::RuntimeUnavailable));
-        const auto task = ai_.InspectTask(agent_, task_);
-        if (task.HasError()) {
-            CancelMotion();
-            return Result<bool>::Failure(task.ErrorValue());
-        }
-        if (task.Value().state != AiTaskState::Running) {
-            CancelMotion();
-            return Result<bool>::Success(false);
+        if (decision_) {
+            if (pendingTerminal_) {
+                const auto retried = OfferDecisionTerminal();
+                return retried.HasValue() ? Result<bool>::Success(false) : Result<bool>::Failure(retried.ErrorValue());
+            }
+            const auto owner = ai_.ResolveAgentOwner(agent_);
+            if (decisionFinished_ || !decision_->IsCurrent() || owner.HasError()) {
+                CancelMotion();
+                return owner.HasValue() ? Result<bool>::Success(false) : Result<bool>::Failure(owner.ErrorValue());
+            }
+        } else {
+            const auto task = ai_.InspectTask(agent_, task_);
+            if (task.HasError() || task.Value().state != AiTaskState::Running) {
+                CancelMotion();
+                return task.HasValue() ? Result<bool>::Success(false) : Result<bool>::Failure(task.ErrorValue());
+            }
         }
         if (movement_->Status().id != operation_) {
-            const auto cancelled = ai_.CancelTask(agent_, task_, AiTaskCancellationReason::Superseded);
+            const auto cancelled = Finish({.state = AiTaskState::Cancelled, .cancellationReason = AiTaskCancellationReason::Superseded});
             return cancelled.HasValue() ? Result<bool>::Success(false) : Result<bool>::Failure(cancelled.ErrorValue());
         }
         return Result<bool>::Success(true);
@@ -148,13 +182,44 @@ namespace Horo::AI {
         if (!movement_ || owner_ != std::this_thread::get_id())
             return Result<AiTaskTransitionDisposition>::Failure(MakeError(AIErrors::RuntimeUnavailable));
         CancelMotion();
-        return ai_.CancelTask(agent_, task_);
+        return Finish({.state = AiTaskState::Cancelled, .cancellationReason = AiTaskCancellationReason::Requested});
+    }
+
+    /** @copydoc AiNavigationMovementTask::Finish */
+    Result<AiTaskTransitionDisposition> AiNavigationMovementTask::Finish(AiTaskTerminalResult terminal) {
+        if (!decision_) {
+            if (terminal.failure)
+                return ai_.FailTask(agent_, task_, std::move(*terminal.failure));
+            if (terminal.cancellationReason)
+                return ai_.CancelTask(agent_, task_, *terminal.cancellationReason);
+            return ai_.CompleteTask(agent_, task_);
+        }
+        if (decisionFinished_)
+            return Result<AiTaskTransitionDisposition>::Success(AiTaskTransitionDisposition::AlreadyTerminal);
+        if (!pendingTerminal_)
+            pendingTerminal_.emplace(std::move(terminal));
+        return OfferDecisionTerminal();
+    }
+
+    /** @copydoc AiNavigationMovementTask::OfferDecisionTerminal */
+    Result<AiTaskTransitionDisposition> AiNavigationMovementTask::OfferDecisionTerminal() {
+        using ResultType = Result<AiTaskTransitionDisposition>;
+        const auto offered = decision_->PublishTerminal(*pendingTerminal_);
+        if (offered.HasError())
+            return ResultType::Failure(offered.ErrorValue());
+        if (offered.Value() == AiTaskPublicationDisposition::Contended)
+            return ResultType::Success(AiTaskTransitionDisposition::NoChange);
+        pendingTerminal_.reset();
+        decisionFinished_ = true;
+        return ResultType::Success(offered.Value() == AiTaskPublicationDisposition::Accepted
+                                       ? AiTaskTransitionDisposition::Applied
+                                       : AiTaskTransitionDisposition::AlreadyTerminal);
     }
 
     /** @copydoc AiNavigationMovementTask::RecordFailure */
     Error AiNavigationMovementTask::RecordFailure(const AiTaskFailureKind kind, Error cause) {
         CancelMotion();
-        auto failed = ai_.FailTask(agent_, task_, {kind, cause});
+        auto failed = Finish({.state = AiTaskState::Failed, .failure = AiTaskFailureDetail{kind, cause}});
         if (failed.HasError())
             return std::move(failed).ErrorValue();
         return cause;
@@ -166,11 +231,12 @@ namespace Horo::AI {
         using enum N::NavigationMovementState;
         switch (status.state) {
             case Arrived:
-                return Transition(ai_.CompleteTask(agent_, task_));
+                return Transition(Finish({.state = AiTaskState::Succeeded}));
             case Cancelled:
-                return Transition(ai_.CancelTask(agent_, task_, AiTaskCancellationReason::ContextCancelled));
+                return Transition(
+                    Finish({.state = AiTaskState::Cancelled, .cancellationReason = AiTaskCancellationReason::ContextCancelled}));
             case TimedOut:
-                return Transition(ai_.CancelTask(agent_, task_, AiTaskCancellationReason::TimedOut));
+                return Transition(Finish({.state = AiTaskState::Cancelled, .cancellationReason = AiTaskCancellationReason::TimedOut}));
             case AgentLost:
             case TargetLost:
             case WorldLost:

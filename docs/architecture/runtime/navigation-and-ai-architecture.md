@@ -2298,6 +2298,9 @@ then publishes committed state for variable-rate RenderExtraction.
      the adapter returns the achieved displacement to the velocity pipeline for the next tick.
      The binding publishes Navigation admission errors, provider failures, arrival and cancellation to the original
      AI task. A superseded movement can never complete the replacement task or authorize its motion.
+     For a behavior-tree node, the host binds the continuation captured during evaluation at intent dispatch.
+     Navigation offers a detached terminal candidate, and the next decision evaluation consumes it on the
+     original task.
 5. **`SystemPhase::Gameplay` (Behavior Script Step & Locomotion)**:
    - Generic object-attached gameplay behaviors (`IBehaviorInstance::OnFixedUpdate`) and character controllers step **after** AI decision evaluation.
    - This group is not the AI decision phase.

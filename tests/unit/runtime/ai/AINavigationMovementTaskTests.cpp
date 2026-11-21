@@ -1,4 +1,5 @@
 #include "AiSceneTestSupport.h"
+#include "BehaviorTreeAsyncTestSupport.h"
 #include "Horo/AI/AINavigationMovementTask.h"
 #include "navigation/NavigationCoordinatorTestFixtures.h"
 
@@ -76,11 +77,11 @@ namespace Horo::AI {
                 return {.destination = {10, 0, 0}, .query = Request().requirement, .capabilityRevision = 1};
             }
 
-            void PublishPath() {
-                REQUIRE(coordinator.Dispatch(0) == 1);
+            void PublishPath(const std::uint64_t submittedTick = 0) {
+                REQUIRE(coordinator.Dispatch(submittedTick) == 1);
                 jobs.Shutdown(ShutdownPolicy::Drain);
                 const std::array callers{Caller()};
-                REQUIRE(coordinator.Commit(Current(callers, 1)) == 1);
+                REQUIRE(coordinator.Commit(Current(callers, submittedTick + 1)) == 1);
             }
         };
     }  // namespace
@@ -165,5 +166,36 @@ namespace Horo::AI {
         REQUIRE(snapshot.terminal.has_value());
         CHECK(snapshot.state == AiTaskState::Cancelled);
         CHECK(snapshot.terminal->cancellationReason == AiTaskCancellationReason::OwnerShutdown);
+    }
+
+    TEST_CASE("Behavior tree consumes the original Navigation failure only on its next evaluation", "[ai][navigation][movement]") {
+        namespace BT = BehaviorTreeTestSupport;
+        namespace Async = BehaviorTreeAsyncTestSupport;
+        Fixture fixture(true);
+        BT::Fixture tree({BT::Node(1, BehaviorTreeOperation::Task)});
+        tree.agent = fixture.agent;
+        tree.blackboard =
+            BlackboardInstance::Create({tree.agent, tree.schema->Identity(), tree.schema->Version(), 1, 1}, tree.schema).Value();
+        tree.probe->outcome[1] = AiTaskState::Running;
+        Async::StartedInstance active(tree);
+        const auto continuation = active.async->continuations[1];
+        auto admitted = AiNavigationMovementTask::Start(fixture.capability, continuation, *fixture.movement, fixture.Move(), fixture.At(1));
+        REQUIRE(admitted.HasValue());
+        auto movementTask = std::move(admitted).Value();
+        REQUIRE(movementTask.Advance(fixture.At(1)).HasValue());
+        fixture.PublishPath(1);
+        const auto outcome = movementTask.Advance(fixture.At(2));
+        REQUIRE(outcome.HasError());
+        CHECK_FALSE(tree.probe->terminals[1]);
+
+        CHECK(tree.Evaluate(*active.instance, 2) == AiTaskState::Failed);
+        REQUIRE(tree.probe->terminals[1]);
+        REQUIRE(tree.probe->terminals[1]->failure);
+        CHECK(tree.probe->terminals[1]->failure->cause.code.Value() == AIErrors::NavigationTaskUnreachable.code.Value());
+        CHECK(tree.probe->resumes[1] == 0);
+        const auto retired = movementTask.Advance(fixture.At(3));
+        REQUIRE(retired.HasValue());
+        CHECK_FALSE(retired.Value().has_value());
+        CHECK(fixture.capability.InspectTask(fixture.agent, fixture.task).Value().state == AiTaskState::Running);
     }
 }  // namespace Horo::AI
