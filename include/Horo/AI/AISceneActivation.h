@@ -286,12 +286,26 @@ namespace Horo::AI {
         }
     };
 
+    /** @brief Scene-owned admission port for intents staged by cooked decision providers. */
+    class IAiCookedDecisionIntentSink {
+    public:
+        virtual ~IAiCookedDecisionIntentSink() = default;
+        /** @brief Publishes the exact agent's staged requests within the scheduler's command budget.
+         * @param context Validated dispatch identity. @param budget Bounded command allowance.
+         * @return True when all work is committed, false when work remains, or a typed dispatch failure.
+         */
+        [[nodiscard]] virtual Result<bool> Commit(const AiDecisionSliceContext &context, AiWorkBudget &budget) noexcept = 0;
+        /** @brief Discards unpublished requests for a cancelled or replaced decision. @param agent Exact decision agent. */
+        virtual void Discard(AgentHandle agent) noexcept = 0;
+    };
+
     /** @brief Opt-in fixed-tick execution for flat cooked Behavior Trees owned by this Scene. */
     struct AiSceneCookedDecisionExecution final {
         JobSystem &jobs; /**< Process executor must outlive the scene scheduler and its worker image pins. */
         AiTaskSchedulerSettings scheduler;
         AiAgentSchedulePolicy agent; /**< Maximum per-agent allowances; compiled plans reserve only required work units. */
         std::shared_ptr<IDecisionQueryTaskBinder> queryTasks; /**< Explicit Scene owner binding for authored query tasks. */
+        std::shared_ptr<IAiCookedDecisionIntentSink> intents; /**< Explicit owner for deferred decision requests. */
     };
 
     /**

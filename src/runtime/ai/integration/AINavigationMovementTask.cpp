@@ -115,28 +115,33 @@ namespace Horo::AI {
     Result<bool> AiNavigationMovementTask::CanAdvance() {
         if (!movement_ || owner_ != std::this_thread::get_id())
             return Result<bool>::Failure(MakeError(AIErrors::RuntimeUnavailable));
-        if (decision_) {
-            if (pendingTerminal_) {
-                const auto retried = OfferDecisionTerminal();
-                return retried.HasValue() ? Result<bool>::Success(false) : Result<bool>::Failure(retried.ErrorValue());
-            }
-            const auto owner = ai_.ResolveAgentOwner(agent_);
-            if (decisionFinished_ || !decision_->IsCurrent() || owner.HasError()) {
-                CancelMotion();
-                return owner.HasValue() ? Result<bool>::Success(false) : Result<bool>::Failure(owner.ErrorValue());
-            }
-        } else {
-            const auto task = ai_.InspectTask(agent_, task_);
-            if (task.HasError() || task.Value().state != AiTaskState::Running) {
-                CancelMotion();
-                return task.HasValue() ? Result<bool>::Success(false) : Result<bool>::Failure(task.ErrorValue());
-            }
+        if (pendingTerminal_) {
+            const auto retried = OfferDecisionTerminal();
+            return retried.HasValue() ? Result<bool>::Success(false) : Result<bool>::Failure(retried.ErrorValue());
+        }
+        const auto running = IsExecutionRunning();
+        if (running.HasError() || !running.Value()) {
+            CancelMotion();
+            return running;
         }
         if (movement_->Status().id != operation_) {
             const auto cancelled = Finish({.state = AiTaskState::Cancelled, .cancellationReason = AiTaskCancellationReason::Superseded});
             return cancelled.HasValue() ? Result<bool>::Success(false) : Result<bool>::Failure(cancelled.ErrorValue());
         }
         return Result<bool>::Success(true);
+    }
+
+    /** @copydoc AiNavigationMovementTask::IsExecutionRunning */
+    Result<bool> AiNavigationMovementTask::IsExecutionRunning() const {
+        if (decision_) {
+            if (decisionFinished_ || !decision_->IsCurrent())
+                return Result<bool>::Success(false);
+            const auto owner = ai_.ResolveAgentOwner(agent_);
+            return owner.HasValue() ? Result<bool>::Success(true) : Result<bool>::Failure(owner.ErrorValue());
+        }
+        const auto task = ai_.InspectTask(agent_, task_);
+        return task.HasValue() ? Result<bool>::Success(task.Value().state == AiTaskState::Running)
+                               : Result<bool>::Failure(task.ErrorValue());
     }
 
     /** @copydoc AiNavigationMovementTask::Advance */

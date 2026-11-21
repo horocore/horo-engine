@@ -899,6 +899,7 @@ horo_configure_target_header_boundary(HoroAISightIntegration PUBLIC_HEADERS
 )
 horo_configure_target_header_boundary(HoroAINavigationIntegration PUBLIC_HEADERS
     Horo/AI/EnvironmentQueryNavigation.h
+    Horo/AI/AINavigationIntentDispatch.h
     Horo/AI/AINavigationMovementTask.h
 )
 horo_configure_target_header_boundary(HoroAnimationEditorModel PUBLIC_HEADERS

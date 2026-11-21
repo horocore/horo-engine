@@ -1932,6 +1932,7 @@ target_link_libraries(HoroAISightIntegration PUBLIC HoroEngine::AISceneIntegrati
 # Explicit tactical Navigation composition keeps the AI core independent of Navigation owners.
 add_library(HoroAINavigationIntegration STATIC
     runtime/ai/integration/EnvironmentQueryNavigation.cpp
+    runtime/ai/integration/AINavigationIntentDispatch.cpp
     runtime/ai/integration/AINavigationMovementTask.cpp)
 add_library(HoroEngine::AINavigationIntegration ALIAS HoroAINavigationIntegration)
 target_compile_features(HoroAINavigationIntegration PUBLIC cxx_std_20)

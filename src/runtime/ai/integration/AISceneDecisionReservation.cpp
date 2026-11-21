@@ -28,8 +28,9 @@ namespace Horo::AI {
         class ScheduledCookedDecision final : public IAiScheduledDecision {
         public:
             ScheduledCookedDecision(const std::shared_ptr<Detail::AiSceneRuntimeState> &state,
-                                    std::unique_ptr<DecisionGraphInstance> decision) noexcept
-                : state_(state), decision_(std::move(decision)) {}
+                                    std::unique_ptr<DecisionGraphInstance> decision, AgentHandle agent,
+                                    std::shared_ptr<IAiCookedDecisionIntentSink> intents) noexcept
+                : state_(state), decision_(std::move(decision)), agent_(agent), intents_(std::move(intents)) {}
 
             Result<AiSliceOutcome> Evaluate(const AiDecisionSliceContext &context, AiWorkBudget &budget) noexcept override {
                 providerFailure_.reset();
@@ -60,17 +61,20 @@ namespace Horo::AI {
                 return tick == evaluationTick_ ? std::exchange(providerFailure_, std::nullopt) : std::nullopt;
             }
 
-            Result<bool> Commit(const AiDecisionSliceContext &, AiWorkBudget &) noexcept override {
-                // These native decision callbacks receive no Scene command writer.
-                return Result<bool>::Success(true);
+            Result<bool> Commit(const AiDecisionSliceContext &context, AiWorkBudget &budget) noexcept override {
+                return intents_ ? intents_->Commit(context, budget) : Result<bool>::Success(true);
             }
 
             void Cancel() noexcept override {
+                if (intents_)
+                    intents_->Discard(agent_);
                 providerFailure_.reset();
                 static_cast<void>(decision_->Cancel(AiTaskCancellationReason::AgentGenerationRetired));
             }
 
             void CancelForReplacement() noexcept override {
+                if (intents_)
+                    intents_->Discard(agent_);
                 providerFailure_.reset();
                 static_cast<void>(decision_->Cancel(AiTaskCancellationReason::PlanReplaced));
             }
@@ -82,6 +86,8 @@ namespace Horo::AI {
         private:
             std::weak_ptr<Detail::AiSceneRuntimeState> state_;
             std::unique_ptr<DecisionGraphInstance> decision_;
+            AgentHandle agent_;
+            std::shared_ptr<IAiCookedDecisionIntentSink> intents_;
             std::optional<DecisionProviderFailure> providerFailure_;
             std::uint64_t evaluationTick_{};
         };
@@ -252,7 +258,8 @@ namespace Horo::AI {
             if (decision.HasError())
                 return Output::Failure(decision.ErrorValue());
             bounded.workUnitsPerTick = *limit;
-            auto executor = std::make_shared<ScheduledCookedDecision>(state, std::move(decision).Value());
+            auto executor =
+                std::make_shared<ScheduledCookedDecision>(state, std::move(decision).Value(), handle, decisionExecution_->intents);
             nextTaskSlot += count + 1;
             return Output::Success({handle, identity, bounded, plan, std::move(executor), cancellation});
         } catch (const std::bad_alloc &) {

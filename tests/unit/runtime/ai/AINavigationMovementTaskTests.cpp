@@ -1,5 +1,7 @@
 #include "AiSceneTestSupport.h"
 #include "BehaviorTreeAsyncTestSupport.h"
+#include "DecisionGraphCompilerTestSupport.h"
+#include "Horo/AI/AINavigationIntentDispatch.h"
 #include "Horo/AI/AINavigationMovementTask.h"
 #include "navigation/NavigationCoordinatorTestFixtures.h"
 
@@ -197,5 +199,68 @@ namespace Horo::AI {
         REQUIRE(retired.HasValue());
         CHECK_FALSE(retired.Value().has_value());
         CHECK(fixture.capability.InspectTask(fixture.agent, fixture.task).Value().state == AiTaskState::Running);
+    }
+
+    TEST_CASE("Cooked decisions stage navigation during evaluation and admit it within intent dispatch", "[ai][navigation][scheduler]") {
+        namespace Cook = DecisionGraphTestSupport;
+        const bool reject = GENERATE(false, true);
+        Fixture navigation;
+        Cook::Fixture decision;
+        decision.probe.succeedTick = 100;
+        auto authored = Cook::TaskTree(11);
+        authored.executionTask = TestSupport::MakeIdentity<TaskId>(9000);
+        const auto plan = decision.Compile(std::span{&authored, 1}, 11);
+
+        AiRuntimeCapability capability;
+        std::optional<AiNavigationMovementTask> active;
+        auto dispatch = AiNavigationIntentDispatch::Create(8, [&](const AiTaskContinuation &task, NavigationMovementRequest request,
+                                                                  std::uint64_t tick) {
+            auto admitted =
+                AiNavigationMovementTask::Start(capability, task, *navigation.movement, std::move(request), navigation.At(tick));
+            if (admitted.HasError())
+                return Result<void>::Failure(admitted.ErrorValue());
+            active.emplace(std::move(admitted).Value());
+            return Result<void>::Success();
+        }).Value();
+        bool staged{};
+        decision.probe.onStart = [&] {
+            auto request = navigation.Move();
+            if (reject)
+                request.speedMetersPerSecond = -1;
+            staged = dispatch->Stage(decision.probe.continuation, 1, std::move(request)).HasValue();
+        };
+
+        JobSystem jobs{{.workerCount = 0}};
+        auto ai = AiSceneRuntime::Create({}, AiSceneCookedDecisionExecution{jobs, {}, {}, {}, dispatch}).Value();
+        auto source = TestSupport::MakeFixture(1, 10, navigation.binding.scene.Value(), 1);
+        source.schema = decision.schema;
+        source.plan = plan->Graphs().front().bindings;
+        source.descriptor.blackboardSchema = source.schema;
+        source.descriptor.decisionPlan = source.plan;
+        source.descriptor.decisionAsset = plan->Root();
+        source.descriptor.cookedPlan = plan;
+        source.agent.controller->blackboardSchema = source.schema->Identity();
+        source.agent.controller->decisionAsset = plan->Root();
+        const auto published = TestSupport::Publish(ai, source);
+        capability = ai.CapabilityAtSafePoint();
+        auto &scheduler = *ai.TaskSchedulerAtSafePoint().Value();
+
+        REQUIRE(scheduler.EvaluateAtDecision(1).HasValue());
+        REQUIRE(staged);
+        CHECK(navigation.movement->Status().state == NavigationMovementState::Idle);
+        const auto committed = scheduler.CommitAtIntentDispatch(1);
+        REQUIRE(committed.HasValue());
+        CHECK(committed.Value().failed == 0);
+        if (reject) {
+            CHECK_FALSE(active.has_value());
+            CHECK(navigation.movement->Status().state == NavigationMovementState::Idle);
+            CHECK(decision.probe.cleanups == 0);
+            REQUIRE(scheduler.EvaluateAtDecision(2).HasValue());
+            CHECK(decision.probe.cleanups == 1);
+            CHECK(decision.probe.resumes == 0);
+            return;
+        }
+        REQUIRE(active.has_value());
+        CHECK(navigation.movement->Status().state == NavigationMovementState::Querying);
     }
 }  // namespace Horo::AI

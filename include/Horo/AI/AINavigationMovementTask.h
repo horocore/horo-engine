@@ -83,6 +83,8 @@ namespace Horo::AI {
                                                                          const Navigation::NavigationMovementObservation &current);
         /** @brief Admit advancement only for the exact active execution and operation. */
         [[nodiscard]] Result<bool> CanAdvance();
+        /** @brief Checks the exact execution's liveness on the admitted owner lane. */
+        [[nodiscard]] Result<bool> IsExecutionRunning() const;
         /** @brief Publish through the existing tree mailbox or the admitted scene-task lifecycle. */
         [[nodiscard]] Result<AiTaskTransitionDisposition> Finish(AiTaskTerminalResult terminal);
         /** @brief Retry one detached terminal candidate without advancing Navigation. */

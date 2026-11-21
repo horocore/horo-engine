@@ -2299,6 +2299,8 @@ then publishes committed state for variable-rate RenderExtraction.
      The binding publishes Navigation admission errors, provider failures, arrival and cancellation to the original
      AI task. A superseded movement can never complete the replacement task or authorize its motion.
      For a behavior-tree node, the host binds the continuation captured during evaluation at intent dispatch.
+     `AiNavigationIntentDispatch` retains one staged movement per agent and the cooked Scene scheduler publishes
+     it within the command allowance in `AiIntentDispatch`. A rejected admission is delivered to that same task.
      Navigation offers a detached terminal candidate, and the next decision evaluation consumes it on the
      original task.
 5. **`SystemPhase::Gameplay` (Behavior Script Step & Locomotion)**:
