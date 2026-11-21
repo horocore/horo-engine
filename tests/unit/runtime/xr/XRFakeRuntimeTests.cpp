@@ -171,6 +171,26 @@ namespace Horo::XR {
             REQUIRE(runtime.Step(session).status == XRFrameStatus::Ok);
         }
 
+        TEST_CASE("Fake XR script allocation failure preserves the active script cursor", "[unit][xr][fake]") {
+            XRFakeRuntime runtime;
+            const auto session = Activate(runtime);
+            const std::array active{Event(XRSessionEvent::Started), Frame(session)};
+            REQUIRE(runtime.LoadScript(session, active) == XRFrameStatus::Ok);
+            REQUIRE(runtime.Step(session).nextStep == 1);
+            const std::array replacement{Frame(session, 200)};
+            XRFrameStatus status{};
+            {
+                Horo::Tests::AllocationProbe::ScopedFailure fail;
+                status = runtime.LoadScript(session, replacement);
+            }
+            CHECK(status == XRFrameStatus::CapacityExceeded);
+            const auto preserved = runtime.Step(session);
+            REQUIRE(preserved.status == XRFrameStatus::Ok);
+            CHECK(preserved.nextStep == 2);
+            CHECK(preserved.frame.predictedDisplayTime == active[1].prediction);
+            CHECK(runtime.LoadScript(session, replacement) == XRFrameStatus::Ok);
+        }
+
         TEST_CASE("Fake XR script boundaries reject unsupported stale and malformed evidence", "[unit][xr][fake]") {
             XRFakeRuntime runtime;
             const auto session = Activate(runtime);
