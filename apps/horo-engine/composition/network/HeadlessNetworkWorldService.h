@@ -691,6 +691,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
                 return Result<void>::Success();
             auto selected = *selectedGameplay_;
             selected.vfxScene = record_->vfxScene;
+            selected.animation = request_.world == Network::NetworkModeWorldKind::Client ? std::weak_ptr<Runtime::SceneAnimationRuntime>{}
+                                                                                         : record_->animation;
             if (record_->prefabReplica)
                 selected.prefabPermission = GameplayPrefabPermission::ReplicaOnly;
             if (auto bound = BindAuthorityPrefabs(selected); bound.HasError())

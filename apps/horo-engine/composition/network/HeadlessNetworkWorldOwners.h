@@ -60,7 +60,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         std::shared_ptr<Gameplay::GameplayVfxScene> vfxScene;
         CancellationToken sceneCancellation;
         ScenePhysicsHost native;
-        std::unique_ptr<Runtime::SceneAnimationRuntime> animation;
+        std::shared_ptr<Runtime::SceneAnimationRuntime> animation;
         std::shared_ptr<ReplicaAnimationInputs> replicaAnimation;
         bool fixedReserved{};
         bool closeRequested{};

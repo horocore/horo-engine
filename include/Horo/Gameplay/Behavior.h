@@ -23,6 +23,7 @@ namespace Horo::Gameplay {
     class GameplayCharacterContext;
     class GameplayNavigationContext;
     class GameplayVfxContext;
+    class GameplayAnimationContext;
     class GameplayPrefabContext;
     inline constexpr std::size_t MaximumBehaviorReloadStateBytes = 1024U * 1024U;
     inline constexpr std::size_t MaximumBehaviorReloadSnapshotBytes = 16U * 1024U * 1024U;
@@ -150,6 +151,11 @@ namespace Horo::Gameplay {
             [[nodiscard]] virtual std::shared_ptr<const GameplayVfxContext> VfxContext() const noexcept {
                 return {};
             }
+
+            /** @brief Returns the host-granted animation scope for this behavior's module. */
+            [[nodiscard]] virtual std::shared_ptr<const GameplayAnimationContext> AnimationContext() const noexcept {
+                return {};
+            }
         };
     }  // namespace Detail
 
@@ -192,6 +198,11 @@ namespace Horo::Gameplay {
          */
         [[nodiscard]] std::shared_ptr<const GameplayVfxContext> VfxContext() const noexcept {
             return backend_->VfxContext();
+        }
+
+        /** @brief Accesses the explicit Scene animation grant. @return Module scope or empty when withheld. */
+        [[nodiscard]] std::shared_ptr<const GameplayAnimationContext> AnimationContext() const noexcept {
+            return backend_->AnimationContext();
         }
 
         [[nodiscard]] std::shared_ptr<const GameplayNavigationContext> NavigationContext() const noexcept {

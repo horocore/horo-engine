@@ -2121,6 +2121,8 @@ target_link_libraries(HoroAnimationSceneIntegration
 add_library(HoroGameplayAnimationApi INTERFACE)
 add_library(HoroEngine::GameplayAnimationApi ALIAS HoroGameplayAnimationApi)
 target_link_libraries(HoroGameplayAnimationApi INTERFACE HoroEngine::GameplayApi HoroEngine::AnimationApi)
+target_link_libraries(HoroGameplayRuntime PRIVATE HoroEngine::GameplayAnimationApi)
+target_link_libraries(HoroGameplayModuleHost PRIVATE HoroEngine::GameplayAnimationApi)
 
 add_library(HoroGameplayAnimationScene STATIC gameplay/GameplayAnimationScene.cpp)
 add_library(HoroEngine::GameplayAnimationScene ALIAS HoroGameplayAnimationScene)

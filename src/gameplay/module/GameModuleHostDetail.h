@@ -80,7 +80,8 @@ namespace Horo::Gameplay {
         [[nodiscard]] Result<void> CaptureGeneratedContributions(const GeneratedGameplayDescriptorBundle &bundle);
         [[nodiscard]] Result<void> FreezeRegistries(std::span<const GameplayCapabilityId> hostCapabilities);
         [[nodiscard]] Result<void> RegisterAndStart(std::span<const GameplayCapabilityId> hostCapabilities,
-                                                    const std::optional<GameplayReplicationAdmissionPolicy> &replicationAdmission);
+                                                    const std::optional<GameplayReplicationAdmissionPolicy> &replicationAdmission,
+                                                    const GameModuleAnimationFactory &animationFactory);
         /** @brief Checks the actual frozen generation without self-pinning its owner or invoking runtime callbacks. */
         [[nodiscard]] Result<void> AdmitReplication(const GameplayReplicationAdmissionPolicy &policy) const;
         [[nodiscard]] Result<GameModuleReloadSnapshot> PrepareReload();
@@ -101,6 +102,7 @@ namespace Horo::Gameplay {
         std::shared_ptr<GameplayCharacterContext> character;
         std::shared_ptr<GameplayNavigationContext> navigation;
         std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi;
+        std::shared_ptr<const GameplayAnimationContext> animation;
         IGameModule *gameplayModule{};
         CreateGameModuleFunction create{}; /**< Copied generated lifecycle entry point pinned by codeImage. */
         DestroyGameModuleFunction destroy{};

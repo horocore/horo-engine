@@ -636,6 +636,7 @@ namespace {
             if (retirement_) {
                 ++retirement_->started;
                 retirement_->physics = context.physics;
+                retirement_->animation = context.animation;
             }
             if (retirement_ && (retirement_->failPhase == 2 || retirement_->failPhase == 5)) {
                 auto acquired = events_->Acquire(90, 1, 91, 1, context.cancellation);

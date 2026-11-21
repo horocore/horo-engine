@@ -24,6 +24,10 @@ namespace Horo::Gameplay {
     class GameplayVfxScene;
 }  // namespace Horo::Gameplay
 
+namespace Horo::Runtime {
+    class SceneAnimationRuntime;
+}
+
 namespace Horo::Application::Internal {
     /** @brief Trusted host policy resolved before invoking project code; no ambient grant. */
     enum class GameplayPhysicsPermission {
@@ -64,6 +68,7 @@ namespace Horo::Application::Internal {
         std::shared_ptr<Gameplay::GameplayVfxScene>
             vfxScene; /**< Explicit Scene owner; configured factories clone its original cold policy per WorldRecord. */
         std::shared_ptr<const Prefab::IPrefabGroupPublicationOwner> prefabGroupPublication; /**< Optional host-owned Scene binding. */
+        std::weak_ptr<Runtime::SceneAnimationRuntime> animation; /**< Explicit authority Scene animation owner, when composed. */
     };
 
     /** @brief Explicit asset authorities and bounds for a composition-owned cooked prefab provider.

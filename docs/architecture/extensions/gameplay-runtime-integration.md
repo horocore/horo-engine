@@ -17,6 +17,15 @@ requests go through the existing Graph owner. Parameter, state, event, socket
 and root motion observations copy committed values while Character retains
 the authority to consume movement.
 
+The headless authority composition supplies the configured Scene animation
+owner when it starts a selected native gameplay module. The module loader
+issues a grant using the actual project-service generation token before calling
+`Start`. Reload and retirement cancel that token before module teardown.
+Behavior callbacks in the registered module namespace receive the same grant
+through `BehaviorContext::AnimationContext` during simulation-capable phases.
+The native SDK boundary advances to 32 because the module context and behavior
+backend layout changed.
+
 ## Cooked prefab creation and retirement
 
 The explicitly selected production `GameplayWorldComposition` may grant

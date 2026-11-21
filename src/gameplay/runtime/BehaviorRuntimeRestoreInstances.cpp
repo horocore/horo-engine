@@ -174,6 +174,8 @@ namespace Horo::Gameplay {
                                                       std::shared_ptr<const GameplayPrefabContext> prefabs) {
         if (prefabs && prefabs->Binding().scene != impl.sceneIdentity)
             return Result<void>::Failure(MakeError(Prefab::PrefabErrors::SceneUnavailable));
+        if (services.animation && services.animation->Scene() != impl.sceneIdentity.value)
+            return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent, "Animation grant belongs to another Scene."));
         if (auto vfx = BindRestoreVfx(impl, services); vfx.HasError())
             return vfx;
         if (auto physics = BindRestorePhysics(impl, services); physics.HasError())
@@ -181,6 +183,7 @@ namespace Horo::Gameplay {
         if (auto others = BindRestoreNavigationUi(impl, services); others.HasError())
             return others;
         impl.prefabs = std::move(prefabs);
+        impl.animation = std::move(services.animation);
         for (auto &instance : impl.instances)
             if (auto bound = impl.InitializePrefabContext(instance); bound.HasError())
                 return bound;

@@ -1,4 +1,5 @@
 #include "GameModuleHostDetail.h"
+#include "Horo/Gameplay/GameplayAnimationContext.h"
 #include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
@@ -114,7 +115,8 @@ namespace Horo::Gameplay {
     }
 
     Result<void> LoadedGameModule::Impl::RegisterAndStart(const std::span<const GameplayCapabilityId> hostCapabilities,
-                                                          const std::optional<GameplayReplicationAdmissionPolicy> &replicationAdmission) {
+                                                          const std::optional<GameplayReplicationAdmissionPolicy> &replicationAdmission,
+                                                          const GameModuleAnimationFactory &animationFactory) {
         registries.components = std::make_unique<ComponentRegistry>();
         registries.assetTypes = std::make_unique<GameAssetTypeRegistry>(moduleId);
         registries.services = std::make_unique<GameServiceRegistry>(moduleId);
@@ -145,6 +147,14 @@ namespace Horo::Gameplay {
         if (activated.HasError())
             return Result<void>::Failure(activated.ErrorValue());
         projectServices = std::move(activated).Value();
+        if (animationFactory) {
+            auto granted = animationFactory(moduleId, projectServices->Cancellation());
+            if (granted.HasError())
+                return Result<void>::Failure(granted.ErrorValue());
+            if (!granted.Value() || granted.Value()->ModuleId() != moduleId)
+                return Result<void>::Failure(MakeError(GameplayErrors::InvalidGameModuleDescriptor));
+            animation = std::move(granted).Value();
+        }
         PublishRuntimeContext();
         startAttempted = true;
         return InvokeStart(*gameplayModule, runtimeContext);
@@ -172,6 +182,7 @@ namespace Horo::Gameplay {
         runtimeContext.ai = ai;
         runtimeContext.runtimeUi = runtimeUi;
         runtimeContext.navigation = navigation;
+        runtimeContext.animation = animation;
     }
 
     Result<GameModuleReloadSnapshot> LoadedGameModule::Impl::PrepareReload() {
@@ -201,6 +212,8 @@ namespace Horo::Gameplay {
         runtimeContext.activeServices = {};
         runtimeContext.capabilities = {};
         runtimeContext.ai.reset();
+        runtimeContext.animation.reset();
+        animation.reset();
         startAttempted = false;
         reloadPrepared = true;
         return snapshot;
@@ -239,6 +252,8 @@ namespace Horo::Gameplay {
             gameplayModule->Stop(runtimeContext);  // NOSONAR: exact-generation module boundary; path analysis is unrelated.
         // Mutable public context copies may contain module-emitted shared owners; release them while code and module still exist.
         runtimeContext.physics.reset();
+        runtimeContext.animation.reset();
+        animation.reset();
         runtimeContext.navigation.reset();
         runtimeContext.activeServices = {};
         runtimeContext.capabilities = {};

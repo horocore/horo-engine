@@ -3005,7 +3005,7 @@ target_compile_definitions(HoroGameModuleHostTests PRIVATE
         HORO_TEST_GAME_MODULE_REVISION_PATH="${HORO_TEST_GAME_MODULE_REVISION_FILE}"
 )
 target_link_libraries(HoroGameModuleHostTests PRIVATE HoroEngine::GameplayModuleHost HoroEngine::GameplayPhysicsIntegration
-    HoroEngine::GameplayCharacterIntegration HoroEngine::Platform)
+    HoroEngine::GameplayCharacterIntegration HoroEngine::GameplayAnimationScene HoroEngine::Platform)
 add_dependencies(HoroGameModuleHostTests HoroTestGameModule)
 horo_add_gameplay_module(HoroTestAiGameModule
     MODULE_ID game.ai.tests

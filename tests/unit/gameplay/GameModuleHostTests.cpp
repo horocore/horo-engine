@@ -3,8 +3,10 @@
 #include "Horo/AI/DecisionNodeRegistration.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Foundation/PathUtils.h"
+#include "Horo/Gameplay/GameplayAnimationScene.h"
 #include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayPhysicsContext.h"
+#include "Horo/Runtime/FrameScheduler.h"
 #include "OwnedTestDirectory.h"
 
 #include <thread>
@@ -45,6 +47,39 @@ namespace {
         return policy;
     }
 }  // namespace
+
+TEST_CASE("Native module Start receives its animation grant and retirement cancels the retained scope", "[gameplay][module][animation]") {
+    Tests::NativeGameplayFailureControl control{0};
+    DeterministicClock clock;
+    auto scheduler = FrameScheduler::Create(clock, {.fixedStep = Duration::FromNanoseconds(10)});
+    REQUIRE(scheduler.HasValue());
+    SceneAnimationRuntimeConfig configuration;
+    configuration.expectedDispatch = scheduler.Value()->DispatchSource();
+    configuration.runtimeOwner = Animation::AnimationRuntimeId::Create(7).Value();
+    configuration.target = AssetCookTargetId::Parse("native-gameplay-test").Value();
+    auto owner = SceneAnimationRuntime::Create(configuration);
+    REQUIRE(owner.HasValue());
+    const std::shared_ptr<SceneAnimationRuntime> sceneAnimation = std::move(owner).Value();
+    const SceneRuntimeId scene{7};
+    GameModuleHostOptions options{{}, {}};
+    options.runtimeServices.animation = [scene, &sceneAnimation](std::string_view principal, const CancellationToken &lifetime) {
+        return CreateGameplayAnimationContext(sceneAnimation, scene, std::string{principal}, lifetime);
+    };
+    auto loaded = GameModuleHost{std::move(options)}.Load(HORO_TEST_GAME_MODULE_PATH, Expectation());
+    REQUIRE(loaded.HasValue());
+    REQUIRE_FALSE(loaded.Value().diagnostic);
+    auto &module = loaded.Value().owner;
+    REQUIRE(control.control.started == 1);
+    const auto retained = control.control.animation;
+    REQUIRE(retained);
+    CHECK(retained == module->AnimationContext());
+    CHECK(retained->Scene() == scene.value);
+    CHECK(retained->ModuleId() == module->ModuleId());
+    module->RequestRetirement();
+    const auto revoked = retained->Observe({scene.value, 0, 1});
+    REQUIRE(revoked.HasError());
+    CHECK(revoked.ErrorValue().code.Value() == Animation::AnimationErrors::GraphOperationCancelled.code.Value());
+}
 
 TEST_CASE("Prepared image closes native factory admission on abandonment cancellation and failed Start",
           "[gameplay][module][prepared-image]") {

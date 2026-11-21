@@ -4,6 +4,7 @@
 #include "GameplayVfxHostAccess.h"
 #include "Horo/Foundation/Logging/Logger.h"
 #include "Horo/Gameplay/BehaviorRuntime.h"
+#include "Horo/Gameplay/GameplayAnimationContext.h"
 #include "Horo/Gameplay/GameplayCharacterContext.h"
 #include "Horo/Gameplay/GameplayErrors.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
@@ -105,6 +106,16 @@ namespace Horo::Gameplay {
 
             [[nodiscard]] std::shared_ptr<const GameplayVfxContext> VfxContext() const noexcept override {
                 return instance.vfx;
+            }
+
+            [[nodiscard]] std::shared_ptr<const GameplayAnimationContext> AnimationContext() const noexcept override {
+                if (!runtime.animation || !allowSimulationMutation)
+                    return {};
+                const auto module = runtime.animation->ModuleId();
+                const auto type = std::string_view{instance.component.typeId.Value()};
+                if (type.size() <= module.size() || !type.starts_with(module) || type[module.size()] != '.')
+                    return {};
+                return runtime.animation;
             }
 
             [[nodiscard]] GameplayEntityRef Entity() const noexcept override {
@@ -609,6 +620,7 @@ namespace Horo::Gameplay {
         std::shared_ptr<const GameplayNavigationContext> navigation;
         std::shared_ptr<const GameplayPrefabContext> prefabs;
         std::shared_ptr<const GameplayVfxContext> vfx;
+        std::shared_ptr<const GameplayAnimationContext> animation;
         mutable std::shared_ptr<const Runtime::SceneStructuralReceipt> vfxStructuralReceipt;
         std::vector<Instance> instances;
         bool shutdown{};

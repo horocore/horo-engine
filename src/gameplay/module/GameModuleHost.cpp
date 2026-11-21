@@ -239,7 +239,8 @@ namespace Horo::Gameplay {
             impl.gameplayModule = impl.create();
             if (impl.gameplayModule == nullptr)
                 diagnostic = MakeError(GameplayErrors::InvalidBehaviorComponent, "Gameplay module factory returned no module object.");
-            else if (auto activated = impl.RegisterAndStart(hostCapabilities_, replicationAdmission_); activated.HasError())
+            else if (auto activated = impl.RegisterAndStart(hostCapabilities_, replicationAdmission_, runtimeServices_.animation);
+                     activated.HasError())
                 diagnostic = activated.ErrorValue();
             else if (cancellation.IsCancellationRequested())
                 diagnostic = JobCancelled().ErrorValue();

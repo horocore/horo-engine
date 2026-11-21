@@ -50,6 +50,7 @@ namespace Horo::Gameplay {
         std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi; /**< Exact host UI grant, independently derived by the runner. */
         std::shared_ptr<const GameplayVfxContext> vfx;                 /**< Explicit module/Scene presentation grant. */
         std::string vfxModuleId; /**< Trusted composition principal; never inferred from an effect tag or behavior type. */
+        std::shared_ptr<const GameplayAnimationContext> animation; /**< Exact current module and Scene animation grant. */
     };
 
     /** @brief Owns every behavior instance attached to one active runtime scene. */

@@ -12,6 +12,7 @@
 #include "Horo/Gameplay/SaveGameplayPersistence.h"
 
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <string>
 #include <utility>
@@ -26,6 +27,10 @@ namespace Horo::Gameplay {
     class SystemRegistry;
     class GameEventRegistry;
 
+    /** @brief Explicit host binding invoked once per started project module generation. */
+    using GameModuleAnimationFactory =
+        std::function<Result<std::shared_ptr<const GameplayAnimationContext>>(std::string_view, const CancellationToken &)>;
+
     /** @brief Inert host-selected service anchors; no callback, discovery or activation occurs here. */
     struct GameModuleRuntimeServices final {
         std::shared_ptr<GameplayPhysicsContext> physics;       /**< Existing exact per-module Physics scope. */
@@ -33,6 +38,7 @@ namespace Horo::Gameplay {
         std::shared_ptr<GameplayNavigationContext> navigation; /**< Exact generation navigation anchor. */
         std::shared_ptr<GameplayAiContext> ai;                 /**< AI anchor; each loaded generation receives a fresh child. */
         std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi; /**< Exact independently revocable UI anchor. */
+        GameModuleAnimationFactory animation; /**< Optional Scene grant factory using the actual module lifetime. */
     };
 
     /** @brief Owned inert projection of one frozen durable registration; contains no source callback or module authority.
@@ -79,6 +85,8 @@ namespace Horo::Gameplay {
         [[nodiscard]] const std::string &ModuleId() const noexcept;
         /** @brief Returns copied build fingerprint. */
         [[nodiscard]] const std::string &BuildFingerprint() const noexcept;
+        /** @brief Returns the host-issued animation grant. @return Exact module generation grant, or empty. */
+        [[nodiscard]] std::shared_ptr<const GameplayAnimationContext> AnimationContext() const noexcept;
         /** @brief Returns the complete generated descriptor revision loaded from the module. */
         [[nodiscard]] std::uint64_t DescriptorRevision() const noexcept;
         /** @brief Acquires generated nodes with exact native-generation callback/code-image admission.

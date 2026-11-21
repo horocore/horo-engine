@@ -72,6 +72,8 @@ namespace Horo::Gameplay {
             impl_->character->Revoke();
         if (impl_ && impl_->navigation)
             impl_->navigation->Revoke();
+        if (impl_ && impl_->animation && impl_->projectServices)
+            impl_->projectServices->RequestCancellation();
     }
 
     /** @copydoc LoadedGameModule::NavigationContext */
@@ -87,6 +89,11 @@ namespace Horo::Gameplay {
     /** @copydoc LoadedGameModule::BuildFingerprint */
     const std::string &LoadedGameModule::BuildFingerprint() const noexcept {
         return impl_->buildFingerprint;
+    }
+
+    /** @copydoc LoadedGameModule::AnimationContext */
+    std::shared_ptr<const GameplayAnimationContext> LoadedGameModule::AnimationContext() const noexcept {
+        return impl_->animation;
     }
 
     /** @copydoc LoadedGameModule::DescriptorRevision */

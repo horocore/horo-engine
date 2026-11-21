@@ -2,6 +2,7 @@
 
 #include "HeadlessPerceptionPolicy.h"
 #include "Horo/AI/AISceneActivation.h"
+#include "Horo/Gameplay/GameplayAnimationScene.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
 #include "Horo/Gameplay/GameplayVfxScene.h"
 #include "Horo/Physics/CharacterWorld.h"
@@ -148,7 +149,8 @@ namespace Horo::Application::Internal {
                                                           .character = CharacterContext(),
                                                           .runtimeUi = runtimeUi_,
                                                           .vfx = vfx_,
-                                                          .vfxModuleId = vfxModuleId_});
+                                                          .vfxModuleId = vfxModuleId_,
+                                                          .animation = native_ ? native_->AnimationContext() : nullptr});
         if (runtime.HasError())
             return Result<void>::Failure(runtime.ErrorValue());
         behaviors_ = std::move(runtime).Value();
@@ -199,6 +201,13 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
         GameModuleHostOptions options{{},
                                       {.physics = physics_, .character = character_, .navigation = navigation_, .runtimeUi = runtimeUi_}};
+        if (!selection.animation.expired()) {
+            const Runtime::SceneRuntimeId scene{physics_->Binding().scene};
+            options.runtimeServices.animation = [runtime = selection.animation, scene](std::string_view module,
+                                                                                       const CancellationToken &lifetime) {
+                return CreateGameplayAnimationContext(runtime, scene, std::string{module}, lifetime);
+            };
+        }
         options.replicationAdmission = selection.replicationAdmission;
         GameModuleHost loader{std::move(options)};
         auto loaded = prepared ? loader.ActivatePrepared(prepared->image, prepared->cancellation)
@@ -384,7 +393,8 @@ namespace Horo::Application::Internal {
                                                           .character = CharacterContext(),
                                                           .runtimeUi = runtimeUi_,
                                                           .vfx = vfx_,
-                                                          .vfxModuleId = vfxModuleId_},
+                                                          .vfxModuleId = vfxModuleId_,
+                                                          .animation = native_ ? native_->AnimationContext() : nullptr},
                                                          prefabContext_);
         if (runtime.HasError())
             return Result<void>::Failure(runtime.ErrorValue());

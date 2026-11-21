@@ -44,7 +44,7 @@ namespace Horo::Gameplay {
     class GameplayAiContext;
     class GameplayCharacterContext;
 
-    inline constexpr std::uint32_t GameplaySdkBoundaryVersion = 31;
+    inline constexpr std::uint32_t GameplaySdkBoundaryVersion = 32;
     inline constexpr std::uint32_t GameplayDescriptorBundleSchemaVersion = 1;
     inline constexpr std::uint32_t GameModuleReloadSnapshotSchemaVersion = 1;
     inline constexpr std::size_t MaximumGeneratedBehaviorDescriptors = 4096;
@@ -78,6 +78,7 @@ namespace Horo::Gameplay {
         std::shared_ptr<const GameplayAiContext> ai;                   /**< Optional exact-generation AI grant; missing is recoverable. */
         std::shared_ptr<const GameplayCharacterContext> character;     /**< Exact module-generation Character scope. */
         std::shared_ptr<const Runtime::Ui::RuntimeUiClient> runtimeUi; /**< Optional independently revocable host UI grant. */
+        std::shared_ptr<const GameplayAnimationContext> animation;     /**< Optional exact-module Scene animation grant. */
     };
 
     /** @brief Module-global state captured only after owned work and callbacks are quiescent. */
