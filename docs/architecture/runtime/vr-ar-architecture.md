@@ -981,6 +981,8 @@ failure states.
   admitted budget before attaching action sets. The same Input cutoff samples
   the dedicated gaze pose with the reported OpenXR sample time. The owner
   requires both components tracked and at most 50 ms old for pointing.
+  The native owner rechecks that same Play grant after the activity and
+  location calls, before issuing another query or publishing a pose.
   It requests no velocity, retains one current pose privately, and projects
   only redacted status to Setup. Pause, focus interruption, platform
   permission denial, explicit revocation and session retirement discard the

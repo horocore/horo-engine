@@ -71,10 +71,24 @@ namespace Horo::Tests::OpenXRAction {
 
     TEST_CASE("OpenXR gaze requires a separate route and a fresh supported sample", "[xr][native][poses][gaze]") {
         TrackingFixture fixture;
+        bool consent = true;
         const auto sample = [&] {
             return fixture.actions.owner.SampleConsentedGaze(fixture.actions.session.Request().candidate, fixture.Time(),
-                                                             Duration::FromNanoseconds(10));
+                                                             Duration::FromNanoseconds(10), consent);
         };
+        SECTION("withdrawn consent skips the native activity and location calls") {
+            REQUIRE(fixture.Prepare(std::nullopt, false, XRActionSetId{1}).HasValue());
+            fixture.Activate(4);
+            fixture.Sync();
+            bool queried = false;
+            fixture.actions.script.gaze.onActivity = [&queried] { queried = true; };
+            consent = false;
+            const auto denied = sample();
+            REQUIRE(denied.HasError());
+            CHECK(denied.ErrorValue().code.Value() == XRErrors::PermissionDenied.code.Value());
+            CHECK_FALSE(queried);
+            CHECK(fixture.actions.script.gaze.locationReads == 0);
+        }
         SECTION("ordinary pose tracking never prepares an eye action") {
             REQUIRE(fixture.Prepare().HasValue());
             fixture.Activate();

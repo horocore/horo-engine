@@ -339,7 +339,7 @@ namespace Horo::Application::Internal {
         std::optional<XRPoseSample> gaze;
         if (input_.gazeAllowed) {
             constexpr auto maximumGazeAge = Duration::FromMilliseconds(50);
-            auto observed = input_.native->SampleConsentedGaze(state.session, time.Value(), maximumGazeAge);
+            auto observed = input_.native->SampleConsentedGaze(state.session, time.Value(), maximumGazeAge, input_.gazeAllowed);
             if (auto current = Current(); current.HasError())
                 return current;
             if (!bindingsCurrent())

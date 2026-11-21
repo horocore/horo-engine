@@ -77,6 +77,8 @@ namespace Horo::Tests::OpenXRAction {
             XrTime sampleTime{};
             XrBool32 active{XR_TRUE};
             XrResult poseResult{XR_SUCCESS};
+            std::function<void()> onActivity;
+            std::function<void()> onLocation;
             unsigned locationReads{};
         } gaze;
 
@@ -300,6 +302,8 @@ namespace Horo::Tests::OpenXRAction {
                 REQUIRE(info->subactionPath == XR_NULL_PATH);
                 state->isActive = active->gaze.active;
                 const auto result = Script::Record("sample-gaze");
+                if (active->gaze.onActivity)
+                    active->gaze.onActivity();
                 return result == XR_SUCCESS ? active->gaze.poseResult : result;
             }
             REQUIRE(info->subactionPath != XR_NULL_PATH);
@@ -370,6 +374,8 @@ namespace Horo::Tests::OpenXRAction {
                 REQUIRE(sampleTime->next == nullptr);
                 ++active->gaze.locationReads;
                 sampleTime->time = active->gaze.sampleTime;
+                if (active->gaze.onLocation)
+                    active->gaze.onLocation();
                 return Script::Record("locate-gaze");
             }
             auto *velocity = static_cast<XrSpaceVelocity *>(location->next);

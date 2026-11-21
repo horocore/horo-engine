@@ -369,12 +369,13 @@ namespace Horo::XR::OpenXRInternal {
          * @brief Reads at most one consented gaze sample from the exact synchronized cutoff.
          * @param session Exact retained owner. @param cutoff Current runtime and simulation clock evidence.
          * @param ageLimit Positive maximum sample age in the same native clock domain.
-         * @pre The app has revalidated its purpose grant, focus and permission for this exact session.
+         * @param consent Live same-lane grant borrowed from the exact Play owner through both native calls.
+         * @pre The app has revalidated focus and permission for this exact session.
          * @return Current separately scoped pose, empty for inactive or untracked eyes, or a typed rejection.
          * @post Never appends to the ordinary tracking snapshot, scalar actions or capture stream.
          */
         [[nodiscard]] Result<std::optional<XRPoseSample>> SampleConsentedGaze(const XRSessionId &session, const XRTimeEvidence &cutoff,
-                                                                              Duration ageLimit) const;
+                                                                              Duration ageLimit, const bool &consent) const;
         /** @brief Locates actual primary-stereo views at the runtime's exact predicted display time.
          * @param session Same issued active owner. @param time Actual OS-converted sample plus native frame prediction, no simulation time.
          * @param expectedViews Complete primary view count observed by the same native system census.

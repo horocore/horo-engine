@@ -1423,6 +1423,24 @@ namespace Horo::Tests::OpenXRApplication {
                 CHECK_FALSE(sample());
                 CHECK(source.locationReads == reads);
             }
+            SECTION("consent withdrawn during the native activity query prevents the location read") {
+                source.onActivity = [&preview] { preview.RevokeEyeGaze(); };
+                CHECK_FALSE(sample());
+                CHECK(preview.ReadEyeGazeState() == Unavailable);
+                CHECK(source.locationReads == reads);
+                source.onActivity = {};
+                CHECK_FALSE(sample());
+                CHECK(source.locationReads == reads);
+            }
+            SECTION("consent withdrawn during location discards the returned pose") {
+                source.onLocation = [&preview] { preview.RevokeEyeGaze(); };
+                CHECK_FALSE(sample());
+                CHECK(preview.ReadEyeGazeState() == Unavailable);
+                CHECK(source.locationReads == reads + 1);
+                source.onLocation = {};
+                CHECK_FALSE(sample());
+                CHECK(source.locationReads == reads + 1);
+            }
         } else {
             CHECK(source.locationReads == 0);
         }
