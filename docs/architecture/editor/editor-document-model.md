@@ -165,6 +165,21 @@ indentation, ignore string/comment delimiters, retain exact newline bytes and
 publish through the canonical revision-fenced source planner. Lexical support
 is not a language server or an alternate document/parser authority.
 
+### Language Service Session (EDT-003.9)
+
+The language session tracks the source owner’s immutable snapshots and the
+requests sent for each revision. One ready connection serves several
+documents. A new connection uses a fresh stamp and requires current
+documents to be synchronized again. Closing a document or changing its
+revision invalidates its requests, while responses for other documents
+remain eligible. Source rekeys report the previous path for the adapter to
+retire. Replies only carry read evidence and must be consumed once.
+
+Editor Services owns this state. Transport adapters supply the process,
+protocol, and request payloads. Workspace callers keep callback ownership
+scoped to this session object and issue Stop when retiring a connection. A
+failed or disconnected adapter has no authority over source editing.
+
 ### Source Save Publication (EDT-003.5)
 
 `SourceDocumentService::Save` captures one exact current revision on the owner thread.

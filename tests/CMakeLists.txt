@@ -3931,6 +3931,10 @@ add_executable(HoroProposedChangeSetTests
 target_link_libraries(HoroProposedChangeSetTests PRIVATE HoroEngine::EditorServices HoroEngine::Security nlohmann_json::nlohmann_json)
 horo_register_catch_test(HoroProposedChangeSetTests LABELS "unit;editor;proposal;headless")
 
+add_executable(HoroSourceLanguageSessionTests unit/editor/SourceLanguageSessionTests.cpp)
+target_link_libraries(HoroSourceLanguageSessionTests PRIVATE HoroEngine::EditorServices)
+horo_register_catch_test(HoroSourceLanguageSessionTests LABELS "unit;editor;source;headless")
+
 add_executable(HoroUiCanvasDocumentTests
         unit/editor/UiInspectorDraftTests.cpp
         unit/editor/UiCanvasInspectorCommandTests.cpp
