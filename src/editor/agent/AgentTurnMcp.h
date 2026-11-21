@@ -15,6 +15,24 @@ namespace Horo::Agent {
         std::uint64_t generation{};
     };
 
+    /** @brief One immutable host-selected diagnostic projection with a thread-safe freshness witness. */
+    struct AgentDiagnosticCapture final {
+        std::string revision;
+        std::vector<std::string> messages;
+        bool truncated{};
+        std::function<bool()> isCurrent;
+    };
+
+    /** @brief Reads one selected editor or build diagnostic projection through a private Query-only session.
+     * @param captured Bounded owned messages and their source revision. @param context Project and worker stop fence.
+     * @param requestId Host preview identity. @param entropy Host credential entropy.
+     * @return Owned read-only MCP response or typed failure. The query session expires before return.
+     */
+    [[nodiscard]] Result<Application::CodeQueryPage> ReadLocalDiagnostics(AgentDiagnosticCapture captured,
+                                                                          const Application::CodeQueryContext &context,
+                                                                          std::uint64_t requestId,
+                                                                          std::shared_ptr<Security::SecureRandomSource> entropy);
+
     /** @brief Reads one bounded diagnostic capture through a private, authenticated MCP query session.
      * @param tail Owned warning/error capture for the operation explicitly selected in the workspace.
      * @param context Current project and synchronous worker stop fence.

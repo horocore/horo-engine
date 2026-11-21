@@ -1,5 +1,6 @@
 #pragma once
 
+#include "Horo/Editor/AgentEditorDiagnosticsSnapshot.h"
 #include "Horo/Editor/AgentSceneSelectionSnapshot.h"
 #include "Horo/Editor/EditorGuiContext.h"
 #include "Horo/Editor/EditorSurfaceEventContext.h"
@@ -103,6 +104,8 @@ namespace Horo::Editor {
         /** @brief Optional rooted read authority for explicit saved-file review, bound to generation one. */
         std::shared_ptr<const Platform::IProjectReadFiles> agentProjectFiles{};
         std::string_view agentProjectReadIdentity{}; /**< Exact workspace reader identity, borrowed during attachment. */
+        /** @brief Captures findings from the active editor document on the workspace owner lane. */
+        std::function<std::optional<AgentEditorDiagnosticsSnapshot>()> captureEditorDiagnostics{};
     };
 
     /** @brief Base interface for a modular Workspace Panel (e.g. Hierarchy, Inspector) */

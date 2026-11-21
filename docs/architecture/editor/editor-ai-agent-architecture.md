@@ -893,6 +893,10 @@ selected operation contributes a bounded capture of its warnings and errors to
 an authenticated, read-only MCP session on the agent worker. The session exposes
 only the project's diagnostic query for that capture and is closed before model
 inference. The worker returns the revisioned page for redaction and review.
+The active Decision Graph can expose its current Problems through the same
+query. The workspace supplies only bounded findings from that open document and
+revokes the review when the active document, its revision, or its validation
+result changes.
 Changes to the selected operation's output invalidate its approval. Other
 builds and process logs have no effect while the selected output is retained.
 

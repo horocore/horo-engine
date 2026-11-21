@@ -203,6 +203,12 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         Result<void> ValidateLeaveCapture() const;
         /** @brief Attaches built-in panels before session publication. */
         void AttachWorkspacePanels(std::string_view projectIdentity);
+        /** @brief Captures bounded Problems rows for the one active Decision Graph document. */
+        [[nodiscard]] std::optional<AgentEditorDiagnosticsSnapshot> CaptureEditorDiagnostics();
+        /** @brief Cancels a held preview when the active document, its revision or validation changes. */
+        void ReconcileEditorDiagnostics();
+        /** @brief Revokes this workspace's captured Problems evidence before teardown. */
+        void RevokeEditorDiagnostics() noexcept;
         /** @brief Owns the project path and application closure across asynchronous Play preparation. */
         EditorPlaySceneFactory BindPlayFactory(const std::filesystem::path &projectRoot) const;
         /** @brief Binds the explicit authoring stage capability to this authorized project. */
@@ -286,6 +292,16 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         std::shared_ptr<IXRSimulatorArtifacts> simulatorArtifacts_;
         std::shared_ptr<const Platform::IProjectReadFiles> agentProjectFiles_;
         std::string agentProjectReadIdentity_;
+
+        struct EditorDiagnosticsReview final {
+            DocumentInstanceId document;
+            std::uint64_t revision{};
+            std::shared_ptr<const AI::DecisionAssetValidationReport> validation;
+            CancellationSource lifetime;
+        };
+
+        std::optional<EditorDiagnosticsReview> editorDiagnosticsReview_;
+        std::uint64_t editorDiagnosticsSequence_{};
         WorkspacePanelServices panelServices_{};
         WorkspaceProjectServices projectServices_{};
         WorkspacePublishedRevisions publishedRevisions_{};

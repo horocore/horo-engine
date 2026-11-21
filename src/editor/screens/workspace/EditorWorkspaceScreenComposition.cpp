@@ -26,6 +26,36 @@
 
 namespace Horo::Editor::WorkspaceScreenDetail {
     namespace {
+        /** @brief Borrows the active Decision Graph projection only for the current owner-lane call. */
+        const DecisionGraphWorkspaceDocument *ActiveDecisionDocument(const EditorWorkspaceViewModel &model) {
+            const auto active = model.workspacePanelHost.ActiveDocument();
+            const auto found = std::ranges::find_if(model.decisionGraphDocuments, [active](const auto &document) {
+                return document.identity.instance == active;
+            });
+            return found == model.decisionGraphDocuments.end() ? nullptr : &*found;
+        }
+
+        /** @brief Copies complete Problems messages only, preserving order and recording omissions. */
+        void CopyDecisionProblems(AgentEditorDiagnosticsSnapshot &snapshot,
+                                  std::span<const AI::DecisionAssetValidationDiagnostic> diagnostics) {
+            auto remaining = AgentEditorDiagnosticsSnapshot::MaximumMessageBytes;
+            for (const auto &finding : diagnostics) {
+                if (snapshot.messages.size() == AgentEditorDiagnosticsSnapshot::MaximumMessages) {
+                    snapshot.truncated = true;
+                    break;
+                }
+                const auto &code = finding.code.Value();
+                constexpr std::size_t Separator = 2;
+                if (remaining < Separator || code.size() > remaining - Separator ||
+                    finding.message.size() > remaining - Separator - code.size()) {
+                    snapshot.truncated = true;
+                    continue;
+                }
+                snapshot.messages.push_back(code + ": " + finding.message);
+                remaining -= snapshot.messages.back().size();
+            }
+        }
+
         /** @brief Composes the explicit project loader and retains its cooperative lease through cache publication. */
         PrefabHierarchySourceCapture PrefabCapture(const std::filesystem::path &root, const ProjectMutationCoordinator *mutations,
                                                    Prefab::PrefabMetricHandles metrics,
@@ -171,8 +201,48 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         },
             .agentProjectFiles = agentProjectFiles_,
             .agentProjectReadIdentity = agentProjectReadIdentity_,
+            .captureEditorDiagnostics =
+                [this] {
+            return CaptureEditorDiagnostics();
+        },
         };
         contributions_.panels.AttachAll(panelContext);
+    }
+
+    /** @copydoc EditorWorkspaceScreen::CaptureEditorDiagnostics */
+    std::optional<AgentEditorDiagnosticsSnapshot> EditorWorkspaceScreen::CaptureEditorDiagnostics() {
+        ReconcileEditorDiagnostics();
+        const auto *document = ActiveDecisionDocument(controller_->ViewModel());
+        if (!document || !document->validation || document->validation->Empty())
+            return std::nullopt;
+        AgentEditorDiagnosticsSnapshot snapshot{.document = document->identity.instance.Value(),
+                                                .observation = ++editorDiagnosticsSequence_};
+        CopyDecisionProblems(snapshot, document->validation->Diagnostics());
+        if (snapshot.messages.empty())
+            return std::nullopt;
+        if (!editorDiagnosticsReview_)
+            editorDiagnosticsReview_.emplace(
+                EditorDiagnosticsReview{document->identity.instance, document->revision, document->validation});
+        snapshot.lifetime = editorDiagnosticsReview_->lifetime.Token();
+        return snapshot;
+    }
+
+    /** @copydoc EditorWorkspaceScreen::ReconcileEditorDiagnostics */
+    void EditorWorkspaceScreen::ReconcileEditorDiagnostics() {
+        if (!editorDiagnosticsReview_)
+            return;
+        const auto *document = ActiveDecisionDocument(controller_->ViewModel());
+        if (!document || document->identity.instance != editorDiagnosticsReview_->document ||
+            document->revision != editorDiagnosticsReview_->revision || document->validation != editorDiagnosticsReview_->validation)
+            RevokeEditorDiagnostics();
+    }
+
+    /** @copydoc EditorWorkspaceScreen::RevokeEditorDiagnostics */
+    void EditorWorkspaceScreen::RevokeEditorDiagnostics() noexcept {
+        if (editorDiagnosticsReview_) {
+            editorDiagnosticsReview_->lifetime.RequestCancellation();
+            editorDiagnosticsReview_.reset();
+        }
     }
 
     /** @copydoc EditorWorkspaceScreen::BindPlayFactory */

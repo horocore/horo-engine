@@ -178,6 +178,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             }
             controller_->UpdateEnvironmentQueryPreview();
             controller_->UpdateFps(ImGui::GetIO().Framerate);
+            ReconcileEditorDiagnostics();
         }
     }
 
@@ -256,6 +257,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         using enum EditorWorkspaceViewCommand;
         EditorWorkspaceViewCommandData command;
         controller_->RefreshWorldDocumentProjection();
+        ReconcileEditorDiagnostics();
         GuiLive::Invoke<&EditorWorkspaceView::Draw>(context_.theme.liveReload, view_, controller_->ViewModel(), command, contentRegion);
         controller_->SetPlayDecisionInspectorVisibility(command.visiblePlayDecisionInspector);
 
@@ -340,6 +342,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             return;
         if (!TryOpenDocumentModal(command) && !TryOpenCreationModal(command))
             controller_->ProcessCommand(command);
+        ReconcileEditorDiagnostics();
         if (command.command == ReturnToWelcome)
             static_cast<void>(host_.Navigate(GuiRoute{GuiRouteKind::Welcome, WelcomeRouteParameters{}}));
     }

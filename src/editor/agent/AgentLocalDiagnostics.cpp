@@ -74,21 +74,21 @@ namespace Horo::Agent {
             }});
         }
 
-        /** @brief Projects only retained diagnostic messages for the chosen operation, without exposing a store or native path. */
-        CodeQueryProviders DiagnosticProvider(BuildOutputOperationTail tail, const CodeQueryContext &context) {
+        /** @brief Projects only retained diagnostics, without exposing a store or native path. */
+        CodeQueryProviders DiagnosticProvider(AgentDiagnosticCapture input, const CodeQueryContext &context) {
             CodeQueryObservation captured{context.projectIdentity,
                                           context.projectGeneration,
-                                          std::format("operation:{}:{}", tail.operation, tail.lastSequence),
+                                          std::move(input.revision),
                                           {},
-                                          tail.truncated ? 1U : 0U};
-            captured.records.reserve(tail.messages.size());
+                                          input.truncated ? 1U : 0U};
+            captured.records.reserve(input.messages.size());
             std::uint64_t ordinal{};
-            for (auto &message : tail.messages)
+            for (auto &message : input.messages)
                 captured.records.push_back({.kind = CodeQueryRecordKind::Diagnostic, .label = std::move(message), .byteOffset = ordinal++});
-            return {.diagnostics = [captured = std::move(captured), witness = std::move(tail.witness)](const CodeQueryRequest &,
-                                                                                                       const CodeQueryContext &) {
+            return {.diagnostics = [captured = std::move(captured), current = std::move(input.isCurrent)](const CodeQueryRequest &,
+                                                                                                          const CodeQueryContext &) {
                 using Observation = Result<CodeQueryObservation>;
-                return witness.IsCurrent() ? Observation::Success(captured) : Observation::Failure(MakeError(CodeQueryErrors::Stale));
+                return current() ? Observation::Success(captured) : Observation::Failure(MakeError(CodeQueryErrors::Stale));
             }};
         }
     }  // namespace
@@ -98,20 +98,33 @@ namespace Horo::Agent {
                                                                  const Application::CodeQueryContext &context,
                                                                  const std::uint64_t requestId,
                                                                  std::shared_ptr<Security::SecureRandomSource> entropy) {
-        if (!entropy || !tail.operation || !tail.lastSequence || tail.kind != BuildOutputTailKind::Diagnostics || tail.messages.empty() ||
-            tail.messages.size() > MaximumRows)
+        if (!tail.operation || !tail.lastSequence || tail.kind != BuildOutputTailKind::Diagnostics)
             return Page::Failure(MakeError(CodeQueryErrors::Invalid));
-        if (!FitsDiagnosticBudget(tail.messages))
+        return ReadLocalDiagnostics({std::format("operation:{}:{}", tail.operation, tail.lastSequence), std::move(tail.messages),
+                                     tail.truncated,
+                                     [witness = std::move(tail.witness)] {
+            return witness.IsCurrent();
+        }},
+                                    context, requestId, std::move(entropy));
+    }
+
+    /** @copydoc ReadLocalDiagnostics */
+    Result<Application::CodeQueryPage> ReadLocalDiagnostics(AgentDiagnosticCapture captured, const Application::CodeQueryContext &context,
+                                                            const std::uint64_t requestId,
+                                                            std::shared_ptr<Security::SecureRandomSource> entropy) {
+        if (!entropy || !captured.isCurrent || captured.messages.empty() || captured.messages.size() > MaximumRows)
+            return Page::Failure(MakeError(CodeQueryErrors::Invalid));
+        if (!FitsDiagnosticBudget(captured.messages))
             return Page::Failure(MakeError(CodeQueryErrors::Capacity));
         if (const auto active = Platform::CheckProjectReadContext(context); active.HasError())
             return Page::Failure(active.ErrorValue());
-        if (!tail.witness.IsCurrent())
+        if (!captured.isCurrent())
             return Page::Failure(MakeError(CodeQueryErrors::Stale));
-        auto generation = [witness = tail.witness, cancellation = context.cancellation, generation = context.projectGeneration] {
-            return witness.IsCurrent() && !cancellation.IsCancellationRequested() ? generation : 0;
+        auto generation = [current = captured.isCurrent, cancellation = context.cancellation, generation = context.projectGeneration] {
+            return current() && !cancellation.IsCancellationRequested() ? generation : 0;
         };
-        auto capability =
-            ProjectCodeQuery::Create({}, context.projectIdentity, context.projectGeneration, DiagnosticProvider(std::move(tail), context));
+        auto capability = ProjectCodeQuery::Create({}, context.projectIdentity, context.projectGeneration,
+                                                   DiagnosticProvider(std::move(captured), context));
         if (capability.HasError())
             return Page::Failure(capability.ErrorValue());
         auto tools = Mcp::MakeProjectCodeQueryTools(std::move(capability).Value(), context.projectIdentity, context.projectGeneration,

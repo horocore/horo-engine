@@ -115,6 +115,7 @@ namespace Horo::Editor {
                 projectFiles_ = context.agentProjectFiles;
                 projectReadIdentity_ = context.agentProjectReadIdentity;
                 captureSceneSelection_ = context.captureSceneSelection;
+                captureEditorDiagnostics_ = context.captureEditorDiagnostics;
                 buildOutput_ = context.buildOutputQuery;
                 gameplayBuilds_ = context.gameplayBuilds;
                 if (context.projectFileRoot)
@@ -216,6 +217,7 @@ namespace Horo::Editor {
                 activeSourceRange_ = {};
                 openSources_ = {};
                 captureSceneSelection_ = {};
+                captureEditorDiagnostics_ = {};
                 sourcePicker_ = SourcePickerMode::None;
                 projectFiles_.reset();
                 projectReadIdentity_.clear();
@@ -283,7 +285,7 @@ namespace Horo::Editor {
                     return;
                 }
                 if (DrawSourceContextActions(locale, ready) || DrawBuildContextActions(locale, ready) ||
-                    DrawClipboardActions(locale, ready)) {
+                    DrawClipboardActions(locale, ready) || DrawEditorDiagnosticsAction(locale, ready)) {
                     return;
                 }
                 const bool sceneAvailable = ready && captureSceneSelection_ && contextLifetime_ && !contextProject_.empty();
@@ -297,6 +299,40 @@ namespace Horo::Editor {
                     if (Button(locale, "ask_with_scene_count", ready))
                         Send(count);
                 }
+            }
+
+            /** @brief Opens a query for the active graph only after an explicit editor action. */
+            bool DrawEditorDiagnosticsAction(const ILocalizationService &locale, const bool ready) {
+                const bool enabled = ready && captureEditorDiagnostics_ && contextLifetime_ && !contextProject_.empty();
+                if (!Button(locale, "context_editor_diagnostics_offer", enabled))
+                    return false;
+                StartEditorDiagnosticsReview();
+                return true;
+            }
+
+            /** @brief Transfers only an owned Problems capture into the authenticated MCP worker. */
+            void StartEditorDiagnosticsReview() {
+                constexpr auto Unavailable = "context_editor_diagnostics_unavailable";
+                try {
+                    if (auto capture = captureEditorDiagnostics_()) {
+                        Platform::ProjectReadContext project{contextProject_, contextGeneration_, contextLifetime_->Token(),
+                                                             std::chrono::steady_clock::now() + std::chrono::minutes{5}};
+                        BackgroundTurn::Operation task{[snapshot = std::move(*capture), project = std::move(project),
+                                                        requestId = turn_ + 1](std::stop_token stop) mutable -> Reply {
+                            return ContextReview{EditorLocalAgentContext::
+                                                     PrepareEditorDiagnostics(std::move(snapshot), std::move(project), requestId,
+                                                                              Platform::CreateNativeSecureRandomSource(), stop),
+                                                 "context_editor_diagnostics_unavailable"};
+                        }};
+                        if (background_->Start(std::move(task))) {
+                            status_ = "context_editor_diagnostics_reading";
+                            return;
+                        }
+                    }
+                } catch (const std::bad_alloc &) {
+                    // Preparing the bounded worker inputs may allocate.
+                }
+                status_ = Unavailable;
             }
 
             /** @brief Keeps clipboard reads behind one of the two explicit attachment choices. */
@@ -741,6 +777,7 @@ namespace Horo::Editor {
             std::vector<ModelDescriptor> models_;
             std::function<std::optional<std::size_t>()> sceneCount_;
             std::function<std::optional<AgentSceneSelectionSnapshot>()> captureSceneSelection_;
+            std::function<std::optional<AgentEditorDiagnosticsSnapshot>()> captureEditorDiagnostics_;
             std::function<bool(SourceDocumentSnapshot &)> activeSource_;
             std::function<bool(SourceDocumentSnapshot &, SourceContextRange &)> activeSourceRange_;
             std::function<std::span<const SourceDocumentSnapshot>()> openSources_;

@@ -476,6 +476,51 @@ namespace Horo::Editor {
         CHECK(model.sent.front().text == text);
     }
 
+    TEST_CASE("Active editor diagnostics remain scoped to the reviewed report and its owner witness",
+              "[unit][agent][context][mcp][editor_diagnostics]") {
+        CancellationSource report;
+        CancellationSource workspace;
+        const Platform::ProjectReadContext project{"project", 3, workspace.Token(),
+                                                   std::chrono::steady_clock::now() + std::chrono::minutes{1}};
+        const AgentEditorDiagnosticsSnapshot snapshot{.document = 70,
+                                                      .observation = 2,
+                                                      .messages = {"decision.invalid: Invalid edge", "Api-Key: preview-secret"},
+                                                      .truncated = true,
+                                                      .lifetime = report.Token()};
+        const auto prepare = [&] {
+            return EditorLocalAgentContext::PrepareEditorDiagnostics(snapshot, project, 51, std::make_shared<Mcp::Test::Entropy>(), {});
+        };
+        auto prepared = prepare();
+        REQUIRE(prepared.HasValue());
+        auto context = std::move(prepared).Value();
+        const auto &item = context.Items().front();
+        CHECK(item.provenance.kind == AgentContextKind::Diagnostic);
+        CHECK(item.provenance.truncated);
+        CHECK(item.candidate.text.find("Invalid edge") != std::string::npos);
+        CHECK(item.candidate.text.find("preview-secret") == std::string::npos);
+        CHECK_FALSE(context.HistoryReference());
+        REQUIRE(context.Approve());
+        bool current{true};
+        SECTION("The chosen current report sends exactly the MCP preview") {}
+        SECTION("A change in the selected editor document denies new captures and dispatch") {
+            report.RequestCancellation();
+            REQUIRE(prepare().HasError());
+            current = false;
+        }
+        RecordingModel model;
+        const auto dispatch = context.Dispatch();
+        const ModelRequest request{.model = "local", .messages = {{.role = ModelRole::User, .text = "Explain these problems"}}};
+        const auto result = AgentTurnRuntime{}.Run(model, nullptr, 51, request, {}, {}, &dispatch);
+        if (!current) {
+            CHECK(result.status == AgentTurnStatus::ContextDenied);
+            CHECK(model.sent.empty());
+            return;
+        }
+        REQUIRE(result.status == AgentTurnStatus::Completed);
+        REQUIRE(model.sent.size() == 2);
+        CHECK(model.sent.front().text == item.candidate.text);
+    }
+
     TEST_CASE("Local panel build context sends the explicitly approved bounded project operation output without history",
               "[unit][agent][context][build_output]") {
         constexpr OperationId selected = 31;

@@ -25,6 +25,16 @@ namespace Horo::Editor {
             return {std::move(identity), generation, std::move(lifetime), std::chrono::steady_clock::now() + PreviewLifetime};
         }
 
+        /** @brief Applies a short synchronous query deadline and removes the borrowed stop callback from the retained preview. */
+        Platform::ProjectReadContext DiagnosticReadContext(Platform::ProjectReadContext &project, std::stop_token stop) {
+            auto reading = project;
+            reading.deadline = std::min(project.deadline, std::chrono::steady_clock::now() + std::chrono::seconds{2});
+            reading.authorityStopped = [authority = std::exchange(project.authorityStopped, {}), stop] {
+                return stop.stop_requested() || (authority && authority());
+            };
+            return reading;
+        }
+
         /** @brief Reads at most one context item's bytes with both the workspace and worker stop conditions. */
         Result<Platform::ProjectReadTextSnapshot> ReadSavedText(const Platform::IProjectReadFiles &files, std::string_view path,
                                                                 const Platform::ProjectReadContext &project, std::stop_token stop) {
@@ -79,16 +89,41 @@ namespace Horo::Editor {
                                                                                      std::shared_ptr<Security::SecureRandomSource> entropy,
                                                                                      std::stop_token stop) {
         using namespace Agent;
-        using Output = Result<EditorLocalAgentContext>;
         const auto witness = tail.witness;
         const auto operation = tail.operation;
         const auto sequence = tail.lastSequence;
-        auto queryContext = project;
-        queryContext.deadline = std::min(project.deadline, std::chrono::steady_clock::now() + std::chrono::seconds{2});
-        queryContext.authorityStopped = [authority = std::exchange(project.authorityStopped, {}), stop] {
-            return stop.stop_requested() || (authority && authority());
-        };
+        const auto queryContext = DiagnosticReadContext(project, stop);
         const auto page = ReadLocalBuildDiagnostics(std::move(tail), queryContext, requestId, std::move(entropy));
+        return CaptureDiagnosticPage(page, [witness] {
+            return witness.IsCurrent();
+        }, std::move(project), requestId, operation, {AgentHistoryReferenceKind::BuildOutput, operation, sequence});
+    }
+
+    /** @copydoc EditorLocalAgentContext::PrepareEditorDiagnostics */
+    Result<EditorLocalAgentContext> EditorLocalAgentContext::PrepareEditorDiagnostics(AgentEditorDiagnosticsSnapshot snapshot,
+                                                                                      Platform::ProjectReadContext project,
+                                                                                      const std::uint64_t requestId,
+                                                                                      std::shared_ptr<Security::SecureRandomSource> entropy,
+                                                                                      std::stop_token stop) {
+        using namespace Agent;
+        if (!snapshot.document || !snapshot.observation)
+            return Result<EditorLocalAgentContext>::Failure(MakeError(Application::CodeQueryErrors::Invalid));
+        auto current = [lifetime = snapshot.lifetime] {
+            return !lifetime.IsCancellationRequested();
+        };
+        const auto queryContext = DiagnosticReadContext(project, stop);
+        const auto page = ReadLocalDiagnostics({std::format("editor:{}:{}", snapshot.document, snapshot.observation),
+                                                std::move(snapshot.messages), snapshot.truncated, current},
+                                               queryContext, requestId, std::move(entropy));
+        return CaptureDiagnosticPage(page, std::move(current), std::move(project), requestId, {}, {});
+    }
+
+    /** @copydoc EditorLocalAgentContext::CaptureDiagnosticPage */
+    Result<EditorLocalAgentContext> EditorLocalAgentContext::CaptureDiagnosticPage(
+        const Result<Application::CodeQueryPage> &page, std::function<bool()> current, Platform::ProjectReadContext project,
+        const std::uint64_t requestId, const std::optional<OperationId> operation, const Agent::AgentHistoryReference reference) {
+        using namespace Agent;
+        using Output = Result<EditorLocalAgentContext>;
         if (page.HasError())
             return Output::Failure(page.ErrorValue());
         const auto &revision = page.Value().revision;
@@ -97,11 +132,10 @@ namespace Horo::Editor {
                                                                          .limit = std::max(std::size_t{1}, page.Value().records.size())}};
         AgentContextReaders readers{.readOnlyQuery = [&page](const auto &, const auto &) {
             return page;
-        }, .redact = RedactEvidence, .isCurrent = [witness, revision](const AgentContextProvenance &item) {
-            return witness.IsCurrent() && item.kind == AgentContextKind::Diagnostic && item.revision == revision;
+        }, .redact = RedactEvidence, .isCurrent = [current = std::move(current), revision](const AgentContextProvenance &item) {
+            return current() && item.kind == AgentContextKind::Diagnostic && item.revision == revision;
         }};
-        return Capture(selected, std::move(readers), std::move(project), requestId, {}, {}, operation,
-                       {AgentHistoryReferenceKind::BuildOutput, operation, sequence});
+        return Capture(selected, std::move(readers), std::move(project), requestId, {}, {}, operation, reference);
     }
 
     /** @copydoc EditorLocalAgentContext::PrepareSavedFile */

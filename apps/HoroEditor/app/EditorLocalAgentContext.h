@@ -4,6 +4,7 @@
 
 #include "AgentConversationStore.h"
 #include "AgentTurn.h"
+#include "Horo/Editor/AgentEditorDiagnosticsSnapshot.h"
 #include "Horo/Editor/AgentSceneSelectionSnapshot.h"
 #include "Horo/Editor/SourceDocumentService.h"
 #include "Horo/Foundation/BuildOutputStore.h"
@@ -66,6 +67,17 @@ namespace Horo::Editor {
                                                                                      std::uint64_t requestId,
                                                                                      std::shared_ptr<Security::SecureRandomSource> entropy,
                                                                                      std::stop_token stop = {});
+        /** @brief Reads the selected editor document's Problems through the private diagnostic query.
+         * @param snapshot Bounded owner-issued findings and freshness token. @param project Current workspace fence.
+         * @param requestId Exact upcoming local turn. @param entropy Private session credential entropy.
+         * @param stop Worker cancellation. @return Owned redacted review or a typed failure.
+         */
+        [[nodiscard]] static Result<EditorLocalAgentContext> PrepareEditorDiagnostics(AgentEditorDiagnosticsSnapshot snapshot,
+                                                                                      Platform::ProjectReadContext project,
+                                                                                      std::uint64_t requestId,
+                                                                                      std::shared_ptr<Security::SecureRandomSource> entropy,
+                                                                                      std::stop_token stop);
+
         /** @brief Prepares the selected Scene IDs and exact revision from the existing scene owner.
          * @param selection Bounded snapshot and owner revocation witness.
          * @param projectIdentity Exact committed project identity.
@@ -143,6 +155,10 @@ namespace Horo::Editor {
         [[nodiscard]] Agent::AgentTurnContext Dispatch(std::stop_token stop = {});
 
     private:
+        /** @brief Admits the exact owned page and retains its producer witness for provider dispatch. */
+        [[nodiscard]] static Result<EditorLocalAgentContext> CaptureDiagnosticPage(
+            const Result<Application::CodeQueryPage> &page, std::function<bool()> current, Platform::ProjectReadContext project,
+            std::uint64_t requestId, std::optional<OperationId> operation, Agent::AgentHistoryReference reference);
         EditorLocalAgentContext(SourceDocumentSnapshot source, Platform::ProjectReadContext project,
                                 std::unique_ptr<Security::AgentPolicy> policy, Agent::AgentContextPreview preview,
                                 std::function<bool(const Agent::AgentContextProvenance &)> current,
