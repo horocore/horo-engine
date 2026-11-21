@@ -111,6 +111,7 @@ if(HORO_BUILD_XR_OPENXR AND HORO_BUILD_RENDER_VULKAN AND TARGET HoroEditorVulkan
     configure_file(HoroEditor/composition/xr/OpenXRPlayHost.h "${HORO_OPENXR_APPLICATION_HEADERS}/OpenXRPlayHost.h" COPYONLY)
     add_library(HoroOpenXRApplicationHost STATIC HoroEditor/composition/xr/OpenXRApplicationSession.cpp
         HoroEditor/composition/xr/OpenXRApplicationInput.cpp HoroEditor/composition/xr/OpenXRApplicationProjection.cpp
+        HoroEditor/composition/xr/OpenXRApplicationSpatialAnchor.cpp
         HoroEditor/composition/xr/OpenXRPlayHost.cpp HoroEditor/composition/xr/OpenXRPlayFrames.cpp HoroEditor/composition/xr/OpenXRPlayScene.cpp
         HoroEditor/composition/xr/OpenXRPlaySetup.cpp)
     target_compile_features(HoroOpenXRApplicationHost PUBLIC cxx_std_20)

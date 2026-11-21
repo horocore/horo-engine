@@ -278,6 +278,11 @@ namespace Horo::Application::Internal {
                                                 const XR::OpenXRInternal::NativeTrackingSpaceRequest &tracking, bool gazeConsent = false);
         /** @return Whether policy and exact native evidence permit requesting plane consent. */
         [[nodiscard]] bool MayArmPlaneCapture() const noexcept;
+        [[nodiscard]] bool MayArmSpatialAnchor() const;
+        [[nodiscard]] Result<void> SetSpatialAnchorConsent(bool allowed, const std::shared_ptr<const XR::XRSessionLifecycle> &lifecycle);
+        void RevokeSpatialAnchor() noexcept;
+        [[nodiscard]] Result<void> ProgressSpatialAnchorRetirement();
+        [[nodiscard]] XR::XRCapabilityState ReadSpatialAnchorState() const noexcept;
         /** @brief Reports whether the installed platform and negotiated extension support the next-Play request. */
         [[nodiscard]] bool MayArmPassthrough() const;
         /** @brief Checks the installed platform's current permission for the exact Play scope, without native I/O. */
@@ -462,6 +467,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> RetirePlaneCapture();
         /** @brief Advances one async operation after canonical tracking publication. @param tracking Current Input evidence. */
         void AdvancePlaneCapture(const XR::XRTrackingSnapshot &tracking);
+        void AdvanceSpatialAnchor(const XR::XRTrackingSnapshot &tracking);
+        [[nodiscard]] Result<void> StartSpatialAnchor(const XR::XRCoordinateSpace &space, XrSpace world, XR::XRRuntimeTime now);
         /** @brief Starts the one authorized native capture in the current calibrated space.
          * @param session Current XR session identity.
          * @param space The portable identity of the calibrated World space.
@@ -587,6 +594,17 @@ namespace Horo::Application::Internal {
             std::uint64_t lastGrant{};
             bool allowed{};
         } planes_;
+
+        struct SpatialAnchorPreview final {
+            std::shared_ptr<XR::XRSpatialAnchors> publication;
+            std::optional<XR::XRAnchorScope> scope;
+            XR::XRSpatialAnchorId id;
+            XR::XRRuntimeTime sampled;
+            XR::XRRuntimeTime cutoff;
+            std::uint64_t grant{};
+            bool allowed{};
+            bool localized{};
+        } spatialAnchor_;
 
         InputPreparation input_;
         XR::XRContactPinchGesturePolicy pinchPolicy_;

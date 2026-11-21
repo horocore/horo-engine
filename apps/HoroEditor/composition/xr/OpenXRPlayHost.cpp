@@ -158,6 +158,7 @@ namespace Horo::Application::Internal {
     void OpenXRPlayHost::RevokeSensitiveObservations() noexcept {
         RevokeEyeGaze();
         RevokePlaneCapture();
+        RevokeSpatialAnchor();
         if (scene_ && scene_->nativeLighting)
             scene_->nativeLighting->active = false;
         RevokePassthrough();
@@ -187,7 +188,7 @@ namespace Horo::Application::Internal {
         if (auto lane = Lane(); lane.HasError())
             return lane;
         const Operation operation{*this};
-        if (sessions_.Snapshot().state == XRSessionState::Lost && scene_)
+        if (sessions_->Snapshot().state == XRSessionState::Lost && scene_)
             scene_->Retire(*this);
         if (scene_ && scene_->retiring) {
             const auto retired = SceneState::ProgressRetirement(*this);
@@ -231,7 +232,7 @@ namespace Horo::Application::Internal {
                 scene_->Retire(*this);
             return Result<bool>::Success(false);
         }
-        const auto state = sessions_.Snapshot();
+        const auto state = sessions_->Snapshot();
         if (inputSuspended) {
             tracking_.Revoke();
             input_.neutralPending = true;
@@ -274,10 +275,10 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::RevokeEventAdmission */
     void OpenXRPlayHost::RevokeEventAdmission() noexcept {
-        if (const auto state = sessions_.Snapshot(); state.session.IsValid()) {
+        if (const auto state = sessions_->Snapshot(); state.session.IsValid()) {
             // The copied publication is current on this serialized lane. SessionLost is legal from
             // every published state and only revokes admission; it never destroys native children.
-            const auto lost = sessions_.ApplyEvent(state.session, XRSessionEvent::SessionLost);
+            const auto lost = sessions_->ApplyEvent(state.session, XRSessionEvent::SessionLost);
             HORO_INVARIANT_MSG(lost.HasValue(), "Current XR event failure must revoke canonical frame admission");
         }
         if (scene_)
@@ -303,7 +304,7 @@ namespace Horo::Application::Internal {
         if (!input_.coordinator)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         const auto placement = scene_ && scene_->locomotion ? scene_->locomotion->worldPlacement : std::nullopt;
-        auto sampled = composition_.session.AppendInput(sessions_, *input_.coordinator, tracking_, clock_, context, input_.origin, frame,
+        auto sampled = composition_.session.AppendInput(*sessions_, *input_.coordinator, tracking_, clock_, context, input_.origin, frame,
                                                         placement ? &*placement : nullptr);
         input_.sampledWorldPlacement = sampled.HasValue() ? placement : std::nullopt;
         return sampled;
@@ -314,7 +315,7 @@ namespace Horo::Application::Internal {
         using Outcome = Result<XRReferenceSpaceSnapshot>;
         if (auto lane = Lane(); lane.HasError())
             return Outcome::Failure(lane.ErrorValue());
-        const auto state = sessions_.Snapshot();
+        const auto state = sessions_->Snapshot();
         if (auto valid = ValidateXRSession(session, state.session); valid.HasError())
             return Outcome::Failure(valid.ErrorValue());
         if (state.state == XRSessionState::Lost || !scene_ || !scene_->published || scene_->retiring)
@@ -328,14 +329,14 @@ namespace Horo::Application::Internal {
     std::optional<XRReferenceSpaceChange> OpenXRPlayHost::ReadReferenceChange(XRSessionId session) const noexcept {
         if (std::this_thread::get_id() != lane_ || busy_ || closing_ || !lastReferenceChange_ || lastReferenceChange_->session != session)
             return std::nullopt;
-        const auto active = sessions_.Snapshot().session;
+        const auto active = sessions_->Snapshot().session;
         return active.IsValid() && active != session ? std::nullopt : lastReferenceChange_;
     }
 
     /** @copydoc OpenXRPlayHost::ReadHandGestures */
     XRHandGestureCandidates OpenXRPlayHost::ReadHandGestures() const noexcept {
         if (std::this_thread::get_id() != lane_ || busy_ || closing_ || eventsPending_ || !input_.admitted ||
-            input_.play != Editor::EditorPlayState::Playing || !sessions_.Snapshot().admitsActions)
+            input_.play != Editor::EditorPlayState::Playing || !sessions_->Snapshot().admitsActions)
             return {};
         const auto *snapshot = tracking_.Current();
         return snapshot ? composition_.session.ReadHandGestures(*snapshot) : XRHandGestureCandidates{};
@@ -359,7 +360,7 @@ namespace Horo::Application::Internal {
             return Outcome::Failure(MakeError(XRErrors::IdentityStale));
         const auto assignment = input_.port->ReadPlayerAssignmentRevision();
         const auto *snapshot = tracking_.Current();
-        const auto state = sessions_.Snapshot();
+        const auto state = sessions_->Snapshot();
         if (!snapshot || !scene_ || !scene_->published || scene_->retiring || !state.admitsActions || eventsPending_ || !input_.admitted ||
             !assignment || input_.play != Editor::EditorPlayState::Playing || snapshot->Focus() != XRTrackingFocusState::Focused ||
             snapshot->Visibility() != XRTrackingVisibilityState::Visible || snapshot->State() != XRTrackingState::Active)

@@ -458,7 +458,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::FinishFrameResources */
     Result<void> OpenXRPlayHost::FinishFrameResources(const XRSessionId &candidate, const XRCapabilitySnapshot &capabilities) {
-        if (!render_ || render_->session != candidate || sessions_.Snapshot().session != candidate || events_)
+        if (!render_ || render_->session != candidate || sessions_->Snapshot().session != candidate || events_)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         const std::uint32_t layerLimit = scene_ && scene_->passthroughGrant ? 2U : 1U;
         std::optional<XRReprojectionPolicy> reprojection;
@@ -483,7 +483,7 @@ namespace Horo::Application::Internal {
         if (auto bound = clock_.BindNative(); bound.HasError())
             return bound;
         render_->clockBound = true;
-        events_.emplace(native_, sessions_, frames_);
+        events_.emplace(native_, *sessions_, frames_);
         std::array<OpenXRSwapchain *, 3> owners{&render_->color};
         if (render_->writer) {
             owners[1] = &render_->writer->motion.owner;
@@ -507,7 +507,7 @@ namespace Horo::Application::Internal {
             return Pending;
         if (!scene_ && !render_)
             return Inactive;
-        return UsesXrScene() && eventsBound_ && !eventsPending_ && sessions_.Snapshot().admitsFrames &&
+        return UsesXrScene() && eventsBound_ && !eventsPending_ && sessions_->Snapshot().admitsFrames &&
                        frames_.Snapshot().phase == XRFramePhase::Idle
                    ? FrameAdmitted
                    : Pending;
@@ -651,7 +651,7 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRPlayHost::LightingCutoff */
     std::optional<XRRuntimeTime> OpenXRPlayHost::LightingCutoff(const XRLightEstimateScope &scope) const noexcept {
         const auto read = [&]() -> std::optional<XRRuntimeTime> {
-            const auto state = sessions_.Snapshot();
+            const auto state = sessions_->Snapshot();
             const auto *tracking = tracking_.Current();
             if (!tracking || pendingRevoke_ || eventsPending_ || !input_.admitted || input_.play != Editor::EditorPlayState::Playing ||
                 !state.admitsActions || state.session != scope.session || tracking->Session() != scope.session ||
@@ -725,7 +725,7 @@ namespace Horo::Application::Internal {
             return std::nullopt;
         if (!source)
             return ReadNativeLighting(world);
-        if (!sessions_.Snapshot().admitsActions)
+        if (!sessions_->Snapshot().admitsActions)
             return std::nullopt;
         const auto sample = source->Read(frame.frame, world, frame.predictedDisplayTime);
         if (!sample || !sample->scope.IsValid() || sample->scope.space != world || sample->scope.session != frame.frame.session ||
@@ -858,7 +858,7 @@ namespace Horo::Application::Internal {
         if (references.HasError())
             return Output::Failure(references.ErrorValue());
         const auto frame = frames_.Snapshot();
-        if (!UsesXrScene() || !sessions_.Snapshot().admitsFrames || !render_ || !render_->views || !render_->plan ||
+        if (!UsesXrScene() || !sessions_->Snapshot().admitsFrames || !render_ || !render_->views || !render_->plan ||
             render_->hostFrameNumber != hostFrameNumber || !frame.renderAdmitted || frame.frame.session != session ||
             !frame.frame.IsValid() || (frame.phase != XRFramePhase::ImagesAcquired && frame.phase != XRFramePhase::RendererSubmitted))
             return Output::Failure(MakeError(XRErrors::IdentityStale));
@@ -893,7 +893,7 @@ namespace Horo::Application::Internal {
     Editor::EditorViewportTextureView OpenXRPlayHost::MirrorView(const std::uint64_t frameNumber) const noexcept {
         if (std::this_thread::get_id() != lane_ || busy_ || !UsesXrScene() || !render_ || !render_->encoded || render_->guiFinished ||
             !render_->plan || !render_->acquisition || render_->hostFrameNumber != frameNumber ||
-            sessions_.Snapshot().state == XRSessionState::Lost)
+            sessions_->Snapshot().state == XRSessionState::Lost)
             return {};
         const auto mirror = Editor::EditorVulkanXrViewportAccess::Mirror(composition_.viewport, frameNumber, render_->eyeViews[0]);
         return mirror.IsValid() && mirror.sampledView.IsValid() && mirror.sampledView == render_->eyeViews[0]
@@ -925,13 +925,15 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::ProgressTail */
     Result<void> OpenXRPlayHost::ProgressTail() {
+        if (auto retired = composition_.session.ProgressSpatialAnchorRetirement(); retired.HasError())
+            return retired;
         if (auto retired = composition_.session.ProgressPlaneRetirement(); retired.HasError())
             return retired;
-        if (render_ && render_->writer && !eventsPending_ && sessions_.Snapshot().state != XRSessionState::Lost)
+        if (render_ && render_->writer && !eventsPending_ && sessions_->Snapshot().state != XRSessionState::Lost)
             render_->writer->PollOmitted(composition_.frontend);
         if (eventsPending_ || !render_ || frames_.Snapshot().phase == XRFramePhase::Idle)
             return Result<void>::Success();
-        if (sessions_.Snapshot().state == XRSessionState::Lost)
+        if (sessions_->Snapshot().state == XRSessionState::Lost)
             return Result<void>::Success();  // Explicit destructive retirement owns this debt; ordinary End is no longer admitted.
         if (!render_->guiFinished && !(scene_ && scene_->retiring))
             return Result<void>::Success();
@@ -1169,7 +1171,7 @@ namespace Horo::Application::Internal {
         using Output = Result<bool>;
         if (host.render_ && host.render_->session != candidate)
             return Output::Failure(MakeError(XRErrors::IdentityStale));
-        if (host.sessions_.Snapshot().state != XRSessionState::Lost && host.events_ && (host.eventsPending_ || host.events_->Running())) {
+        if (host.sessions_->Snapshot().state != XRSessionState::Lost && host.events_ && (host.eventsPending_ || host.events_->Running())) {
             const auto observed = host.events_->Poll(false);
             if (observed.HasError()) {
                 host.RevokeEventAdmission();
@@ -1178,7 +1180,7 @@ namespace Horo::Application::Internal {
             if (const auto applied = host.ApplyEventObservation(observed.Value()); applied.HasError())
                 return Output::Failure(applied.ErrorValue());
         }
-        const bool lost = host.sessions_.Snapshot().state == XRSessionState::Lost;
+        const bool lost = host.sessions_->Snapshot().state == XRSessionState::Lost;
         if (!lost && host.eventsPending_)
             return Output::Success(false);
         if (!lost) {

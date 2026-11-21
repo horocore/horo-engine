@@ -26,6 +26,7 @@ namespace Horo::Editor {
         void DrawHapticPreview(IEditorXrHapticPreview &preview);
         /** @brief Shows consent controls and current redacted pointing evidence. */
         void DrawPlaneCapturePreview(IEditorXrPlaneCapturePreview &preview);
+        void DrawSpatialAnchorPreview(IEditorXrSpatialAnchorPreview &preview);
         void DrawEyeGazePreview(IEditorXrEyeGazePreview &preview);
         /** @brief Draws next-Play passthrough consent controls without exposing provider data. */
         void DrawPassthroughPreview(IEditorXrPassthroughPreview &preview);
@@ -36,6 +37,7 @@ namespace Horo::Editor {
         EditorXrHapticPreviewId previewRequest_;
         bool previewRejected_{};
         bool planesRejected_{};
+        bool spatialAnchorRejected_{};
         bool gazeRejected_{};
         bool passthroughRejected_{};
         bool rejected_{};

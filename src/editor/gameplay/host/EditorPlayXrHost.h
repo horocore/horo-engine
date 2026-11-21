@@ -262,6 +262,23 @@ namespace Horo::Editor {
         virtual void RevokePlaneCapture() noexcept = 0;
     };
 
+    /** @brief Redacted status of a session-local anchor at the calibrated World origin. */
+    enum class EditorXrSpatialAnchorState : std::uint8_t {
+        Unavailable,
+        Ready,
+        Armed,
+        Locating,
+        Localized
+    };
+
+    class IEditorXrSpatialAnchorPreview {
+    public:
+        virtual ~IEditorXrSpatialAnchorPreview() = default;
+        [[nodiscard]] virtual EditorXrSpatialAnchorState ReadSpatialAnchorState() const = 0;
+        [[nodiscard]] virtual Result<void> ArmSpatialAnchor() = 0;
+        virtual void RevokeSpatialAnchor() noexcept = 0;
+    };
+
     /** @brief Redacted operator state for runtime-composited passthrough. */
     enum class EditorXrPassthroughState : std::uint8_t {
         Unavailable,
@@ -301,6 +318,11 @@ namespace Horo::Editor {
 
         /** @return Optional consent control for the selected native plane capture provider. */
         [[nodiscard]] virtual IEditorXrPlaneCapturePreview *PlaneCapturePreview() noexcept {
+            return nullptr;
+        }
+
+        /** @return Optional consent control for one session-local spatial anchor. */
+        [[nodiscard]] virtual IEditorXrSpatialAnchorPreview *SpatialAnchorPreview() noexcept {
             return nullptr;
         }
 

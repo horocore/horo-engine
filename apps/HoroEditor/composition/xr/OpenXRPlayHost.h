@@ -208,6 +208,7 @@ namespace Horo::Application::Internal {
                                  public Editor::IEditorXrSetup,
                                  public Editor::IEditorXrHapticPreview,
                                  public Editor::IEditorXrPlaneCapturePreview,
+                                 public Editor::IEditorXrSpatialAnchorPreview,
                                  public Editor::IEditorXrEyeGazePreview,
                                  public Editor::IEditorXrPassthroughPreview,
                                  private XR::RuntimeInternal::IXRSessionRetirementResources,
@@ -261,6 +262,14 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Editor::EditorXrPlaneCaptureState ReadPlaneCaptureState() const noexcept override;
         [[nodiscard]] Result<void> ArmPlaneCapture() override;
         void RevokePlaneCapture() noexcept override;
+
+        [[nodiscard]] Editor::IEditorXrSpatialAnchorPreview *SpatialAnchorPreview() noexcept override {
+            return this;
+        }
+
+        [[nodiscard]] Editor::EditorXrSpatialAnchorState ReadSpatialAnchorState() const override;
+        [[nodiscard]] Result<void> ArmSpatialAnchor() override;
+        void RevokeSpatialAnchor() noexcept override;
 
         [[nodiscard]] Editor::IEditorXrEyeGazePreview *EyeGazePreview() noexcept override {
             return this;
@@ -765,7 +774,8 @@ namespace Horo::Application::Internal {
         std::optional<HapticPreviewRecord> hapticPreview_;
         std::uint64_t nextHapticPreview_{};
         bool planesArmed_{}; /**< One-use Setup consent, consumed by an actual Play preparation. */
-        bool gazeArmed_{};   /**< In-memory grant consumed by one actual Play preparation. */
+        bool spatialAnchorArmed_{};
+        bool gazeArmed_{}; /**< In-memory grant consumed by one actual Play preparation. */
         std::uint64_t nextPassthroughGrant_{};
         std::optional<XR::XRPassthroughGrant> passthroughArmed_;
         std::optional<XR::XRPassthroughScope> passthroughScope_; /**< Retained until the native owner confirms retirement. */
@@ -804,9 +814,10 @@ namespace Horo::Application::Internal {
         const XR::XRLoaderPreflightAttempt discoveryAttempt_;
         const XR::XRLocomotionComfortSettings locomotionComfort_;
         PFN_xrGetInstanceProcAddr getProc_;
-        XR::XRSessionLifecycle sessions_{*this};
-        XR::XRFrameLifecycle frames_{sessions_};
-        XR::RuntimeInternal::XRTrackingPublication tracking_{sessions_};
+        std::shared_ptr<XR::XRSessionLifecycle> sessions_{
+            std::make_shared<XR::XRSessionLifecycle>(static_cast<XR::IXRSessionResources &>(*this))};
+        XR::XRFrameLifecycle frames_{*sessions_};
+        XR::RuntimeInternal::XRTrackingPublication tracking_{*sessions_};
         OpenXRInputClock clock_;
         std::optional<XR::OpenXRInternal::OpenXRSessionEvents> events_;
         std::shared_ptr<FrameState> render_;

@@ -364,6 +364,29 @@ namespace Horo::Editor {
         }
     }
 
+    void XrSetupModal::DrawSpatialAnchorPreview(IEditorXrSpatialAnchorPreview &preview) {
+        using enum EditorXrSpatialAnchorState;
+        const auto state = preview.ReadSpatialAnchorState();
+        if (state == Unavailable && !spatialAnchorRejected_)
+            return;
+        const auto &fonts = context_.theme.fonts;
+        constexpr std::array keys{"anchor_rejected", "anchor_scope", "anchor_armed", "anchor_locating", "anchor_localized"};
+        const auto key = spatialAnchorRejected_ ? "anchor_rejected" : keys[static_cast<std::size_t>(state)];
+        Ui::WrappedText(ImGui::GetContentRegionAvail().x, Text(key), Theme::Muted(), fonts);
+        const bool canArm = state == Ready;
+        if (state == Unavailable || !Ui::Button({.label = Text(canArm ? "anchor_allow" : "anchor_revoke").c_str(),
+                                                 .variant = Ui::ButtonVariant::Secondary,
+                                                 .font = fonts.sans,
+                                                 .style = {.width = Ui::StyleWidth::FillAvailable}}))
+            return;
+        if (canArm)
+            spatialAnchorRejected_ = preview.ArmSpatialAnchor().HasError();
+        else {
+            preview.RevokeSpatialAnchor();
+            spatialAnchorRejected_ = false;
+        }
+    }
+
     /** @copydoc XrSetupModal::DrawPassthroughPreview */
     void XrSetupModal::DrawPassthroughPreview(IEditorXrPassthroughPreview &preview) {
         using enum EditorXrPassthroughState;
@@ -423,6 +446,8 @@ namespace Horo::Editor {
             DrawHapticPreview(*preview);
         if (auto *preview = setup_ ? setup_->PlaneCapturePreview() : nullptr)
             DrawPlaneCapturePreview(*preview);
+        if (auto *preview = setup_ ? setup_->SpatialAnchorPreview() : nullptr)
+            DrawSpatialAnchorPreview(*preview);
         if (auto *preview = setup_ ? setup_->EyeGazePreview() : nullptr)
             DrawEyeGazePreview(*preview);
         if (auto *preview = setup_ ? setup_->PassthroughPreview() : nullptr)

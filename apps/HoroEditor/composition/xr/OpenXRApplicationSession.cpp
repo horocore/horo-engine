@@ -78,7 +78,7 @@ namespace Horo::Application::Internal {
         /** @brief Prepares exactly the installed extension routes usable by this editor composition. */
         Result<void> PrepareNativeDiscovery(OpenXRNativeSession &native, const XRLoaderPreflightRequest &selection, bool handsRequested,
                                             bool planePreview, const std::optional<NativeExtensionRequest> &passthrough,
-                                            bool optionalReprojection, bool lightEstimation) {
+                                            bool optionalReprojection, bool lightEstimation, bool spatialAnchors) {
             const XRLoaderApiVersion compiled{XR_VERSION_MAJOR(XR_CURRENT_API_VERSION), XR_VERSION_MINOR(XR_CURRENT_API_VERSION),
                                               XR_VERSION_PATCH(XR_CURRENT_API_VERSION)};
             // The editor composition owns a time provider and color projection; its renderer has no native depth provider.
@@ -95,6 +95,7 @@ namespace Horo::Application::Internal {
                 Selection{{XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME}, true},
                 Selection{{XR_EXT_HAND_TRACKING_EXTENSION_NAME}, handsRequested},
                 Selection{{XR_ANDROID_LIGHT_ESTIMATION_EXTENSION_NAME}, lightEstimation},
+                Selection{{XR_MSFT_SPATIAL_ANCHOR_EXTENSION_NAME}, spatialAnchors},
                 Selection{{XR_EXT_FUTURE_EXTENSION_NAME}, planePreview},
                 Selection{{.name = XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME, .dependencies = spatialDependencies}, planePreview},
                 Selection{{.name = XR_EXT_SPATIAL_PLANE_TRACKING_EXTENSION_NAME, .dependencies = planeDependencies}, planePreview},
@@ -128,7 +129,8 @@ namespace Horo::Application::Internal {
         if (!native_ || native_.get() != owner)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         const bool lightEstimation = policy_.lightPermission && policy_.lightPermission->SupportsLightEstimation();
-        if (auto prepared = PrepareNativeDiscovery(*native_, selection_, hands, planes, passthrough, optionalReprojection, lightEstimation);
+        if (auto prepared = PrepareNativeDiscovery(*native_, selection_, hands, planes, passthrough, optionalReprojection, lightEstimation,
+                                                   settings_.AllowsSpatialAnchorPreview());
             prepared.HasError())
             return prepared;
         auto actual = native_->DiscoverSystem(selection_.attempt);
@@ -477,6 +479,9 @@ namespace Horo::Application::Internal {
 
         RevokeInput();
         sessionCensus_.reset();
+        RevokeSpatialAnchor();
+        if (auto retired = ProgressSpatialAnchorRetirement(); retired.HasError())
+            return retired;
         if (auto retired = RetirePlaneCapture(); retired.HasError())
             return retired;
         if (auto retired = RetireHands(); retired.HasError())
@@ -517,6 +522,9 @@ namespace Horo::Application::Internal {
 
         RevokeInput();
         sessionCensus_.reset();
+        RevokeSpatialAnchor();
+        if (auto retired = ProgressSpatialAnchorRetirement(); retired.HasError())
+            return retired;
         if (auto retired = RetirePlaneCapture(); retired.HasError())
             return retired;
         if (auto retired = RetireHands(); retired.HasError())
@@ -540,6 +548,9 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         closing_ = true;
         RevokeInput();
+        RevokeSpatialAnchor();
+        if (auto retired = ProgressSpatialAnchorRetirement(); retired.HasError())
+            return retired;
         if (auto retired = RetirePlaneCapture(); retired.HasError())
             return retired;
         if (auto retired = RetireHands(); retired.HasError())

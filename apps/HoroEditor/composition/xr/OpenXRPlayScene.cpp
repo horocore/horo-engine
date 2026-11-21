@@ -429,6 +429,7 @@ namespace Horo::Application::Internal {
         if (cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(XRSessionErrors::ActivationCancelled));
         const bool planeConsent = std::exchange(host.planesArmed_, false);
+        const bool anchorConsent = std::exchange(host.spatialAnchorArmed_, false);
         const bool gazeConsent = std::exchange(host.gazeArmed_, false);
         passthroughGrant = std::exchange(host.passthroughArmed_, std::nullopt);
         if (auto prepared = host.composition_.session.PrepareInput(*host.input_.port, *host.input_.router, *host.composition_.bindings,
@@ -438,6 +439,8 @@ namespace Horo::Application::Internal {
         if (cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(XRSessionErrors::ActivationCancelled));
         host.composition_.session.SetPlaneCaptureConsent(planeConsent);
+        if (auto consent = host.composition_.session.SetSpatialAnchorConsent(anchorConsent, host.sessions_); consent.HasError())
+            return consent;
         auto preparedProjection = host.composition_.session.PrepareProjection(host.composition_.frontend, host.composition_.viewport,
                                                                               *host.composition_.bindings);
         if (preparedProjection.HasError())
@@ -457,8 +460,8 @@ namespace Horo::Application::Internal {
             return Result<void>::Failure(finalized.ErrorValue());
         projection.emplace(std::move(finalized).Value());
         const auto &facts = *projection;
-        auto activatedSession = host.sessions_.Activate(facts.capabilities, facts.capabilities.System(), facts.capabilities.Revision(),
-                                                        facts.plan, cancellation);
+        auto activatedSession = host.sessions_->Activate(facts.capabilities, facts.capabilities.System(), facts.capabilities.Revision(),
+                                                         facts.plan, cancellation);
         if (activatedSession.HasError())
             return Result<void>::Failure(activatedSession.ErrorValue());
         activated = true;
@@ -522,7 +525,7 @@ namespace Horo::Application::Internal {
     Result<void> OpenXRPlayHost::SceneState::Validate(const OpenXRPlayHost &host) const {
         if (std::this_thread::get_id() != host.lane_ || host.pendingRevoke_ || host.pendingDetach_ || host.scene_.get() != this ||
             retiring || !geometry || !projection || !session.IsValid() || !host.input_.port ||
-            host.sessions_.Snapshot().session != session || !host.input_.coordinator || !host.input_.coordinator->Current())
+            host.sessions_->Snapshot().session != session || !host.input_.coordinator || !host.input_.coordinator->Current())
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         if (auto source = geometry->ValidateSource(); source.HasError())
             return source;
@@ -572,7 +575,7 @@ namespace Horo::Application::Internal {
             return Result<bool>::Failure(finished.ErrorValue());
         host.retired_ = candidate;  // Actual native/graph/image cleanup succeeded, never a request/Scene Shutdown receipt.
         if (host.scene_->activated) {
-            auto canonical = RuntimeInternal::XRSessionHostControl::Retire(host.sessions_, host.frames_, host, candidate);
+            auto canonical = RuntimeInternal::XRSessionHostControl::Retire(*host.sessions_, host.frames_, host, candidate);
             if (canonical.HasError())
                 return Result<bool>::Failure(canonical.ErrorValue());
         }

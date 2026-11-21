@@ -84,7 +84,7 @@ namespace Horo::XR {
 
         TEST_CASE("XR settings defaults are inert and disabled", "[unit][xr][settings]") {
             const auto descriptors = XRProjectSettingDescriptors();
-            REQUIRE(descriptors.size() == 26);
+            REQUIRE(descriptors.size() == 27);
             for (const auto &descriptor : descriptors)
                 REQUIRE(descriptor.reloadPolicy == ReloadPolicy::ProjectReopen);
             const auto resolved = ResolveXRProjectSettings(Configuration());
@@ -94,6 +94,7 @@ namespace Horo::XR {
             REQUIRE(resolved.Value().Features().empty());
             CHECK_FALSE(resolved.Value().AllowsEyeGazePreview());
             CHECK_FALSE(resolved.Value().AllowsPlaneCapturePreview());
+            CHECK_FALSE(resolved.Value().AllowsSpatialAnchorPreview());
             CHECK(resolved.Value().WorldCanvasMinimumSpanPixels() == 1);
             CHECK(resolved.Value().StageBoundaryWarningMeters() == 0.30F);
             const Evidence evidence;
@@ -219,8 +220,19 @@ namespace Horo::XR {
             const auto preview = ResolveXRProjectSettings(Configuration(request));
             REQUIRE(preview.HasValue());
             CHECK(preview.Value().AllowsPlaneCapturePreview());
+            CHECK_FALSE(preview.Value().AllowsSpatialAnchorPreview());
             CHECK(preview.Value().Profile() == baseline.Value().Profile());
             CHECK(preview.Value().Features().size() == baseline.Value().Features().size());
+        }
+
+        TEST_CASE("XR spatial anchors are an independent optional preview", "[unit][xr][settings]") {
+            ConfigurationResolutionRequest request;
+            Project(request, "xr.preview.spatial_anchors", true);
+            const auto settings = ResolveXRProjectSettings(Configuration(request));
+            REQUIRE(settings.HasValue());
+            CHECK(settings.Value().AllowsSpatialAnchorPreview());
+            CHECK_FALSE(settings.Value().AllowsPlaneCapturePreview());
+            CHECK(settings.Value().Features().empty());
         }
 
         TEST_CASE("XR project policy can offer optional eye gaze without granting consent", "[unit][xr][settings]") {

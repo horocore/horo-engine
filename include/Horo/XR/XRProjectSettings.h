@@ -61,6 +61,12 @@ namespace Horo::XR {
         /** @brief Reports policy for the independent plane-capture preview.
          * @return True when the product permits a separate operator request for consent. */
         [[nodiscard]] bool AllowsPlaneCapturePreview() const noexcept;
+
+        /** @brief Reports whether the selected host may offer live spatial anchor preview consent. */
+        [[nodiscard]] bool AllowsSpatialAnchorPreview() const noexcept {
+            return spatialAnchorPreview_;
+        }
+
         /** @brief Returns version-one extra requests. @return Snapshot-owned span valid for this object's lifetime. */
         [[nodiscard]] std::span<const XRFeatureRequest> Features() const noexcept;
         /** @brief Returns safe configuration provenance. @return Retained immutable source snapshot. */
@@ -81,6 +87,7 @@ namespace Horo::XR {
         std::array<XRFeatureRequest, static_cast<std::size_t>(XRCapability::Count)> features_{};
         std::size_t featureCount_{};
         bool planeCapturePreview_{};
+        bool spatialAnchorPreview_{};
         bool eyeGazePreview_{};
     };
 

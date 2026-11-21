@@ -371,6 +371,7 @@ namespace Horo::Application::Internal {
                 if (const auto boundary = poses.Value().StageBoundary(); boundary && tracking->State() == XRTrackingState::Active)
                     input_.stageBoundary = StageBoundaryObservation{DescribeXRInteractionCutoff(*tracking), *boundary};
                 AdvancePlaneCapture(*tracking);
+                AdvanceSpatialAnchor(*tracking);
             }
             if (const auto *published = publication.Current(); published && input_.gaze)
                 input_.gazeRevision = published->Revision();
@@ -730,6 +731,7 @@ namespace Horo::Application::Internal {
         RequestHapticCancellation();
         RevokeEyeGaze();
         RevokePlaneCapture();
+        RevokeSpatialAnchor();
         input_.projection.reset();
         input_.handCutoff.reset();
     }

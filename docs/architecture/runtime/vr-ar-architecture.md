@@ -1026,6 +1026,11 @@ original World space. Permission loss withdraws the portable publication
 before native retirement. Anchor spaces and handles retire before the session,
 with failed cleanup retained for retry. The application must supply a current
 focused grant and retire the grant before replacing its World space.
+Editor Play offers a one-session anchor preview with `xr.preview.spatial_anchors`
+or the signed-host invocation flag `--xr-enable-spatial-anchors`. An explicit
+Setup grant allows one anchor at the calibrated native World origin. The preview
+publishes localization status, samples at most once every 100 ms, and withdraws
+on interruption, origin replacement, or operator revocation.
 
 `HoroXRAnchorSaveIntegration` provides the separate optional local durability
 lane. The selected host binds one canonical Save participant per durable anchor

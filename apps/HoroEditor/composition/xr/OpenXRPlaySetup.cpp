@@ -188,7 +188,7 @@ namespace Horo::Application::Internal {
         if (std::this_thread::get_id() != lane_ || closing_ || busy_)
             return report;
 
-        const auto state = sessions_.Snapshot();
+        const auto state = sessions_->Snapshot();
         if (instanceLost_ || state.state == XR::XRSessionState::Lost || (scene_ && scene_->retiring) ||
             (!state.session.IsValid() && retired_.IsValid())) {
             report.session = state.state;
@@ -202,7 +202,7 @@ namespace Horo::Application::Internal {
 
         report.session = state.state;
         // The owner only publishes an accepted plan and tracking sample from this exact session.
-        const auto plan = sessions_.AcceptedPlan();
+        const auto plan = sessions_->AcceptedPlan();
         if (!plan || !scene_->projection || scene_->session != state.session ||
             scene_->projection->capabilities.Revision() != state.capabilityRevision || plan->Revision() != state.capabilityRevision) {
             report.status = Stale;
@@ -244,7 +244,7 @@ namespace Horo::Application::Internal {
             return std::nullopt;
         const auto player = input_.port->AssignedPlayer();
         const auto *snapshot = tracking_.Current();
-        const auto session = sessions_.Snapshot();
+        const auto session = sessions_->Snapshot();
         if (!player || !snapshot || !session.admitsActions || !scene_ || !scene_->published || scene_->retiring ||
             snapshot->Session() != session.session || snapshot->BindingRevision() == 0)
             return std::nullopt;
@@ -333,7 +333,7 @@ namespace Horo::Application::Internal {
         };
         const bool lostOwner = revoked();
         if (expired || lostOwner) {
-            if (preview.mayNeedStop && sessions_.Snapshot().session == preview.target.session)
+            if (preview.mayNeedStop && sessions_->Snapshot().session == preview.target.session)
                 composition_.session.RequestHapticCancellation(preview.target.role);
             preview.mayNeedStop = false;
             if (lostOwner || preview.state == Queued)
@@ -349,7 +349,7 @@ namespace Horo::Application::Internal {
                                                             preview.intent.duration);
         }();
         if (revoked()) {
-            if (sessions_.Snapshot().session == preview.target.session)
+            if (sessions_->Snapshot().session == preview.target.session)
                 composition_.session.RequestHapticCancellation(preview.target.role);
             preview.state = Cancelled;
             return;
@@ -371,7 +371,7 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRPlayHost::ReadEyeGaze */
     std::optional<XR::XRPoseSample> OpenXRPlayHost::ReadEyeGaze() const noexcept {
         if (std::this_thread::get_id() != lane_ || closing_ || busy_ || eventsPending_ || !input_.admitted ||
-            input_.play != Editor::EditorPlayState::Playing || !sessions_.Snapshot().admitsActions)
+            input_.play != Editor::EditorPlayState::Playing || !sessions_->Snapshot().admitsActions)
             return std::nullopt;
         const auto *snapshot = tracking_.Current();
         return snapshot ? composition_.session.ReadEyeGaze(*snapshot) : std::nullopt;
@@ -381,7 +381,7 @@ namespace Horo::Application::Internal {
     Result<XR::XRPlaneSnapshot> OpenXRPlayHost::ReadPlaneObservations() const {
         using Outcome = Result<XR::XRPlaneSnapshot>;
         if (std::this_thread::get_id() != lane_ || closing_ || busy_ || eventsPending_ || !input_.admitted ||
-            input_.play != Editor::EditorPlayState::Playing || !sessions_.Snapshot().admitsActions)
+            input_.play != Editor::EditorPlayState::Playing || !sessions_->Snapshot().admitsActions)
             return Outcome::Failure(MakeError(XR::XRErrors::OperationUnavailable));
         const auto *tracking = tracking_.Current();
         return tracking ? composition_.session.ReadPlaneObservations(*tracking)
@@ -411,7 +411,7 @@ namespace Horo::Application::Internal {
             return Armed;
         if (SetupIdle() && composition_.session.MayArmPlaneCapture())
             return Ready;
-        if (eventsPending_ || !input_.admitted || input_.play != Editor::EditorPlayState::Playing || !sessions_.Snapshot().admitsActions)
+        if (eventsPending_ || !input_.admitted || input_.play != Editor::EditorPlayState::Playing || !sessions_->Snapshot().admitsActions)
             return Unavailable;
         switch (composition_.session.PlaneCaptureAvailability()) {
             case XR::XRCapabilityState::Available:
@@ -441,6 +441,44 @@ namespace Horo::Application::Internal {
             return;
         planesArmed_ = false;
         composition_.session.RevokePlaneCapture();
+    }
+
+    Editor::EditorXrSpatialAnchorState OpenXRPlayHost::ReadSpatialAnchorState() const {
+        using enum Editor::EditorXrSpatialAnchorState;
+        if (std::this_thread::get_id() != lane_ || closing_ || busy_ || instanceLost_)
+            return Unavailable;
+        if (spatialAnchorArmed_)
+            return Armed;
+        if (SetupIdle() && composition_.session.MayArmSpatialAnchor())
+            return Ready;
+        if (eventsPending_ || !input_.admitted || input_.play != Editor::EditorPlayState::Playing || !sessions_->Snapshot().admitsActions)
+            return Unavailable;
+        switch (composition_.session.ReadSpatialAnchorState()) {
+            case XR::XRCapabilityState::Available:
+                return Localized;
+            case XR::XRCapabilityState::TemporarilyUnavailable:
+                return Locating;
+            default:
+                return Unavailable;
+        }
+    }
+
+    Result<void> OpenXRPlayHost::ArmSpatialAnchor() {
+        if (auto lane = Lane(); lane.HasError())
+            return lane;
+        if (!SetupIdle())
+            return Result<void>::Failure(MakeError(XR::XRErrors::OperationUnavailable));
+        if (!composition_.session.MayArmSpatialAnchor())
+            return Result<void>::Failure(MakeError(XR::XRErrors::OperationUnsupported));
+        spatialAnchorArmed_ = true;
+        return Result<void>::Success();
+    }
+
+    void OpenXRPlayHost::RevokeSpatialAnchor() noexcept {
+        if (std::this_thread::get_id() != lane_)
+            return;
+        spatialAnchorArmed_ = false;
+        composition_.session.RevokeSpatialAnchor();
     }
 
     /** @copydoc Editor::IEditorXrPassthroughPreview::ReadPassthroughPreviewState */
@@ -492,7 +530,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRPlayHost::MatchesPassthroughGrant */
     bool OpenXRPlayHost::MatchesPassthroughGrant(const XR::XRPassthroughScope &scope) const noexcept {
-        const auto state = sessions_.Snapshot();
+        const auto state = sessions_->Snapshot();
         return !closing_ && !eventsPending_ && scene_ && scene_->published && !scene_->retiring && scene_->session == scope.session &&
                scene_->passthroughGrant == scope.grant && input_.admitted && input_.play == Editor::EditorPlayState::Playing &&
                input_.origin == scope.world.worldOriginRevision && state.session == scope.session && state.admitsActions;
@@ -533,7 +571,7 @@ namespace Horo::Application::Internal {
         }
         const auto scene = scene_;
         if (!idle || !scene || !scene->published || scene->retiring || !scene->passthroughGrant || !input_.admitted ||
-            input_.play != Editor::EditorPlayState::Playing || !sessions_.Snapshot().admitsActions)
+            input_.play != Editor::EditorPlayState::Playing || !sessions_->Snapshot().admitsActions)
             return;
         const auto session = scene->session;
         const auto grant = *scene->passthroughGrant;

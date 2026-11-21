@@ -149,12 +149,14 @@ namespace Horo::Tests::OpenXRApplication {
                                         const XR::XRProjectFeaturePolicy gaze = XR::XRProjectFeaturePolicy::Unrequested,
                                         const bool planePreview = false,
                                         std::shared_ptr<const Host::IOpenXRPassthroughPermission> passthrough = {},
-                                        const XR::IXRHandGesturePolicy *handGestures = nullptr)
+                                        const XR::IXRHandGesturePolicy *handGestures = nullptr, const bool anchorPreview = false)
                 : product{HORO_TEST_OPENXR_LOADER, std::move(controllerBindings)} {
                 ConfigurationResolutionRequest request;
                 request.invocation.emplace(SettingKey{"xr.enabled"}, ConfigurationInputValue{true, std::nullopt});
                 if (planePreview)
                     request.invocation.emplace(SettingKey{"xr.preview.spatial_planes"}, ConfigurationInputValue{true, std::nullopt});
+                if (anchorPreview)
+                    request.invocation.emplace(SettingKey{"xr.preview.spatial_anchors"}, ConfigurationInputValue{true, std::nullopt});
                 if (gaze != XR::XRProjectFeaturePolicy::Unrequested) {
                     request.invocation.emplace(SettingKey{"xr.features.eye_gaze"},
                                                ConfigurationInputValue{static_cast<std::int64_t>(gaze), std::nullopt});
@@ -1275,6 +1277,108 @@ namespace Horo::Tests::OpenXRApplication {
         CHECK_FALSE(native.liveFeature);
         CHECK(native.layersDestroyed == (active ? 1U : 0U));
         CHECK(fixture.play->ReadPassthroughState() == XR::XRCapabilityState::Unavailable);
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
+
+    namespace {
+        struct ApplicationAnchorScript final {
+            static XRAPI_ATTR XrResult XRAPI_CALL Create(XrSession, const XrSpatialAnchorCreateInfoMSFT *info, XrSpatialAnchorMSFT *out) {
+                CHECK(info->space != XR_NULL_HANDLE);
+                CHECK(info->pose.position.x == 0.0F);
+                *out = OpenXR::NativeHandle<XrSpatialAnchorMSFT>(901);
+                return OpenXR::Script::Record("app-anchor-create");
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL CreateSpace(XrSession, const XrSpatialAnchorSpaceCreateInfoMSFT *, XrSpace *out) {
+                *out = OpenXR::NativeHandle<XrSpace>(902);
+                return OpenXR::Script::Record("app-anchor-space");
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Destroy(XrSpatialAnchorMSFT) {
+                return OpenXR::Script::Record("app-anchor-destroy");
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL DestroySpace(XrSpace space) {
+                return space == OpenXR::NativeHandle<XrSpace>(902) ? OpenXR::Script::Record("app-anchor-space-destroy")
+                                                                    : OpenXRAction::ActionScript::DestroySpace(space);
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Locate(XrSpace space, XrSpace base, XrTime time, XrSpaceLocation *location) {
+                if (space != OpenXR::NativeHandle<XrSpace>(902))
+                    return OpenXRAction::ActionScript::LocateSpace(space, base, time, location);
+                location->locationFlags = XR_SPACE_LOCATION_POSITION_VALID_BIT | XR_SPACE_LOCATION_ORIENTATION_VALID_BIT |
+                                          XR_SPACE_LOCATION_POSITION_TRACKED_BIT | XR_SPACE_LOCATION_ORIENTATION_TRACKED_BIT;
+                location->pose = {{0, 0, 0, 1}, {0, 0, 0}};
+                return OpenXR::Script::Record("app-anchor-locate");
+            }
+
+            static XRAPI_ATTR XrResult XRAPI_CALL Resolve(XrInstance, const char *name, PFN_xrVoidFunction *out) {
+                const std::array entries{std::pair{"xrCreateSpatialAnchorMSFT", std::bit_cast<PFN_xrVoidFunction>(&Create)},
+                                         std::pair{"xrCreateSpatialAnchorSpaceMSFT", std::bit_cast<PFN_xrVoidFunction>(&CreateSpace)},
+                                         std::pair{"xrDestroySpatialAnchorMSFT", std::bit_cast<PFN_xrVoidFunction>(&Destroy)},
+                                         std::pair{"xrDestroySpace", std::bit_cast<PFN_xrVoidFunction>(&DestroySpace)},
+                                         std::pair{"xrLocateSpace", std::bit_cast<PFN_xrVoidFunction>(&Locate)}};
+                const auto match = std::ranges::find_if(entries, [name](const auto &entry) {
+                    return std::string_view{entry.first} == name;
+                });
+                if (match == entries.end())
+                    return XR_ERROR_FUNCTION_UNSUPPORTED;
+                *out = match->second;
+                return XR_SUCCESS;
+            }
+        };
+    }  // namespace
+
+    TEST_CASE("Signed XR Play anchors the World origin only during one operator grant", "[xr][application][play][anchors]") {
+        using enum XR::XRProjectFeaturePolicy;
+        using enum Editor::EditorXrSpatialAnchorState;
+        const bool policy = GENERATE(false, true);
+        ApplicationFixture fixture{true,         6,           Unrequested, Unrequested, Unrequested, false,
+                                   std::nullopt, Unrequested, false,       {},          nullptr,     policy};
+        constexpr std::array<std::string_view, 1> extensions{XR_MSFT_SPATIAL_ANCHOR_EXTENSION_NAME};
+        fixture.script.native.extraExtensions = extensions;
+        ++fixture.script.native.extensionCount;
+        fixture.script.census.extraProc = &ApplicationAnchorScript::Resolve;
+        fixture.CreatePlay();
+        auto &preview = *fixture.play->SpatialAnchorPreview();
+        CHECK(preview.ReadSpatialAnchorState() == (policy ? Ready : Unavailable));
+        const bool requested = GENERATE(false, true);
+        if (requested)
+            CHECK(preview.ArmSpatialAnchor().HasValue() == policy);
+        CHECK(std::ranges::count(fixture.script.native.calls, "app-anchor-create") == 0);
+        auto scene = ActivatePlay(fixture, std::nullopt);
+        auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
+        auto *observed = cutoff.get();
+        RequireValue(fixture.scheduler->AddParticipant(std::move(cutoff)));
+        RequireValue(fixture.scheduler->Startup());
+        const auto sample = [&](const std::int64_t now) {
+            fixture.script.clock.sample = now;
+            RequireValue(fixture.scheduler->RunFrame());
+            REQUIRE(observed->result);
+            RequireValue(*observed->result);
+        };
+        sample(100'000'000);
+        CHECK(preview.ReadSpatialAnchorState() == (policy && requested ? Locating : Unavailable));
+        sample(220'000'000);
+        CHECK(preview.ReadSpatialAnchorState() == (policy && requested ? Localized : Unavailable));
+        CHECK(std::ranges::count(fixture.script.native.calls, "app-anchor-create") == (policy && requested ? 1 : 0));
+        if (policy && requested) {
+            SECTION("operator revocation closes the one-session grant") {
+                preview.RevokeSpatialAnchor();
+            }
+            SECTION("focus interruption closes the grant even when focus returns in the same poll") {
+                fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
+                fixture.script.events.Push(XR_SESSION_STATE_FOCUSED);
+                RequireValue(fixture.play->PollEvents());
+            }
+        }
+        CHECK(preview.ReadSpatialAnchorState() == Unavailable);
+        RequireValue(fixture.play->ProgressRenderTail());
+        CHECK(std::ranges::count(fixture.script.native.calls, "app-anchor-destroy") == (policy && requested ? 1 : 0));
+        sample(340'000'000);
+        CHECK(preview.ReadSpatialAnchorState() == Unavailable);
+        fixture.scheduler->Shutdown();
         scene->Shutdown();
         REQUIRE(RequireValue(fixture.ClosePlay()));
     }

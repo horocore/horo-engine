@@ -127,7 +127,7 @@ namespace Horo::Application::Internal {
             auto state = host.frames_.Snapshot();
             if (writer && writer->frame.IsValid())
                 return Output::Failure(MakeError(XR::XRErrors::OperationIncompatible));
-            if (!host.sessions_.Snapshot().admitsFrames)
+            if (!host.sessions_->Snapshot().admitsFrames)
                 return Output::Success(false);  // Real native Ready/Running events, never Scene publication, admit waits.
             rendered = false;
             completionTimingObserved = false;

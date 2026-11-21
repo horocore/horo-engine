@@ -25,6 +25,7 @@ namespace Horo::Editor {
             bool requested{};
             bool allowEyeGazePreview{};
             bool allowPlaneCapturePreview{};
+            bool allowSpatialAnchorPreview{};
             std::optional<std::uint16_t> worldCanvasMinimumSpanPixels;
         };
 
@@ -84,6 +85,8 @@ namespace Horo::Editor {
                 return Result<void>::Failure(BootstrapError("XR gaze policy requires an explicit signed XR host."));
             if (options.allowPlaneCapturePreview && !options.requested)
                 return Result<void>::Failure(BootstrapError("XR spatial plane policy requires an explicit signed XR host."));
+            if (options.allowSpatialAnchorPreview && !options.requested)
+                return Result<void>::Failure(BootstrapError("XR spatial anchor policy requires an explicit signed XR host."));
             if (options.worldCanvasMinimumSpanPixels.has_value() && !options.requested)
                 return Result<void>::Failure(BootstrapError("XR world canvas policy requires an explicit signed XR host."));
             return Result<void>::Success();
@@ -116,6 +119,12 @@ namespace Horo::Editor {
                     if (parsed.allowPlaneCapturePreview)
                         return Result<HostArguments>::Failure(BootstrapError("Duplicate XR spatial plane policy option."));
                     parsed.allowPlaneCapturePreview = true;
+                    continue;
+                }
+                if (argument == "--xr-enable-spatial-anchors") {
+                    if (parsed.allowSpatialAnchorPreview)
+                        return Result<HostArguments>::Failure(BootstrapError("Duplicate XR spatial anchor policy option."));
+                    parsed.allowSpatialAnchorPreview = true;
                     continue;
                 }
                 if (!argument.starts_with("--xr-host-"))
@@ -348,6 +357,8 @@ namespace Horo::Editor {
                 put("xr.features.eye_gaze", static_cast<std::int64_t>(XR::XRProjectFeaturePolicy::OptionalDisable));
             if (options.allowPlaneCapturePreview)
                 put("xr.preview.spatial_planes", true);
+            if (options.allowSpatialAnchorPreview)
+                put("xr.preview.spatial_anchors", true);
             if (options.worldCanvasMinimumSpanPixels.has_value())
                 put("xr.world_canvas.minimum_span_pixels", static_cast<std::int64_t>(*options.worldCanvasMinimumSpanPixels));
             return Current();
