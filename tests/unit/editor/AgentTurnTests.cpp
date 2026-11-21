@@ -157,8 +157,8 @@ namespace Horo::Agent {
                 return true;
             }
 
-            AgentTurnStatus Run(std::uint64_t, std::size_t, const ModelToolIntent &, std::chrono::steady_clock::time_point,
-                                std::stop_token, std::string &result) const override {
+            AgentTurnStatus Run(std::uint64_t, std::size_t, const ModelToolIntent &, std::chrono::steady_clock::time_point, std::stop_token,
+                                std::string &result) const override {
                 ++calls;
                 if (failDuringDispatch)
                     throw std::runtime_error("Bridge failed");

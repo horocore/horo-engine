@@ -146,37 +146,38 @@ namespace Horo::Agent {
         };
 
         /** @brief Appends the assistant intent round and related results only after successful dispatch. */
-        AgentTurnStatus AppendToolRound(const IAgentTurnTools &tools, ModelRequest &request, ModelMessage message,
-                                        TurnProgress &progress) try {
-            const auto admission = PrepareTools(tools, request, message);
-            if (const auto stopped = progress.stop.Status())
-                return *stopped;
-            if (admission != Completed)
-                return admission;
-            std::vector<ModelMessage> results;
-            results.reserve(message.toolIntents.size());
-            for (const auto &intent : message.toolIntents) {
+        AgentTurnStatus AppendToolRound(const IAgentTurnTools &tools, ModelRequest &request, ModelMessage message, TurnProgress &progress) {
+            try {
+                const auto admission = PrepareTools(tools, request, message);
                 if (const auto stopped = progress.stop.Status())
                     return *stopped;
-                std::string result;
-                const auto state =
-                    tools.Run(progress.id, ++progress.submitted, intent, progress.stop.Deadline(), progress.stop.Token(), result);
-                if (const auto stopped = progress.stop.Status())
-                    return *stopped;
-                if (state != Completed)
-                    return state;
-                if (!Charge(progress.remaining.bytes, intent.callId) || !Charge(progress.remaining.bytes, result))
-                    return BudgetExceeded;
-                results.push_back({.role = ModelRole::Tool, .text = std::move(result), .toolCallId = intent.callId});
+                if (admission != Completed)
+                    return admission;
+                std::vector<ModelMessage> results;
+                results.reserve(message.toolIntents.size());
+                for (const auto &intent : message.toolIntents) {
+                    if (const auto stopped = progress.stop.Status())
+                        return *stopped;
+                    std::string result;
+                    const auto state =
+                        tools.Run(progress.id, ++progress.submitted, intent, progress.stop.Deadline(), progress.stop.Token(), result);
+                    if (const auto stopped = progress.stop.Status())
+                        return *stopped;
+                    if (state != Completed)
+                        return state;
+                    if (!Charge(progress.remaining.bytes, intent.callId) || !Charge(progress.remaining.bytes, result))
+                        return BudgetExceeded;
+                    results.push_back({.role = ModelRole::Tool, .text = std::move(result), .toolCallId = intent.callId});
+                }
+                request.messages.push_back(std::move(message));
+                request.messages.insert(request.messages.end(), std::make_move_iterator(results.begin()),
+                                        std::make_move_iterator(results.end()));
+                return Completed;
+            } catch (const std::bad_alloc &) {
+                throw;
+            } catch (...) {
+                return progress.stop.Status().value_or(ToolFailed);
             }
-            request.messages.push_back(std::move(message));
-            request.messages.insert(request.messages.end(), std::make_move_iterator(results.begin()),
-                                    std::make_move_iterator(results.end()));
-            return Completed;
-        } catch (const std::bad_alloc &) {
-            throw;
-        } catch (...) {
-            return progress.stop.Status().value_or(ToolFailed);
         }
 
     }  // namespace
