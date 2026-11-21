@@ -4,6 +4,9 @@
 
 #include "AgentHistorySession.h"
 
+#include <array>
+#include <mutex>
+
 namespace Horo::Agent {
     /** @brief Removes recognized credential-bearing lines and rejects unsupported display text.
      * @param kind History display field being admitted.
@@ -45,7 +48,7 @@ namespace Horo::Agent {
         std::string prompt_;
     };
 
-    /** @brief Redacted terminal answer for one exact previously approved recoverable turn. */
+    /** @brief Redacted answer preview for one exact previously approved recoverable turn. */
     class AgentHistoryAnswerReview final {
     public:
         /** @brief Prepare only the visible answer for explicit approval and exact checkpoint replacement. */
@@ -66,10 +69,31 @@ namespace Horo::Agent {
         [[nodiscard]] Result<AgentHistoryOperationId> SaveApproved(AgentHistorySession &history, std::uint64_t now) const;
 
     private:
+        friend class AgentHistoryLiveDraft;
         AgentHistoryAnswerReview(AgentHistoryRecoveryTurn recovery, std::string answer, AgentHistoryUsage usage);
         AgentHistoryRecoveryTurn recovery_;
         std::string answer_;
         AgentHistoryUsage usage_;
+        AgentHistoryMessageState state_{AgentHistoryMessageState::Complete};
+    };
+
+    /** @brief Bounded ephemeral preview shared by one inference producer and the editor review lane.
+     * @details Only newline-terminated prefixes can be reviewed. The mutex protects the byte inventory and
+     * boundary together. Each lane retains shared ownership until it stops accessing the buffer.
+     */
+    class AgentHistoryLiveDraft final {
+    public:
+        /** @brief Appends accepted plain-text model output up to the durable message limit. */
+        void Append(std::string_view delta);
+
+        /** @brief Freezes the current redacted prefix for explicit approval of a streaming checkpoint. */
+        [[nodiscard]] Result<AgentHistoryAnswerReview> Review(AgentHistoryRecoveryTurn recovery) const;
+
+    private:
+        mutable std::mutex mutex_;
+        std::array<char, AgentHistoryLimits{}.textBytesPerMessage> buffer_;
+        std::size_t size_{};
+        std::size_t complete_{};
     };
 
     /** @brief Immutable sanitized display pair for one exact plain local chat exchange. */

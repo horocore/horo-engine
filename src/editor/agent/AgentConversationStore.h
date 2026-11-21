@@ -205,6 +205,7 @@ namespace Horo::Agent {
          * @param response Exact streaming assistant message returned by BeginTurn.
          * @param state Streaming or explicit terminal outcome.
          * @param visibleText Complete visible response preview before history filtering.
+         * @details An incomplete, cancelled or failed settlement without content or metadata retains the last approved checkpoint.
          * @param references Explicit host-issued safe references for this response.
          * @param usage Bounded aggregate token counts.
          * @param now Host epoch seconds.

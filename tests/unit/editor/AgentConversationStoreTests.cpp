@@ -643,6 +643,63 @@ namespace Horo::Agent {
         CHECK(exported.exportedText->find("First project history") == std::string::npos);
     }
 
+    TEST_CASE("A live history draft preserves only the exact approved complete lines across settlement",
+              "[unit][agent][conversation_history]") {
+        Project project;
+        JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 2, .ioWorkerCount = 1}};
+        AgentHistorySession session{jobs, project.files, RedactHistoryDisplayText};
+        session.SelectProject(AgentHistoryProject{project.root, "history-project"});
+        PollUntil(session, [&] {
+            return session.View().phase == AgentHistorySessionPhase::Settled;
+        });
+        const auto projectRevision = session.View().project;
+        const auto started = session.BeginTurn(projectRevision, {.title = "Draft test", .userText = "Prompt", .now = 1});
+        REQUIRE(started.HasValue());
+        const auto opened = TakeMutation(session, started.Value());
+        REQUIRE(opened.started);
+        const AgentHistoryRecoveryTurn recovery{projectRevision, *opened.started};
+
+        AgentHistoryLiveDraft draft;
+        draft.Append("Public line");
+        RequireError(draft.Review(recovery), AgentHistoryErrors::Invalid);
+        draft.Append("\nAuthorization: Bear");
+        const auto early = draft.Review(recovery);
+        REQUIRE(early.HasValue());
+        CHECK(early.Value().Answer() == "Public line\n");
+        draft.Append("er split-secret\nUnapproved suffix");
+        const auto preview = draft.Review(recovery);
+        REQUIRE(preview.HasValue());
+        CHECK(preview.Value().Answer() == "Public line\n[redacted]\n");
+        draft.Append(" becomes complete later\n");
+        CHECK(session.View().conversations.front().messages.back().text.empty());
+        const auto save = preview.Value().SaveApproved(session, 2);
+        REQUIRE(save.HasValue());
+        REQUIRE_FALSE(TakeMutation(session, save.Value()).error);
+        CHECK(session.View().conversations.front().messages.back().state == MessageState::Streaming);
+
+        auto expected = MessageState::Incomplete;
+        SECTION("A cancelled response preserves the last approved checkpoint") {
+            expected = MessageState::Cancelled;
+            const auto settlement = session.Checkpoint(projectRevision, {.conversation = recovery.turn.conversation,
+                                                                         .response = recovery.turn.response,
+                                                                         .state = expected,
+                                                                         .now = 3});
+            REQUIRE(settlement.HasValue());
+            REQUIRE_FALSE(TakeMutation(session, settlement.Value()).error);
+        }
+        SECTION("Restart recovers the approved checkpoint as incomplete") {}
+        session.Shutdown();
+        const auto reopened = project.Open();
+        REQUIRE(reopened.Conversations().size() == 1);
+        const auto &response = reopened.Conversations().front().messages.back();
+        CHECK(response.id == recovery.turn.response);
+        CHECK(response.state == expected);
+        CHECK(response.text == preview.Value().Answer());
+        const auto image = project.Image();
+        CHECK_FALSE(Contains(image, "split-secret"));
+        CHECK_FALSE(Contains(image, "Unapproved suffix"));
+    }
+
     TEST_CASE("An explicitly approved recoverable prompt survives interruption without saving the unapproved response",
               "[unit][agent][conversation_history]") {
         using Phase = AgentHistorySessionPhase;

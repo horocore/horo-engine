@@ -33,6 +33,8 @@ namespace Horo::Editor {
         [[nodiscard]] bool RecoveryStartPending() const noexcept;
         /** @brief Reports whether a durable prompt still owns a recoverable response. */
         [[nodiscard]] bool HasRecovery() const noexcept;
+        /** @brief Captures a fresh, sanitized draft for review without persisting it. */
+        void ReviewLiveDraft(const Agent::AgentHistoryLiveDraft &draft);
         /** @brief Prepares the visible terminal answer for a second, independent approval. */
         void ReviewRecoveryAnswer(std::string_view answer, Agent::AgentHistoryUsage usage);
         /** @brief Settles a failed, cancelled or skipped response with no output payload. */
@@ -46,6 +48,7 @@ namespace Horo::Editor {
             Change,
             Export,
             StartRecovery,
+            SaveDraft,
             FinishRecovery
         };
 
@@ -64,11 +67,17 @@ namespace Horo::Editor {
             Agent::AgentHistoryRecoveryTurn binding;
             std::uint64_t checkpointTime{};
             std::optional<Agent::AgentHistoryAnswerReview> answer;
+            std::optional<Agent::AgentHistoryAnswerReview> draft;
+            std::optional<Agent::AgentHistoryMessageState> pendingSettlement;
         };
 
         [[nodiscard]] bool Button(const ILocalizationService &locale, const char *key, bool enabled = true) const;
         [[nodiscard]] bool Queue(const Result<Agent::AgentHistoryOperationId> &operation, Action action, std::uint64_t checkpointTime = 0);
+        /** @brief Releases draft publication and advances a terminal outcome that arrived during the write. */
+        void AdoptDraftReceipt(bool saved, std::uint64_t checkpointTime);
         void DrawRecovery(const ILocalizationService &locale, const Agent::AgentHistorySessionView &view);
+        /** @brief Offers one frozen redacted streaming preview for explicit approval. */
+        void DrawDraft(const ILocalizationService &locale, bool enabled);
         void DrawReview(const ILocalizationService &locale, const Agent::AgentHistorySessionView &view);
         /** @brief Displays present, bounded counts beside the text whose save the user approves. */
         void DrawTokenUsage(const ILocalizationService &locale, Agent::AgentHistoryUsage usage) const;

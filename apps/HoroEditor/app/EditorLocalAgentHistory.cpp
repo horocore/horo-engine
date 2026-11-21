@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <utility>
 
 namespace Horo::Editor {
     using namespace Agent;
@@ -89,6 +90,10 @@ namespace Horo::Editor {
         const auto accepted = *pending_;
         const auto action = accepted.action;
         pending_.reset();
+        if (action == Action::SaveDraft) {
+            AdoptDraftReceipt(!completed->error, accepted.checkpointTime);
+            return false;
+        }
         if (completed->error) {
             status_ = "history_write_error";
             if (action == Action::FinishRecovery && recovery_ && !recovery_->answer)
@@ -122,6 +127,17 @@ namespace Horo::Editor {
             }
         }
         return false;
+    }
+
+    /** @copydoc EditorLocalAgentHistory::AdoptDraftReceipt */
+    void EditorLocalAgentHistory::AdoptDraftReceipt(const bool saved, const std::uint64_t checkpointTime) {
+        status_ = saved ? "history_draft_saved" : "history_write_error";
+        if (!recovery_)
+            return;
+        if (saved)
+            recovery_->checkpointTime = checkpointTime;
+        if (const auto settlement = std::exchange(recovery_->pendingSettlement, std::nullopt))
+            FinishRecovery(*settlement);
     }
 
     /** @copydoc EditorLocalAgentHistory::Project */
@@ -173,10 +189,24 @@ namespace Horo::Editor {
         return recovery_.has_value();
     }
 
+    /** @copydoc EditorLocalAgentHistory::ReviewLiveDraft */
+    void EditorLocalAgentHistory::ReviewLiveDraft(const AgentHistoryLiveDraft &draft) {
+        if (!recovery_ || pending_ || recovery_->answer)
+            return;
+        auto preview = draft.Review(recovery_->binding);
+        if (preview.HasValue()) {
+            recovery_->draft.emplace(std::move(preview).Value());
+            status_ = nullptr;
+        } else {
+            status_ = "history_draft_unavailable";
+        }
+    }
+
     /** @copydoc EditorLocalAgentHistory::ReviewRecoveryAnswer */
     void EditorLocalAgentHistory::ReviewRecoveryAnswer(std::string_view answer, const AgentHistoryUsage usage) {
         if (!recovery_)
             return;
+        recovery_->draft.reset();
         auto prepared = AgentHistoryAnswerReview::Prepare(recovery_->binding, answer, usage);
         if (prepared.HasError()) {
             FinishRecovery(AgentHistoryMessageState::Incomplete);
@@ -187,8 +217,14 @@ namespace Horo::Editor {
 
     /** @copydoc EditorLocalAgentHistory::FinishRecovery */
     void EditorLocalAgentHistory::FinishRecovery(const AgentHistoryMessageState state) {
-        if (!recovery_ || pending_)
+        if (!recovery_)
             return;
+        recovery_->draft.reset();
+        if (pending_) {
+            if (pending_->action == Action::SaveDraft)
+                recovery_->pendingSettlement = state;
+            return;
+        }
         const auto &binding = recovery_->binding;
         const auto submitted = history_.Checkpoint(binding.project, {.conversation = binding.turn.conversation,
                                                                      .response = binding.turn.response,
@@ -232,7 +268,10 @@ namespace Horo::Editor {
             if (Button(locale, "history_cancel", !pending_))
                 recoveryPrompt_.reset();
         }
-        if (!recovery_ || !recovery_->answer)
+        if (!recovery_)
+            return;
+        DrawDraft(locale, enabled);
+        if (!recovery_->answer)
             return;
         ImGui::TextWrapped("%s", LocalizedText(locale, "history_recovery_answer").c_str());
         DrawText(recovery_->answer->Answer());
@@ -243,6 +282,23 @@ namespace Horo::Editor {
         ImGui::SameLine();
         if (Button(locale, "history_recovery_keep_incomplete", enabled && !pending_))
             FinishRecovery(AgentHistoryMessageState::Incomplete);
+    }
+
+    /** @copydoc EditorLocalAgentHistory::DrawDraft */
+    void EditorLocalAgentHistory::DrawDraft(const ILocalizationService &locale, const bool enabled) {
+        auto &draft = recovery_->draft;
+        if (!draft)
+            return;
+        ImGui::TextWrapped("%s", LocalizedText(locale, "history_draft_preview").c_str());
+        DrawText(draft->Answer());
+        if (Button(locale, "history_draft_save", enabled)) {
+            const auto now = std::max(recovery_->checkpointTime, WallSeconds());
+            if (Queue(draft->SaveApproved(history_, now), Action::SaveDraft, now))
+                draft.reset();
+        }
+        ImGui::SameLine();
+        if (Button(locale, "history_draft_cancel", enabled && !pending_))
+            draft.reset();
     }
 
     /** @copydoc EditorLocalAgentHistory::DrawTokenUsage */

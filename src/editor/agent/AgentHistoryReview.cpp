@@ -212,10 +212,35 @@ namespace Horo::Agent {
     Result<AgentHistoryOperationId> AgentHistoryAnswerReview::SaveApproved(AgentHistorySession &history, std::uint64_t now) const {
         return history.Checkpoint(recovery_.project, {.conversation = recovery_.turn.conversation,
                                                       .response = recovery_.turn.response,
-                                                      .state = AgentHistoryMessageState::Complete,
+                                                      .state = state_,
                                                       .visibleText = answer_,
                                                       .usage = usage_,
                                                       .now = now});
+    }
+
+    /** @copydoc AgentHistoryLiveDraft::Append */
+    void AgentHistoryLiveDraft::Append(const std::string_view delta) {
+        const std::lock_guard lock{mutex_};
+        const auto accepted = delta.substr(0, buffer_.size() - size_);
+        const auto newline = accepted.rfind('\n');
+        if (newline != std::string_view::npos)
+            complete_ = size_ + newline + 1;
+        std::ranges::copy(accepted, buffer_.begin() + size_);
+        size_ += accepted.size();
+    }
+
+    /** @copydoc AgentHistoryLiveDraft::Review */
+    Result<AgentHistoryAnswerReview> AgentHistoryLiveDraft::Review(const AgentHistoryRecoveryTurn recovery) const {
+        const auto prefix = [this] {
+            const std::lock_guard lock{mutex_};
+            return std::string{buffer_.data(), complete_};
+        }();
+        auto preview = AgentHistoryAnswerReview::Prepare(recovery, prefix);
+        if (preview.HasError())
+            return preview;
+        auto answer = std::move(preview).Value();
+        answer.state_ = AgentHistoryMessageState::Streaming;
+        return Result<AgentHistoryAnswerReview>::Success(std::move(answer));
     }
 
     AgentHistoryExchangeReview::AgentHistoryExchangeReview(AgentHistoryProjectRevision project, std::string prompt, std::string response,

@@ -840,9 +840,12 @@ Detaching the workspace cancels the operation and discards late replies.
 
 The panel also offers recovery for an explicitly approved plain-text request.
 It commits the reviewed, redacted prompt and an empty response checkpoint on
-the history worker before starting inference. A successful reply requires its
+the history worker before starting inference. While a plain response streams,
+the user can freeze and approve a redacted draft of the complete lines received
+so far. Later deltas never change that preview. A successful reply requires its
 own review before the panel completes the same checkpoint. A restart after an
-interruption displays the saved prompt and an incomplete-response marker.
+interruption shows the saved prompt, any approved draft, and an incomplete-response
+marker.
 
 Saved conversation management uses the same project worker and is bound to the
 selected conversation. The panel supports rename, archive, restore, and deletion

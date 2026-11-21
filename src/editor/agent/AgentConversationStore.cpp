@@ -710,14 +710,18 @@ namespace Horo::Agent {
         auto admitted = state_->Admit(AgentHistoryTextKind::AssistantMessage, visibleText, state_->limits.textBytesPerMessage, false);
         if (admitted.HasError())
             return Result<void>::Failure(admitted.ErrorValue());
+        const bool statusOnly = state >= MessageState::Incomplete && visibleText.empty() && references.empty() && usage.inputTokens == 0 &&
+                                usage.outputTokens == 0;
         return state_->Edit(conversation, [&](AgentConversation &record) {
             if (!IsStreaming(record) || record.messages.back().id != response || now < record.updatedUnixSeconds)
                 return Result<void>::Failure(MakeError(AgentHistoryErrors::Stale));
             auto &message = record.messages.back();
             message.state = state;
-            message.text = std::move(admitted).Value();
-            message.references.assign(references.begin(), references.end());
-            message.usage = usage;
+            if (!statusOnly) {
+                message.text = std::move(admitted).Value();
+                message.references.assign(references.begin(), references.end());
+                message.usage = usage;
+            }
             record.updatedUnixSeconds = now;
             return Result<void>::Success();
         });

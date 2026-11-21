@@ -26,7 +26,8 @@ namespace Horo::Editor {
 
         /** @brief Runs one user-initiated discovery or inference on an isolated worker. */
         Reply RunLocalOperation(std::string endpoint, std::optional<ModelRequest> request, std::optional<std::size_t> sceneCount,
-                                std::optional<EditorLocalAgentContext> source, std::uint64_t turn, std::stop_token stop) {
+                                std::optional<EditorLocalAgentContext> source, std::uint64_t turn,
+                                const std::shared_ptr<AgentHistoryLiveDraft> &draft, std::stop_token stop) {
             ModelProviderConfig config{.endpoint = std::move(endpoint)};
             if (request && sceneCount.has_value())
                 return RunApprovedLocalSceneTurn(std::move(config), std::move(*request), turn, *sceneCount,
@@ -39,6 +40,10 @@ namespace Horo::Editor {
                 const auto dispatch = source->Dispatch();
                 return runtime.Run(*provider, nullptr, turn, std::move(*request), {}, stop, &dispatch);
             }
+            if (draft)
+                return runtime.Run(*provider, nullptr, turn, std::move(*request), {}, stop, nullptr, [&draft](std::string_view delta) {
+                    draft->Append(delta);
+                });
             return runtime.Run(*provider, nullptr, turn, std::move(*request), {}, stop);
         }
 
@@ -106,6 +111,7 @@ namespace Horo::Editor {
                 sceneCount_ = {};
                 RevokeContext();
                 history_.Detach();
+                liveDraft_.reset();
                 awaitingCheckpoint_ = false;
                 submittedPrompt_.reset();
                 status_ = nullptr;
@@ -148,6 +154,8 @@ namespace Horo::Editor {
                     ImGui::TextWrapped("%s", LocalizedText(locale, status_).c_str());
                 if (!response_.empty())
                     ImGui::TextWrapped("%s", response_.c_str());
+                if (liveDraft_ && background_->CanCancel() && Button(locale, "history_draft_offer", true))
+                    history_.ReviewLiveDraft(*liveDraft_);
                 history_.Draw(context);
                 ImGui::EndChild();
             }
@@ -339,18 +347,20 @@ namespace Horo::Editor {
                 history_.ClearReview();
                 submittedPrompt_ = recoverable || sceneCount.has_value() || source ? std::nullopt : std::optional{prompt_};
                 submittedProject_ = history_.Project();
-                if (!Start(std::move(request), sceneCount, std::move(source)) && recoverable)
+                if (!Start(std::move(request), sceneCount, std::move(source), recoverable) && recoverable)
                     history_.FinishRecovery(AgentHistoryMessageState::Failed);
             }
 
             [[nodiscard]] bool Start(std::optional<ModelRequest> request, std::optional<std::size_t> sceneCount = {},
-                                     std::optional<EditorLocalAgentContext> source = {}) {
+                                     std::optional<EditorLocalAgentContext> source = {}, const bool recoverable = false) {
                 try {
+                    auto draft = recoverable ? std::make_shared<AgentHistoryLiveDraft>() : nullptr;
                     BackgroundTurn::Operation task{[endpoint = endpoint_, request = std::move(request), sceneCount,
-                                                    source = std::move(source), turn = ++turn_](std::stop_token stop) mutable {
-                        return RunLocalOperation(std::move(endpoint), std::move(request), sceneCount, std::move(source), turn, stop);
+                                                    source = std::move(source), turn = ++turn_, draft](std::stop_token stop) mutable {
+                        return RunLocalOperation(std::move(endpoint), std::move(request), sceneCount, std::move(source), turn, draft, stop);
                     }};
                     if (background_->Start(std::move(task))) {
+                        liveDraft_ = std::move(draft);
                         status_ = "working";
                         response_.clear();
                         return true;
@@ -367,6 +377,7 @@ namespace Horo::Editor {
                 auto completion = background_->Poll();
                 if (!completion)
                     return;
+                liveDraft_.reset();
                 if (completion->state != BackgroundTurn::CompletionState::Abandoned) {
                     try {
                         AdoptCompletion(*completion);
@@ -451,6 +462,7 @@ namespace Horo::Editor {
             std::optional<EditorLocalAgentContext> contextPreview_;
             std::shared_ptr<BackgroundTurn> background_;
             EditorLocalAgentHistory history_;
+            std::shared_ptr<AgentHistoryLiveDraft> liveDraft_;
             std::optional<std::string> submittedPrompt_;
             AgentHistoryProjectRevision submittedProject_;
             int selection_{-1};

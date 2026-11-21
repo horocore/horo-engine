@@ -73,6 +73,26 @@ namespace Horo::Agent {
         CHECK(result.finalUsage->outputTokens == 2);
     }
 
+    TEST_CASE("Editor Agent observes only accepted text deltas from a tool-free turn", "[agent][turn]") {
+        Model model;
+        model.action = [](std::size_t, const ModelEventSink &sink, std::stop_token) {
+            return Emit(sink, {{.kind = ModelEventKind::TextDelta, .text = "First\n"},
+                               {.kind = ModelEventKind::Usage, .usage = {4, 2}},
+                               {.kind = ModelEventKind::TextDelta, .text = "Second"},
+                               {.kind = ModelEventKind::Completed}});
+        };
+        AgentTurnRuntime runtime;
+        std::vector<std::string> deltas;
+        const AgentTurnTextObserver observe = [&](std::string_view delta) {
+            deltas.emplace_back(delta);
+        };
+        const auto result = runtime.Run(model, nullptr, 1, Request(), {}, {}, nullptr, observe);
+        REQUIRE(result.status == AgentTurnStatus::Completed);
+        CHECK((deltas == std::vector<std::string>{"First\n", "Second"}));
+        CHECK(runtime.Run(model, nullptr, 2, Request(true), {}, {}, nullptr, observe).status == AgentTurnStatus::InvalidRequest);
+        CHECK(model.requests.size() == 1);
+    }
+
     TEST_CASE("Editor Agent discards malformed sibling intents before making any tool visible", "[agent][turn]") {
         Tools tools;
         Model model;

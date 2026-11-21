@@ -114,10 +114,14 @@ namespace Horo::Agent {
 
         /** @brief Maintains the terminal boundary even if a provider implementation throws. */
         ModelOutcome StreamResponse(IModelProvider &provider, const ModelRequest &request, const TurnStop &stop,
-                                    Detail::AgentTurnStream &stream) {
+                                    Detail::AgentTurnStream &stream, const AgentTurnTextObserver &observeText) {
             try {
-                return provider.Stream(request, [&stop, &stream](const ModelEvent &event) {
-                    return !stop.Token().stop_requested() && stream.Accept(event);
+                return provider.Stream(request, [&](const ModelEvent &event) {
+                    if (stop.Token().stop_requested() || !stream.Accept(event))
+                        return false;
+                    if (observeText && event.kind == ModelEventKind::TextDelta)
+                        observeText(event.text);
+                    return true;
                 }, stop.Token());
             } catch (const std::bad_alloc &) {
                 throw;
@@ -185,7 +189,7 @@ namespace Horo::Agent {
     /** @copydoc AgentTurnRuntime::Run */
     AgentTurnResult AgentTurnRuntime::Run(IModelProvider &provider, const IAgentTurnTools *tools, const std::uint64_t turnId,
                                           ModelRequest request, const AgentTurnLimits &limits, const std::stop_token cancellation,
-                                          const AgentTurnContext *context) {
+                                          const AgentTurnContext *context, const AgentTurnTextObserver &observeText) {
         if (cancellation.stop_requested())
             return {Cancelled, {}};
         if (active_.test_and_set())
@@ -196,6 +200,8 @@ namespace Horo::Agent {
                                           static_cast<std::uint32_t>(ModelFeature::Tools) |
                                           static_cast<std::uint32_t>(ModelFeature::Usage)};
             if (turnId == 0 || !ValidLimits(limits) || (!request.tools.empty() && !tools) || !AdmitModelRequest(request, known).Succeeded())
+                return {InvalidRequest, {}};
+            if (observeText && (context || tools))
                 return {InvalidRequest, {}};
             const auto contextOffset = request.messages.size() - 1;
             const auto contextCount = context ? context->preview.Items().size() : 0;
@@ -222,7 +228,7 @@ namespace Horo::Agent {
                 if (!AdmitModelRequest(request, known).Succeeded())
                     return {BudgetExceeded, {}};
                 Detail::AgentTurnStream stream{progress.remaining};
-                const auto outcome = StreamResponse(provider, request, stop, stream);
+                const auto outcome = StreamResponse(provider, request, stop, stream, observeText);
                 if (const auto status = CompleteModelRound(outcome, stream, stop); status == ProviderFailed)
                     return {status, {}, outcome.error->code};
                 else if (status != Completed)
