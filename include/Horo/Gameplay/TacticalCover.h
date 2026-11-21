@@ -12,11 +12,14 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <thread>
 #include <vector>
 
 namespace Horo::Gameplay {
     /** @brief Stable authored identity distinct from the anchor's runtime generation. */
     using TacticalCoverId = AI::AiStableIdentity<struct TacticalCoverIdentityTag>;
+    /** @brief Process-local provider incarnation. Never part of an authored cover asset. */
+    using TacticalCoverProviderGeneration = AI::AiStableIdentity<struct TacticalCoverProviderGenerationTag>;
 
     /** @brief Stance for which the authored point offers cover. */
     enum class TacticalCoverStance : std::uint8_t {
@@ -40,6 +43,7 @@ namespace Horo::Gameplay {
         TacticalCoverId id;
         Runtime::EntityRef anchor;
         std::uint64_t revision{};
+        TacticalCoverProviderGeneration provider;
         bool operator==(const TacticalCoverHandle &) const = default;
     };
 
@@ -58,13 +62,13 @@ namespace Horo::Gameplay {
     };
 
     /** @brief Owner-lane, generation-fenced provider for one Scene's cover point inventory.
-     * @details All operations are serialized at Scene/decision safe points. A retained selection or
+     * @details Operations require the construction thread at Scene/decision safe points. A retained selection or
      * receipt is an immutable value. The provider does not retain any Scene view or backend object.
      */
     class TacticalCoverRegistry final {
     public:
         static constexpr std::size_t MaximumPoints = 4096;
-        TacticalCoverRegistry() = default;
+        TacticalCoverRegistry() noexcept;
         TacticalCoverRegistry(const TacticalCoverRegistry &) = delete;
         TacticalCoverRegistry &operator=(const TacticalCoverRegistry &) = delete;
 
@@ -81,6 +85,8 @@ namespace Horo::Gameplay {
          */
         [[nodiscard]] Result<std::vector<TacticalCoverCandidate>> Capture(const Runtime::RuntimeSceneView &scene,
                                                                           std::size_t maximumItems) const;
+        /** @brief Reads one exact resident candidate without copying the inventory or changing occupancy. */
+        [[nodiscard]] Result<TacticalCoverCandidate> Resolve(const Runtime::RuntimeSceneView &scene, TacticalCoverHandle cover) const;
         /** @brief Combines existing Navigation and Physics facts with current Gameplay contention.
          * @param scene Fresh Scene view. @param cover Exact candidate sampled by both adapters.
          * @param reachability Navigation sample. @param threatVisibility Physics clear/blocked sample, with clear indicating exposure.
@@ -114,6 +120,9 @@ namespace Horo::Gameplay {
         [[nodiscard]] bool IsCurrent(const Runtime::RuntimeSceneView &scene) const noexcept;
         /** @brief Checks that the retained receipt still belongs to a live occupant. */
         [[nodiscard]] static bool IsOccupied(const Runtime::RuntimeSceneView &scene, const Entry &entry);
+        [[nodiscard]] bool OnOwnerLane() const noexcept;
+        const std::thread::id owner_{std::this_thread::get_id()};
+        const TacticalCoverProviderGeneration provider_;
         Runtime::SceneRuntimeId scene_;
         std::uint64_t revision_{};
         std::uint64_t nextReservation_{};

@@ -76,7 +76,8 @@ reachability and Physics visibility from the same Scene publication.
 `host/GuardCover.cpp` filters out exposed, unreachable and occupied points,
 chooses the lowest Navigation cost, and reserves the winner on the Scene owner.
 Equal costs favor the lower authored cover ID. Retain the returned receipt
-while moving to the selected point. Release that exact receipt if movement
+while moving to the selected point. The receipt is bound to its provider\'s
+Scene owner thread and generation. Release that exact receipt if movement
 fails, the task is cancelled, or the guard leaves cover. When no point is
 selected, inspect reachability, exposure and the current guard reservations.
 

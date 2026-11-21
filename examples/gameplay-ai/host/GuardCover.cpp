@@ -24,18 +24,15 @@ namespace Horo::Examples {
                                                                 const Runtime::RuntimeSceneView &scene, Runtime::EntityRef guard,
                                                                 const Gameplay::TacticalCoverHandle selected) {
             using Selection = Result<std::optional<GuardCoverSelection>>;
-            const auto candidates = cover.Capture(scene, Gameplay::TacticalCoverRegistry::MaximumPoints);
-            if (candidates.HasError())
-                return Selection::Failure(candidates.ErrorValue());
-            const auto point = std::ranges::find(candidates.Value(), selected, &Gameplay::TacticalCoverCandidate::handle);
-            if (point == candidates.Value().end())
-                return Selection::Failure(MakeError(AI::AIErrors::EnvironmentQueryContextStale));
+            const auto point = cover.Resolve(scene, selected);
+            if (point.HasError())
+                return Selection::Failure(point.ErrorValue());
             const auto receipt = cover.TryReserve(scene, selected, guard);
             if (receipt.HasError())
                 return Selection::Failure(receipt.ErrorValue());
             if (!receipt.Value())
                 return Selection::Success(std::nullopt);
-            return Selection::Success(GuardCoverSelection{*receipt.Value(), point->point.position});
+            return Selection::Success(GuardCoverSelection{*receipt.Value(), point.Value().point.position});
         }
     }  // namespace
 

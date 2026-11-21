@@ -14,6 +14,7 @@
 #endif
 
 #include <limits>
+#include <thread>
 
 namespace Horo::AI {
     namespace {
@@ -62,6 +63,76 @@ namespace Horo::AI {
             REQUIRE(next.Value().has_value());
             CHECK_FALSE(cover.Release(*acquired.Value()));
             CHECK(cover.TryReserve(view, selected, second).Value() == next.Value());
+        }
+
+        TEST_CASE("Replacement cover providers reject historical selections and receipts for the same live anchor",
+                  "[unit][ai][navigation][eqs][cover]") {
+            const auto scene = QueryTestSupport::MakeScene();
+            const auto view = scene->View();
+            const auto anchor = *view.Find({1});
+            const auto occupant = *view.Find({2});
+            const std::array points{CoverPoint(anchor)};
+
+            TacticalCoverRegistry original;
+            REQUIRE(original.Publish(view, 1, points).HasValue());
+            const auto old = original.Capture(view, 1).Value().front().handle;
+            const auto oldReceipt = original.TryReserve(view, old, occupant);
+            REQUIRE(oldReceipt.HasValue());
+            REQUIRE(oldReceipt.Value());
+
+            TacticalCoverRegistry replacement;
+            REQUIRE(replacement.Publish(view, 1, points).HasValue());
+            const auto current = replacement.Capture(view, 1).Value().front().handle;
+            CHECK(current.anchor == old.anchor);
+            CHECK(current.revision == old.revision);
+            CHECK(current.provider != old.provider);
+            const auto stale = replacement.TryReserve(view, old, occupant);
+            REQUIRE(stale.HasError());
+            CHECK(stale.ErrorValue().code.Value() == AIErrors::EnvironmentQueryContextStale.code.Value());
+            CHECK(replacement.Score(view, old, {}, {}, {}).HasError());
+            CHECK(replacement.Resolve(view, old).HasError());
+            REQUIRE(replacement.Resolve(view, current).HasValue());
+            CHECK(replacement.Resolve(view, current).Value().point == points.front());
+
+            const auto admitted = replacement.TryReserve(view, current, occupant);
+            REQUIRE(admitted.HasValue());
+            REQUIRE(admitted.Value());
+            CHECK(admitted.Value()->sequence == oldReceipt.Value()->sequence);
+            CHECK_FALSE(replacement.Release(*oldReceipt.Value()));
+            CHECK_FALSE(replacement.TryReserve(view, current, anchor).Value());
+            CHECK(replacement.Release(*admitted.Value()));
+        }
+
+        TEST_CASE("Cover registry rejects off-lane access before reading or changing the inventory", "[unit][ai][navigation][eqs][cover]") {
+            const auto scene = QueryTestSupport::MakeScene();
+            const auto view = scene->View();
+            const auto anchor = *view.Find({1});
+            const auto occupant = *view.Find({2});
+            const std::array points{CoverPoint(anchor)};
+            TacticalCoverRegistry cover;
+            REQUIRE(cover.Publish(view, 1, points).HasValue());
+            const auto selected = cover.Capture(view, 1).Value().front().handle;
+            const auto receipt = cover.TryReserve(view, selected, occupant);
+            REQUIRE(receipt.HasValue());
+            REQUIRE(receipt.Value());
+
+            std::array<bool, 6> rejected{};
+            const auto offLane = [&](const auto &result) {
+                return result.HasError() && result.ErrorValue().code.Value() == AIErrors::EnvironmentQueryContextInvalid.code.Value();
+            };
+            {
+                const std::jthread worker{[&] {
+                    rejected[0] = offLane(cover.Publish(view, 2, points));
+                    rejected[1] = offLane(cover.Capture(view, 1));
+                    rejected[2] = offLane(cover.Score(view, selected, {}, {}, {}));
+                    rejected[3] = offLane(cover.TryReserve(view, selected, anchor));
+                    rejected[4] = !cover.Release(*receipt.Value());
+                    rejected[5] = offLane(cover.Resolve(view, selected));
+                }};
+            }
+            CHECK(std::ranges::all_of(rejected, std::identity{}));
+            CHECK(cover.TryReserve(view, selected, occupant).Value() == receipt.Value());
+            CHECK(cover.Release(*receipt.Value()));
         }
 
         TEST_CASE("Cover selection rejects a retired anchor even before its inventory is republished",
