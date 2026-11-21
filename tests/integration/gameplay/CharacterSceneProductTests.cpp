@@ -550,8 +550,8 @@ namespace Horo::Application::CharacterSceneProductTest {
         graph.executionTask = MakeIdentity<TaskId>(9000);
         auto nodes = cookImage->AcquireDecisionNodes();
         REQUIRE(nodes.HasValue());
-        auto compiled = DecisionGraphCompiler::Compile(graph.asset, std::span{&graph, 1},
-                                                        {std::move(nodes).Value(), {blackboardSchema}, {}, 1});
+        auto compiled =
+            DecisionGraphCompiler::Compile(graph.asset, std::span{&graph, 1}, {std::move(nodes).Value(), {blackboardSchema}, {}, 1});
         REQUIRE(compiled.HasValue());
         REQUIRE(compiled.Value().plan);
         auto graphBytes = DecisionPlanCodec::EncodeCooked(*compiled.Value().plan);
