@@ -314,8 +314,7 @@ namespace Horo::Application::Internal {
         }
         const auto arguments = input.first(Count);
         const std::string_view host{arguments[Host]};
-        if (host.empty() || host != OpenXRProbeWire::DesktopHost() ||
-            std::string_view{arguments[Route]} != OpenXRProbeWire::Route) {
+        if (host.empty() || host != OpenXRProbeWire::DesktopHost() || std::string_view{arguments[Route]} != OpenXRProbeWire::Route) {
             errors << "XR probe unavailable for the declared host or connection route.\n";
             return 2;
         }
