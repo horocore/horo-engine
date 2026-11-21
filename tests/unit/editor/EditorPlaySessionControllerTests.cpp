@@ -21,6 +21,7 @@
 #include "editor/gameplay/EditorPlaySessionController.h"
 #include "editor/renderer/xr/EditorXrSceneGeometry.h"
 #if HORO_TEST_NAVIGATION_NATIVE
+#include "Horo/Navigation/Backends/RecastDetourProvider.h"
 #include "navigation/ProjectSceneNavigationFixture.h"
 #if HORO_TEST_PHYSICS_NATIVE
 #include "CharacterSceneProductFixture.h"
@@ -1542,6 +1543,8 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
                                       R"(],"layers":1,"mask":1}],"native":{"listeners":[{"id":91,"sense":)" + sense +
                                       R"(}],"radiusMillimeters":4000,"visibleLayers":1,"workUnitsPerTick":)" + std::to_string(work) + "}}");
     }
+    const auto tileBuilder = Navigation::CreateRecastDetourNavigationMeshBuilder();
+    REQUIRE(tileBuilder.HasValue());
     fixture.Publish(Fixture::Input::Valid, Fixture::Client::None, assets, [&](auto &scene) {
         auto &actor = scene.objects.back();
         actor.localTransform.translation = {1, 0, 1};
@@ -1575,7 +1578,7 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
             scene.objects.push_back(std::move(materialOwner));
         }
 #endif
-    });
+    }, std::nullopt, tileBuilder.Value().get());
     std::ifstream metadataSource{root / ".horo/project.json"};
     REQUIRE(metadataSource.is_open());
     std::string metadata{std::istreambuf_iterator<char>{metadataSource}, {}};

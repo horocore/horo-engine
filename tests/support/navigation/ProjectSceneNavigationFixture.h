@@ -2,6 +2,7 @@
 
 #include "Horo/Application/NavigationProjectSettings.h"
 #include "Horo/Navigation/NavigationDefinitionSerialization.h"
+#include "Horo/Navigation/NavigationMeshBuilder.h"
 #include "Horo/Prefab/CookedPrefab.h"
 #include "Horo/Scene/CookedSceneDefinition.h"
 #include "Horo/Scene/PrefabComponentProjection.h"
@@ -45,7 +46,8 @@ namespace Horo::Application::CharacterSceneProductTest {
 
         void Publish(const Input input, const Client client = Client::None, std::span<const AddedAsset> added = {},
                      const std::function<void(SceneSource::SceneSourceDocument &)> &editScene = {},
-                     std::optional<Runtime::SceneAssetDependency> explicitDependency = std::nullopt) {
+                     std::optional<Runtime::SceneAssetDependency> explicitDependency = std::nullopt,
+                     const Navigation::INavigationMeshBuilder *tileBuilder = nullptr) {
             using namespace Navigation;
             const auto profile = NavigationAgentProfileId::Create(7).Value();
             const auto surface = SurfaceId::Create(53).Value();
@@ -99,19 +101,21 @@ namespace Horo::Application::CharacterSceneProductTest {
                                               .geometry = geometry,
                                               .borderSizeCells = 4,
                                               .dependencyKey = digest};
-            const auto cookedTile =
-                NavigationCookedTile::Create(tile, {.state = NavigationTileBuildState::Built,
-                                                    .bounds = tile.tile.bounds,
-                                                    .vertices = {{0, 0, 0}, {10, 0, 0}, {0, 0, 10}},
-                                                    .polygons = {{{0, 3}, {0, 3}, area}},
-                                                    .polygonVertexIndices = {0, 1, 2},
-                                                    .polygonAdjacencies = {NavMeshBoundaryAdjacency, NavMeshBoundaryAdjacency,
-                                                                           NavMeshBoundaryAdjacency},
-                                                    .provenance = {{.producer = NavigationSourceProducerId::Create(1).Value(),
-                                                                    .contribution = NavigationSourceContributionId::Create(1).Value(),
-                                                                    .revision = NavigationSourceRevision::Create(1).Value(),
-                                                                    .sourceDigest = digest,
-                                                                    .polygons = {0, 1}}}});
+            auto topology = NavigationTileBuildResult{
+                .state = NavigationTileBuildState::Built,
+                .bounds = tile.tile.bounds,
+                .vertices = {{0, 0, 0}, {10, 0, 0}, {0, 0, 10}},
+                .polygons = {{{0, 3}, {0, 3}, area}},
+                .polygonVertexIndices = {0, 1, 2},
+                .polygonAdjacencies = {NavMeshBoundaryAdjacency, NavMeshBoundaryAdjacency, NavMeshBoundaryAdjacency},
+                .provenance = {{.producer = NavigationSourceProducerId::Create(1).Value(),
+                                .contribution = NavigationSourceContributionId::Create(1).Value(),
+                                .revision = NavigationSourceRevision::Create(1).Value(),
+                                .sourceDigest = digest,
+                                .polygons = {0, 1}}}};
+            if (tileBuilder)
+                topology = BakeGroundTile(*tileBuilder, tile, area);
+            const auto cookedTile = NavigationCookedTile::Create(tile, std::move(topology));
             CAPTURE((cookedTile.HasError() ? cookedTile.ErrorValue().message : "encoded"));
             REQUIRE(cookedTile.HasValue());
             if (input == Input::StalePolicy)
@@ -163,6 +167,43 @@ namespace Horo::Application::CharacterSceneProductTest {
         }
 
     private:
+        static Navigation::NavigationTileBuildResult BakeGroundTile(const Navigation::INavigationMeshBuilder &builder,
+                                                                  const Navigation::NavigationPreparedTile &tile,
+                                                                  const Navigation::NavigationAreaId area) {
+            using namespace Navigation;
+            const NavigationTriangleProvenance first{.kind = NavigationSourceProducerKind::StaticCollider,
+                                                     .producer = NavigationSourceProducerId::Create(1).Value(),
+                                                     .contribution = NavigationSourceContributionId::Create(1).Value(),
+                                                     .revision = NavigationSourceRevision::Create(1).Value(),
+                                                     .contentDigest = tile.dependencyKey,
+                                                     .sourceTriangleIndex = 0};
+            auto second = first;
+            second.sourceTriangleIndex = 1;
+            const std::array triangles{
+                NavigationTileBuildTriangle{.vertices = {{{0, 0, 0}, {10, 0, 10}, {10, 0, 0}}},
+                                            .area = area,
+                                            .traversalCost = 1,
+                                            .materialSlot = {.value = 1},
+                                            .provenance = first},
+                NavigationTileBuildTriangle{.vertices = {{{0, 0, 0}, {0, 0, 10}, {10, 0, 10}}},
+                                            .area = area,
+                                            .traversalCost = 1,
+                                            .materialSlot = {.value = 1},
+                                            .provenance = second}};
+            auto baked = builder.BuildTile({.key = tile.tile.key.tile,
+                                            .bounds = tile.tile.bounds,
+                                            .tileSizeMeters = tile.tile.tileSizeMeters,
+                                            .buildGeometry = tile.geometry,
+                                            .triangles = triangles,
+                                            .borderSizeCells = tile.borderSizeCells}, {});
+            if (baked.HasError())
+                UNSCOPED_INFO(baked.ErrorValue().code.Value() << ": " << baked.ErrorValue().message);
+            REQUIRE(baked.HasValue());
+            CHECK(baked.Value().statistics.walkableTriangleCount == triangles.size());
+            REQUIRE_FALSE(baked.Value().IsEmpty());
+            return std::move(baked).Value();
+        }
+
         static Result<Runtime::RuntimeSceneDefinition> WithRequiredAsset(const Runtime::RuntimeSceneDefinition &scene,
                                                                          const Runtime::SceneAssetDependency &dependency) {
             Runtime::SceneDefinitionBuilder builder{scene.Id(), scene.Revision()};

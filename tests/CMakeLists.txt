@@ -3246,6 +3246,9 @@ add_dependencies(HoroEditorPlaySessionControllerTests HoroTestAiGameModule)
 target_link_libraries(HoroEditorPlaySessionControllerTests PRIVATE HoroEngine::EditorServices)
 target_link_libraries(HoroEditorPlaySessionControllerTests PRIVATE HoroEngine::ProjectSurfaceSettings HoroEngine::ProjectSettings
         HoroEngine::NavigationApi HoroEngine::DecisionCookHost)
+if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
+    target_link_libraries(HoroEditorPlaySessionControllerTests PRIVATE HoroEngine::NavigationRecastDetour)
+endif()
 if(HORO_BUILD_PHYSICS_NATIVE)
     target_include_directories(HoroEditorPlaySessionControllerTests PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}/integration/network ${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/networking)
