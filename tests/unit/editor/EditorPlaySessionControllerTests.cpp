@@ -3,6 +3,7 @@
 #include "EditorPlayXrHost.h"
 #include "EditorProjectSceneHost.h"
 #include "Horo/AI/AIErrors.h"
+#include "Horo/AI/EnvironmentQueryExecution.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/AI/PerceptionSenseProvider.h"
@@ -24,6 +25,7 @@
 #endif
 #endif
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <catch2/catch_test_macros.hpp>
@@ -1261,10 +1263,14 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
 
     Fixture fixture;
     bool mixed = false;
+    bool allowInspection = true;
 #if HORO_TEST_PHYSICS_NATIVE
     SECTION("Navigation reachability alone publishes the first reachable candidate") {}
     SECTION("Real Physics visibility eliminates the first reachable candidate") {
         mixed = true;
+    }
+    SECTION("A project can deny inspection while its query still runs") {
+        allowInspection = false;
     }
     using CollisionFixture = Horo::Application::CharacterSceneProductTest::Fixture;
     std::optional<CollisionFixture> collision;
@@ -1297,6 +1303,7 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
     REQUIRE(queries.HasValue());
     auto queryBytes = EnvironmentQueryCookedCodec::Encode(query.Value(), queries.Value());
     REQUIRE(queryBytes.HasValue());
+    const auto cookedDigest = ComputeSha256(std::as_bytes(std::span{queryBytes.Value()}));
     const Gameplay::GameModuleLoadExpectation expected{"game.ai.tests", Gameplay::CurrentGameplayBuildFingerprint(),
                                                        Horo::Tests::ReadDescriptorRevision(HORO_TEST_AI_MODULE_REVISION_PATH)};
     auto image = Gameplay::GameModuleHost{}.Load(HORO_TEST_AI_MODULE_PATH, expected);
@@ -1375,7 +1382,10 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
     constexpr std::string_view render = R"("renderBackend":"opengl")";
     const auto insertion = metadata.find(render);
     REQUIRE(insertion != std::string::npos);
-    metadata.insert(insertion + render.size(), R"(,"ai":{"schemaVersion":1,"scheduler":{"mode":"bestEffort"}})");
+    const auto capture = allowInspection ? "true" : "false";
+    metadata.insert(insertion + render.size(),
+                    std::string{R"(,"ai":{"schemaVersion":1,"scheduler":{"mode":"bestEffort"},"development":{"replayCapture":)"} + capture +
+                        "}}");
     fixture.project.WriteText(".horo/project.json", metadata);
 
     constexpr auto fixedStep = Duration::FromNanoseconds(16'666'667);
@@ -1420,6 +1430,12 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
     REQUIRE(play.SceneView());
     const auto owner = play.SceneView()->Find({3});
     REQUIRE(owner);
+    const Editor::EditorPlayQueryInspectionSelection inspection{*owner, query.Value().Id(), cookedDigest};
+    auto mismatch = inspection;
+    mismatch.cooked.bytes.front() ^= 1;
+    CHECK_FALSE(play.InspectQuery(mismatch).admitted);
+    CHECK(play.InspectQuery(inspection).admitted == allowInspection);
+    CHECK_FALSE(play.InspectQuery(inspection).snapshot);
     Runtime::RuntimeLifecycle lifecycle;
     auto fixed = std::make_unique<PlayFixedParticipant>(play);
     const auto *fixedState = fixed.get();
@@ -1428,6 +1444,7 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
     REQUIRE(lifecycle.Startup(cancellation.Token()).HasValue());
     REQUIRE(scheduler.Value()->RunFrame(lifecycle, cancellation.Token(), false).HasValue());
     std::optional<BlackboardValue> winner;
+    std::shared_ptr<const QueryDebugSnapshot> terminal;
     for (std::size_t frame = 0; frame < 64 && !winner; ++frame) {
         clock.Advance(fixedStep);
         REQUIRE(scheduler.Value()->RunFrame(lifecycle, cancellation.Token(), false).HasValue());
@@ -1438,6 +1455,12 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
         if (const auto problem = play.ReadDecisionProblem())
             UNSCOPED_INFO(problem->error.code.Value() << ": " << problem->error.message);
         REQUIRE_FALSE(play.ReadDecisionProblem());
+        const auto live = play.InspectQuery(inspection);
+        REQUIRE(live.admitted == allowInspection);
+        if (live.snapshot && live.snapshot->terminalStatus == QueryExecutionStatus::Completed)
+            terminal = live.snapshot;
+        if (!allowInspection)
+            CHECK_FALSE(live.snapshot);
         play.RefreshAgentInspection(*owner);
         REQUIRE_FALSE(play.AgentInspectionHistory().empty());
         const auto &snapshot = play.AgentInspectionHistory().back().snapshot;
@@ -1452,7 +1475,33 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
     const auto expectedPoint =
         mixed ? Math::WorldCoordinate64::FromMillimeters(1000, 0, 5000) : Math::WorldCoordinate64::FromMillimeters(5000, 0, 1000);
     CHECK(std::get<Math::WorldCoordinate64>(std::get<BlackboardScalarValue>(*winner)) == expectedPoint);
+    if (allowInspection) {
+        REQUIRE(terminal);
+        CHECK_FALSE(terminal->stale);
+        CHECK(terminal->query == query.Value().Id());
+        REQUIRE(terminal->candidates.size() == 4);
+        const auto expectedStages = mixed ? 8u : 4u;
+        REQUIRE(terminal->stages.size() == expectedStages);
+        REQUIRE(terminal->winners.size() == 1);
+        const auto index = terminal->winners.front().itemIndex;
+        REQUIRE(index < terminal->candidates.size());
+        CHECK(terminal->candidates[index].point == expectedPoint);
+        CHECK(terminal->winners.front().status == QueryScoreStatus::Eligible);
+        if (mixed) {
+            const auto firstReachable = Math::WorldCoordinate64::FromMillimeters(5000, 0, 1000);
+            const auto blocked = std::ranges::find(terminal->candidates, std::optional{firstReachable}, &QueryDebugCandidate::point);
+            REQUIRE(blocked != terminal->candidates.end());
+            const auto visibility = std::ranges::find_if(terminal->stages, [&](const QueryDebugStage &stage) {
+                return stage.candidateIndex == blocked->index && stage.score.stage == MakeIdentity<QueryStageId>(3);
+            });
+            REQUIRE(visibility != terminal->stages.end());
+            CHECK(visibility->score.status == QueryScoreStatus::Filtered);
+        }
+    }
+    CHECK_FALSE(play.InspectQuery(mismatch).snapshot);
+    CHECK_FALSE(play.InspectQuery(inspection).snapshot);
     play.Stop();
+    CHECK_FALSE(play.InspectQuery(inspection).snapshot);
     lifecycle.Shutdown();
 }
 #endif

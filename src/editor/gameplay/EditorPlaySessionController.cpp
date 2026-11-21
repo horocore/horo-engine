@@ -807,6 +807,15 @@ namespace Horo::Editor {
         return sceneHost_ ? sceneHost_->ReadDecisionDebugState() : std::nullopt;
     }
 
+    /** @copydoc EditorPlaySessionController::InspectQuery */
+    EditorPlayQueryInspection EditorPlaySessionController::InspectQuery(std::optional<EditorPlayQueryInspectionSelection> selection) {
+        if (fixedAttempt_ || !sceneHost_)
+            return {};
+        if (state_ != EditorPlaySessionState::Playing && state_ != EditorPlaySessionState::Paused)
+            selection.reset();
+        return sceneHost_->InspectQuery(selection);
+    }
+
     /** @copydoc EditorPlaySessionController::AgentInspectionHistory */
     std::span<const EditorPlayAgentInspection> EditorPlaySessionController::AgentInspectionHistory() const noexcept {
         return std::span{inspectionHistory_}.first(inspectionCount_);

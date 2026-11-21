@@ -27,6 +27,14 @@ namespace Horo::Application::Internal {
         Result<void> (*run)(void *, AI::AiTaskScheduler &, std::uint64_t){};
     };
 
+    /** @brief Exact live agent and cooked document permitted to expose diagnostic samples. */
+    struct SceneQueryInspectionSelection final {
+        AI::AgentHandle agent;
+        AI::QueryId query;
+        Sha256Digest cooked;
+        bool operator==(const SceneQueryInspectionSelection &) const = default;
+    };
+
     /** @brief Owns the query binding and fixed-step phases for one authoritative runtime world. */
     class SceneDecisionQueries final : public AI::IDecisionQueryTaskBinder,
                                        private AI::IDecisionQueryTaskHost,
@@ -56,6 +64,10 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Sha256Digest ReplayProfile() const noexcept;
         /** @brief Reports whether the frozen query inventory needs a Navigation caller. */
         [[nodiscard]] bool UsesNavigation() const noexcept;
+        /** @brief Enables bounded evidence collection for one authenticated query selection. */
+        [[nodiscard]] bool SelectInspection(std::optional<SceneQueryInspectionSelection> selection) noexcept;
+        /** @brief Transfers the bounded sample from the just-evaluated tick to the host's fixed commit. */
+        [[nodiscard]] std::shared_ptr<const AI::QueryDebugSnapshot> TakeInspection() noexcept;
 
     private:
         struct TickScope final {
@@ -98,6 +110,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Result<void> PrepareVisibilityCapability(Physics::PhysicsWorld &world);
         /** @brief Publishes at most one result per active query through the Scene-owned BlackboardSync lane. */
         [[nodiscard]] Result<void> PublishOutputs(TickScope &scope);
+        void InspectOutput(const AI::DecisionQueryTask &task, const Runtime::RuntimeSceneView &scene);
         /** @brief Issues bounded allowances in round-robin occurrence order without allocating. */
         void AdvanceQueries(std::uint64_t tick);
         /** @brief Allocates retention once per active Scene incarnation. */
@@ -122,5 +135,7 @@ namespace Horo::Application::Internal {
         std::array<AI::DecisionQueryPublication, 32> replayPublications_{};
         std::size_t replayCount_{};
         bool replayOverflow_{};
+        std::optional<SceneQueryInspectionSelection> inspection_;
+        std::shared_ptr<const AI::QueryDebugSnapshot> pendingInspection_;
     };
 }  // namespace Horo::Application::Internal

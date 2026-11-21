@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <bit>
 #include <new>
+#include <utility>
 
 namespace Horo::Application::Internal {
     namespace {
@@ -84,6 +85,10 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(evaluated.ErrorValue());
             const auto committed = scheduler.CommitAtIntentDispatch(tick);
             return committed.HasValue() ? Result<void>::Success() : Result<void>::Failure(committed.ErrorValue());
+        }
+
+        bool HasLiveProvider(const AI::EnvironmentQueryPlan &plan) noexcept {
+            return AI::UsesBuiltinPerceptionQuery(plan) || AI::UsesBuiltinPointVisibility(plan) || AI::UsesBuiltinPointNavigation(plan);
         }
     }  // namespace
 
@@ -184,10 +189,12 @@ namespace Horo::Application::Internal {
         if (contexts.HasError())
             return Execution::Failure(contexts.ErrorValue());
         AI::QueryExecutionInputs inputs{operation.agent, contexts.Value(), operation.ownerCancellation};
-        const AI::QueryExecutionSettings settings{.submittedTick = submitted,
-                                                  .deadlineTick = deadline,
-                                                  .maximumCandidates = Candidates,
-                                                  .bestCount = 1};
+        AI::QueryExecutionSettings settings{.submittedTick = submitted,
+                                            .deadlineTick = deadline,
+                                            .maximumCandidates = Candidates,
+                                            .bestCount = 1};
+        if (inspection_ && inspection_->agent == operation.agent && inspection_->query == plan.plan->Id())
+            settings.debugCapture = {.maximumSamples = 16, .includeWorldPoints = true};
         if (AI::UsesBuiltinPointVisibility(*plan.plan)) {
             if (AI::UsesBuiltinPointNavigation(*plan.plan))
                 return AdmitMixedPointPlan(*plan.plan, owner.Value(), std::move(inputs), settings);
@@ -314,9 +321,38 @@ namespace Horo::Application::Internal {
             }
             if (synced.HasError() && synced.ErrorValue().code.Value() != AI::AIErrors::EnvironmentQueryContextStale.code.Value())
                 return Result<void>::Failure(synced.ErrorValue());
+            InspectOutput(*task, scope.scene);
             scope.active += task->ActiveAgent().IsValid();
         }
         return Result<void>::Success();
+    }
+
+    bool SceneDecisionQueries::SelectInspection(std::optional<SceneQueryInspectionSelection> selection) noexcept {
+        if (selection) {
+            const auto plan = plans_.find(selection->query);
+            if (!selection->agent.IsValid() || plan == plans_.end() || plan->second.digest != selection->cooked ||
+                !HasLiveProvider(*plan->second.plan))
+                selection.reset();
+        }
+        if (inspection_ != selection)
+            pendingInspection_.reset();
+        inspection_ = selection;
+        return inspection_.has_value();
+    }
+
+    std::shared_ptr<const AI::QueryDebugSnapshot> SceneDecisionQueries::TakeInspection() noexcept {
+        return std::exchange(pendingInspection_, nullptr);
+    }
+
+    void SceneDecisionQueries::InspectOutput(const AI::DecisionQueryTask &task, const Runtime::RuntimeSceneView &scene) {
+        if (!inspection_ || pendingInspection_ || task.ActiveAgent() != inspection_->agent)
+            return;
+        try {
+            if (auto sample = task.InspectQuery(inspection_->query, scene))
+                pendingInspection_ = std::make_shared<const AI::QueryDebugSnapshot>(std::move(*sample));
+        } catch (const std::bad_alloc &) {
+            // Debug sampling must not change the outcome of the Decision tick.
+        }
     }
 
     /** @copydoc SceneDecisionQueries::ArmReplay */
@@ -392,6 +428,7 @@ namespace Horo::Application::Internal {
                                                       SceneQueryNavigationSource navigation, SceneQueryDecisionPhase decision) {
         if (scope_ || !scene.IsCurrent() || tick == 0)
             return Result<void>::Failure(MakeError(AI::AIErrors::TaskContextInvalid));
+        pendingInspection_.reset();
         if (auto prepared = PrepareCache(scene); prepared.HasError())
             return prepared;
         std::erase_if(tasks_, [](const auto &task) {

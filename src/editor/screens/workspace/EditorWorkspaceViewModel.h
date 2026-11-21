@@ -1043,6 +1043,8 @@ namespace Horo::Editor {
         std::string playError;
         std::optional<EditorPlayDecisionProblem> playDecisionProblem;
         std::vector<EditorPlayAgentInspection> playAgentInspection;
+        DocumentInstanceId playQueryDocument;
+        EditorPlayQueryInspection playQueryInspection;
         std::optional<EditorPlayDecisionDebugState> playDecisionDebug;
         bool playDecisionObjectAvailable{};
         float fps = 0.0F;

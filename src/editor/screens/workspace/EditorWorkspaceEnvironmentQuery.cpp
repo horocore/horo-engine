@@ -201,11 +201,34 @@ namespace Horo::Editor {
                     snapshot.stages.push_back({score.itemIndex, *stage});
         }
 
+        std::string_view QueryPreviewStatusKey(const AI::QueryScoreStatus status) noexcept {
+            using enum AI::QueryScoreStatus;
+            switch (status) {
+                case Eligible:
+                    return "workspace.environment_query.preview_passed";
+                case Filtered:
+                    return "workspace.environment_query.preview_filtered";
+                case MissingSample:
+                    return "workspace.environment_query.preview_missing_sample";
+                case ProviderUnavailable:
+                    return "workspace.environment_query.preview_provider_unavailable";
+                case ProviderFailed:
+                    return "workspace.environment_query.preview_provider_failed";
+                case Incomparable:
+                    return "workspace.environment_query.preview_incomparable";
+                case InvalidScore:
+                    return "workspace.environment_query.preview_invalid_score";
+            }
+            return "workspace.environment_query.preview_invalid_score";
+        }
+
         /** @brief Shows every retained test fact for a candidate, using disclosure for multi-stage results. */
         void DrawQueryPreviewCandidate(const AI::QueryDebugSnapshot &snapshot, const AI::QueryDebugCandidate &candidate,
                                        const ILocalizationService &localization, const Theme::Fonts &fonts) {
             const auto stages = std::ranges::equal_range(snapshot.stages, candidate.index, {}, &AI::QueryDebugStage::candidateIndex);
             const auto title = [&] {
+                if (candidate.actor)
+                    return std::format("#{}  {}", candidate.index, localization.Get("editor", "workspace.environment_query.live_actor"));
                 if (!candidate.point)
                     return std::format("#{}", candidate.index);
                 const auto point = candidate.point->Millimeters();
@@ -219,8 +242,7 @@ namespace Horo::Editor {
             };
             const auto drawTest = [&](const AI::QueryDebugStage &stage, std::string_view prefix) {
                 const bool passed = stage.score.status == AI::QueryScoreStatus::Eligible;
-                const auto status =
-                    text(passed ? "workspace.environment_query.preview_passed" : "workspace.environment_query.preview_filtered");
+                const auto status = text(QueryPreviewStatusKey(stage.score.status));
                 label(std::format("{}{} {} / {} / {} {:.3f}", prefix, text("workspace.environment_query.test"), stage.score.stage.Value(),
                                   status, text("workspace.environment_query.preview_contribution"), stage.score.contribution),
                       passed ? Theme::Text() : Theme::Warn());
@@ -239,6 +261,46 @@ namespace Horo::Editor {
             if (card.BeginBody())
                 for (const auto &stage : stages)
                     drawTest(stage, {});
+        }
+
+        bool HasLiveQueryProvider(const EnvironmentQueryWorkspaceDocument &document) noexcept {
+            return document.perception || (document.settings && (document.settings->visibility || document.settings->navigation));
+        }
+
+        /** @brief Presents only committed evidence for the selected saved Play query. */
+        void DrawLiveQueryPreview(const EditorWorkspaceViewModel &viewModel, const EnvironmentQueryWorkspaceDocument &document,
+                                  const ILocalizationService &localization, const Theme::Fonts &fonts) {
+            const auto text = [&](std::string_view key) {
+                return localization.Get("editor", key);
+            };
+            const auto label = [&](std::string_view value, const auto &color) {
+                Ui::WrappedText(ImGui::GetContentRegionAvail().x, value, color, fonts);
+            };
+            const auto &live = viewModel.playQueryInspection;
+            if (viewModel.playQueryDocument != document.identity.instance || document.dirty || document.conflict) {
+                label(text("workspace.environment_query.live_select"), Theme::Muted());
+                return;
+            }
+            if (!live.snapshot) {
+                label(text(live.admitted ? "workspace.environment_query.live_waiting" : "workspace.environment_query.live_unavailable"),
+                      Theme::Muted());
+                return;
+            }
+            const auto &snapshot = *live.snapshot;
+            label(std::format("{} {}", text("workspace.environment_query.live_tick"), snapshot.observedTick), Theme::Text());
+            if (snapshot.stale)
+                label(text("workspace.environment_query.preview_stale"), Theme::Warn());
+            label(std::format("{} {} / {} {} / {} {}", text("workspace.environment_query.preview_generated"), snapshot.generated,
+                              text("workspace.environment_query.preview_shown"), snapshot.candidates.size(),
+                              text("workspace.environment_query.preview_ranked"), snapshot.winnerCount),
+                  Theme::Text());
+            for (const auto &winner : snapshot.winners) {
+                const auto score = static_cast<double>(winner.scoreKey) / AI::QueryScoringPlan::ScoreKeyScale;
+                label(std::format("{} #{} / {:.3f}", text("workspace.environment_query.live_winner"), winner.itemIndex, score),
+                      Theme::Text());
+            }
+            for (const auto &candidate : snapshot.candidates)
+                DrawQueryPreviewCandidate(snapshot, candidate, localization, fonts);
         }
 
         /** @brief Evaluates the native generator and admitted tests through canonical scoring using frozen inputs only. */
@@ -543,6 +605,36 @@ namespace Horo::Editor {
             static_cast<void>(m_environmentQueryPreviewWork->job.RequestCancel());
             m_environmentQueryPreviewWork.reset();
         }
+    }
+
+    void EditorWorkspaceController::RefreshLiveEnvironmentQueryPreview(const std::optional<Runtime::EntityRef> owner) {
+        m_viewModel.playQueryDocument = {};
+        std::optional<EditorPlayQueryInspectionSelection> selection;
+        if (owner && m_querySchema && m_playSession.AuthoringRevision() == m_document.Revision() &&
+            m_viewModel.playViewSource != EditorPlayViewSource::MountedWorld &&
+            (m_viewModel.playState == EditorPlayState::Playing || m_viewModel.playState == EditorPlayState::Paused)) {
+            const auto active = m_viewModel.workspacePanelHost.ActiveDocument();
+            const auto &documents = m_viewModel.environmentQueryDocuments;
+            const auto found = std::ranges::find_if(documents, [active](const auto &document) {
+                return document.identity.instance == active;
+            });
+            if (found != documents.end() && HasLiveQueryProvider(*found) && !found->dirty && !found->conflict &&
+                found->descriptors == QueryDescriptorAvailability::Validated) {
+                const EnvironmentQueryDocumentFence fence{found->identity.instance, found->revision};
+                if (m_playQueryDigestFence != fence) {
+                    m_playQueryDigestFence = fence;
+                    m_playQueryDigest = {};
+                    const auto bytes = AI::EnvironmentQueryCookedCodec::Encode(*found->query, *m_querySchema);
+                    if (bytes.HasValue())
+                        m_playQueryDigest = ComputeSha256(std::as_bytes(std::span{bytes.Value()}));
+                }
+                if (m_playQueryDigest != Sha256Digest{}) {
+                    m_viewModel.playQueryDocument = found->identity.instance;
+                    selection.emplace(*owner, found->query->Id(), m_playQueryDigest);
+                }
+            }
+        }
+        m_viewModel.playQueryInspection = m_playSession.InspectQuery(selection);
     }
 
     /** @copydoc EditorWorkspaceController::UpdateEnvironmentQueryPreview */
@@ -967,6 +1059,12 @@ namespace Horo::Editor {
         for (const auto &stage : query.Stages()) {
             const auto stageType = text(StageLabel(stage.kind));
             label(std::format("{} / {} ({})", stageType, stage.displayName, stage.id.Value()), Theme::Text());
+        }
+
+        if (HasLiveQueryProvider(*opened) &&
+            (viewModel.playState == EditorPlayState::Playing || viewModel.playState == EditorPlayState::Paused)) {
+            DrawLiveQueryPreview(viewModel, *opened, m_context.localization, m_context.theme.fonts);
+            return true;
         }
 
         if (opened->perception) {

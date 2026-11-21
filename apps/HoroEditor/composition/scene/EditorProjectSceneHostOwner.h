@@ -494,6 +494,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         std::uint64_t AgentInspectionTick() const noexcept override;
         std::optional<Editor::EditorPlayAgentInspection> ReadAgentInspection(Runtime::EntityRef owner) const override;
         void SelectDecisionTraceOwner(std::optional<Runtime::EntityRef> owner) noexcept override;
+        [[nodiscard]] Editor::EditorPlayQueryInspection InspectQuery(
+            std::optional<Editor::EditorPlayQueryInspectionSelection> selection) override;
         void SetDecisionDebugView(std::optional<AI::AgentHandle> agent) override;
         bool ApplyDecisionDebugCommand(const Editor::EditorPlayDecisionDebugCommand &command) override;
         [[nodiscard]] std::optional<Editor::EditorPlayDecisionDebugState> ReadDecisionDebugState() const noexcept override;
@@ -634,6 +636,10 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 if (pendingDecisionTrace_)
                     committedDecisionTrace_ = std::move(pendingDecisionTrace_);
                 CommitDecisionDebugTick();
+                if (decisionQueries_) {
+                    if (auto snapshot = decisionQueries_->TakeInspection())
+                        committedQueryInspection_ = std::move(snapshot);
+                }
             }
         }
 
@@ -645,6 +651,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 animation_->AbortFixedUpdate(context);
             decisionTickPending_ = false;
             pendingDecisionTrace_.reset();
+            if (decisionQueries_)
+                static_cast<void>(decisionQueries_->TakeInspection());
         }
 
         void Shutdown() noexcept override {
@@ -772,6 +780,10 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         std::optional<Editor::EditorPlayDecisionDebugState> decisionDebug_;
         Sha256Digest decisionBreakpointPlan_{};
         bool decisionDebugGranted_{};
+        bool queryInspectionGranted_{};
+        std::optional<SceneQueryInspectionSelection> liveQueryInspection_;
+        std::uint64_t queryInspectionStructure_{};
+        std::shared_ptr<const AI::QueryDebugSnapshot> committedQueryInspection_;
         std::optional<Runtime::EntityRef> decisionTraceOwner_;
         std::uint64_t lastDecisionTraceTick_{};
         std::shared_ptr<const AI::DecisionStepTrace> pendingDecisionTrace_;

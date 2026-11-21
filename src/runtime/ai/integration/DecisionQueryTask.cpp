@@ -314,6 +314,11 @@ namespace Horo::AI {
             Discard();
     }
 
+    /** @copydoc DecisionQueryTask::InspectQuery */
+    std::optional<QueryDebugSnapshot> DecisionQueryTask::InspectQuery(QueryId query, const Runtime::RuntimeSceneView &scene) const {
+        return query_ && descriptor_.query == query && !providerCall_ ? query_->ReadDebugSnapshot(scene) : std::nullopt;
+    }
+
     /** @copydoc DecisionQueryTask::SyncQuery */
     void DecisionQueryTask::SyncQuery(const std::uint64_t tick, std::optional<DecisionQueryPublication> *publication) {
         if (providerCall_ || !query_)

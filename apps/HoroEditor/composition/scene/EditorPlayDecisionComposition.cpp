@@ -16,6 +16,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             bool schedulerModeAuthored{};
             std::size_t queryWorkUnitsLimit{AI::AiTaskSchedulerSettings::HardWorkUnits};
             std::optional<AI::QueryResultCacheLimits> queryCacheLimits;
+            bool queryInspectionGranted{};
         };
 
         /** @brief Resolves the selected project's policy before any provider admission. */
@@ -34,7 +35,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                                     selection.decisionDebugGranted &&
                                         settings.AllowsDebug(AiProjectRuntimeKind::Development, AiProjectDebugOperation::LiveMutation),
                                     settings.PerceptionWorkUnitsLimit(), settings.HasAuthoredSchedulerMode(),
-                                    settings.QueryWorkUnitsLimit(), settings.QueryCacheLimits()});
+                                    settings.QueryWorkUnitsLimit(), settings.QueryCacheLimits(),
+                                    settings.AllowsDebug(AiProjectRuntimeKind::Development, AiProjectDebugOperation::ReplayCapture)});
         }
     }  // namespace
 
@@ -75,6 +77,30 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         decisionDebug_.reset();
         committedDecisionTrace_.reset();
         pendingDecisionTrace_.reset();
+    }
+
+    Editor::EditorPlayQueryInspection ProjectPlaySceneHost::InspectQuery(
+        std::optional<Editor::EditorPlayQueryInspectionSelection> selection) {
+        if (!decisionQueries_ || std::this_thread::get_id() != ownerLane_)
+            return {};
+        const auto scene = selection && queryInspectionGranted_ && !sceneClosed_ ? scenes_->ActiveScene() : std::nullopt;
+        std::optional<SceneQueryInspectionSelection> resolved;
+        if (scene && scene->IsCurrent() && scene->RuntimeId() == selection->owner.runtime) {
+            const auto entity = scene->Get(selection->owner);
+            if (entity.HasValue() && entity.Value().components && entity.Value().components->aiAgent) {
+                const auto agent = ai_->CapabilityAtSafePoint().ResolveAgent(entity.Value().components->aiAgent->agent);
+                if (agent.HasValue())
+                    resolved.emplace(agent.Value(), selection->query, selection->cooked);
+            }
+        }
+        if (!decisionQueries_->SelectInspection(resolved))
+            resolved.reset();
+        const auto structure = resolved ? scene->StructuralRevision() : 0;
+        if (liveQueryInspection_ != resolved || queryInspectionStructure_ != structure)
+            committedQueryInspection_.reset();
+        liveQueryInspection_ = resolved;
+        queryInspectionStructure_ = structure;
+        return {resolved.has_value(), committedQueryInspection_};
     }
 
     /** @copydoc ProjectPlaySceneHost::SelectedDecisionAgent */
@@ -335,6 +361,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         if (admitted.HasValue()) {
             inspectionKeys_ = std::move(policy.decisions->inspectionKeys);
             decisionDebugGranted_ = settings.Value().debugGranted;
+            queryInspectionGranted_ = settings.Value().queryInspectionGranted;
         }
         return admitted;
     }

@@ -187,6 +187,8 @@ namespace Horo::Editor {
 
         /** @brief Borrows chronological detached snapshots until the next refresh or Play transition. */
         [[nodiscard]] std::span<const EditorPlayAgentInspection> AgentInspectionHistory() const noexcept;
+        /** @brief Routes the exact active EQS document's selection through the current Play owner. */
+        [[nodiscard]] EditorPlayQueryInspection InspectQuery(std::optional<EditorPlayQueryInspectionSelection> selection);
         /** @brief Indicates whether legacy viewport extraction is outside the selected Play composition. */
         [[nodiscard]] bool UsesMountedViewport() const noexcept;
         /** @brief Borrows the actual Play host receipt synchronously; absence never implies no Physics. */

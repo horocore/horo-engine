@@ -26,6 +26,7 @@ namespace Horo::AI {
     class DecisionStepTrace;
     class DecisionNodeGeneration;
     class PerceptionSenseGeneration;
+    struct QueryDebugSnapshot;
 }  // namespace Horo::AI
 
 namespace Horo::Runtime {
@@ -39,6 +40,19 @@ namespace Horo::Editor {
     /** @brief First Play identity; the divider itself is never issued. */
     inline constexpr Runtime::SceneRuntimeId EditorFirstPlayScene{EditorPlaySceneNamespace + 1};
     inline constexpr std::uint64_t EditorPlayAgentInspectionTickSpacing = 4;
+
+    /** @brief Exact live entity and authenticated cooked query requested by the active EQS document. */
+    struct EditorPlayQueryInspectionSelection final {
+        Runtime::EntityRef owner;
+        AI::QueryId query;
+        Sha256Digest cooked;
+        bool operator==(const EditorPlayQueryInspectionSelection &) const = default;
+    };
+
+    struct EditorPlayQueryInspection final {
+        bool admitted{};
+        std::shared_ptr<const AI::QueryDebugSnapshot> snapshot;
+    };
 
     /** @brief Actual application-owned peer lifecycle, independent of editor draft/publication policy. */
     enum class EditorScenePhysicsState : std::uint8_t {
@@ -196,6 +210,11 @@ namespace Horo::Editor {
 
         /** @brief Selects the entity generation eligible for read-only trace sampling. */
         virtual void SelectDecisionTraceOwner(std::optional<Runtime::EntityRef>) noexcept {}
+
+        /** @brief Samples one authorized live query while the selection stays current. */
+        [[nodiscard]] virtual EditorPlayQueryInspection InspectQuery(std::optional<EditorPlayQueryInspectionSelection>) {
+            return {};
+        }
 
         /** @brief Admits a visible inspection lease and releases its control on closure or target change. */
         virtual void SetDecisionDebugView(std::optional<AI::AgentHandle>) {}

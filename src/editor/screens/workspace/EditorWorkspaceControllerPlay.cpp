@@ -258,7 +258,9 @@ namespace Horo::Editor {
         RefreshPlayDecisionProblem();
         const auto scene = m_playSession.SceneView();
         const auto selected = m_selection.Current().primary;
-        m_playSession.RefreshAgentInspection(scene && selected ? scene->Find(Runtime::SceneObjectId{selected->value}) : std::nullopt);
+        const auto owner = scene && selected ? scene->Find(Runtime::SceneObjectId{selected->value}) : std::nullopt;
+        m_playSession.RefreshAgentInspection(owner);
+        RefreshLiveEnvironmentQueryPreview(owner);
         const auto history = m_playSession.AgentInspectionHistory();
         m_viewModel.playAgentInspection.assign(history.begin(), history.end());
         m_viewModel.playDecisionDebug = m_playSession.ReadDecisionDebugState();

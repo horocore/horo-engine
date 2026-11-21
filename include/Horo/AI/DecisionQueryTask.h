@@ -99,6 +99,8 @@ namespace Horo::AI {
          * @return Live-operation identity, or an empty handle when the query is idle or retired.
          */
         [[nodiscard]] AgentHandle ActiveAgent() const noexcept;
+        /** @brief Copies bounded inspection evidence for the requested authored query on the owner lane. */
+        [[nodiscard]] std::optional<QueryDebugSnapshot> InspectQuery(QueryId query, const Runtime::RuntimeSceneView &scene) const;
         /** @brief Delegates budgeted work to the admitted query after BlackboardSync. */
         void AdvanceQuery(std::uint64_t tick, QueryExecutionBudget budget);
         /** @brief Collects already available provider completion at BlackboardSync. */
