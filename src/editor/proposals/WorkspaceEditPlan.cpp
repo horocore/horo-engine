@@ -179,6 +179,21 @@ namespace Horo::Editor::Proposals {
             return bytes;
         }
 
+        /** @brief Validates the accepted operation and reserves its output before reconstructing text. */
+        Result<std::string> RenderAcceptedText(const ProjectPolicy &policy, const FileOperation &file, const std::string_view text,
+                                               const std::span<const ReviewState> selection, Budget &budget) {
+            using Output = Result<std::string>;
+            const auto *edit = std::get_if<EditFile>(&file);
+            if (!edit)
+                return Output::Failure(MakeError(Errors::Invalid));
+            if (!policy.Allows(edit->base.path))
+                return Output::Failure(MakeError(Errors::PolicyDenied));
+            const auto bytes = AcceptedSize(text.size(), *edit, selection);
+            if (!budget.Charge(bytes, budget.output))
+                return Output::Failure(MakeError(Errors::Bounds));
+            return Output::Success(Render(text, edit->hunks, bytes, selection));
+        }
+
         /** @brief Admits exact source evidence and charges work before hashing source or allocating a preview. */
         Result<PlanEntry> PrepareSource(const Operation &operation, const ObservationIndex &index, Budget &budget) {
             using Entry = Result<PlanEntry>;
@@ -289,40 +304,60 @@ namespace Horo::Editor::Proposals {
         return Plan(proposal, policy, observations, limits, ReviewSourceMatch::RecoveredContent);
     }
 
-    /** @copydoc ReviewDecisions::ApplyAccepted */
-    Result<SourceEditBatch> ReviewDecisions::ApplyAccepted(SourceDocumentService &documents, const ProjectPolicy &policy,
-                                                           const WorkspaceEditPlan &plan, const CancellationToken cancellation) const {
-        using Output = Result<SourceEditBatch>;
+    /** @copydoc ReviewDecisions::PrepareAccepted */
+    Result<PreparedSourceReview> ReviewDecisions::PrepareAccepted(const ProjectPolicy &policy, const WorkspaceEditPlan &plan,
+                                                                  const CancellationToken cancellation) const {
+        using Output = Result<PreparedSourceReview>;
+        if (cancellation.IsCancellationRequested())
+            return Output::Failure(MakeError(SourceDocumentErrors::Cancelled));
         if (proposal_.PolicyDigest() != policy.Digest())
             return Output::Failure(MakeError(Errors::PolicyDenied));
         if (!Matches(plan) || !AcceptancesCurrent(plan, units_))
             return Output::Failure(MakeError(Errors::StaleBase));
         try {
-            std::vector<std::string> replacements;
-            std::vector<SourceBatchEdit> edits;
-            replacements.reserve(units_.size());
-            edits.reserve(units_.size());
+            PreparedSourceReview prepared;
+            prepared.edits_.reserve(units_.size());
             const Limits limits;
             Budget budget{limits, ReviewSourceMatch::CurrentRevision};
             for (std::size_t file = 0; file < units_.size(); ++file) {
+                if (cancellation.IsCancellationRequested())
+                    return Output::Failure(MakeError(SourceDocumentErrors::Cancelled));
                 const auto &selection = units_[file];
                 if (std::ranges::find(selection, ReviewState::Accepted) == selection.end())
                     continue;
-                const auto *operation = std::get_if<EditFile>(&proposal_.Files()[file]);
-                if (!operation)
-                    return Output::Failure(MakeError(Errors::Invalid));
-                if (!policy.Allows(operation->base.path))
-                    return Output::Failure(MakeError(Errors::PolicyDenied));
                 const auto &source = std::get<FilePreview>(plan.entries[file]).before;
-                const auto bytes = AcceptedSize(source.Text().size(), *operation, selection);
-                if (!budget.Charge(bytes, budget.output))
-                    return Output::Failure(MakeError(Errors::Bounds));
-                const auto &replacement = replacements.emplace_back(Render(source.Text(), operation->hunks, bytes, selection));
-                edits.push_back({source, {source.Revision(), 0, source.Text().size(), replacement}});
+                auto replacement = RenderAcceptedText(policy, proposal_.Files()[file], source.Text(), selection, budget);
+                if (replacement.HasError())
+                    return Output::Failure(replacement.ErrorValue());
+                prepared.edits_.push_back({source, std::move(replacement).Value()});
             }
-            return documents.EditBatch(edits, cancellation);
+            if (prepared.edits_.empty())
+                return Output::Failure(MakeError(Errors::Invalid));
+            return Output::Success(std::move(prepared));
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(Errors::Bounds));
         }
+    }
+
+    /** @copydoc PreparedSourceReview::Commit */
+    Result<SourceEditBatch> PreparedSourceReview::Commit(SourceDocumentService &documents, const CancellationToken cancellation) const {
+        try {
+            std::vector<SourceBatchEdit> edits;
+            edits.reserve(edits_.size());
+            for (const auto &edit : edits_)
+                edits.push_back({edit.source, {edit.source.Revision(), 0, edit.source.Text().size(), edit.replacement}});
+            return documents.EditBatch(edits, cancellation);
+        } catch (const std::bad_alloc &) {
+            return Result<SourceEditBatch>::Failure(MakeError(Errors::Bounds));
+        }
+    }
+
+    /** @copydoc ReviewDecisions::ApplyAccepted */
+    Result<SourceEditBatch> ReviewDecisions::ApplyAccepted(SourceDocumentService &documents, const ProjectPolicy &policy,
+                                                           const WorkspaceEditPlan &plan, const CancellationToken cancellation) const {
+        const auto prepared = PrepareAccepted(policy, plan, cancellation);
+        if (prepared.HasError())
+            return Result<SourceEditBatch>::Failure(prepared.ErrorValue());
+        return prepared.Value().Commit(documents, cancellation);
     }
 }  // namespace Horo::Editor::Proposals

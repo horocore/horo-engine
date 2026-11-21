@@ -35,7 +35,7 @@ namespace Horo::Editor {
     /** @brief An admitted source edit and its read-only preview, ready for an explicit workspace review action. */
     struct EditorLocalAgentPatchReview final {
         Proposals::ChangeSet proposal;
-        Proposals::WorkspaceEditPlan plan;
+        std::shared_ptr<const Proposals::WorkspaceEditPlan> plan;
         std::vector<EditorPatchFileCard> files;
         Proposals::ReviewDecisions decisions;
         std::vector<SourceDocumentId> offeredPaths;

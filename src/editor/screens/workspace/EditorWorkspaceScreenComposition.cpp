@@ -221,7 +221,8 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         },
             .requestSourceReviewApply =
                 [project = std::string{projectIdentity}](const Proposals::ReviewDecisions &decisions,
-                                                         const Proposals::ProjectPolicy &policy, const Proposals::WorkspaceEditPlan &plan,
+                                                         const Proposals::ProjectPolicy &policy,
+                                                         const std::shared_ptr<const Proposals::WorkspaceEditPlan> &plan,
                                                          const CancellationToken &lifetime, EditorWorkspaceViewCommandData &command) {
             return QueueSourceReviewApplication(project, decisions, policy, plan, lifetime, command);
         },

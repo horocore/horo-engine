@@ -309,13 +309,34 @@ namespace Horo::Editor::Proposals {
         ApplyFailed,
         UndoFailed,
         Conflict,
-        Cancelled
+        Cancelled,
+        Preparing
     };
 
     /** @brief Owner-published status for the latest explicit application or group undo. */
     struct SourceTransactionStatus final {
         SourceTransactionFeedback feedback{};
         bool canUndo{};
+    };
+
+    /** @brief Detached accepted text and exact immutable leases, suitable for worker-to-editor handoff. */
+    class PreparedSourceReview final {
+    public:
+        /** @brief Publishes through the source owner after its current lease and disk checks.
+         * @param documents Current source owner. @param cancellation Current workspace admission.
+         * @return Atomic receipt or failure with all source buffers intact.
+         */
+        [[nodiscard]] Result<SourceEditBatch> Commit(SourceDocumentService &documents, CancellationToken cancellation = {}) const;
+
+    private:
+        friend class ReviewDecisions;
+
+        struct Edit final {
+            SourceDocumentSnapshot source;
+            std::string replacement;
+        };
+
+        std::vector<Edit> edits_;
     };
 
     /** @brief Inert decisions on one exact proposal. Edits have per-hunk decisions and structural operations are indivisible. */
@@ -340,6 +361,12 @@ namespace Horo::Editor::Proposals {
 
         /** @brief Restores the previous decision batch against the current plan. @return True if a decision was undone. */
         Result<bool> Undo(const WorkspaceEditPlan &plan);
+        /** @brief Validates review and renders only accepted hunks without accessing the editor owner or filesystem.
+         * @param policy Exact captured project policy. @param plan Immutable proposal preview and source leases.
+         * @param cancellation Cooperative observer. @return Detached candidate or typed refusal.
+         */
+        [[nodiscard]] Result<PreparedSourceReview> PrepareAccepted(const ProjectPolicy &policy, const WorkspaceEditPlan &plan,
+                                                                   CancellationToken cancellation = {}) const;
         /** @brief Applies only accepted text hunks through the current source owner.
          * @param documents Owner of the live source snapshots. @param policy Active captured policy for this proposal.
          * @param plan Exact proposal preview with current source evidence. @param cancellation Cooperative observer.

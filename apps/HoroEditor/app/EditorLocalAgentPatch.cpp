@@ -114,7 +114,12 @@ namespace Horo::Editor {
             return ReviewResult::Failure(plan.ErrorValue());
         auto cards = DescribeEditorPatchFiles(proposal.Value());
         ReviewDecisions decisions{proposal.Value()};
-        return ReviewResult::Success(
-            {std::move(proposal).Value(), std::move(plan).Value(), std::move(cards), std::move(decisions), std::move(offeredPaths), {}, 0});
+        return ReviewResult::Success({std::move(proposal).Value(),
+                                      std::make_shared<const WorkspaceEditPlan>(std::move(plan).Value()),
+                                      std::move(cards),
+                                      std::move(decisions),
+                                      std::move(offeredPaths),
+                                      {},
+                                      0});
     }
 }  // namespace Horo::Editor

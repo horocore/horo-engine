@@ -24,9 +24,11 @@ namespace Horo::Editor {
 
     /** @copydoc QueueSourceReviewApplication */
     bool QueueSourceReviewApplication(const std::string_view project, const Proposals::ReviewDecisions &decisions,
-                                      const Proposals::ProjectPolicy &policy, const Proposals::WorkspaceEditPlan &plan,
-                                      const CancellationToken &lifetime, EditorWorkspaceViewCommandData &command) {
-        if (command.command != EditorWorkspaceViewCommand::None || policy.Project() != project || lifetime.IsCancellationRequested())
+                                      const Proposals::ProjectPolicy &policy,
+                                      const std::shared_ptr<const Proposals::WorkspaceEditPlan> &plan, const CancellationToken &lifetime,
+                                      EditorWorkspaceViewCommandData &command) {
+        if (command.command != EditorWorkspaceViewCommand::None || !plan || policy.Project() != project ||
+            lifetime.IsCancellationRequested())
             return false;
         command.sourceReviewApplication = std::make_shared<const SourceReviewApplication>(SourceReviewApplication{decisions, policy, plan});
         command.sourceReviewLifetime = lifetime;
@@ -36,7 +38,7 @@ namespace Horo::Editor {
 
     /** @copydoc SourceReviewTransactions::Status */
     Proposals::SourceTransactionStatus SourceReviewTransactions::Status() const noexcept {
-        const bool canUndo = batch_.CanUndo() && std::ranges::all_of(batch_.Items(), [](const auto &item) {
+        const bool canUndo = !preparing_ && batch_.CanUndo() && std::ranges::all_of(batch_.Items(), [](const auto &item) {
             return !item.changed || item.snapshot.IsCurrent();
         });
         return {feedback_, canUndo};
@@ -53,34 +55,73 @@ namespace Horo::Editor {
     }
 
     /** @copydoc SourceReviewTransactions::Process */
-    bool SourceReviewTransactions::Process(const EditorWorkspaceViewCommandData &command, SourceDocumentService &documents) {
+    bool SourceReviewTransactions::Process(const EditorWorkspaceViewCommandData &command, SourceDocumentService &documents,
+                                           const JobSystem *jobs) {
         switch (command.command) {
             case EditorWorkspaceViewCommand::ApplySourceReview:
-                Apply(command.sourceReviewApplication.get(), documents, command.sourceReviewLifetime);
+                Start(command.sourceReviewApplication, jobs, command.sourceReviewLifetime);
                 return true;
             case EditorWorkspaceViewCommand::UndoSourceReview:
-                Undo(command.sourceReviewUndo, documents, command.sourceReviewLifetime);
+                if (!preparing_)
+                    Undo(command.sourceReviewUndo, documents, command.sourceReviewLifetime);
                 return true;
             default:
                 return false;
         }
     }
 
-    /** @copydoc SourceReviewTransactions::Apply */
-    void SourceReviewTransactions::Apply(const SourceReviewApplication *request, SourceDocumentService &documents,
+    /** @copydoc SourceReviewTransactions::Start */
+    void SourceReviewTransactions::Start(std::shared_ptr<const SourceReviewApplication> request, const JobSystem *jobs,
                                          const CancellationToken &lifetime) {
+        if (preparing_)
+            return;
         feedback_ = lifetime.IsCancellationRequested() ? Feedback::Cancelled : Feedback::ApplyFailed;
-        if (feedback_ == Feedback::Cancelled)
+        if (feedback_ == Feedback::Cancelled || !jobs || !request || !request->plan)
             return;
-        if (!request)
-            return;
-        auto applied = request->decisions.ApplyAccepted(documents, request->policy, request->plan, lifetime);
+        try {
+            auto output = std::make_shared<std::optional<Proposals::PreparedSourceReview>>();
+            auto job = jobs->SubmitResult({.parentCancellation = lifetime, .priority = JobPriority::Interactive},
+                                          [request = std::move(request), output](const CancellationToken &stop) {
+                auto prepared = request->decisions.PrepareAccepted(request->policy, *request->plan, stop);
+                if (prepared.HasError())
+                    return Result<void>::Failure(std::move(prepared).ErrorValue());
+                output->emplace(std::move(prepared).Value());
+                return Result<void>::Success();
+            });
+            if (job.HasValue()) {
+                preparing_.emplace(Preparation{std::move(job).Value(), lifetime, std::move(output)});
+                feedback_ = Feedback::Preparing;
+            }
+        } catch (const std::bad_alloc &) {
+            // No owner mutation or receipt publication occurs on admission failure.
+        }
+    }
+
+    /** @copydoc SourceReviewTransactions::Poll */
+    bool SourceReviewTransactions::Poll(SourceDocumentService &documents) {
+        if (!preparing_)
+            return false;
+        const auto job = preparing_->job.Snapshot();
+        if (!job || !job->terminalResult)
+            return false;
+        auto preparation = std::move(*preparing_);
+        preparing_.reset();
+        if (preparation.lifetime.IsCancellationRequested() || job->state == JobState::Cancelled) {
+            feedback_ = Feedback::Cancelled;
+            return false;
+        }
+        if (const auto &error = job->terminalResult->error; error || !*preparation.output) {
+            feedback_ = error ? FailureFeedback(*error, Feedback::ApplyFailed) : Feedback::ApplyFailed;
+            return false;
+        }
+        auto applied = preparation.output->value().Commit(documents, preparation.lifetime);
         if (applied.HasError()) {
             feedback_ = FailureFeedback(applied.ErrorValue(), Feedback::ApplyFailed);
-            return;
+            return false;
         }
         batch_ = std::move(applied).Value();
         feedback_ = Feedback::Applied;
+        return true;
     }
 
     /** @copydoc SourceReviewTransactions::Undo */

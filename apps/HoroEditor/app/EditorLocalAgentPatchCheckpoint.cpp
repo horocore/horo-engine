@@ -145,7 +145,7 @@ namespace Horo::Editor {
                 return LoadResult::Failure(decisions.ErrorValue());
             auto cards = DescribeEditorPatchFiles(proposal.Value());
             return LoadResult::Success(EditorLocalAgentPatchReview{std::move(proposal).Value(),
-                                                                   std::move(plan).Value(),
+                                                                   std::make_shared<const WorkspaceEditPlan>(std::move(plan).Value()),
                                                                    std::move(cards),
                                                                    std::move(decisions).Value(),
                                                                    std::move(envelope.paths),

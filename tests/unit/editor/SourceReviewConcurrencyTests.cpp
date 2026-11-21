@@ -4,6 +4,8 @@
 
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <chrono>
+#include <thread>
 
 namespace {
     using namespace Horo;
@@ -17,6 +19,7 @@ namespace {
         DocumentIdentity b = project.Identity("b.cpp", 2);
         ProjectPolicy policy = ProjectPolicy::Capture("workspace", 1, {{a.key.source, false}, {b.key.source, false}}).Value();
         SourceReviewTransactions reviews;
+        JobSystem jobs{JobSystemConfig{}};
         CancellationSource lifetime;
 
         ReviewWorkspace() {
@@ -38,9 +41,11 @@ namespace {
                                              EditFile{FileBase::Capture(second).Value(), {{0, std::string{second.Text()}, text}}}}})
                     .Value();
             const std::array observations{SourcePathObservation{a.key.source, first}, SourcePathObservation{b.key.source, second}};
-            const auto plan = PlanWorkspaceEdits(proposal, policy, observations).Value();
+            const auto planned = PlanWorkspaceEdits(proposal, policy, observations);
+            REQUIRE(planned.HasValue());
+            const auto plan = std::make_shared<const WorkspaceEditPlan>(planned.Value());
             ReviewDecisions decisions{proposal};
-            REQUIRE(decisions.Decide(plan, {}, ReviewChoice::Accept).HasValue());
+            REQUIRE(decisions.Decide(*plan, {}, ReviewChoice::Accept).HasValue());
             EditorWorkspaceViewCommandData command;
             REQUIRE(QueueSourceReviewApplication(policy.Project(), decisions, policy, plan, lifetime.Token(), command));
             CHECK_FALSE(QueueSourceReviewApplication(policy.Project(), decisions, policy, plan, lifetime.Token(), command));
@@ -51,6 +56,16 @@ namespace {
         auto Snapshots() {
             return std::array{documents.Snapshot(a.instance).Value(), documents.Snapshot(b.instance).Value()};
         }
+
+        /** @brief Drains the exact worker publication with a finite fixture deadline. */
+        void Drain() {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{5};
+            while (reviews.Status().feedback == SourceTransactionFeedback::Preparing && std::chrono::steady_clock::now() < deadline) {
+                static_cast<void>(reviews.Poll(documents));
+                std::this_thread::sleep_for(std::chrono::milliseconds{1});
+            }
+            REQUIRE(reviews.Status().feedback != SourceTransactionFeedback::Preparing);
+        }
     };
 
     TEST_CASE("Overlapping review applications and group undo produce deterministic revisions", "[editor][source][review][concurrency]") {
@@ -60,20 +75,22 @@ namespace {
             const auto alpha = workspace.Queue("alpha", "alpha");
             const auto beta = workspace.Queue("beta", "beta");
             const bool alphaFirst = index % 2 == 0;
-            REQUIRE(workspace.reviews.Process(alphaFirst ? alpha : beta, workspace.documents));
+            REQUIRE(workspace.reviews.Process(alphaFirst ? alpha : beta, workspace.documents, &workspace.jobs));
+            workspace.Drain();
             REQUIRE(workspace.reviews.Status().feedback == SourceTransactionFeedback::Applied);
             const auto applied = workspace.Snapshots();
             CHECK(applied[0].Text() == (alphaFirst ? "alpha" : "beta"));
             CHECK(applied[0].Text() == applied[1].Text());
             CHECK(applied[0].Revision() == 2 + 2 * index);
             CHECK(applied[0].Revision() == applied[1].Revision());
-            REQUIRE(workspace.reviews.Process(alphaFirst ? beta : alpha, workspace.documents));
+            REQUIRE(workspace.reviews.Process(alphaFirst ? beta : alpha, workspace.documents, &workspace.jobs));
+            workspace.Drain();
             CHECK(workspace.reviews.Status().feedback == SourceTransactionFeedback::Conflict);
             CHECK(applied[0].IsCurrent());
             CHECK(applied[1].IsCurrent());
             EditorWorkspaceViewCommandData undo;
             REQUIRE(workspace.reviews.QueueUndo(workspace.lifetime.Token(), undo));
-            REQUIRE(workspace.reviews.Process(undo, workspace.documents));
+            REQUIRE(workspace.reviews.Process(undo, workspace.documents, &workspace.jobs));
             CHECK(workspace.reviews.Status().feedback == SourceTransactionFeedback::Undone);
             const auto restored = workspace.Snapshots();
             CHECK(restored[0].Text() == "base");
@@ -101,10 +118,33 @@ namespace {
             workspace.lifetime.RequestCancellation();
             expected = SourceTransactionFeedback::Cancelled;
         }
-        REQUIRE(workspace.reviews.Process(command, workspace.documents));
+        REQUIRE(workspace.reviews.Process(command, workspace.documents, &workspace.jobs));
+        workspace.Drain();
         CHECK(workspace.reviews.Status().feedback == expected);
         CHECK_FALSE(workspace.reviews.Status().canUndo);
         CHECK(before[0].IsCurrent());
         CHECK(before[1].IsCurrent());
+    }
+
+    TEST_CASE("The editor keeps source ownership during background review preparation", "[editor][source][review][concurrency]") {
+        ReviewWorkspace workspace;
+        const auto command = workspace.Queue("proposal", "agent");
+        const auto before = workspace.Snapshots();
+        REQUIRE(workspace.reviews.Process(command, workspace.documents, &workspace.jobs));
+        REQUIRE(workspace.reviews.Status().feedback == SourceTransactionFeedback::Preparing);
+        CHECK(before[0].IsCurrent());
+        CHECK(before[1].IsCurrent());
+        auto expected = SourceTransactionFeedback::Conflict;
+        SECTION("A user edit arrives before publication") {
+            REQUIRE(workspace.documents.Edit(workspace.b.instance, {1, 0, 4, "user"}).HasValue());
+        }
+        SECTION("The workspace is retired before publication") {
+            workspace.lifetime.RequestCancellation();
+            expected = SourceTransactionFeedback::Cancelled;
+        }
+        workspace.Drain();
+        CHECK(workspace.reviews.Status().feedback == expected);
+        CHECK(before[0].IsCurrent());
+        CHECK(workspace.Snapshots()[1].Text() == (expected == SourceTransactionFeedback::Conflict ? "user" : "base"));
     }
 }  // namespace

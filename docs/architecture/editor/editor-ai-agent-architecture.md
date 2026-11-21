@@ -805,6 +805,13 @@ source edits and checks current leases and disk bases at execution. A competing
 command that loses its evidence reports a conflict. An older review never
 rebases onto new user or external edits without another review.
 
+The command shares its immutable preview with one workspace-owned preparation
+job. Policy validation and reconstruction of the accepted text run on the
+worker. The editor polls completion without waiting and publishes through the
+source owner after rechecking the current leases and disk bases. A manual edit
+can advance a source while the job is running. In that case the owner rejects
+the stale preparation before publishing any buffer.
+
 ## Backend Providers
 
 The system supports pluggable LLM backends:

@@ -120,8 +120,9 @@ namespace Horo::Editor {
                            EditorWorkspaceViewCommandData &)>
             requestSourceReview{};
         /** @brief Stages the user's explicit request to apply the accepted text after drawing. */
-        std::function<bool(const Proposals::ReviewDecisions &, const Proposals::ProjectPolicy &, const Proposals::WorkspaceEditPlan &,
-                           const CancellationToken &, EditorWorkspaceViewCommandData &)>
+        std::function<bool(const Proposals::ReviewDecisions &, const Proposals::ProjectPolicy &,
+                           const std::shared_ptr<const Proposals::WorkspaceEditPlan> &, const CancellationToken &,
+                           EditorWorkspaceViewCommandData &)>
             requestSourceReviewApply{};
         /** @brief Stages group undo for the last applied source review. */
         std::function<bool(const CancellationToken &, EditorWorkspaceViewCommandData &)> requestSourceReviewUndo{};

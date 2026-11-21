@@ -233,6 +233,7 @@ namespace {
             "workspace.local_agent.source_patch_revert_failed",
             "workspace.local_agent.source_patch_transaction_conflict",
             "workspace.local_agent.source_patch_transaction_cancelled",
+            "workspace.local_agent.source_patch_transaction_preparing",
             "workspace.local_agent.source_patch_hunks",
             "workspace.local_agent.source_patch_checkpoint_save",
             "workspace.local_agent.source_patch_checkpoint_load",

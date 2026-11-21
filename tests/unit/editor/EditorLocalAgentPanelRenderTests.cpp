@@ -371,7 +371,7 @@ namespace {
         const auto removal = PrepareEditorLocalPatchReview(remove, offered, "workspace", 1);
         REQUIRE(removal.HasValue());
         CHECK(removal.Value().files.front().kind == EditorPatchFileKind::Delete);
-        CHECK(SourceReviewOverlay::Capture(removal.Value().proposal, removal.Value().plan, 0).HasValue());
+        CHECK(SourceReviewOverlay::Capture(removal.Value().proposal, *removal.Value().plan, 0).HasValue());
         CHECK(owner.Snapshot(source.Identity().instance).Value().SharesStateWith(source));
     }
 
@@ -431,14 +431,14 @@ namespace {
         REQUIRE(review.Value().files.size() == 2);
         CHECK(review.Value().files[0].path == one.Identity().key.source);
         CHECK(review.Value().files[1].path == two.Identity().key.source);
-        const auto selected = SourceReviewOverlay::Capture(review.Value().proposal, review.Value().plan, 1);
+        const auto selected = SourceReviewOverlay::Capture(review.Value().proposal, *review.Value().plan, 1);
         REQUIRE(selected.HasValue());
         CHECK(selected.Value().Source().SharesStateWith(two));
         REQUIRE(owner.Edit(two.Identity().instance, {two.Revision(), 0, 3, "new"}).HasValue());
         CHECK_FALSE(context.IsCurrent());
         CHECK_FALSE(context.MatchesOpenSource(both));
-        CHECK(SourceReviewOverlay::Capture(review.Value().proposal, review.Value().plan, 1).HasError());
-        CHECK(SourceReviewOverlay::Capture(review.Value().proposal, review.Value().plan, 0).HasValue());
+        CHECK(SourceReviewOverlay::Capture(review.Value().proposal, *review.Value().plan, 1).HasError());
+        CHECK(SourceReviewOverlay::Capture(review.Value().proposal, *review.Value().plan, 0).HasValue());
     }
 
     TEST_CASE("A source review checkpoint restores after reopening exact content and rejects different evidence", "[editor][agent][gui]") {
@@ -461,8 +461,8 @@ namespace {
         NativeDurableFileSystem files;
         const auto stored = project.directory / ".horo/local/agent/source-review";
         REQUIRE_FALSE(LoadEditorPatchCheckpoint(project.directory, "layout-test", {}, {}).Value());
-        REQUIRE(review.decisions.Decide(review.plan, {0, 0}, ReviewChoice::Accept).HasValue());
-        REQUIRE(review.decisions.Decide(review.plan, {0, 1}, ReviewChoice::Reject).HasValue());
+        REQUIRE(review.decisions.Decide(*review.plan, {0, 0}, ReviewChoice::Accept).HasValue());
+        REQUIRE(review.decisions.Decide(*review.plan, {0, 1}, ReviewChoice::Reject).HasValue());
         CHECK_FALSE(std::filesystem::exists(stored));
         REQUIRE(
             SaveEditorPatchCheckpoint(files, project.directory, {review.proposal, review.decisions, review.offeredPaths}, {}).HasValue());
@@ -478,9 +478,9 @@ namespace {
         CHECK(restored.decisions.State().Value() == ReviewState::Mixed);
         CHECK(restored.decisions.State({0, 0}).Value() == ReviewState::Accepted);
         CHECK(restored.decisions.State({0, 1}).Value() == ReviewState::Rejected);
-        REQUIRE(SourceReviewOverlay::Capture(restored.proposal, restored.plan, 0).HasValue());
-        REQUIRE(restored.decisions.Decide(restored.plan, {0, 1}, ReviewChoice::Accept).HasValue());
-        REQUIRE(restored.decisions.Undo(restored.plan).Value());
+        REQUIRE(SourceReviewOverlay::Capture(restored.proposal, *restored.plan, 0).HasValue());
+        REQUIRE(restored.decisions.Decide(*restored.plan, {0, 1}, ReviewChoice::Accept).HasValue());
+        REQUIRE(restored.decisions.Undo(*restored.plan).Value());
         CHECK(restored.decisions.State().Value() == ReviewState::Mixed);
         CHECK(latest.IsCurrent());
         CHECK(latest.Text() == "one two\n");
@@ -604,7 +604,13 @@ namespace {
         REQUIRE(fixture.command.command == EditorWorkspaceViewCommand::ApplySourceReview);
         CHECK(one.IsCurrent());
         CHECK(two.IsCurrent());
-        REQUIRE(transactions.Process(std::exchange(fixture.command, {}), owner));
+        REQUIRE(transactions.Process(std::exchange(fixture.command, {}), owner, &fixture.jobs.Get()));
+        CHECK(fixture.DrawnText().find("Preparing accepted source changes") != std::string::npos);
+        CHECK(one.IsCurrent());
+        CHECK(two.IsCurrent());
+        REQUIRE(Await([&] {
+            return transactions.Poll(owner);
+        }));
         CHECK(fixture.DrawnText().find("Accepted changes applied to the open files.") != std::string::npos);
         const auto appliedOne = owner.Snapshot(one.Identity().instance).Value();
         const auto appliedTwo = owner.Snapshot(two.Identity().instance).Value();
@@ -618,7 +624,7 @@ namespace {
         fixture.Activate("###source_patch_revert");
         REQUIRE(fixture.command.command == EditorWorkspaceViewCommand::UndoSourceReview);
         fixture.panels.DetachAll();
-        REQUIRE(transactions.Process(std::exchange(fixture.command, {}), owner));
+        REQUIRE(transactions.Process(std::exchange(fixture.command, {}), owner, &fixture.jobs.Get()));
         CHECK(transactions.Status().feedback == Proposals::SourceTransactionFeedback::Cancelled);
         CHECK(appliedOne.IsCurrent());
         CHECK(appliedTwo.IsCurrent());
@@ -626,7 +632,7 @@ namespace {
         CHECK(fixture.DrawnText().find("The source review action was cancelled.") != std::string::npos);
         fixture.Activate("###source_patch_revert");
         REQUIRE(fixture.command.command == EditorWorkspaceViewCommand::UndoSourceReview);
-        REQUIRE(transactions.Process(std::exchange(fixture.command, {}), owner));
+        REQUIRE(transactions.Process(std::exchange(fixture.command, {}), owner, &fixture.jobs.Get()));
         CHECK(fixture.DrawnText().find("Applied changes were undone together.") != std::string::npos);
         CHECK_FALSE(transactions.Status().canUndo);
         CHECK(owner.Snapshot(one.Identity().instance).Value().Text() == one.Text());

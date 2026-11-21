@@ -873,7 +873,7 @@ namespace Horo::Editor {
             /** @brief Records an explicit review choice against the current plan. */
             void DecidePatch(EditorLocalAgentPatchReview &review, const Proposals::ReviewTarget target,
                              const Proposals::ReviewChoice choice) {
-                const auto result = review.decisions.Decide(review.plan, target, choice);
+                const auto result = review.decisions.Decide(*review.plan, target, choice);
                 status_ = result.HasError() ? "source_patch_stale" : nullptr;
             }
 
@@ -925,7 +925,7 @@ namespace Horo::Editor {
             void DrawPatchCard(EditorLocalAgentPatchReview &review, const std::size_t index, const ILocalizationService &locale,
                                const Theme::Fonts &fonts, EditorWorkspaceViewCommandData &command) {
                 const auto &file = review.files[index];
-                const auto *conflict = DrawPatchFile(file, review.plan.entries[index], locale, fonts);
+                const auto *conflict = DrawPatchFile(file, review.plan->entries[index], locale, fonts);
                 using enum Proposals::ReviewState;
                 const auto state = review.decisions.State({index}).Value();
                 const bool rejected = state == Rejected;
@@ -934,7 +934,7 @@ namespace Horo::Editor {
                                 conflict && !rejected ? Theme::ConsoleWarning() : Theme::Muted(), fonts);
                 const bool canOpen = !rejected && !conflict && file.kind != EditorPatchFileKind::Create;
                 if (Button(locale, "source_patch_review", canOpen))
-                    status_ = requestSourceReview_(review.proposal, review.plan, index, command) ? nullptr : "source_patch_unavailable";
+                    status_ = requestSourceReview_(review.proposal, *review.plan, index, command) ? nullptr : "source_patch_unavailable";
                 DrawUnitDecisions(review, {index}, state, conflict != nullptr, locale);
                 DrawHunkReview(review, index, conflict != nullptr, locale, fonts);
             }
@@ -948,7 +948,7 @@ namespace Horo::Editor {
                 if (Button(locale, "source_patch_reject", state != Rejected))
                     DecidePatch(review, {}, Proposals::ReviewChoice::Reject);
                 if (Button(locale, "source_patch_undo", review.decisions.CanUndo()))
-                    status_ = review.decisions.Undo(review.plan).HasError() ? "source_patch_stale" : nullptr;
+                    status_ = review.decisions.Undo(*review.plan).HasError() ? "source_patch_stale" : nullptr;
             }
 
             /** @brief Rebuilds the exact offered-file policy before staging the explicit application. */
@@ -976,15 +976,16 @@ namespace Horo::Editor {
                     return;
                 const auto state = sourceReviewTransaction_();
                 using enum Proposals::SourceTransactionFeedback;
-                if (std::exchange(sourceApplyQueued_, false) && state.feedback == Applied)
+                if (state.feedback != Preparing && std::exchange(sourceApplyQueued_, false) && state.feedback == Applied)
                     patchReview_.reset();
-                constexpr std::array<const char *, 7> keys{nullptr,
+                constexpr std::array<const char *, 8> keys{nullptr,
                                                            "source_patch_applied",
                                                            "source_patch_reverted",
                                                            "source_patch_apply_failed",
                                                            "source_patch_revert_failed",
                                                            "source_patch_transaction_conflict",
-                                                           "source_patch_transaction_cancelled"};
+                                                           "source_patch_transaction_cancelled",
+                                                           "source_patch_transaction_preparing"};
                 if (const auto *key = keys[static_cast<std::size_t>(state.feedback)])
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, key), Theme::Text(), fonts);
                 if (requestSourceReviewUndo_ && contextLifetime_ && state.canUndo && Button(locale, "source_patch_revert", true))
@@ -1078,7 +1079,7 @@ namespace Horo::Editor {
                     DrawPatchRestore(locale);
                     return;
                 }
-                ImGui::BeginDisabled(patchCheckpoint_.Busy());
+                ImGui::BeginDisabled(patchCheckpoint_.Busy() || sourceApplyQueued_);
                 auto &review = *patchReview_;
                 for (std::size_t index = 0; index < review.files.size(); ++index) {
                     if (review.files.size() > 1)
