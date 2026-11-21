@@ -4033,6 +4033,7 @@ add_library(HoroEditorServices STATIC
         editor/proposals/ProposedChangeSetCodec.cpp
         editor/proposals/ProposedUnifiedPatch.cpp
         editor/proposals/WorkspaceEditPlan.cpp
+        editor/proposals/ReviewDecisions.cpp
         editor/SourceDocumentChanges.cpp
         editor/SourceEditingCommands.cpp
         editor/SourceDocumentSave.cpp

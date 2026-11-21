@@ -111,6 +111,7 @@ namespace Horo::Editor {
         if (plan.HasError())
             return ReviewResult::Failure(plan.ErrorValue());
         auto cards = DescribeEditorPatchFiles(proposal.Value());
-        return ReviewResult::Success({std::move(proposal).Value(), std::move(plan).Value(), std::move(cards), {}});
+        ReviewDecisions decisions{proposal.Value()};
+        return ReviewResult::Success({std::move(proposal).Value(), std::move(plan).Value(), std::move(cards), std::move(decisions)});
     }
 }  // namespace Horo::Editor

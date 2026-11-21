@@ -37,7 +37,7 @@ namespace Horo::Editor {
         Proposals::ChangeSet proposal;
         Proposals::WorkspaceEditPlan plan;
         std::vector<EditorPatchFileCard> files;
-        std::optional<Proposals::ReviewRecord> decision;
+        Proposals::ReviewDecisions decisions;
     };
 
     /** @brief Reports whether a complete reply begins with a supported patch format. */

@@ -219,6 +219,12 @@ namespace {
             "workspace.local_agent.patch_file_destination_occupied",
             "workspace.local_agent.patch_file_overlap",
             "workspace.local_agent.patch_file_rejected",
+            "workspace.local_agent.patch_file_accepted",
+            "workspace.local_agent.patch_file_mixed",
+            "workspace.local_agent.source_patch_accept_file",
+            "workspace.local_agent.source_patch_reject_file",
+            "workspace.local_agent.source_patch_accept_all",
+            "workspace.local_agent.source_patch_undo",
             "workspace.local_agent.source_patch_reject",
         };
         RequireCatalogKeys(service, sourceEditingKeys);

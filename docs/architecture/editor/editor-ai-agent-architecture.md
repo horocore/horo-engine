@@ -768,6 +768,13 @@ the admitted path and queues the corresponding existing source tab through
 the workspace command lane. Reviews remain scoped to each tab. Rejecting a
 proposal records the choice against its digest and disables its chat actions.
 
+A review decision set binds its canonical file and hunk indices to the
+proposal digest. File and bulk decisions update their selected units
+atomically. Structural operations have one file decision. Acceptance and
+undo validate current workspace evidence before publishing a decision.
+The detached review encoding retains the current unit states and proposal
+digest for recovery. It carries no source bytes or mutation authority.
+
 ## Backend Providers
 
 The system supports pluggable LLM backends:

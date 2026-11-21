@@ -59,6 +59,12 @@ namespace Horo::Editor {
             return "patch_file_source_unavailable";
         }
 
+        /** @brief Resolves a canonical review state through the editor catalog. */
+        const char *PatchDecisionLabel(const Proposals::ReviewState state) {
+            constexpr std::array labels{"patch_file_pending", "patch_file_accepted", "patch_file_rejected", "patch_file_mixed"};
+            return labels[static_cast<std::size_t>(state)];
+        }
+
         enum class SceneQueryPhase {
             Idle,
             Running,
@@ -850,17 +856,43 @@ namespace Horo::Editor {
                 return source.Revision() && !source.IsCurrent() ? "source_patch_stale" : nullptr;
             }
 
+            /** @brief Records an explicit review choice against the current plan. */
+            void DecidePatch(EditorLocalAgentPatchReview &review, const Proposals::ReviewTarget target,
+                             const Proposals::ReviewChoice choice) {
+                const auto result = review.decisions.Decide(review.plan, target, choice);
+                status_ = result.HasError() ? "source_patch_stale" : nullptr;
+            }
+
             /** @brief Draws one file's review state and stages its operation when available. */
-            void DrawPatchCard(const EditorLocalAgentPatchReview &review, const std::size_t index, const bool rejected,
-                               const ILocalizationService &locale, const Theme::Fonts &fonts, EditorWorkspaceViewCommandData &command) {
+            void DrawPatchCard(EditorLocalAgentPatchReview &review, const std::size_t index, const ILocalizationService &locale,
+                               const Theme::Fonts &fonts, EditorWorkspaceViewCommandData &command) {
                 const auto &file = review.files[index];
                 const auto *conflict = DrawPatchFile(file, review.plan.entries[index], locale, fonts);
-                const auto *status = rejected ? "patch_file_rejected" : conflict ? conflict : "patch_file_pending";
+                using enum Proposals::ReviewState;
+                const auto state = review.decisions.State({index}).Value();
+                const bool rejected = state == Rejected;
+                const auto *status = conflict && !rejected ? conflict : PatchDecisionLabel(state);
                 Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, status),
                                 conflict && !rejected ? Theme::ConsoleWarning() : Theme::Muted(), fonts);
                 const bool canOpen = !rejected && !conflict && file.kind != EditorPatchFileKind::Create;
                 if (Button(locale, "source_patch_review", canOpen))
                     status_ = requestSourceReview_(review.proposal, review.plan, index, command) ? nullptr : "source_patch_unavailable";
+                if (Button(locale, "source_patch_accept_file", !conflict && state != Accepted))
+                    DecidePatch(review, {index}, Proposals::ReviewChoice::Accept);
+                if (Button(locale, "source_patch_reject_file", !rejected))
+                    DecidePatch(review, {index}, Proposals::ReviewChoice::Reject);
+            }
+
+            /** @brief Shows atomic proposal actions independently of per-file decisions. */
+            void DrawPatchDecisions(EditorLocalAgentPatchReview &review, const ILocalizationService &locale) {
+                using enum Proposals::ReviewState;
+                const auto state = review.decisions.State().Value();
+                if (Button(locale, "source_patch_accept_all", state != Accepted))
+                    DecidePatch(review, {}, Proposals::ReviewChoice::Accept);
+                if (Button(locale, "source_patch_reject", state != Rejected))
+                    DecidePatch(review, {}, Proposals::ReviewChoice::Reject);
+                if (Button(locale, "source_patch_undo", review.decisions.CanUndo()))
+                    status_ = review.decisions.Undo(review.plan).HasError() ? "source_patch_stale" : nullptr;
             }
 
             /** @brief Renders file summaries in proposal order and stages only the selected current operation. */
@@ -868,20 +900,14 @@ namespace Horo::Editor {
                 if (!patchReview_)
                     return;
                 auto &review = *patchReview_;
-                const bool rejected = review.decision && review.decision->choice == Proposals::ReviewChoice::Reject;
                 for (std::size_t index = 0; index < review.files.size(); ++index) {
                     if (review.files.size() > 1)
                         ImGui::PushID(static_cast<int>(index));
-                    DrawPatchCard(review, index, rejected, locale, fonts, command);
+                    DrawPatchCard(review, index, locale, fonts, command);
                     if (review.files.size() > 1)
                         ImGui::PopID();
                 }
-                if (Button(locale, "source_patch_reject", !rejected)) {
-                    auto decision =
-                        Proposals::Review(review.proposal, Proposals::ReviewChoice::Reject, std::format("editor.{}", contextGeneration_));
-                    if (decision.HasValue())
-                        review.decision.emplace(std::move(decision).Value());
-                }
+                DrawPatchDecisions(review, locale);
             }
 
             void Send(std::string_view prompt, std::optional<std::size_t> sceneCount = {}, bool recoverable = false,

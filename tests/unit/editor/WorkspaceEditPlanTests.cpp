@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <iterator>
 
 namespace {
     using namespace Horo;
@@ -33,6 +34,89 @@ namespace {
         }
     };
 }  // namespace
+
+TEST_CASE("Review decisions target exact hunks and undo an entire decision batch", "[editor][proposal][review]") {
+    Workspace workspace;
+    const auto source = workspace.Open("src/edit.cpp", "one two\n");
+    const auto path = source.Identity().key.source;
+    const auto proposal = workspace.Build({EditFile{FileBase::Capture(source).Value(), {{0, "one", "first"}, {4, "two", "second"}}}});
+    const std::array observations{SourcePathObservation{path, source}};
+    const auto plan = PlanWorkspaceEdits(proposal, workspace.policy, observations).Value();
+    ReviewDecisions decisions{proposal};
+    CHECK(decisions.State().Value() == ReviewState::Pending);
+    REQUIRE(decisions.Decide(plan, {0, 1}, ReviewChoice::Accept).HasValue());
+    CHECK(decisions.State({0, 1}).Value() == ReviewState::Accepted);
+    CHECK(decisions.State({0, 0}).Value() == ReviewState::Pending);
+    CHECK(decisions.State({0}).Value() == ReviewState::Mixed);
+    REQUIRE(decisions.Decide(plan, {0}, ReviewChoice::Reject).HasValue());
+    CHECK(decisions.State().Value() == ReviewState::Rejected);
+    REQUIRE(decisions.Undo(plan).Value());
+    CHECK(decisions.State({0, 1}).Value() == ReviewState::Accepted);
+    CHECK(decisions.State({0, 0}).Value() == ReviewState::Pending);
+    REQUIRE(decisions.Undo(plan).Value());
+    CHECK(decisions.State().Value() == ReviewState::Pending);
+    CHECK_FALSE(decisions.Undo(plan).Value());
+    CHECK(workspace.documents.Snapshot(source.Identity().instance).Value().SharesStateWith(source));
+    CHECK(source.DiskBase() == "one two\n");
+    std::ifstream disk(workspace.project.directory / "src/edit.cpp", std::ios::binary);
+    CHECK((std::string{std::istreambuf_iterator<char>{disk}, {}} == "one two\n"));
+}
+
+TEST_CASE("Bulk acceptance fails atomically when any selected operation conflicts", "[editor][proposal][review]") {
+    Workspace workspace;
+    const auto a = workspace.Open("src/a.cpp", "one");
+    const auto b = workspace.Open("src/b.cpp", "two", 2);
+    const auto proposal =
+        workspace.Build({EditFile{FileBase::Capture(a).Value(), {{0, "one", "first"}}}, DeleteFile{FileBase::Capture(b).Value()}});
+    const std::array observations{SourcePathObservation{a.Identity().key.source, a}, SourcePathObservation{b.Identity().key.source, b}};
+    const auto plan = PlanWorkspaceEdits(proposal, workspace.policy, observations).Value();
+    ReviewDecisions decisions{proposal};
+    CHECK(decisions.Decide(plan, {1, 0}, ReviewChoice::Reject).HasError());
+    CHECK(decisions.State({1, 0}).HasError());
+    REQUIRE(workspace.documents.Edit(b.Identity().instance, {b.Revision(), 0, 3, "changed"}).HasValue());
+    const auto blocked = decisions.Decide(plan, {}, ReviewChoice::Accept);
+    REQUIRE(blocked.HasError());
+    CHECK(blocked.ErrorValue().code.Value() == Errors::StaleBase.code.Value());
+    CHECK(decisions.State().Value() == ReviewState::Pending);
+    REQUIRE(decisions.Decide(plan, {0}, ReviewChoice::Accept).HasValue());
+    CHECK(decisions.State({0}).Value() == ReviewState::Accepted);
+    REQUIRE(decisions.Decide(plan, {}, ReviewChoice::Reject).HasValue());
+    CHECK(decisions.State().Value() == ReviewState::Rejected);
+    CHECK(workspace.documents.Snapshot(a.Identity().instance).Value().SharesStateWith(a));
+    CHECK(std::filesystem::exists(workspace.project.directory / "src/b.cpp"));
+}
+
+TEST_CASE("Review recovery rejects corruption and stale accepted units", "[editor][proposal][review]") {
+    Workspace workspace;
+    const auto source = workspace.Open("src/edit.cpp", "original");
+    const auto path = source.Identity().key.source;
+    const auto proposal = workspace.Build({EditFile{FileBase::Capture(source).Value(), {{0, "original", "replacement"}}}});
+    const std::array observations{SourcePathObservation{path, source}};
+    const auto plan = PlanWorkspaceEdits(proposal, workspace.policy, observations).Value();
+    ReviewDecisions decisions{proposal};
+    REQUIRE(decisions.Decide(plan, {}, ReviewChoice::Accept).HasValue());
+    const auto accepted = decisions.Encode();
+    CHECK(accepted.find("replacement") == std::string::npos);
+    CHECK(accepted.find("src/edit.cpp") == std::string::npos);
+    auto decoded = ReviewDecisions::Decode(proposal, plan, accepted);
+    REQUIRE(decoded.HasValue());
+    auto restored = std::move(decoded).Value();
+    CHECK(restored.State().Value() == ReviewState::Accepted);
+    CHECK(restored.Encode() == accepted);
+    CHECK_FALSE(restored.Undo(plan).Value());
+    auto corrupt = accepted;
+    corrupt.back() = corrupt.back() == '0' ? '1' : '0';
+    CHECK(ReviewDecisions::Decode(proposal, plan, corrupt).HasError());
+    CHECK(ReviewDecisions::Decode(proposal, plan, accepted + "extra").HasError());
+    const auto different = workspace.Build({EditFile{FileBase::Capture(source).Value(), {{0, "original", "different"}}}});
+    CHECK(ReviewDecisions::Decode(different, plan, accepted).HasError());
+    REQUIRE(decisions.Decide(plan, {}, ReviewChoice::Reject).HasValue());
+    REQUIRE(workspace.documents.Edit(source.Identity().instance, {source.Revision(), 0, 8, "new"}).HasValue());
+    CHECK(ReviewDecisions::Decode(proposal, plan, accepted).HasError());
+    CHECK(ReviewDecisions::Decode(proposal, plan, decisions.Encode()).HasValue());
+    CHECK(decisions.Undo(plan).HasError());
+    CHECK(decisions.State().Value() == ReviewState::Rejected);
+}
 
 TEST_CASE("Workspace plans preserve exact text and use canonical operation order", "[editor][proposal][plan]") {
     Workspace workspace;

@@ -4,6 +4,7 @@
 #include "Horo/Foundation/Sha256.h"
 
 #include <array>
+#include <deque>
 #include <span>
 #include <variant>
 
@@ -263,6 +264,59 @@ namespace Horo::Editor::Proposals {
      * @param proposal Immutable reviewed proposal. @param choice Visible decision. @param reviewer Host-supplied stable identity.
      * @return Review data or invalid decision/identity error. */
     Result<ReviewRecord> Review(const ChangeSet &proposal, ReviewChoice choice, std::string reviewer);
+
+    /** @brief One review decision or the aggregate of several units. Mixed is aggregate-only. */
+    enum class ReviewState : std::uint8_t {
+        Pending,
+        Accepted,
+        Rejected,
+        Mixed
+    };
+
+    /** @brief Canonical proposal coordinates. An empty target selects the whole proposal. */
+    struct ReviewTarget final {
+        std::optional<std::size_t> file;
+        std::optional<std::size_t> hunk;
+    };
+
+    /** @brief Inert decisions on one exact proposal. Edits have per-hunk decisions and structural operations are indivisible. */
+    class ReviewDecisions final {
+    public:
+        /** @brief Creates pending decisions in canonical proposal order. */
+        explicit ReviewDecisions(ChangeSet proposal);
+        /** @brief Reads the exact selected unit or its aggregate. @return Invalid for unknown units. */
+        [[nodiscard]] Result<ReviewState> State(ReviewTarget target = {}) const;
+        /** @brief Records one atomic decision. Acceptance requires a current, conflict-free plan for every selected operation.
+         * @param plan The latest defensive workspace plan. @param target Whole proposal, file or edit hunk.
+         * @param choice Explicit review-only choice. @return Success or typed failure, with no partial decisions or source writes.
+         */
+        Result<void> Decide(const WorkspaceEditPlan &plan, ReviewTarget target, ReviewChoice choice);
+
+        /** @brief Reports whether this session has a decision to undo. */
+        [[nodiscard]] bool CanUndo() const noexcept {
+            return !undo_.empty();
+        }
+
+        /** @brief Restores the previous decision batch against the current plan. @return True if a decision was undone. */
+        Result<bool> Undo(const WorkspaceEditPlan &plan);
+        /** @brief Encodes the proposal digest and canonical unit states without source bytes or approval authority. */
+        [[nodiscard]] std::string Encode() const;
+        /** @brief Reconstructs decisions bound to the exact proposal and current plan.
+         * @param proposal Exact admitted proposal. @param plan Current workspace plan. @param text Bounded review bytes.
+         * @return Detached decisions or a typed parse, identity or freshness failure.
+         */
+        [[nodiscard]] static Result<ReviewDecisions> Decode(ChangeSet proposal, const WorkspaceEditPlan &plan, std::string_view text);
+
+    private:
+        using Units = std::vector<std::vector<ReviewState>>;
+        [[nodiscard]] bool Contains(ReviewTarget target) const noexcept;
+        [[nodiscard]] bool Matches(const WorkspaceEditPlan &plan) const noexcept;
+        [[nodiscard]] bool CanAccept(const WorkspaceEditPlan &plan, std::size_t file) const;
+        ChangeSet proposal_;
+        Units units_;
+        std::deque<Units> undo_;
+    };
+
     enum class ApplicationState : std::uint8_t {
         NotApplied,
         AppliedToWorkspace,
