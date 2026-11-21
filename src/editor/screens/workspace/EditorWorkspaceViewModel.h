@@ -278,6 +278,8 @@ namespace Horo::Editor {
         EditDecisionLayout,
         OpenDecisionDiagnosticKey,
         ReloadExternalDecisionGraph,
+        RestoreDecisionGraphRecovery,
+        DiscardDecisionGraphRecovery,
         OpenDiagnosticSource,
         ChangeActivePanel,
         CloseWorkspacePanel,
@@ -631,6 +633,7 @@ namespace Horo::Editor {
         std::optional<Error> diagnostic;
         std::shared_ptr<const AI::DecisionAssetValidationReport> validation; /**< Typed targets from the last failed validation. */
         bool conflict{};
+        std::shared_ptr<const DocumentRecoveryRecord> recovery;
     };
 
     /** @brief Confirmed first Blackboard asset and an explicitly authored initial key. */
@@ -784,7 +787,8 @@ namespace Horo::Editor {
         std::optional<UtilityGraphEditRequest> utilityGraphEdit = std::nullopt;
         std::optional<DecisionGraphLayoutRequest> decisionLayoutEdit = std::nullopt;
         std::optional<DecisionDiagnosticKeyRequest> decisionDiagnosticKey;
-        std::optional<DecisionGraphDocumentFence> decisionGraphReload;
+        std::optional<DecisionGraphDocumentFence> decisionGraphFence;
+        std::shared_ptr<const DocumentRecoveryRecord> decisionGraphRecovery;
         std::optional<DiagnosticSourceRequest> diagnosticSource = std::nullopt;
         std::optional<CreateGameplayBehaviorRequest> gameplayBehaviorRequest = std::nullopt;
         std::optional<AssetSceneDropRequest> assetSceneDrop = std::nullopt;

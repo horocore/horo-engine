@@ -53,6 +53,9 @@ namespace Horo::Editor {
     /** @brief Encodes one canonical layout independently of runtime graph bytes. */
     [[nodiscard]] Result<std::vector<std::byte>> EncodeDecisionLayout(const DecisionGraphLayout &layout, Assets::AssetId asset,
                                                                       AI::DecisionGraphAssetId graph);
+    /** @brief Validates layout bytes with the same codec used for the registered sidecar. */
+    [[nodiscard]] Result<DecisionGraphLayout> DecodeDecisionLayout(std::span<const std::byte> bytes, Assets::AssetId asset,
+                                                                   AI::DecisionGraphAssetId graph);
     /** @brief Computes deterministic logical positions across reachable graph layers. */
     [[nodiscard]] DecisionGraphLayout AutomaticDecisionLayout(const GraphViewSnapshot &graph);
     /** @brief Applies only bounded positions for nodes in the current revision. */

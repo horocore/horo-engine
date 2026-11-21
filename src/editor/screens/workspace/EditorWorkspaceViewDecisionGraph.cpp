@@ -8,6 +8,7 @@
 #include "Horo/AI/DecisionAssetValidation.h"
 #include "Horo/AI/DecisionNodeRegistration.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
+#include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/Editor/Localization/ILocalizationService.h"
 
@@ -1075,6 +1076,28 @@ namespace Horo::Editor {
         return focus;
     }
 
+    namespace {
+        /** @brief Presents explicit recovery actions for the currently projected checkpoint. */
+        bool DrawDecisionRecovery(const DecisionGraphWorkspaceDocument &document, const EditorGuiContext &context,
+                                  EditorWorkspaceViewCommandData &outCommand) {
+            if (!document.recovery)
+                return false;
+            constexpr GuiLocalizationScope text{"workspace.decision_graph"};
+            const auto &fonts = context.theme.fonts;
+            const bool restore = Ui::Button({.label = text.Text(context.localization, "restore_recovery").c_str(),
+                                             .enabled = !document.dirty && !document.conflict,
+                                             .font = fonts.sans});
+            const bool discard = Ui::Button({.label = text.Text(context.localization, "discard_recovery").c_str(), .font = fonts.sans});
+            if (!restore && !discard)
+                return false;
+            outCommand = {.command = restore ? EditorWorkspaceViewCommand::RestoreDecisionGraphRecovery
+                                             : EditorWorkspaceViewCommand::DiscardDecisionGraphRecovery,
+                          .decisionGraphFence = DecisionGraphDocumentFence{document.identity.instance, document.revision},
+                          .decisionGraphRecovery = document.recovery};
+            return true;
+        }
+    }  // namespace
+
     /** @copydoc EditorWorkspaceView::DrawDecisionGraphDocument */
     bool EditorWorkspaceView::DrawDecisionGraphDocument(const EditorWorkspaceViewModel &viewModel,
                                                         EditorWorkspaceViewCommandData &outCommand) const {
@@ -1099,7 +1122,9 @@ namespace Horo::Editor {
         if (opened->diagnostic) {
             const auto code = opened->diagnostic->code.Value();
             std::string_view key = opened->conflict ? "workspace.decision_graph.edit_conflict" : "workspace.decision_graph.edit_refused";
-            if (code == AI::AIErrors::DecisionAssetDependencyCycle.code.Value())
+            if (!opened->conflict && opened->recovery && code == Assets::AssetSourceErrors::Conflict.code.Value())
+                key = "workspace.decision_graph.recovery_conflict";
+            else if (code == AI::AIErrors::DecisionAssetDependencyCycle.code.Value())
                 key = "workspace.decision_graph.subtree_cycle";
             else if (code == AI::AIErrors::DecisionAssetSubtreeMissing.code.Value())
                 key = "workspace.decision_graph.subtree_missing";
@@ -1125,9 +1150,11 @@ namespace Horo::Editor {
         if (opened->conflict &&
             Ui::Button({.label = text("workspace.decision_graph.reload_external").c_str(), .font = m_context.theme.fonts.sans})) {
             outCommand = {.command = EditorWorkspaceViewCommand::ReloadExternalDecisionGraph,
-                          .decisionGraphReload = DecisionGraphDocumentFence{opened->identity.instance, opened->revision}};
+                          .decisionGraphFence = DecisionGraphDocumentFence{opened->identity.instance, opened->revision}};
             return true;
         }
+        if (DrawDecisionRecovery(*opened, m_context, outCommand))
+            return true;
 
         const auto *propertyMachine = std::get_if<AI::StateMachineAssetDescriptor>(&opened->graph->body);
         const bool propertyOnly = opened->editable && propertyMachine && !CanEditStateMachineTopology(*propertyMachine);

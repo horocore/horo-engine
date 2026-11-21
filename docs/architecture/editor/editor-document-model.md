@@ -654,6 +654,11 @@ disk identities and never writes the registered source or layout. A
 successful save or an explicit discard removes only the workspace's own
 matching checkpoint.
 
+Reopening a registered Decision graph offers to restore or discard its
+checkpoint. Restore validates the current graph and layout identities and
+loads a dirty draft only when they match the accepted base. A newer disk
+revision leaves both the canonical files and the recovery copy available.
+
 By default, external reload starts a new history branch, clears redo history, and prevents undo across the reload boundary. It is never injected as a hidden command. Rebase is allowed only through an explicit policy that rebuilds valid semantic history entries.
 
 ## Navigation Definition And Scene Intent

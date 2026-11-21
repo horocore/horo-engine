@@ -72,6 +72,12 @@ namespace Horo::Editor {
         }
     }  // namespace
 
+    /** @copydoc DecodeDecisionLayout */
+    Result<DecisionGraphLayout> DecodeDecisionLayout(std::span<const std::byte> bytes, Assets::AssetId asset,
+                                                     AI::DecisionGraphAssetId graph) {
+        return DecodeLayout(bytes, asset, graph);
+    }
+
     /** @copydoc DecisionLayoutPath */
     std::filesystem::path DecisionLayoutPath(const std::filesystem::path &source) {
         auto result = source;

@@ -557,18 +557,48 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
         const auto source = project.root / path;
         const auto accepted = Assets::CaptureAssetSource(project.root, source, AI::DecisionCodecLimits{}.maximumBytes);
         REQUIRE(accepted.HasValue());
+        workspace.ProcessCommand({.command = EditorWorkspaceViewCommand::EditDecisionStateMachine,
+                                  .stateMachineEdit = StateMachineEditRequest{instance,
+                                                                              view.revision,
+                                                                              StateMachineEditOperation::SetTerminal,
+                                                                              node,
+                                                                              {},
+                                                                              AI::DecisionStateTerminal::Succeeded}});
+        REQUIRE_FALSE(view.diagnostic);
         workspace.ProcessCommand(
             {.command = EditorWorkspaceViewCommand::EditDecisionLayout,
              .decisionLayoutEdit = DecisionGraphLayoutRequest{{instance, view.revision}, DecisionLayoutOperation::Move, {{node, 4, 8}}}});
         REQUIRE(view.dirty);
-        {
-            std::ofstream external(source, std::ios::binary | std::ios::app);
-            external.put('\n');
+        bool sourceChanged = false;
+        bool layoutChanged = false;
+        SECTION("matching source and layout restore a dirty draft") {}
+        SECTION("newer canonical source rejects restoration") {
+            sourceChanged = true;
+        }
+        SECTION("newer canonical layout rejects restoration") {
+            layoutChanged = true;
+        }
+        if (sourceChanged) {
+            const auto changed = AI::DecisionPlanCodec::EncodeSource(std::span{view.graph.get(), 1}, view.graph->asset);
+            REQUIRE(changed.HasValue());
+            const auto &bytes = changed.Value();
+            std::ofstream external(source, std::ios::binary);
+            external.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
             REQUIRE(static_cast<bool>(external));
+        }
+        if (layoutChanged) {
+            const auto external = EncodeDecisionLayout({{node, 16, 32}}, view.asset, view.graph->asset);
+            REQUIRE(external.HasValue());
+            const auto &bytes = external.Value();
+            std::ofstream stream(DecisionLayoutPath(source), std::ios::binary);
+            stream.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            REQUIRE(static_cast<bool>(stream));
         }
         const auto newer = Assets::CaptureAssetSource(project.root, source, AI::DecisionCodecLimits{}.maximumBytes);
         REQUIRE(newer.HasValue());
-        REQUIRE(newer.Value().identity != accepted.Value().identity);
+        CHECK((newer.Value().identity != accepted.Value().identity) == sourceChanged);
+        const auto diskLayout = Assets::CaptureAssetSource(project.root, DecisionLayoutPath(source), MaximumDecisionLayoutBytes);
+        REQUIRE(diskLayout.HasValue());
         DocumentRecoveryService recovery(project.root, project.mutations, project.files);
         workspace.UpdateAutosave(60.0F, 1);
         for (int attempt = 0; attempt < 300; ++attempt) {
@@ -589,12 +619,61 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
         const auto canonical = Assets::CaptureAssetSource(project.root, source, AI::DecisionCodecLimits{}.maximumBytes);
         REQUIRE(canonical.HasValue());
         CHECK(canonical.Value().identity == newer.Value().identity);
-        CHECK_FALSE(std::filesystem::exists(DecisionLayoutPath(source)));
+        CHECK(std::filesystem::exists(DecisionLayoutPath(source)) == layoutChanged);
         CHECK(view.dirty);
 
         const auto asset = view.asset;
         const auto key = view.identity.key;
-        REQUIRE(workspace.ResolveDecisionGraphClose({instance, view.revision}, SourceCloseDecision::Discard).HasValue());
+        const auto nextSession = Assets::AssetId::FromBytes({38});
+        EditorWorkspaceController restarted(project.root, project.runtime, project.registry.Snapshot(),
+                                            {.assets = {.mutableAssetRegistry = &project.registry},
+                                             .world = {.documentSessionOwner = nextSession},
+                                             .mutations = &project.mutations,
+                                             .durableFiles = &project.files,
+                                             .jobs = &jobs});
+        restarted.ProcessCommand({.command = EditorWorkspaceViewCommand::OpenSourceFile,
+                                  .sourceOpenRequest = SourceOpenRequest{.path = path, .origin = SourceOpenOrigin::AssetActivation}});
+        REQUIRE(restarted.ViewModel().decisionGraphDocuments.size() == 1);
+        const auto &opened = restarted.ViewModel().decisionGraphDocuments.front();
+        REQUIRE(opened.recovery);
+        REQUIRE(*opened.recovery == *recovered.Value());
+        const auto request = [&](EditorWorkspaceViewCommand action) {
+            restarted.ProcessCommand({.command = action,
+                                      .decisionGraphFence = DecisionGraphDocumentFence{opened.identity.instance, opened.revision},
+                                      .decisionGraphRecovery = opened.recovery});
+        };
+        request(EditorWorkspaceViewCommand::RestoreDecisionGraphRecovery);
+        if (sourceChanged || layoutChanged) {
+            REQUIRE(opened.diagnostic);
+            CHECK(opened.diagnostic->code.Value() == Assets::AssetSourceErrors::Conflict.code.Value());
+            CHECK_FALSE(opened.dirty);
+            REQUIRE(opened.recovery);
+            CHECK(recovery.Inspect(asset, key).Value() == recovered.Value());
+            const auto preservedSource = Assets::CaptureAssetSource(project.root, source, AI::DecisionCodecLimits{}.maximumBytes);
+            const auto preservedLayout = Assets::CaptureAssetSource(project.root, DecisionLayoutPath(source), MaximumDecisionLayoutBytes);
+            REQUIRE(preservedSource.HasValue());
+            REQUIRE(preservedLayout.HasValue());
+            CHECK(preservedSource.Value().identity == newer.Value().identity);
+            CHECK(preservedLayout.Value().identity == diskLayout.Value().identity);
+            request(EditorWorkspaceViewCommand::DiscardDecisionGraphRecovery);
+        } else {
+            CHECK_FALSE(opened.recovery);
+            REQUIRE(opened.dirty);
+            CHECK(*opened.layout == *view.layout);
+            CHECK(std::get<AI::StateMachineAssetDescriptor>(opened.graph->body).states.front().terminal ==
+                  AI::DecisionStateTerminal::Succeeded);
+            CHECK_FALSE(std::filesystem::exists(DecisionLayoutPath(source)));
+            const auto afterRestore = Assets::CaptureAssetSource(project.root, source, AI::DecisionCodecLimits{}.maximumBytes);
+            REQUIRE(afterRestore.HasValue());
+            CHECK(afterRestore.Value().identity == accepted.Value().identity);
+            restarted.FlushAutosave();
+            const auto replaced = recovery.Inspect(asset, key);
+            REQUIRE(replaced.HasValue());
+            REQUIRE(replaced.Value());
+            CHECK(replaced.Value()->sessionOwner == nextSession);
+            restarted.ProcessCommand(MakeDecisionHistoryCommand(opened, DecisionHistoryAction::Save));
+            CHECK_FALSE(opened.dirty);
+        }
         CHECK_FALSE(recovery.Inspect(asset, key).Value());
     }
 
@@ -1188,7 +1267,7 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
         const auto revision = view.revision;
         const auto reload = [&](std::uint64_t expected) {
             controller.ProcessCommand({.command = EditorWorkspaceViewCommand::ReloadExternalDecisionGraph,
-                                       .decisionGraphReload = DecisionGraphDocumentFence{instance, expected}});
+                                       .decisionGraphFence = DecisionGraphDocumentFence{instance, expected}});
         };
         reload(revision);
         CHECK(view.revision == revision);

@@ -1,6 +1,7 @@
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Editor/DocumentRecoveryService.h"
 #include "Horo/Foundation/Logging/Logger.h"
+#include "Horo/Foundation/PathUtils.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
 #include <algorithm>
@@ -10,6 +11,10 @@
 
 namespace Horo::Editor {
     namespace {
+        constexpr std::size_t LayoutIdentityOffset = 1;
+        constexpr std::size_t GraphSizeOffset = LayoutIdentityOffset + 1 + 8 + Sha256Digest{}.bytes.size();
+        constexpr std::size_t RecoveryHeaderSize = GraphSizeOffset + 4;
+
         /** @brief Immutable owner capture, with both accepted disk identities separate from in-memory changes. */
         struct DecisionRecoveryCapture final {
             Assets::AssetId asset;
@@ -20,6 +25,7 @@ namespace Horo::Editor {
             Assets::AssetSourceIdentity acceptedLayout;
             std::shared_ptr<const AI::DecisionGraphSource> graph;
             std::shared_ptr<const DecisionGraphLayout> layout;
+            std::shared_ptr<const DocumentRecoveryRecord> acceptedRecovery;
         };
 
         /** @brief Appends one fixed-width big-endian integer to the versioned record payload. */
@@ -37,13 +43,12 @@ namespace Horo::Editor {
             const auto layout = EncodeDecisionLayout(*capture.layout, capture.asset, capture.graph->asset);
             if (layout.HasError())
                 return Encoded::Failure(layout.ErrorValue());
-            constexpr std::size_t headerSize = 1 + 1 + 8 + 32 + 4;
-            if (graph.Value().size() + layout.Value().size() > DocumentRecoveryLimits{}.maximumRecordBytes - headerSize)
+            if (graph.Value().size() + layout.Value().size() > DocumentRecoveryLimits{}.maximumRecordBytes - RecoveryHeaderSize)
                 return Encoded::Failure(MakeError(Assets::AssetSourceErrors::Limit));
             const auto source = std::as_bytes(std::span{graph.Value()});
             const auto base = std::as_bytes(std::span{capture.acceptedLayout.digest.bytes});
             std::vector<std::byte> payload;
-            payload.reserve(headerSize + source.size() + layout.Value().size());
+            payload.reserve(RecoveryHeaderSize + source.size() + layout.Value().size());
             AppendInteger(payload, 1, 1);
             AppendInteger(payload, capture.acceptedLayout.exists, 1);
             AppendInteger(payload, capture.acceptedLayout.bytes, 8);
@@ -52,6 +57,57 @@ namespace Horo::Editor {
             payload.insert(payload.end(), source.begin(), source.end());
             payload.insert(payload.end(), layout.Value().begin(), layout.Value().end());
             return Encoded::Success(std::move(payload));
+        }
+
+        /** @brief Reads a validated fixed-width big-endian payload field. */
+        std::uint64_t ReadInteger(const std::span<const std::byte> bytes) {
+            std::uint64_t value{};
+            for (const auto byte : bytes)
+                value = (value << 8) | std::to_integer<std::uint8_t>(byte);
+            return value;
+        }
+
+        /** @brief Decodes the exact accepted layout identity stored alongside the draft. */
+        Assets::AssetSourceIdentity ReadLayoutIdentity(const std::span<const std::byte> payload) {
+            Sha256Digest digest;
+            const auto bytes = payload.subspan(LayoutIdentityOffset + 9, digest.bytes.size());
+            std::ranges::transform(bytes, digest.bytes.begin(), [](const std::byte value) {
+                return std::to_integer<std::uint8_t>(value);
+            });
+            return {payload[LayoutIdentityOffset] == std::byte{1},
+                    static_cast<std::size_t>(ReadInteger(payload.subspan(LayoutIdentityOffset + 1, 8))), digest};
+        }
+
+        /** @brief Validates the checkpoint framing and reuses both registered source codecs. */
+        Result<DecisionGraphDocumentRoot> DecodeDecisionRecovery(const DocumentRecoveryRecord &record,
+                                                                 const DecisionGraphWorkspaceDocument &document,
+                                                                 const Assets::AssetSourceIdentity &acceptedLayout) {
+            using Root = Result<DecisionGraphDocumentRoot>;
+            const std::span payload{record.payload};
+            if (payload.size() <= RecoveryHeaderSize || payload.front() != std::byte{1} || payload[LayoutIdentityOffset] > std::byte{1} ||
+                ReadInteger(payload.subspan(LayoutIdentityOffset + 1, 8)) > MaximumDecisionLayoutBytes ||
+                ComputeSha256(payload) != record.state)
+                return Root::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+            if (ReadLayoutIdentity(payload) != acceptedLayout)
+                return Root::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+            const auto graphSize = ReadInteger(payload.subspan(GraphSizeOffset, 4));
+            if (graphSize == 0 || graphSize >= payload.size() - RecoveryHeaderSize || graphSize > AI::DecisionCodecLimits{}.maximumBytes)
+                return Root::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+            const auto graphBytes = payload.subspan(RecoveryHeaderSize, static_cast<std::size_t>(graphSize));
+            AI::DecisionGraphAssetId graphRoot;
+            auto graph = AI::DecisionPlanCodec::DecodeSource({reinterpret_cast<const std::uint8_t *>(graphBytes.data()), graphBytes.size()},
+                                                             graphRoot);
+            if (graph.HasError())
+                return Root::Failure(graph.ErrorValue());
+            if (graphRoot != document.graph->asset || graph.Value().size() != 1 ||
+                graph.Value().front().body.index() != document.graph->body.index())
+                return Root::Failure(MakeError(Application::DecisionCookErrors::Invalid));
+            auto layout = DecodeDecisionLayout(payload.subspan(RecoveryHeaderSize + graphBytes.size()), document.asset, graphRoot);
+            if (layout.HasError())
+                return Root::Failure(layout.ErrorValue());
+            auto graphs = std::move(graph).Value();
+            return Root::Success({std::make_shared<const AI::DecisionGraphSource>(std::move(graphs.front())),
+                                  std::make_shared<const DecisionGraphLayout>(std::move(layout).Value()), ComputeSha256(graphBytes)});
         }
 
         /** @brief Publishes only a project-local recovery slot under the shared writer's exact ownership rules. */
@@ -65,10 +121,17 @@ namespace Horo::Editor {
                     return Result<void>::Failure(payload.ErrorValue());
                 const auto now =
                     std::chrono::duration_cast<std::chrono::seconds>(std::chrono::system_clock::now().time_since_epoch()).count();
-                return recovery.Write({capture.asset, capture.document.key, capture.session, capture.document.instance.Value(),
-                                       capture.revision, static_cast<std::uint64_t>(now), capture.acceptedSource,
-                                       ComputeSha256(payload.Value()), std::move(payload).Value()},
-                                      cancellation);
+                const DocumentRecoveryRecord record{capture.asset,
+                                                    capture.document.key,
+                                                    capture.session,
+                                                    capture.document.instance.Value(),
+                                                    capture.revision,
+                                                    static_cast<std::uint64_t>(now),
+                                                    capture.acceptedSource,
+                                                    ComputeSha256(payload.Value()),
+                                                    std::move(payload).Value()};
+                return capture.acceptedRecovery ? recovery.ReplaceAccepted(record, *capture.acceptedRecovery, cancellation)
+                                                : recovery.Write(record, cancellation);
             } catch (const std::bad_alloc &) {
                 return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Limit));
             }
@@ -76,11 +139,48 @@ namespace Horo::Editor {
 
         /** @brief Projects one owner revision without borrowing its edit state across the I/O job. */
         DecisionRecoveryCapture CaptureDecisionRecovery(const DecisionGraphWorkspaceDocument &document, Assets::AssetId session,
-                                                        std::size_t acceptedBytes, Assets::AssetSourceIdentity acceptedLayout) {
-            return {document.asset, document.identity, session,        document.revision, {true, acceptedBytes, document.source},
-                    acceptedLayout, document.graph,    document.layout};
+                                                        std::size_t acceptedBytes, Assets::AssetSourceIdentity acceptedLayout,
+                                                        std::shared_ptr<const DocumentRecoveryRecord> acceptedRecovery) {
+            return {document.asset, document.identity, session,         document.revision,          {true, acceptedBytes, document.source},
+                    acceptedLayout, document.graph,    document.layout, std::move(acceptedRecovery)};
         }
     }  // namespace
+
+    /** @copydoc EditorWorkspaceController::InspectDecisionGraphRecovery */
+    void EditorWorkspaceController::InspectDecisionGraphRecovery(DecisionGraphWorkspaceDocument &document) const {
+        if (!document.editable || !m_mutations || !m_durableFiles || !m_workspaceSession.IsValid())
+            return;
+        DocumentRecoveryService recovery(ProjectRoot(), *m_mutations, *m_durableFiles);
+        auto observed = recovery.Inspect(document.asset, document.identity.key);
+        if (observed.HasError()) {
+            LOG_ERROR("editor.decision_recovery", "Decision recovery inspection failed: %s", observed.ErrorValue().message.c_str());
+        } else if (observed.Value()) {
+            document.recovery = std::make_shared<const DocumentRecoveryRecord>(std::move(observed).Value().value());
+        }
+    }
+
+    /** @copydoc EditorWorkspaceController::ReadDecisionGraphRecovery */
+    Result<DecisionGraphDocumentRoot> EditorWorkspaceController::ReadDecisionGraphRecovery(const DecisionGraphWorkspaceDocument &document,
+                                                                                           const DecisionGraphDraft &draft) const {
+        using Root = Result<DecisionGraphDocumentRoot>;
+        DocumentRecoveryService recovery(ProjectRoot(), *m_mutations, *m_durableFiles);
+        const auto observed = recovery.Inspect(document.asset, document.identity.key);
+        if (observed.HasError())
+            return Root::Failure(observed.ErrorValue());
+        const Assets::AssetSourceIdentity acceptedSource{true, draft.acceptedBytes, document.source};
+        if (!observed.Value() || *observed.Value() != *document.recovery || observed.Value()->acceptedSource != acceptedSource)
+            return Root::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        const auto *record = m_assetRegistry.Find(document.asset);
+        if (!record || record->sourcePath.String() != document.identity.key.source.Value())
+            return Root::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        const auto path = Foundation::Paths::Resolve(ProjectRoot(), record->sourcePath);
+        const auto layout = CaptureDecisionLayout(ProjectRoot(), path, document.asset, document.graph->asset);
+        if (layout.HasError())
+            return Root::Failure(layout.ErrorValue());
+        if (layout.Value().accepted != draft.acceptedLayout)
+            return Root::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        return DecodeDecisionRecovery(*observed.Value(), document, draft.acceptedLayout);
+    }
 
     /** @copydoc EditorWorkspaceController::ObserveDecisionGraphRecovery */
     void EditorWorkspaceController::ObserveDecisionGraphRecovery() {
@@ -93,8 +193,10 @@ namespace Horo::Editor {
         m_decisionGraphRecovery.reset();
         if (result->state == JobState::Succeeded) {
             const auto draft = m_decisionGraphDrafts.find(fence.instance);
-            if (draft != m_decisionGraphDrafts.end())
+            if (draft != m_decisionGraphDrafts.end()) {
                 draft->second.recoveredRevision = std::max(draft->second.recoveredRevision, fence.revision);
+                draft->second.acceptedRecovery.reset();
+            }
         } else if (result->state != JobState::Cancelled && result->terminalResult->error) {
             LOG_ERROR("editor.decision_recovery", "Decision recovery checkpoint failed: %s",
                       result->terminalResult->error->message.c_str());
@@ -113,19 +215,22 @@ namespace Horo::Editor {
     Result<void> EditorWorkspaceController::ClearDecisionGraphRecovery(const DecisionGraphWorkspaceDocument &document,
                                                                        DecisionGraphDraft &draft) {
         JoinDecisionGraphRecovery(document.identity.instance);
-        if (!m_workspaceSession.IsValid() || !m_mutations || !m_durableFiles || draft.recoveredRevision == 0)
+        if (!m_workspaceSession.IsValid() || !m_mutations || !m_durableFiles || (draft.recoveredRevision == 0 && !draft.acceptedRecovery))
             return Result<void>::Success();
         DocumentRecoveryService recovery(ProjectRoot(), *m_mutations, *m_durableFiles);
         const auto observed = recovery.Inspect(document.asset, document.identity.key);
         if (observed.HasError())
             return Result<void>::Failure(observed.ErrorValue());
-        if (const auto &record = observed.Value(); record && record->sessionOwner == m_workspaceSession &&
-                                                   record->sessionGeneration == document.identity.instance.Value() &&
-                                                   record->revision == draft.recoveredRevision) {
+        const auto &record = observed.Value();
+        const bool owned = record && record->sessionOwner == m_workspaceSession &&
+                           record->sessionGeneration == document.identity.instance.Value() && record->revision == draft.recoveredRevision;
+        const bool accepted = record && draft.acceptedRecovery && *record == *draft.acceptedRecovery;
+        if (owned || accepted) {
             if (auto discarded = recovery.Discard(*record); discarded.HasError())
                 return discarded;
         }
         draft.recoveredRevision = 0;
+        draft.acceptedRecovery.reset();
         return Result<void>::Success();
     }
 
@@ -154,8 +259,8 @@ namespace Horo::Editor {
         if (document == documents.end() || !document->dirty || draft == m_decisionGraphDrafts.end() ||
             draft->second.recoveredRevision >= document->revision)
             return;
-        const auto capture =
-            CaptureDecisionRecovery(*document, m_workspaceSession, draft->second.acceptedBytes, draft->second.acceptedLayout);
+        const auto capture = CaptureDecisionRecovery(*document, m_workspaceSession, draft->second.acceptedBytes,
+                                                     draft->second.acceptedLayout, draft->second.acceptedRecovery);
         auto submitted = m_sourceRecoveryJobs->SubmitResult({.priority = JobPriority::Background, .resource = JobResource::Io},
                                                             [root = ProjectRoot(), mutations = m_mutations, files = m_durableFiles,
                                                              capture](const CancellationToken &cancellation) {
@@ -181,12 +286,14 @@ namespace Horo::Editor {
             const auto draft = m_decisionGraphDrafts.find(document.identity.instance);
             if (!document.dirty || draft == m_decisionGraphDrafts.end() || draft->second.recoveredRevision >= document.revision)
                 continue;
-            const auto capture =
-                CaptureDecisionRecovery(document, m_workspaceSession, draft->second.acceptedBytes, draft->second.acceptedLayout);
+            const auto capture = CaptureDecisionRecovery(document, m_workspaceSession, draft->second.acceptedBytes,
+                                                         draft->second.acceptedLayout, draft->second.acceptedRecovery);
             if (const auto saved = WriteDecisionRecovery(capture, recovery); saved.HasError())
                 LOG_ERROR("editor.decision_recovery", "Decision recovery checkpoint failed: %s", saved.ErrorValue().message.c_str());
-            else
+            else {
                 draft->second.recoveredRevision = document.revision;
+                draft->second.acceptedRecovery.reset();
+            }
         }
     }
 

@@ -6,6 +6,7 @@
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Application/ProjectAssetImportCommitter.h"
+#include "Horo/Editor/DocumentRecoveryService.h"
 #include "Horo/Foundation/BuildOutputStore.h"
 #include "Horo/Foundation/PathUtils.h"
 #include "UtilityGraphAuthoring.h"
@@ -1340,6 +1341,7 @@ namespace Horo::Editor {
             *existing = std::move(candidate);
         }
         static_cast<void>(host.SetDocumentDirty(existing->identity.instance, false));
+        InspectDecisionGraphRecovery(*existing);
         if (reloadExternal)
             m_viewModel.contentBrowserOperationError.clear();
         if (existing->diagnostic)
@@ -1827,11 +1829,87 @@ namespace Horo::Editor {
         OpenEmbeddedDecisionGraphSource(opened.Value(), true);
     }
 
+    /** @copydoc EditorWorkspaceController::RestoreDecisionGraphDraft */
+    Result<void> EditorWorkspaceController::RestoreDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft) {
+        if (document.dirty || document.conflict || HasPendingBlackboardReferenceEdit(document.identity.instance))
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        const auto root = ProjectRoot();
+        const auto current = CaptureGraphInput(root, m_assetRegistry, document.asset, AI::DecisionCodecLimits{}.maximumBytes);
+        if (current.HasError())
+            return Result<void>::Failure(current.ErrorValue());
+        if (current.Value().Sources().front().sourceDigest != document.source)
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        auto recovered = ReadDecisionGraphRecovery(document, draft);
+        if (recovered.HasError())
+            return Result<void>::Failure(recovered.ErrorValue());
+        const auto providers = AcquireDecisionDraftProviders(*recovered.Value().graph);
+        if (providers.HasError())
+            return Result<void>::Failure(providers.ErrorValue());
+        if (auto validated = ValidateDecisionDraft(root, m_assetRegistry, *recovered.Value().graph, providers.Value(), document);
+            validated.HasError())
+            return validated;
+        if (auto verified = current.Value().VerifyUnchanged(); verified.HasError())
+            return Result<void>::Failure(verified.ErrorValue());
+        if (draft.currentDigest == recovered.Value().digest && *document.layout == *recovered.Value().layout) {
+            DocumentRecoveryService recovery(root, *m_mutations, *m_durableFiles);
+            return recovery.Discard(*document.recovery);
+        }
+        auto prepared = draft.history.PrepareChange(CaptureDecisionHistoryFence(document, draft), std::move(recovered).Value(),
+                                                    document.recovery->payload.size() + draft.acceptedBytes);
+        if (prepared.HasError())
+            return Result<void>::Failure(prepared.ErrorValue());
+        auto change = std::move(prepared).Value();
+        if (!PublishDecisionGraphChange(document, draft, change))
+            return Result<void>::Failure(MakeError(Application::DecisionCookErrors::Stale));
+        draft.acceptedRecovery = document.recovery;
+        ProjectDecisionGraphDraft(document, draft);
+        return Result<void>::Success();
+    }
+
+    /** @copydoc EditorWorkspaceController::ProcessDecisionRecoveryAction */
+    void EditorWorkspaceController::ProcessDecisionRecoveryAction(const EditorWorkspaceViewCommandData &command) {
+        if (!command.decisionGraphFence || !command.decisionGraphRecovery || !m_mutations || !m_durableFiles)
+            return;
+        const auto fence = *command.decisionGraphFence;
+        if (m_viewModel.workspacePanelHost.ActiveDocument() != fence.instance)
+            return;
+        auto &documents = m_viewModel.decisionGraphDocuments;
+        const auto document = std::ranges::find_if(documents, [fence](const auto &entry) {
+            return entry.identity.instance == fence.instance && entry.revision == fence.revision;
+        });
+        const auto draft = m_decisionGraphDrafts.find(fence.instance);
+        if (document == documents.end() || document->recovery != command.decisionGraphRecovery || draft == m_decisionGraphDrafts.end())
+            return;
+        try {
+            JoinDecisionGraphRecovery(fence.instance);
+            const auto result = [&] {
+                if (command.command == EditorWorkspaceViewCommand::RestoreDecisionGraphRecovery)
+                    return RestoreDecisionGraphDraft(*document, draft->second);
+                DocumentRecoveryService recovery(ProjectRoot(), *m_mutations, *m_durableFiles);
+                return recovery.Discard(*document->recovery);
+            }();
+            if (result.HasValue()) {
+                document->recovery.reset();
+                document->diagnostic.reset();
+            } else {
+                document->diagnostic = result.ErrorValue();
+                PublishDecisionGraphDiagnostics(*document->diagnostic);
+            }
+        } catch (const std::bad_alloc &) {
+            document->diagnostic = MakeError(Assets::AssetSourceErrors::Limit);
+        }
+    }
+
     /** @copydoc EditorWorkspaceController::ProcessDecisionGraphEdit */
     bool EditorWorkspaceController::ProcessDecisionGraphEdit(const EditorWorkspaceViewCommandData &cmd) {
         if (cmd.command == EditorWorkspaceViewCommand::ReloadExternalDecisionGraph) {
-            if (cmd.decisionGraphReload)
-                ReloadExternalDecisionGraph(*cmd.decisionGraphReload);
+            if (cmd.decisionGraphFence)
+                ReloadExternalDecisionGraph(*cmd.decisionGraphFence);
+            return true;
+        }
+        if (cmd.command == EditorWorkspaceViewCommand::RestoreDecisionGraphRecovery ||
+            cmd.command == EditorWorkspaceViewCommand::DiscardDecisionGraphRecovery) {
+            ProcessDecisionRecoveryAction(cmd);
             return true;
         }
         if (cmd.command == EditorWorkspaceViewCommand::OpenDecisionDiagnosticKey) {

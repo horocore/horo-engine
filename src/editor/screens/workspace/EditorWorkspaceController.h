@@ -606,6 +606,7 @@ namespace Horo::Editor {
             std::shared_ptr<const DecisionGraphLayout> savedLayout;
             DecisionGraphDocumentHistory history;
             std::uint64_t recoveredRevision{};
+            std::shared_ptr<const DocumentRecoveryRecord> acceptedRecovery;
         };
 
         std::map<DocumentInstanceId, DecisionGraphDraft> m_decisionGraphDrafts;
@@ -625,6 +626,15 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> ClearDecisionGraphRecovery(const DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft);
         /** @brief Observes terminal recovery and acknowledges the exact published revision. */
         void ObserveDecisionGraphRecovery();
+        /** @brief Projects the durable recovery candidate when staging a registered Decision document. */
+        void InspectDecisionGraphRecovery(DecisionGraphWorkspaceDocument &document) const;
+        /** @brief Revalidates the exact checkpoint and its base before decoding the draft root. */
+        [[nodiscard]] Result<DecisionGraphDocumentRoot> ReadDecisionGraphRecovery(const DecisionGraphWorkspaceDocument &document,
+                                                                                  const DecisionGraphDraft &draft) const;
+        /** @brief Applies only an explicitly requested recovery action to the exact focused revision. */
+        void ProcessDecisionRecoveryAction(const EditorWorkspaceViewCommandData &command);
+        /** @brief Installs an explicitly accepted compatible checkpoint as an unsaved revision. */
+        [[nodiscard]] Result<void> RestoreDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft);
 
         struct DecisionRecoveryWork final {
             DecisionGraphDocumentFence fence;
