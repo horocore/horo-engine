@@ -108,7 +108,8 @@ namespace Horo::Tests::OpenXR {
             LosesSession,
             Supports
         };
-        const auto runtime = GENERATE(Runtime::Unavailable, Runtime::MissingDispatch, Runtime::Refuses, Runtime::LosesSession, Runtime::Supports);
+        const auto runtime =
+            GENERATE(Runtime::Unavailable, Runtime::MissingDispatch, Runtime::Refuses, Runtime::LosesSession, Runtime::Supports);
         Fixture fixture;
         SwapchainScript script;
         ImagePort images;
