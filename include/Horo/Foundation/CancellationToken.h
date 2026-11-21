@@ -62,6 +62,7 @@ namespace Horo {
             // A size constructor lets checked-library proxy allocation fail through the owning construction boundary.
             mutable std::vector<AdmissionWake> admissionWakes = std::vector<AdmissionWake>(std::size_t{0});
         };
+
         [[nodiscard]] static bool IsRequested(const State *state) noexcept {
             for (; state; state = state->parent.get()) {
                 if (state->requested.load())

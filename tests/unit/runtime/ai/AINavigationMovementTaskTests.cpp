@@ -175,8 +175,8 @@ namespace Horo::AI {
         CancellationSource caller;
         auto request = fixture.Move();
         request.cancellation = caller.Token();
-        auto bound = AiNavigationMovementTask::Start(fixture.capability, fixture.agent, fixture.task, *fixture.movement, request,
-                                                     fixture.At(0));
+        auto bound =
+            AiNavigationMovementTask::Start(fixture.capability, fixture.agent, fixture.task, *fixture.movement, request, fixture.At(0));
         REQUIRE(bound.HasValue());
         auto task = std::move(bound).Value();
         REQUIRE(task.Advance(fixture.At(0)).Value()->state == NavigationMovementState::Querying);
