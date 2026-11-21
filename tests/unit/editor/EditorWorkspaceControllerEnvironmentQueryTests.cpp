@@ -721,6 +721,7 @@ TEST_CASE("Authoring preview ranks mixed path, distance and visibility evidence 
     auto request = EnvironmentQueryPreviewRequest{document.identity.instance, document.source, model.documentRevision, anchor};
     controller.ProcessCommand({.command = EditorWorkspaceViewCommand::PreviewEnvironmentQuery, .environmentQueryPreview = request});
     using enum EnvironmentQueryPreviewStatus;
+    INFO((document.preview.diagnostic ? document.preview.diagnostic->code.Value() : std::string{}));
     REQUIRE(document.preview.status == Running);
     jobs.Shutdown(ShutdownPolicy::Drain);
     controller.UpdateEnvironmentQueryPreview();

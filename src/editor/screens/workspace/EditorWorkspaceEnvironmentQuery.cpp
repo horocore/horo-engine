@@ -137,10 +137,11 @@ namespace Horo::Editor {
             const auto querier = CapturePreviewActor(scene, pin.anchor);
             if (querier.HasError())
                 return Captured::Failure(querier.ErrorValue());
+            // A freshly opened saved document can have revision zero. Each preview captures its own execution context.
             AI::QueryContextCaptureSource source{.querier = querier.Value().entity,
                                                  .querierLocation = querier.Value().point,
                                                  .availableCapabilities = access.capabilities,
-                                                 .executionRevision = pin.document.value};
+                                                 .executionRevision = std::max<std::uint64_t>(1, pin.document.value)};
             if (pin.target) {
                 const auto target = CapturePreviewActor(scene, *pin.target);
                 if (target.HasError())
