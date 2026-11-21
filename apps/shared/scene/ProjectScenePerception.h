@@ -17,6 +17,7 @@ namespace Horo::Application::Internal {
         std::vector<AI::PerceptionListenerTypeId> listeners;
         std::vector<AI::SenseTypeId> sources;
         AI::PerceptionParticipantFilter participant;
+        AI::PerceptionListenerFilter listenerFilter;
         std::vector<AI::DecisionWakePerceptionDependency> decisionWatches;
     };
 
@@ -43,6 +44,7 @@ namespace Horo::Application::Internal {
         Math::WorldCoordinate64 origin;
         std::vector<ProjectPerceptionControllerSelection> controllers;
         std::optional<ProjectNativePerceptionPolicy> native;
+        std::optional<AI::PerceptionFilteringPolicy> filtering;
     };
 
     /** @brief Reports whether the selected project explicitly opted into reactive cooked execution. */

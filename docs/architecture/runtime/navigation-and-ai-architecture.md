@@ -1332,7 +1332,20 @@ startup on the already paired Scene. A listener cannot name an unregistered
 sense, and an insufficient aggregate allowance fails startup before exposing the
 world. Connected hosts receive no native Perception grant.
 
-A schema 2 controller may add a nonempty `decisionWatches` array. Each entry
+Schema 3 adds explicit filtering to the same native policy. Each controller
+declares a `filter` with `team` (zero means unaligned), `visibility`
+(`everyone`, `teamOnly` or `hidden`), `teamFilter` (`any`, `same` or
+`different`), a unique `affiliations` list of `friendly`, `neutral` or
+`hostile`, and up to eight nonzero `customAffiliations` IDs. The root
+`relationships` list holds up to 64 directional `listenerTeam` and
+`sourceTeam` pairs. Each row declares an `affiliation` and a `customId`.
+Only the `custom` affiliation requires a nonzero ID. Duplicate pairs and
+ambiguous project/host relationship authority fail admission before sensing.
+Editor Play and headless use the same validated policy for activation,
+structural endpoint changes and fixed-tick position publication. Schemas 1
+and 2 keep their existing defaults.
+
+A schema 2 or 3 controller may add a nonempty `decisionWatches` array. Each entry
 names a cooked Decision `node` and a `listener` already declared by the same
 controller. For example, `"decisionWatches": [{"node": 2, "listener": 91}]`
 selects event-only evaluation for that controller in Editor Play and

@@ -641,6 +641,7 @@ namespace Horo::Application::PrefabAtomicTest {
             auto world = NetworkModeWorldKind::Standalone;
             bool seatsAdmitted = true;
             bool usesAuthoredCoordinates = false;
+            bool admitAuthoredSource = true;
             bool isolateFault = false;
             SECTION("bounded fixed dispatch and paired shutdown") {}
             SECTION("a provider exception suspends its recipient while the other recipient and fixed tick continue") {
@@ -648,8 +649,47 @@ namespace Horo::Application::PrefabAtomicTest {
             }
             SECTION("durable endpoint selectors and parented coordinates reach actual fixed dispatch") {
                 const auto asset = Assets::AssetId::Parse("5c881920-450f-4ca7-b938-d151696ea419").Value();
-                const auto source = ProjectPerceptionSource(asset, definition.Value().Revision().value, controller.descriptor);
-                auto policy = CaptureProjectPerception(definition.Value(), asset, source);
+                auto source =
+                    nlohmann::json::parse(ProjectPerceptionSource(asset, definition.Value().Revision().value, controller.descriptor));
+                bool useTypedFilter = false;
+                SECTION("Schema one retains the default filter") {}
+                SECTION("Schema three denies the peer unless its custom affiliation is admitted") {
+                    useTypedFilter = true;
+                    admitAuthoredSource = false;
+                }
+                SECTION("Schema three admits the exact directional custom affiliation") {
+                    useTypedFilter = true;
+                }
+                bool conflictingRelationships = false;
+                SECTION("Duplicate authored team relationships are rejected") {
+                    useTypedFilter = true;
+                    conflictingRelationships = true;
+                }
+                if (useTypedFilter) {
+                    const auto &endpoints = *controller.descriptor.perceptionEndpoints;
+                    source["schema"] = 3;
+                    source["relationships"] = {{{"listenerTeam", 9}, {"sourceTeam", 9}, {"affiliation", "custom"}, {"customId", 19}}};
+                    source["controllers"][0]["filter"] = {{"team", 9},
+                                                          {"visibility", "teamOnly"},
+                                                          {"teamFilter", "same"},
+                                                          {"affiliations", nlohmann::json::array()},
+                                                          {"customAffiliations", {admitAuthoredSource ? 19 : 18}}};
+                    source["native"] = {{"listeners",
+                                         {{{"id", endpoints.listeners.front().Value()}, {"sense", endpoints.sources.front().Value()}}}},
+                                        {"radiusMillimeters", 4000},
+                                        {"visibleLayers", 1},
+                                        {"workUnitsPerTick", 128}};
+                }
+                if (conflictingRelationships) {
+                    const auto duplicate = source["relationships"].front();
+                    source["relationships"].push_back(duplicate);
+                }
+                auto policy = CaptureProjectPerception(definition.Value(), asset, source.dump());
+                if (conflictingRelationships) {
+                    REQUIRE(policy.HasError());
+                    CHECK(policy.ErrorValue().code.Value() == AI::AIErrors::PerceptionDescriptorInvalid.code.Value());
+                    return;
+                }
                 REQUIRE(policy.HasValue());
                 input.perceptionProject =
                     Internal::HeadlessPerceptionProjectAdmission{std::move(policy).Value(), native.endpoints->registry};
@@ -710,11 +750,13 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(native.probe.module[1] == 2);
             const auto memory = Internal::InspectHeadlessPerceptionMemory(*physics.Value(), *observer);
             REQUIRE(memory.HasValue());
-            REQUIRE(memory.Value().count == 1);
-            CHECK(memory.Value().entries.front().key.source == AI::ProjectPerceptionSource(*source));
-            CHECK(memory.Value().entries.front().lastSensedTick == 1);
-            if (usesAuthoredCoordinates)
-                CHECK(memory.Value().entries.front().lastKnownPosition == Math::WorldCoordinate64::FromMillimeters(1100, 200, -300));
+            REQUIRE(memory.Value().count == (admitAuthoredSource ? 1 : 0));
+            if (admitAuthoredSource) {
+                CHECK(memory.Value().entries.front().key.source == AI::ProjectPerceptionSource(*source));
+                CHECK(memory.Value().entries.front().lastSensedTick == 1);
+                if (usesAuthoredCoordinates)
+                    CHECK(memory.Value().entries.front().lastKnownPosition == Math::WorldCoordinate64::FromMillimeters(1100, 200, -300));
+            }
             if (isolateFault)
                 RequirePerceptionFaultIsolation(*physics.Value(), native.probe, *observer, *source, quantum, cancellation.Token());
             sceneService.Value()->Shutdown();

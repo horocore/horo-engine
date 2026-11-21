@@ -879,11 +879,18 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     constexpr auto scenePath = "assets/level.horo";
     constexpr auto perceptionPath = "play-perception.json";
     bool livePerception = false;
+    std::optional<bool> admitCustomAffiliation;
     std::optional<AI::AiSchedulingMode> watchedScheduler;
     bool inferWatchedScheduler = false;
     SECTION("Prepared native sensing reaches the selected agent's committed inspection memory") {
         livePerception = true;
         SECTION("Fixed scheduling retains the existing inspection contract") {}
+        SECTION("An exact authored custom affiliation reaches Play inspection") {
+            admitCustomAffiliation = true;
+        }
+        SECTION("A mismatched authored custom affiliation stays out of Play inspection") {
+            admitCustomAffiliation = false;
+        }
         SECTION("Authored best-effort scheduling wakes only when a watched decision has work") {
             watchedScheduler = AI::AiSchedulingMode::BestEffort;
         }
@@ -1022,12 +1029,21 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
         const auto sense = std::to_string(contract.sense.identity.Value());
         const auto units = (contract.workUnits + AI::PerceptionSenseGeneration::ValidationWorkUnits + 1) * 3;
         const auto watches = watchedScheduler ? R"(,"decisionWatches":[{"node":3,"listener":91}])" : "";
+        const auto schema = admitCustomAffiliation ? "3" : "2";
+        const auto filter =
+            admitCustomAffiliation
+                ? std::string{R"(,"filter":{"team":4,"visibility":"teamOnly","affiliations":[],"teamFilter":"same","customAffiliations":[)"} +
+                      (*admitCustomAffiliation ? "42" : "41") + "]}"
+                : std::string{};
+        const auto relationships =
+            admitCustomAffiliation ? R"(,"relationships":[{"listenerTeam":4,"sourceTeam":4,"affiliation":"custom","customId":42}])" : "";
         project.WriteText(perceptionPath,
-                          "{\"schema\":2,\"sceneAsset\":\"" + project.sceneId.ToString() +
+                          std::string{"{\"schema\":"} + schema + ",\"sceneAsset\":\"" + project.sceneId.ToString() +
                               "\",\"sceneRevision\":1,\"worldOriginMillimeters\":[0,0,0],\"controllers\":[{\"controller\":" +
                               std::to_string(controller.Value()) + ",\"listeners\":[91],\"sources\":[" + sense +
-                              "],\"layers\":1,\"mask\":1" + watches + "}],\"native\":{\"listeners\":[{\"id\":91,\"sense\":" + sense +
-                              "}],\"radiusMillimeters\":4000,\"visibleLayers\":1,\"workUnitsPerTick\":" + std::to_string(units) + "}}");
+                              "],\"layers\":1,\"mask\":1" + watches + filter + "}],\"native\":{\"listeners\":[{\"id\":91,\"sense\":" +
+                              sense + "}],\"radiusMillimeters\":4000,\"visibleLayers\":1,\"workUnitsPerTick\":" + std::to_string(units) +
+                              "}" + relationships + "}");
     }
     const auto projectFactory =
         MakeEditorProjectSceneFactory(project.jobs, {.cooked = SceneCookSelection{project.cooked.path, target},
@@ -1179,6 +1195,18 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     CHECK_FALSE(play.ApplyDecisionDebugCommand({selectedAgent, Pause}));
     if (livePerception) {
         CHECK_FALSE(inspection.snapshot->perceptionFailure);
+        if (admitCustomAffiliation == false) {
+            CHECK(inspection.snapshot->stimuli.empty());
+            for (std::uint64_t frame = 0; frame < Editor::EditorPlayAgentInspectionTickSpacing; ++frame)
+                REQUIRE(tick().HasValue());
+            play.RefreshAgentInspection(entity);
+            REQUIRE_FALSE(play.AgentInspectionHistory().empty());
+            REQUIRE(play.AgentInspectionHistory().back().snapshot);
+            CHECK(play.AgentInspectionHistory().back().snapshot->stimuli.empty());
+            play.Stop();
+            lifecycle.Shutdown();
+            return;
+        }
         REQUIRE(inspection.snapshot->stimuli.size() == 1);
         const auto &stimulus = inspection.snapshot->stimuli.front();
         REQUIRE(play.SceneView()->Find({8}));

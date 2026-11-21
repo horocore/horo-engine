@@ -105,10 +105,68 @@ namespace Horo::Application::Internal {
             return watches;
         }
 
+        template <typename Enum, std::size_t Count>
+        Enum ReadPerceptionEnum(const Json &value, const std::array<std::string_view, Count> &names) {
+            const std::string_view name = value.get_ref<const std::string &>();
+            const auto found = std::ranges::find(names, name);
+            if (found == names.end())
+                throw std::invalid_argument("Unknown Perception filter value");
+            return static_cast<Enum>(found - names.begin());
+        }
+
+        constexpr std::array<std::string_view, 4> AffiliationNames{"friendly", "neutral", "hostile", "custom"};
+        constexpr std::array<std::string_view, 3> TeamFilterNames{"any", "same", "different"};
+        constexpr std::array<std::string_view, 3> VisibilityNames{"everyone", "teamOnly", "hidden"};
+
+        AI::PerceptionFilteringPolicy ReadFiltering(const Json &relationships) {
+            AI::PerceptionFilteringPolicy filter;
+            if (!relationships.is_array() || relationships.size() > filter.relationships.size())
+                throw std::invalid_argument("Perception team relationship capacity exceeded");
+            for (const auto &row : relationships) {
+                RequireFields(row, {"listenerTeam", "sourceTeam", "affiliation", "customId"});
+                auto &relationship = filter.relationships[filter.relationshipCount++];
+                relationship.listener.value = Unsigned(row["listenerTeam"]);
+                relationship.source.value = Unsigned(row["sourceTeam"]);
+                relationship.affiliation = {ReadPerceptionEnum<AI::PerceptionAffiliation>(row["affiliation"], AffiliationNames),
+                                            {Unsigned(row["customId"])}};
+            }
+            if (auto valid = AI::ValidatePerceptionFiltering(filter); valid.HasError())
+                throw std::invalid_argument("Invalid or duplicate Perception team relationship");
+            std::ranges::sort(std::span{filter.relationships}.first(filter.relationshipCount));
+            return filter;
+        }
+
+        AI::PerceptionListenerFilter ReadListenerFilter(const Json &object) {
+            AI::PerceptionListenerFilter filter;
+            const auto &affiliations = object["affiliations"];
+            const auto &custom = object["customAffiliations"];
+            if (!affiliations.is_array() || affiliations.size() >= AffiliationNames.size() || !custom.is_array() ||
+                custom.size() > filter.custom.size())
+                throw std::invalid_argument("Invalid Perception affiliation allowlist");
+            filter.affiliations = 0;
+            for (const auto &name : affiliations) {
+                const auto affiliation = ReadPerceptionEnum<AI::PerceptionAffiliation>(name, AffiliationNames);
+                const auto bit = static_cast<std::uint8_t>(1u << static_cast<unsigned>(affiliation));
+                if (affiliation == AI::PerceptionAffiliation::Custom || (filter.affiliations & bit) != 0)
+                    throw std::invalid_argument("Use exact custom affiliation IDs and unique built-in affiliations");
+                filter.affiliations |= bit;
+            }
+            filter.teams = ReadPerceptionEnum<AI::PerceptionTeamFilter>(object["teamFilter"], TeamFilterNames);
+            for (const auto &id : custom)
+                filter.custom[filter.customCount++].value = Unsigned(id);
+            std::ranges::sort(std::span{filter.custom}.first(filter.customCount));
+            return filter;
+        }
+
         /** @brief Projects inert durable controller fields without choosing any runtime implementation. */
-        ProjectPerceptionControllerSelection ReadController(const Json &object, const bool allowWatches) {
-            const bool hasWatches = allowWatches && object.contains("decisionWatches");
-            if (hasWatches)
+        ProjectPerceptionControllerSelection ReadController(const Json &object, const std::uint64_t schema) {
+            const bool hasWatches = schema >= 2 && object.contains("decisionWatches");
+            if (schema == 3) {
+                if (hasWatches)
+                    RequireFields(object, {"controller", "listeners", "sources", "layers", "mask", "filter", "decisionWatches"});
+                else
+                    RequireFields(object, {"controller", "listeners", "sources", "layers", "mask", "filter"});
+            } else if (hasWatches)
                 RequireFields(object, {"controller", "listeners", "sources", "layers", "mask", "decisionWatches"});
             else
                 RequireFields(object, {"controller", "listeners", "sources", "layers", "mask"});
@@ -120,14 +178,23 @@ namespace Horo::Application::Internal {
                                                         .sources = ReadSelectors<AI::SenseTypeId>(object["sources"]),
                                                         .participant = {.layers = Unsigned(object["layers"]),
                                                                         .mask = Unsigned(object["mask"])}};
-            if (result.participant.layers == 0 || (result.listeners.empty() && result.sources.empty()))
-                throw std::invalid_argument("Controller requires declared endpoint layers and a listener or source");
+            if (schema == 3) {
+                const auto &filter = object["filter"];
+                RequireFields(filter, {"team", "visibility", "affiliations", "teamFilter", "customAffiliations"});
+                result.participant.team.value = Unsigned(filter["team"]);
+                result.participant.visibility = ReadPerceptionEnum<AI::PerceptionGameplayVisibility>(filter["visibility"], VisibilityNames);
+                result.listenerFilter = ReadListenerFilter(filter);
+            }
+            if (auto valid = AI::ValidatePerceptionParticipant(result.participant, result.listenerFilter); valid.HasError())
+                throw std::invalid_argument("Invalid Perception controller filters");
+            if (result.listeners.empty() && result.sources.empty())
+                throw std::invalid_argument("Controller requires a listener or source");
             if (hasWatches)
                 result.decisionWatches = ReadDecisionWatches(object["decisionWatches"], result.listeners);
             return result;
         }
 
-        /** @brief Validates explicit native listeners and a bounded execution window for schema two. */
+        /** @brief Validates explicit native listeners and a bounded native execution window. */
         ProjectNativePerceptionPolicy ReadNative(const Json &object) {
             RequireFields(object, {"listeners", "radiusMillimeters", "visibleLayers", "workUnitsPerTick"});
             const auto &listeners = object["listeners"];
@@ -242,6 +309,9 @@ namespace Horo::Application::Internal {
                 RequireFields(root, {"schema", "sceneAsset", "sceneRevision", "worldOriginMillimeters", "controllers"});
             else if (schema == 2)
                 RequireFields(root, {"schema", "sceneAsset", "sceneRevision", "worldOriginMillimeters", "controllers", "native"});
+            else if (schema == 3)
+                RequireFields(root, {"schema", "sceneAsset", "sceneRevision", "worldOriginMillimeters", "controllers", "native",
+                                     "relationships"});
             else
                 throw std::invalid_argument("Unsupported Perception policy schema");
             if (!root["sceneAsset"].is_string())
@@ -266,17 +336,19 @@ namespace Horo::Application::Internal {
                                                 {}};
             policy.controllers.reserve(controllers.size());
             for (const auto &controller : controllers)
-                policy.controllers.push_back(ReadController(controller, schema == 2));
+                policy.controllers.push_back(ReadController(controller, schema));
             constexpr auto key = &ProjectPerceptionControllerSelection::controller;
             std::ranges::sort(policy.controllers, {}, key);
             if (std::ranges::adjacent_find(policy.controllers, {}, key) != policy.controllers.end())
                 throw std::invalid_argument("Duplicate Perception controller");
-            if (schema == 2) {
+            if (schema >= 2) {
                 policy.native = ReadNative(root["native"]);
                 if (policy.native->workUnitsPerTick > workUnitsLimit)
                     return Output::Failure(
                         MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Scene Perception budget exceeds the project AI limit."));
             }
+            if (schema == 3)
+                policy.filtering = ReadFiltering(root["relationships"]);
             return Output::Success(std::make_shared<const ProjectScenePerceptionPolicy>(std::move(policy)));
         } catch (const Json::exception &) {
             return Output::Failure(MakeError(AI::AIErrors::PerceptionDescriptorInvalid, "Malformed project Perception policy."));
@@ -357,6 +429,7 @@ namespace Horo::Application::Internal {
                                                         .listeners = selection.listeners,
                                                         .sources = selection.sources,
                                                         .participant = selection.participant,
+                                                        .listenerFilter = selection.listenerFilter,
                                                         .decisionWatches = selection.decisionWatches});
                 if (const auto valid = AI::ValidateAiControllerDescriptor(*chosen); valid.HasError())
                     return Output::Failure(valid.ErrorValue());

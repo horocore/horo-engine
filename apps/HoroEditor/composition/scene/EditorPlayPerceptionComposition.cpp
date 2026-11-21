@@ -48,6 +48,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             auto prepared = std::make_unique<PlayPerception>();
             prepared->positions =
                 MakeProjectPerceptionPositionSources(captured.Value(), ProjectPerceptionSceneProjection{live.Id(), live.Revision()});
+            prepared->filtering = captured.Value()->filtering.value_or(AI::PerceptionFilteringPolicy{});
             prepared->execution = {.generation = std::move(generation).Value(),
                                    .capabilities = ProjectNativePerceptionPolicy::capabilities,
                                    .memory = {.fixedStep = std::chrono::nanoseconds{selection.fixedStep.ToNanoseconds()}},
@@ -77,7 +78,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         const auto positions = capture.positions.scene(*scene);
         if (positions.HasError())
             return Result<void>::Failure(positions.ErrorValue());
-        const auto published = ai_->PublishPerceptionAtSafePoint(*scene, current->Revision() + 1, positions.Value(), capture.spatial, {});
+        const auto published =
+            ai_->PublishPerceptionAtSafePoint(*scene, current->Revision() + 1, positions.Value(), capture.spatial, capture.filtering);
         if (published.HasError())
             return Result<void>::Failure(published.ErrorValue());
         return ai_->PollPerceptionAtSensePoll(*scene, capture.spatial, tick, fixedStep);

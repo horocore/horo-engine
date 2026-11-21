@@ -799,12 +799,19 @@ namespace Horo::Application::Internal {
                 case HeadlessPerceptionProvider::SelectedNativeGameplay:
                     if (registry || input.perceptionExecution || !policy->native || !input.cookedDecisions ||
                         input.cookedDecisions->provider != HeadlessDecisionProvider::SelectedNativeGameplay)
-                        return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionDependencyMissing,
-                                                               "Native Perception requires schema two and a selected prepared module."));
+                        return Result<void>::Failure(
+                            MakeError(AI::AIErrors::PerceptionDependencyMissing,
+                                      "Native Perception requires an explicit native policy and a selected prepared module."));
                     break;
             }
             if (definition->Id() != policy->definition || definition->Revision() != policy->revision)
                 return Result<void>::Failure(MakeError(AI::AIErrors::PerceptionSpatialStale));
+            if (policy->filtering) {
+                if (input.perceptionFiltering.relationshipCount != 0)
+                    return Result<void>::Failure(
+                        MakeError(AI::AIErrors::PerceptionDescriptorConflict, "Project and host both supplied Perception relationships."));
+                input.perceptionFiltering = *policy->filtering;
+            }
             auto sources = MakeProjectPerceptionPositionSources(policy);
             input.perceptionPositions = std::move(sources.scene);
             input.perceptionGroupPositions = std::move(sources.group);
