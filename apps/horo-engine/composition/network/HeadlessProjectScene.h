@@ -58,6 +58,8 @@ namespace Horo::Application::Internal {
         Platform::ProjectReadContext sourceContext;
         std::optional<SceneSource::SceneSourceDocument> authoredSource; /**< Exact decoded admitted source, never a second parse. */
         std::optional<Network::NetworkProjectSettings> networkSettings; /**< Owner-validated snapshot captured from the same root. */
+        AI::AiTaskSchedulerSettings decisionScheduler;                  /**< Authoritative scheduler budgets from that same snapshot. */
+        bool developmentReplayAllowed{true}; /**< Legacy projects retain the explicit development CLI workflow. */
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition;
         Assets::AssetId sceneAsset; /**< Exact selected cooked Scene identity, including the full UUID. */
         std::shared_ptr<const ProjectSceneNavigationSelection> navigation;

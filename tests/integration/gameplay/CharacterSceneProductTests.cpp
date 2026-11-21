@@ -948,6 +948,28 @@ namespace Horo::Application::CharacterSceneProductTest {
         CHECK(prepared.Value()->sceneAsset == fixture.project.sceneId);
     }
 
+    TEST_CASE("Headless project AI settings supply scheduler budgets and gate development replay", "[scene][ai][product]") {
+        Fixture fixture;
+        fixture.project.WriteProjectMetadata(R"({"schemaVersion":1,"scheduler":{"maximumAgents":16,"evaluationsPerTick":4}})");
+        const auto selector = "cooked:" + fixture.project.sceneId.ToString();
+        const Internal::HeadlessProjectSceneOptions options{.projectRoot = fixture.project.project.dir.path,
+                                                            .scene = selector,
+                                                            .cookedRoot = fixture.project.cooked.path,
+                                                            .cookTarget = fixture.project.request.assets.target.Value()};
+        const auto prepared = Internal::PrepareHeadlessProjectSceneResources(options);
+        REQUIRE(prepared.HasValue());
+        CHECK(prepared.Value()->decisionScheduler.maximumAgents == 16);
+        CHECK(prepared.Value()->decisionScheduler.evaluationsPerTick == 4);
+        CHECK_FALSE(prepared.Value()->developmentReplayAllowed);
+
+        const auto gameplay = NavigationGameplay();
+        auto arguments = SceneArguments(fixture, selector, "null");
+        arguments.insert(arguments.end(), {"--game-module", Utf8Path(gameplay.nativeArtifact), gameplay.moduleId,
+                                           std::to_string(gameplay.descriptorRevision), "deny", "--ai-decision", "49",
+                                           fixture.project.sceneId.ToString(), "--ai-replay", "50", "1"});
+        CHECK(RunCli(std::move(arguments), "Project AI policy does not grant development replay capture").exitCode == 3);
+    }
+
     TEST_CASE("Terminal Scene options reject malformed incomplete and escaping input", "[character][scene][cli][product]") {
         CHECK(RunCli({"--run-network-product", "standalone", "1", "--project", "relative", "--scene", "source:level.scene"}).exitCode == 2);
         CHECK(RunCli({"--run-network-product", "standalone", "1", "--physics", "canonical"}).exitCode == 2);

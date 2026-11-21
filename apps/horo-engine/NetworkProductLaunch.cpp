@@ -3,6 +3,7 @@
 #include "HeadlessInitialStateAuthority.h"
 #include "HeadlessNetworkServices.h"
 #include "HeadlessProjectScene.h"
+#include "Horo/AI/AIErrors.h"
 #include "Horo/AI/EnvironmentQueryGenerators.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Network/NetworkAddress.h"
@@ -354,6 +355,9 @@ namespace Horo::Application::Internal {
                                                                                              *launch.sceneInput.world)
                                                                                        : nullptr,
                                                .worldJobs = &resources->jobs};
+            if (launch.decisionReplay && !resources->developmentReplayAllowed)
+                return Result<NetworkProductComposition>::Failure(
+                    MakeError(AI::AIErrors::CapabilityUnavailable, "Project AI policy does not grant development replay capture."));
             input.decisionReplay = launch.decisionReplay;
             if (launch.role == Net::NetworkProjectRole::DedicatedServer)
                 input.animationParallel.emplace(resources->jobs, Duration::FromMilliseconds(50));
@@ -366,13 +370,17 @@ namespace Horo::Application::Internal {
                 if (!resources->committed)
                     return Result<NetworkProductComposition>::Failure(
                         MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI decisions require the selected committed Scene generation."));
+                if (resources->decisionScheduler.mode != AI::AiSchedulingMode::Deterministic)
+                    return Result<NetworkProductComposition>::Failure(
+                        MakeError(AI::AIErrors::SchedulerPolicyInvalid, "This product launch requires a deterministic AI scheduler."));
                 auto querySchema = AI::CaptureBuiltinQuerySchema();
                 if (querySchema.HasError())
                     return Result<NetworkProductComposition>::Failure(querySchema.ErrorValue());
                 input.cookedDecisions = std::make_shared<const HeadlessCookedDecisionInput>(
                     HeadlessCookedDecisionInput{.committed = *resources->committed,
                                                 .bindings = launch.cookedDecisionBindings,
-                                                .execution = AI::AiSceneCookedDecisionExecution{resources->jobs, {}, {}},
+                                                .execution =
+                                                    AI::AiSceneCookedDecisionExecution{resources->jobs, resources->decisionScheduler, {}},
                                                 .provider = HeadlessDecisionProvider::SelectedNativeGameplay,
                                                 .querySchema =
                                                     std::make_shared<const AI::QuerySchemaRegistry>(std::move(querySchema).Value())});

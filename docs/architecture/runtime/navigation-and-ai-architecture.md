@@ -3512,11 +3512,19 @@ Omitted limits retain the runtime defaults. The `mode` accepts
 `reducedIntervalTicks` greater than one and a positive `demotionDelayTicks`.
 Editor Decision Play requires deterministic timing and rejects an incompatible
 project profile before admitting the Scene's Decision providers.
+The headless network-product launcher captures the same project source before
+world composition and applies its budgets to the authoritative cooked Decision
+scheduler. The launcher's current cooked Decision path requires deterministic
+timing. Release Scene cooking validates the AI policy from the exact captured
+project document before publishing any cooked generation.
 
 The optional `development` object declares boolean `liveMutation` and
 `replayCapture` permissions. Both default to false in an authored AI policy.
 Editor Play requires both the project permission and the explicit
 `--play-ai-debug` request for live mutation when an AI policy is present.
+For the standalone development CLI, authored settings must grant
+`replayCapture` before an explicit AI replay request can proceed. Legacy
+projects without an AI policy retain the explicit development command.
 The permission check denies both operations for a packaged execution profile.
 
 ### Scene decision scheduling tiers

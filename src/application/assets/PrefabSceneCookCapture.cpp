@@ -1,4 +1,5 @@
 #include "Horo/Application/PrefabProjectSettings.h"
+#include "Horo/Application/ProjectAiSettings.h"
 #include "Horo/Application/ProjectSourceDocument.h"
 #include "Horo/Packages/PackageLockfile.h"
 #include "Horo/Packages/PackageRequest.h"
@@ -194,6 +195,8 @@ namespace Horo::Application {
                 auto document = DecodeProjectSourceDocument(*raw.Value());
                 if (document.HasError())
                     return Outcome::Failure(document.ErrorValue());
+                if (const auto ai = ResolveProjectAiSettings(document.Value()); ai.HasError())
+                    return Outcome::Failure(ai.ErrorValue());
                 if (const auto &metadata = document.Value().metadata;
                     metadata.horoVersion != classified.metadata->horoVersion ||
                     metadata.persistentContract != classified.metadata->persistentContract)

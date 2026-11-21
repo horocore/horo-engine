@@ -1,4 +1,5 @@
 #include "../packages/PackageArchiveTestSupport.h"
+#include "Horo/AI/AIErrors.h"
 #include "Horo/Application/PrefabSceneCookHost.h"
 #include "Horo/Assets/AssetArchive.h"
 #include "Horo/Editor/UiCanvasDocument.h"
@@ -641,6 +642,19 @@ TEST_CASE("Release cook handoff pins the actual generation and rejects changed f
     }
     REQUIRE(host.CookForRelease(*preflight.plan, current, fixture.request, {}).HasError());
     fixture.AssertRetained(active.Value());
+}
+
+TEST_CASE("Release content cooking rejects an invalid project AI profile before publishing a generation",
+          "[native][prefab-cook][host][release][ai]") {
+    HostFixture fixture;
+    fixture.WriteProjectMetadata(R"({"schemaVersion":1,"scheduler":{"maximumAgents":4,"evaluationsPerTick":8}})");
+    const auto release = PrepareHostRelease(fixture);
+    ReleaseTestFixtures::FixedReleaseFacts current{release.facts};
+    auto host = fixture.MakeHost();
+    const auto denied = host.CookForRelease(*release.preflight.plan, current, fixture.request, {});
+    REQUIRE(denied.HasError());
+    CHECK(denied.ErrorValue().code.Value() == AI::AIErrors::SchedulerPolicyInvalid.code.Value());
+    CHECK(ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, fixture.cooked.path).HasError());
 }
 
 TEST_CASE("Release executor packages the concrete static prefab cook generation", "[native][prefab-cook][host][release]") {

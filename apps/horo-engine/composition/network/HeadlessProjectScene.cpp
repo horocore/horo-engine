@@ -1,6 +1,7 @@
 #include "HeadlessProjectScene.h"
 
 #include "Horo/Application/PrefabProjectSettings.h"
+#include "Horo/Application/ProjectAiSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Application/ProjectNetworkSettings.h"
 #include "Horo/Application/ProjectSurfaceSettings.h"
@@ -181,6 +182,14 @@ namespace Horo::Application::Internal {
             auto root = LoadProjectSourceDocument(launch.projectRoot);
             if (root.HasError())
                 return Metadata::Failure(root.ErrorValue());
+            const auto ai = ResolveProjectAiSettings(root.Value());
+            if (ai.HasError())
+                return Metadata::Failure(ai.ErrorValue());
+            if (const auto &policy = ai.Value()) {
+                resources.decisionScheduler = policy->Scheduler();
+                resources.developmentReplayAllowed =
+                    policy->AllowsDebug(AiProjectRuntimeKind::Development, AiProjectDebugOperation::ReplayCapture);
+            }
             if (launch.captureNetworkSettings) {
                 auto settings = ResolveProjectNetworkSettings(root.Value());
                 if (settings.HasError())

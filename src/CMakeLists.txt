@@ -4812,7 +4812,7 @@ add_library(HoroPrefabCookHost STATIC
         application/assets/PrefabSceneCookState.h)
 add_library(HoroEngine::PrefabCookHost ALIAS HoroPrefabCookHost)
 target_compile_features(HoroPrefabCookHost PUBLIC cxx_std_20)
-target_link_libraries(HoroPrefabCookHost PRIVATE HoroEngine::PrefabProjectSettings)
+target_link_libraries(HoroPrefabCookHost PRIVATE HoroEngine::PrefabProjectSettings HoroEngine::ProjectSettings)
 target_link_libraries(HoroPrefabCookHost PRIVATE HoroEngine::AnimationAssetCook HoroUiCanvasSourceHostInternal)
 target_link_libraries(HoroPrefabCookHost
         PUBLIC HoroEngine::Application HoroEngine::Assets HoroEngine::EditorServices
