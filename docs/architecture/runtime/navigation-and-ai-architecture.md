@@ -3528,6 +3528,10 @@ headless environment queries on each authoritative tick. Replay comparison
 detects changes to the effective query budget. The default retains the
 existing query replay profile identity.
 
+The Play agent inspector reports the stable IDs, capability requirements and
+current availability of the agent's admitted Perception providers. The
+inspector reads an owned snapshot and does not invoke those providers.
+
 The optional `development` object declares boolean `liveMutation` and
 `replayCapture` permissions. Both default to false in an authored AI policy.
 Editor Play requires both the project permission and the explicit

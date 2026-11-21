@@ -5,6 +5,7 @@
 #include "editor/screens/workspace/panels/game/GamePanel.h"
 
 #include <algorithm>
+#include <array>
 #include <format>
 #include <type_traits>
 
@@ -185,6 +186,32 @@ namespace Horo::Editor {
                 line(std::format("{} {}", text("ai_inspection_trace_overflow"), trace.DroppedRecords()), Theme::Warn());
         }
 
+        /** @brief Displays the actual provider contract and availability copied at the selected tick. */
+        void DrawSenseProvider(const AI::AiInspectionSenseProvider &provider, const EditorGuiContext &context) {
+            using enum AI::PerceptionCapability;
+            constexpr std::array labels{
+                std::pair{SpatialCandidateQuery, "ai_inspection_capability_spatial"},
+                std::pair{PhysicsLineOfSight, "ai_inspection_capability_sight"},
+                std::pair{AcousticOcclusion, "ai_inspection_capability_acoustic"},
+                std::pair{PhysicsContact, "ai_inspection_capability_contact"},
+                std::pair{TeamRelay, "ai_inspection_capability_relay"},
+                std::pair{ScriptExecution, "ai_inspection_capability_script"},
+            };
+            static_assert(labels.size() == static_cast<std::size_t>(Count));
+            const auto text = [&](const std::string_view key) -> const std::string & {
+                return GamePanel::kTextScope.Text(context.localization, key);
+            };
+            auto line = std::format("{} {} · {} {} · {}", text("ai_inspection_perception"), provider.sense.Value(),
+                                    text("ai_inspection_provider"), provider.origin.provider.Value(),
+                                    text(provider.available ? "ai_inspection_provider_available" : "ai_inspection_provider_unavailable"));
+            for (const auto &[capability, label] : labels) {
+                if (provider.requiredCapabilities.Contains(AI::PerceptionCapabilitySet::Of(capability)))
+                    line.append(" · ").append(text(label));
+            }
+            Ui::WrappedText(ImGui::GetContentRegionAvail().x, line, provider.available ? Theme::Muted() : Theme::Warn(),
+                            context.theme.fonts);
+        }
+
         /** @brief Shows copied lifecycle and memory metadata without reading live runtime state. */
         void DrawObservations(const EditorPlayAgentInspection &entry, const EditorGuiContext &context) {
             const auto &snapshot = *entry.snapshot;
@@ -211,6 +238,8 @@ namespace Horo::Editor {
                 line(std::format("{} · {}", text("ai_problem"), snapshot.decisionFailure->code.Value()), Theme::Warn());
             if (snapshot.perceptionFailure)
                 line(std::format("{} · {}", text("ai_inspection_perception"), snapshot.perceptionFailure->code.Value()), Theme::Warn());
+            for (const auto &provider : snapshot.senseProviders)
+                DrawSenseProvider(provider, context);
             if (const auto &navigation = entry.navigation)
                 line(std::format("{} · {} {} · {} {} · {}", text("ai_inspection_navigation"), text("ai_inspection_profile"),
                                  navigation->profile, text("ai_inspection_navigation_filter"), navigation->filter,

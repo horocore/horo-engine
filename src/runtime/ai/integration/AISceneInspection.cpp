@@ -62,6 +62,18 @@ namespace Horo::AI {
                 result.stimuli.push_back(
                     {entry.key, entry.firstSensedTick, entry.lastSensedTick, entry.ageSeconds, entry.isCurrentlySensed});
         }
+
+        /** @brief Copies contracts from instantiated senses without invoking provider code. */
+        void InspectSenseProviders(AiAgentInspectionSnapshot &result, const Detail::SceneAgentPerception &sensing) {
+            result.senseProviders.reserve(sensing.senses.size());
+            for (const auto &listener : sensing.senses) {
+                const auto &instance = *listener.instance;
+                const auto &contract = instance.Contract();
+                result.senseProviders.push_back({contract.sense.identity, contract.sense.origin,
+                                                 contract.sense.requiredCapabilities.Union(contract.stimulus.requiredCapabilities),
+                                                 !sensing.suspension && instance.CanEvaluate()});
+            }
+        }
     }  // namespace
 
     /** @copydoc AiSceneRuntime::CaptureAgentInspectionAtSafePoint */
@@ -99,6 +111,7 @@ namespace Horo::AI {
                 result.omittedDecisionTasks = total - retained.size();
             }
             if (selected->sensing) {
+                InspectSenseProviders(result, *selected->sensing);
                 const auto memory = ReadPerceptionAtSafePoint(scene, result.owner);
                 if (memory.HasError())
                     result.perceptionFailure = FailureIdentity(memory.ErrorValue());

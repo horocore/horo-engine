@@ -165,6 +165,14 @@ namespace Horo::AI {
         bool sensed{};
     };
 
+    /** @brief Read-only metadata and liveness of one admitted Perception provider instance. */
+    struct AiInspectionSenseProvider final {
+        SenseTypeId sense;
+        PerceptionDescriptorOrigin origin;            /**< Stable provider identity, contribution family and contract version. */
+        PerceptionCapabilitySet requiredCapabilities; /**< Requirements of the registered sense and its stimulus. */
+        bool available{};                             /**< Active for this agent when the inspection was captured. */
+    };
+
     /** @brief Entirely owned inspection data scoped to an exact Scene and agent generation. */
     struct AiAgentInspectionSnapshot final {
         static constexpr std::size_t MaximumDecisionTasks = 32;
@@ -181,6 +189,7 @@ namespace Horo::AI {
         std::optional<AiInspectionFailure> decisionFailure;
         std::vector<AiInspectionStimulus> stimuli;
         std::optional<AiInspectionFailure> perceptionFailure;
+        std::vector<AiInspectionSenseProvider> senseProviders;
     };
 
     /** @brief Detached evidence from one selected decision and the canonical AI population at a completed tick. */

@@ -1,3 +1,5 @@
+#include "AiSceneTestSupport.h"
+#include "Horo/AI/AISceneActivation.h"
 #include "Horo/AI/AIScenePerceptionSource.h"
 #include "Horo/AI/PerceptionSenseScene.h"
 #include "Horo/Gameplay/LuaPerceptionSense.h"
@@ -141,6 +143,65 @@ namespace Horo::AI {
             CHECK(budget.Remaining() == 6);
             CHECK(fixture.state->calls == 0);
             CHECK(fixture.memory->StoredCount() == 0);
+        }
+
+        TEST_CASE("Scene agent inspection reports admitted provider capabilities and revocation", "[unit][ai][sense-scene]") {
+            Fixture fixture;
+            auto controller = TestSupport::MakeFixture(1, 11, 1, 0);
+            controller.agent.controller->requiredCapabilities =
+                controller.agent.controller->requiredCapabilities.Union(AiCapabilitySet::Of(AiCapability::Perception));
+            const auto &contract = fixture.generation->Contracts().front();
+            controller.descriptor.perceptionEndpoints = std::make_shared<const AiControllerPerceptionEndpoints>(
+                AiControllerPerceptionEndpoints{std::make_shared<const PerceptionDescriptorRegistry>(fixture.Registry(contract)),
+                                                {fixture.binding.listenerType},
+                                                {contract.sense.identity}});
+            Runtime::SceneDefinitionBuilder builder{{1}, {1}};
+            builder.Add({.object = {1}, .components = {.aiAgent = controller.agent.agent, .aiController = controller.agent.controller}});
+            const auto definition = std::move(builder).Build();
+            REQUIRE(definition.HasValue());
+            const auto scene = Runtime::RuntimeScene::Create(definition.Value(), {78});
+            REQUIRE(scene.HasValue());
+            const auto view = scene.Value()->View();
+            const auto entity = view.Find({1});
+            REQUIRE(entity);
+            PerceptionSpatialBroadphase spatial;
+            auto created = AiSceneRuntime::Create();
+            REQUIRE(created.HasValue());
+            auto runtime = std::move(created).Value();
+            const auto descriptors = std::array{controller.descriptor};
+            const AiScenePerceptionExecution execution{.generation = fixture.generation,
+                                                       .capabilities = fixture.capabilities,
+                                                       .radiusMillimeters = 10'000,
+                                                       .visibleLayers = 1,
+                                                       .workUnitsPerTick = 100};
+            const AiScenePerceptionActivationInput perception{spatial, {}, [entity](const Runtime::RuntimeSceneView &) {
+                return Result<std::vector<AiScenePerceptionPosition>>::Success({{*entity, {}}});
+            }, execution};
+            AiSceneActivationParticipant participant{runtime, descriptors, perception};
+            const auto prepared = participant.Prepare(definition.Value(), view);
+            REQUIRE(prepared.HasValue());
+            REQUIRE(prepared.Value()->ValidatePublication().HasValue());
+            prepared.Value()->Publish();
+            const auto agent = runtime.CapabilityAtSafePoint().ResolveAgent(controller.agent.agent.agent);
+            REQUIRE(agent.HasValue());
+            const auto active = runtime.CaptureAgentInspectionAtSafePoint(view, agent.Value(), {});
+            REQUIRE(active.HasValue());
+            REQUIRE(active.Value().senseProviders.size() == 1);
+            const auto &provider = active.Value().senseProviders.front();
+            CHECK(provider.sense == contract.sense.identity);
+            CHECK(provider.origin == contract.sense.origin);
+            CHECK(provider.requiredCapabilities == fixture.capabilities);
+            CHECK(provider.available);
+            CHECK(fixture.state->calls == 0);
+
+            fixture.state->admission.store(false, std::memory_order_release);
+            const auto revoked = runtime.CaptureAgentInspectionAtSafePoint(view, agent.Value(), {});
+            REQUIRE(revoked.HasValue());
+            REQUIRE(revoked.Value().senseProviders.size() == 1);
+            CHECK_FALSE(revoked.Value().senseProviders.front().available);
+            CHECK(provider.available);
+            CHECK(fixture.state->calls == 0);
+            prepared.Value()->Shutdown();
         }
 
         TEST_CASE("Custom spatial senses fence dead foreign and nested admission before gathering", "[unit][ai][sense-scene]") {
