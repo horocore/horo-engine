@@ -307,7 +307,9 @@ namespace Horo::Editor::Proposals {
         Applied,
         Undone,
         ApplyFailed,
-        UndoFailed
+        UndoFailed,
+        Conflict,
+        Cancelled
     };
 
     /** @brief Owner-published status for the latest explicit application or group undo. */

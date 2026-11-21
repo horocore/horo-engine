@@ -222,12 +222,12 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             .requestSourceReviewApply =
                 [project = std::string{projectIdentity}](const Proposals::ReviewDecisions &decisions,
                                                          const Proposals::ProjectPolicy &policy, const Proposals::WorkspaceEditPlan &plan,
-                                                         EditorWorkspaceViewCommandData &command) {
-            return QueueSourceReviewApplication(project, decisions, policy, plan, command);
+                                                         const CancellationToken &lifetime, EditorWorkspaceViewCommandData &command) {
+            return QueueSourceReviewApplication(project, decisions, policy, plan, lifetime, command);
         },
             .requestSourceReviewUndo =
-                [this](EditorWorkspaceViewCommandData &command) {
-            return controller_->SourceReviews().QueueUndo(command);
+                [this](const CancellationToken &lifetime, EditorWorkspaceViewCommandData &command) {
+            return controller_->SourceReviews().QueueUndo(lifetime, command);
         },
             .sourceReviewTransaction =
                 [this] {

@@ -852,6 +852,7 @@ namespace Horo::Editor {
         std::optional<AssetSceneDropRequest> assetSceneDrop = std::nullopt;
         std::shared_ptr<const SourceReviewApplication> sourceReviewApplication;
         SourceEditBatch sourceReviewUndo;
+        CancellationToken sourceReviewLifetime;
     };
 
     /** @brief Pending project-local Content Browser clipboard operation. */

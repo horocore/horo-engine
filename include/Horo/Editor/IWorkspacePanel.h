@@ -37,6 +37,7 @@ namespace Horo::Platform {
 }
 
 namespace Horo {
+    class CancellationToken;
     class IBuildOutputQuery;
     class IOperationControl;
     class IOperationQuery;
@@ -120,10 +121,10 @@ namespace Horo::Editor {
             requestSourceReview{};
         /** @brief Stages the user's explicit request to apply the accepted text after drawing. */
         std::function<bool(const Proposals::ReviewDecisions &, const Proposals::ProjectPolicy &, const Proposals::WorkspaceEditPlan &,
-                           EditorWorkspaceViewCommandData &)>
+                           const CancellationToken &, EditorWorkspaceViewCommandData &)>
             requestSourceReviewApply{};
         /** @brief Stages group undo for the last applied source review. */
-        std::function<bool(EditorWorkspaceViewCommandData &)> requestSourceReviewUndo{};
+        std::function<bool(const CancellationToken &, EditorWorkspaceViewCommandData &)> requestSourceReviewUndo{};
         /** @brief Reads the current workspace's source transaction outcome and undo availability. */
         std::function<Proposals::SourceTransactionStatus()> sourceReviewTransaction{};
     };

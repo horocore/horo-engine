@@ -961,7 +961,8 @@ namespace Horo::Editor {
                     const auto policy =
                         Proposals::ProjectPolicy::Capture(contextProject_, review.proposal.PolicyRevision(), std::move(rules));
                     sourceApplyQueued_ =
-                        policy.HasValue() && requestSourceReviewApply_(review.decisions, policy.Value(), review.plan, command);
+                        policy.HasValue() && contextLifetime_ &&
+                        requestSourceReviewApply_(review.decisions, policy.Value(), review.plan, contextLifetime_->Token(), command);
                 } catch (const std::bad_alloc &) {
                     sourceApplyQueued_ = false;
                 }
@@ -977,12 +978,17 @@ namespace Horo::Editor {
                 using enum Proposals::SourceTransactionFeedback;
                 if (std::exchange(sourceApplyQueued_, false) && state.feedback == Applied)
                     patchReview_.reset();
-                constexpr std::array<const char *, 5> keys{nullptr, "source_patch_applied", "source_patch_reverted",
-                                                           "source_patch_apply_failed", "source_patch_revert_failed"};
+                constexpr std::array<const char *, 7> keys{nullptr,
+                                                           "source_patch_applied",
+                                                           "source_patch_reverted",
+                                                           "source_patch_apply_failed",
+                                                           "source_patch_revert_failed",
+                                                           "source_patch_transaction_conflict",
+                                                           "source_patch_transaction_cancelled"};
                 if (const auto *key = keys[static_cast<std::size_t>(state.feedback)])
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, key), Theme::Text(), fonts);
-                if (requestSourceReviewUndo_ && state.canUndo && Button(locale, "source_patch_revert", true))
-                    status_ = requestSourceReviewUndo_(command) ? nullptr : "source_patch_revert_failed";
+                if (requestSourceReviewUndo_ && contextLifetime_ && state.canUndo && Button(locale, "source_patch_revert", true))
+                    status_ = requestSourceReviewUndo_(contextLifetime_->Token(), command) ? nullptr : "source_patch_revert_failed";
             }
 
             /** @brief Explicitly checkpoints the exact inert proposal and current unit decisions on the storage worker. */

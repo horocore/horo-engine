@@ -16,7 +16,7 @@ namespace Horo::Editor {
     /** @brief Queues an exact source review only within the current workspace and an idle command slot. */
     [[nodiscard]] bool QueueSourceReviewApplication(std::string_view project, const Proposals::ReviewDecisions &decisions,
                                                     const Proposals::ProjectPolicy &policy, const Proposals::WorkspaceEditPlan &plan,
-                                                    EditorWorkspaceViewCommandData &command);
+                                                    const CancellationToken &lifetime, EditorWorkspaceViewCommandData &command);
 
     /** @brief Owns the last applied source group and dispatches explicit editor source transaction commands. */
     class SourceReviewTransactions final {
@@ -26,13 +26,13 @@ namespace Horo::Editor {
         /** @brief Reads the latest feedback and whether every changed document still permits group undo. */
         [[nodiscard]] Proposals::SourceTransactionStatus Status() const noexcept;
         /** @brief Stages one grouped undo when its receipt remains current. */
-        [[nodiscard]] bool QueueUndo(EditorWorkspaceViewCommandData &command) const;
+        [[nodiscard]] bool QueueUndo(const CancellationToken &lifetime, EditorWorkspaceViewCommandData &command) const;
 
     private:
         /** @brief Applies a complete accepted subset and captures its immutable receipt. */
-        void Apply(const SourceReviewApplication *request, SourceDocumentService &documents);
+        void Apply(const SourceReviewApplication *request, SourceDocumentService &documents, const CancellationToken &lifetime);
         /** @brief Replays the current source review as one group. */
-        void Undo(const SourceEditBatch &receipt, SourceDocumentService &documents);
+        void Undo(const SourceEditBatch &receipt, SourceDocumentService &documents, const CancellationToken &lifetime);
         SourceEditBatch batch_;
         Proposals::SourceTransactionFeedback feedback_{};
     };

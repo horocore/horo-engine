@@ -222,6 +222,8 @@
     "workspace.local_agent.source_patch_revert": {"text": "Uygulanan değişiklikleri geri al"},
     "workspace.local_agent.source_patch_reverted": {"text": "Uygulanan değişiklikler birlikte geri alındı."},
     "workspace.local_agent.source_patch_revert_failed": {"text": "Uygulanan değişiklikler birlikte geri alınamadı."},
+    "workspace.local_agent.source_patch_transaction_conflict": {"text": "Kaynak incelemesi daha yeni değişikliklerle çakışıyor. Tekrar denemeden önce güncel dosyaları inceleyin."},
+    "workspace.local_agent.source_patch_transaction_cancelled": {"text": "Kaynak incelemesi işlemi iptal edildi."},
     "workspace.local_agent.source_patch_hunks": {"text": "Değişiklik aralığı kararları"},
     "workspace.local_agent.source_patch_checkpoint_save": {"text": "Teklifi ve kararları yerelde kaydet"},
     "workspace.local_agent.source_patch_checkpoint_load": {"text": "Kaydedilen kaynak incelemesini geri yükle"},

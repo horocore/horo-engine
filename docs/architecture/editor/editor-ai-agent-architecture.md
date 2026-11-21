@@ -798,6 +798,13 @@ enter that batch. The workspace retains its latest receipt for a single grouped
 Undo action while every affected publication is still current. Source files are
 written through the ordinary save flow.
 
+Queued Apply and Undo commands carry the current workspace attachment's
+cancellation token. Detaching the workspace cancels that admission before an
+old command can publish. The owner serializes accepted transactions with manual
+source edits and checks current leases and disk bases at execution. A competing
+command that loses its evidence reports a conflict. An older review never
+rebases onto new user or external edits without another review.
+
 ## Backend Providers
 
 The system supports pluggable LLM backends:

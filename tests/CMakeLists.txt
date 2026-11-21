@@ -4188,6 +4188,7 @@ if (HORO_BUILD_EDITOR_GUI)
     )
     add_executable(HoroEditorLocalAgentPanelRenderTests
         unit/editor/EditorLocalAgentPanelRenderTests.cpp
+        unit/editor/SourceReviewConcurrencyTests.cpp
         ../apps/HoroEditor/app/EditorLocalAgentPanel.cpp
         ../apps/HoroEditor/app/EditorLocalAgentPatch.cpp
         ../apps/HoroEditor/app/EditorLocalAgentPatchCheckpoint.cpp

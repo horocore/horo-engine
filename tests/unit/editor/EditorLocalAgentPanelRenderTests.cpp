@@ -522,11 +522,12 @@ namespace {
                 selections.push_back(overlay.Value().Source().Identity().instance);
                 return true;
             };
-            context.requestSourceReviewApply = [](const auto &decisions, const auto &policy, const auto &plan, auto &command) {
-                return QueueSourceReviewApplication("layout-test", decisions, policy, plan, command);
+            context.requestSourceReviewApply = [](const auto &decisions, const auto &policy, const auto &plan, const auto &lifetime,
+                                                  auto &command) {
+                return QueueSourceReviewApplication("layout-test", decisions, policy, plan, lifetime, command);
             };
-            context.requestSourceReviewUndo = [&](auto &command) {
-                return transactions.QueueUndo(command);
+            context.requestSourceReviewUndo = [&](const auto &lifetime, auto &command) {
+                return transactions.QueueUndo(lifetime, command);
             };
             context.sourceReviewTransaction = [&] {
                 return transactions.Status();
@@ -614,6 +615,15 @@ namespace {
         SourceDocumentService disk(project.directory);
         CHECK(disk.Open(project.Identity("one.cpp", 1), project.directory / "one.cpp").Value().Text() == one.Text());
         CHECK(disk.Open(project.Identity(longPath, 2), project.directory / longPath).Value().Text() == two.Text());
+        fixture.Activate("###source_patch_revert");
+        REQUIRE(fixture.command.command == EditorWorkspaceViewCommand::UndoSourceReview);
+        fixture.panels.DetachAll();
+        REQUIRE(transactions.Process(std::exchange(fixture.command, {}), owner));
+        CHECK(transactions.Status().feedback == Proposals::SourceTransactionFeedback::Cancelled);
+        CHECK(appliedOne.IsCurrent());
+        CHECK(appliedTwo.IsCurrent());
+        fixture.panels.AttachAll(next);
+        CHECK(fixture.DrawnText().find("The source review action was cancelled.") != std::string::npos);
         fixture.Activate("###source_patch_revert");
         REQUIRE(fixture.command.command == EditorWorkspaceViewCommand::UndoSourceReview);
         REQUIRE(transactions.Process(std::exchange(fixture.command, {}), owner));
