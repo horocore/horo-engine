@@ -2,6 +2,7 @@
  * @brief Installed OpenXR Play driven by real Vulkan memory, graphics and coverage with scripted runtime ownership.
  */
 #include "../renderer/UiSubmissionSourceFixture.h"
+#include "OpenXRFrameMetricsTestSupport.h"
 #include "RuntimeUiPaintShaderPackage.h"
 #include "editor/renderer/vulkan/EditorGuiRendererVulkan.h"
 #include "editor/renderer/vulkan/SdlVulkanPresentationPort.h"
@@ -273,10 +274,32 @@ namespace Horo::Tests::OpenXRApplication {
             return RequireValue(load(ReadNativeCook(prefix.string() + ".horoshdr"), ReadNativeCook(prefix.string() + ".reflection.json")));
         }
 
+        struct NativeComfortProjection final {
+            std::filesystem::path shaders;
+            XR::OpenXRInternal::NativeFrameMetricHandles metrics;
+        };
+
+        /** @brief Signs the exact smooth-movement action used by the native comfort fixture. */
+        std::string ComfortBindingDocument() {
+            auto document = OpenXRProduct::Json::parse(OpenXRProduct::InstalledProductFixture::BindingDocument());
+            document["locomotion"] = {{"actor", 17}, {"speedMetersPerSecond", 2.5}, {"moveAction", "select"}, {"deadZone", 0.1}};
+            const auto axis = static_cast<unsigned>(Input::ActionValueType::Axis2D);
+            document["actions"][0]["type"] = axis;
+            document["controls"][0]["type"] = axis;
+            document["controls"][0]["path"] = "/user/hand/left/input/thumbstick";
+            document["poses"].push_back({{"profile", 1},
+                                         {"set", 1},
+                                         {"role", static_cast<unsigned>(XR::XRTrackedDeviceRole::LeftController)},
+                                         {"kind", static_cast<unsigned>(XR::XRTrackedPoseKind::Aim)},
+                                         {"path", "/user/hand/left/input/aim/pose"},
+                                         {"label", "Aim"}});
+            return document.dump();
+        }
+
         /** @brief Exact signed Play composition with real SDL WSI, production viewport and real native graphics queues. */
         struct NativePlayFixture final {
             ApplicationNativeScript script;
-            OpenXRProduct::InstalledProductFixture product{HORO_TEST_OPENXR_LOADER, std::nullopt};
+            OpenXRProduct::InstalledProductFixture product;
             ConfigurationService configuration{XrSchema()};
             NativePlayPlatform video;
             const Render::FramebufferExtent extent{160, 120};
@@ -309,7 +332,9 @@ namespace Horo::Tests::OpenXRApplication {
 
             explicit NativePlayFixture(const std::filesystem::path &cooks, const Host::IOpenXRPlayLightingSource *lighting = nullptr,
                                        const std::filesystem::path &lightingCooks = {},
-                                       std::shared_ptr<const Host::IOpenXRLightPermission> lightPermission = {}) {
+                                       std::shared_ptr<const Host::IOpenXRLightPermission> lightPermission = {},
+                                       const NativeComfortProjection *comfort = nullptr)
+                : product{HORO_TEST_OPENXR_LOADER, comfort ? std::optional{ComfortBindingDocument()} : std::nullopt} {
                 REQUIRE(window);
                 platform = std::make_unique<Editor::SdlVulkanPresentationPort>(*window);
                 images = std::make_unique<NativePlayImages>(*platform, bridge);
@@ -330,11 +355,18 @@ namespace Horo::Tests::OpenXRApplication {
                 script.swapchain.imageCount = 1;
                 ConfigurationResolutionRequest request;
                 request.invocation.emplace(SettingKey{"xr.enabled"}, ConfigurationInputValue{true, std::nullopt});
-                request.invocation.emplace(SettingKey{"xr.limits.spaces"}, ConfigurationInputValue{std::int64_t{5}, std::nullopt});
+                request.invocation.emplace(SettingKey{"xr.limits.spaces"},
+                                           ConfigurationInputValue{std::int64_t{comfort ? 6 : 5}, std::nullopt});
                 request.invocation.emplace(SettingKey{"xr.features.space_warp"},
                                            ConfigurationInputValue{static_cast<std::int64_t>(
                                                                        XR::XRProjectFeaturePolicy::OptionalProjection),
                                                                    std::nullopt});
+                if (comfort) {
+                    request.invocation.emplace(SettingKey{"xr.locomotion.maximum_vignette_percent"},
+                                               ConfigurationInputValue{std::int64_t{40}, std::nullopt});
+                    script.actions.tracking.enabled = true;
+                    script.actions.sample.expectedType = XR_ACTION_TYPE_VECTOR2F_INPUT;
+                }
                 RequireValue(configuration.ResolveAndCommit(request));
                 session =
                     std::make_unique<Host::OpenXRApplicationSession>(Host::OpenXRApplicationAuthorities{configuration, *product.host,
@@ -368,6 +400,9 @@ namespace Horo::Tests::OpenXRApplication {
                                                                            Editor::LoadEditorVulkanMultiviewEnvironmentCook),
                                                             Editor::EditorVulkanMultiviewProgram::EnvironmentLighting));
                 }
+                if (comfort)
+                    RequireValue(viewport->PrepareXrComfortProgram(
+                        LoadNativeCook(comfort->shaders, "xr-comfort-vulkan", Editor::LoadEditorVulkanXrComfortCook)));
                 viewport->StageXrMotionProgram(LoadNativeCook(cooks, "motion", Editor::LoadEditorVulkanMultiviewMotionCook));
                 viewport->StageXrCoverageProgram(LoadNativeCook(cooks, "coverage", Editor::LoadEditorVulkanMultiviewCoverageCook));
                 viewport->StageXrCoverageReductionProgram(
@@ -375,15 +410,17 @@ namespace Horo::Tests::OpenXRApplication {
                 gui = std::make_unique<Editor::EditorGuiRendererVulkan>(*window, *frontend, bridge);
                 RequireValue(gui->Initialize());
                 RequireValue(session->PrepareSession());
-                play = RequireValue(Host::OpenXRPlayHost::Create({*session,
-                                                                  router,
-                                                                  *viewport,
-                                                                  *frontend,
-                                                                  bindings,
-                                                                  scheduler->DispatchSource(),
-                                                                  Duration::FromMilliseconds(10),
-                                                                  {root.value},
-                                                                  lighting}));
+                play = RequireValue(
+                    Host::OpenXRPlayHost::Create({*session,
+                                                  router,
+                                                  *viewport,
+                                                  *frontend,
+                                                  bindings,
+                                                  scheduler->DispatchSource(),
+                                                  Duration::FromMilliseconds(10),
+                                                  {root.value},
+                                                  lighting,
+                                                  comfort ? comfort->metrics : XR::OpenXRInternal::NativeFrameMetricHandles{}}));
             }
 
             ~NativePlayFixture() {
@@ -416,7 +453,7 @@ namespace Horo::Tests::OpenXRApplication {
                 }
             }
 
-            Input::InputActionCollection InputPort(const std::optional<Input::PlayerId>) {
+            Input::InputActionCollection InputPort(const std::optional<Input::PlayerId> player) {
                 std::vector registered{Input::ActionDescriptor{Input::ActionId{"select"},
                                                                bindings->schema.actions.front().valueType,
                                                                Input::InputContextId{"gameplay"},
@@ -424,7 +461,8 @@ namespace Horo::Tests::OpenXRApplication {
                                                                {{.kind = Input::BindingControlKind::Key, .key = Input::Key::Space}}}};
                 RequireValue(router.SetActionMap(std::move(registered)));
                 inputContext = router.PushContext(Input::InputContextId{"gameplay"}, Input::InputContextKind::Gameplay);
-                return RequireValue(router.ActionCollection(inputContext));
+                return RequireValue(player ? router.ActionCollectionForPlayer(inputContext, *player)
+                                           : router.ActionCollection(inputContext));
             }
 
             /** @brief Bounds explicit test observation without introducing a normal-frame GPU wait into Play. */
@@ -443,7 +481,7 @@ namespace Horo::Tests::OpenXRApplication {
 
             void Project(const std::uint64_t number, const Host::OpenXRPlayHost::WorldCanvasFrame *canvas = nullptr,
                          const Editor::EditorVulkanXrViewportAccess::CanvasSource *submitCanvas = nullptr,
-                         const PublicationHooks &hooks = {}) {
+                         const PublicationHooks &hooks = {}, const Runtime::FrameContext *dispatch = nullptr) {
                 CAPTURE(number);
                 const auto step = [](std::string_view name, auto result) {
                     INFO(name);
@@ -453,7 +491,8 @@ namespace Horo::Tests::OpenXRApplication {
                     SDL_PumpEvents();
                     return step("poll native WSI availability", frontend->PollPresentationAvailability(extent));
                 });
-                REQUIRE(step("prepare native prediction", play->PrepareRenderFrame(number, canvas)));
+                REQUIRE(step("prepare native prediction",
+                             dispatch ? play->PrepareRenderFrame(*dispatch, canvas) : play->PrepareRenderFrame(number, canvas)));
                 {
                     auto frame = step("begin Vulkan WSI frame", frontend->BeginFrame({number, extent}));
                     step("execute native Play graph", play->ExecuteRenderFrame(frame, {}, submitCanvas));
@@ -542,6 +581,66 @@ namespace Horo::Tests::OpenXRApplication {
         }
         scene->Shutdown();
     }
+
+#if HORO_ENABLE_TELEMETRY
+    TEST_CASE("Signed Vulkan Play submits the comfort shader over the two acquired eyes", "[xr][application][play][native-comfort]") {
+        using namespace Character::TestDetail;
+        const auto *root = SDL_getenv("HORO_XR_PLAY_NATIVE_COOK_ROOT");
+        const auto *shaderDirectory = SDL_getenv("HORO_XR_COMFORT_SHADER_DIRECTORY");
+        if (!root || !shaderDirectory)
+            SKIP("Supply the genuine offline Vulkan projection and comfort programs.");
+
+        OpenXR::FrameMetricRecorder metrics;
+        metrics.Start(4096);
+        const NativeComfortProjection comfort{shaderDirectory, metrics.handles};
+
+        NativePlayFixture fixture{root, nullptr, {}, {}, &comfort};
+        auto scene = ActivatePlay(fixture, Input::PlayerId{7});
+        auto character = SpawnedActiveWorldWithController();
+        const auto runtime = fixture.scene->View().RuntimeId();
+        auto input = std::make_unique<AppInputSample>(*fixture.play);
+        const auto *observed = input.get();
+        input->onFixed = [&](const Runtime::FixedStepContext &step) {
+            RequireValue(fixture.play->TickAuthoredCharacter(runtime, character.controller, *character.world, step.simulationTick, step));
+            RequireValue(character.world->AdvanceFixedTick(FixedTick(step.simulationTick)));
+        };
+        input->onCommit = [&](const Runtime::FixedStepContext &step) noexcept {
+            fixture.play->CommitAuthoredCharacter(runtime, *character.world, step);
+        };
+        input->onRender = [&](const Runtime::FrameContext &frame) {
+            fixture.Project(frame.frameNumber, nullptr, nullptr, {}, &frame);
+            CHECK(fixture.script.frames.layers == 1);
+            REQUIRE(fixture.script.frames.views == 2);
+        };
+        RequireValue(fixture.scheduler->AddParticipant(std::move(input)));
+        RequireValue(fixture.scheduler->Startup());
+        fixture.script.clock.sample = 1;
+        const auto frame = [&] {
+            RequireValue(fixture.scheduler->RunFrame());
+            REQUIRE(observed->result);
+            RequireValue(*observed->result);
+            fixture.script.frames.prediction += fixture.script.frames.period;
+            fixture.script.clock.sample += 1'000'000;
+            fixture.schedulerClock.Advance(Duration::FromMilliseconds(10));
+        };
+        frame();
+        frame();
+        const auto before = RequireValue(character.world->ControllerTransform(character.controller));
+        fixture.script.actions.sample.vector = {0.0F, 1.0F};
+        frame();
+        const auto axis = fixture.router.ReadAction(fixture.inputContext, Input::ActionId{"select"}, Input::PlayerId{7});
+        CHECK(axis.y == 1.0F);
+        const auto moved = RequireValue(character.world->ControllerTransform(character.controller));
+        CHECK(moved.position.z < before.position.z);
+        fixture.script.actions.sample.vector = {};
+        frame();
+        fixture.scheduler->Shutdown();
+        scene->Shutdown();
+        metrics.Finish();
+        CHECK(metrics.sink->Total("horo.xr.projection_comfort", 0) == 3);
+        CHECK(metrics.sink->Total("horo.xr.projection_comfort", 1) == 1);
+    }
+#endif
 
     TEST_CASE("Signed Vulkan Play reads optional lighting only for the selected program and current frame",
               "[xr][application][play][native-lighting]") {
