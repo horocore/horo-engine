@@ -2145,8 +2145,8 @@ namespace Horo::Editor {
         const auto &problem = m_viewModel.playDecisionProblem;
         const auto scene = m_playSession.SceneView();
         const auto state = m_playSession.State();
-        if ((state != EditorPlaySessionState::Playing && state != EditorPlaySessionState::Paused) ||
-            !problem || !scene || !scene->IsCurrent() || scene->RuntimeId() != request.scene || problem->scene != request.scene ||
+        if ((state != EditorPlaySessionState::Playing && state != EditorPlaySessionState::Paused) || !problem || !scene ||
+            !scene->IsCurrent() || scene->RuntimeId() != request.scene || problem->scene != request.scene ||
             request.tick != problem->tick || request.agent != problem->agent || request.graph != problem->graph ||
             request.node != problem->node || !request.graph.IsValid() || !request.node.IsValid())
             return;
@@ -2167,8 +2167,8 @@ namespace Horo::Editor {
             return std::ranges::find(graphs, matched->asset, &DecisionGraphWorkspaceDocument::asset);
         };
         const auto current = [&](const DecisionGraphWorkspaceDocument &document) {
-            return document.source == matched->digest && document.graph && document.graph->asset == request.graph &&
-                   !document.dirty && !document.conflict;
+            return document.source == matched->digest && document.graph && document.graph->asset == request.graph && !document.dirty &&
+                   !document.conflict;
         };
         if (const auto found = findDocument(); found != graphs.end() && !current(*found))
             return;
@@ -2182,8 +2182,9 @@ namespace Horo::Editor {
                 static_cast<void>(host.FocusDocument(*previous));
             return;
         }
-        m_viewModel.playDecisionGraphFocus = {{found->identity.instance, found->revision}, request.node,
-                                               ++m_playDecisionGraphFocusSequence};
+        m_viewModel.playDecisionGraphFocus = {{found->identity.instance, found->revision},
+                                              request.node,
+                                              ++m_playDecisionGraphFocusSequence};
         m_viewModel.playDecisionGraphUnavailable = false;
     }
 

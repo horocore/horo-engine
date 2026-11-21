@@ -307,7 +307,8 @@ namespace Horo::Editor {
         if (problem && problem->scene != scene->RuntimeId())
             problem.reset();
         if (auto captured = m_playSession.ReadDecisionProblem(); captured && captured->scene == scene->RuntimeId() && captured->tick > 0 &&
-                                                                 captured->agent.IsValid() && (!problem || captured->tick > problem->tick)) {
+                                                                 captured->agent.IsValid() &&
+                                                                 (!problem || captured->tick > problem->tick)) {
             problem = std::move(captured);
             m_viewModel.playDecisionGraphFocus.reset();
             m_viewModel.playDecisionGraphUnavailable = false;
