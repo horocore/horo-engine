@@ -83,6 +83,10 @@ namespace Horo::AI {
                 return *decision_;
             }
 
+            const DecisionGraphInstance &Decision() const noexcept {
+                return *decision_;
+            }
+
         private:
             std::weak_ptr<Detail::AiSceneRuntimeState> state_;
             std::unique_ptr<DecisionGraphInstance> decision_;
@@ -92,6 +96,13 @@ namespace Horo::AI {
             std::uint64_t evaluationTick_{};
         };
     }  // namespace
+
+    /** @copydoc AiSceneRuntime::CopyCookedDecisionTasks */
+    std::size_t AiSceneRuntime::CopyCookedDecisionTasks(const AgentHandle agent, const std::shared_ptr<const CookedDecisionPlan> &plan,
+                                                        const std::span<DecisionActiveTask> output) const {
+        const auto *executor = dynamic_cast<const ScheduledCookedDecision *>(active_->scheduler->InspectDecision(agent, plan));
+        return executor ? executor->Decision().CopyActiveTasks(output) : 0;
+    }
 
     /** @copydoc AiSceneRuntime::ArmDecisionReplayAtSafePoint */
     Result<void> AiSceneRuntime::ArmDecisionReplayAtSafePoint(const AgentHandle agent, const std::uint64_t tick) const {

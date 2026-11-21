@@ -346,6 +346,8 @@ namespace Horo::AI {
 
     private:
         friend class AiSceneRuntime;
+        /** @brief Borrows the selected registered evaluator after the tick has completed. */
+        [[nodiscard]] const IAiScheduledDecision *InspectDecision(AgentHandle agent, const std::shared_ptr<const void> &image) noexcept;
         /** @brief Borrows the evaluator only for an exact registered image at an eligible decision replacement boundary. */
         [[nodiscard]] Result<IAiScheduledDecision *> ValidateDecisionReplacement(AgentHandle agent,
                                                                                  const std::shared_ptr<const void> &previousImage);
@@ -360,6 +362,8 @@ namespace Horo::AI {
         [[nodiscard]] std::vector<std::size_t>::iterator HandlePosition(AgentHandle agent) noexcept;
         /** @brief Resolves exact registration. @param agent Exact handle. @return Slot or null. */
         [[nodiscard]] Entry *Find(AgentHandle agent) noexcept;
+        /** @brief Resolves a registration whose exact executable image and lifetime are both current. */
+        [[nodiscard]] Entry *FindBoundDecision(AgentHandle agent, const std::shared_ptr<const void> &image) noexcept;
         /** @brief Advances one admitted owner slice, retaining bounded intents and original failures. @param entry Admitted agent. */
         void EvaluateEntry(Entry &entry);
         /** @brief Commits one retained bounded intent prefix. @param entry Exact live agent. */

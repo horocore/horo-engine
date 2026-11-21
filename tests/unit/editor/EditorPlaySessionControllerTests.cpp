@@ -1020,6 +1020,17 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     REQUIRE(inspection.snapshot);
     CHECK(inspection.snapshot->agent == inspection.agent);
     CHECK(inspection.snapshot->decisionTick == 1);
+    CHECK(inspection.snapshot->omittedDecisionTasks == 0);
+    if (providerState->failure == FailedCallback::Start) {
+        CHECK(inspection.snapshot->decisionTasks.empty());
+    } else {
+        REQUIRE(inspection.snapshot->decisionTasks.size() == 1);
+        const auto &task = inspection.snapshot->decisionTasks.front();
+        CHECK(task.occurrence.graph == graph.asset);
+        CHECK(task.node == Decisions::MakeIdentity<AI::DecisionNodeId>(3));
+        CHECK(task.task.IsValid());
+        CHECK(task.execution.IsValid());
+    }
     for (const auto &key : inspection.snapshot->keys) {
         if (discloseKey && key.key == disclosed.key) {
             CHECK(key.status == (disclosed.defaultValue ? AI::AiInspectionValueStatus::Present : AI::AiInspectionValueStatus::Unset));

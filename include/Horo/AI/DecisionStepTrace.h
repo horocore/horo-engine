@@ -35,6 +35,14 @@ namespace Horo::AI {
         bool operator==(const DecisionTraceOccurrence &) const = default;
     };
 
+    /** @brief Read-only identity of an exact running task in a cooked occurrence. */
+    struct DecisionActiveTask final {
+        DecisionTraceOccurrence occurrence;
+        DecisionNodeId node;
+        TaskId task;
+        TaskHandle execution;
+    };
+
     /** @brief Bounded stable identities and outcomes without provider payloads or blackboard values. */
     struct DecisionStepRecord final {
         DecisionStepRecordKind kind{DecisionStepRecordKind::BehaviorNode};

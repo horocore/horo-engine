@@ -134,6 +134,13 @@ namespace Horo::Editor {
                 if (task->failure)
                     line(std::format("{} · {}", text("ai_inspection_task_failed"), task->failure->code.Value()), Theme::Warn());
             }
+            for (const auto &task : snapshot.decisionTasks)
+                line(std::format("{} {} · {} {} · {} {} · {}", text("ai_inspection_task"), task.task.Value(), text("ai_problem_graph"),
+                                 task.occurrence.graph.Value(), text("ai_problem_node"), task.node.Value(),
+                                 text("ai_inspection_task_running")),
+                     Theme::Muted());
+            if (snapshot.omittedDecisionTasks != 0)
+                line(std::format("{} {}", text("ai_inspection_omitted_tasks"), snapshot.omittedDecisionTasks), Theme::Warn());
             if (snapshot.decisionFailure)
                 line(std::format("{} · {}", text("ai_problem"), snapshot.decisionFailure->code.Value()), Theme::Warn());
             if (snapshot.perceptionFailure)

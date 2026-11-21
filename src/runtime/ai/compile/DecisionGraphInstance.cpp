@@ -5,6 +5,37 @@
 #include <new>
 
 namespace Horo::AI {
+    /** @copydoc DecisionGraphInstance::CopyActiveTasks */
+    std::size_t DecisionGraphInstance::CopyActiveTasks(const std::span<DecisionActiveTask> output) const noexcept {
+        if (owner_ != std::this_thread::get_id() || evaluating_ || shutdown_)
+            return 0;
+        std::size_t count{};
+        for (std::size_t index = 0; index < occurrences_.size(); ++index) {
+            const auto &state = *occurrences_[index];
+            if (!state.active)
+                continue;
+            const auto occurrence = TraceOccurrence(index);
+            const auto treeTasks = [&](const BehaviorTreeInstance &tree) {
+                count += tree.CopyActiveTasks(occurrence, output.subspan(std::min(count, output.size())));
+            };
+            if (state.tree)
+                treeTasks(*state.tree);
+            if (state.utility && state.utility->selected)
+                treeTasks(*state.utility->actions[*state.utility->selected]);
+            if (!state.actions)
+                continue;
+            for (const auto &action : state.actions->actions) {
+                if (action->lifecycle.State() != AiTaskState::Running || !action->lifecycle.Context())
+                    continue;
+                const auto &context = *action->lifecycle.Context();
+                if (count < output.size())
+                    output[count] = {occurrence, action->node, context.taskDefinition, context.task};
+                ++count;
+            }
+        }
+        return count;
+    }
+
     namespace {
         template <typename T> Result<T> Invalid(const ErrorCodeDescriptor &code = AIErrors::TaskContextInvalid) {
             return Result<T>::Failure(MakeError(code));

@@ -16,6 +16,7 @@
 namespace Horo::AI {
     class DecisionStepTrace;
     struct DecisionTraceOccurrence;
+    struct DecisionActiveTask;
 
     /** @brief Executable core operations, independent of provider/display names. */
     enum class BehaviorTreeOperation : std::uint8_t {
@@ -334,6 +335,9 @@ namespace Horo::AI {
          * @param occurrence Exact owning compiled call. @param trace Bounded owner-supplied evidence buffer.
          */
         void AppendTrace(const DecisionTraceOccurrence &occurrence, DecisionStepTrace &trace) const noexcept;
+        /** @brief Copies the active task prefix, returning the exact running count independent of output capacity. */
+        [[nodiscard]] std::size_t CopyActiveTasks(const DecisionTraceOccurrence &occurrence,
+                                                  std::span<DecisionActiveTask> output) const noexcept;
         [[nodiscard]] bool ValidEvaluation(std::uint64_t tick, AiTaskResumeReason reason) const noexcept;
         [[nodiscard]] bool EvaluationCancelled(AgentHandle activeAgent) const noexcept;
         [[nodiscard]] Result<AiTaskState> CancelEvaluation(AgentHandle activeAgent);

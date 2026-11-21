@@ -91,6 +91,13 @@ namespace Horo::AI {
                                              .keys = InspectBlackboard(board, *schema, disclosedKeys),
                                              .task = InspectTask(selected->task.get()),
                                              .decisionFailure = InspectDecision(report, agent)};
+            if (report && selected->cookedPlan) {
+                std::array<DecisionActiveTask, AiAgentInspectionSnapshot::MaximumDecisionTasks> tasks{};
+                const auto total = CopyCookedDecisionTasks(agent, selected->cookedPlan, tasks);
+                const auto retained = std::span{tasks}.first(std::min(total, tasks.size()));
+                result.decisionTasks.assign(retained.begin(), retained.end());
+                result.omittedDecisionTasks = total - retained.size();
+            }
             if (selected->sensing) {
                 const auto memory = ReadPerceptionAtSafePoint(scene, result.owner);
                 if (memory.HasError())

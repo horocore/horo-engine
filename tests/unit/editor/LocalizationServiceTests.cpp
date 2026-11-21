@@ -520,11 +520,17 @@ namespace {
 
     TEST_CASE("Play Decision provider context is translated in both supported locales", "[unit][editor][ai][localization]") {
         const auto root = std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor";
-        constexpr std::array providerKeys{"workspace.game.ai_problem_provider",      "workspace.game.ai_problem_graph",
-                                          "workspace.game.ai_problem_node",          "workspace.game.ai_inspection_title",
-                                          "workspace.game.ai_inspection_compare",    "workspace.game.ai_inspection_filter",
-                                          "workspace.game.ai_inspection_redacted",   "workspace.game.ai_inspection_age",
-                                          "workspace.game.ai_inspection_navigation", "workspace.game.ai_inspection_navigation_disabled"};
+        constexpr std::array providerKeys{"workspace.game.ai_problem_provider",
+                                          "workspace.game.ai_problem_graph",
+                                          "workspace.game.ai_problem_node",
+                                          "workspace.game.ai_inspection_title",
+                                          "workspace.game.ai_inspection_compare",
+                                          "workspace.game.ai_inspection_filter",
+                                          "workspace.game.ai_inspection_redacted",
+                                          "workspace.game.ai_inspection_age",
+                                          "workspace.game.ai_inspection_navigation",
+                                          "workspace.game.ai_inspection_navigation_disabled",
+                                          "workspace.game.ai_inspection_omitted_tasks"};
         for (const auto locale : {"en-US", "tr-TR"}) {
             Horo::Editor::LocalizationService service{Horo::Editor::LocaleTag{locale}};
             Horo::Editor::LocalizationError error;

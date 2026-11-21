@@ -376,6 +376,24 @@ namespace Horo::AI {
         }
     }
 
+    /** @copydoc AiTaskScheduler::FindBoundDecision */
+    AiTaskScheduler::Entry *AiTaskScheduler::FindBoundDecision(const AgentHandle agent, const std::shared_ptr<const void> &image) noexcept {
+        auto *entry = Find(agent);
+        if (!entry || !image || entry->image != image || entry->image.owner_before(image) || image.owner_before(entry->image) ||
+            entry->cancellation.IsCancellationRequested())
+            return nullptr;
+        return entry;
+    }
+
+    /** @copydoc AiTaskScheduler::InspectDecision */
+    const IAiScheduledDecision *AiTaskScheduler::InspectDecision(const AgentHandle agent,
+                                                                 const std::shared_ptr<const void> &image) noexcept {
+        if (!CompletedReportAtSafePoint())
+            return nullptr;
+        const auto *entry = FindBoundDecision(agent, image);
+        return entry ? entry->executor.get() : nullptr;
+    }
+
     /** @copydoc AiTaskScheduler::ValidateDecisionReplacement */
     Result<IAiScheduledDecision *> AiTaskScheduler::ValidateDecisionReplacement(const AgentHandle agent,
                                                                                 const std::shared_ptr<const void> &previousImage) {
@@ -383,9 +401,8 @@ namespace Horo::AI {
         if (!CanChangePopulation(true) || settings_.mode != AiSchedulingMode::Deterministic ||
             report_.tick == std::numeric_limits<std::uint64_t>::max())
             return Validated::Failure(MakeError(AIErrors::SchedulerPhaseInvalid));
-        const auto *entry = Find(agent);
-        if (!entry || !previousImage || entry->image != previousImage || entry->image.owner_before(previousImage) ||
-            previousImage.owner_before(entry->image) || entry->cancellation.IsCancellationRequested())
+        const auto *entry = FindBoundDecision(agent, previousImage);
+        if (!entry)
             return Validated::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
         return Validated::Success(entry->executor.get());
     }

@@ -167,6 +167,7 @@ namespace Horo::AI {
 
     /** @brief Entirely owned inspection data scoped to an exact Scene and agent generation. */
     struct AiAgentInspectionSnapshot final {
+        static constexpr std::size_t MaximumDecisionTasks = 32;
         AgentHandle agent;
         Runtime::EntityRef owner;
         std::uint64_t sceneRevision{};
@@ -175,6 +176,8 @@ namespace Horo::AI {
         std::uint64_t blackboardRevision{};
         std::vector<AiInspectionBlackboardRow> keys;
         std::optional<AiInspectionTask> task;
+        std::vector<DecisionActiveTask> decisionTasks;
+        std::size_t omittedDecisionTasks{};
         std::optional<AiInspectionFailure> decisionFailure;
         std::vector<AiInspectionStimulus> stimuli;
         std::optional<AiInspectionFailure> perceptionFailure;
@@ -665,6 +668,10 @@ namespace Horo::AI {
     private:
         friend class AiSceneActivationCandidate;
         friend class Detail::AiSceneStructuralParticipant;
+
+        /** @brief Reads the exact selected cooked executor on the established Scene safe point. */
+        [[nodiscard]] std::size_t CopyCookedDecisionTasks(AgentHandle agent, const std::shared_ptr<const CookedDecisionPlan> &plan,
+                                                          std::span<DecisionActiveTask> output) const;
 
         explicit AiSceneRuntime(AiSceneRuntimeSettings settings, std::optional<AiSceneCookedDecisionExecution> execution) noexcept;
 

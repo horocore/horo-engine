@@ -3469,6 +3469,10 @@ key in the selected cooked Play Scene. The selection is carried across editor
 restarts only within the same project. Navigation registration shows the
 selected entity's live profile, filter, and enabled state when the host has
 admitted Navigation.
+Running tasks in the selected cooked decision include their graph and node
+identity. The inspector copies these directly from the live task lifecycles
+after a completed Decision tick, retains at most 32, and counts any additional
+tasks.
 
 ### Scene decision scheduling tiers
 

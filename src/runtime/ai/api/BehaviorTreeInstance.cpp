@@ -10,6 +10,22 @@
 #include <utility>
 
 namespace Horo::AI {
+    /** @copydoc BehaviorTreeInstance::CopyActiveTasks */
+    std::size_t BehaviorTreeInstance::CopyActiveTasks(const DecisionTraceOccurrence &occurrence,
+                                                      const std::span<DecisionActiveTask> output) const noexcept {
+        std::size_t count{};
+        for (std::size_t index = 0; index < plan_->Nodes().size(); ++index) {
+            const auto &task = states_[index].task;
+            if (!task || task->State() != AiTaskState::Running || !task->Context())
+                continue;
+            const auto &context = *task->Context();
+            if (count < output.size())
+                output[count] = {occurrence, plan_->Nodes()[index].execution.id, context.taskDefinition, context.task};
+            ++count;
+        }
+        return count;
+    }
+
     namespace {
         /** @brief Recognizes the shared task/subtree terminal vocabulary. */
         bool Terminal(const AiTaskState state) noexcept {

@@ -2704,6 +2704,7 @@
     "workspace.game.ai_inspection_task_succeeded": {"text": "Succeeded"},
     "workspace.game.ai_inspection_task_failed": {"text": "Failed"},
     "workspace.game.ai_inspection_task_cancelled": {"text": "Cancelled"},
+    "workspace.game.ai_inspection_omitted_tasks": {"text": "Additional running tasks"},
     "workspace.game.ai_inspection_perception": {"text": "Perception sense"},
     "workspace.game.ai_inspection_stimulus": {"text": "Stimulus"},
     "workspace.game.ai_inspection_age": {"text": "Age in seconds"},

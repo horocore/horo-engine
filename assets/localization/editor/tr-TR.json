@@ -2704,6 +2704,7 @@
     "workspace.game.ai_inspection_task_succeeded": {"text": "Başarılı"},
     "workspace.game.ai_inspection_task_failed": {"text": "Başarısız"},
     "workspace.game.ai_inspection_task_cancelled": {"text": "İptal edildi"},
+    "workspace.game.ai_inspection_omitted_tasks": {"text": "Listelenmeyen çalışan görevler"},
     "workspace.game.ai_inspection_perception": {"text": "Algı duyusu"},
     "workspace.game.ai_inspection_stimulus": {"text": "Uyaran"},
     "workspace.game.ai_inspection_age": {"text": "Saniye cinsinden yaş"},

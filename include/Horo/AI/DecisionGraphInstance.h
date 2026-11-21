@@ -149,6 +149,8 @@ namespace Horo::AI {
                                                         std::optional<DecisionProviderFailure> *providerFailure = nullptr);
         /** @brief Correlates a record to the exact compiled call and its stable caller. */
         [[nodiscard]] DecisionTraceOccurrence TraceOccurrence(std::size_t index) const noexcept;
+        /** @brief Copies exact active task identities, without advancing or calling any Decision providers. */
+        [[nodiscard]] std::size_t CopyActiveTasks(std::span<DecisionActiveTask> output) const noexcept;
         /** @brief Copies the state and last transition reported by the actual HSM kernel. */
         void TraceMachine(std::size_t index, const StateMachineStepResult &step) const noexcept;
         /** @brief Copies the complete bounded committed transition chain, including before a later failure. */
