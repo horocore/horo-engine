@@ -1169,18 +1169,6 @@ namespace Horo::Editor {
                 ImGui::EndDisabled();
             }
 
-            /** @brief Prevents dispatch through the text transaction when a structural decision is included. */
-            bool HasAcceptedFileOperation(const EditorLocalAgentPatchReview &review) const {
-                if (review.files.size() == 1)
-                    return false;
-                for (std::size_t index = 0; index < review.files.size(); ++index) {
-                    if (review.files[index].kind != EditorPatchFileKind::Edit &&
-                        review.decisions.State({index}).Value() == Proposals::ReviewState::Accepted)
-                        return true;
-                }
-                return false;
-            }
-
             /** @brief Renders file summaries in proposal order and stages only the selected current operation. */
             void DrawPatchReview(const ILocalizationService &locale, const Theme::Fonts &fonts, EditorWorkspaceViewCommandData &command) {
                 if (!patchReview_) {
@@ -1199,13 +1187,12 @@ namespace Horo::Editor {
                 }
                 DrawPatchDecisions(review, locale);
                 const bool writingAudit = sourceReviewTransaction_ && sourceReviewTransaction_().writingAudit;
-                const bool fileOperation = HasAcceptedFileOperation(review);
-                if (fileOperation)
+                const auto kind = EditorPatchApplyKind(review);
+                if (!kind && review.decisions.HasAcceptedChanges())
                     Ui::WrappedText(ImGui::GetContentRegionAvail().x, LocalizedText(locale, "source_patch_structural_preview"),
                                     Theme::Muted(), fonts);
-                const auto *action = PatchApplyLabel(review.files);
-                if (requestSourceReviewApply_ &&
-                    Button(locale, action, !fileOperation && !writingAudit && review.decisions.HasAcceptedChanges()))
+                const auto *action = PatchApplyLabel(kind.value_or(EditorPatchFileKind::Edit));
+                if (requestSourceReviewApply_ && Button(locale, action, kind.has_value() && !writingAudit))
                     QueueSourceApply(review, command);
                 if (!buildRoot_.empty() && Button(locale, "source_patch_checkpoint_save", CanCheckpointPatchReview()))
                     SavePatchReview(review);
@@ -1213,10 +1200,8 @@ namespace Horo::Editor {
             }
 
             /** @brief Gives native file moves an explicit confirmation action. */
-            static const char *PatchApplyLabel(std::span<const EditorPatchFileCard> files) {
-                if (files.size() != 1)
-                    return "source_patch_apply";
-                switch (files.front().kind) {
+            static const char *PatchApplyLabel(const EditorPatchFileKind kind) {
+                switch (kind) {
                     case EditorPatchFileKind::Delete:
                         return "source_patch_confirm_delete";
                     case EditorPatchFileKind::Rename:

@@ -384,13 +384,19 @@ namespace Horo::Editor::Proposals {
         SourceBatchDiskEvidence disk;
     };
 
-    /** @brief An owner action produced by the single-file structural review route. */
+    /** @brief A detached structural action with its original review evidence. */
     using PreparedSourceFileOperation = std::variant<PreparedSourceCreate, PreparedSourceDelete, PreparedSourceRename>;
 
-    /** @brief Detached accepted text and exact immutable leases, suitable for worker-to-editor handoff. */
+    /** @brief The accepted hunks rendered against their exact immutable source. */
+    struct PreparedSourceTextEdit final {
+        SourceDocumentSnapshot source;
+        std::string replacement;
+    };
+
+    /** @brief Accepted operations, shared attribution and exact leases for worker-to-editor handoff. */
     class PreparedSourceReview final {
     public:
-        /** @brief Captures the full saved bytes on a worker before publication.
+        /** @brief Captures the full saved bytes and verifies destination availability on a worker.
          * @param root Authorized project root. @param files Host filesystem authority.
          * @param cancellation Cooperative observer. @return Success or typed refusal.
          */
@@ -407,15 +413,24 @@ namespace Horo::Editor::Proposals {
         [[nodiscard]] Result<SourceReviewApplied> CommitObserved(SourceDocumentService &documents, const DurableFileSystem &files,
                                                                  CancellationToken cancellation = {}) const;
 
+        /** @brief Views accepted text operations in canonical proposal order. */
+        [[nodiscard]] std::span<const PreparedSourceTextEdit> TextEdits() const noexcept {
+            return edits_;
+        }
+
+        /** @brief Views accepted structural operations in canonical proposal order. */
+        [[nodiscard]] std::span<const PreparedSourceFileOperation> FileOperations() const noexcept {
+            return files_;
+        }
+
+        /** @brief Transfers an exact single structural operation to the single-file owner path. */
+        [[nodiscard]] std::optional<PreparedSourceFileOperation> TakeSingleFileOperation() &&;
+
     private:
         friend class ReviewDecisions;
 
-        struct Edit final {
-            SourceDocumentSnapshot source;
-            std::string replacement;
-        };
-
-        std::vector<Edit> edits_;
+        std::vector<PreparedSourceTextEdit> edits_;
+        std::vector<PreparedSourceFileOperation> files_;
         SourceBatchDiskEvidence disk_;
         std::shared_ptr<const SourceReviewAudit> audit_;
         /** @brief Builds the borrowed batch inputs and dispatches the requested verification mode. */
@@ -432,6 +447,8 @@ namespace Horo::Editor::Proposals {
         [[nodiscard]] Result<ReviewState> State(ReviewTarget target = {}) const;
         /** @brief Reports whether at least one proposal unit was accepted. */
         [[nodiscard]] bool HasAcceptedChanges() const noexcept;
+        /** @brief Reports whether the given canonical file has any accepted unit. */
+        [[nodiscard]] bool HasAcceptedChanges(std::size_t file) const noexcept;
         /** @brief Records one atomic decision. Acceptance requires a current, conflict-free plan for every selected operation.
          * @param plan The latest defensive workspace plan. @param target Whole proposal, file or edit hunk.
          * @param choice Explicit review-only choice. @return Success or typed failure, with no partial decisions or source writes.
@@ -451,12 +468,12 @@ namespace Horo::Editor::Proposals {
          */
         [[nodiscard]] Result<PreparedSourceReview> PrepareAccepted(const ProjectPolicy &policy, const WorkspaceEditPlan &plan,
                                                                    CancellationToken cancellation = {}) const;
-        /** @brief Prepares one accepted structural operation without writing files.
-         * @return Detached structural operation, absence for other selections, or failure for stale or mixed operations.
+        /** @brief Prepares all accepted operations against one plan and aggregate text budget.
+         * @param policy Exact captured project policy. @param plan Immutable preview and source leases.
+         * @param cancellation Cooperative observer. @return Detached mixed candidate or typed refusal.
          */
-        [[nodiscard]] Result<std::optional<PreparedSourceFileOperation>> PrepareFileOperation(const ProjectPolicy &policy,
-                                                                                              const WorkspaceEditPlan &plan,
-                                                                                              CancellationToken cancellation = {}) const;
+        [[nodiscard]] Result<PreparedSourceReview> PrepareTransaction(const ProjectPolicy &policy, const WorkspaceEditPlan &plan,
+                                                                      CancellationToken cancellation = {}) const;
         /** @brief Applies only accepted text hunks through the current source owner.
          * @param documents Owner of the live source snapshots. @param policy Active captured policy for this proposal.
          * @param plan Exact proposal preview with current source evidence. @param cancellation Cooperative observer.

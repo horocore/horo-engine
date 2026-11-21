@@ -120,6 +120,69 @@ TEST_CASE("Review recovery rejects corruption and stale accepted units", "[edito
     CHECK(decisions.State().Value() == ReviewState::Rejected);
 }
 
+TEST_CASE("Mixed review preparation keeps exact accepted text and structural evidence together", "[editor][proposal][apply]") {
+    Workspace workspace;
+    const auto removed = workspace.Open("src/delete.cpp", "delete", 1);
+    const auto edited = workspace.Open("src/edit.cpp", "one two", 2);
+    const auto renamed = workspace.Open("src/rename.cpp", "old name", 3);
+    const auto creation = Path("src/create.cpp");
+    const auto destination = Path("src/moved.cpp");
+    const auto proposal = workspace.Build({
+        RenameFile{FileBase::Capture(renamed).Value(), destination, {{0, "old", "new"}}},
+        EditFile{FileBase::Capture(edited).Value(), {{0, "one", "first"}, {4, "two", "second"}}},
+        CreateFile{creation, "new file"},
+        DeleteFile{FileBase::Capture(removed).Value()},
+    });
+    const std::array observed{SourcePathObservation{creation, SourcePathState::Absent},
+                              SourcePathObservation{destination, SourcePathState::Absent},
+                              SourcePathObservation{removed.Identity().key.source, removed},
+                              SourcePathObservation{edited.Identity().key.source, edited},
+                              SourcePathObservation{renamed.Identity().key.source, renamed}};
+    const auto plan = PlanWorkspaceEdits(proposal, workspace.policy, observed).Value();
+    ReviewDecisions decisions{proposal};
+    REQUIRE(decisions.Decide(plan, {}, ReviewChoice::Accept).HasValue());
+    REQUIRE(decisions.Decide(plan, {2, 1}, ReviewChoice::Reject).HasValue());
+    auto prepared = decisions.PrepareTransaction(workspace.policy, plan);
+    REQUIRE(prepared.HasValue());
+    auto candidate = std::move(prepared).Value();
+    REQUIRE(candidate.TextEdits().size() == 1);
+    CHECK(candidate.TextEdits().front().source.SharesStateWith(edited));
+    CHECK(candidate.TextEdits().front().replacement == "first two");
+    const auto files = candidate.FileOperations();
+    REQUIRE(files.size() == 3);
+    const auto &create = std::get<PreparedSourceCreate>(files[0]);
+    const auto &deletion = std::get<PreparedSourceDelete>(files[1]);
+    const auto &rename = std::get<PreparedSourceRename>(files[2]);
+    CHECK(create.file.path == creation);
+    CHECK(deletion.source.SharesStateWith(removed));
+    CHECK(rename.source.SharesStateWith(renamed));
+    CHECK(rename.destination == destination);
+    CHECK(rename.text == "new name");
+    CHECK(create.audit == deletion.audit);
+    CHECK(create.audit == rename.audit);
+    REQUIRE(create.audit);
+    CHECK(create.audit->revisions.size() == 4);
+    CHECK_FALSE(std::move(candidate).TakeSingleFileOperation());
+
+    NativeDurableFileSystem native;
+    SECTION("Every operation has valid inputs, but neither text-only entry point can publish a partial group") {
+        REQUIRE(candidate.ObserveDisk(workspace.project.directory, native).HasValue());
+        CHECK(candidate.Commit(workspace.documents).HasError());
+        CHECK(candidate.CommitObserved(workspace.documents, native).HasError());
+        CHECK(workspace.documents.Snapshot(edited.Identity().instance).Value().SharesStateWith(edited));
+        CHECK(std::filesystem::exists(workspace.project.directory / "src/delete.cpp"));
+        CHECK_FALSE(std::filesystem::exists(workspace.project.directory / "src/create.cpp"));
+    }
+    SECTION("A late rename destination collision invalidates the full candidate") {
+        workspace.project.Put("external", "src/moved.cpp");
+        const auto result = candidate.ObserveDisk(workspace.project.directory, native);
+        REQUIRE(result.HasError());
+        CHECK(result.ErrorValue().code.Value() == Errors::StaleBase.code.Value());
+        CHECK(workspace.documents.Snapshot(edited.Identity().instance).Value().SharesStateWith(edited));
+        CHECK(std::filesystem::exists(workspace.project.directory / "src/rename.cpp"));
+    }
+}
+
 TEST_CASE("Applying accepted proposal hunks stages one unsaved buffer transaction", "[editor][proposal][apply]") {
     Workspace workspace;
     const auto a = workspace.Open("src/a.cpp", "one two end");

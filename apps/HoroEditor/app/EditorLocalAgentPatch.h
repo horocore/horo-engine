@@ -60,6 +60,11 @@ namespace Horo::Editor {
         std::size_t displayedHunk{};
     };
 
+    /** @brief Gives the available apply route for the accepted selection, including single-file confirmation.
+     * @return Edit for a text-only group, a kind for one structural action, or no route for mixed or empty selections.
+     */
+    [[nodiscard]] std::optional<EditorPatchFileKind> EditorPatchApplyKind(const EditorLocalAgentPatchReview &review);
+
     /** @brief Reports whether a complete reply begins with a supported patch format. */
     [[nodiscard]] bool IsEditorLocalPatchReply(std::string_view answer);
 

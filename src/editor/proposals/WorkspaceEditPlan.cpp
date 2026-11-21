@@ -242,18 +242,64 @@ namespace Horo::Editor::Proposals {
         }
 
         /** @brief Validates the accepted operation and reserves its output before reconstructing text. */
-        Result<std::string> RenderAcceptedText(const ProjectPolicy &policy, const FileOperation &file, const std::string_view text,
+        Result<std::string> RenderAcceptedText(const ProjectPolicy &policy, const EditFile &edit, const std::string_view text,
                                                const std::span<const ReviewState> selection, Budget &budget) {
             using Output = Result<std::string>;
-            const auto *edit = std::get_if<EditFile>(&file);
-            if (!edit)
-                return Output::Failure(MakeError(Errors::Invalid));
-            if (!policy.Allows(edit->base.path))
+            if (!policy.Allows(edit.base.path))
                 return Output::Failure(MakeError(Errors::PolicyDenied));
-            const auto bytes = AcceptedSize(text.size(), *edit, selection);
+            const auto bytes = AcceptedSize(text.size(), edit, selection);
             if (!budget.Charge(bytes, budget.output))
                 return Output::Failure(MakeError(Errors::Bounds));
-            return Output::Success(Render(text, edit->hunks, bytes, selection));
+            return Output::Success(Render(text, edit.hunks, bytes, selection));
+        }
+
+        /** @brief Builds an accepted structural action without trusting detached preview text. */
+        Result<PreparedSourceFileOperation> PrepareStructural(const FileOperation &file, const SourceDocumentSnapshot &source,
+                                                              Budget &budget, const std::shared_ptr<SourceReviewAudit> &audit,
+                                                              const std::uint32_t ordinal) {
+            using Output = Result<PreparedSourceFileOperation>;
+            if (const auto *create = std::get_if<CreateFile>(&file)) {
+                if (!budget.Charge(create->text.size(), budget.output))
+                    return Output::Failure(MakeError(Errors::Bounds));
+                audit->revisions.push_back({ordinal, 0, 1});
+                return Output::Success(PreparedSourceCreate{*create, audit});
+            }
+            if (const auto *rename = std::get_if<RenameFile>(&file)) {
+                if (source.Revision() == std::numeric_limits<std::uint64_t>::max())
+                    return Output::Failure(MakeError(Errors::StaleBase));
+                auto bytes = source.Text().size();
+                for (const auto &hunk : rename->hunks)
+                    bytes = bytes - hunk.before.size() + hunk.after.size();
+                if (!budget.Charge(bytes, budget.output))
+                    return Output::Failure(MakeError(Errors::Bounds));
+                audit->revisions.push_back({ordinal, source.Revision(), source.Revision() + 1});
+                return Output::Success(
+                    PreparedSourceRename{source, rename->destination, Render(source.Text(), rename->hunks, bytes), audit, {}});
+            }
+            audit->revisions.push_back({ordinal, source.Revision(), 0});
+            return Output::Success(PreparedSourceDelete{source, audit, {}});
+        }
+
+        /** @brief Checks the destination and saved source for an accepted file operation. */
+        Result<void> ObserveStructural(PreparedSourceFileOperation &operation, const std::filesystem::path &root,
+                                       const DurableFileSystem &files, const CancellationToken &stop) {
+            return std::visit([&](auto &file) -> Result<void> {
+                const SourceDocumentId *destination{};
+                if constexpr (requires { file.file.path; })
+                    destination = &file.file.path;
+                else if constexpr (requires { file.destination; })
+                    destination = &file.destination;
+                if (destination && ObserveSourceDestination(*destination, root, files, stop) != SourcePathState::Absent)
+                    return Result<void>::Failure(
+                        MakeError(stop.IsCancellationRequested() ? SourceDocumentErrors::Cancelled : Errors::StaleBase));
+                if constexpr (requires { file.disk; }) {
+                    auto disk = SourceBatchDiskEvidence::Capture(root, std::span{&file.source, 1}, files, stop);
+                    if (disk.HasError())
+                        return Result<void>::Failure(std::move(disk).ErrorValue());
+                    file.disk = std::move(disk).Value();
+                }
+                return Result<void>::Success();
+            }, operation);
         }
 
         /** @brief Admits exact source evidence and charges work before hashing source or allocating a preview. */
@@ -404,71 +450,18 @@ namespace Horo::Editor::Proposals {
         return Output::Success(std::move(audit));
     }
 
-    /** @copydoc ReviewDecisions::PrepareFileOperation */
-    Result<std::optional<PreparedSourceFileOperation>> ReviewDecisions::PrepareFileOperation(const ProjectPolicy &policy,
-                                                                                             const WorkspaceEditPlan &plan,
-                                                                                             const CancellationToken cancellation) const {
-        using Output = Result<std::optional<PreparedSourceFileOperation>>;
-        std::optional<std::size_t> structural;
-        std::size_t accepted{};
-        for (std::size_t index = 0; index < units_.size(); ++index) {
-            if (std::ranges::find(units_[index], ReviewState::Accepted) == units_[index].end())
-                continue;
-            ++accepted;
-            if (!std::holds_alternative<EditFile>(proposal_.Files()[index]))
-                structural = index;
-        }
-        if (!structural)
-            return Output::Success(std::nullopt);
-        if (accepted != 1 || proposal_.PolicyDigest() != policy.Digest())
-            return Output::Failure(MakeError(Errors::PolicyDenied));
-        try {
-            if (cancellation.IsCancellationRequested())
-                return Output::Failure(MakeError(SourceDocumentErrors::Cancelled));
-            if (!Matches(plan) || !CanAccept(plan, *structural))
-                return Output::Failure(MakeError(Errors::StaleBase));
-            auto attributed = BuildAudit();
-            if (attributed.HasError())
-                return Output::Failure(attributed.ErrorValue());
-            auto audit = std::move(attributed).Value();
-            const auto ordinal = static_cast<std::uint32_t>(*structural);
-            if (const auto *file = std::get_if<CreateFile>(&proposal_.Files()[*structural])) {
-                audit->revisions.push_back({ordinal, 0, 1});
-                return Output::Success(PreparedSourceFileOperation{PreparedSourceCreate{*file, std::move(audit)}});
-            }
-            const auto &source = std::get<FilePreview>(plan.entries[*structural]).before;
-            if (const auto *rename = std::get_if<RenameFile>(&proposal_.Files()[*structural])) {
-                if (source.Revision() == std::numeric_limits<std::uint64_t>::max())
-                    return Output::Failure(MakeError(Errors::StaleBase));
-                auto size = source.Text().size();
-                for (const auto &hunk : rename->hunks)
-                    size = size - hunk.before.size() + hunk.after.size();
-                if (size > Limits{}.maximumTextBytes)
-                    return Output::Failure(MakeError(Errors::Bounds));
-                audit->revisions.push_back({ordinal, source.Revision(), source.Revision() + 1});
-                return Output::Success(PreparedSourceFileOperation{
-                    PreparedSourceRename{source, rename->destination, Render(source.Text(), rename->hunks, size), std::move(audit), {}}});
-            }
-            audit->revisions.push_back({ordinal, source.Revision(), 0});
-            return Output::Success(PreparedSourceFileOperation{PreparedSourceDelete{source, std::move(audit), {}}});
-        } catch (const std::bad_alloc &) {
-            return Output::Failure(MakeError(Errors::Bounds));
-        }
-    }
-
-    /** @copydoc ReviewDecisions::PrepareAccepted */
-    Result<PreparedSourceReview> ReviewDecisions::PrepareAccepted(const ProjectPolicy &policy, const WorkspaceEditPlan &plan,
-                                                                  const CancellationToken cancellation) const {
+    /** @copydoc ReviewDecisions::PrepareTransaction */
+    Result<PreparedSourceReview> ReviewDecisions::PrepareTransaction(const ProjectPolicy &policy, const WorkspaceEditPlan &plan,
+                                                                     const CancellationToken cancellation) const {
         using Output = Result<PreparedSourceReview>;
         if (cancellation.IsCancellationRequested())
             return Output::Failure(MakeError(SourceDocumentErrors::Cancelled));
         if (proposal_.PolicyDigest() != policy.Digest())
             return Output::Failure(MakeError(Errors::PolicyDenied));
-        if (!Matches(plan) || !AcceptancesCurrent(plan, units_))
+        if (!Matches(plan))
             return Output::Failure(MakeError(Errors::StaleBase));
         try {
             PreparedSourceReview prepared;
-            prepared.edits_.reserve(units_.size());
             auto attributed = BuildAudit();
             if (attributed.HasError())
                 return Output::Failure(attributed.ErrorValue());
@@ -476,20 +469,36 @@ namespace Horo::Editor::Proposals {
             audit->revisions.reserve(units_.size());
             const Limits limits;
             Budget budget{limits, ReviewSourceMatch::CurrentRevision};
-            for (std::size_t file = 0; file < units_.size(); ++file) {
+            for (std::size_t index = 0; index < units_.size(); ++index) {
                 if (cancellation.IsCancellationRequested())
                     return Output::Failure(MakeError(SourceDocumentErrors::Cancelled));
-                const auto &selection = units_[file];
-                if (std::ranges::find(selection, ReviewState::Accepted) == selection.end())
+                const auto &selection = units_[index];
+                if (!HasAcceptedChanges(index))
                     continue;
-                const auto &source = std::get<FilePreview>(plan.entries[file]).before;
-                auto replacement = RenderAcceptedText(policy, proposal_.Files()[file], source.Text(), selection, budget);
-                if (replacement.HasError())
-                    return Output::Failure(replacement.ErrorValue());
-                prepared.edits_.push_back({source, std::move(replacement).Value()});
-                audit->revisions.push_back({static_cast<std::uint32_t>(file), source.Revision(), 0});
+                const auto &file = proposal_.Files()[index];
+                const auto *preview = std::get_if<FilePreview>(&plan.entries[index]);
+                if (!preview)
+                    return Output::Failure(MakeError(Errors::StaleBase));
+                if (!budget.Charge(preview->before.Text().size(), budget.input) ||
+                    !budget.Charge(preview->before.DiskBase().size(), budget.input))
+                    return Output::Failure(MakeError(Errors::Bounds));
+                if (!CanAccept(plan, index))
+                    return Output::Failure(MakeError(Errors::StaleBase));
+                const auto ordinal = static_cast<std::uint32_t>(index);
+                if (const auto *edit = std::get_if<EditFile>(&file)) {
+                    auto replacement = RenderAcceptedText(policy, *edit, preview->before.Text(), selection, budget);
+                    if (replacement.HasError())
+                        return Output::Failure(replacement.ErrorValue());
+                    prepared.edits_.push_back({preview->before, std::move(replacement).Value()});
+                    audit->revisions.push_back({ordinal, preview->before.Revision(), 0});
+                    continue;
+                }
+                auto operation = PrepareStructural(file, preview->before, budget, audit, ordinal);
+                if (operation.HasError())
+                    return Output::Failure(operation.ErrorValue());
+                prepared.files_.push_back(std::move(operation).Value());
             }
-            if (prepared.edits_.empty())
+            if (audit->revisions.empty())
                 return Output::Failure(MakeError(Errors::Invalid));
             prepared.audit_ = std::move(audit);
             return Output::Success(std::move(prepared));
@@ -498,11 +507,35 @@ namespace Horo::Editor::Proposals {
         }
     }
 
+    /** @copydoc ReviewDecisions::PrepareAccepted */
+    Result<PreparedSourceReview> ReviewDecisions::PrepareAccepted(const ProjectPolicy &policy, const WorkspaceEditPlan &plan,
+                                                                  const CancellationToken cancellation) const {
+        auto prepared = PrepareTransaction(policy, plan, cancellation);
+        if (prepared.HasValue() && !prepared.Value().FileOperations().empty())
+            return Result<PreparedSourceReview>::Failure(MakeError(Errors::Invalid));
+        return prepared;
+    }
+
+    /** @copydoc PreparedSourceReview::TakeSingleFileOperation */
+    std::optional<PreparedSourceFileOperation> PreparedSourceReview::TakeSingleFileOperation() && {
+        if (!edits_.empty() || files_.size() != 1)
+            return std::nullopt;
+        auto operation = std::move(files_.front());
+        files_.clear();
+        return operation;
+    }
+
     /** @copydoc PreparedSourceReview::ObserveDisk */
     Result<void> PreparedSourceReview::ObserveDisk(const std::filesystem::path &root, const DurableFileSystem &files,
                                                    const CancellationToken cancellation) {
         disk_ = {};
         try {
+            for (auto &operation : files_) {
+                if (const auto observed = ObserveStructural(operation, root, files, cancellation); observed.HasError())
+                    return observed;
+            }
+            if (edits_.empty())
+                return Result<void>::Success();
             std::vector<SourceDocumentSnapshot> sources;
             sources.reserve(edits_.size());
             for (const auto &edit : edits_)
@@ -520,6 +553,8 @@ namespace Horo::Editor::Proposals {
     /** @copydoc PreparedSourceReview::Publish */
     Result<SourceEditBatch> PreparedSourceReview::Publish(SourceDocumentService &documents, const DurableFileSystem *files,
                                                           const CancellationToken cancellation) const {
+        if (edits_.empty() || !files_.empty())
+            return Result<SourceEditBatch>::Failure(MakeError(Errors::Invalid));
         try {
             std::vector<SourceBatchEdit> edits;
             edits.reserve(edits_.size());

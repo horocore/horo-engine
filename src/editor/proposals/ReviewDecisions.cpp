@@ -123,6 +123,11 @@ namespace Horo::Editor::Proposals {
         return std::ranges::any_of(units_, HasAcceptance);
     }
 
+    /** @copydoc ReviewDecisions::HasAcceptedChanges */
+    bool ReviewDecisions::HasAcceptedChanges(const std::size_t file) const noexcept {
+        return file < units_.size() && HasAcceptance(units_[file]);
+    }
+
     /** @brief Publishes a complete decision change with bounded undo history. */
     void ReviewDecisions::Publish(Units units) {
         if (units == units_)

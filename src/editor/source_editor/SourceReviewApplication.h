@@ -139,7 +139,7 @@ namespace Horo::Editor {
         bool reverted_{};
         std::optional<Proposals::SourceReviewDisposition> committedFileOutcome_;
 
-        using Candidate = std::variant<Proposals::PreparedSourceReview, Proposals::PreparedSourceFileOperation, RenameRestore>;
+        using Candidate = std::variant<Proposals::PreparedSourceReview, RenameRestore>;
 
         struct Preparation final {
             JobHandle job;

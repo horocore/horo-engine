@@ -830,6 +830,11 @@ in the current review session.
 
 The Local Model panel queues an explicit Apply command with the accepted review
 and its exact offered-file policy. The workspace dispatches it after drawing.
+The preparation worker uses one plan, aggregate text budget, and audit for
+the entire accepted selection. It renders accepted text from original ranges,
+inspects each structural destination, and records saved-file evidence before
+returning the detached candidate. Text-only publication rejects candidates
+that also carry structural operations.
 The source owner rechecks the policy, the live publications and the saved disk
 bases before publishing one batch of buffer changes. Only accepted text ranges
 enter that batch. The workspace retains its latest receipt for a single grouped

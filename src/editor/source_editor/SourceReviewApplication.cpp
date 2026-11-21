@@ -269,25 +269,7 @@ namespace Horo::Editor {
             auto job =
                 jobs->SubmitResult({.parentCancellation = lifetime, .priority = JobPriority::Interactive, .resource = JobResource::Io},
                                    [request = std::move(request), output, root, files](const CancellationToken &stop) {
-                auto operation = request->decisions.PrepareFileOperation(request->policy, *request->plan, stop);
-                if (operation.HasError())
-                    return Result<void>::Failure(std::move(operation).ErrorValue());
-                if (auto candidate = std::move(operation).Value()) {
-                    const auto checked = std::visit([&](auto &file) -> Result<void> {
-                        if constexpr (requires { file.disk; }) {
-                            auto disk = SourceBatchDiskEvidence::Capture(root, std::span{&file.source, 1}, *files, stop);
-                            if (disk.HasError())
-                                return Result<void>::Failure(std::move(disk).ErrorValue());
-                            file.disk = std::move(disk).Value();
-                        }
-                        return Result<void>::Success();
-                    }, *candidate);
-                    if (checked.HasError())
-                        return checked;
-                    output->emplace(std::move(*candidate));
-                    return Result<void>::Success();
-                }
-                auto prepared = request->decisions.PrepareAccepted(request->policy, *request->plan, stop);
+                auto prepared = request->decisions.PrepareTransaction(request->policy, *request->plan, stop);
                 if (prepared.HasError())
                     return Result<void>::Failure(std::move(prepared).ErrorValue());
                 auto candidate = std::move(prepared).Value();
@@ -325,15 +307,15 @@ namespace Horo::Editor {
         }
         if (const auto *restore = std::get_if<RenameRestore>(&**preparation.output))
             return CommitRenameRestore(*restore, open, *files, mutations, preparation.lifetime);
-        if (auto *operation = std::get_if<Proposals::PreparedSourceFileOperation>(&**preparation.output)) {
-            if (auto *creation = std::get_if<Proposals::PreparedSourceCreate>(operation))
+        auto &review = std::get<Proposals::PreparedSourceReview>(**preparation.output);
+        if (auto operation = std::move(review).TakeSingleFileOperation()) {
+            if (auto *creation = std::get_if<Proposals::PreparedSourceCreate>(&*operation))
                 return CommitDraft(*creation, open, host, preparation.lifetime);
-            if (auto *rename = std::get_if<Proposals::PreparedSourceRename>(operation))
+            if (auto *rename = std::get_if<Proposals::PreparedSourceRename>(&*operation))
                 return CommitRename(*rename, open, *files, mutations, preparation.lifetime);
             return CommitDelete(std::get<Proposals::PreparedSourceDelete>(*operation), open, *files, mutations, preparation.lifetime);
         }
-        auto applied =
-            std::get<Proposals::PreparedSourceReview>(**preparation.output).CommitObserved(documents, *files, preparation.lifetime);
+        auto applied = review.CommitObserved(documents, *files, preparation.lifetime);
         if (applied.HasError()) {
             feedback_ = FailureFeedback(applied.ErrorValue(), Feedback::ApplyFailed);
             return false;

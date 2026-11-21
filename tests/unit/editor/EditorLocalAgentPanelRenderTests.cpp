@@ -6,6 +6,7 @@
 #include "../../support/SourceDocumentTestProject.h"
 #include "EditorWorkspaceViewModel.h"
 #include "Horo/Editor/IWorkspacePanel.h"
+#include "Horo/Editor/SourceFileOpenService.h"
 #include "Horo/Editor/WorkspacePanelRegistry.h"
 #include "Horo/Foundation/Platform.h"
 #include "editor/source_editor/SourceEditorSession.h"
@@ -570,6 +571,68 @@ namespace {
             REQUIRE(corrupt.good());
         }
         CHECK(LoadEditorPatchCheckpoint(project.directory, "layout-test", std::span{&latest, 1}, {}).HasError());
+    }
+
+    TEST_CASE("Structural confirmation follows accepted files in a restored review", "[editor][agent][source]") {
+        using namespace Proposals;
+        TestSupport::SourceProject project;
+        project.Put("one", "edit.cpp");
+        project.Put("remove", "remove.cpp");
+        SourceFileOpenService owner{project.directory};
+        const auto edited = *owner.Open({.path = "edit.cpp"}).Value().sourceSnapshot;
+        const auto removed = *owner.Open({.path = "remove.cpp"}).Value().sourceSnapshot;
+        const std::array sources{edited, removed};
+        auto prepared = PrepareEditorLocalPatchReview(
+            R"({"version":1,"files":[{"kind":"edit","path":"edit.cpp","hunks":[{"offset":0,"before":"one","after":"two"}]},
+                {"kind":"delete","path":"remove.cpp"}]})",
+            {{edited, removed}, "test", 1}, "layout-test", 1);
+        REQUIRE(prepared.HasValue());
+        auto review = std::move(prepared).Value();
+        REQUIRE(review.decisions.Decide(*review.plan, {}, ReviewChoice::Accept).HasValue());
+        NativeDurableFileSystem files;
+        REQUIRE(
+            SaveEditorPatchCheckpoint(files, project.directory, {review.proposal, review.decisions, review.offeredPaths}, {}).HasValue());
+        SourceReviewTransactions transactions;
+        const auto context = [&](PanelContext &panel) {
+            panel.projectFileRoot = &project.directory;
+            panel.openSourceSnapshots = [&] {
+                return std::span<const SourceDocumentSnapshot>{sources};
+            };
+            panel.requestSourceReview = [](const auto &, const auto &, const auto, auto &) {
+                return false;
+            };
+            panel.requestSourceReviewApply = [](const auto &decisions, const auto &policy, const auto &plan, const auto &lifetime,
+                                                auto &command) {
+                return QueueSourceReviewApplication("layout-test", decisions, policy, plan, lifetime, command);
+            };
+            panel.sourceReviewTransaction = [&] {
+                return transactions.Status();
+            };
+        };
+        LocalAgentFixture fixture{"en-US", context};
+        fixture.Draw(420);
+        fixture.Activate("###source_patch_checkpoint_load");
+        REQUIRE(Await([&] {
+            return fixture.DrawnText().find("Saved source review restored.") != std::string::npos;
+        }));
+        fixture.Activate("###source_patch_apply");
+        CHECK(fixture.command.command == EditorWorkspaceViewCommand::None);
+        REQUIRE(fixture.ChatWindow());
+        ImGui::FocusWindow(fixture.ChatWindow());
+        ImGui::ActivateItemByID(ImHashStr("###source_patch_reject_file", 0, fixture.ChatWindow()->GetID(0)));
+        fixture.Draw(420);
+        fixture.Activate("###source_patch_confirm_delete");
+        REQUIRE(fixture.command.command == EditorWorkspaceViewCommand::ApplySourceReview);
+        CHECK(std::filesystem::is_regular_file(project.directory / "remove.cpp"));
+        JobSystem jobs{JobSystemConfig{.workerCount = 1, .ioWorkerCount = 1}};
+        ProjectMutationCoordinator mutations{files};
+        REQUIRE(transactions.Process(std::exchange(fixture.command, {}), owner.Documents(), &jobs, project.directory, &files, &owner));
+        REQUIRE(Await([&] {
+            return transactions.Poll(owner.Documents(), &files, &owner, nullptr, &mutations);
+        }));
+        CHECK(transactions.Status().feedback == SourceTransactionFeedback::Deleted);
+        CHECK_FALSE(std::filesystem::exists(project.directory / "remove.cpp"));
+        CHECK(edited.IsCurrent());
     }
 
     TEST_CASE("The file picker sends the selected sources and routes each returned card", "[.][chat-http]") {

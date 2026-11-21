@@ -85,6 +85,20 @@ namespace Horo::Editor {
         return cards;
     }
 
+    /** @copydoc EditorPatchApplyKind */
+    std::optional<EditorPatchFileKind> EditorPatchApplyKind(const EditorLocalAgentPatchReview &review) {
+        std::optional<EditorPatchFileKind> selected;
+        for (std::size_t index = 0; index < review.files.size(); ++index) {
+            if (!review.decisions.HasAcceptedChanges(index))
+                continue;
+            const auto kind = review.files[index].kind;
+            if (selected && (*selected != EditorPatchFileKind::Edit || kind != EditorPatchFileKind::Edit))
+                return std::nullopt;
+            selected = kind;
+        }
+        return selected;
+    }
+
     /** @copydoc ObserveEditorPatchDestinations */
     void ObserveEditorPatchDestinations(const std::span<const EditorPatchFileCard> cards, const std::filesystem::path &root,
                                         const DurableFileSystem &files, std::vector<Proposals::SourcePathObservation> &observations,
