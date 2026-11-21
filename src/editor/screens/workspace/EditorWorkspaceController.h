@@ -846,6 +846,7 @@ namespace Horo::Editor {
 
         struct EnvironmentQueryDraft final {
             EnvironmentQueryState current;
+            std::shared_ptr<const AI::EnvironmentQueryAsset> savedSource;
             Sha256Digest saved;
             Sha256Digest sidecar;
             std::size_t acceptedBytes{};
@@ -861,6 +862,9 @@ namespace Horo::Editor {
         Result<void> RestoreEnvironmentQueryRecovery(EnvironmentQueryWorkspaceDocument &document, EnvironmentQueryDraft &draft);
         /** @brief Publishes a durable registered Query source while owning the mutation lease. */
         Result<void> PublishEnvironmentQueryDraft(EnvironmentQueryWorkspaceDocument &document, EnvironmentQueryDraft &draft);
+        /** @brief Rebases an exact conflicted Query draft onto validated current disk inputs. */
+        Result<void> ResolveEnvironmentQueryExternal(EnvironmentQueryWorkspaceDocument &document, EnvironmentQueryDraft &draft,
+                                                     const EnvironmentQueryEditRequest &request);
         /** @brief Removes only a Query checkpoint accepted or captured by this draft. */
         Result<void> ClearEnvironmentQueryRecovery(const EnvironmentQueryWorkspaceDocument &document, EnvironmentQueryDraft &draft);
         /** @brief Applies an exact restore or discard action for the candidate the user reviewed. */

@@ -266,6 +266,14 @@ namespace Horo::Editor {
          */
         [[nodiscard]] Result<void> Reload(std::uint64_t expectedRevision, const Assets::AssetRegistrySnapshot &registry,
                                           bool discardDirty = false, CancellationToken cancellation = {});
+        /** @brief Adopts the latest validated disk version while keeping or merging the authored draft.
+         * @param expectedRevision Exact conflicted document revision. @param registry Current project registry.
+         * @param keepLocal Whether to keep the whole local draft. @param cancellation Read and commit fence.
+         * @return Success with a new history boundary, or a conflict with the current source and history preserved.
+         * @post Disk is unchanged. A subsequent explicit save checks the selected disk revision again.
+         */
+        [[nodiscard]] Result<void> ResolveExternal(std::uint64_t expectedRevision, const Assets::AssetRegistrySnapshot &registry,
+                                                   bool keepLocal, CancellationToken cancellation = {});
 
     private:
         struct State;

@@ -1128,6 +1128,8 @@
     "workspace.blackboard.save": {"text": "Şemayı kaydet"},
     "workspace.blackboard.reload": {"text": "Diskten yeniden yükle"},
     "workspace.blackboard.reload_discard": {"text": "Taslağı at ve diskten yeniden yükle"},
+    "workspace.blackboard.merge_external": {"text": "Diskteki değişiklikleri taslakla birleştir"},
+    "workspace.blackboard.keep_local": {"text": "Yerel taslağı bir sonraki kayıt için koru"},
     "workspace.blackboard.restore_recovery": {"text": "Kurtarma kopyasını taslak olarak yükle"},
     "workspace.blackboard.discard_recovery": {"text": "Kurtarma kopyasını sil"},
     "workspace.blackboard.undo": {"text": "Geri al"},

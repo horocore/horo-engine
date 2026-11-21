@@ -661,6 +661,10 @@ still checks each file it replaces against that base.
 Environment Query drafts use the same explicit reload action. The editor
 keeps the draft and its history until the registered external query and its
 metadata stage successfully as an editable replacement.
+Query merge combines independent display, result-contract and stage changes.
+The staged result must pass the Query descriptor registry and authoring
+validation. Keeping the local draft accepts the current registered source and
+metadata as the next save's base.
 
 Query autosave captures the authored Query into the shared AI document recovery
 queue. Each checkpoint records the accepted source bytes and metadata digest.
@@ -674,6 +678,11 @@ source and the highest issued key ID. Restore checks the accepted source bytes
 and preserves every durable key descriptor and the key allocator boundary.
 A restored draft establishes a new history boundary. An explicit reload can
 discard the open draft after the registered external schema is validated.
+Blackboard merge reconciles independent rows by stable key and resolves a
+presentation-order change when it comes from one version. Merging or keeping
+the draft preserves every durable key in the accepted disk schema. Both
+actions advance the save base and clear the undo and redo history. They leave
+source and identity metadata on disk until an explicit save.
 
 Decision graph autosave sends immutable graph and layout snapshots to the
 shared background recovery writer. The checkpoint records both accepted

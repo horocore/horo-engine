@@ -415,8 +415,15 @@ namespace Horo::Editor {
                 frame.Request(Save);
             if (frame.Button("reload", !snapshot.dirty))
                 frame.Request(Reload);
-            if (snapshot.conflict && snapshot.dirty && frame.Button("reload_discard", !document.referenceEditStaged))
-                frame.Request(ReloadDiscardingDraft);
+            if (snapshot.conflict && snapshot.dirty) {
+                const bool enabled = !document.referenceEditStaged;
+                if (frame.Button("reload_discard", enabled))
+                    frame.Request(ReloadDiscardingDraft);
+                if (frame.Button("merge_external", enabled))
+                    frame.Request(MergeExternal);
+                if (frame.Button("keep_local", enabled))
+                    frame.Request(KeepLocal);
+            }
             if (document.recovery) {
                 if (frame.Button("restore_recovery", !snapshot.dirty && !snapshot.conflict))
                     frame.Request(RestoreRecovery, {}, {}, document.recovery);

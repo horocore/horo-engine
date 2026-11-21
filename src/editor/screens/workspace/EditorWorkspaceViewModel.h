@@ -426,6 +426,8 @@ namespace Horo::Editor {
         Redo,
         Save,
         ReloadExternal,
+        MergeExternal,
+        KeepLocal,
         RestoreRecovery,
         DiscardRecovery
     };
@@ -691,6 +693,8 @@ namespace Horo::Editor {
         Save,
         Reload,
         ReloadDiscardingDraft,
+        MergeExternal,
+        KeepLocal,
         RestoreRecovery,
         DiscardRecovery,
         ReviewUsages,

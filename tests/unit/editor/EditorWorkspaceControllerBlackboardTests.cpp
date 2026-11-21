@@ -466,6 +466,92 @@ TEST_CASE("Blackboard draft recovery preserves canonical bytes and the issued ke
     }
 }
 
+TEST_CASE("Blackboard external choices merge independent rows and fence later saves", "[unit][editor][blackboard][workspace]") {
+    BlackboardWorkspaceFixture project;
+    const auto other = AI::BlackboardKeyId::Create(9).Value();
+    const std::array keys{AI::BlackboardKeyDescriptor{.key = project.key}, AI::BlackboardKeyDescriptor{.key = other}};
+    const auto write = [&](std::string first, std::string second) {
+        const std::array labels{AI::BlackboardSchemaAuthoringRow{project.key, std::move(first)},
+                                AI::BlackboardSchemaAuthoringRow{other, std::move(second)}};
+        project.WriteSchema(keys, labels);
+    };
+    write("First", "Second");
+    EditorWorkspaceController workspace(project.root, project.runtime, project.registry.Snapshot(),
+                                        {.assets = {.mutableAssetRegistry = &project.registry},
+                                         .mutations = &project.mutations,
+                                         .durableFiles = &project.files});
+    workspace.ProcessCommand(BlackboardWorkspaceFixture::Open());
+    REQUIRE(workspace.ViewModel().blackboardDocuments.size() == 1);
+    const auto &tab = workspace.ViewModel().blackboardDocuments.front();
+    project.Rename(workspace, project.Current(workspace), "Local first");
+    REQUIRE(tab.snapshot.dirty);
+    using enum BlackboardDocumentOperation;
+    const auto command = [&](BlackboardDocumentOperation value) {
+        workspace.ProcessCommand({.command = EditorWorkspaceViewCommand::BlackboardDocument,
+                                  .blackboard = BlackboardWorkspaceRequest{.fence = project.Current(workspace), .operation = value}});
+    };
+    const auto disk = [&] {
+        return Assets::CaptureAssetSource(project.root, project.root / BlackboardWorkspaceFixture::Path,
+                                          AI::BlackboardSchemaSourceCodec::MaximumBytes)
+            .Value()
+            .identity;
+    };
+    SECTION("independent row labels merge without writing until save") {
+        write("First", "Disk second");
+        const auto external = disk();
+        command(Save);
+        REQUIRE(tab.snapshot.conflict);
+        command(MergeExternal);
+        REQUIRE_FALSE(tab.diagnostic);
+        CHECK_FALSE(tab.snapshot.conflict);
+        CHECK_FALSE(tab.snapshot.canUndo);
+        CHECK(tab.snapshot.dirty);
+        CHECK(tab.snapshot.source->rows[0].displayName == "Local first");
+        CHECK(tab.snapshot.source->rows[1].displayName == "Disk second");
+        CHECK(disk() == external);
+        command(Save);
+        REQUIRE_FALSE(tab.diagnostic);
+        CHECK_FALSE(tab.snapshot.dirty);
+        CHECK(disk() != external);
+    }
+    SECTION("same-row conflicts keep the draft and a later disk revision still prevents save") {
+        write("Disk first", "Second");
+        const auto external = disk();
+        command(Save);
+        REQUIRE(tab.snapshot.conflict);
+        command(MergeExternal);
+        REQUIRE(tab.diagnostic);
+        CHECK(tab.snapshot.conflict);
+        CHECK(tab.snapshot.canUndo);
+        command(KeepLocal);
+        REQUIRE_FALSE(tab.diagnostic);
+        CHECK_FALSE(tab.snapshot.canUndo);
+        CHECK(tab.snapshot.source->rows[0].displayName == "Local first");
+        CHECK(disk() == external);
+        write("A newer disk first", "Second");
+        const auto newer = disk();
+        command(Save);
+        REQUIRE(tab.snapshot.conflict);
+        CHECK(disk() == newer);
+        command(KeepLocal);
+        command(Save);
+        REQUIRE_FALSE(tab.diagnostic);
+        CHECK_FALSE(tab.snapshot.dirty);
+        CHECK(disk() != newer);
+    }
+    SECTION("changed identity metadata prevents taking over another asset") {
+        const auto source = disk();
+        project.WriteSidecar(BlackboardWorkspaceFixture::Path, Assets::AssetId::FromBytes({21}), AI::BlackboardSchemaAssetType);
+        command(Save);
+        REQUIRE(tab.snapshot.conflict);
+        command(KeepLocal);
+        CHECK(tab.diagnostic);
+        CHECK(tab.snapshot.conflict);
+        CHECK(tab.snapshot.canUndo);
+        CHECK(disk() == source);
+    }
+}
+
 TEST_CASE("Blackboard New atomically creates and opens a schema with an authored initial key", "[unit][editor][blackboard][workspace]") {
     BlackboardWorkspaceFixture project{false};
     EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(),

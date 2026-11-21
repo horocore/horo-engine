@@ -1,10 +1,13 @@
 #include "Horo/Editor/BlackboardSchemaDocument.h"
 
 #include "Horo/AI/DecisionPlanCodec.h"
+#include "Horo/Assets/AssetCookInputSnapshot.h"
 #include "Horo/Assets/AssetRegistry.h"
 #include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Editor/SemanticDocumentHistory.h"
+#include "Horo/Foundation/PathUtils.h"
+#include "editor/document/AuthoringSourceMerge.h"
 
 #include <algorithm>
 #include <limits>
@@ -49,6 +52,26 @@ namespace Horo::Editor {
     }  // namespace BlackboardDocumentErrors
 
     namespace {
+        constexpr std::size_t MaximumBlackboardMetadataBytes = 1024U * 1024U;
+
+        /** @brief Captures the exact optional metadata file separately from the authored schema. */
+        Result<Assets::AssetSourceIdentity> CaptureBlackboardMetadata(const std::filesystem::path &root, const std::filesystem::path &path,
+                                                                      const CancellationToken &cancellation = {}) {
+            const auto captured = Assets::CaptureAssetSource(root, path, MaximumBlackboardMetadataBytes, cancellation);
+            if (captured.HasError())
+                return Result<Assets::AssetSourceIdentity>::Failure(captured.ErrorValue());
+            return Result<Assets::AssetSourceIdentity>::Success(captured.Value().identity);
+        }
+
+        /** @brief Checks that every registered durable key still has the same semantics in a working schema. */
+        bool PreservesBlackboardKeys(const AI::BlackboardSchema &baseline, const AI::BlackboardSchema &candidate) {
+            const auto keys = candidate.Keys();
+            return std::ranges::all_of(baseline.Keys(), [&](const auto &durable) {
+                const auto matching = std::ranges::lower_bound(keys, durable.key, {}, &AI::BlackboardKeyDescriptor::key);
+                return matching != keys.end() && *matching == durable;
+            });
+        }
+
         using namespace AI;
         using namespace BlackboardDocumentErrors;
         using Schema = std::shared_ptr<const BlackboardSchema>;
@@ -193,6 +216,8 @@ namespace Horo::Editor {
             std::filesystem::path root;
             std::filesystem::path path;
             Assets::AssetSourceIdentity accepted;
+            std::filesystem::path metadataPath;
+            Assets::AssetSourceIdentity metadata;
         };
 
         std::optional<SourceFile> file;
@@ -329,11 +354,28 @@ namespace Horo::Editor {
         auto capture = Assets::CaptureAssetSource(root, path, BlackboardSchemaSourceCodec::MaximumBytes, cancellation);
         if (capture.HasError())
             return Document::Failure(capture.ErrorValue());
+        const auto metadataPath = Foundation::Paths::Resolve(root, record->metadataPath);
+        const auto metadata = CaptureBlackboardMetadata(root, metadataPath, cancellation);
+        if (metadata.HasError())
+            return Document::Failure(metadata.ErrorValue());
+        if (metadata.Value().exists) {
+            const auto asset = record->id;
+            constexpr auto limit = BlackboardSchemaSourceCodec::MaximumBytes;
+            const auto pair = Assets::AssetCookInputSnapshot::CaptureSelected(root, registry, std::span{&asset, 1},
+                                                                              {.maximumSourceBytes = limit, .maximumAssets = 1},
+                                                                              limit + MaximumBlackboardMetadataBytes, cancellation);
+            if (pair.HasError())
+                return Document::Failure(pair.ErrorValue());
+            const auto latest = CaptureBlackboardMetadata(root, metadataPath, cancellation);
+            if (pair.Value().Sources().front().sourceDigest != capture.Value().identity.digest || latest.HasError() ||
+                latest.Value() != metadata.Value() || pair.Value().VerifyUnchanged(cancellation).HasError())
+                return Document::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        }
         const auto &bytes = capture.Value().bytes;
         auto opened =
             OpenRegistered(std::move(document), registry, record->id, {reinterpret_cast<const std::uint8_t *>(bytes.data()), bytes.size()});
         if (opened.HasValue())
-            opened.Value()->state_->file.emplace(root, path, capture.Value().identity);
+            opened.Value()->state_->file.emplace(root, path, capture.Value().identity, metadataPath, metadata.Value());
         return opened;
     }
 
@@ -394,17 +436,14 @@ namespace Horo::Editor {
         if (draft.source->schema != state_->saved->schema || draft.source->version != state_->saved->version ||
             draft.source->unknownValues != state_->saved->unknownValues || draft.issuedKey > issuedThrough)
             return Restored::Failure(MakeError(InvalidEdit));
-        const auto candidateKeys = draft.runtime->Keys();
-        for (const auto &durable : state_->durable->Keys()) {
-            const auto matching = std::ranges::lower_bound(candidateKeys, durable.key, {}, &BlackboardKeyDescriptor::key);
-            if (matching == candidateKeys.end() || *matching != durable)
-                return Restored::Failure(MakeError(ReferenceResolutionRequired));
-        }
+        if (!PreservesBlackboardKeys(*state_->durable, *draft.runtime))
+            return Restored::Failure(MakeError(ReferenceResolutionRequired));
         const auto &file = *state_->file;
         const auto canonical = Assets::CaptureAssetSource(file.root, file.path, BlackboardSchemaSourceCodec::MaximumBytes, cancellation);
         if (canonical.HasError())
             return Restored::Failure(canonical.ErrorValue());
-        if (canonical.Value().identity != base)
+        const auto metadata = CaptureBlackboardMetadata(file.root, file.metadataPath, cancellation);
+        if (canonical.Value().identity != base || metadata.HasError() || metadata.Value() != file.metadata)
             return conflict();
         if (cancellation.IsCancellationRequested())
             return Restored::Failure(MakeError(Cancelled));
@@ -606,6 +645,13 @@ namespace Horo::Editor {
         const auto lease = files.TryAcquireExclusive(lockPath.Value(), "blackboard-source-save");
         if (lease.HasError())
             return Result<void>::Failure(lease.ErrorValue());
+        const auto metadata = CaptureBlackboardMetadata(file.root, file.metadataPath, cancellation);
+        if (metadata.HasError())
+            return Result<void>::Failure(metadata.ErrorValue());
+        if (metadata.Value() != file.metadata) {
+            state_->conflict = true;
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        }
         auto written = Assets::PublishAssetSource(file.root, file.path, file.accepted, std::as_bytes(std::span{encoded.Value()}),
                                                   lease.Value(), files, cancellation);
         if (written.HasError()) {
@@ -649,6 +695,87 @@ namespace Horo::Editor {
         state_->durable = state_->runtime;
         state_->issuedKey = std::max(state_->issuedKey, candidate.issuedKey);
         state_->file->accepted = candidate.file->accepted;
+        state_->file->metadataPath = std::move(candidate.file->metadataPath);
+        state_->file->metadata = candidate.file->metadata;
+        state_->conflict = false;
+        state_->history.Clear();
+        ++state_->revision;
+        return Result<void>::Success();
+    }
+
+    /** @copydoc BlackboardSchemaDocument::ResolveExternal */
+    Result<void> BlackboardSchemaDocument::ResolveExternal(std::uint64_t expectedRevision, const Assets::AssetRegistrySnapshot &registry,
+                                                           bool keepLocal, CancellationToken cancellation) {
+        if (auto admitted = state_->Check(expectedRevision, cancellation); admitted.HasError())
+            return admitted;
+        const auto conflict = [] {
+            return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        };
+        if (!state_->file || !state_->conflict || !state_->DirtySource())
+            return conflict();
+        const FileOperation guard{state_->fileOperation};
+        auto &file = *state_->file;
+        auto opened = OpenFile(state_->document, registry, file.root, file.path, cancellation);
+        if (opened.HasError())
+            return Result<void>::Failure(opened.ErrorValue());
+        auto &disk = *opened.Value()->state_;
+        if (disk.source->asset != state_->saved->asset || disk.source->schema != state_->saved->schema ||
+            disk.source->version != state_->saved->version || disk.source->unknownValues != state_->saved->unknownValues)
+            return conflict();
+
+        auto next = state_->source;
+        auto schema = state_->runtime;
+        if (!keepLocal) {
+            const auto rowKey = [](const BlackboardSchemaRow &row) {
+                return row.descriptor.key;
+            };
+            const auto keyOrder = [&](const auto &rows) {
+                std::vector<BlackboardKeyId> order;
+                order.reserve(rows.size());
+                std::ranges::transform(rows, std::back_inserter(order), rowKey);
+                return order;
+            };
+            const auto &base = state_->saved->rows;
+            const auto &local = next->rows;
+            const auto &external = disk.source->rows;
+            const auto baseOrder = keyOrder(base);
+            const auto localOrder = keyOrder(local);
+            const auto diskOrder = keyOrder(external);
+            const auto order = SelectAuthoringMerge(baseOrder, localOrder, diskOrder);
+            const auto rows = MergeAuthoringRecords(base, local, external, rowKey);
+            if (!order || !rows || rows->size() != order->get().size())
+                return conflict();
+            auto merged = std::make_shared<BlackboardSchemaSource>(*disk.source);
+            merged->rows.clear();
+            for (const auto key : order->get()) {
+                const auto row = rows->find(key);
+                if (row == rows->end())
+                    return conflict();
+                merged->rows.push_back(*row->second);
+            }
+            auto validated = CaptureSchema(*merged);
+            if (validated.HasError())
+                return Result<void>::Failure(validated.ErrorValue());
+            next = std::move(merged);
+            schema = std::move(validated).Value();
+        }
+        if (!PreservesBlackboardKeys(*disk.runtime, *schema))
+            return Result<void>::Failure(MakeError(ReferenceResolutionRequired));
+        const auto actual = Assets::CaptureAssetSource(file.root, file.path, BlackboardSchemaSourceCodec::MaximumBytes, cancellation);
+        const auto metadata = CaptureBlackboardMetadata(file.root, disk.file->metadataPath, cancellation);
+        if (actual.HasError() || actual.Value().identity != disk.file->accepted || metadata.HasError() ||
+            metadata.Value() != disk.file->metadata)
+            return conflict();
+        if (cancellation.IsCancellationRequested())
+            return Result<void>::Failure(MakeError(Cancelled));
+        state_->source = std::move(next);
+        state_->runtime = std::move(schema);
+        state_->saved = std::move(disk.source);
+        state_->durable = std::move(disk.runtime);
+        state_->issuedKey = std::max(state_->issuedKey, disk.issuedKey);
+        file.accepted = disk.file->accepted;
+        file.metadataPath = std::move(disk.file->metadataPath);
+        file.metadata = disk.file->metadata;
         state_->conflict = false;
         state_->history.Clear();
         ++state_->revision;

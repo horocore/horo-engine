@@ -163,11 +163,9 @@ namespace Horo::Editor {
                 captured.Value().VerifyUnchanged().HasValue()) {
                 const auto digest = ComputeSha256(std::as_bytes(std::span{bytes.Value()}));
                 candidate.settings = settings.Value();
+                const EnvironmentQueryState baseline{candidate.query, settings.Value(), digest, bytes.Value().size()};
                 prepared.try_emplace(candidate.identity.instance,
-                                     EnvironmentQueryDraft{{candidate.query, settings.Value(), digest, bytes.Value().size()},
-                                                           digest,
-                                                           sidecar.Value().digest,
-                                                           source.bytes.size()});
+                                     EnvironmentQueryDraft{baseline, candidate.query, digest, sidecar.Value().digest, source.bytes.size()});
             }
         }
         if (reloadExternal && prepared.empty()) {
@@ -402,6 +400,7 @@ namespace Horo::Editor {
             }
             document.source = receipt.identity.digest;
             draft.acceptedBytes = receipt.identity.bytes;
+            draft.savedSource = draft.current.source;
             draft.saved = draft.current.digest;
             document.conflict = false;
             ProjectEnvironmentQueryDraft(document, draft);
@@ -476,9 +475,13 @@ namespace Horo::Editor {
                 return true;
             }
             using enum EnvironmentQueryEditAction;
-            const auto edited = request.action == RestoreRecovery || request.action == DiscardRecovery
-                                    ? ResolveEnvironmentQueryRecovery(*document, draft->second, request)
-                                    : ApplyEnvironmentQueryEdit(*document, draft->second, request);
+            const auto edited = [&] {
+                if (request.action == MergeExternal || request.action == KeepLocal)
+                    return ResolveEnvironmentQueryExternal(*document, draft->second, request);
+                if (request.action == RestoreRecovery || request.action == DiscardRecovery)
+                    return ResolveEnvironmentQueryRecovery(*document, draft->second, request);
+                return ApplyEnvironmentQueryEdit(*document, draft->second, request);
+            }();
             document->diagnostic = edited.HasError() ? std::optional{edited.ErrorValue()} : std::nullopt;
         } catch (const std::bad_alloc &) {
             document->diagnostic = MakeError(Assets::AssetSourceErrors::Limit);

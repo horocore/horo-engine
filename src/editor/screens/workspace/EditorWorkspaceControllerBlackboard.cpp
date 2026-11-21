@@ -513,6 +513,17 @@ namespace Horo::Editor {
                 case RestoreRecovery:
                 case DiscardRecovery:
                     return ResolveBlackboardRecovery(*document, request);
+                case MergeExternal:
+                case KeepLocal: {
+                    if (HasPendingBlackboardReferenceEdit(request.fence.instance))
+                        return Result<void>::Failure(MakeError(BlackboardDocumentErrors::ReferenceResolutionRequired));
+                    JoinAiDocumentRecovery(request.fence.instance);
+                    auto registry = m_mutableAssetRegistry ? m_mutableAssetRegistry->Snapshot() : m_assetRegistry;
+                    const auto result = document->ResolveExternal(request.fence.revision, registry, request.operation == KeepLocal);
+                    if (result.HasValue() && m_blackboardReferenceGroup && m_blackboardReferenceGroup->schema == request.fence.instance)
+                        RetireBlackboardReferenceEdit();
+                    return result;
+                }
                 case ReviewUsages:
                     return StartBlackboardUsageReview(request, *document);
                 case ApplyReviewedEdit:

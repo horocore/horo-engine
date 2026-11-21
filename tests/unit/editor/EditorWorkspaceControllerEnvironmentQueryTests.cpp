@@ -883,6 +883,71 @@ TEST_CASE("Registered Query settings use shared history and tracked source publi
         CHECK_FALSE(document.canRedo);
         CHECK_FALSE(controller.HasDirtySourceDocuments());
     }
+    SECTION("three-way merge keeps local stages and the external display name until explicit save") {
+        const auto &base = native.Value();
+        const auto external =
+            EnvironmentQueryAsset::Capture({.id = base.Id(),
+                                            .displayName = "External label",
+                                            .result = base.ResultSchema(),
+                                            .stages = std::vector<QueryAssetStage>(base.Stages().begin(), base.Stages().end())});
+        REQUIRE(external.HasValue());
+        project.WriteAsset(external.Value());
+        const auto observed = disk();
+        REQUIRE(observed.HasValue());
+        Project::Open(controller, Project::Path);
+        REQUIRE(document.conflict);
+        issue(MergeExternal);
+        REQUIRE_FALSE(document.diagnostic);
+        CHECK_FALSE(document.conflict);
+        CHECK_FALSE(document.canUndo);
+        CHECK(document.dirty);
+        CHECK(document.query->DisplayName() == "External label");
+        CHECK(document.settings->lattice.stepMillimeters == 800);
+        CHECK(document.settings->distanceTests.front().test.radiusMillimeters == 2400);
+        CHECK(disk().Value().identity == observed.Value().identity);
+        issue(Save);
+        REQUIRE_FALSE(document.diagnostic);
+        CHECK_FALSE(document.dirty);
+        CHECK(disk().Value().identity != observed.Value().identity);
+    }
+    SECTION("keep local fences the next save after a competing stage edit") {
+        const auto settings = AI::ReadBuiltinPointQuerySettings(native.Value(), registry.Value());
+        REQUIRE(settings.HasValue());
+        auto outside = settings.Value();
+        outside.lattice.stepMillimeters = 900;
+        const auto external = AI::EditBuiltinPointQuerySettings(native.Value(), registry.Value(), outside);
+        REQUIRE(external.HasValue());
+        project.WriteAsset(external.Value());
+        const auto observed = disk();
+        REQUIRE(observed.HasValue());
+        Project::Open(controller, Project::Path);
+        REQUIRE(document.conflict);
+        issue(MergeExternal);
+        REQUIRE(document.diagnostic);
+        CHECK(document.conflict);
+        CHECK(document.canUndo);
+        CHECK(document.query == draft);
+        issue(KeepLocal);
+        REQUIRE_FALSE(document.diagnostic);
+        CHECK_FALSE(document.conflict);
+        CHECK_FALSE(document.canUndo);
+        CHECK(document.query == draft);
+        CHECK(disk().Value().identity == observed.Value().identity);
+        outside.lattice.stepMillimeters = 1000;
+        const auto newer = AI::EditBuiltinPointQuerySettings(native.Value(), registry.Value(), outside);
+        REQUIRE(newer.HasValue());
+        project.WriteAsset(newer.Value());
+        const auto latest = disk();
+        REQUIRE(latest.HasValue());
+        issue(Save);
+        REQUIRE(document.conflict);
+        CHECK(disk().Value().identity == latest.Value().identity);
+        issue(KeepLocal);
+        issue(Save);
+        REQUIRE_FALSE(document.diagnostic);
+        CHECK_FALSE(document.dirty);
+        CHECK(document.settings->lattice.stepMillimeters == 800);
+    }
     SECTION("external bytes cannot displace the draft, and stale close cannot discard it") {
         project.WriteQuery("External");
         Project::Open(controller, Project::Path);

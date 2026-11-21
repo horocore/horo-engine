@@ -4449,6 +4449,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerSequence.cpp
             editor/screens/workspace/EditorWorkspaceEnvironmentQuery.cpp
             editor/screens/workspace/EditorWorkspaceEnvironmentQueryDocument.cpp
+            editor/screens/workspace/EditorWorkspaceEnvironmentQueryExternal.cpp
             editor/screens/workspace/EditorWorkspaceEnvironmentQueryRecovery.cpp
             editor/screens/workspace/EditorWorkspaceDecisionGraph.cpp
             editor/screens/workspace/EditorWorkspaceDecisionGraphRecovery.cpp

@@ -826,10 +826,18 @@ namespace Horo::Editor {
                 return true;
             }
         }
-        if (opened->conflict &&
-            Ui::Button({.label = text("workspace.decision_graph.reload_external").c_str(), .font = m_context.theme.fonts.sans})) {
-            outCommand = MakeEnvironmentQueryEditCommand(*opened, EnvironmentQueryEditAction::ReloadExternal);
-            return true;
+        if (opened->conflict) {
+            using enum EnvironmentQueryEditAction;
+            const auto action = [&](const char *key, EnvironmentQueryEditAction value, bool enabled) {
+                if (!Ui::Button({.label = text(key).c_str(), .enabled = enabled, .font = m_context.theme.fonts.sans}))
+                    return false;
+                outCommand = MakeEnvironmentQueryEditCommand(*opened, value);
+                return true;
+            };
+            if (action("workspace.decision_graph.reload_external", ReloadExternal, true) ||
+                action("workspace.decision_graph.merge_external", MergeExternal, opened->dirty) ||
+                action("workspace.decision_graph.keep_local", KeepLocal, opened->dirty))
+                return true;
         }
         label(text(DescriptorLabel(opened->descriptors)), Theme::Muted());
         for (const auto &stage : query.Stages()) {

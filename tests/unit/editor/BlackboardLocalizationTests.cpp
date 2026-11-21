@@ -14,6 +14,8 @@ TEST_CASE("Blackboard workspace controls resolve in both shipped locales", "[uni
         "save",
         "reload",
         "reload_discard",
+        "merge_external",
+        "keep_local",
         "restore_recovery",
         "discard_recovery",
         "undo",
