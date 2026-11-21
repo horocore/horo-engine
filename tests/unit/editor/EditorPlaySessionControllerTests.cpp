@@ -1367,8 +1367,8 @@ TEST_CASE("Editor authoring EQS evaluates a committed NavMesh without starting P
     REQUIRE(gameplay->RuntimeId() == Editor::EditorFirstPlayScene);
     const auto playQuerier = gameplay->Find(Runtime::SceneObjectId{fixture.source.objects.back().id.value});
     REQUIRE(playQuerier);
-    const auto foreign =
-        preview.queryPreviewNavigation.capture({root, fixture.project.sceneId, gameplayDefinition.Value(), *gameplay, *playQuerier, start, stage});
+    const auto foreign = preview.queryPreviewNavigation.capture(
+        {root, fixture.project.sceneId, gameplayDefinition.Value(), *gameplay, *playQuerier, start, stage});
     REQUIRE(foreign.HasError());
     CHECK(ErrorChainContains(foreign.ErrorValue(), Navigation::NavigationErrors::StaleSnapshot.domain,
                              Navigation::NavigationErrors::StaleSnapshot.code));

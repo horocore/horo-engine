@@ -712,7 +712,8 @@ TEST_CASE("Authoring preview ranks mixed path, distance and visibility evidence 
     controller.ProcessCommand({.command = EditorWorkspaceViewCommand::SelectObject, .objectPayload = anchor});
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
     for (std::uint64_t frame = 1; std::chrono::steady_clock::now() < deadline; ++frame) {
-        REQUIRE(project.runtime.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, {frame, {}, 0.0, 0, {}, false, token}).HasValue());
+        REQUIRE(project.runtime.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, {frame, {}, 0.0, 0, {}, false, token})
+                    .HasValue());
         controller.SynchronizeRuntimeScenePreview();
         if (project.runtime.ActiveScene() && controller.ViewportScene().documentRevision == model.documentRevision)
             break;
