@@ -300,11 +300,16 @@ namespace Horo::Application::Internal {
             if (needsPrefab && (!gameplay || gameplay->prefabPermission != GameplayPrefabPermission::Granted))
                 return Result<void>::Failure(
                     MakeError(Network::NetworkErrors::NetworkModeInvalid, "AI prefab selection requires the actual host's prefab grant."));
+            const bool executesDecisions = decisions && decisions->execution;
+            const bool dispatchesMotion =
+                input.navigationMotion && executesDecisions && decisions->execution->scheduler.mode == AI::AiSchedulingMode::BestEffort;
             if (input.navigationPath && (!input.navigationPath->IsValid() || !input.navigation || !gameplay || !gameplay->enabled ||
-                                         gameplay->nativeArtifact.empty() || (decisions && decisions->execution)))
-                return Result<void>::Failure(
-                    MakeError(Network::NetworkErrors::NetworkModeInvalid,
-                              "Best-effort paths require cooked Navigation and native gameplay without deterministic AI dispatch."));
+                                         gameplay->nativeArtifact.empty() || (executesDecisions && !dispatchesMotion)))
+                return Result<void>::Failure(MakeError(Network::NetworkErrors::NetworkModeInvalid,
+                                                       "Best-effort paths require cooked Navigation and native gameplay. Scheduled "
+                                                       "decisions also require explicit best-effort motion."));
+            if (input.navigationMotion && (!input.navigationPath || !dispatchesMotion || input.decisionReplay))
+                return Result<void>::Failure(MakeError(Navigation::NavigationErrors::CapabilityDescriptorInvalid));
             if (gameplay && gameplay->prefabPermission == GameplayPrefabPermission::Granted && !input.prefabLoads)
                 return Result<void>::Failure(
                     MakeError(Network::NetworkErrors::NetworkModeInvalid, "Prefab grant requires an explicit committed artifact loader."));

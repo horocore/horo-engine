@@ -98,7 +98,7 @@ namespace Horo::AI {
         if (auto valid = CapabilityAtSafePoint().ValidateAtSafePoint(); valid.HasError())
             return valid;
         auto *scheduler = active_->scheduler.get();
-        if (!scheduler || !decisionExecution_)
+        if (!scheduler || !decisionExecution_ || decisionExecution_->timing != AiCookedDecisionTiming::Deterministic)
             return Result<void>::Failure(MakeError(AIErrors::RuntimeUnavailable));
         const auto previousTick = scheduler->report_.tick;
         if (tick == 0 || (previousTick != 0 && (tick <= previousTick || tick - previousTick != 1)))
@@ -391,7 +391,7 @@ namespace Horo::AI {
         if (auto valid = CapabilityAtSafePoint().ValidateAtSafePoint(); valid.HasError())
             return valid;
         const auto state = active_;
-        if (decisionExecution_ || state->scheduler || execution.scheduler.mode != AiSchedulingMode::Deterministic)
+        if (decisionExecution_ || state->scheduler || !execution.HasMatchingTiming())
             return Result<void>::Failure(MakeError(AIErrors::SchedulerPolicyInvalid));
         if (state->revision == std::numeric_limits<std::uint64_t>::max())
             return Result<void>::Failure(MakeError(AIErrors::CanonicalRestoreStale));

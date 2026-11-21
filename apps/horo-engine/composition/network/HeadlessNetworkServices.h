@@ -145,7 +145,9 @@ namespace Horo::Application::Internal {
         std::shared_ptr<Navigation::INavigationCrowdBackend> solver;
         Navigation::NavigationAvoidanceRequest limits;
         std::function<Result<Navigation::NavigationCrowdSnapshot>(const Runtime::RuntimeSceneView &,
-                                                                  const Navigation::NavigationAgentSnapshot &, std::uint64_t)>
+                                                                  const Navigation::NavigationWorldActivationDescriptor &,
+                                                                  const Navigation::NavigationAgentSnapshot &,
+                                                                  std::span<const Navigation::NavigationCrowdMotionSample>, std::uint64_t)>
             capture;
         std::function<Result<std::optional<Navigation::NavigationMovementTarget>>(const Runtime::RuntimeSceneView &,
                                                                                   Navigation::NavigationAgentOwner, std::uint64_t)>

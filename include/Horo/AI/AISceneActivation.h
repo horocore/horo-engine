@@ -299,6 +299,12 @@ namespace Horo::AI {
         virtual void Discard(AgentHandle agent) noexcept = 0;
     };
 
+    /** @brief Timing contract for external outcomes consumed by cooked decisions. */
+    enum class AiCookedDecisionTiming : std::uint8_t {
+        Deterministic,
+        BestEffortExternalFeedback
+    };
+
     /** @brief Opt-in fixed-tick execution for flat cooked Behavior Trees owned by this Scene. */
     struct AiSceneCookedDecisionExecution final {
         JobSystem &jobs; /**< Process executor must outlive the scene scheduler and its worker image pins. */
@@ -306,6 +312,15 @@ namespace Horo::AI {
         AiAgentSchedulePolicy agent; /**< Maximum per-agent allowances; compiled plans reserve only required work units. */
         std::shared_ptr<IDecisionQueryTaskBinder> queryTasks; /**< Explicit Scene owner binding for authored query tasks. */
         std::shared_ptr<IAiCookedDecisionIntentSink> intents; /**< Explicit owner for deferred decision requests. */
+        AiCookedDecisionTiming timing{AiCookedDecisionTiming::Deterministic};
+
+        /** @brief Checks that scheduler semantics match the declared feedback authority. */
+        [[nodiscard]] bool HasMatchingTiming() const noexcept {
+            if (timing == AiCookedDecisionTiming::Deterministic)
+                return scheduler.mode == AiSchedulingMode::Deterministic;
+            return timing == AiCookedDecisionTiming::BestEffortExternalFeedback && scheduler.mode == AiSchedulingMode::BestEffort &&
+                   intents;
+        }
     };
 
     /**

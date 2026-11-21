@@ -186,6 +186,26 @@ namespace Horo::Application::Internal {
         return Observation::Success(current);
     }
 
+    /** @copydoc SceneAiNavigationActor::Sample */
+    Result<Nav::NavigationCrowdMotionSample> SceneAiNavigationActor::Sample(const std::uint64_t tick) const {
+        using Sample = Result<Nav::NavigationCrowdMotionSample>;
+        const auto root = character_.ControllerTransform(binding_.controller);
+        if (root.HasError())
+            return Sample::Failure(root.ErrorValue());
+        if (tick == 0 || root.Value().sourceTick >= tick)
+            return Sample::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
+        Nav::NavigationCrowdMotionSample sample{.handle = agent_, .position = root.Value().position};
+        if (root.Value().sourceTick == 0 || root.Value().sourceTick < tick - 1)
+            return Sample::Success(sample);
+        const auto actual = character_.ControllerLocomotionSnapshot(binding_.controller);
+        if (actual.HasError())
+            return Sample::Failure(actual.ErrorValue());
+        if (actual.Value().tick != root.Value().sourceTick)
+            return Sample::Failure(MakeError(Nav::NavigationErrors::StaleSnapshot));
+        sample.velocity = actual.Value().movement.achievedVelocityMetersPerSecond;
+        return Sample::Success(sample);
+    }
+
     /** @copydoc SceneAiNavigationActor::Agent */
     Nav::CrowdAgentHandle SceneAiNavigationActor::Agent() const noexcept {
         return agent_;

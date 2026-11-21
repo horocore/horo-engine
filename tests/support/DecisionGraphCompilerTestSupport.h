@@ -45,6 +45,8 @@ namespace Horo::AI::DecisionGraphTestSupport {
         std::size_t resumes{};
         std::size_t aborts{};
         std::size_t cleanups{};
+        AiTaskState lastTerminal{AiTaskState::Idle};
+        std::optional<Error> lastFailure;
         std::function<void()> onStart;
         std::function<void()> onAbort;
         std::optional<Result<AiTaskState>> startOutcome;
@@ -87,8 +89,10 @@ namespace Horo::AI::DecisionGraphTestSupport {
                 probe_.onAbort();
         }
 
-        void Cleanup(const AiTaskOperationContext &, const AiTaskTerminalResult &) noexcept override {
+        void Cleanup(const AiTaskOperationContext &, const AiTaskTerminalResult &result) noexcept override {
             ++probe_.cleanups;
+            probe_.lastTerminal = result.state;
+            probe_.lastFailure = result.failure ? std::optional{result.failure->cause} : std::nullopt;
             probe_.calls.push_back("cleanup");
         }
 

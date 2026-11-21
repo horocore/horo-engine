@@ -4,6 +4,7 @@
  * @brief Private standalone Gameplay path grant over the installed immutable cooked provider.
  */
 #include "Horo/Gameplay/GameplayNavigationContext.h"
+#include "Horo/Navigation/NavigationCrowdSnapshot.h"
 #include "Horo/Runtime/Scene/SceneIdentity.h"
 
 namespace Horo::Runtime {
@@ -89,6 +90,7 @@ namespace Horo::Application::Internal {
         Navigation::NavigationAgentRegistry &agents_;
         std::vector<Navigation::NavigationPathCaller> callers_;
         std::vector<Actor> actors_;
+        std::vector<Navigation::NavigationCrowdMotionSample> samples_;
         std::uint64_t motionTick_{};
         float motionStep_{};
         std::shared_ptr<Gameplay::GameplayNavigationContext> context_;

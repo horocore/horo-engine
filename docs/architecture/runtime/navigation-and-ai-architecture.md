@@ -2305,6 +2305,8 @@ then publishes committed state for variable-rate RenderExtraction.
      The configured standalone host accepts task requests during cooked evaluation, dispatches them through
      the scheduler, and submits safe motion before the native Character step. The next tick consumes feedback
      from the prior committed native step. An aborted animated attempt discards its outstanding feedback.
+     This host explicitly selects `BestEffortExternalFeedback` for the asynchronous path and crowd providers.
+     A deterministic cooked Scene requires deterministic scheduling. Replay capture requires that timing contract.
      The binding publishes Navigation admission errors, provider failures, arrival and cancellation to the original
      AI task. A superseded movement can never complete the replacement task or authorize its motion.
      For a behavior-tree node, the host binds the continuation captured during evaluation at intent dispatch.

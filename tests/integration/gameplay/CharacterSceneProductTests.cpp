@@ -1,9 +1,12 @@
 #include "../../helpers/ProjectReplicationTestSupport.h"
 #include "CharacterSceneProductFixture.h"
+#include "DecisionGraphCompilerTestSupport.h"
 #include "GameplayReplicationAdmissionTestSupport.h"
+#include "HeadlessCookedDecisionAdmission.h"
 #include "HeadlessProjectScene.h"
 #include "Horo/AI/AITaskContinuation.h"
 #include "Horo/Gameplay/GameplayNavigationContext.h"
+#include "Horo/Navigation/Backends/RecastDetourCrowdProvider.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Platform/DynamicLibrary.h"
 #include "Horo/Platform/ExternalProcess.h"
@@ -12,8 +15,12 @@
 #include <bit>
 #include <catch2/generators/catch_generators.hpp>
 #include <chrono>
+#include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <functional>
+#include <iterator>
+#include <limits>
 #include <thread>
 #include <utility>
 #include <vector>
@@ -107,31 +114,36 @@ namespace Horo::Application::CharacterSceneProductTest {
             std::uint64_t tick{};
 
             Result<void> Start(const NavigationProductFixture &fixture, const Internal::GameplayWorldSelection &gameplay,
-                               std::vector<Internal::HeadlessNavigationActorPolicy> actors = {}) {
+                               std::vector<Internal::HeadlessNavigationActorPolicy> actors = {},
+                               Physics::PhysicsRuntimeMode mode = Physics::PhysicsRuntimeMode::Null,
+                               const std::function<void(Internal::HeadlessSceneActivationInput &,
+                                                        Internal::HeadlessProjectSceneResources &)> &configure = {}) {
                 const Internal::HeadlessProjectSceneOptions options{.projectRoot = fixture.project.project.dir.path,
                                                                     .scene = "cooked:" + fixture.project.sceneId.ToString(),
                                                                     .cookedRoot = fixture.project.cooked.path,
                                                                     .cookTarget = fixture.project.request.assets.target.Value(),
+                                                                    .physicsMode = mode,
                                                                     .navigationMode = Internal::HeadlessNavigationMode::RecastDetour};
                 auto prepared = Internal::PrepareHeadlessProjectSceneResources(options);
                 REQUIRE(prepared.HasValue());
                 resources = std::move(prepared).Value();
                 auto &project = *resources;
                 const auto nativePrefabs = gameplay.prefabPermission == Internal::GameplayPrefabPermission::Granted;
-                auto configured =
-                    Internal::ComposeHeadlessSceneNetworkServices(project.definition,
-                                                                  {.mode = options.physicsMode,
-                                                                   .settings = *project.settings,
-                                                                   .registry = project.registry,
-                                                                   .loads = *project.loads,
-                                                                   .load = project.load,
-                                                                   .prefabLoads = nativePrefabs ? project.prefabLoads.get() : nullptr,
-                                                                   .navigation = project.navigation,
-                                                                   .navigationPath =
-                                                                       Internal::HeadlessNavigationPathPolicy{fixture.pathFilter, 512},
-                                                                   .navigationActors = std::move(actors)},
-                                                                  {}, gameplay);
-                REQUIRE(configured.HasValue());
+                Internal::HeadlessSceneActivationInput input{.mode = options.physicsMode,
+                                                             .settings = *project.settings,
+                                                             .registry = project.registry,
+                                                             .loads = *project.loads,
+                                                             .load = project.load,
+                                                             .prefabLoads = nativePrefabs ? project.prefabLoads.get() : nullptr,
+                                                             .navigation = project.navigation,
+                                                             .navigationPath =
+                                                                 Internal::HeadlessNavigationPathPolicy{fixture.pathFilter, 512},
+                                                             .navigationActors = std::move(actors)};
+                if (configure)
+                    configure(input, project);
+                auto configured = Internal::ComposeHeadlessSceneNetworkServices(project.definition, std::move(input), {}, gameplay);
+                if (configured.HasError())
+                    return Result<void>::Failure(std::move(configured).ErrorValue());
                 composition.emplace(std::move(configured).Value());
                 const auto makeService = [&](const Network::NetworkModeServiceKind kind) {
                     auto service = composition->factories.services[static_cast<std::size_t>(kind)](
@@ -140,10 +152,13 @@ namespace Horo::Application::CharacterSceneProductTest {
                     return std::move(service).Value();
                 };
                 scene = makeService(Network::NetworkModeServiceKind::Scene);
-                REQUIRE(scene->Prepare().HasValue());
+                if (auto preparedScene = scene->Prepare(); preparedScene.HasError())
+                    return preparedScene;
                 physics = makeService(Network::NetworkModeServiceKind::Physics);
-                REQUIRE(physics->Prepare().HasValue());
-                REQUIRE(scene->Activate().HasValue());
+                if (auto preparedPhysics = physics->Prepare(); preparedPhysics.HasError())
+                    return preparedPhysics;
+                if (auto activated = scene->Activate(); activated.HasError())
+                    return activated;
                 return physics->Activate();
             }
 
@@ -260,6 +275,131 @@ namespace Horo::Application::CharacterSceneProductTest {
     }
 
 #if HORO_TEST_NAVIGATION_NATIVE
+#if HORO_TEST_PHYSICS_NATIVE
+    namespace {
+        namespace DecisionFixture = AI::DecisionGraphTestSupport;
+
+        /** @brief Adds the canonical Character geometry and the authored decision closure to the real cooked Navigation project. */
+        Assets::AssetId PublishDecisionMotionProject(NavigationProductFixture &navigation, DecisionFixture::Fixture &decision,
+                                                     const AI::DecisionGraphSource &source, const AI::AiControllerDescriptor &controller) {
+            Fixture character;
+            auto &project = navigation.project;
+            const auto root = project.project.dir.path;
+            const auto characterRoot = character.project.project.dir.path;
+            for (const auto *relative :
+                 {".horo/collision.json", ".horo/surfaces.json", "assets/controller.horoasset", "assets/controller.horoasset.horo"})
+                std::filesystem::copy_file(characterRoot / relative, root / relative, std::filesystem::copy_options::overwrite_existing);
+            std::ifstream materialBytes(root / "assets/controller.horoasset", std::ios::binary);
+            REQUIRE(materialBytes.is_open());
+            const std::vector<std::uint8_t> material{std::istreambuf_iterator<char>{materialBytes}, {}};
+            const auto plan = decision.Compile(std::span{&source, 1}, source.asset.Value());
+            const auto payload = AI::DecisionPlanCodec::EncodeCooked(*plan);
+            REQUIRE(payload.HasValue());
+            const auto authored = AI::DecisionPlanCodec::EncodeSource(std::span{&source, 1}, source.asset);
+            REQUIRE(authored.HasValue());
+            const auto asset = Assets::AssetId::FromBytes({103});
+            const auto type = AI::DecisionAssetType(AI::DecisionPlanKind::BehaviorTree);
+            WriteFile(root / "assets/move.horo_bt", authored.Value());
+            project.WriteText("assets/move.horo_bt.horo", SidecarJson(asset.ToString(), type));
+            const std::array added{NavigationProductFixture::AddedAsset{Fixture::Record(character.materialId, "core.physics_material",
+                                                                                        "assets/controller.horoasset"),
+                                                                        material},
+                                   NavigationProductFixture::AddedAsset{Fixture::Record(asset, type, "assets/move.horo_bt"),
+                                                                        payload.Value()}};
+            navigation.Publish(NavigationProductFixture::Input::Valid, NavigationProductFixture::Client::None, added,
+                               [&](SceneSource::SceneSourceDocument &scene) {
+                auto &actor = scene.objects[2];
+                actor.localTransform.translation = {1, 0.495F, 1};
+                actor.components.characterController = character.source.objects[0].components.characterController;
+                actor.components.aiAgent = AI::AiAgentComponent{.agent = DecisionFixture::MakeIdentity<AI::AgentId>(50)};
+                actor.components.aiController = AI::AiControllerComponent{.controller = controller.controller,
+                                                                          .decisionAsset = source.asset,
+                                                                          .blackboardSchema = decision.schema->Identity()};
+                auto &floor = scene.objects[1].components;
+                floor.rigidBody = character.source.objects[1].components.rigidBody;
+                floor.colliders = character.source.objects[1].components.colliders;
+            });
+            return asset;
+        }
+    }  // namespace
+
+    TEST_CASE("Cooked standalone decision moves a real Character and observes arrival", "[ai][navigation][character][product]") {
+        using namespace Navigation;
+        NavigationProductFixture fixture;
+        DecisionFixture::Fixture decision;
+        decision.probe.succeedTick = std::numeric_limits<std::uint64_t>::max();
+        auto source = DecisionFixture::TaskTree(11);
+        source.executionTask = DecisionFixture::MakeIdentity<AI::TaskId>(9000);
+        const std::array catalog{AI::AiControllerDescriptor{.controller = DecisionFixture::MakeIdentity<AI::ControllerTypeId>(49),
+                                                            .decisionAsset = source.asset,
+                                                            .decisionKind = AI::DecisionPlanKind::BehaviorTree,
+                                                            .blackboardSchema = decision.schema}};
+        const auto decisionAsset = PublishDecisionMotionProject(fixture, decision, source, catalog.front());
+        Math::Vec3 goal{3, 0, 2};
+        bool staged{};
+        auto dynamic = NavigationDynamicRegistry::Create().Value();
+        Math::Vec3 position;
+        std::size_t captures{};
+        auto policy = std::make_shared<Internal::HeadlessNavigationMotionPolicy>();
+        NativeNavigationProductWorld product;
+        decision.probe.onStart = [&] {
+            staged = Internal::StageHeadlessNavigationMotion(*product.physics, decision.probe.continuation,
+                                                             {.destination = goal,
+                                                              .acceptanceRadiusMeters = 0.2F,
+                                                              .timeoutTicks = 350,
+                                                              .query = {NavigationQueryKind::Path,
+                                                                        NavigationQualityLevel::Balanced,
+                                                                        {64, 16, 100}},
+                                                              .capabilityRevision = 3},
+                                                             product.tick)
+                         .HasValue();
+        };
+        policy->solver = CreateRecastDetourCrowdBackend().Value();
+        policy->capture = [&](const auto &, const auto &active, const auto &agents, const auto samples, const std::uint64_t tick) {
+            REQUIRE(samples.size() == 1);
+            if (captures++ == 0)
+                REQUIRE(dynamic.CommitAtSafePoint(active, tick).HasValue());
+            position = samples.front().position;
+            const std::array profiles{NavigationCrowdProfileFacts{.profile = agents.Agents().front().profile}};
+            return BuildNavigationCrowdSnapshot(agents, dynamic.Snapshot().Value(), samples, profiles, {}, tick);
+        };
+        const auto started = product.Start(fixture, NavigationGameplay(), {{{3}, 1}}, Physics::PhysicsRuntimeMode::Canonical,
+                                           [&](auto &input, auto &assets) {
+            input.aiControllers = catalog;
+            input.cookedDecisions = std::make_shared<Internal::HeadlessCookedDecisionInput>(
+                Internal::HeadlessCookedDecisionInput{.committed = *assets.committed,
+                                                      .environment = decision.Environment(),
+                                                      .bindings = {{catalog.front().controller, decisionAsset}},
+                                                      .execution =
+                                                          AI::AiSceneCookedDecisionExecution{assets.jobs,
+                                                                                             {.mode = AI::AiSchedulingMode::BestEffort},
+                                                                                             {}}});
+            input.navigationMotion = policy;
+        });
+        if (started.HasError())
+            UNSCOPED_INFO(started.ErrorValue().code.Value() + ": " + started.ErrorValue().message);
+        REQUIRE(started.HasValue());
+        const auto scene = Internal::InspectHeadlessScene(*product.scene);
+        REQUIRE(scene);
+        const auto actor = scene->Find({3});
+        REQUIRE(actor);
+        goal.y = scene->Get(*actor).Value().localTransform->translation.y;
+        for (std::size_t index = 0; index < 340 && decision.probe.cleanups == 0; ++index) {
+            product.RunFrame();
+            std::this_thread::yield();
+        }
+        CHECK(staged);
+        CHECK(captures > 2);
+        REQUIRE(decision.probe.cleanups == 1);
+        if (decision.probe.lastFailure)
+            UNSCOPED_INFO(decision.probe.lastFailure->code.Value() + ": " + decision.probe.lastFailure->message);
+        CAPTURE(goal.y, position.y);
+        CHECK(decision.probe.lastTerminal == AI::AiTaskState::Succeeded);
+        CHECK(decision.probe.aborts == 0);
+        CHECK(std::hypot(position.x - goal.x, position.z - goal.z) <= 0.2F);
+    }
+#endif
+
     TEST_CASE("Configured Navigation actor admission requires a Character on the exact cooked entity",
               "[navigation][scene][gameplay][product]") {
         NavigationProductFixture fixture;

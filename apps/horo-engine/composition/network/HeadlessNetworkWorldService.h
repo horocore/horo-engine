@@ -589,8 +589,10 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             auto execution = *owners_->configured->cookedDecisions->execution;
             if (record_->decisionQueries)
                 execution.queryTasks = record_->decisionQueries;
-            if (record_->decisionMotion)
+            if (record_->decisionMotion) {
                 execution.intents = record_->decisionMotion;
+                execution.timing = AI::AiCookedDecisionTiming::BestEffortExternalFeedback;
+            }
             return execution;
         }
 

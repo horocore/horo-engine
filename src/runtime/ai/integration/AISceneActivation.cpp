@@ -435,8 +435,9 @@ namespace Horo::AI {
     Result<AiSceneRuntime> AiSceneRuntime::Create(const AiSceneRuntimeSettings settings, AiSceneCookedDecisionExecution execution) {
         if (!settings.IsValid())
             return Failure<AiSceneRuntime>(AIErrors::AgentCapacityExceeded, "AI scene runtime settings exceed a bounded product limit.");
-        if (execution.scheduler.mode != AiSchedulingMode::Deterministic)
-            return Failure<AiSceneRuntime>(AIErrors::SchedulerPolicyInvalid, "Cooked scene decisions require deterministic scheduling.");
+        if (!execution.HasMatchingTiming())
+            return Failure<AiSceneRuntime>(AIErrors::SchedulerPolicyInvalid,
+                                           "Cooked decisions require an explicit matching timing policy.");
         return Result<AiSceneRuntime>::Success(AiSceneRuntime{settings, std::move(execution)});
     }
 

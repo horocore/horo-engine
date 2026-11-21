@@ -87,6 +87,8 @@ namespace Horo::Application::Internal {
         [[nodiscard]] SceneAiNavigationMotion *Motion() noexcept;
         /** @brief Replaces the observation's root with the committed Character position. */
         [[nodiscard]] Result<Navigation::NavigationMovementObservation> Capture(Navigation::NavigationMovementObservation current) const;
+        /** @brief Copies the actor's committed root and achieved velocity for the crowd capture. */
+        [[nodiscard]] Result<Navigation::NavigationCrowdMotionSample> Sample(std::uint64_t tick) const;
         /** @brief Returns stable registration identity used to locate this actor in an immutable crowd capture. */
         [[nodiscard]] Navigation::CrowdAgentHandle Agent() const noexcept;
 

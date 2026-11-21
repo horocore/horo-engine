@@ -2757,6 +2757,9 @@ add_executable(HoroCharacterSceneProductTests integration/gameplay/CharacterScen
         integration/gameplay/CharacterSceneProductFixture.h)
 target_compile_features(HoroCharacterSceneProductTests PRIVATE cxx_std_20)
 target_link_libraries(HoroCharacterSceneProductTests PRIVATE HoroEngine::ProjectSurfaceSettings)
+if(HORO_BUILD_NAVIGATION_RECAST_DETOUR AND HORO_BUILD_PHYSICS_NATIVE)
+    target_link_libraries(HoroCharacterSceneProductTests PRIVATE HoroEngine::NavigationCrowdDetour)
+endif()
 target_compile_definitions(HoroCharacterSceneProductTests PRIVATE
         HORO_TEST_PHYSICS_NATIVE=$<BOOL:${HORO_BUILD_PHYSICS_NATIVE}>
         HORO_TEST_NAVIGATION_NATIVE=$<BOOL:${HORO_BUILD_NAVIGATION_RECAST_DETOUR}>

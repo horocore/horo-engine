@@ -9,6 +9,9 @@
 #include "PrefabSceneCookHostFixture.h"
 #include "navigation/NavigationContentPolicyFixture.h"
 
+#include <algorithm>
+#include <functional>
+
 namespace Horo::Application::CharacterSceneProductTest {
     using namespace PrefabCookTestSupport;
 
@@ -34,7 +37,13 @@ namespace Horo::Application::CharacterSceneProductTest {
 
         Sha256Digest prefabDigest;
 
-        void Publish(const Input input, const Client client = Client::None) {
+        struct AddedAsset final {
+            Assets::AssetRecord record;
+            std::vector<std::uint8_t> payload;
+        };
+
+        void Publish(const Input input, const Client client = Client::None, std::span<const AddedAsset> added = {},
+                     const std::function<void(SceneSource::SceneSourceDocument &)> &editScene = {}) {
             using namespace Navigation;
             const auto profile = NavigationAgentProfileId::Create(7).Value();
             const auto surface = SurfaceId::Create(53).Value();
@@ -60,10 +69,11 @@ namespace Horo::Application::CharacterSceneProductTest {
             std::filesystem::rename(project.project.dir.path / "assets/level.scene", project.project.dir.path / "assets/level.horo");
             std::filesystem::rename(project.project.dir.path / "assets/level.scene.horo",
                                     project.project.dir.path / "assets/level.horo.horo");
-            REQUIRE(project.registry
-                        .Publish({AssetRecordFor(project.sceneId, "core.scene", "assets/level.horo"),
-                                  AssetRecordFor(definitionId, "core.navmesh", "assets/nav.horoasset")})
-                        .status == Assets::AssetRegistryBuildStatus::Complete);
+            std::vector recordsToPublish{AssetRecordFor(project.sceneId, "core.scene", "assets/level.horo"),
+                                         AssetRecordFor(definitionId, "core.navmesh", "assets/nav.horoasset")};
+            for (const auto &asset : added)
+                recordsToPublish.push_back(asset.record);
+            REQUIRE(project.registry.Publish(std::move(recordsToPublish)).status == Assets::AssetRegistryBuildStatus::Complete);
 
             NavigationProjectProfileInput policy{.id = NavigationProjectProfileId::Create(5).Value(),
                                                  .revision = NavigationProjectProfileRevision::Create(3).Value(),
@@ -136,13 +146,15 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                                          .start = {.surface = surface},
                                                                          .end = {.surface = surface, .localPosition = {2, 0, 2}},
                                                                          .profiles = {profile}}}});
+            if (editScene)
+                editScene(source);
             const SceneSource::SceneSourceView view{source.objects, source.prefabInstances};
             project.WriteText("assets/level.horo", SceneSource::EncodeSceneSource(view));
             const auto scene = SceneSource::ConvertSceneSourceToRuntime(view, SceneCook::SceneDefinitionIdForAsset(project.sceneId), {1});
             REQUIRE(scene.HasValue());
             auto prefab = client == Client::Prefab ? EncodeNavigationPrefab(profile) : std::vector<std::uint8_t>{};
             PublishCook(Navigation::TestSupport::ContentEnvelope(set, definitionId, project.request.assets.target), scene.Value(),
-                        std::move(prefab));
+                        std::move(prefab), added);
         }
 
     private:
@@ -192,7 +204,7 @@ namespace Horo::Application::CharacterSceneProductTest {
         }
 
         void PublishCook(std::vector<std::uint8_t> navigationEnvelope, const Runtime::RuntimeSceneDefinition &scene,
-                         std::vector<std::uint8_t> prefab) {
+                         std::vector<std::uint8_t> prefab, std::span<const AddedAsset> added) {
             const auto cooked = SceneCook::EncodeCookedSceneDefinition(scene);
             REQUIRE(cooked.HasValue());
             const auto target = project.request.assets.target;
@@ -211,6 +223,15 @@ namespace Horo::Application::CharacterSceneProductTest {
                 prefabDigest = entries.front().artifactHash;
                 envelopes.insert(envelopes.begin(), std::move(prefab));
             }
+            for (const auto &asset : added) {
+                const auto hash = ComputeSha256(std::as_bytes(std::span{asset.payload}));
+                auto encoded = Assets::EncodeCookedArtifact({asset.record.id, asset.record.type, target, hash, hash, hash, asset.payload});
+                REQUIRE(encoded.HasValue());
+                const auto at = std::ranges::lower_bound(entries, asset.record.id, {}, &Assets::AssetCookManifestEntry::assetId);
+                const auto manifestEntry = entry(asset.record.id, asset.record.type, encoded.Value());
+                envelopes.insert(envelopes.begin() + (at - entries.begin()), std::move(encoded).Value());
+                entries.insert(at, manifestEntry);
+            }
             auto lease = project.files.TryAcquireExclusive(project.cooked.path / ".cook-writer.lock", "Navigation product fixture");
             REQUIRE(lease.HasValue());
             const Assets::AssetCookPublicationPolicy publication{.files = &project.files,
@@ -218,7 +239,7 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                                  .writerLease = &lease.Value()};
             const auto generation = Assets::PublishCookGeneration(project.cooked.path, target, entries, envelopes, {}, publication);
             if (generation.HasError())
-                UNSCOPED_INFO(generation.ErrorValue().message);
+                UNSCOPED_INFO(generation.ErrorValue().code.Value() + ": " + generation.ErrorValue().message);
             REQUIRE(generation.HasValue());
         }
     };

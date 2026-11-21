@@ -107,6 +107,7 @@ namespace Horo::Application::Internal {
             std::vector<Actor> actors;
             callers.reserve(1 + selected.size());
             actors.reserve(selected.size());
+            samples_.reserve(selected.size());
             for (const auto &policy : selected) {
                 const auto entity = scene.Find(policy.object);
                 if (!entity || policy.principal == 0)
@@ -202,7 +203,15 @@ namespace Horo::Application::Internal {
         auto population = agents_.Snapshot();
         if (population.HasError())
             return Result<void>::Failure(std::move(population).ErrorValue());
-        auto capture = policy.capture(scene, population.Value(), motionTick_);
+        samples_.clear();
+        for (auto &actor : actors_) {
+            auto sample = actor.owner->Sample(motionTick_);
+            if (sample.HasValue())
+                samples_.push_back(sample.Value());
+            else if (auto *motion = actor.owner->Motion())
+                motion->Reject(std::move(sample).ErrorValue());
+        }
+        auto capture = policy.capture(scene, activation_, population.Value(), samples_, motionTick_);
         if (capture.HasError())
             return Result<void>::Failure(std::move(capture).ErrorValue());
         const auto sampled = capture.Value().Agents();
