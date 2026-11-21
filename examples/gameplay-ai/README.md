@@ -69,6 +69,25 @@ cancels when the signal stops or its target generation changes.
 The Navigation host test loads the shipped behavior on a real runtime Scene
 and exercises request admission and cancellation.
 
+The cover sample pairs each captured cover handle with Navigation
+reachability and Physics visibility from the same Scene publication.
+`host/GuardCover.cpp` filters out exposed, unreachable and occupied points,
+chooses the lowest Navigation cost, and reserves the winner on the Scene owner.
+Equal costs favor the lower authored cover ID. Retain the returned receipt
+while moving to the selected point. Release that exact receipt if movement
+fails, the task is cancelled, or the guard leaves cover. When no point is
+selected, inspect reachability, exposure and the current guard reservations.
+
+With the engine configured using `HORO_BUILD_EXAMPLES=ON`, run the
+deterministic cover fixture. It demonstrates the selection policy with
+captured sample facts. The native Navigation and Physics integration test
+also runs the same helper against actual provider results.
+
+```sh
+rtk proxy cmake --build <engine-build> --target HoroGuardCoverSample
+rtk proxy <engine-build>/examples/HoroGuardCoverSample
+```
+
 If the node is unavailable, verify that the gameplay module built successfully
 and that the loaded module matches the project's SDK fingerprint. In cooked
 Editor Play, select the guard and open the Game panel's **AI agent inspector**.

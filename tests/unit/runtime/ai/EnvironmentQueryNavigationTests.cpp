@@ -1,4 +1,5 @@
 #include "EnvironmentQueryTestSupport.h"
+#include "GuardCover.h"
 #include "Horo/AI/EnvironmentQueryExecution.h"
 #include "Horo/AI/EnvironmentQueryNavigation.h"
 #include "Horo/Gameplay/TacticalCover.h"
@@ -95,6 +96,43 @@ namespace Horo::AI {
             REQUIRE(newCover.HasValue());
             REQUIRE(newCover.Value().size() == 1);
             CHECK(cover.TryReserve(scene->View(), newCover.Value().front().handle, occupant).Value().has_value());
+        }
+
+        TEST_CASE("Guard cover example breaks ties by authored identity and skips exposed or reserved points",
+                  "[unit][ai][navigation][eqs][cover][example]") {
+            const auto scene = QueryTestSupport::MakeScene();
+            const auto view = scene->View();
+            const auto first = *view.Find({1});
+            const auto second = *view.Find({2});
+            auto near = CoverPoint(first, 1);
+            near.position = Math::WorldCoordinate64::FromMillimeters(8'000, 0, 9'000);
+            const std::array points{CoverPoint(second, 2), near};
+            TacticalCoverRegistry cover;
+            REQUIRE(cover.Publish(view, 1, points).HasValue());
+            const auto candidates = cover.Capture(view, points.size());
+            REQUIRE(candidates.HasValue());
+            REQUIRE(candidates.Value().size() == points.size());
+            const auto route = QueryStageId::Create(1).Value();
+            const auto sight = QueryStageId::Create(2).Value();
+            const auto contention = QueryStageId::Create(3).Value();
+            const QueryTestSample reachable{.stage = route, .filter = true, .metric = 3.0};
+            const QueryTestSample hidden{.stage = sight, .filter = false};
+            std::array evidence{Examples::GuardCoverObservation{candidates.Value()[1].handle, reachable, hidden},
+                                Examples::GuardCoverObservation{candidates.Value()[0].handle, reachable, hidden}};
+
+            const auto winner = Examples::TrySelectGuardCover(cover, view, first, evidence, contention);
+            REQUIRE(winner.HasValue());
+            REQUIRE(winner.Value());
+            CHECK(winner.Value()->destination == near.position);
+            const auto alternate = Examples::TrySelectGuardCover(cover, view, second, evidence, contention);
+            REQUIRE(alternate.HasValue());
+            REQUIRE(alternate.Value());
+            CHECK(alternate.Value()->destination == points[0].position);
+            REQUIRE(cover.Release(winner.Value()->reservation));
+            evidence[1].visibility.filter = true;
+            const auto empty = Examples::TrySelectGuardCover(cover, view, first, evidence, contention);
+            REQUIRE(empty.HasValue());
+            CHECK_FALSE(empty.Value());
         }
 
         [[nodiscard]] QueryGeneratorOutput SurfaceOutput(std::span<QueryGeneratedItem> items) {
@@ -396,6 +434,25 @@ namespace Horo::AI {
 
 #if HORO_TEST_NAVIGATION_NATIVE
 #if HORO_TEST_PHYSICS_NATIVE
+        /** @brief Captures the published Detour route facts for the cover fixture. */
+        QueryTestSample CaptureCoverRoute(const TacticalCoverPoint &point, const QueryStageId stage) {
+            ProbeOwner navigation{Navigation::TestSupport::MakeGroundedProvider()};
+            QueryNavigationProbe route{navigation.coordinator};
+            const std::array callers{Caller()};
+            auto input = Input(callers.front());
+            input.request.start = {1, 0, 1};
+            const auto destination = point.position.Millimeters();
+            input.request.destination = {static_cast<float>(destination[0]) / 1000.0F, static_cast<float>(destination[1]) / 1000.0F,
+                                         static_cast<float>(destination[2]) / 1000.0F};
+            REQUIRE(route.Start(navigation.world, stage, input, 0).Value());
+            navigation.Complete(callers, 1);
+            const auto reachable = route.Poll(Current(callers));
+            REQUIRE(reachable.HasValue());
+            REQUIRE(reachable.Value());
+            REQUIRE(reachable.Value()->filter == true);
+            return *reachable.Value();
+        }
+
         TEST_CASE("Cover combines actual reachability and occlusion without claiming occupancy", "[unit][ai][navigation][eqs][cover]") {
             auto scene = QueryTestSupport::MakeScene();
             const auto view = scene->View();
@@ -411,20 +468,7 @@ namespace Horo::AI {
             const auto exposureStage = QueryStageId::Create(1).Value();
             const auto contentionStage = QueryStageId::Create(2).Value();
             const auto reachableStage = QueryStageId::Create(3).Value();
-            ProbeOwner navigation{Navigation::TestSupport::MakeGroundedProvider()};
-            QueryNavigationProbe route{navigation.coordinator};
-            const std::array callers{Caller()};
-            auto input = Input(callers.front());
-            input.request.start = {1, 0, 1};
-            const auto globalCover = point.position.Millimeters();
-            input.request.destination = {static_cast<float>(globalCover[0]) / 1000.0F, static_cast<float>(globalCover[1]) / 1000.0F,
-                                         static_cast<float>(globalCover[2]) / 1000.0F};
-            REQUIRE(route.Start(navigation.world, reachableStage, input, 0).Value());
-            navigation.Complete(callers, 1);
-            const auto reachable = route.Poll(Current(callers));
-            REQUIRE(reachable.HasValue());
-            REQUIRE(reachable.Value().has_value());
-            REQUIRE(reachable.Value()->filter == true);
+            const auto reachable = CaptureCoverRoute(point, reachableStage);
 
             SightTest::SightWorld physics;
             (void)physics.Box(-5);
@@ -443,7 +487,7 @@ namespace Horo::AI {
             REQUIRE(visibility.Value().has_value());
             REQUIRE(visibility.Value()->filter == false);
 
-            const auto scored = cover.Score(view, selection, *reachable.Value(), *visibility.Value(), contentionStage);
+            const auto scored = cover.Score(view, selection, reachable, *visibility.Value(), contentionStage);
             REQUIRE(scored.HasValue());
             CHECK(scored.Value()[0].stage == exposureStage);
             CHECK(scored.Value()[0].filter == true);
@@ -451,8 +495,12 @@ namespace Horo::AI {
             CHECK(scored.Value()[1].filter == true);
             CHECK(scored.Value()[2].stage == reachableStage);
             CHECK(scored.Value()[2].filter == true);
-            REQUIRE(cover.TryReserve(view, selection, occupant).Value().has_value());
-            const auto occupied = cover.Score(view, selection, *reachable.Value(), *visibility.Value(), contentionStage);
+            const std::array observation{Examples::GuardCoverObservation{selection, reachable, *visibility.Value()}};
+            const auto reserved = Examples::TrySelectGuardCover(cover, view, occupant, observation, contentionStage);
+            REQUIRE(reserved.HasValue());
+            REQUIRE(reserved.Value());
+            CHECK(reserved.Value()->destination == point.position);
+            const auto occupied = cover.Score(view, selection, reachable, *visibility.Value(), contentionStage);
             REQUIRE(occupied.HasValue());
             CHECK(occupied.Value()[1].filter == false);
         }
