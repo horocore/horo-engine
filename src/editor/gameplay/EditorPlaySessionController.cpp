@@ -372,7 +372,7 @@ namespace Horo::Editor {
         }
         if (!scenes.ActiveScene())
             return Result<void>::Success();
-        auto services = sceneHost_->GameplayServices();
+        auto services = sceneHost_->GameplayServices(*pendingRegistry_);
         if (services.HasError()) {
             Fail(services.ErrorValue());
             return Result<void>::Failure(services.ErrorValue());
@@ -702,7 +702,7 @@ namespace Horo::Editor {
                                                                  const EditorPlayReloadSnapshot &snapshot) {
         if (!sceneHost_ || state_ != EditorPlaySessionState::Reloading || behaviors_)
             return Result<void>::Failure(InvalidTransition("No quiesced native reload transaction is active."));
-        auto services = sceneHost_->GameplayServices();
+        auto services = sceneHost_->GameplayServices(registry);
         if (services.HasError()) {
             lastError_ = services.ErrorValue();
             return Result<void>::Failure(services.ErrorValue());

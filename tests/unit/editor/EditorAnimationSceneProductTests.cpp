@@ -4,6 +4,7 @@
 #include "EditorProjectSceneHost.h"
 #include "Horo/Animation/AnimationAssetSource.h"
 #include "Horo/Animation/AnimationGraphSource.h"
+#include "Horo/Gameplay/GameplayAnimationContext.h"
 #include "Horo/Runtime/RuntimeHost.h"
 #include "PrefabSceneCookHostFixture.h"
 #include "editor/gameplay/EditorPlaySessionController.h"
@@ -16,6 +17,31 @@ namespace Horo::Application::EditorAnimationProductTest {
     namespace {
         using namespace PrefabCookTestSupport;
         namespace A = Animation;
+
+        /** @brief Records the animation scope and exact publication visible in Play callbacks. */
+        struct AnimationBehaviorProbe final {
+            std::shared_ptr<const Gameplay::GameplayAnimationContext> grant;
+            Gameplay::GameplayEntityRef entity;
+            std::size_t observedPoses{};
+        };
+
+        class AnimationBehavior final : public Gameplay::IBehaviorInstance {
+        public:
+            explicit AnimationBehavior(AnimationBehaviorProbe &probe) : probe_(probe) {}
+
+            void OnFixedUpdate(Gameplay::BehaviorContext &context, Gameplay::FixedDeltaTime) override {
+                probe_.grant = context.AnimationContext();
+                probe_.entity = context.Entity();
+                if (probe_.grant) {
+                    const auto observed = probe_.grant->Observe(probe_.entity);
+                    if (observed.HasValue() && observed.Value().current.IsValid())
+                        ++probe_.observedPoses;
+                }
+            }
+
+        private:
+            AnimationBehaviorProbe &probe_;
+        };
 
         template <typename T> T Take(Result<T> result) {
             INFO((result.HasError() ? result.ErrorValue().code.Value() + ": " + result.ErrorValue().message : "success"));
@@ -68,7 +94,7 @@ namespace Horo::Application::EditorAnimationProductTest {
                                          Take(A::SerializeAnimationGraphSource(A::Test::Graph::Simple()))));
             project.WriteText("assets/level.horo", SceneSource::EncodeSceneSource({document.objects, {}}));
             REQUIRE(project.registry.Publish(std::move(records)).status == AssetRegistryBuildStatus::Complete);
-            REQUIRE(project.Cook().HasValue());
+            (void)Take(project.Cook());
         }
 
         /** @brief Forwards the actual app/controller callbacks; measurements cover only the owner-thread fixed path. */
@@ -164,10 +190,21 @@ namespace Horo::Application::EditorAnimationProductTest {
             PlayParticipant *forward{};
             LaterGate *gate{};
 
-            explicit Fixture(bool directClip = false, Internal::AnimationRuntimeIdentityRange range = {701, 704})
+            explicit Fixture(bool directClip = false, Internal::AnimationRuntimeIdentityRange range = {701, 704},
+                             std::optional<Gameplay::BehaviorRegistration> behavior = std::nullopt)
                 : authoring(Document(source, directClip)), identities(std::make_shared<Internal::AnimationRuntimeIdentitySource>(range)) {
-                CookProject(project, source, authoring);
+                if (behavior) {
+                    authoring.objects.back().components.behaviors.push_back({{1}, behavior->descriptor.typeId, 1, true, {}});
+                    REQUIRE(registry.Register(std::move(*behavior)).HasValue());
+                }
                 REQUIRE(registry.Freeze().HasValue());
+                if (!registry.Registrations().empty()) {
+                    Gameplay::ComponentRegistry components;
+                    REQUIRE(components.Freeze().HasValue());
+                    const std::array descriptors{registry.Registrations().front().descriptor};
+                    project.request.schemas = Take(PrefabCookSchemaContext::Capture(components, descriptors));
+                }
+                CookProject(project, source, authoring);
                 runtime = Take(Runtime::RuntimeHost::Create(clock, {.fixedStep = Duration::FromNanoseconds(10)}));
                 policy.cooked = Internal::SceneCookSelection{project.cooked.path, project.request.assets.target};
                 policy.animation =
@@ -247,6 +284,37 @@ namespace Horo::Application::EditorAnimationProductTest {
             }
         };
     }  // namespace
+
+    TEST_CASE("Actual Editor Play grants exact behavior animation access and cancels it across reload", "[animation][editor][product]") {
+        AnimationBehaviorProbe probe;
+        Gameplay::BehaviorRegistration behavior{.descriptor = {.typeId =
+                                                                   Take(Gameplay::BehaviorTypeId::Parse("game.editor.animation_probe")),
+                                                               .displayName = "Animation Probe",
+                                                               .category = "Tests"},
+                                                .factory = {.userData = &probe, .create = [](void *data) -> Gameplay::IBehaviorInstance * {
+            return new AnimationBehavior(*static_cast<AnimationBehaviorProbe *>(data));
+        }, .destroy = [](void *, Gameplay::IBehaviorInstance *instance) noexcept {
+            delete instance;
+        }}};
+        Fixture fixture(false, {701, 704}, std::move(behavior));
+        fixture.Start();
+        REQUIRE(fixture.Tick().HasValue());
+        REQUIRE(probe.grant);
+        CHECK(probe.grant->ModuleId() == "game.editor.animation_probe");
+        REQUIRE(fixture.Tick().HasValue());
+        CHECK(probe.observedPoses == 1);
+        const auto original = probe.grant;
+        const auto reload = Take(fixture.play.QuiesceForReload());
+        const auto retired = original->Observe(probe.entity);
+        REQUIRE(retired.HasError());
+        CHECK(retired.ErrorValue().code.Value() == A::AnimationErrors::GraphOperationCancelled.code.Value());
+        REQUIRE(fixture.play.RestoreAfterReload(fixture.registry, reload).HasValue());
+        REQUIRE(fixture.Tick().HasValue());
+        CHECK(probe.grant != original);
+        CHECK(probe.observedPoses == 2);
+        fixture.play.Stop();
+        CHECK(probe.grant->Observe(probe.entity).HasError());
+    }
 
     TEST_CASE("Actual Editor animated Graph and Clip factories use one runtime and preserve pause step resume",
               "[editor][animation][product]") {

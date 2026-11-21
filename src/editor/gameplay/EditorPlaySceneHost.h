@@ -182,9 +182,10 @@ namespace Horo::Editor {
         }
 
         /** @brief Resolves explicitly granted gameplay services after aggregate readiness.
+         * @param registry The exact frozen behavior registry selected for this Play generation.
          * @return Captured typed services or a failure before behavior creation; default withholds all optional capabilities.
          */
-        [[nodiscard]] virtual Result<Gameplay::BehaviorRuntimeServiceBindings> GameplayServices() {
+        [[nodiscard]] virtual Result<Gameplay::BehaviorRuntimeServiceBindings> GameplayServices(const Gameplay::BehaviorRegistry &) {
             return Result<Gameplay::BehaviorRuntimeServiceBindings>::Success({});
         }
 

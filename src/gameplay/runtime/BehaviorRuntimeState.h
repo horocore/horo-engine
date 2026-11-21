@@ -109,7 +109,13 @@ namespace Horo::Gameplay {
             }
 
             [[nodiscard]] std::shared_ptr<const GameplayAnimationContext> AnimationContext() const noexcept override {
-                if (!runtime.animation || !allowSimulationMutation)
+                if (!allowSimulationMutation)
+                    return {};
+                const auto &typeId = instance.component.typeId;
+                const auto exact = std::ranges::lower_bound(runtime.animationBehaviors, typeId, {}, &BehaviorAnimationGrant::type);
+                if (exact != runtime.animationBehaviors.end() && exact->type == typeId)
+                    return exact->context;
+                if (!runtime.animation)
                     return {};
                 const auto module = runtime.animation->ModuleId();
                 const auto type = std::string_view{instance.component.typeId.Value()};
@@ -587,6 +593,8 @@ namespace Horo::Gameplay {
             if (shutdown)
                 return;
             shutdown = true;
+            if (animationLifetime)
+                animationLifetime->RequestCancellation();
             Detail::GameplayVfxHostAccess::RevokeClient(vfx);
             if (character)
                 character->Revoke();
@@ -621,6 +629,8 @@ namespace Horo::Gameplay {
         std::shared_ptr<const GameplayPrefabContext> prefabs;
         std::shared_ptr<const GameplayVfxContext> vfx;
         std::shared_ptr<const GameplayAnimationContext> animation;
+        std::vector<BehaviorAnimationGrant> animationBehaviors;
+        std::optional<CancellationSource> animationLifetime;
         mutable std::shared_ptr<const Runtime::SceneStructuralReceipt> vfxStructuralReceipt;
         std::vector<Instance> instances;
         bool shutdown{};

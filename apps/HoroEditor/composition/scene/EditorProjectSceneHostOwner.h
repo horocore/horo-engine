@@ -303,6 +303,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             return animation_.get();
         }
 
+        /** @brief Issues exact-type animation grants for the selected Play registry and live Scene. */
+        Result<Gameplay::BehaviorRuntimeServiceBindings> GameplayServices(const Gameplay::BehaviorRegistry &registry) override;
+
         /** @brief Admits the exact selected cooked profile/scope only when the authored Play projection still matches it. */
         Result<void> PrepareNavigation(const std::filesystem::path &root, JobSystem &jobs, const EditorProjectScenePolicy &policy,
                                        const Runtime::RuntimeSceneDefinition *definition);
@@ -680,7 +683,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         bool decisionTickPending_{};
         std::shared_ptr<PlaySaveAiServices> aiSave_;
         CancellationSource animationLifetime_;
-        std::unique_ptr<Runtime::SceneAnimationRuntime> animation_;
+        std::shared_ptr<Runtime::SceneAnimationRuntime> animation_;
         std::unique_ptr<ProjectSceneNavigationWorld> navigation_;
         std::unique_ptr<Runtime::RuntimeSceneService> scenes_;
         std::optional<CommittedWorldSelection> worldSelection_;

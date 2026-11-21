@@ -26,6 +26,13 @@ through `BehaviorContext::AnimationContext` during simulation-capable phases.
 The native SDK boundary advances to 32 because the module context and behavior
 backend layout changed.
 
+Editor Play issues animation grants from the frozen project behavior registry
+after the active Scene publishes. Each grant is keyed by the exact registered
+behavior type. The behavior runtime revokes those grants before unloading a
+generation and Editor Play creates fresh grants when it restores a replacement
+registry. Headless Lua receives its grant from the selected script module's
+authority Scene composition.
+
 An admitted Lua behavior receives `ctx.animation` for its own entity during
 simulation callbacks. A stored table or function from an earlier callback
 returns `nil, "animation.callback.expired"`. An action handle can be stored

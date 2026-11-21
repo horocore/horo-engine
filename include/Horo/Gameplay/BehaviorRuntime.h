@@ -10,10 +10,17 @@
 
 #include <cstddef>
 #include <memory>
+#include <optional>
 #include <vector>
 
 namespace Horo::Gameplay {
     enum class BehaviorRestoreServices : std::uint32_t;
+
+    /** @brief Host-issued animation access for an exact frozen behavior type. */
+    struct BehaviorAnimationGrant final {
+        BehaviorTypeId type;
+        std::shared_ptr<const GameplayAnimationContext> context;
+    };
 
     /** @brief Runtime-only state captured for one stable behavior attachment. */
     struct BehaviorInstanceReloadState {
@@ -51,6 +58,8 @@ namespace Horo::Gameplay {
         std::shared_ptr<const GameplayVfxContext> vfx;                 /**< Explicit module/Scene presentation grant. */
         std::string vfxModuleId; /**< Trusted composition principal; never inferred from an effect tag or behavior type. */
         std::shared_ptr<const GameplayAnimationContext> animation; /**< Exact current module and Scene animation grant. */
+        std::vector<BehaviorAnimationGrant> animationBehaviors;    /**< Explicit exact-type Scene grants. */
+        std::optional<CancellationSource> animationLifetime;       /**< Runtime-owned retirement for exact-type grants. */
     };
 
     /** @brief Owns every behavior instance attached to one active runtime scene. */
@@ -142,6 +151,8 @@ namespace Horo::Gameplay {
         [[nodiscard]] static bool RestoreBindingAdmitted(const Impl &) noexcept;
         [[nodiscard]] static Result<std::shared_ptr<void>> AcquireRestoreGeneration(const BehaviorRegistry &);
         [[nodiscard]] static Result<void> BindRestoreVfx(Impl &, BehaviorRuntimeServiceBindings &);
+        /** @brief Validates and installs exact Scene animation grants at the activation boundary. */
+        [[nodiscard]] static Result<void> BindRestoreAnimation(Impl &, BehaviorRuntimeServiceBindings &);
         [[nodiscard]] static Result<void> BindRestorePhysics(Impl &, BehaviorRuntimeServiceBindings &);
         [[nodiscard]] static Result<void> BindRestoreNavigationUi(Impl &, BehaviorRuntimeServiceBindings &);
         [[nodiscard]] static Result<void> BindRestoreServices(Impl &, BehaviorRuntimeServiceBindings,

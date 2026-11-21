@@ -50,6 +50,8 @@ namespace Horo::Gameplay {
     /** @copydoc BehaviorRuntime::ActivateImpl */
     Result<std::unique_ptr<BehaviorRuntime>> BehaviorRuntime::ActivateImpl(std::shared_ptr<Impl> impl) {
         if (Result<void> built = impl->BuildInstances(); built.HasError()) {
+            if (impl->animationLifetime)
+                impl->animationLifetime->RequestCancellation();
             if (impl->character)
                 impl->character->Revoke();
             if (impl->navigation)

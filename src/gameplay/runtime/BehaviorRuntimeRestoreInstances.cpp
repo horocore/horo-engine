@@ -170,12 +170,34 @@ namespace Horo::Gameplay {
         return Outcome::Success(std::move(runtime));
     }
 
+    /** @copydoc BehaviorRuntime::BindRestoreAnimation */
+    Result<void> BehaviorRuntime::BindRestoreAnimation(Impl &impl, BehaviorRuntimeServiceBindings &services) {
+        if (services.animation && services.animation->Scene() != impl.sceneIdentity.value)
+            return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent, "Animation grant belongs to another Scene."));
+        if (!services.animationBehaviors.empty() && !services.animationLifetime.has_value())
+            return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent, "Behavior animation grants need a lifetime."));
+        auto &bindings = services.animationBehaviors;
+        std::ranges::sort(bindings, {}, &BehaviorAnimationGrant::type);
+        if (std::ranges::adjacent_find(bindings, {}, &BehaviorAnimationGrant::type) != bindings.end())
+            return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent, "Duplicate behavior animation grant."));
+        for (const auto &binding : bindings) {
+            if (!binding.context || binding.context->Scene() != impl.sceneIdentity.value || !impl.registry.Find(binding.type))
+                return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent, "Invalid behavior animation grant."));
+        }
+        if (impl.animationLifetime)
+            impl.animationLifetime->RequestCancellation();
+        impl.animation = std::move(services.animation);
+        impl.animationBehaviors = std::move(bindings);
+        impl.animationLifetime = std::move(services.animationLifetime);
+        return Result<void>::Success();
+    }
+
     Result<void> BehaviorRuntime::BindRestoreServices(Impl &impl, BehaviorRuntimeServiceBindings services,
                                                       std::shared_ptr<const GameplayPrefabContext> prefabs) {
         if (prefabs && prefabs->Binding().scene != impl.sceneIdentity)
             return Result<void>::Failure(MakeError(Prefab::PrefabErrors::SceneUnavailable));
-        if (services.animation && services.animation->Scene() != impl.sceneIdentity.value)
-            return Result<void>::Failure(MakeError(GameplayErrors::InvalidBehaviorComponent, "Animation grant belongs to another Scene."));
+        if (auto animation = BindRestoreAnimation(impl, services); animation.HasError())
+            return animation;
         if (auto vfx = BindRestoreVfx(impl, services); vfx.HasError())
             return vfx;
         if (auto physics = BindRestorePhysics(impl, services); physics.HasError())
@@ -183,7 +205,6 @@ namespace Horo::Gameplay {
         if (auto others = BindRestoreNavigationUi(impl, services); others.HasError())
             return others;
         impl.prefabs = std::move(prefabs);
-        impl.animation = std::move(services.animation);
         for (auto &instance : impl.instances)
             if (auto bound = impl.InitializePrefabContext(instance); bound.HasError())
                 return bound;

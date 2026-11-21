@@ -5,6 +5,7 @@
 #include "Horo/Application/ProjectCollisionSettings.h"
 #include "Horo/Application/ProjectCompatibility.h"
 #include "Horo/Application/ProjectSurfaceSettings.h"
+#include "Horo/Gameplay/GameplayAnimationScene.h"
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Prefab/PrefabSpawnService.h"
 #include "Horo/Scene/PrefabComponentProjection.h"
@@ -18,6 +19,34 @@
 #include <utility>
 
 namespace Horo::Application::Internal {
+    /** @copydoc EditorProjectSceneDetail::ProjectPlaySceneHost::GameplayServices */
+    Result<Gameplay::BehaviorRuntimeServiceBindings> EditorProjectSceneDetail::ProjectPlaySceneHost::GameplayServices(
+        const Gameplay::BehaviorRegistry &registry) {
+        using Return = Result<Gameplay::BehaviorRuntimeServiceBindings>;
+        const auto registrations = registry.Registrations();
+        if (!animation_ || registrations.empty())
+            return Return::Success({});
+        const auto scene = scenes_->ActiveScene();
+        if (!registry.IsFrozen() || !scene || sceneClosed_)
+            return Return::Failure(MakeError(InvalidProjectScene));
+        try {
+            Gameplay::BehaviorRuntimeServiceBindings bindings;
+            bindings.animationLifetime.emplace(animationLifetime_.Token());
+            bindings.animationBehaviors.reserve(registrations.size());
+            for (const auto &registration : registrations) {
+                const auto &type = registration.descriptor.typeId;
+                auto grant = Gameplay::CreateGameplayAnimationContext(animation_, scene->RuntimeId(), std::string{type.Value()},
+                                                                      bindings.animationLifetime->Token());
+                if (grant.HasError())
+                    return Return::Failure(grant.ErrorValue());
+                bindings.animationBehaviors.push_back({type, std::move(grant).Value()});
+            }
+            return Return::Success(std::move(bindings));
+        } catch (const std::bad_alloc &) {
+            return Return::Failure(MakeError(InvalidProjectScene, "Animation grant capacity exhausted while activating Play."));
+        }
+    }
+
     namespace {
         using EditorProjectSceneDetail::InvalidProjectScene;
         using EditorProjectSceneDetail::ProjectPlaySceneHost;

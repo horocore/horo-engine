@@ -3205,7 +3205,8 @@ target_include_directories(HoroEditorAnimationProductTests PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/unit/runtime/animation ${PROJECT_SOURCE_DIR}/src/runtime/assets/cooker/builtin)
 target_link_libraries(HoroEditorAnimationProductTests PRIVATE
         HoroEditorSceneProductHost HoroEditorTestInternals HoroEngine::EditorServices HoroEngine::EditorRenderExtraction
-        HoroEngine::PrefabCookHost HoroEngine::AnimationAssetCook HoroEngine::AnimationGraphSourceCodec HoroEngine::Runtime
+        HoroEngine::PrefabCookHost HoroEngine::AnimationAssetCook HoroEngine::AnimationGraphSourceCodec HoroEngine::GameplayAnimationApi
+        HoroEngine::Runtime
         HoroEngine::Platform HoroEngine::PlatformImmutableFileStorage Threads::Threads nlohmann_json::nlohmann_json miniz)
 horo_register_catch_test(HoroEditorAnimationProductTests LABELS "integration;editor;animation;headless;product")
 add_executable(HoroUpdateExperienceSessionTests
