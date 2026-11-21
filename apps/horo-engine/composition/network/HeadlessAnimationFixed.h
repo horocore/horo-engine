@@ -110,7 +110,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
 
         /** @brief Arms only the current opaque fixed dispatch for the configured standalone World. */
         void ArmDecisionReplay(WorldRecord &record, const Runtime::FixedStepContext &context) {
-            if (auto *replay = DecisionReplay(); replay && replay->Selection().tick == context.simulationTick && attempting_ && !closed_ &&
+            if (auto *replay = DecisionReplay(); replay && replay->WantsTick(context.simulationTick) && attempting_ && !closed_ &&
                                                  Valid(context) && Same(context) && std::ranges::any_of(pins_, [&record](const auto &pin) {
                 return pin.get() == &record;
             }))

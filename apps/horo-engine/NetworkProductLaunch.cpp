@@ -607,24 +607,25 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
-        /** @brief Hashes detached replay state after the frame loop and reports its original trace identity. */
+        /** @brief Publishes an entirely committed replay after the frame loop and reports its original trace identities. */
         [[nodiscard]] Result<void> PrintDecisionReplay(HeadlessDecisionReplay &replay, const std::optional<HeadlessReplayOutput> &output) {
-            auto captured = replay.TakeCommitted();
+            auto captured = replay.TakeCommittedWindow();
             if (!captured)
                 return Result<void>::Failure(
-                    MakeError(Net::NetworkErrors::NetworkModeUnavailable, "Selected AI replay tick did not commit."));
+                    MakeError(Net::NetworkErrors::NetworkModeUnavailable, "Selected AI replay window did not fully commit."));
             if (captured->HasError())
                 return Result<void>::Failure(std::move(*captured).ErrorValue());
-            const auto &data = captured->Value();
-            const auto &capture = data.evidence;
-            const auto hash = ComputeSha256(std::as_bytes(std::span{data.canonicalRecord}));
             if (output) {
-                if (auto published = PublishHeadlessReplayArtifact(*output, data, hash); published.HasError())
+                if (auto published = PublishHeadlessReplayWindow(*output, captured->Value()); published.HasError())
                     return published;
             }
-            std::cout << "AI replay scene " << capture.scene.value << " tick " << capture.tick << " agent " << capture.subject.Value()
-                      << " blackboard-revision " << capture.blackboardRevision << " plan "
-                      << FormatSha256(capture.trace->Header().planDigest) << " canonical-ai-state " << FormatSha256(hash) << '\n';
+            for (const auto &frame : captured->Value()) {
+                const auto &capture = frame.evidence;
+                const auto hash = ComputeSha256(std::as_bytes(std::span{frame.canonicalRecord}));
+                std::cout << "AI replay scene " << capture.scene.value << " tick " << capture.tick << " agent " << capture.subject.Value()
+                          << " blackboard-revision " << capture.blackboardRevision << " plan "
+                          << FormatSha256(capture.trace->Header().planDigest) << " canonical-ai-state " << FormatSha256(hash) << '\n';
+            }
             return Result<void>::Success();
         }
 

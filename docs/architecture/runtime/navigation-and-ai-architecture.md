@@ -3413,8 +3413,13 @@ and surface identity. Comparison rejects a different configuration before
 examining body motion. A host without verified solver identity reports a typed
 replay capture error. Older Physics records must be regenerated for comparison.
 
+Use `--ai-replay-window <agent-id> <first-tick> <tick-count>` to capture up to 32
+consecutive fixed ticks for the selected agent. The output is published only once
+the complete window commits. A multi-tick report uses version 2 and contains
+the original version 1 evidence records in tick order.
+
 Use `horo-engine --compare-ai-replay <recorded evidence.json> <replayed evidence.json>`
-to compare two single-tick reports with matching coverage and content identities.
+to compare single ticks or windows with matching coverage and content identities.
 The command reads bounded files without opening a project and prints the first
 differing boundary and its publication revisions. Exit code `0` indicates equality
 within the declared coverage, `1` indicates divergence, and `2` indicates invalid

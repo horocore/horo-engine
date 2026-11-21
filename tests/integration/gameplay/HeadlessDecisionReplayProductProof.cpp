@@ -237,6 +237,45 @@ namespace Horo::Application::PrefabAtomicTest {
             ExpectPortableComparison(file, artifact, configuration);
         }
 
+        /** @brief Checks the real consecutive captures and locates a difference in the later boundary. */
+        void ExpectReplayWindow(const Internal::HeadlessReplayOutput &output,
+                                std::span<const Internal::HeadlessDecisionReplayData> frames) {
+            REQUIRE(frames.size() == 2);
+            REQUIRE(Internal::PublishHeadlessReplayWindow(output, frames).HasValue());
+            const auto file = output.Directory() / "evidence.json";
+            std::ifstream stream{file, std::ios::binary};
+            REQUIRE(stream.is_open());
+            auto window = nlohmann::json::parse(stream);
+            CHECK(window.at("version") == 2);
+            auto &encoded = window.at("frames");
+            REQUIRE(encoded.size() == 2);
+            CHECK(encoded.at(0).at("tick") == "3");
+            CHECK(encoded.at(1).at("tick") == "4");
+            CHECK(encoded.at(0).at("queryPublication").at("records").size() == 1);
+            CHECK(encoded.at(0).at("blackboardSync").at("records").empty());
+            CHECK(encoded.at(1).at("queryPublication").at("records").empty());
+            CHECK(encoded.at(1).at("blackboardSync").at("records").size() == 1);
+            const auto same = Internal::CompareHeadlessReplayArtifacts(file, file);
+            REQUIRE(same.HasValue());
+            CHECK_FALSE(same.Value());
+            const auto candidate = output.Directory() / "candidate.json";
+            const auto writeCandidate = [&] {
+                std::ofstream changed{candidate, std::ios::binary | std::ios::trunc};
+                changed << window;
+                REQUIRE(changed.good());
+            };
+            encoded.at(1).at("canonicalAi").at("digest") = FormatSha256(frames.back().sceneInput);
+            writeCandidate();
+            const auto different = Internal::CompareHeadlessReplayArtifacts(file, candidate);
+            REQUIRE(different.HasValue());
+            REQUIRE(different.Value());
+            CHECK(different.Value()->tick == 4);
+            CHECK(different.Value()->boundary == AI::AiReplayBoundary::CanonicalAi);
+            encoded.at(1).at("tick") = "5";
+            writeCandidate();
+            CHECK(Internal::CompareHeadlessReplayArtifacts(file, candidate).HasError());
+        }
+
         /** @brief Verifies shared first-difference ordering using evidence from an actual committed fixed tick. */
         void ExpectReplayComparison(const Internal::HeadlessDecisionReplayData &data) {
             const auto equal = Internal::CompareHeadlessReplayCaptures(data, data);
@@ -294,10 +333,12 @@ namespace Horo::Application::PrefabAtomicTest {
 
     /** @copydoc ExpectDecisionReplay */
     void ExpectDecisionReplay(std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition,
-                              Internal::HeadlessSceneActivationInput input, AI::AgentId agent, const Sha256Digest &planDigest, bool abort,
-                              std::optional<std::uint32_t> referenceGeneration, std::optional<Internal::GameplayWorldSelection> gameplay,
-                              const std::uint64_t tick, const std::span<const std::uint8_t> materialPayload) {
+                              Internal::HeadlessSceneActivationInput input, const Internal::HeadlessDecisionReplaySelection replaySelection,
+                              const Sha256Digest &planDigest, bool abort, std::optional<std::uint32_t> referenceGeneration,
+                              std::optional<Internal::GameplayWorldSelection> gameplay,
+                              const std::span<const std::uint8_t> materialPayload) {
         using namespace Network;
+        const auto [agent, tick, tickCount] = replaySelection;
         const auto definitionId = definition->Id();
         const bool hasPerception = static_cast<bool>(input.perceptionPositions);
         const bool hasCharacter = std::ranges::any_of(definition->Entities(), [](const auto &entity) {
@@ -323,7 +364,7 @@ namespace Horo::Application::PrefabAtomicTest {
         const auto output =
             Internal::HeadlessReplayOutput::Parse(std::string_view{reinterpret_cast<const char *>(utf8.data()), utf8.size()});
         REQUIRE(output.HasValue());
-        const auto replay = std::make_shared<Internal::HeadlessDecisionReplay>(Internal::HeadlessDecisionReplaySelection{agent, tick});
+        const auto replay = std::make_shared<Internal::HeadlessDecisionReplay>(replaySelection);
         input.decisionReplay = replay;
         if (hasCharacter) {
             std::ifstream revision{HORO_TEST_GAME_MODULE_REVISION_PATH};
@@ -412,6 +453,21 @@ namespace Horo::Application::PrefabAtomicTest {
         }
         INFO((fixed.HasError() ? fixed.ErrorValue().message : "success"));
         REQUIRE(fixed.HasValue());
+        if (tickCount > 1) {
+            for (std::size_t frame = 1; frame < tickCount; ++frame) {
+                CHECK_FALSE(replay->TakeCommittedWindow());
+                clock.Advance(Duration::FromNanoseconds(16'666'667));
+                REQUIRE(host.Value()->RunFrame().HasValue());
+            }
+            const auto window = replay->TakeCommittedWindow();
+            REQUIRE(window);
+            INFO((window->HasError() ? window->ErrorValue().message : "window committed"));
+            REQUIRE(window->HasValue());
+            ExpectReplayWindow(output.Value(), window->Value());
+            CHECK_FALSE(replay->TakeCommittedWindow());
+            host.Value()->Shutdown();
+            return;
+        }
         auto captured = replay->TakeCommitted();
         REQUIRE(captured);
         if (referenceGeneration && *referenceGeneration != 1) {

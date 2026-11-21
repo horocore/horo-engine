@@ -400,7 +400,7 @@ namespace Horo::Application::Internal {
         Result<void> ValidateCookedDecisions(const ProductLaunch &launch) {
             if (launch.decisionReplayOutput && !launch.decisionReplay)
                 return Result<void>::Failure(
-                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI replay output requires --ai-replay selection."));
+                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "AI replay output requires --ai-replay or --ai-replay-window."));
             if (launch.decisionReplay && (launch.role != Net::NetworkProjectRole::Standalone || launch.cookedDecisionBindings.empty()))
                 return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid,
                                                        "AI replay requires standalone mode and explicit cooked controllers."));
@@ -431,16 +431,20 @@ namespace Horo::Application::Internal {
             return parsed.ec == std::errc{} && parsed.ptr == text.data() + text.size() && value != 0;
         }
 
-        /** @brief Selects one stable agent and one committed fixed tick. */
-        Result<void> ReadDecisionReplay(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch) {
-            std::uint64_t agent{}, tick{};
-            if (launch.decisionReplay || arguments.size() - index < 3 || !ReadReplayNumber(arguments[index + 1], agent) ||
-                !ReadReplayNumber(arguments[index + 2], tick))
-                return Result<void>::Failure(
-                    MakeError(Net::NetworkErrors::NetworkModeInvalid, "Use --ai-replay <positive agent id> <positive fixed tick> once."));
-            launch.decisionReplay =
-                std::make_shared<HeadlessDecisionReplay>(HeadlessDecisionReplaySelection{AI::AgentId::Create(agent).Value(), tick});
-            index += 3;
+        /** @brief Selects one stable agent and a bounded contiguous fixed-tick window. */
+        Result<void> ReadDecisionReplay(const std::span<char *> arguments, std::size_t &index, ProductLaunch &launch, const bool window) {
+            const std::size_t width = window ? 4 : 3;
+            constexpr auto Usage = "Use --ai-replay <agent> <tick> or --ai-replay-window <agent> <first-tick> <tick-count> once.";
+            std::uint64_t agent{}, tick{}, count{1};
+            if (launch.decisionReplay || arguments.size() - index < width || !ReadReplayNumber(arguments[index + 1], agent) ||
+                !ReadReplayNumber(arguments[index + 2], tick) || (window && !ReadReplayNumber(arguments[index + 3], count)) ||
+                count > MaximumHeadlessReplayTicks)
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, Usage));
+            const HeadlessDecisionReplaySelection selection{AI::AgentId::Create(agent).Value(), tick, static_cast<std::size_t>(count)};
+            if (!selection.IsValid())
+                return Result<void>::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, Usage));
+            launch.decisionReplay = std::make_shared<HeadlessDecisionReplay>(selection);
+            index += width;
             return Result<void>::Success();
         }
 
@@ -536,8 +540,8 @@ namespace Horo::Application::Internal {
                         return selected;
                     continue;
                 }
-                if (key == "--ai-replay") {
-                    if (auto selected = ReadDecisionReplay(arguments, index, launch); selected.HasError())
+                if (key == "--ai-replay" || key == "--ai-replay-window") {
+                    if (auto selected = ReadDecisionReplay(arguments, index, launch, key == "--ai-replay-window"); selected.HasError())
                         return selected;
                     continue;
                 }

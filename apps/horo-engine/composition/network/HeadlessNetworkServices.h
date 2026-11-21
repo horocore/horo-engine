@@ -3,6 +3,7 @@
 #include "AnimationRuntimeIdentitySource.h"
 #include "GameplayWorldComposition.h"
 #include "HeadlessNavigationPathScope.h"
+#include "HeadlessReplayArtifact.h"
 #include "HeadlessSceneLoadBoundary.h"
 #include "Horo/AI/AISceneActivation.h"
 #include "Horo/AI/DecisionQueryTask.h"
@@ -19,6 +20,7 @@
 #include "ScenePhysicsHost.h"
 
 #include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <thread>
@@ -67,13 +69,15 @@ namespace Horo::Application::Internal {
     };
     struct HeadlessCookedDecisionInput;
 
-    /** @brief Explicit one-shot diagnostic selection for a configured standalone World. */
+    /** @brief Bounded contiguous diagnostic selection for a configured standalone World. */
     struct HeadlessDecisionReplaySelection final {
         AI::AgentId agent;
         std::uint64_t tick{};
+        std::size_t count{1};
 
         [[nodiscard]] bool IsValid() const noexcept {
-            return agent.IsValid() && tick != 0;
+            return agent.IsValid() && tick != 0 && count != 0 && count <= MaximumHeadlessReplayTicks &&
+                   std::numeric_limits<std::uint64_t>::max() - tick >= count - 1;
         }
     };
 
@@ -145,30 +149,34 @@ namespace Horo::Application::Internal {
         std::optional<HeadlessReplayNavigation> navigation;
     };
 
-    /** @brief Product-owned mailbox for one exact committed tick; no concurrent access or file storage. */
+    /** @brief Product-owned storage for an exact committed tick window; no concurrent access or file storage. */
     class HeadlessDecisionReplay final {
     public:
         static constexpr std::size_t CanonicalBudget = 1U << 20U;
         using Capture = Result<HeadlessDecisionReplayData>;
+        using Window = Result<std::vector<HeadlessDecisionReplayData>>;
 
-        explicit HeadlessDecisionReplay(HeadlessDecisionReplaySelection selection) noexcept : selection_(selection) {}
+        explicit HeadlessDecisionReplay(HeadlessDecisionReplaySelection selection);
 
         HeadlessDecisionReplay(const HeadlessDecisionReplay &) = delete;
         HeadlessDecisionReplay &operator=(const HeadlessDecisionReplay &) = delete;
 
-        /** @brief Reports the immutable selected subject and fixed tick. */
+        /** @brief Reports the immutable selected subject and fixed tick window. */
         [[nodiscard]] const HeadlessDecisionReplaySelection &Selection() const noexcept {
             return selection_;
         }
 
         /** @brief Takes the one published capture or diagnostic on the fixed owner's lane. */
         [[nodiscard]] std::optional<Capture> TakeCommitted() noexcept;
+        /** @brief Takes the whole window once, after all selected ticks commit or the first capture fails. */
+        [[nodiscard]] std::optional<Window> TakeCommittedWindow() noexcept;
 
     private:
         friend class HeadlessNetworkDetail::HeadlessFixedParticipant;
         friend class HeadlessNetworkDetail::WorldService;
         /** @brief Captures the exact original root Scene bindings before mounted or gameplay entities materialize. */
         static Result<void> BindAuthoredScene(HeadlessNetworkDetail::WorldRecord &world, const Runtime::RuntimeSceneDefinition &definition);
+        [[nodiscard]] bool WantsTick(std::uint64_t tick) const noexcept;
         void Arm(HeadlessNetworkDetail::WorldRecord &world, const Runtime::FixedStepContext &context);
         void Prepare(HeadlessNetworkDetail::WorldRecord &world, const Runtime::FixedStepContext &context);
         void Commit(const Runtime::FixedStepContext &context) noexcept;
@@ -186,13 +194,15 @@ namespace Horo::Application::Internal {
         const HeadlessNetworkDetail::WorldRecord *attemptWorld_{};
         AI::AgentHandle armedAgent_;
         std::uint64_t attempt_{};
+        std::uint64_t attemptedTick_{};
         std::optional<std::uint64_t> previousPhysicsTick_;
         std::optional<HeadlessReplayPerception> perception_;
         std::optional<Gameplay::BehaviorFixedEvidence> gameplay_;
         std::optional<HeadlessReplayNavigation> navigation_;
         std::optional<Capture> pending_;
-        std::optional<Capture> committed_;
-        bool published_{};
+        std::vector<HeadlessDecisionReplayData> committed_;
+        std::optional<Error> captureError_;
+        bool consumed_{};
     };
 
     /** @brief Exact registered traversal filter and bounded deadline for an authority world's best-effort path grant. */

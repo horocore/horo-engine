@@ -16,6 +16,8 @@ namespace Horo::Application::Internal {
                                          "navigation", "gameplay", "physics", "achieved-character-motion", "canonical-ai"});
     static_assert(HeadlessReplayBoundaryNames.size() == AI::AiReplayBoundaryCount);
     inline constexpr std::size_t MaximumHeadlessReplayEvidenceBytes = 128U * 1024U;
+    inline constexpr std::size_t MaximumHeadlessReplayTicks = 32;
+    inline constexpr std::size_t MaximumHeadlessReplayWindowBytes = MaximumHeadlessReplayEvidenceBytes * MaximumHeadlessReplayTicks;
     inline constexpr std::uint32_t HeadlessSceneInputSchemaVersion = 2;
 
     /** @brief User-selected absolute directory name for one immutable evidence publication. */
@@ -44,6 +46,10 @@ namespace Horo::Application::Internal {
      * throughout publication. On a postcommit error the published directory remains intact. */
     [[nodiscard]] Result<void> PublishHeadlessReplayArtifact(const HeadlessReplayOutput &output, const HeadlessDecisionReplayData &data,
                                                              const Sha256Digest &canonicalDigest);
+
+    /** @brief Atomically publishes one contiguous window, retaining the single-tick format for a one-tick capture. */
+    [[nodiscard]] Result<void> PublishHeadlessReplayWindow(const HeadlessReplayOutput &output,
+                                                           std::span<const HeadlessDecisionReplayData> frames);
 
     /** @brief Compares committed captures using their original decision evidence and owned publication identities.
      * @param recorded Baseline product capture. @param replayed Independently committed product capture.

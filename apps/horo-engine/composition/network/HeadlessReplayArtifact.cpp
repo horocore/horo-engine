@@ -447,6 +447,39 @@ namespace Horo::Application::Internal {
         return PublishDirectory(output.Directory(), evidence.Value());
     }
 
+    /** @copydoc PublishHeadlessReplayWindow */
+    Result<void> PublishHeadlessReplayWindow(const HeadlessReplayOutput &output, std::span<const HeadlessDecisionReplayData> frames) {
+        if (frames.empty() || frames.size() > MaximumHeadlessReplayTicks)
+            return Result<void>::Failure(MakeError(AI::AIErrors::CanonicalStateInvalid));
+        if (frames.size() == 1) {
+            const auto &frame = frames.front();
+            return PublishHeadlessReplayArtifact(output, frame, ComputeSha256(std::as_bytes(std::span{frame.canonicalRecord})));
+        }
+        try {
+            std::string document = R"({"format":"horo-ai-replay-evidence","version":2,"frames":[)";
+            auto previous = frames.front().evidence.tick;
+            for (const auto &frame : frames) {
+                const auto tick = frame.evidence.tick;
+                if (frame.evidence.subject != frames.front().evidence.subject ||
+                    (&frame != &frames.front() && (tick <= previous || tick - previous != 1)))
+                    return Result<void>::Failure(MakeError(AI::AIErrors::CanonicalStateInvalid));
+                auto encoded = EncodeEvidence(frame, ComputeSha256(std::as_bytes(std::span{frame.canonicalRecord})));
+                if (encoded.HasError())
+                    return Result<void>::Failure(std::move(encoded).ErrorValue());
+                if (&frame != &frames.front())
+                    document.push_back(',');
+                document.append(encoded.Value());
+                previous = tick;
+            }
+            document.append("]}\n");
+            if (document.size() > MaximumHeadlessReplayWindowBytes)
+                return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetStorageUnavailable));
+            return PublishDirectory(output.Directory(), document);
+        } catch (const std::bad_alloc &) {
+            return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetStorageUnavailable));
+        }
+    }
+
     /** @copydoc CompareHeadlessReplayCaptures */
     Result<std::optional<AI::AiReplayDivergence>> CompareHeadlessReplayCaptures(const HeadlessDecisionReplayData &recorded,
                                                                                 const HeadlessDecisionReplayData &replayed) {

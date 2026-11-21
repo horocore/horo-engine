@@ -11,6 +11,7 @@
 #include <ostream>
 #include <string>
 #include <utility>
+#include <vector>
 
 namespace Horo::Application::Internal {
     namespace {
@@ -188,19 +189,10 @@ namespace Horo::Application::Internal {
                     {{agent, ReadIdentity(section.at("revision"))}, hash}};
         }
 
-        /** @brief Reads only a bounded regular file and rejects deep JSON before recursive processing. */
-        Result<PortableReplay> ReadReplay(const std::filesystem::path &path) {
-            using Outcome = Result<PortableReplay>;
-            const auto bytes = NativeDurableFileSystem{}.ReadFileBounded(path, MaximumHeadlessReplayEvidenceBytes);
-            if (bytes.HasError())
-                return Outcome::Failure(bytes.ErrorValue());
-            const auto file = Json::parse(bytes.Value(), [](int depth, Json::parse_event_t, Json &) {
-                if (depth > 16)
-                    throw InvalidEvidence{};
-                return true;
-            });
+        /** @brief Projects one unchanged version-one frame onto the ordered portable observations. */
+        PortableReplay ReadReplayFrame(const Json &file) {
             if (file.at("format") != "horo-ai-replay-evidence" || file.at("version") != 1)
-                return Outcome::Failure(MakeError(AI::AIErrors::CanonicalSchemaUnsupported));
+                throw InvalidEvidence{};
             auto result = ReadRequired(file);
             if (file.contains("navigation")) {
                 const auto &navigation = file.at("navigation");
@@ -260,25 +252,80 @@ namespace Horo::Application::Internal {
                 throw InvalidEvidence{};
             }
             ValidateCoverage(file, result);
+            return result;
+        }
+
+        /** @brief Reads a bounded regular file, preserving the legacy one-tick representation. */
+        Result<std::vector<PortableReplay>> ReadReplay(const std::filesystem::path &path) {
+            using Outcome = Result<std::vector<PortableReplay>>;
+            const auto bytes = NativeDurableFileSystem{}.ReadFileBounded(path, MaximumHeadlessReplayWindowBytes);
+            if (bytes.HasError())
+                return Outcome::Failure(bytes.ErrorValue());
+            const auto file = Json::parse(bytes.Value(), [](int depth, Json::parse_event_t, Json &) {
+                if (depth > 18)
+                    throw InvalidEvidence{};
+                return true;
+            });
+            if (file.at("format") != "horo-ai-replay-evidence")
+                return Outcome::Failure(MakeError(AI::AIErrors::CanonicalSchemaUnsupported));
+            if (file.at("version") == 1 && bytes.Value().size() <= MaximumHeadlessReplayEvidenceBytes)
+                return Outcome::Success({ReadReplayFrame(file)});
+            if (file.at("version") != 2)
+                return Outcome::Failure(MakeError(AI::AIErrors::CanonicalSchemaUnsupported));
+            const auto &frames = file.at("frames");
+            if (!frames.is_array() || frames.size() < 2 || frames.size() > MaximumHeadlessReplayTicks)
+                throw InvalidEvidence{};
+            std::vector<PortableReplay> result;
+            result.reserve(frames.size());
+            for (const auto &encoded : frames) {
+                auto frame = ReadReplayFrame(encoded);
+                if (!result.empty() &&
+                    (frame.agent != result.front().agent || frame.tick <= result.back().tick || frame.tick - result.back().tick != 1))
+                    throw InvalidEvidence{};
+                result.push_back(std::move(frame));
+            }
             return Outcome::Success(std::move(result));
         }
 
-        /** @brief Compares only matching profiles, following the shared boundary order of original fixed capture. */
-        Comparison ComparePortable(const PortableReplay &left, const PortableReplay &right) {
+        /** @brief Tests the original subject and each boundary's schema and content identities. */
+        bool Compatible(const PortableReplay &left, const PortableReplay &right) {
             if (left.agent != right.agent)
-                return Comparison::Failure(MakeError(AI::AIErrors::CanonicalSchemaUnsupported));
+                return false;
             for (std::size_t index = 0; index < left.boundaries.size(); ++index)
                 if (left.boundaries[index].profile != right.boundaries[index].profile)
-                    return Comparison::Failure(MakeError(AI::AIErrors::CanonicalSchemaUnsupported));
+                    return false;
+            return true;
+        }
+
+        /** @brief Finds the earliest differing observation in the original fixed boundary order. */
+        std::optional<AI::AiReplayDivergence> CompareFrame(const PortableReplay &left, const PortableReplay &right) {
             if (left.tick != right.tick)
-                return Comparison::Success(AI::AiReplayDivergence{std::min(left.tick, right.tick)});
+                return AI::AiReplayDivergence{std::min(left.tick, right.tick)};
             for (std::size_t index = 0; index < left.boundaries.size(); ++index) {
                 const auto &a = left.boundaries[index].observation;
                 const auto &b = right.boundaries[index].observation;
                 if (a != b)
-                    return Comparison::Success(
-                        AI::AiReplayDivergence{left.tick, static_cast<AI::AiReplayBoundary>(index), a.stamp, b.stamp});
+                    return AI::AiReplayDivergence{left.tick, static_cast<AI::AiReplayBoundary>(index), a.stamp, b.stamp};
             }
+            return std::nullopt;
+        }
+
+        /** @brief Rejects incompatible profiles before returning the first gap or different boundary. */
+        Comparison ComparePortable(std::span<const PortableReplay> left, std::span<const PortableReplay> right) {
+            if (left.front().tick != right.front().tick) {
+                if (!Compatible(left.front(), right.front()))
+                    return Comparison::Failure(MakeError(AI::AIErrors::CanonicalSchemaUnsupported));
+                return Comparison::Success(AI::AiReplayDivergence{std::min(left.front().tick, right.front().tick)});
+            }
+            const auto common = std::min(left.size(), right.size());
+            for (std::size_t index = 0; index < common; ++index)
+                if (!Compatible(left[index], right[index]))
+                    return Comparison::Failure(MakeError(AI::AIErrors::CanonicalSchemaUnsupported));
+            for (std::size_t index = 0; index < common; ++index)
+                if (const auto divergence = CompareFrame(left[index], right[index]))
+                    return Comparison::Success(divergence);
+            if (left.size() != right.size())
+                return Comparison::Success(AI::AiReplayDivergence{(left.size() > common ? left : right)[common].tick});
             return Comparison::Success(std::nullopt);
         }
 

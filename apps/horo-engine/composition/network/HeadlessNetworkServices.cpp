@@ -374,16 +374,46 @@ namespace Horo::Application::Internal {
         }
     }
 
+    HeadlessDecisionReplay::HeadlessDecisionReplay(HeadlessDecisionReplaySelection selection) : selection_(selection) {
+        if (selection_.IsValid())
+            committed_.reserve(selection_.count);
+    }
+
     /** @copydoc HeadlessDecisionReplay::TakeCommitted */
     std::optional<HeadlessDecisionReplay::Capture> HeadlessDecisionReplay::TakeCommitted() noexcept {
-        return owner_ == std::this_thread::get_id() ? std::exchange(committed_, std::nullopt) : std::nullopt;
+        auto window = selection_.count == 1 ? TakeCommittedWindow() : std::nullopt;
+        if (!window)
+            return std::nullopt;
+        if (window->HasError())
+            return Capture::Failure(std::move(*window).ErrorValue());
+        return Capture::Success(std::move(window->Value().front()));
+    }
+
+    /** @copydoc HeadlessDecisionReplay::TakeCommittedWindow */
+    std::optional<HeadlessDecisionReplay::Window> HeadlessDecisionReplay::TakeCommittedWindow() noexcept {
+        if (owner_ != std::this_thread::get_id() || consumed_)
+            return std::nullopt;
+        if (captureError_) {
+            consumed_ = true;
+            return Window::Failure(std::move(*captureError_));
+        }
+        if (committed_.size() != selection_.count || committed_.empty())
+            return std::nullopt;
+        consumed_ = true;
+        return Window::Success(std::move(committed_));
+    }
+
+    bool HeadlessDecisionReplay::WantsTick(const std::uint64_t tick) const noexcept {
+        return owner_ == std::this_thread::get_id() && !consumed_ && !captureError_ && !attemptWorld_ &&
+               committed_.size() < selection_.count && tick == selection_.tick + committed_.size();
     }
 
     void HeadlessDecisionReplay::Arm(HeadlessNetworkDetail::WorldRecord &world, const Runtime::FixedStepContext &context) {
-        if (owner_ != std::this_thread::get_id() || published_ || attemptWorld_ || context.simulationTick != selection_.tick || !world.ai)
+        if (!world.ai)
             return;
         attemptWorld_ = &world;
         attempt_ = context.attemptNumber;
+        attemptedTick_ = context.simulationTick;
         gameplay_.reset();
         navigation_.reset();
         perception_.reset();
@@ -414,13 +444,13 @@ namespace Horo::Application::Internal {
             pending_ = Capture::Failure(agent.ErrorValue());
             return;
         }
-        const auto armed = world.ai->ArmDecisionReplayAtSafePoint(agent.Value(), selection_.tick);
+        const auto armed = world.ai->ArmDecisionReplayAtSafePoint(agent.Value(), attemptedTick_);
         if (armed.HasError())
             pending_ = Capture::Failure(armed.ErrorValue());
         else {
             armedAgent_ = agent.Value();
             if (world.decisionQueries)
-                world.decisionQueries->ArmReplay(armedAgent_, selection_.tick);
+                world.decisionQueries->ArmReplay(armedAgent_, attemptedTick_);
         }
     }
 
@@ -442,11 +472,11 @@ namespace Horo::Application::Internal {
 
     void HeadlessDecisionReplay::Prepare(HeadlessNetworkDetail::WorldRecord &world, const Runtime::FixedStepContext &context) {
         if (owner_ != std::this_thread::get_id() || pending_ || attemptWorld_ != &world || attempt_ != context.attemptNumber ||
-            selection_.tick != context.simulationTick)
+            attemptedTick_ != context.simulationTick)
             return;
         const auto scene = world.closeRequested ? std::nullopt : world.scenes->ActiveScene();
         auto evidence = scene && world.replayAuthoredScene
-                            ? world.ai->CaptureDecisionReplayAtSafePoint(*scene, selection_.tick, CanonicalBudget)
+                            ? world.ai->CaptureDecisionReplayAtSafePoint(*scene, attemptedTick_, CanonicalBudget)
                             : Result<AI::AiSceneDecisionReplayCapture>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
         if (evidence.HasError()) {
             pending_ = Capture::Failure(std::move(evidence).ErrorValue());
@@ -461,19 +491,22 @@ namespace Horo::Application::Internal {
     }
 
     void HeadlessDecisionReplay::Commit(const Runtime::FixedStepContext &context) noexcept {
-        static_assert(std::is_nothrow_move_constructible_v<Capture>);
+        static_assert(std::is_nothrow_move_constructible_v<HeadlessDecisionReplayData>);
+        static_assert(std::is_nothrow_move_constructible_v<Error>);
         if (owner_ != std::this_thread::get_id() || !pending_ || attempt_ != context.attemptNumber ||
-            selection_.tick != context.simulationTick)
+            attemptedTick_ != context.simulationTick)
             return;
-        committed_.emplace(std::move(*pending_));
-        published_ = true;
+        if (pending_->HasError())
+            captureError_.emplace(std::move(*pending_).ErrorValue());
+        else
+            committed_.push_back(std::move(*pending_).Value());  // Capacity was reserved before the fixed loop.
         pending_.reset();
         attemptWorld_ = nullptr;
     }
 
     void HeadlessDecisionReplay::Abort(const Runtime::FixedStepContext &context) noexcept {
         if (owner_ == std::this_thread::get_id() && attemptWorld_ && attempt_ == context.attemptNumber &&
-            selection_.tick == context.simulationTick) {
+            attemptedTick_ == context.simulationTick) {
             pending_.reset();
             DiscardArm();
             attemptWorld_ = nullptr;
@@ -483,7 +516,7 @@ namespace Horo::Application::Internal {
     /** @copydoc HeadlessDecisionReplay::DiscardArm */
     void HeadlessDecisionReplay::DiscardArm() noexcept {
         if (armedAgent_.IsValid())
-            attemptWorld_->ai->DiscardDecisionReplayAtSafePoint(armedAgent_, selection_.tick);
+            attemptWorld_->ai->DiscardDecisionReplayAtSafePoint(armedAgent_, attemptedTick_);
         armedAgent_ = {};
     }
 
