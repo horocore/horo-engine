@@ -1,5 +1,6 @@
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/Assets/AssetRegistry.h"
+#include "Horo/Assets/AssetSourcePublication.h"
 #include "Horo/Editor/BlackboardSchemaDocument.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Editor/SourceFileOpenService.h"
@@ -401,6 +402,42 @@ namespace {
         CHECK(refreshed.source->rows[0].displayName == "External Target");
         CHECK(refreshed.revision > dirty.revision);
         CHECK(document.Execute(dirty.revision, RenameBlackboardKey{Key(8), "Stale"}).HasError());
+    }
+
+    TEST_CASE("Blackboard recovery cannot change a durable key descriptor", "[editor][blackboard][source]") {
+        FileFixture fixture;
+        SourceFileOpenService service{fixture.root, fixture.documents};
+        const auto opened = service.Open({.path = fixture.path});
+        REQUIRE(opened.HasValue());
+        REQUIRE(opened.Value().document);
+        const auto registry = fixture.registry.Snapshot();
+        auto loaded = BlackboardSchemaDocument::OpenFile(opened.Value().document->identity, registry, fixture.root, fixture.path);
+        REQUIRE(loaded.HasValue());
+        auto &document = *loaded.Value();
+        const auto start = document.Snapshot().Value();
+        REQUIRE(start.sourceDigest);
+        REQUIRE(start.nextKey);
+        auto keys = std::vector(start.schema->Keys().begin(), start.schema->Keys().end());
+        keys.front().access = BlackboardKeyAccess::ReadOnly;
+        const auto changed = BlackboardSchema::Capture({.identity = start.schema->Identity(),
+                                                        .version = start.schema->Version(),
+                                                        .unknownValuePolicy = start.schema->UnknownValuePolicy(),
+                                                        .keys = keys});
+        REQUIRE(changed.HasValue());
+        const auto bytes = BlackboardSchemaCodec::Encode(changed.Value());
+        REQUIRE(bytes.HasValue());
+        const Assets::AssetSourceIdentity accepted{true, start.sourceBytes, *start.sourceDigest};
+        const auto refused = document.RestoreDraft(start.revision, registry, accepted, bytes.Value(), start.nextKey->Value() - 1);
+        REQUIRE(refused.HasError());
+        CHECK(refused.ErrorValue().code.Value() == BlackboardDocumentErrors::ReferenceResolutionRequired.code.Value());
+        const auto current = document.Snapshot().Value();
+        CHECK(current.revision == start.revision);
+        CHECK(current.source == start.source);
+        CHECK(current.schema == start.schema);
+        CHECK_FALSE(current.dirty);
+        const auto disk = Assets::CaptureAssetSource(fixture.root, fixture.path, BlackboardSchemaSourceCodec::MaximumBytes);
+        REQUIRE(disk.HasValue());
+        CHECK(disk.Value().identity == accepted);
     }
 
     TEST_CASE("Blackboard owner rejects foreign threads and leaves exhausted identities unchanged", "[editor][blackboard]") {

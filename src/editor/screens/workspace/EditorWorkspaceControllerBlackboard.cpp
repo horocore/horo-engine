@@ -5,6 +5,7 @@
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Application/ProjectAssetImportCommitter.h"
 #include "Horo/Assets/AssetSourcePublication.h"
+#include "Horo/Foundation/Logging/Logger.h"
 #include "WorkspacePathText.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 
@@ -165,19 +166,31 @@ namespace Horo::Editor {
             return;
         }
         m_blackboardDocuments.push_back(std::move(loaded).Value());
-        views.push_back({.snapshot = std::move(snapshot).Value(),
-                         .usageReviewAvailable = m_mutableAssetRegistry && m_mutations && m_sourceRecoveryJobs});
+        m_blackboardRecovery.try_emplace(opened.identity.instance);
+        auto &view = views.emplace_back(
+            BlackboardWorkspaceDocument{.snapshot = std::move(snapshot).Value(),
+                                        .usageReviewAvailable = m_mutableAssetRegistry && m_mutations && m_sourceRecoveryJobs});
+        InspectBlackboardRecovery(view);
     }
 
     /** @copydoc EditorWorkspaceController::SaveBlackboardDocument */
     Result<void> EditorWorkspaceController::SaveBlackboardDocument(BlackboardSchemaDocument &document, const std::uint64_t revision) {
         if (!m_mutations)
             return Result<void>::Failure(MakeError(Assets::AssetSourceErrors::Authority));
-        if (HasPendingBlackboardReferenceEdit(document.Identity().instance))
-            return SaveBlackboardReferenceEdit(document, revision);
+        JoinAiDocumentRecovery();
+        const auto current = document.Snapshot();
+        if (current.HasError())
+            return Result<void>::Failure(current.ErrorValue());
         NativeDurableFileSystem fallback;
         auto &files = m_durableFiles ? *m_durableFiles : fallback;
-        return document.Save(revision, m_assetRegistry, *m_mutations, files);
+        auto saved = HasPendingBlackboardReferenceEdit(document.Identity().instance)
+                         ? SaveBlackboardReferenceEdit(document, revision)
+                         : document.Save(revision, m_assetRegistry, *m_mutations, files);
+        if (saved.HasValue()) {
+            if (const auto cleared = ClearBlackboardRecovery(current.Value()); cleared.HasError())
+                LOG_ERROR("editor.ai_recovery", "Saved Blackboard recovery cleanup failed: %s", cleared.ErrorValue().message.c_str());
+        }
+        return saved;
     }
 
     /** @copydoc EditorWorkspaceController::RefreshBlackboardDocument */
@@ -479,14 +492,27 @@ namespace Horo::Editor {
                     return document->Redo(request.fence.revision);
                 case Save:
                     return SaveBlackboardDocument(*document, request.fence.revision);
-                case Reload: {
+                case Reload:
+                case ReloadDiscardingDraft: {
                     if (HasPendingBlackboardReferenceEdit(request.fence.instance))
                         return Result<void>::Failure(MakeError(BlackboardDocumentErrors::ReferenceResolutionRequired));
-                    const auto result = document->Reload(request.fence.revision, m_assetRegistry);
-                    if (result.HasValue() && m_blackboardReferenceGroup && m_blackboardReferenceGroup->schema == request.fence.instance)
-                        RetireBlackboardReferenceEdit();
+                    const bool discard = request.operation == ReloadDiscardingDraft;
+                    if (discard && !snapshot.Value().conflict)
+                        return Result<void>::Failure(MakeError(BlackboardDocumentErrors::StaleRevision));
+                    JoinAiDocumentRecovery(request.fence.instance);
+                    const auto result = document->Reload(request.fence.revision, m_assetRegistry, discard);
+                    if (result.HasValue()) {
+                        if (m_blackboardReferenceGroup && m_blackboardReferenceGroup->schema == request.fence.instance)
+                            RetireBlackboardReferenceEdit();
+                        if (const auto cleared = ClearBlackboardRecovery(snapshot.Value()); cleared.HasError())
+                            LOG_ERROR("editor.ai_recovery", "Reloaded Blackboard recovery cleanup failed: %s",
+                                      cleared.ErrorValue().message.c_str());
+                    }
                     return result;
                 }
+                case RestoreRecovery:
+                case DiscardRecovery:
+                    return ResolveBlackboardRecovery(*document, request);
                 case ReviewUsages:
                     return StartBlackboardUsageReview(request, *document);
                 case ApplyReviewedEdit:
@@ -656,6 +682,8 @@ namespace Horo::Editor {
             if (saved.HasError())
                 return Result<bool>::Failure(saved.ErrorValue());
         }
+        if (const auto cleared = ClearBlackboardRecovery(current.Value()); cleared.HasError())
+            return Result<bool>::Failure(cleared.ErrorValue());
         const auto closed = m_viewModel.workspacePanelHost.CloseDocument(fence.instance, WorkspaceDocumentClosePolicy::DiscardChanges);
         if (closed.HasError())
             return Result<bool>::Failure(closed.ErrorValue());
@@ -664,6 +692,7 @@ namespace Horo::Editor {
         if (m_blackboardUsageWork && m_blackboardUsageWork->fence.instance == fence.instance)
             static_cast<void>(m_blackboardUsageWork->job.RequestCancel());
         m_blackboardReviewGenerations.erase(fence.instance);
+        m_blackboardRecovery.erase(fence.instance);
         std::erase_if(m_viewModel.blackboardDocuments, [fence](const auto &entry) {
             return entry.snapshot.document.instance == fence.instance;
         });

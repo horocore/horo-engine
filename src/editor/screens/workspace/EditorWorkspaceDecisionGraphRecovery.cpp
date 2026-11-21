@@ -215,8 +215,7 @@ namespace Horo::Editor {
         m_aiDocumentRecovery.reset();
         if (terminal->state != JobState::Succeeded) {
             if (terminal->state != JobState::Cancelled && terminal->terminalResult->error)
-                LOG_ERROR("editor.decision_recovery", "Decision recovery checkpoint failed: %s",
-                          terminal->terminalResult->error->message.c_str());
+                LOG_ERROR("editor.ai_recovery", "AI recovery checkpoint failed: %s", terminal->terminalResult->error->message.c_str());
             return;
         }
         const auto acknowledge = [&](auto &draft) {
@@ -228,6 +227,8 @@ namespace Horo::Editor {
             acknowledge(draft->second);
         else if (const auto query = m_environmentQueryDrafts.find(work.instance); query != m_environmentQueryDrafts.end())
             acknowledge(query->second);
+        else if (const auto blackboard = m_blackboardRecovery.find(work.instance); blackboard != m_blackboardRecovery.end())
+            acknowledge(blackboard->second);
     }
 
     void EditorWorkspaceController::JoinAiDocumentRecovery(const std::optional<DocumentInstanceId> instance) {
@@ -257,6 +258,9 @@ namespace Horo::Editor {
             for (const auto &document : m_viewModel.environmentQueryDocuments)
                 if (document.dirty)
                     m_aiRecoveryQueue.push_back(document.identity.instance);
+            for (const auto &document : m_viewModel.blackboardDocuments)
+                if (document.snapshot.dirty)
+                    m_aiRecoveryQueue.push_back(document.snapshot.document.instance);
         }
         if (!m_aiDocumentRecovery && !m_aiRecoveryQueue.empty())
             StartQueuedAiDocumentRecovery();
@@ -265,6 +269,10 @@ namespace Horo::Editor {
     void EditorWorkspaceController::StartQueuedAiDocumentRecovery() {
         const auto instance = m_aiRecoveryQueue.back();
         m_aiRecoveryQueue.pop_back();
+        if (m_blackboardRecovery.contains(instance)) {
+            CheckpointBlackboard(instance, false);
+            return;
+        }
         if (m_environmentQueryDrafts.contains(instance)) {
             StartQueuedEnvironmentQueryRecovery(instance);
             return;
@@ -310,6 +318,7 @@ namespace Horo::Editor {
                 LOG_ERROR("editor.decision_recovery", "Decision recovery checkpoint failed: %s", result.ErrorValue().message.c_str());
         }
         FlushEnvironmentQueryRecovery();
+        FlushBlackboardRecovery();
     }
 
     Result<void> EditorWorkspaceController::DiscardAiDocumentAutosaves() {
@@ -327,6 +336,10 @@ namespace Horo::Editor {
                 if (auto cleared = ClearEnvironmentQueryRecovery(document, draft->second); cleared.HasError())
                     return cleared;
             }
+        }
+        for (const auto &document : m_viewModel.blackboardDocuments) {
+            if (const auto cleared = ClearBlackboardRecovery(document.snapshot); cleared.HasError())
+                return cleared;
         }
         m_aiRecoveryQueue.clear();
         m_aiAutosaveDiscarded = true;

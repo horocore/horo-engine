@@ -15,7 +15,8 @@
 
 namespace Horo::Assets {
     class AssetRegistrySnapshot;
-}
+    struct AssetSourceIdentity;
+}  // namespace Horo::Assets
 
 namespace Horo {
     class DurableFileSystem;
@@ -114,6 +115,7 @@ namespace Horo::Editor {
         bool canUndo{};
         bool canRedo{};
         std::optional<Sha256Digest> sourceDigest; /**< Last accepted exact file bytes, when the document owns a file. */
+        std::size_t sourceBytes{};                /**< Byte count of the same accepted version. */
     };
 
     /** @brief Control-thread typed authoring owner for an existing Blackboard asset.
@@ -170,6 +172,15 @@ namespace Horo::Editor {
          * @post Neither disk state nor the semantic history changes.
          */
         [[nodiscard]] Result<std::vector<std::uint8_t>> EncodeSource(std::uint64_t expectedRevision) const;
+        /** @brief Restores a checkpoint as an unsaved draft over the exact accepted file.
+         * @param expectedRevision Exact clean document revision. @param registry Current project registry.
+         * @param base Accepted canonical source identity. @param bytes Detached encoded Blackboard source.
+         * @param issuedThrough Highest key issued by the captured document. @param cancellation Read and commit fence.
+         * @return Success or a typed failure that leaves the canonical file and current draft intact.
+         */
+        [[nodiscard]] Result<void> RestoreDraft(std::uint64_t expectedRevision, const Assets::AssetRegistrySnapshot &registry,
+                                                const Assets::AssetSourceIdentity &base, std::span<const std::uint8_t> bytes,
+                                                std::uint64_t issuedThrough, CancellationToken cancellation = {});
         /** @brief Proposes the next unused stable key ID for an Add command.
          * @return Next ID above this opening's high-water mark, or an owner/exhaustion failure.
          * @post No identity advances until an Add command successfully publishes.

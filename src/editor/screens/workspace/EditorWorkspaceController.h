@@ -1014,6 +1014,25 @@ namespace Horo::Editor {
         std::size_t m_contentBrowserNextPreviewEntry{};
         std::vector<std::unique_ptr<BlackboardSchemaDocument>> m_blackboardDocuments;
 
+        /** @brief Exact checkpoint acknowledgement and transfer authority for one Blackboard tab. */
+        struct BlackboardRecoveryState final {
+            std::uint64_t recoveryRevision{};
+            bool recoveryAttempted{};
+            std::shared_ptr<const DocumentRecoveryRecord> acceptedRecovery;
+        };
+
+        std::map<DocumentInstanceId, BlackboardRecoveryState> m_blackboardRecovery;
+        /** @brief Projects a prior recovery candidate for an explicit Blackboard decision. */
+        void InspectBlackboardRecovery(BlackboardWorkspaceDocument &view) const;
+        /** @brief Runs an exact Blackboard restore or discard, keeping canonical bytes untouched. */
+        Result<void> ResolveBlackboardRecovery(BlackboardSchemaDocument &document, const BlackboardWorkspaceRequest &request);
+        /** @brief Queues an immutable Blackboard capture for the shared AI I/O lane. */
+        void CheckpointBlackboard(DocumentInstanceId instance, bool synchronous);
+        /** @brief Synchronously flushes dirty Blackboard checkpoints during workspace shutdown. */
+        void FlushBlackboardRecovery();
+        /** @brief Removes only the checkpoint owned or accepted by this Blackboard tab. */
+        Result<void> ClearBlackboardRecovery(const BlackboardSchemaDocumentSnapshot &snapshot);
+
         struct BlackboardUsageWork final {
             JobHandle job;
             BlackboardDocumentFence fence;

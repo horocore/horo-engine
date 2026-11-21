@@ -50,12 +50,16 @@ namespace Horo::Editor {
             }
 
             void Request(BlackboardDocumentOperation operation, std::optional<BlackboardSchemaEdit> edit = {},
-                         std::optional<AI::BlackboardKeyId> replacement = {}) const {
+                         std::optional<AI::BlackboardKeyId> replacement = {},
+                         std::shared_ptr<const DocumentRecoveryRecord> recovery = {}) const {
                 if (command.command != EditorWorkspaceViewCommand::None)
                     return;
                 command.command = EditorWorkspaceViewCommand::BlackboardDocument;
-                command.blackboard =
-                    BlackboardWorkspaceRequest{.fence = fence, .operation = operation, .edit = std::move(edit), .replacement = replacement};
+                command.blackboard = BlackboardWorkspaceRequest{.fence = fence,
+                                                                .operation = operation,
+                                                                .edit = std::move(edit),
+                                                                .replacement = replacement,
+                                                                .recovery = std::move(recovery)};
             }
 
             /** @brief Renders a typed enum using an exhaustive locale label array. */
@@ -411,6 +415,14 @@ namespace Horo::Editor {
                 frame.Request(Save);
             if (frame.Button("reload", !snapshot.dirty))
                 frame.Request(Reload);
+            if (snapshot.conflict && snapshot.dirty && frame.Button("reload_discard", !document.referenceEditStaged))
+                frame.Request(ReloadDiscardingDraft);
+            if (document.recovery) {
+                if (frame.Button("restore_recovery", !snapshot.dirty && !snapshot.conflict))
+                    frame.Request(RestoreRecovery, {}, {}, document.recovery);
+                if (frame.Button("discard_recovery"))
+                    frame.Request(DiscardRecovery, {}, {}, document.recovery);
+            }
             if (frame.Button("undo", snapshot.canUndo))
                 frame.Request(Undo);
             if (frame.Button("redo", snapshot.canRedo))

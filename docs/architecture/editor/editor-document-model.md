@@ -669,6 +669,12 @@ dirty draft with an empty history. Explicit discard removes only the reviewed
 checkpoint, and a durable save clears only the checkpoint owned by or accepted
 by the draft.
 
+Blackboard autosave uses the same queue. The checkpoint contains the authored
+source and the highest issued key ID. Restore checks the accepted source bytes
+and preserves every durable key descriptor and the key allocator boundary.
+A restored draft establishes a new history boundary. An explicit reload can
+discard the open draft after the registered external schema is validated.
+
 Decision graph autosave sends immutable graph and layout snapshots to the
 shared background recovery writer. The checkpoint records both accepted
 disk identities and never writes the registered source or layout. A

@@ -356,7 +356,8 @@ namespace Horo::Editor {
         return Snapshot::Success({state_->document, state_->revision, state_->source, state_->runtime, state_->durable,
                                   proposed.HasValue() ? std::optional{proposed.Value()} : std::nullopt, state_->DirtySource(),
                                   state_->conflict, state_->CanReplay(false), state_->CanReplay(true),
-                                  state_->file ? std::optional{state_->file->accepted.digest} : std::nullopt});
+                                  state_->file ? std::optional{state_->file->accepted.digest} : std::nullopt,
+                                  state_->file ? state_->file->accepted.bytes : 0});
     }
 
     /** @copydoc BlackboardSchemaDocument::EncodeSource */
@@ -372,6 +373,47 @@ namespace Horo::Editor {
         for (const auto &source : state_->source->rows)
             rows.push_back({source.descriptor.key, source.displayName});
         return BlackboardSchemaSourceCodec::Encode(*state_->runtime, rows);
+    }
+
+    /** @copydoc BlackboardSchemaDocument::RestoreDraft */
+    Result<void> BlackboardSchemaDocument::RestoreDraft(std::uint64_t expectedRevision, const Assets::AssetRegistrySnapshot &registry,
+                                                        const Assets::AssetSourceIdentity &base, std::span<const std::uint8_t> bytes,
+                                                        std::uint64_t issuedThrough, CancellationToken cancellation) {
+        if (auto admitted = state_->Check(expectedRevision, cancellation); admitted.HasError())
+            return admitted;
+        using Restored = Result<void>;
+        const auto conflict = [] {
+            return Restored::Failure(MakeError(Assets::AssetSourceErrors::Conflict));
+        };
+        if (!state_->file || state_->file->accepted != base || state_->DirtySource() || state_->conflict)
+            return conflict();
+        const auto decoded = OpenRegistered(state_->document, registry, state_->source->asset, bytes);
+        if (decoded.HasError())
+            return Restored::Failure(decoded.ErrorValue());
+        auto &draft = *decoded.Value()->state_;
+        if (draft.source->schema != state_->saved->schema || draft.source->version != state_->saved->version ||
+            draft.source->unknownValues != state_->saved->unknownValues || draft.issuedKey > issuedThrough)
+            return Restored::Failure(MakeError(InvalidEdit));
+        const auto candidateKeys = draft.runtime->Keys();
+        for (const auto &durable : state_->durable->Keys()) {
+            const auto matching = std::ranges::lower_bound(candidateKeys, durable.key, {}, &BlackboardKeyDescriptor::key);
+            if (matching == candidateKeys.end() || *matching != durable)
+                return Restored::Failure(MakeError(ReferenceResolutionRequired));
+        }
+        const auto &file = *state_->file;
+        const auto canonical = Assets::CaptureAssetSource(file.root, file.path, BlackboardSchemaSourceCodec::MaximumBytes, cancellation);
+        if (canonical.HasError())
+            return Restored::Failure(canonical.ErrorValue());
+        if (canonical.Value().identity != base)
+            return conflict();
+        if (cancellation.IsCancellationRequested())
+            return Restored::Failure(MakeError(Cancelled));
+        state_->issuedKey = std::max(state_->issuedKey, issuedThrough);
+        state_->source = std::move(draft.source);
+        state_->runtime = std::move(draft.runtime);
+        state_->history.Clear();
+        ++state_->revision;
+        return Restored::Success();
     }
 
     /** @copydoc BlackboardSchemaDocument::NextKeyId */

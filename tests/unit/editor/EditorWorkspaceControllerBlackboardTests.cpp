@@ -352,6 +352,120 @@ namespace {
     };
 }  // namespace
 
+TEST_CASE("Blackboard draft recovery preserves canonical bytes and the issued key boundary", "[unit][editor][blackboard][workspace]") {
+    BlackboardWorkspaceFixture project;
+    JobSystem jobs({.ioWorkerCount = 1});
+    const auto reopen = [&](std::uint8_t owner) {
+        auto workspace =
+            std::make_unique<EditorWorkspaceController>(project.root, project.runtime, project.registry.Snapshot(),
+                                                        EditorWorkspaceDependencies{.assets = {.mutableAssetRegistry = &project.registry},
+                                                                                    .world = {.documentSessionOwner =
+                                                                                                  Assets::AssetId::FromBytes({owner})},
+                                                                                    .mutations = &project.mutations,
+                                                                                    .durableFiles = &project.files,
+                                                                                    .jobs = &jobs});
+        workspace->ProcessCommand(BlackboardWorkspaceFixture::Open());
+        return workspace;
+    };
+    const auto disk = [&] {
+        return Assets::CaptureAssetSource(project.root, project.root / BlackboardWorkspaceFixture::Path,
+                                          AI::BlackboardSchemaSourceCodec::MaximumBytes);
+    };
+    const auto saved = disk();
+    REQUIRE(saved.HasValue());
+    auto next = project.key;
+    {
+        auto workspace = reopen(31);
+        const auto &snapshot = project.Snapshot(*workspace);
+        REQUIRE(snapshot.nextKey);
+        const auto consumed = *snapshot.nextKey;
+        const auto edit = [&](BlackboardSchemaEdit candidate) {
+            workspace->ProcessCommand(
+                {.command = EditorWorkspaceViewCommand::BlackboardDocument,
+                 .blackboard = BlackboardWorkspaceRequest{.fence = project.Current(*workspace), .edit = std::move(candidate)}});
+            REQUIRE_FALSE(workspace->ViewModel().blackboardDocuments.front().diagnostic);
+        };
+        auto key = snapshot.source->rows.front().descriptor;
+        key.key = consumed;
+        edit(AddBlackboardKey{{key, "Transient key"}, 1});
+        edit(RemoveBlackboardKey{consumed});
+        project.Rename(*workspace, project.Current(*workspace), "Recovered name");
+        REQUIRE(snapshot.dirty);
+        REQUIRE(snapshot.nextKey);
+        next = *snapshot.nextKey;
+        REQUIRE(next.Value() > consumed.Value());
+        workspace->UpdateAutosave(60, 1);
+    }
+    CHECK(disk().Value().identity == saved.Value().identity);
+
+    auto workspace = reopen(32);
+    const auto &tab = workspace->ViewModel().blackboardDocuments.front();
+    REQUIRE(tab.recovery);
+    const auto checkpoint = tab.recovery;
+    DocumentRecoveryService service(project.root, project.mutations, project.files);
+    using enum BlackboardDocumentOperation;
+    const auto command = [&](BlackboardDocumentOperation action) {
+        workspace->ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::BlackboardDocument,
+             .blackboard =
+                 BlackboardWorkspaceRequest{.fence = project.Current(*workspace), .operation = action, .recovery = tab.recovery}});
+    };
+
+    SECTION("restores an unsaved draft and keeps previously issued keys retired") {
+        command(RestoreRecovery);
+        REQUIRE_FALSE(tab.diagnostic);
+        REQUIRE(tab.snapshot.dirty);
+        CHECK_FALSE(tab.snapshot.canUndo);
+        CHECK_FALSE(tab.snapshot.canRedo);
+        CHECK_FALSE(tab.recovery);
+        CHECK(tab.snapshot.source->rows.front().displayName == "Recovered name");
+        CHECK(tab.snapshot.nextKey == next);
+        CHECK(disk().Value().identity == saved.Value().identity);
+        command(Save);
+        REQUIRE_FALSE(tab.diagnostic);
+        CHECK_FALSE(tab.snapshot.dirty);
+        CHECK(disk().Value().identity != saved.Value().identity);
+        CHECK_FALSE(service.Inspect(tab.snapshot.source->asset, tab.snapshot.document.key).Value());
+    }
+    SECTION("declines to restore over a newer source") {
+        project.Write("Externally renamed");
+        const auto external = disk();
+        REQUIRE(external.HasValue());
+        command(RestoreRecovery);
+        REQUIRE(tab.diagnostic);
+        CHECK_FALSE(tab.snapshot.dirty);
+        CHECK(tab.recovery == checkpoint);
+        CHECK(disk().Value().identity == external.Value().identity);
+        command(DiscardRecovery);
+        CHECK_FALSE(tab.recovery);
+        CHECK_FALSE(service.Inspect(tab.snapshot.source->asset, tab.snapshot.document.key).Value());
+        CHECK(disk().Value().identity == external.Value().identity);
+    }
+    SECTION("reload clears the old edit history only after validating the external source") {
+        project.Rename(*workspace, project.Current(*workspace), "Open draft");
+        {
+            std::ofstream broken(project.root / BlackboardWorkspaceFixture::Path, std::ios::binary | std::ios::trunc);
+            broken << "incomplete";
+            REQUIRE(static_cast<bool>(broken));
+        }
+        command(Save);
+        REQUIRE(tab.snapshot.conflict);
+        command(ReloadDiscardingDraft);
+        REQUIRE(tab.diagnostic);
+        CHECK(tab.snapshot.dirty);
+        CHECK(tab.snapshot.canUndo);
+        CHECK(tab.snapshot.source->rows.front().displayName == "Open draft");
+        project.Write("Externally renamed");
+        command(ReloadDiscardingDraft);
+        REQUIRE_FALSE(tab.diagnostic);
+        CHECK_FALSE(tab.snapshot.dirty);
+        CHECK_FALSE(tab.snapshot.conflict);
+        CHECK_FALSE(tab.snapshot.canUndo);
+        CHECK_FALSE(tab.snapshot.canRedo);
+        CHECK(tab.snapshot.source->rows.front().displayName == "Externally renamed");
+    }
+}
+
 TEST_CASE("Blackboard New atomically creates and opens a schema with an authored initial key", "[unit][editor][blackboard][workspace]") {
     BlackboardWorkspaceFixture project{false};
     EditorWorkspaceController controller(project.root, project.runtime, project.registry.Snapshot(),

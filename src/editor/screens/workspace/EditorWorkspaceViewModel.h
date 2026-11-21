@@ -690,6 +690,9 @@ namespace Horo::Editor {
         Redo,
         Save,
         Reload,
+        ReloadDiscardingDraft,
+        RestoreRecovery,
+        DiscardRecovery,
         ReviewUsages,
         ApplyReviewedEdit
     };
@@ -701,6 +704,7 @@ namespace Horo::Editor {
         std::optional<AI::BlackboardKeyId> reviewKey;
         std::optional<AI::BlackboardKeyId> replacement;
         std::shared_ptr<const Application::BlackboardUsageReview> expectedReview;
+        std::shared_ptr<const DocumentRecoveryRecord> recovery;
     };
 
     struct BlackboardWorkspaceDocument final {
@@ -714,6 +718,7 @@ namespace Horo::Editor {
         bool referenceEditStaged{};
         AI::BlackboardKeyId diagnosticKey;
         std::uint64_t diagnosticKeyRequest{};
+        std::shared_ptr<const DocumentRecoveryRecord> recovery;
     };
 
     /** @brief Requests the exact Blackboard target from a published Decision validation finding. */
