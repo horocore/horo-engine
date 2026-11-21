@@ -1,4 +1,5 @@
 #include "Horo/XR/XRErrors.h"
+#include "Horo/XR/XRInteraction.h"
 #include "Horo/XR/XRTrackingSnapshot.h"
 #include "support/AllocationProbe.h"
 #include "support/TypedIdentityTestSupport.h"
@@ -18,15 +19,15 @@ namespace Horo::XR {
             return {.id = {session, {index, 1}}, .kind = kind, .worldOriginRevision = Horo::Tests::IdentityValue<XRWorldOriginRevision>(9)};
         }
 
-        [[nodiscard]] XRPoseSample PoseSample(const XRSessionId &session, const XRRuntimeTime sampledAt) {
-            const auto trackedPosition =
-                XRPoseComponent<Math::Vec3>{.value = Math::Vec3{1.0F, 2.0F, 3.0F}, .validity = XRPoseComponentValidity::Tracked};
+        [[nodiscard]] XRPoseSample PoseSample(const XRSessionId &session, const XRRuntimeTime sampledAt,
+                                              XRSpaceKind target = XRSpaceKind::Local, Math::Vec3 position = {1.0F, 2.0F, 3.0F}) {
+            const auto trackedPosition = XRPoseComponent<Math::Vec3>{.value = position, .validity = XRPoseComponentValidity::Tracked};
             const auto trackedOrientation =
                 XRPoseComponent<Math::Quaternion>{.value = Math::Quaternion::Identity(), .validity = XRPoseComponentValidity::Tracked};
             auto result =
                 XRPoseSample::Create({.session = session,
                                       .source = TrackingSpace(session, XRSpaceKind::View, 11),
-                                      .target = TrackingSpace(session, XRSpaceKind::Local, 12),
+                                      .target = TrackingSpace(session, target, 12),
                                       .purpose = XRPosePurpose::SimulationInput,
                                       .time = {.runtimeSample = sampledAt, .simulation = Horo::Tests::IdentityValue<XRSimulationTime>(80)},
                                       .components = {.positionMeters = trackedPosition,
@@ -115,6 +116,41 @@ namespace Horo::XR {
             REQUIRE(SnapshotHasError(fixture.Descriptor(), fixture, XRErrors::TrackingSnapshotInvalid));
         }
     }  // namespace
+
+    TEST_CASE("XR Stage boundary proximity requires exact current Stage-relative tracking", "[xr][tracking-snapshot][comfort]") {
+        TrackingFixture fixture;
+        const XRReferenceSpaceSnapshot referenceSpaces{fixture.session, TrackingSpace(fixture.session, XRSpaceKind::View, 11),
+                                                       TrackingSpace(fixture.session, XRSpaceKind::Local, 13),
+                                                       TrackingSpace(fixture.session, XRSpaceKind::Stage, 12), XRStageBounds{4, 6}};
+        for (const auto [x, expected] :
+             std::array{std::pair{1.0F, XRStageBoundaryProximity::Inside}, std::pair{1.75F, XRStageBoundaryProximity::Near},
+                        std::pair{2.0F, XRStageBoundaryProximity::Near}, std::pair{-2.25F, XRStageBoundaryProximity::Outside}}) {
+            fixture.poses[0].sample = PoseSample(fixture.session, fixture.sampledAt, XRSpaceKind::Stage, {x, 1.5F, 0});
+            const auto snapshot = fixture.Snapshot();
+            const auto cutoff = DescribeXRInteractionCutoff(snapshot);
+            const auto before = Tests::AllocationProbe::Count();
+            const auto proximity = QueryXRStageBoundary(snapshot, cutoff, referenceSpaces, 0.25F);
+            const auto after = Tests::AllocationProbe::Count();
+            REQUIRE(proximity.HasValue());
+            CHECK(proximity.Value() == expected);
+            CHECK(before == after);
+        }
+
+        fixture.poses[0].sample = PoseSample(fixture.session, fixture.sampledAt);
+        const auto local = fixture.Snapshot();
+        auto cutoff = DescribeXRInteractionCutoff(local);
+        CHECK(HasErrorIdentity(QueryXRStageBoundary(local, cutoff, referenceSpaces, 0.25F), XRErrors::OperationUnavailable));
+        auto unsupported = referenceSpaces;
+        unsupported.stage.reset();
+        unsupported.stageBounds.reset();
+        CHECK(HasErrorIdentity(QueryXRStageBoundary(local, cutoff, unsupported, 0.25F), XRErrors::OperationUnsupported));
+        auto stale = referenceSpaces;
+        stale.stage->worldOriginRevision = Horo::Tests::IdentityValue<XRWorldOriginRevision>(8);
+        CHECK(HasErrorIdentity(QueryXRStageBoundary(local, cutoff, stale, 0.25F), XRErrors::OriginRevisionStale));
+        CHECK(HasErrorIdentity(QueryXRStageBoundary(local, cutoff, referenceSpaces, -1.0F), XRErrors::OperationInvalid));
+        cutoff.sampledAt = Horo::Tests::IdentityValue<XRRuntimeTime>(101);
+        CHECK(HasErrorIdentity(QueryXRStageBoundary(local, cutoff, referenceSpaces, 0.25F), XRErrors::TrackingSnapshotStale));
+    }
 
     TEST_CASE("XR tracking snapshots own bounded canonical evidence", "[unit][xr][tracking-snapshot]") {
         TrackingFixture fixture;

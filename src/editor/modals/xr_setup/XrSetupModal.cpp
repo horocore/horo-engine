@@ -2,6 +2,7 @@
 
 #include "Horo/Editor/EditorUiComponents.h"
 #include "Horo/XR/XRFeatureNegotiation.h"
+#include "Horo/XR/XRInteraction.h"
 #include "Horo/XR/XRSessionLifecycle.h"
 #include "Horo/XR/XRTrackingSnapshot.h"
 
@@ -225,6 +226,9 @@ namespace Horo::Editor {
         }
         if (report.tracking) {
             rows.Text(Text("inspect_tracking"), Text(InspectionKey(*report.tracking, TrackingKeys)));
+            constexpr std::array boundaryKeys{"inspect_stage_inside", "inspect_stage_near", "inspect_stage_outside"};
+            if (report.stageBoundary)
+                rows.Text(Text("inspect_stage_boundary"), Text(InspectionKey(*report.stageBoundary, boundaryKeys)));
             rows.Begin(Text("inspect_tracking_revisions"));
             rows.Numbers("{} / {} / {}", report.trackingRevision, report.originRevision, report.bindingRevision);
             rows.Begin(Text("inspect_capture_ms"));

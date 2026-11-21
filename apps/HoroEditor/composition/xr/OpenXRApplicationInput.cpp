@@ -161,6 +161,8 @@ namespace Horo::Application::Internal {
         const bool stageAvailable = stageObserved && capacity > minimumSpaces;
         input_.stageAvailability = stageAvailable ? XRCapabilityState::Available : XRCapabilityState::Unavailable;
         admittedTracking.alternateReferenceAvailable = wantsStage && stageAvailable;
+        admittedTracking.stageBoundaryWarningMeters =
+            admittedTracking.alternateReferenceAvailable ? std::optional{settings_.StageBoundaryWarningMeters()} : std::nullopt;
         const auto trackingSpaces = minimumSpaces + static_cast<std::size_t>(admittedTracking.alternateReferenceAvailable);
         if (gazeConsent && MayArmEyeGaze() && capacity > trackingSpaces && !bindings.setLabels.empty() &&
             bindings.PreparedActionCount() < settings_.Limits().maximumActions)
@@ -269,6 +271,7 @@ namespace Horo::Application::Internal {
         publication.Revoke();
         input_.gaze.reset();
         input_.gazeRevision = {};
+        input_.stageBoundary.reset();
         if (auto current = Current(); current.HasError())
             return current;
         const auto state = sessions.Snapshot();
@@ -357,12 +360,23 @@ namespace Horo::Application::Internal {
             input_.profiles = actions.Value().Profiles();
             if (input_.gazeAllowed)
                 input_.gaze = std::move(gaze);
-            if (const auto *tracking = publication.Current())
+            if (const auto *tracking = publication.Current()) {
+                if (const auto boundary = poses.Value().StageBoundary(); boundary && tracking->State() == XRTrackingState::Active)
+                    input_.stageBoundary = StageBoundaryObservation{DescribeXRInteractionCutoff(*tracking), *boundary};
                 AdvancePlaneCapture(*tracking);
+            }
             if (const auto *published = publication.Current(); published && input_.gaze)
                 input_.gazeRevision = published->Revision();
         }
         return appended;
+    }
+
+    /** @copydoc OpenXRApplicationSession::ReadStageBoundary */
+    std::optional<XRStageBoundaryProximity> OpenXRApplicationSession::ReadStageBoundary(const XRTrackingSnapshot &snapshot) const noexcept {
+        if (std::this_thread::get_id() != lane_ || !input_.stageBoundary ||
+            input_.stageBoundary->cutoff != DescribeXRInteractionCutoff(snapshot))
+            return std::nullopt;
+        return input_.stageBoundary->proximity;
     }
 
     /** @copydoc OpenXRApplicationSession::AppendPreparedInput */
@@ -692,6 +706,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc OpenXRApplicationSession::RetireInputProjection */
     void OpenXRApplicationSession::RetireInputProjection() noexcept {
+        input_.stageBoundary.reset();
         HORO_INVARIANT_MSG(std::this_thread::get_id() == lane_, "XR Input retirement requires its owner lane");
         RequestHapticCancellation();
         RevokeEyeGaze();

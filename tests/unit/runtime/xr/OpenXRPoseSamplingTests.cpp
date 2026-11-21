@@ -10,7 +10,8 @@ namespace Horo::Tests::OpenXRAction {
             const XRWorldOriginRevision origin{IdentityValue<XRWorldOriginRevision>(1)};
 
             Result<void> Prepare(std::optional<Math::Transform> worldFromBase = std::nullopt, const bool stageAvailable = false,
-                                 const std::optional<XRActionSetId> gazeSet = std::nullopt) {
+                                 const std::optional<XRActionSetId> gazeSet = std::nullopt,
+                                 const std::optional<float> stageBoundaryWarningMeters = std::nullopt) {
                 actions.script.tracking.enabled = true;
                 const std::array labels{NativeActionLabel{Input::ActionId{"select"}, "Select"}};
                 const std::array setLabels{NativeActionSetLabel{{1}, "Gameplay"}};
@@ -36,7 +37,7 @@ namespace Horo::Tests::OpenXRAction {
                                                      {labels, setLabels},
                                                      poses,
                                                      NativeTrackingSpaceRequest{origin, XRSpaceKind::Local, worldFromBase, stageAvailable,
-                                                                                gazeSet}});
+                                                                                gazeSet, stageBoundaryWarningMeters}});
             }
 
             void Activate(std::uint32_t maximumSpaces = 3) {
@@ -576,6 +577,35 @@ namespace Horo::Tests::OpenXRAction {
         REQUIRE(fixture.actions.owner.Close().HasValue());
         CHECK(fixture.actions.owner.References(session).HasError());
         CHECK(tracking.spaces == 0);
+    }
+
+    TEST_CASE("OpenXR Stage advisory is a bounded side observation from the World sample", "[xr][native][spaces][comfort]") {
+        TrackingFixture fixture;
+        bool available = true;
+        bool tracked = true;
+        SECTION("none when Stage has no metric rectangle") {
+            auto &tracking = fixture.actions.script.tracking;
+            tracking.boundsResult = XR_SPACE_BOUNDS_UNAVAILABLE;
+            tracking.bounds = {};
+            available = false;
+        }
+        SECTION("classified when the native head position is tracked") {}
+        SECTION("no classified value for inferred position") {
+            fixture.actions.script.tracking.flags &= ~XR_SPACE_LOCATION_POSITION_TRACKED_BIT;
+            tracked = false;
+        }
+        REQUIRE(fixture.Prepare(Math::Transform{}, true, std::nullopt, 0.30F).HasValue());
+        fixture.Activate(5);
+        fixture.Sync();
+        const auto packet =
+            fixture.actions.owner.ObserveWorldPoses(fixture.actions.session.Request().candidate, fixture.Time(), fixture.origin);
+        REQUIRE(packet.HasValue());
+        REQUIRE(packet.Value().Poses().size() == 2);
+        for (const auto &pose : packet.Value().Poses())
+            CHECK(pose.pose.target.kind == XRSpaceKind::World);
+        const auto boundary = packet.Value().StageBoundary();
+        CHECK(boundary.has_value() == (available && tracked));
+        CHECK(std::ranges::count(fixture.actions.session.script.calls, "locate-space") == (available ? 3 : 2));
     }
 
     TEST_CASE("OpenXR calibrated World rejects scale before creating native children", "[xr][native][poses]") {

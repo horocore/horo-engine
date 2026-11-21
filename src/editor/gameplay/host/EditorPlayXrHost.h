@@ -27,6 +27,7 @@ namespace Horo::XR {
     enum class XRFeatureProfile : std::uint8_t;
     enum class XRSessionState : std::uint8_t;
     enum class XRTrackingState : std::uint8_t;
+    enum class XRStageBoundaryProximity : std::uint8_t;
     enum class XRCapability : std::uint8_t;
     enum class XRCapabilityState : std::uint8_t;
     enum class XRFeatureDecisionState : std::uint8_t;
@@ -149,6 +150,7 @@ namespace Horo::Editor {
         EditorXrInspectionPrivacy privacy{EditorXrInspectionPrivacy::Redacted};
         std::optional<XR::XRSessionState> session;
         std::optional<XR::XRTrackingState> tracking;
+        std::optional<XR::XRStageBoundaryProximity> stageBoundary;
         std::uint64_t runtimeGeneration{};
         std::uint32_t systemGeneration{};
         std::uint32_t sessionGeneration{};

@@ -27,6 +27,33 @@ namespace Horo::XR {
     /** @brief Copies exact tracking provenance. @param snapshot Published tracking. @return Its immutable fences. */
     [[nodiscard]] XRInteractionCutoff DescribeXRInteractionCutoff(const XRTrackingSnapshot &snapshot) noexcept;
 
+    /** @brief Advisory proximity against the runtime-owned rectangular Stage. */
+    enum class XRStageBoundaryProximity : std::uint8_t {
+        Inside,
+        Near,
+        Outside
+    };
+
+    /** @brief Uses exact Stage-relative tracked head position to classify proximity to the runtime rectangle.
+     * @param snapshot Committed simulation tracking. @param cutoff Exact live consumer fence.
+     * @param referenceSpaces Runtime-owned reference publication. @param warningDistanceMeters Finite, nonnegative inward margin.
+     * @return Advisory condition or typed unsupported, unavailable, stale or malformed evidence.
+     * @details Reads no native data and grants no authority over guardian or chaperone behavior.
+     */
+    [[nodiscard]] Result<XRStageBoundaryProximity> QueryXRStageBoundary(const XRTrackingSnapshot &snapshot,
+                                                                        const XRInteractionCutoff &cutoff,
+                                                                        const XRReferenceSpaceSnapshot &referenceSpaces,
+                                                                        float warningDistanceMeters);
+
+    /** @brief Classifies one Stage-relative head pose derived by the same runtime owner.
+     * @param head Immutable simulation pose. @param referenceSpaces Exact owned runtime references.
+     * @param sampledAt Current sample time. @param warningDistanceMeters Finite, nonnegative inward margin.
+     * @return Advisory condition or a typed evidence failure. No position escapes the classification.
+     */
+    [[nodiscard]] Result<XRStageBoundaryProximity> ClassifyXRStageBoundary(const XRPoseSample &head,
+                                                                           const XRReferenceSpaceSnapshot &referenceSpaces,
+                                                                           XRRuntimeTime sampledAt, float warningDistanceMeters);
+
     /** @brief Controller pose choices that can supply interaction geometry. */
     enum class XRControllerInteractionPose : std::uint8_t {
         Aim,

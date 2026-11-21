@@ -50,6 +50,8 @@ namespace Horo::XR {
          * @return Positive pixel count captured at project reopen.
          */
         [[nodiscard]] std::uint32_t WorldCanvasMinimumSpanPixels() const noexcept;
+        /** @brief Returns the immutable inward margin for advisory Stage classification, in meters. */
+        [[nodiscard]] float StageBoundaryWarningMeters() const noexcept;
         /** @brief Reports optional policy for the independent eye-pointing preview.
          * @return True when product policy permits requesting consent; this is never a grant. */
         [[nodiscard]] bool AllowsEyeGazePreview() const noexcept;
@@ -71,6 +73,7 @@ namespace Horo::XR {
         XRFeatureProfile profile_{XRFeatureProfile::Projection1_0};
         XRSystemLimits limits_{};
         std::uint32_t worldCanvasMinimumSpanPixels_{};
+        float stageBoundaryWarningMeters_{0.30F};
         std::array<XRFeatureRequest, static_cast<std::size_t>(XRCapability::Count)> features_{};
         std::size_t featureCount_{};
         bool planeCapturePreview_{};

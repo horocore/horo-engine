@@ -253,6 +253,28 @@ namespace Horo::XR::OpenXRInternal {
         return Outcome::Success({action.role, action.kind, active, descriptor});
     }
 
+    /** @copydoc OpenXRActionBindings::Tracking::ObserveStageBoundary */
+    std::optional<XRStageBoundaryProximity> OpenXRActionBindings::Tracking::ObserveStageBoundary(const TrackingContext &context,
+                                                                                                 const XRTimeEvidence &time) const {
+        if (!request->stageBoundaryWarningMeters || !stageBounds)
+            return std::nullopt;
+        const bool baseIsStage = request->base == XRSpaceKind::Stage;
+        const auto stage = baseIsStage ? LocationTarget{base, baseIdentity} : LocationTarget{alternate, alternateIdentity};
+        if (!stage.identity.id.IsValid() || stage.space == XR_NULL_HANDLE)
+            return std::nullopt;
+        const auto location = Locate(context, view, viewIdentity, stage, time);
+        if (location.HasError())
+            return std::nullopt;
+        const auto sample = XRPoseSample::Create(location.Value(), context.Session(), request->origin);
+        if (sample.HasError())
+            return std::nullopt;
+        const XRReferenceSpaceSnapshot references{context.Session(), viewIdentity, baseIsStage ? alternateIdentity : baseIdentity,
+                                                  stage.identity, stageBounds};
+        const auto proximity =
+            ClassifyXRStageBoundary(sample.Value(), references, time.runtimeSample, *request->stageBoundaryWarningMeters);
+        return proximity.HasValue() ? std::optional{proximity.Value()} : std::nullopt;
+    }
+
     /** @copydoc OpenXRActionBindings::Tracking::AppendHeadObservation */
     Result<void> OpenXRActionBindings::Tracking::AppendHeadObservation(const TrackingContext &context, const LocationTarget &target,
                                                                        const XRTimeEvidence &time, NativePoseObservations &samples) const {
@@ -310,6 +332,8 @@ namespace Horo::XR::OpenXRInternal {
         if (AdmitsTrackingSource(currentDevices, devices.has_value(), XRTrackedDeviceRole::Head, XRTrackedDeviceCapability::HeadPose)) {
             if (auto observed = tracking_.AppendHeadObservation(TrackingContext{*this}, target, time, samples); observed.HasError())
                 return Outcome::Failure(observed.ErrorValue());
+            if (reference == PoseReference::CalibratedWorld)
+                samples.stageBoundary_ = tracking_.ObserveStageBoundary(TrackingContext{*this}, time);
         }
         for (const auto &action : tracking_.actions) {
             if (const auto capability =

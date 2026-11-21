@@ -83,7 +83,7 @@ namespace Horo::XR {
 
         TEST_CASE("XR settings defaults are inert and disabled", "[unit][xr][settings]") {
             const auto descriptors = XRProjectSettingDescriptors();
-            REQUIRE(descriptors.size() == 20);
+            REQUIRE(descriptors.size() == 21);
             for (const auto &descriptor : descriptors)
                 REQUIRE(descriptor.reloadPolicy == ReloadPolicy::ProjectReopen);
             const auto resolved = ResolveXRProjectSettings(Configuration());
@@ -112,6 +112,21 @@ namespace Horo::XR {
             const Evidence evidence;
             CHECK(AdmitXRProjectSettings(project, evidence.Admission(2)).HasError());
             CHECK(AdmitXRProjectSettings(overridden, evidence.Admission(2)).HasValue());
+        }
+
+        TEST_CASE("XR settings capture a bounded advisory Stage warning margin", "[unit][xr][settings][comfort]") {
+            CHECK(Enabled().StageBoundaryWarningMeters() == 0.30F);
+            for (const auto centimeters : {0, 45}) {
+                ConfigurationResolutionRequest request;
+                Project(request, "xr.stage_boundary.warning_centimeters", static_cast<std::int64_t>(centimeters));
+                CHECK(Enabled(request).StageBoundaryWarningMeters() == static_cast<float>(centimeters) / 100.0F);
+            }
+            ConfigurationResolutionRequest invalid;
+            Project(invalid, "xr.stage_boundary.warning_centimeters", std::int64_t{-1});
+            const auto failed = ResolveXRProjectSettings(Configuration(invalid));
+            REQUIRE(failed.HasError());
+            REQUIRE_FALSE(failed.ErrorValue().diagnostics.empty());
+            CHECK(failed.ErrorValue().diagnostics.front().path == "xr.stage_boundary.warning_centimeters");
         }
 
         TEST_CASE("XR settings preserve Foundation precedence and winning source diagnostics", "[unit][xr][settings]") {

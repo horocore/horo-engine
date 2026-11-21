@@ -9,6 +9,8 @@ namespace Horo::XR {
     namespace {
         constexpr std::string_view WorldCanvasSpanKey = "xr.world_canvas.minimum_span_pixels";
         constexpr std::int64_t DefaultWorldCanvasSpan = 1;
+        constexpr std::string_view StageWarningKey = "xr.stage_boundary.warning_centimeters";
+        constexpr std::int64_t DefaultStageWarningCentimeters = 30;
 
         struct FeatureSetting final {
             std::string_view key;
@@ -162,6 +164,7 @@ namespace Horo::XR {
         add("xr.limits.actions", SettingValueType::Integer, std::int64_t{8});
         add("xr.limits.devices", SettingValueType::Integer, std::int64_t{2});
         add(std::string(WorldCanvasSpanKey), SettingValueType::Integer, DefaultWorldCanvasSpan);
+        add(std::string(StageWarningKey), SettingValueType::Integer, DefaultStageWarningCentimeters);
         for (const auto &feature : FeatureSettings)
             add(std::string(feature.key), SettingValueType::Integer, std::int64_t{0});
         return descriptors;
@@ -198,6 +201,11 @@ namespace Horo::XR {
     /** @copydoc XRProjectSettings::WorldCanvasMinimumSpanPixels */
     std::uint32_t XRProjectSettings::WorldCanvasMinimumSpanPixels() const noexcept {
         return worldCanvasMinimumSpanPixels_;
+    }
+
+    /** @copydoc XRProjectSettings::StageBoundaryWarningMeters */
+    float XRProjectSettings::StageBoundaryWarningMeters() const noexcept {
+        return stageBoundaryWarningMeters_;
     }
 
     /** @copydoc XRProjectSettings::AllowsEyeGazePreview */
@@ -240,6 +248,12 @@ namespace Horo::XR {
                 return Result<XRProjectSettings>::Failure(Failure(source, "xr.preview.spatial_planes", XRErrors::OperationInvalid,
                                                                   "Register spatial preview policy as a boolean."));
             settings.planeCapturePreview_ = *allowCapture;
+        }
+        if (source.FindResolved(SettingKey{std::string(StageWarningKey)})) {
+            const auto margin = Integer(source, StageWarningKey, 0, std::numeric_limits<std::uint16_t>::max());
+            if (margin.HasError())
+                return Result<XRProjectSettings>::Failure(margin.ErrorValue());
+            settings.stageBoundaryWarningMeters_ = static_cast<float>(margin.Value()) / 100.0F;
         }
         const auto runtime = Integer(source, "xr.runtime_selection", 0, static_cast<std::int64_t>(XRRuntimeSelectionPolicy::Count) - 1);
         if (runtime.HasError())

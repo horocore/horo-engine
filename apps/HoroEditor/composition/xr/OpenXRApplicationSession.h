@@ -3,6 +3,7 @@
  * @brief Non-installed application owner of the verified selected runtime and same-device startup transaction.
  */
 #include "Horo/XR/XRInputProjection.h"
+#include "Horo/XR/XRInteraction.h"
 #include "Horo/XR/XRProjectSettings.h"
 #include "OpenXRApplicationBindings.h"
 #include "OpenXRHandTracking.h"
@@ -357,6 +358,8 @@ namespace Horo::Application::Internal {
          * @return Current observed availability or absence after revocation.
          */
         [[nodiscard]] std::optional<XR::XRCapabilityState> ReadHandAvailability(const XR::XRTrackingSnapshot &snapshot) const noexcept;
+        /** @brief Returns the advisory classification for the exact committed tracking cutoff. */
+        [[nodiscard]] std::optional<XR::XRStageBoundaryProximity> ReadStageBoundary(const XR::XRTrackingSnapshot &snapshot) const noexcept;
         /** @brief Borrows the exact resolved preparation until input retirement; no native identity or sampling authority. */
         [[nodiscard]] const XR::XRResolvedActionBindings *PreparedBindings() const noexcept;
         /** @brief Returns the exact native-created calibrated World identity for the bound candidate.
@@ -545,6 +548,11 @@ namespace Horo::Application::Internal {
         /** @brief Reads the last derived hand record only while the caller's exact tracking snapshot is current. */
         [[nodiscard]] const HandCutoffObservation *CurrentHandCutoff(const XR::XRTrackingSnapshot &snapshot) const noexcept;
 
+        struct StageBoundaryObservation final {
+            XR::XRInteractionCutoff cutoff;
+            XR::XRStageBoundaryProximity proximity;
+        };
+
         struct InputPreparation final {
             std::unique_ptr<XR::OpenXRInternal::OpenXRActionBindings> native;
             std::optional<XR::XRInputProjection> projection;
@@ -558,6 +566,7 @@ namespace Horo::Application::Internal {
             bool gazeAllowed{};
             XR::XRCapabilityState handAvailability{XR::XRCapabilityState::Unsupported};
             XR::XRCapabilityState stageAvailability{XR::XRCapabilityState::Unsupported};
+            std::optional<StageBoundaryObservation> stageBoundary;
             std::array<XR::XRActiveInteractionProfile, 2> profiles{}; /**< Actual post-attachment preparation census. */
         };
 

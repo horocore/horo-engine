@@ -2290,6 +2290,42 @@ namespace Horo::Tests::OpenXRApplication {
         REQUIRE(RequireValue(fixture.ClosePlay()));
     }
 
+    TEST_CASE("Installed XR Play publishes redacted Stage advice for the exact focused cutoff",
+              "[xr][application][play][spaces][comfort]") {
+        using enum XR::XRProjectFeaturePolicy;
+        ApplicationFixture fixture{true, 6, Unrequested, Unrequested, Required};
+        fixture.script.census.spaces = 3;
+        fixture.script.actions.tracking.enabled = true;
+        fixture.script.actions.tracking.suggestedPoseBindings = 0;
+        fixture.script.actions.tracking.locatedPosition = {1.35F, 1.6F, 0.0F};
+        auto scene = PublishPlay(fixture);
+        CHECK_FALSE(fixture.play->ReadInspection().stageBoundary);
+        auto cutoff = std::make_unique<AppInputSample>(*fixture.play);
+        auto *observed = cutoff.get();
+        REQUIRE(fixture.scheduler->AddParticipant(std::move(cutoff)).HasValue());
+        RequireValue(fixture.scheduler->Startup());
+
+        const auto inspectCutoff = [&] {
+            RequireValue(fixture.scheduler->RunFrame());
+            REQUIRE(observed->result);
+            RequireValue(*observed->result);
+            return fixture.play->ReadInspection();
+        };
+        const auto near = inspectCutoff();
+        REQUIRE(near.status == Editor::EditorXrInspectionStatus::Current);
+        CHECK(near.stageBoundary == XR::XRStageBoundaryProximity::Near);
+        fixture.script.actions.tracking.locatedPosition.x = 2.0F;
+        const auto outside = inspectCutoff();
+        CHECK(outside.trackingRevision > near.trackingRevision);
+        CHECK(outside.stageBoundary == XR::XRStageBoundaryProximity::Outside);
+
+        fixture.script.events.Push(XR_SESSION_STATE_VISIBLE);
+        RequireValue(fixture.play->PollEvents());
+        CHECK_FALSE(fixture.play->ReadInspection().stageBoundary);
+        scene->Shutdown();
+        REQUIRE(RequireValue(fixture.ClosePlay()));
+    }
+
     TEST_CASE("Real installed Play recenter retires reference identities and replacement rereads Stage bounds",
               "[xr][application][play][spaces]") {
         using enum XR::XRProjectFeaturePolicy;

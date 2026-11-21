@@ -6,6 +6,7 @@
 
 #include "Horo/Foundation/Time.h"
 #include "Horo/XR/XRActionBindings.h"
+#include "Horo/XR/XRInteraction.h"
 #include "OpenXRNativeSession.h"
 
 namespace Horo::XR::OpenXRInternal {
@@ -71,11 +72,12 @@ namespace Horo::XR::OpenXRInternal {
     /** @brief Exact current origin and observed reference-space choice for private tracking preparation. */
     struct NativeTrackingSpaceRequest final {
         XRWorldOriginRevision origin;
-        XRSpaceKind base{XRSpaceKind::Local};          /**< Only observed Local or Stage; never an implicit World alias. */
-        std::optional<Math::Transform> worldFromBase;  /**< Explicit rigid mapping of native base coordinates into authored World.
-                                                        Its inverse creates a distinct native World reference space; absence grants none. */
-        bool alternateReferenceAvailable{};            /**< Observed support for the other Local/Stage reference. */
-        std::optional<XRActionSetId> consentedGazeSet; /**< Registered set selected only after capability and purpose consent. */
+        XRSpaceKind base{XRSpaceKind::Local};            /**< Only observed Local or Stage; never an implicit World alias. */
+        std::optional<Math::Transform> worldFromBase;    /**< Explicit rigid mapping of native base coordinates into authored World.
+                                                          Its inverse creates a distinct native World reference space; absence grants none. */
+        bool alternateReferenceAvailable{};              /**< Observed support for the other Local/Stage reference. */
+        std::optional<XRActionSetId> consentedGazeSet;   /**< Registered set selected only after capability and purpose consent. */
+        std::optional<float> stageBoundaryWarningMeters; /**< Bounded advisory sample requested only with admitted Stage. */
     };
 
     /** @brief Synchronously borrowed native creation request; dispatch and catalogs stay inside the host boundary. */
@@ -152,8 +154,14 @@ namespace Horo::XR::OpenXRInternal {
             return std::span{records_}.first(count_);
         }
 
+        /** @brief Copies only the advisory outcome, with no additional pose publication. */
+        [[nodiscard]] std::optional<XRStageBoundaryProximity> StageBoundary() const noexcept {
+            return stageBoundary_;
+        }
+
     private:
         friend class OpenXRActionBindings;
+        std::optional<XRStageBoundaryProximity> stageBoundary_;
         std::array<NativePoseObservation, 5> records_{};
         std::size_t count_{};
     };
@@ -600,6 +608,9 @@ namespace Horo::XR::OpenXRInternal {
             /** @brief Queries one action's activity then locates independently valid components, or publishes exact loss. */
             [[nodiscard]] Result<NativePoseObservation> LocateAction(const TrackingContext &context, const PoseAction &action,
                                                                      const LocationTarget &target, const XRTimeEvidence &time) const;
+            /** @brief Samples a redacted Stage advisory alongside the admitted World cutoff. */
+            [[nodiscard]] std::optional<XRStageBoundaryProximity> ObserveStageBoundary(const TrackingContext &context,
+                                                                                       const XRTimeEvidence &time) const;
             /** @brief Appends actual head evidence to the same fixed packet under the existing sampling operation.
              * @param context Borrowed current action owner. @param target Exact chosen native reference and identity.
              * @param time Validated simulation cutoff. @param samples Candidate packet, never a committed snapshot.
