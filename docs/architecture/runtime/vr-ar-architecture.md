@@ -1031,6 +1031,10 @@ or the signed-host invocation flag `--xr-enable-spatial-anchors`. An explicit
 Setup grant allows one anchor at the calibrated native World origin. The preview
 publishes localization status, samples at most once every 100 ms, and withdraws
 on interruption, origin replacement, or operator revocation.
+The project can separately offer protected storage through
+`xr.persistence.spatial_anchors`, which defaults to false. OpenXR discovery requests
+the storage extension and its live anchor dependency under that policy. Opening
+the store still requires a separate current operator grant.
 
 `HoroXRAnchorSaveIntegration` provides the separate optional local durability
 lane. The selected host binds one canonical Save participant per durable anchor

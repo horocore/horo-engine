@@ -207,6 +207,7 @@ namespace Horo::XR {
         add("xr.enabled", SettingValueType::Boolean, false);
         add("xr.preview.spatial_planes", SettingValueType::Boolean, false);
         add("xr.preview.spatial_anchors", SettingValueType::Boolean, false);
+        add("xr.persistence.spatial_anchors", SettingValueType::Boolean, false);
         add("xr.runtime_selection", SettingValueType::Integer, std::int64_t{0});
         add("xr.capability_profile", SettingValueType::Integer, std::int64_t{0});
         add("xr.limits.views", SettingValueType::Integer, std::int64_t{2});
@@ -310,20 +311,26 @@ namespace Horo::XR {
                 return Result<XRProjectSettings>::Failure(margin.ErrorValue());
             settings.stageBoundaryWarningMeters_ = static_cast<float>(margin.Value()) / 100.0F;
         }
-        const auto *planes = source.FindResolved(SettingKey{"xr.preview.spatial_planes"});
-        if (planes) {
-            const auto *allowCapture = std::get_if<bool>(&planes->value);
-            if (!allowCapture)
-                return Result<XRProjectSettings>::Failure(Failure(source, "xr.preview.spatial_planes", XRErrors::OperationInvalid,
-                                                                  "Register spatial preview policy as a boolean."));
-            settings.planeCapturePreview_ = *allowCapture;
-        }
-        if (const auto *anchors = source.FindResolved(SettingKey{"xr.preview.spatial_anchors"})) {
-            const auto *allowAnchors = std::get_if<bool>(&anchors->value);
-            if (!allowAnchors)
-                return Result<XRProjectSettings>::Failure(Failure(source, "xr.preview.spatial_anchors", XRErrors::OperationInvalid,
-                                                                  "Register spatial anchor preview policy as a boolean."));
-            settings.spatialAnchorPreview_ = *allowAnchors;
+
+        struct OptionalSetting final {
+            std::string_view key;
+            bool XRProjectSettings::*value;
+        };
+
+        constexpr std::array spatialSettings{
+            OptionalSetting{"xr.preview.spatial_planes", &XRProjectSettings::planeCapturePreview_},
+            OptionalSetting{"xr.preview.spatial_anchors", &XRProjectSettings::spatialAnchorPreview_},
+            OptionalSetting{"xr.persistence.spatial_anchors", &XRProjectSettings::spatialAnchorPersistence_},
+        };
+        for (const auto &option : spatialSettings) {
+            const auto *entry = source.FindResolved(SettingKey{std::string(option.key)});
+            if (!entry)
+                continue;
+            const auto *allowed = std::get_if<bool>(&entry->value);
+            if (!allowed)
+                return Result<XRProjectSettings>::Failure(
+                    Failure(source, option.key, XRErrors::OperationInvalid, "Register spatial policy as a boolean."));
+            settings.*option.value = *allowed;
         }
         const auto runtime = Integer(source, "xr.runtime_selection", 0, static_cast<std::int64_t>(XRRuntimeSelectionPolicy::Count) - 1);
         if (runtime.HasError())

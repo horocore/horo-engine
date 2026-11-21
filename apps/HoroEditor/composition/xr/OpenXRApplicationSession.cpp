@@ -77,13 +77,17 @@ namespace Horo::Application::Internal {
     namespace {
         /** @brief Prepares exactly the installed extension routes usable by this editor composition. */
         Result<void> PrepareNativeDiscovery(OpenXRNativeSession &native, const XRLoaderPreflightRequest &selection, bool handsRequested,
-                                            bool planePreview, const std::optional<NativeExtensionRequest> &passthrough,
-                                            bool optionalReprojection, bool lightEstimation, bool spatialAnchors) {
+                                            const XRProjectSettings &settings, const std::optional<NativeExtensionRequest> &passthrough,
+                                            bool optionalReprojection, bool lightEstimation) {
             const XRLoaderApiVersion compiled{XR_VERSION_MAJOR(XR_CURRENT_API_VERSION), XR_VERSION_MINOR(XR_CURRENT_API_VERSION),
                                               XR_VERSION_PATCH(XR_CURRENT_API_VERSION)};
             // The editor composition owns a time provider and color projection; its renderer has no native depth provider.
             constexpr std::array<std::string_view, 1> spatialDependencies{XR_EXT_FUTURE_EXTENSION_NAME};
             constexpr std::array<std::string_view, 2> planeDependencies{XR_EXT_FUTURE_EXTENSION_NAME, XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME};
+
+            constexpr std::array<std::string_view, 1> anchorDependencies{XR_MSFT_SPATIAL_ANCHOR_EXTENSION_NAME};
+            const bool planePreview = settings.AllowsPlaneCapturePreview();
+            const bool persistence = settings.AllowsSpatialAnchorPersistence();
 
             struct Selection final {
                 NativeExtensionRequest request;
@@ -95,7 +99,8 @@ namespace Horo::Application::Internal {
                 Selection{{XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME}, true},
                 Selection{{XR_EXT_HAND_TRACKING_EXTENSION_NAME}, handsRequested},
                 Selection{{XR_ANDROID_LIGHT_ESTIMATION_EXTENSION_NAME}, lightEstimation},
-                Selection{{XR_MSFT_SPATIAL_ANCHOR_EXTENSION_NAME}, spatialAnchors},
+                Selection{{XR_MSFT_SPATIAL_ANCHOR_EXTENSION_NAME}, settings.AllowsSpatialAnchorPreview() || persistence},
+                Selection{{.name = XR_MSFT_SPATIAL_ANCHOR_PERSISTENCE_EXTENSION_NAME, .dependencies = anchorDependencies}, persistence},
                 Selection{{XR_EXT_FUTURE_EXTENSION_NAME}, planePreview},
                 Selection{{.name = XR_EXT_SPATIAL_ENTITY_EXTENSION_NAME, .dependencies = spatialDependencies}, planePreview},
                 Selection{{.name = XR_EXT_SPATIAL_PLANE_TRACKING_EXTENSION_NAME, .dependencies = planeDependencies}, planePreview},
@@ -118,7 +123,6 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRApplicationSession::DiscoverRuntime */
     Result<void> OpenXRApplicationSession::DiscoverRuntime() {
         const bool hands = WantsHands();
-        const bool planes = settings_.AllowsPlaneCapturePreview();
         const bool optionalReprojection = std::ranges::any_of(settings_.Features(), [](const XRFeatureRequest &feature) {
             return feature.capability == XRCapability::SpaceWarp && feature.kind == XRFeatureRequirementKind::Optional;
         });
@@ -129,8 +133,8 @@ namespace Horo::Application::Internal {
         if (!native_ || native_.get() != owner)
             return Result<void>::Failure(MakeError(XRErrors::IdentityStale));
         const bool lightEstimation = policy_.lightPermission && policy_.lightPermission->SupportsLightEstimation();
-        if (auto prepared = PrepareNativeDiscovery(*native_, selection_, hands, planes, passthrough, optionalReprojection, lightEstimation,
-                                                   settings_.AllowsSpatialAnchorPreview());
+        if (auto prepared =
+                PrepareNativeDiscovery(*native_, selection_, hands, settings_, passthrough, optionalReprojection, lightEstimation);
             prepared.HasError())
             return prepared;
         auto actual = native_->DiscoverSystem(selection_.attempt);

@@ -84,7 +84,7 @@ namespace Horo::XR {
 
         TEST_CASE("XR settings defaults are inert and disabled", "[unit][xr][settings]") {
             const auto descriptors = XRProjectSettingDescriptors();
-            REQUIRE(descriptors.size() == 27);
+            REQUIRE(descriptors.size() == 28);
             for (const auto &descriptor : descriptors)
                 REQUIRE(descriptor.reloadPolicy == ReloadPolicy::ProjectReopen);
             const auto resolved = ResolveXRProjectSettings(Configuration());
@@ -231,7 +231,22 @@ namespace Horo::XR {
             const auto settings = ResolveXRProjectSettings(Configuration(request));
             REQUIRE(settings.HasValue());
             CHECK(settings.Value().AllowsSpatialAnchorPreview());
+            CHECK_FALSE(settings.Value().AllowsSpatialAnchorPersistence());
             CHECK_FALSE(settings.Value().AllowsPlaneCapturePreview());
+            CHECK(settings.Value().Features().empty());
+        }
+
+        TEST_CASE("XR anchor storage has separate opt-in project policy", "[unit][xr][settings]") {
+            ConfigurationResolutionRequest request;
+            const auto defaults = ResolveXRProjectSettings(Configuration(request));
+            REQUIRE(defaults.HasValue());
+            CHECK_FALSE(defaults.Value().AllowsSpatialAnchorPersistence());
+
+            Project(request, "xr.persistence.spatial_anchors", true);
+            const auto settings = ResolveXRProjectSettings(Configuration(request));
+            REQUIRE(settings.HasValue());
+            CHECK(settings.Value().AllowsSpatialAnchorPersistence());
+            CHECK_FALSE(settings.Value().AllowsSpatialAnchorPreview());
             CHECK(settings.Value().Features().empty());
         }
 

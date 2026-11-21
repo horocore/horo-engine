@@ -67,6 +67,11 @@ namespace Horo::XR {
             return spatialAnchorPreview_;
         }
 
+        /** @brief Reports whether the selected host may offer separate anchor storage consent. */
+        [[nodiscard]] bool AllowsSpatialAnchorPersistence() const noexcept {
+            return spatialAnchorPersistence_;
+        }
+
         /** @brief Returns version-one extra requests. @return Snapshot-owned span valid for this object's lifetime. */
         [[nodiscard]] std::span<const XRFeatureRequest> Features() const noexcept;
         /** @brief Returns safe configuration provenance. @return Retained immutable source snapshot. */
@@ -88,6 +93,7 @@ namespace Horo::XR {
         std::size_t featureCount_{};
         bool planeCapturePreview_{};
         bool spatialAnchorPreview_{};
+        bool spatialAnchorPersistence_{};
         bool eyeGazePreview_{};
     };
 
