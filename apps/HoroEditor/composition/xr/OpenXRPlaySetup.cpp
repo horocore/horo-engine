@@ -254,7 +254,8 @@ namespace Horo::Application::Internal {
         const auto found = std::ranges::find(devices, role, &XR::XRTrackedDeviceRecord::role);
         if (found == devices.end() || found->state != XR::XRTrackedDeviceState::Tracked)
             return std::nullopt;
-        return HapticTarget{session.session, found->id, snapshot->BindingRevision(), *player, role};
+        return HapticTarget{session.session, found->id, snapshot->BindingRevision(), scene_->scene, *player,
+                            input_.port->ReadPlayerAssignmentRevision(), role};
     }
 
     /** @copydoc OpenXRPlayHost::HasHapticRoute */
@@ -266,7 +267,8 @@ namespace Horo::Application::Internal {
     /** @copydoc Editor::IEditorXrHapticPreview::CanPreviewHaptic */
     bool OpenXRPlayHost::CanPreviewHaptic(Editor::EditorXrHapticHand hand) const noexcept {
         using enum Editor::EditorXrHapticPreviewState;
-        return CaptureHapticTarget(hand).has_value() &&
+        const auto target = CaptureHapticTarget(hand);
+        return target && target->assignment &&
                (!hapticPreview_ || (hapticPreview_->state != Queued && !hapticPreview_->mayNeedStop));
     }
 
@@ -288,6 +290,8 @@ namespace Horo::Application::Internal {
             return Reply::Failure(MakeError(XRErrors::OperationUnavailable));
         if (!HasCurrentAssignedInput())
             return Reply::Failure(MakeError(XRErrors::IdentityStale));
+        if (!target->assignment)
+            return Reply::Failure(MakeError(XRErrors::OperationUnavailable));
         if ((hapticPreview_ && (hapticPreview_->state == Queued || hapticPreview_->mayNeedStop)) ||
             nextHapticPreview_ == std::numeric_limits<std::uint64_t>::max())
             return Reply::Failure(MakeError(XRErrors::CapacityExceeded));
@@ -319,22 +323,32 @@ namespace Horo::Application::Internal {
             return;
         const auto now = std::chrono::steady_clock::now();
         const bool expired = now >= preview.until;
-        const auto target = CaptureHapticTarget(preview.intent.hand);
-        const bool revoked = preview.cancelRequested || target != preview.target || !HasCurrentAssignedInput();
-        if (expired || revoked) {
+        const auto revoked = [&] {
+            return preview.cancelRequested || CaptureHapticTarget(preview.intent.hand) != preview.target;
+        };
+        const bool lostOwner = revoked();
+        if (expired || lostOwner) {
             if (preview.mayNeedStop && sessions_.Snapshot().session == preview.target.session)
                 composition_.session.RequestHapticCancellation(preview.target.role);
             preview.mayNeedStop = false;
-            if (revoked || preview.state == Queued)
+            if (lostOwner || preview.state == Queued)
                 preview.state = Cancelled;
             return;
         }
         if (preview.state != Queued)
             return;
 
-        const Operation operation{*this};
-        const auto submitted = composition_.session.SubmitHapticPreview(preview.target.session, preview.target.role,
-                                                                        preview.intent.amplitude, preview.intent.duration);
+        const auto submitted = [&] {
+            const Operation operation{*this};
+            return composition_.session.SubmitHapticPreview(preview.target.session, preview.target.role,
+                                                            preview.intent.amplitude, preview.intent.duration);
+        }();
+        if (revoked()) {
+            if (sessions_.Snapshot().session == preview.target.session)
+                composition_.session.RequestHapticCancellation(preview.target.role);
+            preview.state = Cancelled;
+            return;
+        }
         if (submitted.HasError()) {
             const auto &error = submitted.ErrorValue();
             const auto &unsupported = XR::XRErrors::OperationUnsupported;
@@ -347,11 +361,6 @@ namespace Horo::Application::Internal {
         preview.mayNeedStop = true;
         preview.until = std::chrono::steady_clock::now() + std::chrono::nanoseconds{preview.intent.duration.ToNanoseconds()};
         preview.state = Submitted;
-        if (preview.cancelRequested || pendingRevoke_) {
-            composition_.session.RequestHapticCancellation(preview.target.role);
-            preview.mayNeedStop = false;
-            preview.state = Cancelled;
-        }
     }
 
     /** @copydoc OpenXRPlayHost::ReadEyeGaze */

@@ -1717,6 +1717,27 @@ namespace Horo::Tests::OpenXRApplication {
             CHECK(preview.ReadHapticPreview(request) == Cancelled);
             CHECK(native.applies == 0);
         }
+        SECTION("a modal revokes the queued owner and blocks new previews") {
+            const auto modal = fixture.router.PushContext(Input::InputContextId{"haptic-modal"}, Input::InputContextKind::ModalRoot);
+            CHECK_FALSE(preview.CanPreviewHaptic(Left));
+            requireDenial(valid, XR::XRErrors::OperationUnavailable);
+            fixture.play->PumpHapticPreview();
+            CHECK(preview.ReadHapticPreview(request) == Cancelled);
+            CHECK(native.applies == 0);
+        }
+        SECTION("a modal opened by the native callback retires the submitted vibration") {
+            std::optional<Input::InputContextToken> modal;
+            native.onApply = [&] {
+                modal.emplace(fixture.router.PushContext(Input::InputContextId{"haptic-callback-modal"},
+                                                         Input::InputContextKind::ModalRoot));
+            };
+            fixture.play->PumpHapticPreview();
+            native.onApply = {};
+            CHECK(preview.ReadHapticPreview(request) == Cancelled);
+            CHECK(native.applies == 1);
+            RequireValue(fixture.play->PollEvents());
+            CHECK(native.stops == 1);
+        }
         SECTION("runtime refusal reports unsupported without emulation") {
             native.boundCount = 0;
             fixture.play->PumpHapticPreview();

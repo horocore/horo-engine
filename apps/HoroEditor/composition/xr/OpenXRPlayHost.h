@@ -586,7 +586,9 @@ namespace Horo::Application::Internal {
             XR::XRSessionId session;
             XR::XRDeviceId device;
             std::uint64_t bindings;
+            Runtime::SceneRuntimeId scene;
             Input::PlayerId player;
+            std::optional<std::uint64_t> assignment;
             XR::XRTrackedDeviceRole role;
             bool operator==(const HapticTarget &) const = default;
         };

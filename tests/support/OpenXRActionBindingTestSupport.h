@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <bit>
 #include <format>
+#include <functional>
 #include <limits>
 #include <new>
 #include <stdexcept>
@@ -46,6 +47,7 @@ namespace Horo::Tests::OpenXRAction {
             XrHapticVibration vibration{};
             XrResult applyResult{XR_SUCCESS};
             OpenXRActionBindings *revokeOnApply{};
+            std::function<void()> onApply;
             XrResult stopResult{XR_SUCCESS};
             XrResult boundResult{XR_SUCCESS};
             std::uint32_t boundCount{};
@@ -235,6 +237,8 @@ namespace Horo::Tests::OpenXRAction {
             (void)Script::Record("apply-vibration");
             if (auto *owner = active->haptic.revokeOnApply)
                 owner->RequestHapticCancellation();
+            if (active->haptic.onApply)
+                active->haptic.onApply();
             return active->haptic.applyResult;
         }
 
