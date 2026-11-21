@@ -2284,7 +2284,7 @@ if(HORO_BUILD_XR_OPENXR)
         unit/runtime/xr/OpenXRSwapchainTests.cpp unit/runtime/xr/OpenXRFrameCompositorTests.cpp)
     target_include_directories(HoroXROpenXRTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries(HoroXROpenXRTests PRIVATE HoroEngine::XROpenXR HoroXROpenXRHostInterface
-        HoroOpenXRApplicationClock Vulkan::Headers)
+        HoroXROpenXRAnchorSaveHost HoroOpenXRApplicationClock Vulkan::Headers)
     target_compile_definitions(HoroXROpenXRTests PRIVATE XR_USE_GRAPHICS_API_VULKAN)
     horo_register_catch_test(HoroXROpenXRTests LABELS "unit;xr;headless;native;lifecycle")
 

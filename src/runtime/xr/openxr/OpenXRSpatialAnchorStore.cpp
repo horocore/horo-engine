@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <bit>
+#include <limits>
 
 namespace Horo::XR::OpenXRInternal {
     namespace {
@@ -79,6 +80,8 @@ namespace Horo::XR::OpenXRInternal {
         const StoreCall call{anchorCall_};
         if (anchorStore_.connection != XR_NULL_HANDLE)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
+        if (anchorStoreGeneration_ == std::numeric_limits<std::uint64_t>::max())
+            return Result<void>::Failure(MakeError(XRErrors::CapacityExceeded));
         if (consent.IsCancellationRequested())
             return Result<void>::Failure(MakeError(XRErrors::PermissionDenied));
         const auto publication = BorrowAnchorPublication(scope, world);
@@ -126,6 +129,7 @@ namespace Horo::XR::OpenXRInternal {
             return current.HasError() ? current : Result<void>::Failure(StoreFailure(status));
         }
         anchorStore_.admitted = true;
+        ++anchorStoreGeneration_;
         return Result<void>::Success();
     }
 
@@ -144,6 +148,15 @@ namespace Horo::XR::OpenXRInternal {
         if (anchorStore_.consent.IsCancellationRequested())
             return Outcome::Failure(MakeError(XRErrors::PermissionDenied));
         return publication;
+    }
+
+    Result<std::uint64_t> OpenXRNativeSession::CheckSpatialAnchorStore(const XRAnchorScope &scope, XrSpace world) {
+        using Outcome = Result<std::uint64_t>;
+        if (controlThread_ != std::this_thread::get_id() || retirementCall_ || anchorCall_)
+            return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
+        const StoreCall call{anchorCall_};
+        const auto current = BorrowAnchorStore(scope, world);
+        return current.HasError() ? Outcome::Failure(current.ErrorValue()) : Outcome::Success(anchorStoreGeneration_);
     }
 
     Result<std::size_t> OpenXRNativeSession::SpatialAnchorStore::Read(std::span<XrSpatialAnchorPersistenceNameMSFT> names) const {

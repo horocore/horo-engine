@@ -2673,6 +2673,11 @@ if(HORO_BUILD_XR_OPENXR)
     add_library(HoroEngine::XROpenXR ALIAS HoroXROpenXR)
     target_link_libraries(HoroXROpenXR PRIVATE HoroXROpenXRHostInterface)
     target_compile_features(HoroXROpenXR PRIVATE cxx_std_20)
+
+    add_library(HoroXROpenXRAnchorSaveHost STATIC runtime/xr/openxr/OpenXRProtectedAnchorStore.cpp)
+    target_link_libraries(HoroXROpenXRAnchorSaveHost PUBLIC HoroXROpenXRHostInterface HoroEngine::XRAnchorSaveIntegration
+        PRIVATE HoroXROpenXR)
+    target_compile_features(HoroXROpenXRAnchorSaveHost PRIVATE cxx_std_20)
 endif()
 
 add_library(HoroTerrainApi STATIC

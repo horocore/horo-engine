@@ -1,3 +1,5 @@
+#include "Horo/Runtime/Save/SaveCaptureSnapshot.h"
+#include "OpenXRProtectedAnchorStore.h"
 #include "support/OpenXRNativeTestSupport.h"
 
 #include <algorithm>
@@ -6,6 +8,13 @@
 
 namespace Horo::Tests::OpenXR {
     namespace {
+        template <typename T> T AnchorValue(Result<T> result) {
+            if (result.HasError())
+                UNSCOPED_INFO(result.ErrorValue().message);
+            REQUIRE(result.HasValue());
+            return std::move(result).Value();
+        }
+
         struct AnchorResources final : IXRSessionResources {
             Result<void> Prepare(XRSessionPreparation, const XRSessionId &, const XRFeaturePlan &) override {
                 return Result<void>::Success();
@@ -323,6 +332,109 @@ namespace Horo::Tests::OpenXR {
             CHECK_FALSE(storage.entry);
             REQUIRE(fixture.owner.Close().HasValue());
         }
+    }
+
+    TEST_CASE("Canonical Save round trips an opaque reference backed by the native OpenXR store", "[unit][xr][native][anchors][save]") {
+        using namespace Runtime;
+        Fixture fixture;
+        AnchorStoreScript storage;
+        AnchorResources resources;
+        const auto lifecycle = std::make_shared<XRSessionLifecycle>(resources);
+        const auto active = AnchorValue(
+            lifecycle->Activate(fixture.capabilities, fixture.capabilities.System(), fixture.capabilities.Revision(), fixture.plan));
+        for (const auto event : {XRSessionEvent::Started, XRSessionEvent::BecameVisible, XRSessionEvent::BecameFocused})
+            REQUIRE(lifecycle->ApplyEvent(active, event).HasValue());
+
+        constexpr std::array<std::string_view, 2> advertised{XR_MSFT_SPATIAL_ANCHOR_EXTENSION_NAME,
+                                                             XR_MSFT_SPATIAL_ANCHOR_PERSISTENCE_EXTENSION_NAME};
+        fixture.script.extraExtensions = advertised;
+        fixture.script.extensionCount = 3;
+        fixture.script.resolveExtra = &AnchorStoreScript::Resolve;
+        const std::array dependencies{advertised.front()};
+        const std::array extensions{NativeExtensionRequest{advertised.front()},
+                                    NativeExtensionRequest{.name = advertised.back(), .dependencies = dependencies}};
+        auto request = fixture.Request();
+        request.candidate = active;
+        request.extensions = extensions;
+        const auto owner = std::make_shared<OpenXRNativeSession>(fixture.library, fixture.graphics, fixture.fence);
+        REQUIRE(owner->Create(request).HasValue());
+        const XRAnchorScope scope{.space = {.id = {active, {0, 1}},
+                                            .kind = XRSpaceKind::World,
+                                            .worldOriginRevision = IdentityValue<XRWorldOriginRevision>(1)},
+                                  .provider = IdentityValue<XRAnchorProviderGeneration>(1),
+                                  .grant = IdentityValue<XRAnchorGrant>(1)};
+        const auto world = NativeHandle<XrSpace>(11);
+        const auto publication = std::make_shared<XRSpatialAnchors>(lifecycle);
+        REQUIRE(owner->StartSpatialAnchors(scope, world, {1, Duration::FromNanoseconds(30)}, publication).HasValue());
+        const auto anchor = AnchorValue(owner->CreateSpatialAnchor(scope, world, {}, AnchorValue(XRRuntimeTime::Create(10))));
+        const auto now = AnchorValue(XRRuntimeTime::Create(20));
+        REQUIRE(owner->SampleSpatialAnchor(scope, world, anchor, now).HasValue());
+        const XRAnchorStoreScope storeScope{OpenXRProtectedAnchorStore::Provider(), AnchorValue(XRAnchorStorePartition::FromBytes({2})), 1,
+                                            7};
+        const auto reference = AnchorValue(XRProtectedAnchorReference::FromBytes({3}));
+        const auto clock = +[]() noexcept -> std::uint64_t {
+            return 60;
+        };
+        CancellationSource consent;
+        auto store = AnchorValue(OpenXRProtectedAnchorStore::Open(owner, scope, world, storeScope, consent.Token(), clock));
+        REQUIRE(store->Record(anchor, now, {reference, 100}).HasValue());
+        auto foreign = storeScope;
+        foreign.partition = AnchorValue(XRAnchorStorePartition::FromBytes({9}));
+        RequireFailureIdentity(store->Resolve(foreign, reference), XRErrors::PermissionDenied);
+
+        const auto participant = AnchorValue(SaveParticipantId::Parse("horo.xr.anchor"));
+        const auto record = AnchorValue(SaveRecordId::FromBytes({4}));
+        auto source = AnchorValue(XRAnchorPersistence::Bind(participant, record, publication, scope, storeScope, store));
+        REQUIRE(source->RecordLocalized(anchor, now).HasValue());
+        CanonicalStateParticipantRegistry captureBindings;
+        REQUIRE(captureBindings.Register(source->Descriptor(), source).HasValue());
+        const auto captureRegistry = AnchorValue(captureBindings.Snapshot());
+        const RuntimeSaveCaptureProvenance provenance{AnchorValue(CapturedStateId::FromBytes({5})),
+                                                      {10},
+                                                      11,
+                                                      12,
+                                                      captureRegistry.Generation()};
+        auto capture = AnchorValue(RuntimeSaveCaptureBuilder::Create(provenance, captureRegistry, {}));
+        REQUIRE(capture.CaptureParticipants().HasValue());
+        const auto saved = AnchorValue(capture.Seal());
+        REQUIRE(saved.Records().size() == 1);
+        const auto bytes = saved.Records().front().Segment(0);
+        REQUIRE(bytes.size() == 72);
+        REQUIRE(storage.entry);
+        const std::string_view nativeName{storage.entry->name};
+        CHECK(nativeName.starts_with("horo-a1-"));
+        constexpr std::string_view nativePrefix = "horo-a1-";
+        CHECK(std::ranges::search(bytes, std::as_bytes(std::span{nativePrefix})).empty());
+
+        REQUIRE(owner->RetireSpatialAnchor(scope, world, anchor).HasValue());
+        REQUIRE(owner->CloseSpatialAnchorStore(scope).HasValue());
+        auto reopened = AnchorValue(OpenXRProtectedAnchorStore::Open(owner, scope, world, storeScope, consent.Token(), clock));
+        RequireFailureIdentity(store->Admit(storeScope), XRErrors::IdentityStale);
+        auto target = AnchorValue(XRAnchorPersistence::Bind(participant, record, publication, scope, storeScope, reopened));
+        CanonicalStateParticipantRegistry restoreBindings;
+        REQUIRE(restoreBindings.Register(target->Descriptor(), target).HasValue());
+        const auto restoreRegistry = AnchorValue(restoreBindings.Snapshot());
+        auto staged = AnchorValue(target->StageRestore(bytes));
+        std::vector<std::unique_ptr<IStagedRestoreParticipant>> candidates;
+        candidates.push_back(std::move(staged.participant));
+        auto operation =
+            AnchorValue(CreateSaveOperation({.operation = 121, .kind = SaveOperationKind::Load, .maximumCompletionCallbacks = 4}));
+        auto tx = AnchorValue(StagedRestoreTransaction::Create({121, restoreRegistry.Generation(), 19, 23, 1}, std::move(operation),
+                                                               restoreRegistry, std::move(candidates)));
+        REQUIRE(tx.Prepare().HasValue());
+        CHECK(std::ranges::count(fixture.script.calls, "anchor-store-restore") == 0);
+        CHECK_FALSE(AnchorValue(reopened->Relocalize(*target, now)));
+        REQUIRE(tx.Activate({restoreRegistry.Generation(), 19, 23}, *staged.publication).HasValue());
+        const auto durable = AnchorValue(target->Read());
+        CHECK(durable.status == XRDurableAnchorStatus::Unlocalized);
+        CHECK(durable.reference == reference);
+        const auto restored = AnchorValue(reopened->Relocalize(*target, now));
+        REQUIRE(restored);
+        CHECK(*restored != anchor);
+        const auto observation = AnchorValue(publication->Read(scope, *restored, now));
+        CHECK(observation.Observation().state == XRAnchorLocalization::Locating);
+        CHECK_FALSE(observation.Observation().pose);
+        REQUIRE(owner->Close().HasValue());
     }
 
     TEST_CASE("OpenXR native transaction publishes only complete ownership and retires in reverse order", "[unit][xr][native]") {

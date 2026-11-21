@@ -1055,6 +1055,11 @@ capacity. A revoked write is removed before delivery, with cleanup debt retained
 for retry. Native restore creates a fresh Locating identity and publishes a pose
 only after a later successful tracking sample.
 
+The protected OpenXR Save adapter namespaces provider names by partition and
+access revision. It resolves expiry metadata on the cold lane and passes only
+the opaque lookup key to canonical Save. A replacement native store connection
+invalidates the earlier adapter, even within the same live anchor scope.
+
 Plane/mesh snapshots
 are bounded observed evidence and never mutate authored Scene, Physics or Navigation
 without an explicit destination-owned adapter and transaction. The portable plane publication

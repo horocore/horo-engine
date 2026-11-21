@@ -241,6 +241,8 @@ if(HORO_BUILD_XR_OPENXR)
         horo_allow_target_dependencies(TARGET HoroXRMetaQuestInternal DEPENDENCIES HoroXROpenXRHostInterface)
     endif()
     horo_allow_target_dependencies(TARGET HoroXROpenXR DEPENDENCIES HoroXROpenXRHostInterface HoroXRMetaQuestInternal)
+    horo_allow_target_dependencies(TARGET HoroXROpenXRAnchorSaveHost
+        DEPENDENCIES HoroXROpenXR HoroXROpenXRHostInterface HoroXRAnchorSaveIntegration)
     if (HORO_BUILD_RENDER_VULKAN)
         horo_allow_target_dependencies(TARGET HoroXROpenXRVulkanHostInterface
             DEPENDENCIES HoroXROpenXRHostInterface HoroRenderVulkanExternalImagesInterface HoroRenderVulkanHostInterface)
