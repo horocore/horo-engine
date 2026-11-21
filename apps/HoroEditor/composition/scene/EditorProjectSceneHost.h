@@ -9,12 +9,12 @@
 #include "EditorPlaySaveHost.h"
 #include "EditorPlaySceneHost.h"
 #include "EditorPlayXrHost.h"
+#include "EnvironmentQueryPreviewPhysics.h"
 #include "Horo/AI/AISceneActivation.h"
 #include "Horo/Prefab/PrefabMetrics.h"
 #include "MountedWorldHost.h"
 #include "SceneAnimationHostSelection.h"
 #include "ScenePhysicsHost.h"
-#include "EnvironmentQueryPreviewPhysics.h"
 
 #include <functional>
 #include <optional>
