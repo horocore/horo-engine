@@ -2,6 +2,7 @@
  * @brief Actual Game panel CPU image selection; no native acquisition or renderer readiness is fabricated.
  */
 #include "../../helpers/editor_ui/HeadlessEditorGuiFixture.h"
+#include "Horo/AI/AISceneActivation.h"
 #include "editor/renderer/EditorRendererErrors.h"
 #include "editor/screens/workspace/panels/game/GamePanel.h"
 #include "editor/screens/workspace/panels/input_mapping/InputMappingPanel.h"
@@ -189,5 +190,61 @@ namespace Horo::Editor::Tests {
         CHECK(paused.command == EditorWorkspaceViewCommand::ChangeActivePanel);
         CHECK(paused.targetIndex == static_cast<int>(placement));
         CHECK(paused.stringPayload == panelId);
+    }
+
+    TEST_CASE("Game panel opens read-only AI inspection and clears it when the selected agent expires", "[unit][editor][gui][ai]") {
+        EditorGuiContextFixture gui;
+        const auto *locale = GENERATE("en-US", "tr-TR");
+        REQUIRE(gui.localization.LoadCatalogFile(std::filesystem::path{HORO_PROJECT_SOURCE_DIR} / "assets/localization/editor" /
+                                                 (std::string{locale} + ".json")));
+        REQUIRE(gui.localization.Prepare(LocaleTag{locale}));
+        REQUIRE(gui.localization.ActivatePrepared());
+        const auto &label = GamePanel::kTextScope.Text(gui.localization, "ai_inspection_title");
+        REQUIRE(label == (std::string_view{locale} == "en-US" ? "AI agent inspector" : "AI ajan denetleyicisi"));
+
+        GamePanel panel;
+        EditorWorkspaceViewModel model;
+        model.playState = EditorPlayState::Playing;
+        const AI::AgentHandle handle{AI::AiRuntimeIncarnation::Create(7).Value(), {0, 1}};
+        const auto key = AI::BlackboardKeyId::Create(1).Value();
+        for (const std::uint64_t tick : {1, 5}) {
+            auto snapshot = std::make_shared<AI::AiAgentInspectionSnapshot>();
+            snapshot->agent = handle;
+            snapshot->decisionTick = tick;
+            snapshot->blackboardRevision = tick;
+            snapshot->keys.push_back({key,
+                                      AI::BlackboardValueKind::SignedInteger,
+                                      AI::BlackboardValueCardinality::Scalar,
+                                      AI::AiInspectionValueStatus::Redacted,
+                                      {}});
+            model.playAgentInspection.push_back({{}, handle, tick, std::move(snapshot)});
+        }
+        const auto draw = [&] {
+            EditorWorkspaceViewCommandData command;
+            gui.imgui.BeginFrame();
+            ImGui::SetNextWindowSize({190, 300});
+            ImGui::Begin("Game AI", nullptr, ImGuiWindowFlags_NoDecoration | ImGuiWindowFlags_NoSavedSettings);
+            panel.DrawPanel({}, ImGui::GetContentRegionAvail(), model, command, gui.context);
+            ImGui::End();
+            gui.imgui.EndFrame();
+            return command.command;
+        };
+        const auto find = [](const std::string_view suffix) {
+            for (auto *window : ImGui::GetCurrentContext()->Windows)
+                if (window->Active && window->ParentWindow && std::string_view{window->Name}.find(suffix) != std::string_view::npos)
+                    return window;
+            return static_cast<ImGuiWindow *>(nullptr);
+        };
+        CHECK(draw() == EditorWorkspaceViewCommand::None);
+        const auto content = find("##GameContent");
+        REQUIRE(content);
+        CHECK_FALSE(find("##AgentInspection"));
+        ImGui::FocusWindow(content);
+        ImGui::ActivateItemByID(content->GetID(label.c_str()));
+        CHECK(draw() == EditorWorkspaceViewCommand::None);
+        REQUIRE(find("##AgentInspection"));
+        model.playAgentInspection.clear();
+        CHECK(draw() == EditorWorkspaceViewCommand::None);
+        CHECK_FALSE(find("##AgentInspection"));
     }
 }  // namespace Horo::Editor::Tests

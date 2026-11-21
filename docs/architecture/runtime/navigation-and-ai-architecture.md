@@ -3459,7 +3459,11 @@ snapshot. A fresh capture refuses a retired agent or a foreign Scene.
 Editor Play samples the selected live entity only on completed Decision ticks.
 It retains up to eight snapshots and samples at most once every four fixed ticks.
 Pausing does not add duplicate samples, and a changed or stale selection clears
-the previous history. The Play host uses the default redacted Blackboard view.
+the previous history. In the Game panel, AI agent inspector shows the selected
+agent's task, failures, stimulus ages, and typed Blackboard rows. Rows can be
+filtered by key identity or type. Comparing with a retained tick highlights
+changed disclosed values from the same Blackboard generation. The Play host
+uses the default redacted Blackboard view.
 
 ### Scene decision scheduling tiers
 

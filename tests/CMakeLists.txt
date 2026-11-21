@@ -4226,6 +4226,7 @@ if (HORO_BUILD_EDITOR_GUI)
             HoroEngine::RuntimeScene
             HoroEngine::NetworkDebuggerApplication
             HoroEditorControlMetadataInternal
+            HoroEngine::AISceneIntegration
             HoroThirdParty::ImGui
     )
     add_executable(HoroViewportPanelRenderTests

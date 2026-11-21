@@ -953,6 +953,7 @@ namespace Horo::Editor {
         bool simulatorPreviewAvailable{}; /**< Actual current consumed simulator view; false forbids stale texture display. */
         std::string playError;
         std::optional<EditorPlayDecisionProblem> playDecisionProblem;
+        std::vector<EditorPlayAgentInspection> playAgentInspection;
         bool playDecisionObjectAvailable{};
         float fps = 0.0F;
 

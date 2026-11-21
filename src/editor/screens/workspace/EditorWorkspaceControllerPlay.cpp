@@ -257,6 +257,8 @@ namespace Horo::Editor {
         const auto scene = m_playSession.SceneView();
         const auto selected = m_selection.Current().primary;
         m_playSession.RefreshAgentInspection(scene && selected ? scene->Find(Runtime::SceneObjectId{selected->value}) : std::nullopt);
+        const auto history = m_playSession.AgentInspectionHistory();
+        m_viewModel.playAgentInspection.assign(history.begin(), history.end());
     }
 
     /** @copydoc EditorWorkspaceController::ResolvePlayDecisionProblemObject */

@@ -140,6 +140,7 @@ namespace Horo::Editor {
         }
         DrawPausedInputMapping(viewModel, command, context);
         DrawDecisionProblem(viewModel, command, context);
+        DrawAgentInspection(viewModel, context);
         const auto origin = ImGui::GetCursorScreenPos();
         const float height = std::max(0.0F, ImGui::GetContentRegionAvail().y);
         RequestViewport(size.x, height);

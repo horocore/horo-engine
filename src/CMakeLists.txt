@@ -4377,6 +4377,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/panels/input_mapping/InputGyroscopeEditor.cpp
             editor/screens/workspace/panels/accessibility/AccessibilityContrastPanel.cpp
             editor/screens/workspace/panels/game/GamePanel.cpp
+            editor/screens/workspace/panels/game/GameAgentInspection.cpp
             editor/screens/workspace/panels/world_composition/WorldCompositionTab.cpp
             editor/screens/workspace/panels/viewport/ViewportPanel.cpp
             editor/screens/workspace/panels/viewport/WorldSourceViewportTool.cpp
