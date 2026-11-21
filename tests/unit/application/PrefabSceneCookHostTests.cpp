@@ -644,17 +644,33 @@ TEST_CASE("Release cook handoff pins the actual generation and rejects changed f
     fixture.AssertRetained(active.Value());
 }
 
-TEST_CASE("Release content cooking rejects an invalid project AI profile before publishing a generation",
+TEST_CASE("Release content cooking rejects invalid AI policy without replacing a valid generation",
           "[native][prefab-cook][host][release][ai]") {
     HostFixture fixture;
+    auto host = fixture.MakeHost();
+    std::optional<AssetCookGeneration> prior;
+    SECTION("first cook") {}
+    SECTION("replacement after a successful release cook") {
+        const auto release = PrepareHostRelease(fixture);
+        ReleaseTestFixtures::FixedReleaseFacts facts{release.facts};
+        const auto cooked = host.CookForRelease(*release.preflight.plan, facts, fixture.request, {});
+        REQUIRE(cooked.HasValue());
+        const auto baseline = ResolveCurrentCookGeneration(fixture.files, fixture.cooked.path);
+        REQUIRE(baseline.HasValue());
+        CHECK(cooked.Value().bytesDigest == baseline.Value().manifestDigest);
+        prior = baseline.Value();
+    }
+
     fixture.WriteProjectMetadata(R"({"schemaVersion":1,"scheduler":{"maximumAgents":4,"evaluationsPerTick":8}})");
     const auto release = PrepareHostRelease(fixture);
     ReleaseTestFixtures::FixedReleaseFacts current{release.facts};
-    auto host = fixture.MakeHost();
     const auto denied = host.CookForRelease(*release.preflight.plan, current, fixture.request, {});
     REQUIRE(denied.HasError());
     CHECK(denied.ErrorValue().code.Value() == AI::AIErrors::SchedulerPolicyInvalid.code.Value());
-    CHECK(ResolveCurrentCookGeneration(Horo::NativeDurableFileSystem{}, fixture.cooked.path).HasError());
+    if (prior)
+        fixture.AssertRetained(*prior);
+    else
+        CHECK(ResolveCurrentCookGeneration(fixture.files, fixture.cooked.path).HasError());
 }
 
 TEST_CASE("Release executor packages the concrete static prefab cook generation", "[native][prefab-cook][host][release]") {

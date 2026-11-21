@@ -2,6 +2,7 @@
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
 #include "Horo/Application/BlackboardUsageReview.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
+#include "Horo/Assets/AssetArchive.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Prefab/PrefabDocument.h"
 #include "Horo/Scene/SceneSource.h"
@@ -10,6 +11,8 @@
 #include <algorithm>
 #include <catch2/generators/catch_generators.hpp>
 #include <format>
+#include <fstream>
+#include <iterator>
 #include <optional>
 #include <ranges>
 
@@ -1072,6 +1075,56 @@ namespace {
         REQUIRE(reused.HasValue());
         CHECK(reused.Value().cacheHits == 2);
         CHECK(reused.Value().cookedAssets == 0);
+    }
+
+    TEST_CASE("Runtime Decision archives carry only admitted cooked graphs and survive a failed recook",
+              "[native][decision-cook][package]") {
+        Fixture fixture;
+        const auto editorMetadata = fixture.source.path / "assets/task.horo_bt.meta";
+        const auto layout = std::format(
+            R"({{"kind":"horo.decision.graph.layout","asset":"{}","version":1,"graph":2,"nodes":[[1,123.0,567.0]]}})",
+            fixture.child.ToString());
+        Files::WriteFile(editorMetadata, {reinterpret_cast<const std::uint8_t *>(layout.data()), layout.size()});
+        REQUIRE(fixture.Cook().HasValue());
+        const auto accepted = fixture.Current();
+        const AssetChunkDefinition base{.id = AssetChunkId::Parse("base").Value(),
+                                        .kind = AssetChunkKind::Base,
+                                        .assets = {fixture.root, fixture.child}};
+        NativeDurableFileSystem files;
+        const auto chunks = AssetChunkPlan::Create(std::span{&base, 1});
+        REQUIRE(chunks.HasValue());
+        const auto packed = BuildAssetArchive(files, chunks.Value(), accepted);
+        REQUIRE(packed.HasValue());
+        const auto player = AssetArchiveProvider::Open(packed.Value(), accepted.target);
+        REQUIRE(player.HasValue());
+        CHECK(player.Value().Members().size() == base.assets.size());
+        CHECK(std::ranges::any_of(player.Value().Members(), [&](const auto &member) {
+            return member.id == fixture.child && member.type.Value() == DecisionBehaviorTreeSourceType;
+        }));
+        const auto runtime = player.Value().Load(fixture.root, {});
+        REQUIRE(runtime.HasValue());
+        const auto envelope = DecodeCookedArtifact(runtime.Value());
+        REQUIRE(envelope.HasValue());
+        DecisionGraphAssetId sourceRoot;
+        CHECK(DecisionPlanCodec::DecodeSource(envelope.Value().payload, sourceRoot).HasError());
+        const auto admitted = DecisionPlanCodec::DecodeCooked(envelope.Value().payload, fixture.ai.Environment());
+        REQUIRE(admitted.HasValue());
+        REQUIRE(admitted.Value().plan);
+
+        fixture.WriteGraph("assets/root.horo_sm", CallingMachine(1, 999, DecisionPlanKind::BehaviorTree));
+        fixture.Capture();
+        REQUIRE(fixture.Cook().HasError());
+        CHECK(fixture.request.assets.pinnedInputs->VerifyUnchanged().HasValue());
+        CHECK(fixture.Current().manifestDigest == accepted.manifestDigest);
+        CHECK(fixture.Current().generationRoot == accepted.generationRoot);
+        CHECK(player.Value().Load(fixture.root, {}).Value() == runtime.Value());
+        std::ifstream editorFile(editorMetadata, std::ios::binary);
+        REQUIRE(editorFile.good());
+        const std::string retained{std::istreambuf_iterator<char>{editorFile}, std::istreambuf_iterator<char>{}};
+        CHECK(retained == layout);
+        auto instance = fixture.ai.Instance(admitted.Value().plan);
+        CHECK(fixture.ai.Step(*instance, 1) == AiTaskState::Running);
+        CHECK(fixture.ai.Step(*instance, 2) == AiTaskState::Succeeded);
     }
 
     TEST_CASE("Actual Utility sources cook and load through a mixed HSM closure without provider side effects",
