@@ -43,23 +43,19 @@ namespace Horo::Editor {
 
         /** @brief Gives each planner conflict its owning user-facing status. */
         const char *PatchConflictLabel(const Proposals::PlanConflictReason reason) {
-            using enum Proposals::PlanConflictReason;
-            switch (reason) {
-                case SourceStale:
-                    return "source_patch_stale";
-                case SourceMissing:
-                case SourceMoved:
-                case SourceUnavailable:
-                case Unobserved:
-                    return "patch_file_source_unavailable";
-                case SourceChangedOnDisk:
-                    return "patch_file_disk_changed";
-                case DestinationOccupied:
-                    return "patch_file_destination_occupied";
-                case OverlappingPaths:
-                    return "patch_file_overlap";
-            }
-            return "patch_file_source_unavailable";
+            constexpr auto unavailable = "patch_file_source_unavailable";
+            constexpr std::array keys{unavailable,
+                                      unavailable,
+                                      unavailable,
+                                      unavailable,
+                                      "source_patch_stale",
+                                      "patch_file_disk_changed",
+                                      "patch_file_destination_occupied",
+                                      "patch_file_overlap",
+                                      "patch_file_dirty_delete",
+                                      "patch_file_case_only_rename"};
+            const auto index = static_cast<std::size_t>(reason);
+            return index < keys.size() ? keys[index] : unavailable;
         }
 
         /** @brief Resolves a canonical review state through the editor catalog. */

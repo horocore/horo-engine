@@ -259,6 +259,52 @@ TEST_CASE("Workspace plans preserve exact text and use canonical operation order
     CHECK(std::filesystem::exists(workspace.project.directory / "src/removed.cpp"));
 }
 
+TEST_CASE("Structural review protects dirty deletions and reports portable rename aliases", "[editor][proposal][plan]") {
+    Workspace workspace;
+    const auto original = workspace.Open("src/code.cpp", "base");
+    const auto path = original.Identity().key.source;
+
+    SECTION("A current proposal still cannot accept deletion of authored unsaved text") {
+        const auto edited = workspace.documents.Edit(original.Identity().instance, {original.Revision(), 0, 4, "authored"});
+        REQUIRE(edited.HasValue());
+        const auto source = edited.Value();
+        const auto proposal = workspace.Build({DeleteFile{FileBase::Capture(source).Value()}});
+        const std::array observations{SourcePathObservation{path, source}};
+        const auto plan = PlanWorkspaceEdits(proposal, workspace.policy, observations);
+        REQUIRE(plan.HasValue());
+        REQUIRE(std::holds_alternative<PlanConflict>(plan.Value().entries.front()));
+        CHECK(std::get<PlanConflict>(plan.Value().entries.front()).reason == PlanConflictReason::DirtyDelete);
+        const WorkspaceEditPlan replacedPreview{proposal.Digest(), {FilePreview{source, {}}}};
+        ReviewDecisions decisions{proposal};
+        CHECK(decisions.Decide(replacedPreview, {0}, ReviewChoice::Accept).HasError());
+        CHECK(source.IsCurrent());
+        CHECK(source.Text() == "authored");
+        CHECK(source.DiskBase() == "base");
+    }
+
+    SECTION("Case-only spellings remain visible as rejected rename prerequisites") {
+        const auto destination = Path("src/Code.cpp");
+        const auto base = FileBase::Capture(original).Value();
+        const auto proposal = workspace.Build({RenameFile{base, destination, {}}});
+        const std::array observations{SourcePathObservation{path, original}};
+        const auto plan = PlanWorkspaceEdits(proposal, workspace.policy, observations);
+        REQUIRE(plan.HasValue());
+        REQUIRE(std::holds_alternative<PlanConflict>(plan.Value().entries.front()));
+        const auto &conflict = std::get<PlanConflict>(plan.Value().entries.front());
+        CHECK(conflict.reason == PlanConflictReason::CaseOnlyRename);
+        CHECK(conflict.path == destination);
+        const WorkspaceEditPlan replacedPreview{proposal.Digest(), {FilePreview{original, std::string{original.Text()}}}};
+        ReviewDecisions decisions{proposal};
+        CHECK(decisions.Decide(replacedPreview, {0}, ReviewChoice::Accept).HasError());
+        CHECK(ChangeSet::Capture(workspace.policy, {"proposal",
+                                                    1,
+                                                    {"provider", "model", "request"},
+                                                    {RenameFile{base, destination, {}}, CreateFile{destination, {}}}})
+                  .HasError());
+        CHECK(original.IsCurrent());
+    }
+}
+
 TEST_CASE("Workspace plans distinguish stale, missing, relocated and external sources", "[editor][proposal][plan]") {
     Workspace workspace;
     const auto before = workspace.Open("src/edit.cpp", "old\n");

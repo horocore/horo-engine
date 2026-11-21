@@ -203,6 +203,8 @@
     "workspace.local_agent.patch_file_delete": {"text": "Delete file"},
     "workspace.local_agent.patch_file_rename": {"text": "Rename file"},
     "workspace.local_agent.patch_file_bytes": {"text": "bytes"},
+    "workspace.local_agent.patch_file_dirty_delete": {"text": "Save or discard your unsaved edits before reviewing this deletion."},
+    "workspace.local_agent.patch_file_case_only_rename": {"text": "This rename changes only the letter case. It cannot be applied as a source review."},
     "workspace.local_agent.patch_file_ranges": {"text": "change ranges"},
     "workspace.local_agent.patch_file_pending": {"text": "Validated · Awaiting review"},
     "workspace.local_agent.patch_file_source_unavailable": {"text": "The original source is unavailable for review."},

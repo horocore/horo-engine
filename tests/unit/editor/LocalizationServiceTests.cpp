@@ -216,6 +216,8 @@ namespace {
             "workspace.local_agent.patch_file_pending",
             "workspace.local_agent.patch_file_source_unavailable",
             "workspace.local_agent.patch_file_disk_changed",
+            "workspace.local_agent.patch_file_dirty_delete",
+            "workspace.local_agent.patch_file_case_only_rename",
             "workspace.local_agent.patch_file_destination_occupied",
             "workspace.local_agent.patch_file_overlap",
             "workspace.local_agent.patch_file_rejected",

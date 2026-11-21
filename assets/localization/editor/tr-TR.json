@@ -203,6 +203,8 @@
     "workspace.local_agent.patch_file_delete": {"text": "Dosyayı sil"},
     "workspace.local_agent.patch_file_rename": {"text": "Dosyayı yeniden adlandır"},
     "workspace.local_agent.patch_file_bytes": {"text": "bayt"},
+    "workspace.local_agent.patch_file_dirty_delete": {"text": "Silmeyi incelemeden önce kaydedilmemiş düzenlemelerinizi kaydedin veya geri alın."},
+    "workspace.local_agent.patch_file_case_only_rename": {"text": "Bu yeniden adlandırma yalnızca harflerin büyük-küçük yazımını değiştiriyor. Kaynak incelemesinden uygulanamaz."},
     "workspace.local_agent.patch_file_ranges": {"text": "değişiklik aralığı"},
     "workspace.local_agent.patch_file_pending": {"text": "Doğrulandı · İnceleme bekliyor"},
     "workspace.local_agent.patch_file_source_unavailable": {"text": "Çakışma var. Özgün kaynağa erişilemiyor."},

@@ -777,6 +777,10 @@ digest for recovery. It carries no source bytes or mutation authority.
 The chat shows one change range at a time for each selected edit. Its
 controls use the original byte range and the canonical hunk index for the
 decision, even if the displayed file later becomes stale.
+Deleting a source with unsaved edits is a planning conflict, even when the
+proposal captures the current revision. The review also identifies a case-only
+rename as a portable path conflict. Both checks reject acceptance independently
+of the preview so a supplied preview cannot bypass them.
 
 The Local Model panel can explicitly replace the recovery checkpoint at
 `.horo/local/agent/source-review` with the admitted proposal and its current decisions. The

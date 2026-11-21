@@ -205,6 +205,8 @@ namespace Horo::Editor::Proposals {
             auto snapshot = std::get<SourceDocumentSnapshot>(std::move(source));
             if (const auto problem = SourceProblem(snapshot))
                 return Entry::Success(PlanConflict{path, *problem});
+            if (!operation.destination && snapshot.Dirty())
+                return Entry::Success(PlanConflict{path, PlanConflictReason::DirtyDelete});
             if (!budget.Charge(snapshot.Text().size(), budget.input) || !budget.Charge(snapshot.DiskBase().size(), budget.input))
                 return Entry::Failure(MakeError(Errors::Bounds));
             FilePreview preview{std::move(snapshot), {}, budget.sourceMatch};
@@ -234,6 +236,8 @@ namespace Horo::Editor::Proposals {
                     return overlap;
             }
             if (operation.destination && (!operation.base || *operation.destination != operation.base->path)) {
+                if (operation.base && PatchDetail::SamePortablePath(operation.base->path, *operation.destination))
+                    return PlanConflict{*operation.destination, PlanConflictReason::CaseOnlyRename};
                 if (auto overlap = Overlap(*operation.destination, paths))
                     return overlap;
                 return Destination(index, *operation.destination);

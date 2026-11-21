@@ -233,9 +233,12 @@ namespace Horo::Editor::Proposals {
 
             /** @brief Reserves an absent rename destination before validating optional original-base edits. */
             Result<void> AdmitValue(RenameFile &file) {
-                if (!ValidBase(file.base, limits_))
+                if (!ValidBase(file.base, limits_) || file.destination == file.base.path)
                     return Fail<void>(Errors::Invalid);
-                if (const auto destination = Reserve(file.destination); destination.HasError())
+                if (PatchDetail::SamePortablePath(file.base.path, file.destination)) {
+                    if (!policy_.Allows(file.destination))
+                        return Fail<void>(Errors::PolicyDenied);
+                } else if (const auto destination = Reserve(file.destination); destination.HasError())
                     return destination;
                 return Hunks(file.base, file.hunks, limits_, total_);
             }

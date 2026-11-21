@@ -373,6 +373,14 @@ namespace {
         CHECK(removal.Value().files.front().kind == EditorPatchFileKind::Delete);
         CHECK(SourceReviewOverlay::Capture(removal.Value().proposal, *removal.Value().plan, 0).HasValue());
         CHECK(owner.Snapshot(source.Identity().instance).Value().SharesStateWith(source));
+        const auto edited = owner.Edit(source.Identity().instance, {source.Revision(), 0, 3, "authored"});
+        REQUIRE(edited.HasValue());
+        const EditorLocalAgentPatchSource dirty{{edited.Value()}, "example/model:latest", 2};
+        const auto dirtyRemoval = PrepareEditorLocalPatchReview(remove, dirty, "workspace", 1);
+        REQUIRE(dirtyRemoval.HasValue());
+        CHECK(std::get<Proposals::PlanConflict>(dirtyRemoval.Value().plan->entries.front()).reason ==
+              Proposals::PlanConflictReason::DirtyDelete);
+        CHECK(edited.Value().IsCurrent());
     }
 
     TEST_CASE("Chat summarizes every admitted operation without retaining patch text", "[editor][agent][source]") {

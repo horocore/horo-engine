@@ -215,7 +215,9 @@ namespace Horo::Editor::Proposals {
         SourceStale,
         SourceChangedOnDisk,
         DestinationOccupied,
-        OverlappingPaths
+        OverlappingPaths,
+        DirtyDelete,
+        CaseOnlyRename
     };
 
     /** @brief Conflict reason and affected path for one operation in the proposal. */

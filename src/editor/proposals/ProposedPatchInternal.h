@@ -2,6 +2,8 @@
 
 #include "Horo/Editor/ProposedChangeSet.h"
 
+#include <algorithm>
+
 namespace Horo::Editor::Proposals::PatchDetail {
     /** @brief Folds ASCII for portable alias detection without altering canonical spellings. */
     inline char Lower(const char character) noexcept {
@@ -14,6 +16,11 @@ namespace Horo::Editor::Proposals::PatchDetail {
         for (auto &character : key)
             character = Lower(character);
         return key;
+    }
+
+    /** @brief Compares portable aliases without allocating collision keys. */
+    inline bool SamePortablePath(const SourceDocumentId &left, const SourceDocumentId &right) noexcept {
+        return std::ranges::equal(left.Value(), right.Value(), {}, Lower, Lower);
     }
 
     /** @brief Resolves an exact offered source with no fallback or ambiguous selection. */

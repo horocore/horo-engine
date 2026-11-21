@@ -1,4 +1,4 @@
-#include "Horo/Editor/ProposedChangeSet.h"
+#include "ProposedPatchInternal.h"
 
 #include <algorithm>
 #include <new>
@@ -65,6 +65,14 @@ namespace Horo::Editor::Proposals {
                 if constexpr (std::is_same_v<File, CreateFile>) {
                     return !preview.before.Revision() && preview.after == file.text;
                 } else {
+                    if constexpr (std::is_same_v<File, DeleteFile>) {
+                        if (preview.before.Dirty())
+                            return false;
+                    }
+                    if constexpr (std::is_same_v<File, RenameFile>) {
+                        if (PatchDetail::SamePortablePath(file.base.path, file.destination))
+                            return false;
+                    }
                     const bool expectsText = !std::is_same_v<File, DeleteFile>;
                     return preview.after.has_value() == expectsText && preview.ValidateSource(file.base, Hunks(file)).HasValue();
                 }
