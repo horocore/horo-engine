@@ -188,8 +188,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         if (!std::filesystem::equivalent(previewRoot, request.root, error) || error)
             return Captured::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
         if (request.scene.RuntimeId().value >= Editor::EditorPrefabStageNamespace)
-            return Captured::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot,
-                                               "Navigation preview requires an ordinary Editor authoring Scene."));
+            return Captured::Failure(
+                MakeError(Navigation::NavigationErrors::StaleSnapshot, "Navigation preview requires an ordinary Editor authoring Scene."));
         if (!request.scene.IsCurrent() || request.scene.DefinitionId() != request.definition.Id() ||
             request.scene.DefinitionRevision() != request.definition.Revision())
             return Captured::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
