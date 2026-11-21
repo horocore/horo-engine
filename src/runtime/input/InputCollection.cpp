@@ -235,6 +235,41 @@ namespace Horo::Input {
         return owner->router->impl_->assignmentRevision;
     }
 
+    /** @copydoc InputActionCollection::ReadCollectedAxis */
+    std::optional<ActionValue> InputActionCollection::ReadCollectedAxis(const ActionId &action) const noexcept {
+        return ReadCollectedValue(action, false);
+    }
+
+    std::optional<bool> InputActionCollection::ReadCollectedButton(const ActionId &action) const noexcept {
+        if (const auto value = ReadCollectedValue(action, true))
+            return value->x > 0.0F;
+        return std::nullopt;
+    }
+
+    std::optional<ActionValue> InputActionCollection::ReadCollectedValue(const ActionId &action, bool digital) const noexcept {
+        const auto owner = owner_.lock();
+        if (!owner || !player_ || !RoutingEligible())
+            return std::nullopt;
+        const auto actions = owner->router->Actions();
+        const auto descriptor = std::ranges::find(actions, action, &ActionDescriptor::id);
+        if (descriptor == actions.end() || (descriptor->valueType == ActionValueType::Digital) != digital)
+            return std::nullopt;
+
+        ActionValue value;
+        const auto index = static_cast<std::size_t>(descriptor - actions.begin());
+        for (const auto &entry : owner->entries) {
+            if (entry.generation == 0 || entry.action != index || !entry.current.active)
+                continue;
+            const auto &source = owner->sources[entry.source];
+            if (!source.retiring && source.context == context_ && source.player == player_ && source.configuration == configuration_ &&
+                owner->AssignmentCurrent(source.assignment)) {
+                value.x += entry.current.x;
+                value.y += entry.current.y;
+            }
+        }
+        return ActionValue{.x = std::clamp(value.x, -1.0F, 1.0F), .y = std::clamp(value.y, -1.0F, 1.0F)};
+    }
+
     /** @copydoc InputActionCollection::RegisterSource */
     Result<InputActionSourceToken> InputActionCollection::RegisterSource(const std::span<const ActionDescriptor> actions) const {
         const auto owner = owner_.lock();

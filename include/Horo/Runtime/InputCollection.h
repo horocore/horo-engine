@@ -104,7 +104,15 @@ namespace Horo::Input {
          * @return Current revision, or absence for unscoped, stale, blocked or foreign-thread ports. */
         [[nodiscard]] std::optional<std::uint64_t> ReadPlayerAssignmentRevision() const noexcept;
 
+        /** @brief Reads the committed analog value from collected sources for the exact assigned player and context.
+         * @return The analog components with empty transitions, or no value for unsupported actions, blocked routing or an unscoped port.
+         */
+        [[nodiscard]] std::optional<ActionValue> ReadCollectedAxis(const ActionId &action) const noexcept;
+        /** @brief Reads the held state of a committed digital action without consuming its transitions. */
+        [[nodiscard]] std::optional<bool> ReadCollectedButton(const ActionId &action) const noexcept;
+
     private:
+        [[nodiscard]] std::optional<ActionValue> ReadCollectedValue(const ActionId &action, bool digital) const noexcept;
         friend class InputRouter;
         std::weak_ptr<InputCollectionLifetime> owner_;
         std::uint64_t context_{};

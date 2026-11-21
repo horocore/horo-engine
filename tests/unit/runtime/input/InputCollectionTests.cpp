@@ -45,6 +45,56 @@ namespace Horo::Input {
         constexpr std::array pressed{CollectedActionValue{0, 1.0F, 0.0F, true}};
     }  // namespace
 
+    TEST_CASE("Input collected axis observes only committed values for the exact player without consuming edges",
+              "[unit][input][collection]") {
+        Fixture fixture;
+        fixture.action.id = ActionId{"play.xr.move"};
+        fixture.action.valueType = ActionValueType::Axis2D;
+        fixture.action.defaultBindings.clear();
+        REQUIRE(fixture.router.SetActionMap({fixture.action}).HasValue());
+        const auto player = fixture.router.ActionCollectionForPlayer(fixture.context, 2).Value();
+        const auto other = fixture.router.ActionCollectionForPlayer(fixture.context, 3).Value();
+        auto source = fixture.Source(player);
+        auto frame = fixture.Frame(player, 1);
+        const std::array movement{CollectedActionValue{0, 0.25F, -0.5F, true}};
+        REQUIRE(frame.Append(source, movement).HasValue());
+        CHECK_FALSE(player.ReadCollectedAxis(fixture.action.id));
+        REQUIRE(frame.Commit().HasValue());
+
+        const auto axis = player.ReadCollectedAxis(fixture.action.id);
+        REQUIRE(axis);
+        CHECK(axis->x == 0.25F);
+        CHECK(axis->y == -0.5F);
+        CHECK_FALSE(axis->pressed);
+        const auto otherAxis = other.ReadCollectedAxis(fixture.action.id);
+        REQUIRE(otherAxis);
+        CHECK(otherAxis->x == 0.0F);
+        CHECK(otherAxis->y == 0.0F);
+        CHECK_FALSE(fixture.Port().ReadCollectedAxis(fixture.action.id));
+        CHECK(fixture.router.ReadAction(fixture.context, fixture.action.id, 2).pressed);
+        CHECK(player.ReadCollectedAxis(fixture.action.id)->x == axis->x);
+
+        REQUIRE(source.Reset().HasValue());
+        CHECK(player.ReadCollectedAxis(fixture.action.id)->x == 0.0F);
+    }
+
+    TEST_CASE("Input collected digital state is player-scoped and does not drain its press", "[unit][input][collection]") {
+        Fixture fixture;
+        const auto player = fixture.router.ActionCollectionForPlayer(fixture.context, 2).Value();
+        const auto other = fixture.router.ActionCollectionForPlayer(fixture.context, 3).Value();
+        auto source = fixture.Source(player);
+        auto frame = fixture.Frame(player, 1);
+        REQUIRE(frame.Append(source, pressed).HasValue());
+        CHECK_FALSE(player.ReadCollectedButton(fixture.action.id));
+        REQUIRE(frame.Commit().HasValue());
+        CHECK(player.ReadCollectedButton(fixture.action.id) == true);
+        CHECK(other.ReadCollectedButton(fixture.action.id) == false);
+        CHECK_FALSE(player.ReadCollectedAxis(fixture.action.id));
+        CHECK(fixture.router.ReadAction(fixture.context, fixture.action.id, 2).pressed);
+        REQUIRE(source.Reset().HasValue());
+        CHECK(player.ReadCollectedButton(fixture.action.id) == false);
+    }
+
     TEST_CASE("Input reserved source validation retains exact lifetime thread and configuration fences", "[unit][input][collection]") {
         Fixture fixture;
         auto source = fixture.Source(fixture.Port());
@@ -339,6 +389,7 @@ namespace Horo::Input {
         auto frame = std::move(opened).Value();
         REQUIRE(frame.Append(source, pressed).HasValue());
         REQUIRE(frame.Commit().HasValue());
+        CHECK_FALSE(port.RoutingEligible());
         CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id).down);
         fixture.collector.BeginFrame(2);
         fixture.collector.SetWindowState({.focused = true});
@@ -347,8 +398,16 @@ namespace Horo::Input {
         auto focused = std::move(next).Value();
         REQUIRE(focused.Append(source, pressed).HasValue());
         REQUIRE(focused.Commit().HasValue());
-        auto modal = fixture.router.PushContext(InputContextId{"modal"}, InputContextKind::ModalRoot);
-        CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id).down);
+        CHECK(port.RoutingEligible());
+        {
+            const auto modal = fixture.router.PushContext(InputContextId{"modal"}, InputContextKind::ModalRoot);
+            CHECK_FALSE(port.RoutingEligible());
+            CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id).down);
+        }
+        CHECK_FALSE(port.RoutingEligible());
+        auto resumed = fixture.Frame(port, 3);
+        REQUIRE(resumed.Commit().HasValue());
+        CHECK(port.RoutingEligible());
     }
 
     TEST_CASE("Input collection total action storage rejects overflow without consuming a source slot", "[unit][input][collection]") {
