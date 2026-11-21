@@ -98,38 +98,49 @@ namespace Horo::Editor {
             return observations;
         }
 
-        /** @brief Checks exact proposal identity and current source evidence before publishing restored decisions. */
-        LoadResult Restore(std::string_view input, const std::string_view project, const std::span<const SourceDocumentSnapshot> sources) {
-            const auto invalid = [] {
-                return LoadResult::Failure(MakeError(Errors::Malformed));
-            };
+        /** @brief Holds decoded path rules and views into the two bounded payloads. */
+        struct CheckpointEnvelope final {
+            std::uint64_t revision;
+            std::vector<SourceDocumentId> paths;
+            std::string_view proposal;
+            std::string_view decisions;
+        };
+
+        /** @brief Admits the complete envelope before interpreting either payload. */
+        std::optional<CheckpointEnvelope> ReadEnvelope(std::string_view input) {
             if (!input.starts_with(Header))
-                return invalid();
+                return {};
             input.remove_prefix(Header.size());
             const auto revision = Number(input);
             const auto count = Number(input);
             if (!revision || !count || *count == 0 || *count > MaximumPaths)
-                return invalid();
+                return {};
             auto paths = ReadPaths(input, static_cast<std::size_t>(*count));
             if (paths.size() != *count)
-                return invalid();
+                return {};
             const auto proposed = Field(input);
             const auto reviewed = Field(input);
             if (!proposed || !reviewed || !input.empty())
-                return invalid();
+                return {};
+            return CheckpointEnvelope{*revision, std::move(paths), *proposed, *reviewed};
+        }
+
+        /** @brief Checks exact proposal identity and current source evidence before publishing restored decisions. */
+        LoadResult Restore(CheckpointEnvelope envelope, const std::string_view project,
+                           const std::span<const SourceDocumentSnapshot> sources) {
             std::vector<PathRule> rules;
-            for (const auto &path : paths)
+            for (const auto &path : envelope.paths)
                 rules.push_back({path, false});
-            const auto policy = ProjectPolicy::Capture(std::string{project}, *revision, std::move(rules));
+            const auto policy = ProjectPolicy::Capture(std::string{project}, envelope.revision, std::move(rules));
             if (policy.HasError())
                 return LoadResult::Failure(policy.ErrorValue());
-            auto proposal = DecodeRecovery(*proposed, policy.Value());
+            auto proposal = DecodeRecovery(envelope.proposal, policy.Value());
             if (proposal.HasError())
                 return LoadResult::Failure(proposal.ErrorValue());
-            auto plan = PlanRecoveredWorkspaceEdits(proposal.Value(), policy.Value(), Observe(paths, sources));
+            auto plan = PlanRecoveredWorkspaceEdits(proposal.Value(), policy.Value(), Observe(envelope.paths, sources));
             if (plan.HasError())
                 return LoadResult::Failure(plan.ErrorValue());
-            auto decisions = ReviewDecisions::Decode(proposal.Value(), plan.Value(), *reviewed);
+            auto decisions = ReviewDecisions::Decode(proposal.Value(), plan.Value(), envelope.decisions);
             if (decisions.HasError())
                 return LoadResult::Failure(decisions.ErrorValue());
             auto cards = DescribeEditorPatchFiles(proposal.Value());
@@ -137,55 +148,68 @@ namespace Horo::Editor {
                                                                    std::move(plan).Value(),
                                                                    std::move(cards),
                                                                    std::move(decisions).Value(),
-                                                                   std::move(paths),
+                                                                   std::move(envelope.paths),
                                                                    {},
                                                                    0});
+        }
+
+        /** @brief Serializes the checkpoint within its on-disk size budget. */
+        Result<std::string> EncodeCheckpoint(const EditorPatchCheckpoint &checkpoint) {
+            using Output = Result<std::string>;
+            if (checkpoint.offeredPaths.empty() || checkpoint.offeredPaths.size() > MaximumPaths)
+                return Output::Failure(MakeError(Errors::Invalid));
+            const auto proposal = EncodeRecovery(checkpoint.proposal);
+            if (proposal.HasError())
+                return Output::Failure(proposal.ErrorValue());
+            auto bytes = std::string{Header};
+            bytes.append(std::to_string(checkpoint.proposal.PolicyRevision())).push_back('\n');
+            bytes.append(std::to_string(checkpoint.offeredPaths.size())).push_back('\n');
+            for (const auto &path : checkpoint.offeredPaths)
+                Append(bytes, path.Value());
+            Append(bytes, proposal.Value());
+            Append(bytes, checkpoint.decisions.Encode());
+            if (bytes.size() > MaximumBytes)
+                return Output::Failure(MakeError(Errors::Bounds));
+            return Output::Success(std::move(bytes));
+        }
+
+        /** @brief Replaces the checkpoint under its exact project-file lease, using atomic publication. */
+        Result<void> PublishCheckpoint(DurableFileSystem &files, const std::filesystem::path &root, const std::span<const std::byte> bytes,
+                                       const CancellationToken &stop) {
+            using Output = Result<void>;
+            const auto path = root / CheckpointPath;
+            const auto lock = Assets::AssetSourcePublicationLockPath(root, path);
+            if (lock.HasError())
+                return Output::Failure(lock.ErrorValue());
+            const auto lease = files.TryAcquireExclusive(lock.Value(), "editor-source-review");
+            if (lease.HasError())
+                return Output::Failure(lease.ErrorValue());
+            const auto current = Assets::CaptureAssetSource(root, path, MaximumBytes, stop);
+            if (current.HasError())
+                return Output::Failure(current.ErrorValue());
+            if (const auto directory = files.CreateDirectoryPath(path.parent_path(), DirectoryCreationMode::Parents); directory.HasError())
+                return Output::Failure(directory.ErrorValue());
+            if (const auto stage = RemoveInterruptedStage(files, path); stage.HasError())
+                return Output::Failure(stage.ErrorValue());
+            const auto saved = Assets::PublishAssetSource(root, path, current.Value().identity, bytes, lease.Value(), files, stop);
+            if (saved.HasError())
+                return Output::Failure(saved.ErrorValue());
+            if (saved.Value().status != Assets::AssetSourcePublicationStatus::Durable)
+                return Output::Failure(MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed));
+            return Output::Success();
         }
     }  // namespace
 
     /** @copydoc SaveEditorPatchCheckpoint */
     Result<void> SaveEditorPatchCheckpoint(DurableFileSystem &files, const std::filesystem::path &root,
                                            const EditorPatchCheckpoint &checkpoint, const CancellationToken &stop) {
-        using Output = Result<void>;
-        const auto proposal = EncodeRecovery(checkpoint.proposal);
-        const auto decisions = checkpoint.decisions.Encode();
-        if (proposal.HasError())
-            return Output::Failure(proposal.ErrorValue());
-        if (checkpoint.offeredPaths.empty() || checkpoint.offeredPaths.size() > MaximumPaths)
-            return Output::Failure(MakeError(Errors::Invalid));
-        auto bytes = std::string{Header};
-        bytes.append(std::to_string(checkpoint.proposal.PolicyRevision())).push_back('\n');
-        bytes.append(std::to_string(checkpoint.offeredPaths.size())).push_back('\n');
-        for (const auto &path : checkpoint.offeredPaths)
-            Append(bytes, path.Value());
-        Append(bytes, proposal.Value());
-        Append(bytes, decisions);
-        if (bytes.size() > MaximumBytes)
-            return Output::Failure(MakeError(Errors::Bounds));
         const auto canonical = CanonicalRoot(root);
         if (canonical.HasError())
-            return Output::Failure(canonical.ErrorValue());
-        const auto path = canonical.Value() / CheckpointPath;
-        const auto lock = Assets::AssetSourcePublicationLockPath(canonical.Value(), path);
-        if (lock.HasError())
-            return Output::Failure(lock.ErrorValue());
-        const auto lease = files.TryAcquireExclusive(lock.Value(), "editor-source-review");
-        if (lease.HasError())
-            return Output::Failure(lease.ErrorValue());
-        const auto current = Assets::CaptureAssetSource(canonical.Value(), path, MaximumBytes, stop);
-        if (current.HasError())
-            return Output::Failure(current.ErrorValue());
-        if (const auto directory = files.CreateDirectoryPath(path.parent_path(), DirectoryCreationMode::Parents); directory.HasError())
-            return Output::Failure(directory.ErrorValue());
-        if (const auto stage = RemoveInterruptedStage(files, path); stage.HasError())
-            return Output::Failure(stage.ErrorValue());
-        const auto saved = Assets::PublishAssetSource(canonical.Value(), path, current.Value().identity, std::as_bytes(std::span{bytes}),
-                                                      lease.Value(), files, stop);
-        if (saved.HasError())
-            return Output::Failure(saved.ErrorValue());
-        if (saved.Value().status != Assets::AssetSourcePublicationStatus::Durable)
-            return Output::Failure(MakeError(Assets::AssetSourceErrors::DurabilityUnconfirmed));
-        return Output::Success();
+            return Result<void>::Failure(canonical.ErrorValue());
+        const auto bytes = EncodeCheckpoint(checkpoint);
+        if (bytes.HasError())
+            return Result<void>::Failure(bytes.ErrorValue());
+        return PublishCheckpoint(files, canonical.Value(), std::as_bytes(std::span{bytes.Value()}), stop);
     }
 
     /** @copydoc LoadEditorPatchCheckpoint */
@@ -202,6 +226,9 @@ namespace Horo::Editor {
         const auto &bytes = captured.Value().bytes;
         if (bytes.empty())
             return LoadResult::Failure(MakeError(Errors::Malformed));
-        return Restore({reinterpret_cast<const char *>(bytes.data()), bytes.size()}, project, sources);
+        auto envelope = ReadEnvelope({reinterpret_cast<const char *>(bytes.data()), bytes.size()});
+        if (!envelope)
+            return LoadResult::Failure(MakeError(Errors::Malformed));
+        return Restore(std::move(*envelope), project, sources);
     }
 }  // namespace Horo::Editor

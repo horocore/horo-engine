@@ -1011,15 +1011,25 @@ namespace Horo::Editor {
                 status_ = "source_patch_checkpoint_loaded";
             }
 
+            /** @brief Requires an attached project and an idle review lane for explicit checkpoint actions. */
+            bool CanCheckpointPatchReview() const {
+                return !Busy() && !patchCheckpoint_.Busy() && !awaitingCheckpoint_ && !contextPreview_ && !buildRoot_.empty() &&
+                       !contextProject_.empty();
+            }
+
+            /** @brief Offers restoration when there is an attached project and no active source review. */
+            void DrawPatchRestore(const ILocalizationService &locale) {
+                if (openSources_ && requestSourceReview_ && !buildRoot_.empty() &&
+                    Button(locale, "source_patch_checkpoint_load", CanCheckpointPatchReview()))
+                    LoadPatchReview();
+            }
+
             /** @brief Renders file summaries in proposal order and stages only the selected current operation. */
             void DrawPatchReview(const ILocalizationService &locale, const Theme::Fonts &fonts, EditorWorkspaceViewCommandData &command) {
-                const bool canCheckpoint = !Busy() && !patchCheckpoint_.Busy() && !awaitingCheckpoint_ && !contextPreview_ &&
-                                           !buildRoot_.empty() && !contextProject_.empty();
-                if (openSources_ && requestSourceReview_ && !buildRoot_.empty() &&
-                    Button(locale, "source_patch_checkpoint_load", canCheckpoint && !patchReview_))
-                    LoadPatchReview();
-                if (!patchReview_)
+                if (!patchReview_) {
+                    DrawPatchRestore(locale);
                     return;
+                }
                 ImGui::BeginDisabled(patchCheckpoint_.Busy());
                 auto &review = *patchReview_;
                 for (std::size_t index = 0; index < review.files.size(); ++index) {
@@ -1030,7 +1040,7 @@ namespace Horo::Editor {
                         ImGui::PopID();
                 }
                 DrawPatchDecisions(review, locale);
-                if (!buildRoot_.empty() && Button(locale, "source_patch_checkpoint_save", canCheckpoint))
+                if (!buildRoot_.empty() && Button(locale, "source_patch_checkpoint_save", CanCheckpointPatchReview()))
                     SavePatchReview(review);
                 ImGui::EndDisabled();
             }
