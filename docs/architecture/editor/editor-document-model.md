@@ -648,6 +648,12 @@ the registered source and its layout before replacing the open document. A
 failed read or decode leaves the draft and its history intact. An accepted
 replacement starts a new revision with an empty undo and redo history.
 
+**Merge Disk Changes into Draft** compares the accepted revision, the draft
+and the current disk files. It combines independent graph and layout edits and
+reconciles placements by node ID. Divergent graph edits or incompatible
+placements leave the draft and both disk files available. A successful merge
+adopts the disk revision as the new save base and starts a new undo history.
+
 Decision graph autosave sends immutable graph and layout snapshots to the
 shared background recovery writer. The checkpoint records both accepted
 disk identities and never writes the registered source or layout. A

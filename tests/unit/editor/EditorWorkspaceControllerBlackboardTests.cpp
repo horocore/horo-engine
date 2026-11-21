@@ -41,6 +41,19 @@ namespace {
     using namespace Horo;
     using namespace Horo::Editor;
 
+    TEST_CASE("Decision layout merge retains independent replacements and removals", "[editor][decision-graph][layout]") {
+        const auto first = AI::DecisionNodeId::Create(1).Value();
+        const auto second = AI::DecisionNodeId::Create(2).Value();
+        const auto third = AI::DecisionNodeId::Create(3).Value();
+        const DecisionGraphLayout base{{first, 1, 1}, {second, 2, 2}};
+        const DecisionGraphLayout local{{first, 3, 3}, {second, 2, 2}};
+        const DecisionGraphLayout disk{{first, 1, 1}, {third, 4, 4}};
+        const DecisionGraphLayout expected{{first, 3, 3}, {third, 4, 4}};
+        const auto merged = MergeDecisionLayouts(base, local, disk);
+        REQUIRE(merged.HasValue());
+        CHECK(merged.Value() == expected);
+    }
+
     TEST_CASE("Decision document reserves a complete exact root before touching its history", "[editor][decision-graph][history]") {
         DecisionGraphDocumentHistory history;
         const DecisionGraphDocumentRoot original{std::make_shared<const AI::DecisionGraphSource>(),
@@ -1292,6 +1305,66 @@ TEST_CASE("State Machine New publishes a canonical Decision source bound to the 
         CHECK_FALSE(view.canUndo);
         CHECK_FALSE(view.canRedo);
         CHECK_FALSE(controller.HasDirtySourceDocuments());
+    }
+
+    SECTION("external merge preserves independent edits and refuses overlapping placements") {
+        controller.ProcessCommand(*command);
+        REQUIRE(controller.ViewModel().decisionGraphDocuments.size() == 1);
+        const auto &view = controller.ViewModel().decisionGraphDocuments.front();
+        REQUIRE(view.editable);
+        const auto node = std::get<AI::StateMachineAssetDescriptor>(view.graph->body).initial;
+        const auto instance = view.identity.instance;
+        const auto source = project.root / path;
+        const DecisionGraphLayout local{{node, 4, 8}};
+        controller.ProcessCommand(
+            {.command = EditorWorkspaceViewCommand::EditDecisionLayout,
+             .decisionLayoutEdit = DecisionGraphLayoutRequest{{instance, view.revision}, DecisionLayoutOperation::Move, local}});
+        REQUIRE(view.dirty);
+        REQUIRE(view.canUndo);
+        const auto write = [](const auto &target, const auto &bytes) {
+            std::ofstream stream(target, std::ios::binary);
+            stream.write(reinterpret_cast<const char *>(bytes.data()), static_cast<std::streamsize>(bytes.size()));
+            REQUIRE(static_cast<bool>(stream));
+        };
+        bool overlap = false;
+        SECTION("disk graph changes can coexist with the local placement") {
+            auto external = *view.graph;
+            std::get<AI::StateMachineAssetDescriptor>(external.body).states.front().terminal = AI::DecisionStateTerminal::Succeeded;
+            const auto bytes = AI::DecisionPlanCodec::EncodeSource(std::span{&external, 1}, external.asset);
+            REQUIRE(bytes.HasValue());
+            write(source, bytes.Value());
+        }
+        SECTION("two different placements for the same node conflict") {
+            overlap = true;
+            const auto bytes = EncodeDecisionLayout({{node, 20, 30}}, view.asset, view.graph->asset);
+            REQUIRE(bytes.HasValue());
+            write(DecisionLayoutPath(source), bytes.Value());
+        }
+        controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Save));
+        REQUIRE(view.conflict);
+        REQUIRE(view.dirty);
+        const auto revision = view.revision;
+        const auto disk = Assets::CaptureAssetSource(project.root, source, AI::DecisionCodecLimits{}.maximumBytes);
+        const auto diskLayout = Assets::CaptureAssetSource(project.root, DecisionLayoutPath(source), MaximumDecisionLayoutBytes);
+        REQUIRE(disk.HasValue());
+        REQUIRE(diskLayout.HasValue());
+        controller.ProcessCommand({.command = EditorWorkspaceViewCommand::MergeExternalDecisionGraph,
+                                   .decisionGraphFence = DecisionGraphDocumentFence{instance, revision}});
+        CHECK(*view.layout == local);
+        CHECK(view.dirty);
+        CHECK(view.conflict == overlap);
+        CHECK(view.revision == revision + (overlap ? 0 : 1));
+        CHECK(view.canUndo == overlap);
+        CHECK(Assets::CaptureAssetSource(project.root, source, AI::DecisionCodecLimits{}.maximumBytes).Value().identity ==
+              disk.Value().identity);
+        CHECK(Assets::CaptureAssetSource(project.root, DecisionLayoutPath(source), MaximumDecisionLayoutBytes).Value().identity ==
+              diskLayout.Value().identity);
+        if (!overlap) {
+            CHECK(std::get<AI::StateMachineAssetDescriptor>(view.graph->body).states.front().terminal ==
+                  AI::DecisionStateTerminal::Succeeded);
+            controller.ProcessCommand(MakeDecisionHistoryCommand(view, DecisionHistoryAction::Save));
+            CHECK_FALSE(view.dirty);
+        }
     }
 
     SECTION("tracked save receipts retain the last durable graph when layout recording fails") {

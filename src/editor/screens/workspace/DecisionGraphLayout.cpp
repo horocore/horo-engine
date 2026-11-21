@@ -4,6 +4,7 @@
 #include "Horo/Application/DecisionAssetCookHost.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <map>
 #include <nlohmann/json.hpp>
@@ -76,6 +77,30 @@ namespace Horo::Editor {
     Result<DecisionGraphLayout> DecodeDecisionLayout(std::span<const std::byte> bytes, Assets::AssetId asset,
                                                      AI::DecisionGraphAssetId graph) {
         return DecodeLayout(bytes, asset, graph);
+    }
+
+    /** @copydoc MergeDecisionLayouts */
+    Result<DecisionGraphLayout> MergeDecisionLayouts(const DecisionGraphLayout &base, const DecisionGraphLayout &draft,
+                                                     const DecisionGraphLayout &disk) {
+        using Layout = Result<DecisionGraphLayout>;
+        std::map<AI::DecisionNodeId, std::array<std::optional<DecisionNodePlacement>, 3>> nodes;
+        const std::array layouts{&base, &draft, &disk};
+        for (std::size_t index = 0; index < layouts.size(); ++index)
+            for (const auto &placement : *layouts[index])
+                nodes[placement.node][index] = placement;
+        DecisionGraphLayout merged;
+        for (const auto &entry : nodes) {
+            const auto &[original, local, external] = entry.second;
+            if (local != original && external != original && local != external)
+                return Layout::Failure(
+                    MakeError(Assets::AssetSourceErrors::Conflict, "Both versions changed the same Decision placement."));
+            const auto &selected = local == original ? external : local;
+            if (selected)
+                merged.push_back(*selected);
+        }
+        if (!ValidPlacements(merged))
+            return Layout::Failure(MakeError(Assets::AssetSourceErrors::Limit));
+        return Layout::Success(std::move(merged));
     }
 
     /** @copydoc DecisionLayoutPath */

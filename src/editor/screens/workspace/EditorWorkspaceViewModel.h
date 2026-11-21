@@ -278,6 +278,7 @@ namespace Horo::Editor {
         EditDecisionLayout,
         OpenDecisionDiagnosticKey,
         ReloadExternalDecisionGraph,
+        MergeExternalDecisionGraph,
         RestoreDecisionGraphRecovery,
         DiscardDecisionGraphRecovery,
         OpenDiagnosticSource,

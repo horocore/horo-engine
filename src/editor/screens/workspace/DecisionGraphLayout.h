@@ -21,6 +21,9 @@ namespace Horo::Editor {
 
     /** @brief Bounded ordered set of position overrides separate from Decision topology. */
     using DecisionGraphLayout = std::vector<DecisionNodePlacement>;
+    /** @brief Combines non-overlapping edits and removals by stable node identity, or reports a conflict. */
+    [[nodiscard]] Result<DecisionGraphLayout> MergeDecisionLayouts(const DecisionGraphLayout &base, const DecisionGraphLayout &draft,
+                                                                   const DecisionGraphLayout &disk);
 
     inline constexpr std::size_t MaximumDecisionLayoutNodes = 1024;
     inline constexpr std::size_t MaximumDecisionLayoutBytes = 128U * 1024U;

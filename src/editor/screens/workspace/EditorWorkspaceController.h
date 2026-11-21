@@ -1517,6 +1517,10 @@ namespace Horo::Editor {
         bool ProcessDecisionGraphEdit(const EditorWorkspaceViewCommandData &cmd);
         /** @brief Reopens the exact conflicted Decision document after an explicit discard request. */
         void ReloadExternalDecisionGraph(DecisionGraphDocumentFence fence);
+        /** @brief Reconciles a focused dirty Decision draft with its current registered disk version. */
+        void MergeExternalDecisionGraph(DecisionGraphDocumentFence fence);
+        /** @brief Stages an exact three-way merge and adopts the disk revision as the new save base. */
+        [[nodiscard]] Result<void> MergeExternalDecisionGraphDraft(DecisionGraphWorkspaceDocument &document, DecisionGraphDraft &draft);
         /** @brief Resolves a current finding to a registered Blackboard document and selects its exact key. */
         void OpenDecisionDiagnosticKey(const DecisionDiagnosticKeyRequest &request);
         /** @brief Saves all dirty intrinsic decision documents through the registered source owner. */
