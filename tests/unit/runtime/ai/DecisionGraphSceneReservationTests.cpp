@@ -1,4 +1,5 @@
 #include "AiSceneTestSupport.h"
+#include "AllocationProbe.h"
 #include "DecisionGraphCompilerTestSupport.h"
 #include "PerceptionSenseTestSupport.h"
 #include "Horo/AI/AIReplayEvidence.h"
@@ -284,6 +285,61 @@ namespace Horo::AI {
             CHECK(fixture.probe.lastTerminal == AiTaskState::Succeeded);
             CHECK(continuation.NotifyEvent() == AiTaskPublicationDisposition::Stale);
             CHECK(tick(8) == 0);
+
+            Tests::AllocationProbe::Measurement allocations;
+            bool idle = true;
+            {
+                Tests::AllocationProbe::ScopedMeasurement measurement;
+                for (std::uint64_t number = 9; number <= 64; ++number) {
+                    const auto evaluated = scheduler->EvaluateAtDecision(number);
+                    const auto committed = scheduler->CommitAtIntentDispatch(number);
+                    idle = idle && evaluated.HasValue() && evaluated.Value().evaluated == 0 && evaluated.Value().workUnits == 0 &&
+                           committed.HasValue() && committed.Value().commands == 0;
+                }
+                allocations = measurement.Snapshot();
+            }
+            CHECK(idle);
+            CHECK(allocations.requests == 0);
+            runtime.BeginShutdown();
+        }
+
+        TEST_CASE("A cooked task wake during evaluation can resume only on a later tick",
+                  "[unit][ai][scene][decision_reservation][scheduler]") {
+            Fixture fixture;
+            fixture.probe.succeedTick = 100;
+            auto source = Tree(11, {TreeNode(1, DecisionControlKind::Root), TreeNode(2, DecisionControlKind::Task)}, {Edge(1, 1, 2)});
+            source.executionTask = MakeIdentity<TaskId>(9000);
+            const auto plan = fixture.Compile(std::span{&source, 1}, 11);
+            auto scene = SceneFixture(fixture, *plan);
+            scene.descriptor.cookedPlan = plan;
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            auto runtime = std::move(AiSceneRuntime::Create()).Value();
+            auto publication = TestSupport::Publish(runtime, scene);
+            REQUIRE(runtime.ActivateCookedDecisionsAtSafePoint({.jobs = jobs,
+                                                               .scheduler = {.mode = AiSchedulingMode::BestEffort},
+                                                               .agent = {.intervalTicks = 0},
+                                                               .timing = AiCookedDecisionTiming::BestEffortReactive})
+                        .HasValue());
+            auto *scheduler = runtime.TaskSchedulerAtSafePoint().Value();
+            AiTaskPublicationDisposition feedback = AiTaskPublicationDisposition::Stale;
+            bool reentrantRejected{};
+            fixture.probe.onStart = [&] {
+                feedback = fixture.probe.continuation.NotifyEvent();
+                reentrantRejected = scheduler->EvaluateAtDecision(1).HasError();
+            };
+            REQUIRE(scheduler->EvaluateAtDecision(1).Value().evaluated == 1);
+            CHECK(feedback == AiTaskPublicationDisposition::Accepted);
+            CHECK(reentrantRejected);
+            CHECK(scheduler->EvaluateAtDecision(1).Value().evaluated == 1);
+            CHECK(fixture.probe.resumes == 0);
+            REQUIRE(scheduler->CommitAtIntentDispatch(1).HasValue());
+
+            REQUIRE(scheduler->EvaluateAtDecision(2).Value().evaluated == 1);
+            CHECK(fixture.probe.resumes == 1);
+            CHECK(fixture.probe.lastResumeReason == AiTaskResumeReason::Event);
+            REQUIRE(scheduler->CommitAtIntentDispatch(2).HasValue());
+            CHECK(scheduler->EvaluateAtDecision(3).Value().evaluated == 0);
+            REQUIRE(scheduler->CommitAtIntentDispatch(3).HasValue());
             runtime.BeginShutdown();
         }
 
