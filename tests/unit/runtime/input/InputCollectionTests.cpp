@@ -381,6 +381,9 @@ namespace Horo::Input {
         auto borrowed = query.ActionCollection(fixture.context, device);
         REQUIRE(borrowed.HasValue());
         auto port = std::move(borrowed).Value();
+        const auto firstAssignment = port.ReadPlayerAssignmentRevision();
+        REQUIRE(firstAssignment);
+        CHECK(*firstAssignment != 0);
         auto source = fixture.Source(port);
         auto frame = fixture.Frame(port, 2);
         REQUIRE(frame.Append(source, pressed).HasValue());
@@ -395,10 +398,24 @@ namespace Horo::Input {
         fixture.router.UnassignGamepad(device);
         CHECK(port.Begin(fixture.collector.Commit()).HasError());
         auto current = fixture.Port();
+        CHECK_FALSE(current.ReadPlayerAssignmentRevision());
+        CHECK_FALSE(port.ReadPlayerAssignmentRevision());
+        const auto playerPort = query.ActionCollectionForPlayer(fixture.context, 2);
+        REQUIRE(playerPort.HasValue());
+        const auto liveRevision = playerPort.Value().ReadPlayerAssignmentRevision();
+        REQUIRE(liveRevision);
+        CHECK(liveRevision != firstAssignment);
         auto neutral = fixture.Frame(current, 3);
         CHECK(neutral.Append(source, pressed).HasError());
         REQUIRE(neutral.Commit().HasValue());
         CHECK_FALSE(fixture.router.ReadAction(fixture.context, fixture.action.id, 2).down);
+        REQUIRE(fixture.router.AssignGamepad(2, device));
+        const auto reassigned = query.ActionCollection(fixture.context, device);
+        REQUIRE(reassigned.HasValue());
+        const auto revision = reassigned.Value().ReadPlayerAssignmentRevision();
+        REQUIRE(revision);
+        CHECK(revision != liveRevision);
+        CHECK(playerPort.Value().ReadPlayerAssignmentRevision() == revision);
     }
 
     TEST_CASE("Input collection destructor cleanup does not allocate under failure injection", "[unit][input][collection]") {

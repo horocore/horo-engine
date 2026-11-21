@@ -402,6 +402,8 @@ namespace Horo::Application::Internal {
         const auto current = CurrentInteractionTracking(scope);
         if (current.HasError())
             return Outcome::Failure(current.ErrorValue());
+        if (!input_.port->RoutingEligible())
+            return Outcome::Failure(MakeError(XRErrors::OperationUnavailable));
         const auto &bindings = input_.coordinator->Current()->bindings;
         const auto binding = std::ranges::find(bindings, request.selectAction, &XRResolvedActionBinding::action);
         if (binding == bindings.end() || binding->valueType != Input::ActionValueType::Digital)
@@ -423,7 +425,10 @@ namespace Horo::Application::Internal {
     /** @copydoc OpenXRPlayHost::ReadWorldUiPointer */
     std::optional<OpenXRWorldUiPointerFrame> OpenXRPlayHost::ReadWorldUiPointer(const Input::PlayerId player) const {
         const auto &selected = composition_.bindings->worldUiPointer;
-        if (!selected || !input_.port || !input_.port->RoutingEligible())
+        if (!selected || !input_.port)
+            return std::nullopt;
+        const auto assignment = input_.port->ReadPlayerAssignmentRevision();
+        if (!assignment)
             return std::nullopt;
         const auto current = ReadInteractionSources(player);
         if (current.HasError())
@@ -442,8 +447,8 @@ namespace Horo::Application::Internal {
                                                           XRTrackingConfidence::High});
         if (sample.HasError())
             return std::nullopt;
-        return OpenXRWorldUiPointerFrame{{device->id, scope.cutoff.origin, scope.cutoff.bindingRevision, scope.scene, scope.player},
-                                         sample.Value()};
+        return OpenXRWorldUiPointerFrame{
+            {device->id, scope.cutoff.origin, scope.cutoff.bindingRevision, scope.scene, scope.player, *assignment}, sample.Value()};
     }
 
     /** @copydoc OpenXRPlayHost::BuildInputSnapshot */

@@ -100,6 +100,10 @@ namespace Horo::Input {
             return player_;
         }
 
+        /** @brief Reads the live local player-assignment revision for this routable port.
+         * @return Current revision, or absence for unscoped, stale, blocked or foreign-thread ports. */
+        [[nodiscard]] std::optional<std::uint64_t> ReadPlayerAssignmentRevision() const noexcept;
+
     private:
         friend class InputRouter;
         std::weak_ptr<InputCollectionLifetime> owner_;

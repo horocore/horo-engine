@@ -227,6 +227,14 @@ namespace Horo::Input {
                !router.impl_->bindingCaptureTerminal && router.impl_->ContextEligible(context_);
     }
 
+    /** @copydoc InputActionCollection::ReadPlayerAssignmentRevision */
+    std::optional<std::uint64_t> InputActionCollection::ReadPlayerAssignmentRevision() const noexcept {
+        const auto owner = owner_.lock();
+        if (!owner || !player_ || !RoutingEligible())
+            return std::nullopt;
+        return owner->router->impl_->assignmentRevision;
+    }
+
     /** @copydoc InputActionCollection::RegisterSource */
     Result<InputActionSourceToken> InputActionCollection::RegisterSource(const std::span<const ActionDescriptor> actions) const {
         const auto owner = owner_.lock();

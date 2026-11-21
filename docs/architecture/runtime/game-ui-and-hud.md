@@ -834,8 +834,10 @@ The signed OpenXR binding document may opt in with
 already be a declared digital controller action. With an assigned local Play
 player, the editor routes that controller's aimed ray through the presented
 World UI only while its Input context is eligible. Loss or replacement of the
-controller, scene, binding, origin, or eligible presentation cancels capture
-and requires a neutral button sample before another press. The World canvas
+controller, player assignment, scene, binding, origin, or eligible presentation
+cancels capture and requires a neutral button sample before another press.
+The adapter retains the outgoing pointer owner while cancellation is pending
+and retries cleanup before routing another sample. The World canvas
 reserves dispatch storage during scene preparation, including for a replacement.
 
 ### Semantic audio and haptic feedback

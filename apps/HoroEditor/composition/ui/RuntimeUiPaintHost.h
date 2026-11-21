@@ -328,6 +328,7 @@ namespace Horo::Application::Internal {
         std::uint32_t written_{};
         bool armed_{};
         bool down_{};
+        bool cancellationPending_{}; /**< Retains the previous owner until its cancellation can be delivered. */
     };
 
     /** @brief Fixed participant registered before RuntimeHost startup and before the editor frame consumer. */

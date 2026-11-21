@@ -126,6 +126,7 @@ namespace Horo::Application::Internal {
         std::uint64_t bindingRevision;
         Runtime::SceneRuntimeId scene;
         Input::PlayerId player;
+        std::uint64_t assignmentRevision{};
 
         bool operator==(const OpenXRWorldUiPointerSource &) const noexcept = default;
     };

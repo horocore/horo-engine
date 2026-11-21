@@ -1813,13 +1813,10 @@ namespace Horo::Tests::OpenXRApplication {
         REQUIRE(worldUi);
         CHECK(worldUi->source.device == controller);
         CHECK(worldUi->source.scene == sources.Scope().scene);
+        CHECK(worldUi->source.assignmentRevision != 0);
         CHECK(worldUi->sample.selectDown);
         CHECK(worldUi->sample.ray.maximumDistance == 6.0F);
         CHECK_FALSE(fixture.play->ReadWorldUiPointer(2));
-        {
-            const auto modal = fixture.router.PushContext(Input::InputContextId{"test-modal"}, Input::InputContextKind::ModalRoot);
-            CHECK_FALSE(fixture.play->ReadWorldUiPointer(player));
-        }
         const auto wrongDevice =
             fixture.play->ReadControllerPointer(sources.Scope(), {hand, selection, pointer.pose, pointer.ray, pointer.minimumConfidence});
         REQUIRE(wrongDevice.HasError());
@@ -1829,6 +1826,14 @@ namespace Horo::Tests::OpenXRApplication {
                                                                                        pointer.minimumConfidence});
         REQUIRE(wrongAction.HasError());
         CHECK(wrongAction.ErrorValue().code.Value() == XR::XRErrors::OperationUnsupported.code.Value());
+        {
+            const auto modal = fixture.router.PushContext(Input::InputContextId{"test-modal"}, Input::InputContextKind::ModalRoot);
+            CHECK_FALSE(fixture.play->ReadWorldUiPointer(player));
+            const auto blocked = fixture.play->ReadControllerPointer(sources.Scope(), pointer);
+            REQUIRE(blocked.HasError());
+            CHECK(blocked.ErrorValue().code.Value() == XR::XRErrors::OperationUnavailable.code.Value());
+        }
+        CHECK(fixture.play->ReadControllerPointer(sources.Scope(), pointer).HasError());
         CHECK(fixture.script.actions.syncs == syncs);
         sample();
         CHECK(fixture.play->ReadWorldUiPointer(player));

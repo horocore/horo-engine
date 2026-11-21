@@ -647,7 +647,10 @@ namespace Horo::Tests::VulkanEditor {
             CHECK(cue->source.owner.instance == target.instance);
             CHECK(cue->source.owner.interaction == target.presentation.interactionRevision);
             CHECK(cue->focusScope.has_value());
-            Check(pointer_.Cancel(port));
+            const Port unavailable;
+            const auto deferred = pointer_.Cancel(unavailable);
+            REQUIRE(deferred.HasError());
+            CHECK(deferred.ErrorValue().code.Value() == Runtime::Ui::UiErrors::EventDispatchLifecycleUnavailable.code.Value());
             CHECK(update(true, 4) == 0);
             CHECK(update(false, 5) == 0);
             CHECK(update(true, 6) == 1);

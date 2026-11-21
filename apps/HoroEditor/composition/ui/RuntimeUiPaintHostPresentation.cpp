@@ -249,14 +249,17 @@ namespace Horo::Application::Internal {
     /** @copydoc RuntimeUiPaintWorldPointer::Bind */
     Result<void> RuntimeUiPaintWorldPointer::Bind(const RuntimeUiPaintPort &port, const RuntimeUiPaintPresentedWorldCanvas &target) {
         const auto *descriptor = target.hit.TryDescriptor();
-        if (!descriptor)
-            return Result<void>::Failure(MakeError(UiErrors::HitTestSourceStale));
+        if (!descriptor) {
+            const auto failure = MakeError(UiErrors::HitTestSourceStale);
+            const auto cancelled = Cancel(port);
+            return Result<void>::Failure(cancelled.HasError() ? WithCause(failure, cancelled.ErrorValue()) : failure);
+        }
         const auto &hit = *descriptor;
         const auto view = target.presentation.view;
         if (interaction_) {
-            if (const auto &bound = interaction_->Owner(); bound.view == view && bound.instance == target.instance &&
-                                                           bound.canvas == hit.canvas && bound.tree == hit.tree &&
-                                                           bound.document == hit.document && bound.interaction == hit.interaction)
+            if (const auto &bound = interaction_->Owner();
+                !cancellationPending_ && bound.view == view && bound.instance == target.instance && bound.canvas == hit.canvas &&
+                bound.tree == hit.tree && bound.document == hit.document && bound.interaction == hit.interaction)
                 return Result<void>::Success();
             if (const auto cancelled = Cancel(port); cancelled.HasError())
                 return cancelled;
@@ -302,7 +305,13 @@ namespace Horo::Application::Internal {
     Result<void> RuntimeUiPaintWorldPointer::Cancel(const RuntimeUiPaintPort &port) {
         armed_ = false;
         down_ = false;
-        return interaction_ ? port.CancelWorldPointers(*interaction_, sequence_) : Result<void>::Success();
+        if (!interaction_)
+            return Result<void>::Success();
+        auto cancelled = port.CancelWorldPointers(*interaction_, sequence_);
+        cancellationPending_ = cancelled.HasError();
+        if (!cancellationPending_)
+            interaction_.reset();
+        return cancelled;
     }
 
     /** @copydoc RuntimeUiPaintPort::ReadSceneCanvasFrame */

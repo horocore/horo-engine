@@ -1974,8 +1974,11 @@ namespace Horo::Editor {
                 if (!frame)
                     return Cancel(port);
                 const auto target = port.ReadPresentedWorldCanvas(frame->source.scene);
-                if (target.HasError())
-                    return Result<void>::Failure(target.ErrorValue());
+                if (target.HasError()) {
+                    const auto cancelled = Cancel(port);
+                    return Result<void>::Failure(cancelled.HasError() ? WithCause(target.ErrorValue(), cancelled.ErrorValue())
+                                                                       : target.ErrorValue());
+                }
                 if (!target.Value())
                     return Cancel(port);
                 if (current_ != frame->source) {
@@ -1992,8 +1995,10 @@ namespace Horo::Editor {
             [[nodiscard]] Result<void> Cancel(const Application::Internal::RuntimeUiPaintPort &port) {
                 if (!current_)
                     return Result<void>::Success();
-                current_.reset();
-                return pointer_.Cancel(port);
+                const auto cancelled = pointer_.Cancel(port);
+                if (cancelled.HasValue())
+                    current_.reset();
+                return cancelled;
             }
 
         private:
