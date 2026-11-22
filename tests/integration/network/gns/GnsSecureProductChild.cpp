@@ -448,8 +448,9 @@ namespace Horo::Network::NativeQualification {
                     presentation.Observe(*owners.live, wire);
                 if (input.side == 1 && !sent && (!owners.live || presentation.appliedSnapshot))
                     sent = TrySendQualificationCommand(owners);
-                if ((input.side == 1 && owners.handler->calls > 0) ||
-                    (input.side == 0 && std::filesystem::exists(std::filesystem::path(input.directory) / "stop-server")))
+                const bool serverMayStop = input.side == 0 && (!input.liveAi || wire.closedEvents != 0) &&
+                                           std::filesystem::exists(std::filesystem::path(input.directory) / "stop-server");
+                if ((input.side == 1 && owners.handler->calls > 0) || serverMayStop)
                     break;
                 std::this_thread::sleep_for(std::chrono::milliseconds(2));  // Qualification loop only, outside engine polling callbacks.
             }
@@ -461,6 +462,8 @@ namespace Horo::Network::NativeQualification {
                 std::cout << "NATIVE_SNAPSHOT " << (input.side == 0 ? "server" : "client") << '\n' << std::flush;
                 if (owners.live->ai) {
                     const bool authority = input.side == 0;
+                    if (authority)
+                        REQUIRE(wire.closedEvents == 1);
                     REQUIRE(owners.live->scene);
                     owners.live->ai->Verify(*owners.host, *owners.live->scene,
                                             authority ? World(NetworkModeWorldKind::AuthorityServer, 1701)

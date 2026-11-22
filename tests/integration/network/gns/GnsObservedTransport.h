@@ -13,6 +13,7 @@ namespace Horo::Network::NativeQualification {
         ConnectionHandle outbound{};
         std::size_t events{};
         std::size_t readyEvents{};
+        std::size_t closedEvents{};
         NetworkTransportStats retiredStats{};  // Read-only diagnostic snapshot before actual adapter shutdown, never admission authority.
         std::array<NetworkTransportEventKind, 8> eventPrefix{};
         NetworkTransportEventKind lastEvent{NetworkTransportEventKind::Failed};
@@ -104,6 +105,8 @@ namespace Horo::Network::NativeQualification {
                 ++observation_.events;
                 if (event.kind == NetworkTransportEventKind::Accepted || event.kind == NetworkTransportEventKind::Connected)
                     ++observation_.readyEvents;
+                if (event.kind == NetworkTransportEventKind::Closed)
+                    ++observation_.closedEvents;
                 if (event.kind == NetworkTransportEventKind::PacketReceived && event.channel == observation_.snapshotChannel &&
                     event.delivery == DeliveryPolicy::UnreliableUnordered) {
                     if (observation_.holdSnapshots)
