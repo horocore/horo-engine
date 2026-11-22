@@ -78,7 +78,7 @@ namespace Horo::WorldCook {
             }
 
             Result<void> OnPhase(const S::RuntimePhase phase, const S::FrameContext &context) override {
-                if (phase == S::RuntimePhase::CommitDeferredLifecycleChanges) {
+                if (advanceMount && phase == S::RuntimePhase::CommitDeferredLifecycleChanges) {
                     last = world_.AdvanceLiveCell(context.dispatchEvidence);
                     if (probeDuplicate) {
                         probeDuplicate = false;
@@ -91,6 +91,7 @@ namespace Horo::WorldCook {
             Result<Stage> last{Result<Stage>::Success(Stage::Idle)};
             std::optional<Result<Stage>> duplicate;
             bool probeDuplicate{};
+            bool advanceMount{true};
 
         private:
             MountedWorld &world_;
@@ -1019,23 +1020,27 @@ namespace Horo::WorldCook {
                      S::NavigationSurfaceComponent{.id = surface, .definition = Asset(8), .generation = 1, .profiles = {profile}}}});
         REQUIRE(startup.RequireAsset({Asset(8), T::Type("core.navmesh")}).HasValue());
         const HeadlessSceneLoadBoundary boundary{{}, std::chrono::steady_clock::now() + std::chrono::seconds(5)};
-        REQUIRE(PrepareHeadlessSceneAtLoadBoundary(scene, std::move(startup).Build().Value(), boundary).HasValue());
+        const auto definitionForStartup = std::move(startup).Build().Value();
+        REQUIRE(PrepareHeadlessSceneAtLoadBoundary(scene, definitionForStartup, boundary).HasValue());
         W::TestSupport::RequireError(navigation->assets->Acquire(), N::NavigationErrors::NoNavigationData);
         CHECK(navigation->cache->Snapshot().retainedPayloadBytes == 0);
 
         DeterministicClock clock;
         auto host = S::RuntimeHost::Create(clock).Value();
         auto driver = std::make_unique<MountedCellDriver>(*mount, scene);
-        const auto &progress = *driver;
+        auto &progress = *driver;
         REQUIRE(host->AddParticipant(std::move(driver)).HasValue());
         REQUIRE(mount->BindLiveCell(host->DispatchSource(), jobs, {20'000'000, 1'000'000, 4, 0, 0, 2}).HasValue());
         REQUIRE(BindMountedWorldNavigation(*mount, *navigation, selected).HasValue());
         REQUIRE(host->Startup().HasValue());
+        const auto frame = [&] {
+            clock.Advance(Duration::FromMilliseconds(17));
+            REQUIRE(host->RunFrame().HasValue());
+        };
         const auto until = [&](Stage expected) {
             const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
             do {
-                clock.Advance(Duration::FromMilliseconds(17));
-                REQUIRE(host->RunFrame().HasValue());
+                frame();
                 REQUIRE(progress.last.HasValue());
                 if (progress.last.Value() == expected)
                     return;
@@ -1121,6 +1126,39 @@ namespace Horo::WorldCook {
         CHECK(mount->InspectLiveCell({102}).Value().geometryVisible);
         REQUIRE(mount->WithdrawLiveCell({102}).HasValue());
         until(Stage::Idle);
+
+        const auto sourceScene = scene.ActiveScene();
+        REQUIRE(sourceScene);
+        const CommittedWorldInitialCell demand{identity.cell, {101}, identity.scene, identity.revision};
+        REQUIRE(mount->RequestLiveCell(demand).HasValue());
+        until(Stage::Prepared);
+        // Hold the decoded result across a committed root replacement, then resume its ordinary owner cutoff.
+        progress.advanceMount = false;
+        REQUIRE(scene.QueuePreparation(definitionForStartup).HasValue());
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        do {
+            frame();
+            REQUIRE_FALSE(scene.TakeOperationError());
+            if (const auto activeScene = scene.ActiveScene(); activeScene && !sourceScene->SameIncarnation(*activeScene))
+                break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } while (std::chrono::steady_clock::now() < deadline);
+        const auto replacement = scene.ActiveScene();
+        REQUIRE(replacement);
+        REQUIRE_FALSE(sourceScene->SameIncarnation(*replacement));
+        progress.advanceMount = true;
+        frame();
+        W::TestSupport::RequireError(progress.last, S::SceneCellPayloadErrors::Stale);
+        W::TestSupport::RequireError(mount->InspectLiveCell(demand.occurrence), W::WorldArtifactErrors::Stale);
+        W::TestSupport::RequireError(navigation->assets->Acquire(), N::NavigationErrors::NoNavigationData);
+
+        REQUIRE(mount->RequestLiveCell(demand).HasValue());
+        until(Stage::Active);
+        const auto replacementCell = mount->InspectLiveCell(demand.occurrence);
+        REQUIRE(replacementCell.HasValue());
+        CHECK(replacementCell.Value().geometryVisible);
+        CHECK(replacementCell.Value().navigation == MountedWorldCellNavigationReadiness::Ready);
+        CHECK(replacementCell.Value().fence.generation > liveReadiness.Value().fence.generation);
         host->Shutdown();
     }
 #endif
