@@ -3563,9 +3563,11 @@ policy above that ceiling before binding its sensing providers. A Scene within
 the ceiling keeps its authored per-tick budget.
 
 The optional `query.maximumWorkUnitsPerTick` caps the combined work issued to
-headless environment queries on each authoritative tick. Replay comparison
-detects changes to the effective query budget. The default retains the
-existing query replay profile identity.
+environment queries on each authoritative tick. The next tick starts after
+the first query occurrence that spent shared work. Dormant or waiting queries
+do not hold the leading budget position. Replay comparison binds both the
+effective budget and the version of this ordering rule. Replays recorded
+with the previous occurrence order require a matching older build.
 
 The Play agent inspector reports the stable IDs, capability requirements and
 current availability of the agent's admitted Perception providers. The

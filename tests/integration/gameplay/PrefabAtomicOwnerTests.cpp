@@ -902,9 +902,38 @@ namespace Horo::Application::PrefabAtomicTest {
             REQUIRE(defaults.HasValue());
             REQUIRE(limited.HasValue());
             REQUIRE(smaller.HasValue());
-            CHECK(defaults.Value()->ReplayProfile() == ComputeSha256(std::as_bytes(std::span{digest.bytes})));
+            Sha256Builder replayProfile;
+            constexpr std::string_view scheduleContract{"horo.scene-query.budget-order.v2"};
+            (void)replayProfile.Update(std::as_bytes(std::span{scheduleContract.data(), scheduleContract.size()}));
+            (void)replayProfile.Update(std::as_bytes(std::span{digest.bytes}));
+            CHECK(defaults.Value()->ReplayProfile() == replayProfile.Finalize());
+            CHECK(defaults.Value()->ReplayProfile() != ComputeSha256(std::as_bytes(std::span{digest.bytes})));
             CHECK(limited.Value()->ReplayProfile() != defaults.Value()->ReplayProfile());
             CHECK(limited.Value()->ReplayProfile() != smaller.Value()->ReplayProfile());
+        }
+
+        TEST_CASE("Scene EQS budget order skips dormant occurrences between competing queries", "[integration][ai][query]") {
+            std::array<std::size_t, 6> served{};
+            std::size_t cursor = 5;
+            for (auto &winner : served) {
+                std::array<bool, 8> visited{};
+                bool available = true;
+                cursor = Internal::AdvanceSceneQueryBudgetOrder(visited.size(), cursor, [&](const std::size_t index) {
+                    CHECK_FALSE(visited[index]);
+                    visited[index] = true;
+                    if (!available || (index != 0 && index != 4))
+                        return false;
+                    winner = index;
+                    available = false;
+                    return true;
+                });
+                CHECK_FALSE(available);
+                CHECK(std::ranges::all_of(visited, std::identity{}));
+            }
+            CHECK((served == std::array<std::size_t, 6>{0, 4, 0, 4, 0, 4}));
+            const auto noWork = [](std::size_t) { return false; };
+            CHECK(Internal::AdvanceSceneQueryBudgetOrder(8, cursor, noWork) == cursor);
+            CHECK(Internal::AdvanceSceneQueryBudgetOrder(0, cursor, noWork) == 0);
         }
 
         /** @brief Drives the product query owner across real cooked prefab retirement and replacement. */

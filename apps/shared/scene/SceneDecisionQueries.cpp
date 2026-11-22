@@ -10,6 +10,7 @@
 #include <algorithm>
 #include <bit>
 #include <new>
+#include <string_view>
 #include <utility>
 
 namespace Horo::Application::Internal {
@@ -139,9 +140,7 @@ namespace Horo::Application::Internal {
         if (!bestEffort_ && (AI::UsesBuiltinPointVisibility(*plan->second.plan) || AI::UsesBuiltinPointNavigation(*plan->second.plan)))
             return Executor::Failure(MakeError(AI::AIErrors::EnvironmentQueryStageUnsupported));
         if (tasks_.size() == AI::AiTaskSchedulerSettings::HardAgents) {
-            std::erase_if(tasks_, [](const auto &task) {
-                return task.expired();
-            });
+            PruneExpiredTasks();
             if (tasks_.size() == AI::AiTaskSchedulerSettings::HardAgents)
                 return Executor::Failure(MakeError(AI::AIErrors::EnvironmentQueryLimitExceeded));
         }
@@ -374,9 +373,11 @@ namespace Horo::Application::Internal {
     /** @copydoc SceneDecisionQueries::ReplayProfile */
     Sha256Digest SceneDecisionQueries::ReplayProfile() const noexcept {
         Sha256Builder hash;
+        constexpr std::string_view scheduleContract{"horo.scene-query.budget-order.v2"};
+        (void)hash.Update(std::as_bytes(std::span{scheduleContract.data(), scheduleContract.size()}));
         for (const auto &entry : plans_)
             (void)hash.Update(std::as_bytes(std::span{entry.second.digest.bytes}));
-        // The default keeps its digest for existing recordings. Non-default budgets add a canonical 32-bit suffix.
+        // Non-default budgets add a canonical 32-bit suffix.
         if (workUnitsLimit_ != AI::AiTaskSchedulerSettings::HardWorkUnits) {
             const std::array encoded{std::byte(workUnitsLimit_ >> 24U), std::byte(workUnitsLimit_ >> 16U), std::byte(workUnitsLimit_ >> 8U),
                                      std::byte(workUnitsLimit_)};
@@ -387,25 +388,34 @@ namespace Horo::Application::Internal {
 
     /** @copydoc SceneDecisionQueries::AdvanceQueries */
     void SceneDecisionQueries::AdvanceQueries(std::uint64_t tick) {
-        if (tasks_.empty())
-            return;
         AI::AiWorkBudget global{workUnitsLimit_};
-        for (std::size_t visited = 0; visited < tasks_.size(); ++visited) {
-            const auto task = tasks_[(cursor_ + visited) % tasks_.size()].lock();
+        cursor_ = AdvanceSceneQueryBudgetOrder(tasks_.size(), cursor_, [&](const std::size_t index) {
+            const auto task = tasks_[index].lock();
             if (!task)
-                continue;
+                return false;
             const auto agent = task->ActiveAgent();
             if (!agent.IsValid())
-                continue;
+                return false;
             auto &budget = budgets_[agent.slot.index];
-            if (budget.tick != tick)
-                budget = {tick, AgentUnits};
+            if (budget.owner != agent || budget.tick != tick)
+                budget = {agent, tick, AgentUnits};
             AI::AiWorkBudget query{AgentUnits};
             AI::AiWorkBudget agentWork{budget.remaining};
+            const auto before = global.Remaining();
             task->AdvanceQuery(tick, {query, agentWork, global});
             budget.remaining = agentWork.Remaining();
-        }
-        cursor_ = (cursor_ + 1) % tasks_.size();
+            return global.Remaining() < before;
+        });
+    }
+
+    void SceneDecisionQueries::PruneExpiredTasks() {
+        const auto *start = tasks_.empty() ? nullptr : tasks_.data() + std::min(cursor_, tasks_.size());
+        std::erase_if(tasks_, [&](const auto &task) {
+            const bool retired = task.expired();
+            if (retired && &task < start)
+                --cursor_;
+            return retired;
+        });
     }
 
     std::optional<AI::QueryNavigationAccess> SceneDecisionQueries::ReadQueryNavigation(const Runtime::RuntimeSceneView &scene,
@@ -431,9 +441,7 @@ namespace Horo::Application::Internal {
         pendingInspection_.reset();
         if (auto prepared = PrepareCache(scene); prepared.HasError())
             return prepared;
-        std::erase_if(tasks_, [](const auto &task) {
-            return task.expired();
-        });
+        PruneExpiredTasks();
         TickScope current{runtime, scene, origin, tick, physics, navigation};
 
         struct Reset final {

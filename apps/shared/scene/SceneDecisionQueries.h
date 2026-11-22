@@ -12,6 +12,24 @@ namespace Horo::Physics {
 }
 
 namespace Horo::Application::Internal {
+    /** @brief Visits each occurrence once and resumes after the first occurrence that spent shared work. */
+    template <typename Visitor>
+    std::size_t AdvanceSceneQueryBudgetOrder(const std::size_t count, const std::size_t cursor, Visitor visit) {
+        if (count == 0)
+            return 0;
+        const auto start = cursor % count;
+        auto next = start;
+        bool spentWork = false;
+        for (std::size_t offset = 0; offset < count; ++offset) {
+            const auto index = (start + offset) % count;
+            if (visit(index) && !spentWork) {
+                next = (index + 1) % count;
+                spentWork = true;
+            }
+        }
+        return next;
+    }
+
     class ScenePhysicsHost;
 
     /** @brief Synchronous owner-thread projection of the host's committed Navigation authority. */
@@ -81,6 +99,7 @@ namespace Horo::Application::Internal {
         };
 
         struct AgentBudget final {
+            AI::AgentHandle owner;
             std::uint64_t tick{};
             std::size_t remaining{};
         };
@@ -113,6 +132,8 @@ namespace Horo::Application::Internal {
         void InspectOutput(const AI::DecisionQueryTask &task, const Runtime::RuntimeSceneView &scene);
         /** @brief Issues bounded allowances in round-robin occurrence order without allocating. */
         void AdvanceQueries(std::uint64_t tick);
+        /** @brief Removes retired tasks without advancing past the next stable occurrence. */
+        void PruneExpiredTasks();
         /** @brief Allocates retention once per active Scene incarnation. */
         [[nodiscard]] Result<void> PrepareCache(const Runtime::RuntimeSceneView &scene);
 
