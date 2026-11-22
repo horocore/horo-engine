@@ -698,6 +698,57 @@ namespace {
         CHECK(fixture.source.calls == 0);
     }
 
+    TEST_CASE("Package project previews updates under the current host authority without writing", "[packages][application][host][update]") {
+        HostFixture fixture;
+        auto application = fixture.Acquire();
+        const auto oldRequest = fixture.Read("packages.json");
+        const auto oldLock = fixture.Read("packages.lock");
+        auto intent = nlohmann::json::parse(oldRequest);
+        intent["dependencies"][fixture.graph.package.Value()]["version"] = "2.0.0";
+        const auto request = Packages::ValidatedPackageRequest::Parse(intent.dump());
+        REQUIRE(request.HasValue());
+
+        const auto version = Packages::PackageVersion::Parse("2.0.0").Value();
+        const auto digest = fixture.graph.archive.Digest();
+        const Packages::PackageResolutionPlan resolution{
+            .packages = {{fixture.graph.package, version, fixture.graph.source, digest, {}}}};
+        Packages::PackageLockArtifact artifact{.package = fixture.graph.package,
+                                               .version = version,
+                                               .source = fixture.graph.source,
+                                               .artifactDigest = digest,
+                                               .manifestDigest = fixture.graph.archive.PackageManifestDigest(),
+                                               .fileManifestDigest = fixture.graph.archive.Manifest().Digest()};
+        SECTION("an incompatible candidate reports the target platform error") {
+            artifact.platforms = {{"windows", "x64", "horo-sdk-2"}};
+            const auto candidate = Packages::ValidatedPackageLockfileV1::Generate(
+                resolution, std::span{&fixture.graph.package, 1U}, request.Value().Digest(), std::span{&artifact, 1U});
+            REQUIRE(candidate.HasValue());
+            const auto rejected = application->PreviewUpdate(request.Value(), candidate.Value());
+            REQUIRE(rejected.HasError());
+            CHECK(rejected.ErrorValue().code.Value() == "packages.lockfile.unsupported_platform");
+        }
+        SECTION("an admitted candidate reports exact changes and the expired owner rejects it") {
+            const auto candidate = Packages::ValidatedPackageLockfileV1::Generate(
+                resolution, std::span{&fixture.graph.package, 1U}, request.Value().Digest(), std::span{&artifact, 1U});
+            REQUIRE(candidate.HasValue());
+            const auto preview = application->PreviewUpdate(request.Value(), candidate.Value());
+            REQUIRE(preview.HasValue());
+            CHECK(preview.Value().requestChanged);
+            REQUIRE(preview.Value().changes.size() == 1);
+            const auto &change = preview.Value().changes.front();
+            REQUIRE(change.current.has_value());
+            REQUIRE(change.candidate.has_value());
+            CHECK(change.current->version == fixture.graph.version);
+            CHECK(change.candidate->version == version);
+            fixture.clock.now = Duration::FromMilliseconds(1001);
+            CHECK(application->PreviewUpdate(request.Value(), candidate.Value()).HasError());
+        }
+        CHECK(fixture.Read("packages.json") == oldRequest);
+        CHECK(fixture.Read("packages.lock") == oldLock);
+        CHECK_FALSE(application->Current().Value());
+        CHECK(fixture.source.calls.load() == 0);
+    }
+
     TEST_CASE("Package installed snapshot retains sealed bytes after exact project retirement", "[packages][application][host]") {
         HostFixture fixture;
         auto application = fixture.Acquire();

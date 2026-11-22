@@ -248,22 +248,22 @@ namespace Horo::Packages {
             const auto &prior = before.front();
             const auto &next = after.front();
             if (prior.package < next.package) {
-                preview.changes.push_back({prior, std::nullopt});
+                preview.changes.emplace_back(prior, std::nullopt);
                 before = before.subspan(1);
             } else if (next.package < prior.package) {
-                preview.changes.push_back({std::nullopt, next});
+                preview.changes.emplace_back(std::nullopt, next);
                 after = after.subspan(1);
             } else {
                 if (prior != next)
-                    preview.changes.push_back({prior, next});
+                    preview.changes.emplace_back(prior, next);
                 before = before.subspan(1);
                 after = after.subspan(1);
             }
         }
         for (const auto &prior : before)
-            preview.changes.push_back({prior, std::nullopt});
+            preview.changes.emplace_back(prior, std::nullopt);
         for (const auto &next : after)
-            preview.changes.push_back({std::nullopt, next});
+            preview.changes.emplace_back(std::nullopt, next);
         return Output::Success(std::move(preview));
     }
 

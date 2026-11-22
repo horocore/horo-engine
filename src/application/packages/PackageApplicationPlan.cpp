@@ -107,4 +107,20 @@ namespace Horo::Application {
             return Output::Failure(replacement.ErrorValue());
         return Output::Success(std::move(replacement).Value().graph);
     }
+
+    /** @copydoc PackageApplication::PreviewUpdate */
+    Result<Packages::PackageUpdatePreview> PackageApplication::PreviewUpdate(
+        const Packages::ValidatedPackageRequest &candidate, const Packages::ValidatedPackageLockfileV1 &candidateLock) const {
+        using Output = Result<Packages::PackageUpdatePreview>;
+        if (const auto lane = impl_->CheckLane(); lane.HasError())
+            return Output::Failure(lane.ErrorValue());
+        const auto &configuration = impl_->configuration;
+        if (impl_->closing || !configuration.portableRequest || !configuration.lockedPlan)
+            return Output::Failure(PackageOperations::Failure("packages.application.plan_unavailable"));
+        if (const auto current = configuration.validateAdmission(); current.HasError())
+            return Output::Failure(current.ErrorValue());
+        if (const auto valid = candidateLock.ValidateForRestore(candidate.Digest(), configuration.restore.platform); valid.HasError())
+            return Output::Failure(valid.ErrorValue());
+        return Packages::PackageUpdatePreview::Prepare(*configuration.portableRequest, *configuration.lockedPlan, candidate, candidateLock);
+    }
 }  // namespace Horo::Application

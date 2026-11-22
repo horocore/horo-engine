@@ -367,6 +367,8 @@ returns the exact old and new entries for added, removed, or changed packages,
 including same-version artifact replacements, and distinguishes request-only
 changes. The preview is inert. Artifact verification, reference checks, trust
 approval, and migration belong to the transaction that applies the candidate.
+The package application checks current project authority and candidate platform
+compatibility before returning this preview to a host adapter.
 
 ## Uninstall Policy
 

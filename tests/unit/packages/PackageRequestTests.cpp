@@ -18,7 +18,7 @@ namespace {
     }
 
     /** @brief Generates a strict actual lock with independent source/version and the supplied intent commitment. */
-    ValidatedPackageLockfileV1 Lock(const Sha256Digest hash, const std::string_view version = "1.2.0",
+    ValidatedPackageLockfileV1 Lock(const Sha256Digest &hash, const std::string_view version = "1.2.0",
                                     const std::string_view source = "horo.public", const std::string_view packageName = "com.horo.assets",
                                     const std::string_view artifactBytes = "artifact") {
         const auto package = HoroPackageId::Parse(packageName).Value();

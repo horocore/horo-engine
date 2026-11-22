@@ -171,6 +171,15 @@ namespace Horo::Application {
         /** @brief Previews withdrawal of one package from the current exact locked graph.
          * @param package Package from the displayed lock. @return Read-only graph impacts or a stale/missing evidence failure. */
         [[nodiscard]] Result<Packages::PackageRemovalGraphPreview> PreviewRemoval(const Packages::HoroPackageId &package) const;
+        /**
+         * @brief Previews an explicitly resolved candidate against the current project package plan.
+         * @param candidate Portable intent for the candidate.
+         * @param candidateLock Exact lock for that intent.
+         * @return Read-only changes or typed stale authority, incompatibility, or request-to-lock failure.
+         * @post Does not fetch artifacts, start an operation, or change the project.
+         */
+        [[nodiscard]] Result<Packages::PackageUpdatePreview> PreviewUpdate(const Packages::ValidatedPackageRequest &candidate,
+                                                                          const Packages::ValidatedPackageLockfileV1 &candidateLock) const;
         /** @brief Requests cooperative cancellation of one exact current operation.
          * @param operation Expected operation identity. @return Success or typed stale/owner failure. */
         [[nodiscard]] Result<void> RequestCancel(PackageOperationId operation);
