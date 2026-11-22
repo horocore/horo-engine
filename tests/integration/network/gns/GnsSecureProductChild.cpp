@@ -466,11 +466,15 @@ namespace Horo::Network::NativeQualification {
                                             authority ? World(NetworkModeWorldKind::AuthorityServer, 1701)
                                                       : World(NetworkModeWorldKind::Client, 1702),
                                             authority);
+                    if (authority)
+                        owners.live->ai->CapturePendingAtShutdown();
                     std::cout << "NATIVE_AI " << (authority ? "authority" : "client") << '\n' << std::flush;
                 }
             }
             REQUIRE(owners.host->ClientConnectionTerminal() == nullptr);
             ShutdownAndVerifyReuse(owners);
+            if (owners.live && owners.live->ai)
+                owners.live->ai->VerifyRetirement(input.side == 0);
             REQUIRE(owners.fixtures.owners[input.side]->sessions->ConnectionAttemptTerminal() == nullptr);
             std::cout << "NATIVE_QUALIFIED " << (input.side == 0 ? "server" : "client") << '\n' << std::flush;
         }

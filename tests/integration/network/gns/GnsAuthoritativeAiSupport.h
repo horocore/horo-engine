@@ -23,6 +23,10 @@ namespace Horo::Network::NativeQualification {
         /** @brief Verifies native task completion and Blackboard access belong to the authority session alone. */
         void Verify(const Application::Internal::NetworkProductHost &host, const INetworkModeService &scene, NetworkModeWorld world,
                     bool authority) const;
+        /** @brief Captures the unfinished authority task before shutting down the live product. */
+        void CapturePendingAtShutdown();
+        /** @brief Checks pending task cleanup and stale continuation fencing after the peer has stopped. */
+        void VerifyRetirement(bool authority) const;
 
     private:
         struct State;

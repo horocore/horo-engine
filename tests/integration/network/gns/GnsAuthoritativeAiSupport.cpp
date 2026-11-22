@@ -8,6 +8,8 @@
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "NetworkProductHost.h"
 
+#include <limits>
+
 namespace Horo::Network::NativeQualification {
     namespace {
         namespace App = Application::Internal;
@@ -30,12 +32,25 @@ namespace Horo::Network::NativeQualification {
                                        .blackboardSchema = fixture.schema}};
         Output::TempDir output;
         std::unique_ptr<App::CommittedSceneAssets> committed;
+        AI::AiTaskContinuation pendingAtShutdown;
+        std::size_t cleanupsBeforeShutdown{};
+        std::size_t abortsBeforeShutdown{};
     };
 
     /** @copydoc AuthoritativeAi::AuthoritativeAi */
     AuthoritativeAi::AuthoritativeAi(const AssetCookTargetId &target) : state_(std::make_unique<State>()) {
         auto &state = *state_;
-        auto source = Decisions::TaskTree(GraphId);
+        using enum AI::DecisionControlKind;
+        const auto pending = Decisions::TreeNode(4, Task);
+        auto source =
+            Decisions::Tree(GraphId,
+                            {Decisions::TreeNode(1, Root), Decisions::TreeNode(2, Parallel), Decisions::TreeNode(3, Task), pending},
+                            {Decisions::Edge(1, 1, 2), Decisions::Edge(2, 2, 3), Decisions::Edge(3, 2, 4, 1)});
+        auto &probe = state.fixture.probe;
+        probe.onStart = [&probe, pendingTask = pending.task] {
+            probe.succeedTick =
+                probe.continuation.Operation().taskDefinition == pendingTask ? std::numeric_limits<std::uint64_t>::max() : 0;
+        };
         source.executionTask = Decisions::MakeIdentity<AI::TaskId>(9000);
         const auto plan = state.fixture.Compile(std::span{&source, 1}, GraphId);
         auto bytes = AI::DecisionPlanCodec::EncodeCooked(*plan);
@@ -92,8 +107,8 @@ namespace Horo::Network::NativeQualification {
             REQUIRE(health);
             CHECK(health->decisionTick > 0);
             CHECK_FALSE(health->degraded);
-            CHECK(probe.starts > 0);
-            CHECK(probe.cleanups > 0);
+            CHECK(probe.starts == 2);
+            CHECK(probe.cleanups == 1);
             CHECK(probe.lastTerminal == AI::AiTaskState::Succeeded);
             REQUIRE(board.HasValue());
             CHECK(board.Value() == state_->fixture.schema->Keys().front().defaultValue);
@@ -105,5 +120,31 @@ namespace Horo::Network::NativeQualification {
             REQUIRE(board.HasError());
             CHECK(board.ErrorValue().code.Value() == AI::AIErrors::RuntimeUnavailable.code.Value());
         }
+    }
+
+    /** @copydoc AuthoritativeAi::CapturePendingAtShutdown */
+    void AuthoritativeAi::CapturePendingAtShutdown() {
+        const auto &probe = state_->fixture.probe;
+        REQUIRE(probe.continuation.IsCurrent());
+        state_->pendingAtShutdown = probe.continuation;
+        state_->cleanupsBeforeShutdown = probe.cleanups;
+        state_->abortsBeforeShutdown = probe.aborts;
+    }
+
+    /** @copydoc AuthoritativeAi::VerifyRetirement */
+    void AuthoritativeAi::VerifyRetirement(bool authority) const {
+        const auto &probe = state_->fixture.probe;
+        if (!authority) {
+            CHECK(probe.starts == 0);
+            CHECK(probe.aborts == 0);
+            CHECK(probe.cleanups == 0);
+            return;
+        }
+        CHECK(probe.aborts == state_->abortsBeforeShutdown + 1);
+        CHECK(probe.cleanups == state_->cleanupsBeforeShutdown + 1);
+        CHECK(probe.lastTerminal == AI::AiTaskState::Cancelled);
+        CHECK_FALSE(state_->pendingAtShutdown.IsCurrent());
+        AI::AiTaskTerminalResult late{.state = AI::AiTaskState::Succeeded};
+        CHECK(state_->pendingAtShutdown.PublishTerminal(late).Value() == AI::AiTaskPublicationDisposition::Stale);
     }
 }  // namespace Horo::Network::NativeQualification
