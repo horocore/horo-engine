@@ -44,6 +44,8 @@ All 249 headless CTests passed (60 API, 63 Runtime, 14 Input Bindings, and
 These rows record evidence outside this foundation run. The release qualification owner
 checks every required product tuple and its current evidence before signing off.
 An unrun or blocked required row leaves that tuple unqualified.
+Use the [shared XR device smoke protocol](xr-device-qualification.md) to collect
+evidence for each declared physical tuple.
 
 | Evidence | Status | Owner and work |
 |---|---|---|
