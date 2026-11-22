@@ -363,6 +363,11 @@ that exact diagnostic process before reporting `diagnostic_complete`. The
 observation records only the diagnostic stage, native result and numeric
 runtime version. The report keeps physical XR qualification separate.
 
+Use `--expect-apk-sha256` to bind a run to an independently selected APK.
+An APK mismatch stops before device access. Use `--expect-runtime-version`
+with OpenXR to check the exact runtime version reported by the launched process.
+A version mismatch keeps the observed version and retires the diagnostic process.
+
 The command emits one JSON record. Process evidence is restricted to the
 matching package UID, PID and kernel start ticks. The log query accepts only
 entries timestamped after the device clock sample immediately before launch and

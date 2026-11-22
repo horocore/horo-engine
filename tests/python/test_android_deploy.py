@@ -300,6 +300,33 @@ class AndroidDeployTests(unittest.TestCase):
                 self.assertEqual(report["cleanup"], {"status": "stopped"})
                 self.assertEqual(report["qualification"]["physicalXrQualification"], "not_run")
 
+    def test_openxr_checks_selected_apk_before_any_device_command(self):
+        name = project.OPENXR_DEVELOPMENT_PROFILE
+        expected = "e" * 64
+        options = (*OPENXR_OPTIONS, "--expect-apk-sha256", expected)
+        status, report, commands = self.execute({}, options, name)
+        self.assertEqual((status, report["stage"], report["error"]), (1, "artifact", "deployment_apk_digest_mismatch"))
+        self.assertEqual(report["artifact"]["expectedApkSha256"], expected)
+        self.assertEqual(report["artifact"]["apkSha256"], DIGEST)
+        self.assertEqual(commands, [])
+
+    def test_openxr_checks_numeric_runtime_version_and_retires_a_mismatch(self):
+        name = project.OPENXR_DEVELOPMENT_PROFILE
+        for version, status, runtime_status in ((63, 0, "cold_system_discovered"), (64, 1, "version_mismatch")):
+            with self.subTest(version=version):
+                options = (*OPENXR_OPTIONS, "--expect-apk-sha256", DIGEST, "--expect-runtime-version", f"1.1.{version}")
+                actual, report, commands = self.execute({LOGCAT: log_line(OPENXR)}, options, name)
+                self.assertEqual(actual, status)
+                self.assertEqual(report["qualification"]["runtime"]["status"], runtime_status)
+                self.assertEqual(report["qualification"]["runtime"]["expectedVersion"], {"major": 1, "minor": 1, "patch": version})
+                self.assertEqual(report["observed"]["openxr"]["runtimeVersion"], {"major": 1, "minor": 1, "patch": 63})
+                self.assertEqual(report["qualification"]["physicalXrQualification"], "not_run")
+                if status:
+                    self.assertEqual(report["error"], "openxr_runtime_version_mismatch")
+                    self.assertEqual(report["status"], "partial")
+                self.assertEqual(report["cleanup"], {"status": "stopped"})
+                self.assertTrue(any("force-stop" in cmd for cmd in commands))
+
     def test_openxr_cold_discovery_native_failure_keeps_typed_stage(self):
         raw = log_line("host-openxr abi=arm64-v8a stage=extension-admission result=-51 runtimeMajor=0 runtimeMinor=0 runtimePatch=0")
         status, report, _ = self.execute({LOGCAT: raw}, OPENXR_OPTIONS, project.OPENXR_DEVELOPMENT_PROFILE)

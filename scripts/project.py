@@ -1266,6 +1266,16 @@ def openxr_log_evidence(message: str) -> dict:
     raise AndroidDeployError("openxr_diagnostic_invalid")
 
 
+def expected_openxr_runtime_version(value: str) -> dict[str, int]:
+    match = re.fullmatch(r"([1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,4})\.(0|[1-9][0-9]{0,9})", value)
+    if match is None:
+        raise argparse.ArgumentTypeError("Expected a numeric OpenXR runtime version, such as 1.1.63.")
+    major, minor, patch = map(int, match.groups())
+    if major >= 2**16 or minor >= 2**16 or patch >= 2**32:
+        raise argparse.ArgumentTypeError("Expected a version that fits the OpenXR version fields.")
+    return {"major": major, "minor": minor, "patch": patch}
+
+
 def qualification_uid_log_entries(log: str, expected_uid: int, after: int,
                                   through: int) -> Iterator[tuple[int, str, str, int, str]]:
     """Read log fields for one installed UID inside the verified device-clock interval."""
@@ -1597,6 +1607,28 @@ def write_deploy_bundle(path: Path, report: dict) -> None:
         raise AndroidDeployError("diagnostic_bundle_write_failed") from None
 
 
+def check_deployment_apk(artifact: dict, expected_sha256: str | None) -> None:
+    """Compare the verified artifact to an independently selected APK before device access."""
+    if expected_sha256 is None:
+        return
+    artifact["expectedApkSha256"] = expected_sha256
+    if artifact["apkSha256"] != expected_sha256:
+        raise AndroidDeployError("deployment_apk_digest_mismatch")
+
+
+def check_openxr_discovery(runtime: dict, observation: dict, abi: str) -> None:
+    """Admit the exact cold-process runtime observation without claiming a device smoke result."""
+    if observation["abi"] != abi:
+        raise AndroidDeployError("openxr_diagnostic_abi_mismatch")
+    if observation["stage"] != "discovered":
+        runtime["status"] = "cold_discovery_failed"
+        raise AndroidDeployError("openxr_cold_discovery_failed")
+    if "expectedVersion" in runtime and observation["runtimeVersion"] != runtime["expectedVersion"]:
+        runtime["status"] = "version_mismatch"
+        raise AndroidDeployError("openxr_runtime_version_mismatch")
+    runtime["status"] = "cold_system_discovered"
+
+
 def android_deploy_main(argv=None) -> int:
     """Install and launch one declared signed Android artifact, then emit a redacted JSON result."""
     parser = argparse.ArgumentParser(description=android_deploy_main.__doc__)
@@ -1608,15 +1640,24 @@ def android_deploy_main(argv=None) -> int:
     parser.add_argument("--connection", choices=ADB_CONNECTION_MODES, help="Expected connection mode for the selected serial.")
     parser.add_argument("--runtime", choices=("none", "openxr"), default="none",
                         help="Explicit runtime intent. OpenXR requires host and connection selections.")
+    parser.add_argument("--expect-runtime-version", type=expected_openxr_runtime_version,
+                        help="Require this exact OpenXR runtime version from the cold process.")
+    parser.add_argument("--expect-apk-sha256", help="Require the exact verified APK SHA-256 before contacting the device.")
     parser.add_argument("--java", default="java", help="Native Java executable for the locked signature verifier.")
     parser.add_argument("--timeout", type=int, default=120, help="Total host command deadline in seconds (1-300).")
     parser.add_argument("--diagnostic-bundle", type=Path, help="New absolute ZIP path for redacted deployment evidence.")
     arguments = parser.parse_args(argv)
     if not re.fullmatch(r"[A-Za-z0-9\[][A-Za-z0-9_.:@%+\[\]-]{0,127}", arguments.device) or not 1 <= arguments.timeout <= 300:
         parser.error("Supply a valid explicit ADB serial and a deadline of 1-300 seconds.")
+    if arguments.expect_apk_sha256 is not None and not re.fullmatch(r"[a-f0-9]{64}", arguments.expect_apk_sha256):
+        parser.error("--expect-apk-sha256 requires 64 lowercase hexadecimal digits.")
+    if arguments.expect_runtime_version is not None and arguments.runtime != "openxr":
+        parser.error("--expect-runtime-version requires --runtime openxr.")
     deadline = time.monotonic() + arguments.timeout
     host = android_deploy_host()
     runtime = {"requested": arguments.runtime, "status": "not_requested" if arguments.runtime == "none" else "not_observed"}
+    if arguments.expect_runtime_version is not None:
+        runtime["expectedVersion"] = arguments.expect_runtime_version
     connection = {"requested": arguments.connection, "observed": "not_observed"}
     report = {"schema": 1, "status": "partial", "stage": "selection",
               "qualification": {"host": {"requested": arguments.host, "observed": host},
@@ -1652,6 +1693,7 @@ def android_deploy_main(argv=None) -> int:
                                   "apkSha256": artifact.apk_sha256, "provenanceSha256": artifact.provenance_sha256,
                                   "sourceRevision": artifact.source_revision, "declaredRenderer": profile["renderer"],
                                   "abis": sorted(artifact.abis)}
+            check_deployment_apk(report["artifact"], arguments.expect_apk_sha256)
             openxr = "openxrProfile" in profile
             if openxr:
                 runtime["selection"] = "system-default"
@@ -1684,11 +1726,7 @@ def android_deploy_main(argv=None) -> int:
             if observed["crashObserved"]:
                 raise AndroidDeployError("application_crashed")
             if openxr:
-                if observed["openxr"]["abi"] != abi:
-                    raise AndroidDeployError("openxr_diagnostic_abi_mismatch")
-                runtime["status"] = "cold_system_discovered" if observed["openxr"]["stage"] == "discovered" else "cold_discovery_failed"
-                if runtime["status"] != "cold_system_discovered":
-                    raise AndroidDeployError("openxr_cold_discovery_failed")
+                check_openxr_discovery(runtime, observed["openxr"], abi)
                 report["cleanup"] = launch.rollback()
                 if report["cleanup"]["status"] not in ("stopped", "already_exited"):
                     raise AndroidDeployError("application_stop_unconfirmed")
