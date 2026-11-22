@@ -230,6 +230,81 @@ namespace Horo::XR::OpenXRInternal {
             return Outcome::Success(census);
         }
 
+        XRCapabilityState QuadEnumerationFailure(const Error &error) noexcept {
+            const auto code = error.code.Value();
+            return code == XRErrors::CapacityExceeded.code.Value() || code == XRErrors::OperationInvalid.code.Value() ||
+                           code == XRErrors::OperationUnsupported.code.Value()
+                       ? XRCapabilityState::Incompatible
+                       : XRCapabilityState::Unavailable;
+        }
+
+        /** @brief Captures exactly four valid native extents in the specified OpenXR role order. */
+        Result<std::array<NativeQuadView, 4>> ReadQuadGeometry(const NativeDiscoveryBorrow &owner,
+                                                             const XrSystemGraphicsProperties limits) {
+            using Outcome = Result<std::array<NativeQuadView, 4>>;
+            constexpr auto config = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO_WITH_FOVEATED_INSET;
+            const auto enumerate = Resolve<PFN_xrEnumerateViewConfigurationViews>(owner, "xrEnumerateViewConfigurationViews");
+            if (enumerate.HasError())
+                return Outcome::Failure(enumerate.ErrorValue());
+            std::array<XrViewConfigurationView, 4> views{};
+            for (auto &view : views)
+                view.type = XR_TYPE_VIEW_CONFIGURATION_VIEW;
+            const auto count = Enumerate(enumerate.Value(), "xrEnumerateViewConfigurationViews", views, owner.instance, owner.system, config);
+            if (count.HasError())
+                return Outcome::Failure(count.ErrorValue());
+            if (count.Value() != views.size() || !std::ranges::all_of(views, [&limits](const auto &view) {
+                    return ValidView(view, limits);
+                }))
+                return Outcome::Failure(MakeError(XRErrors::OperationInvalid));
+
+            constexpr std::array roles{XRViewRole::PrimaryLeft, XRViewRole::PrimaryRight, XRViewRole::FoveatedInsetLeft,
+                                       XRViewRole::FoveatedInsetRight};
+            std::array<NativeQuadView, roles.size()> result{};
+            for (std::size_t index = 0; index < views.size(); ++index) {
+                const auto &view = views[index];
+                result[index] = {roles[index],
+                                 {view.recommendedImageRectWidth, view.recommendedImageRectHeight},
+                                 {view.maxImageRectWidth, view.maxImageRectHeight},
+                                 view.recommendedSwapchainSampleCount,
+                                 view.maxSwapchainSampleCount};
+            }
+            return Outcome::Success(result);
+        }
+
+        /** @brief Optional discovery never disables an independently admitted stereo configuration. */
+        NativeQuadViewCensus ReadQuadViews(const NativeDiscoveryBorrow &owner, const NativeSystemCensus &observed) {
+            using enum XRCapabilityState;
+            constexpr auto config = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO_WITH_FOVEATED_INSET;
+            const auto configurations = std::span{observed.configurations}.first(observed.configurationCount);
+            if (std::ranges::find(configurations, config) == configurations.end())
+                return {};
+            if (owner.acceptedApi.minor < 1 && !Enabled(owner, XR_VARJO_QUAD_VIEWS_EXTENSION_NAME))
+                return {DependencyMissing};
+
+            const auto geometry = ReadQuadGeometry(owner, observed.system.graphicsProperties);
+            if (geometry.HasError())
+                return {QuadEnumerationFailure(geometry.ErrorValue())};
+            const auto blends = Resolve<PFN_xrEnumerateEnvironmentBlendModes>(owner, "xrEnumerateEnvironmentBlendModes");
+            if (blends.HasError())
+                return {Unavailable};
+            NativeQuadViewCensus result;
+            const auto modes =
+                Enumerate(blends.Value(), "xrEnumerateEnvironmentBlendModes", result.blendModes, owner.instance, owner.system, config);
+            if (modes.HasError())
+                return {QuadEnumerationFailure(modes.ErrorValue())};
+            const auto publishedModes = std::span{result.blendModes}.first(modes.Value());
+            if (!Unique(result.blendModes, modes.Value()) || !std::ranges::all_of(publishedModes, [](const auto mode) {
+                    return mode == XR_ENVIRONMENT_BLEND_MODE_OPAQUE || mode == XR_ENVIRONMENT_BLEND_MODE_ADDITIVE ||
+                           mode == XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND;
+                }))
+                return {Incompatible};
+
+            result.views = geometry.Value();
+            result.blendModeCount = modes.Value();
+            result.state = Available;
+            return result;
+        }
+
         struct ReprojectionRoute final {
             NativeReprojectionRoute kind;
             std::string_view extension;
@@ -370,6 +445,23 @@ namespace Horo::XR::OpenXRInternal {
         if (const auto current = BorrowDiscovery(attempt); current.HasError())
             return Result<NativeSystemCensus>::Failure(current.ErrorValue());
         return census;
+    }
+
+    /** @copydoc OpenXRNativeSession::DiscoverQuadViews */
+    Result<NativeQuadViewCensus> OpenXRNativeSession::DiscoverQuadViews(const XRLoaderPreflightAttempt attempt,
+                                                                      const NativeSystemCensus &observed) const {
+        using Outcome = Result<NativeQuadViewCensus>;
+        const auto owner = BorrowDiscovery(attempt);
+        if (owner.HasError())
+            return Outcome::Failure(owner.ErrorValue());
+        if (observed.system.systemId != owner.Value().system)
+            return Outcome::Failure(MakeError(XRErrors::IdentityStale));
+        if (observed.configurationCount > observed.configurations.size())
+            return Outcome::Failure(MakeError(XRErrors::CapacityExceeded));
+        const auto census = ReadQuadViews(owner.Value(), observed);
+        if (const auto current = BorrowDiscovery(attempt); current.HasError())
+            return Outcome::Failure(current.ErrorValue());
+        return Outcome::Success(census);
     }
 
     /** @copydoc OpenXRNativeSession::BorrowFeatureDiscovery */

@@ -4,6 +4,7 @@
  */
 #include "Horo/Runtime/Render/RenderResourceDescriptors.h"
 #include "Horo/XR/XRCapabilities.h"
+#include "Horo/XR/XRViewRenderPlan.h"
 
 #include <array>
 #include <openxr/openxr.h>
@@ -28,6 +29,23 @@ namespace Horo::XR::OpenXRInternal {
         XRCapabilityState handTracking{XRCapabilityState::Unsupported}; /**< Observed system support for the admitted EXT route. */
         NativePlaneCensus planes;
         XRCapabilityState eyeGazeProvider{XRCapabilityState::Unsupported}; /**< Hardware support from the exact native census. */
+    };
+
+    /** @brief One ordered view's cold semantic role, image extents and sample evidence. */
+    struct NativeQuadView final {
+        XRViewRole role{XRViewRole::Auxiliary};
+        Render::FramebufferExtent recommendedExtent;
+        Render::FramebufferExtent maximumExtent;
+        std::uint32_t recommendedSamples{};
+        std::uint32_t maximumSamples{};
+    };
+
+    /** @brief Complete native quad discovery. Availability here grants no session or submission authority. */
+    struct NativeQuadViewCensus final {
+        XRCapabilityState state{XRCapabilityState::Unsupported};
+        std::array<NativeQuadView, 4> views{};
+        std::array<XrEnvironmentBlendMode, 16> blendModes{};
+        std::uint32_t blendModeCount{};
     };
 
     /** @brief Known native frame synthesis wire routes; discovery never grants a provider. */

@@ -92,6 +92,10 @@ namespace Horo::Application::Internal {
                 return feature.capability == XRCapability::FixedFoveation && feature.kind == XRFeatureRequirementKind::Optional;
             });
 
+            const bool quadViews = std::ranges::any_of(settings.Features(), [](const XRFeatureRequest &feature) {
+                return feature.capability == XRCapability::QuadViews;
+            });
+
             struct Selection final {
                 NativeExtensionRequest request;
                 bool selected;
@@ -102,6 +106,7 @@ namespace Horo::Application::Internal {
                 Selection{{XR_EXT_EYE_GAZE_INTERACTION_EXTENSION_NAME}, true},
                 Selection{{XR_EXT_HAND_TRACKING_EXTENSION_NAME}, handsRequested},
                 Selection{{XR_HTC_FOVEATION_EXTENSION_NAME}, fixedFoveation},
+                Selection{{XR_VARJO_QUAD_VIEWS_EXTENSION_NAME}, quadViews},
                 Selection{{XR_ANDROID_LIGHT_ESTIMATION_EXTENSION_NAME}, lightEstimation},
                 Selection{{XR_MSFT_SPATIAL_ANCHOR_EXTENSION_NAME}, settings.AllowsSpatialAnchorPreview() || persistence},
                 Selection{{.name = XR_MSFT_SPATIAL_ANCHOR_PERSISTENCE_EXTENSION_NAME, .dependencies = anchorDependencies}, persistence},

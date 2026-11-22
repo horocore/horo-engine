@@ -9,6 +9,10 @@ namespace Horo::Tests::OpenXR {
         static inline CensusScript *active{};
         XrVersion implementationVersion{XR_MAKE_VERSION(9, 8, 7)};
         std::uint32_t views{2};
+        std::uint32_t quadViews{4};
+        bool advertisesQuad{};
+        bool invalidQuadView{};
+        bool duplicateQuadBlend{};
         std::uint32_t spaces{2};
         std::uint32_t formats{2};
         std::span<const std::int64_t> formatPublication;
@@ -114,20 +118,27 @@ namespace Horo::Tests::OpenXR {
 
         static XRAPI_ATTR XrResult XRAPI_CALL Configurations(XrInstance, XrSystemId, const std::uint32_t capacity, std::uint32_t *count,
                                                              XrViewConfigurationType *values) {
-            *count = 1;
-            if (capacity)
-                values[0] = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+            *count = active->advertisesQuad ? 2 : 1;
+            if (capacity < *count)
+                return capacity == 0 ? Record("configurations") : XR_ERROR_SIZE_INSUFFICIENT;
+            values[0] = active->advertisesQuad ? XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO_WITH_FOVEATED_INSET
+                                              : XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
+            if (active->advertisesQuad)
+                values[1] = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO;
             return Record("configurations");
         }
 
-        static XRAPI_ATTR XrResult XRAPI_CALL Views(XrInstance, XrSystemId, XrViewConfigurationType, const std::uint32_t capacity,
-                                                    std::uint32_t *count, XrViewConfigurationView *values) {
-            *count = active->views;
+        static XRAPI_ATTR XrResult XRAPI_CALL Views(XrInstance, XrSystemId, const XrViewConfigurationType type,
+                                                   const std::uint32_t capacity, std::uint32_t *count, XrViewConfigurationView *values) {
+            const bool quad = type == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO_WITH_FOVEATED_INSET;
+            *count = quad ? active->quadViews : active->views;
             if (capacity && capacity < *count)
                 return XR_ERROR_SIZE_INSUFFICIENT;
             if (capacity)
                 for (std::uint32_t index = 0; index < *count; ++index) {
-                    values[index].recommendedImageRectWidth = active->invalidView ? 4096 : 1024;
+                    values[index].recommendedImageRectWidth = quad && index == 3 && active->invalidQuadView
+                                                                  ? 4096
+                                                                  : (quad ? 1024 - index * 128 : (active->invalidView ? 4096 : 1024));
                     values[index].maxImageRectWidth = 2048;
                     values[index].recommendedImageRectHeight = 1024;
                     values[index].maxImageRectHeight = 2048;
@@ -142,15 +153,20 @@ namespace Horo::Tests::OpenXR {
                         synthesis.recommendedMotionVectorImageRectHeight = 512;
                     }
                 }
-            return Record("views");
+            return Record(quad ? "quad-views" : "views");
         }
 
-        static XRAPI_ATTR XrResult XRAPI_CALL BlendModes(XrInstance, XrSystemId, XrViewConfigurationType, const std::uint32_t capacity,
-                                                         std::uint32_t *count, XrEnvironmentBlendMode *values) {
-            *count = 1;
-            if (capacity)
-                values[0] = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
-            return Record("blend-modes");
+        static XRAPI_ATTR XrResult XRAPI_CALL BlendModes(XrInstance, XrSystemId, const XrViewConfigurationType type,
+                                                        const std::uint32_t capacity, std::uint32_t *count, XrEnvironmentBlendMode *values) {
+            const bool quad = type == XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO_WITH_FOVEATED_INSET;
+            *count = quad ? 2 : 1;
+            const std::string_view phase = quad ? "quad-blend-modes" : "blend-modes";
+            if (capacity < *count)
+                return capacity == 0 ? Record(phase) : XR_ERROR_SIZE_INSUFFICIENT;
+            values[0] = XR_ENVIRONMENT_BLEND_MODE_OPAQUE;
+            if (quad)
+                values[1] = active->duplicateQuadBlend ? XR_ENVIRONMENT_BLEND_MODE_OPAQUE : XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND;
+            return Record(phase);
         }
 
         static XRAPI_ATTR XrResult XRAPI_CALL Spaces(XrSession session, const std::uint32_t capacity, std::uint32_t *count,

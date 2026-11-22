@@ -304,6 +304,12 @@ namespace Horo::Application::Internal {
                                      {},
                                      {},
                                      reprojection.Value().writer};
+        const auto quad = native_->DiscoverQuadViews(selection_.attempt, observed);
+        if (quad.HasError())
+            return Outcome::Failure(quad.ErrorValue());
+        const auto quadState = quad.Value().state;
+        output.capabilities.states[static_cast<std::size_t>(XRCapability::QuadViews)] =
+            quadState == XRCapabilityState::Available ? XRCapabilityState::DependencyMissing : quadState;
         const auto foveation = native_->ReadExtensionAdmission(selection_.attempt, XR_HTC_FOVEATION_EXTENSION_NAME);
         if (foveation.HasError())
             return Outcome::Failure(foveation.ErrorValue());

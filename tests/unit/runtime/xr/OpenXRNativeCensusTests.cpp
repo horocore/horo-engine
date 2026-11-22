@@ -255,6 +255,81 @@ namespace Horo::Tests::OpenXR {
         REQUIRE(fixture.owner.Close().HasValue());
     }
 
+    TEST_CASE("OpenXR quad discovery preserves native role order without changing stereo admission", "[unit][xr][native][quad]") {
+        using enum XRCapabilityState;
+        CensusFixture fixture;
+        fixture.census.advertisesQuad = true;
+        auto expected = Available;
+        auto discovery = fixture.Discovery();
+        constexpr std::array<std::string_view, 1> legacy{XR_VARJO_QUAD_VIEWS_EXTENSION_NAME};
+        const std::array routes{NativeExtensionRequest{legacy.front()}};
+
+        SECTION("OpenXR 1.1 discovers the core view configuration without a legacy extension") {}
+        SECTION("OpenXR 1.0 requires the legacy route to be enabled") {
+            discovery.requestedApi = {1, 0, 0};
+            expected = DependencyMissing;
+        }
+        SECTION("OpenXR 1.0 can use the explicitly enabled legacy route") {
+            discovery.requestedApi = {1, 0, 0};
+            fixture.native.extraExtensions = legacy;
+            ++fixture.native.extensionCount;
+            discovery.extensions = routes;
+        }
+        SECTION("Absence does not enumerate quad geometry") {
+            fixture.census.advertisesQuad = false;
+            expected = Unsupported;
+        }
+        SECTION("An oversized view list is rejected whole") {
+            fixture.census.quadViews = 5;
+            expected = Incompatible;
+        }
+        SECTION("A short view list is rejected whole") {
+            fixture.census.quadViews = 3;
+            expected = Incompatible;
+        }
+        SECTION("One malformed inset suppresses the whole optional result") {
+            fixture.census.invalidQuadView = true;
+            expected = Incompatible;
+        }
+        SECTION("Duplicate blend modes invalidate the optional result") {
+            fixture.census.duplicateQuadBlend = true;
+            expected = Incompatible;
+        }
+        SECTION("A native query failure remains distinct from a malformed list") {
+            fixture.census.fail = "quad-views";
+            expected = Unavailable;
+        }
+
+        REQUIRE(fixture.owner.PrepareDiscovery(discovery).HasValue());
+        const auto observed = fixture.owner.DiscoverSystem(fixture.preflight.Attempt());
+        REQUIRE(observed.HasValue());
+        CHECK(observed.Value().primaryViewCount == 2);
+        const auto quad = fixture.owner.DiscoverQuadViews(fixture.preflight.Attempt(), observed.Value());
+        REQUIRE(quad.HasValue());
+        CHECK(quad.Value().state == expected);
+        CHECK(fixture.native.liveSessions == 0);
+        if (expected == Available) {
+            constexpr std::array roles{XRViewRole::PrimaryLeft, XRViewRole::PrimaryRight, XRViewRole::FoveatedInsetLeft,
+                                       XRViewRole::FoveatedInsetRight};
+            for (std::size_t index = 0; index < roles.size(); ++index) {
+                const auto &view = quad.Value().views[index];
+                CHECK(view.role == roles[index]);
+                CHECK(view.recommendedExtent.width == 1024 - index * 128);
+                CHECK(view.maximumExtent.width == 2048);
+                CHECK(view.recommendedSamples == 1);
+            }
+            REQUIRE(quad.Value().blendModeCount == 2);
+            CHECK(quad.Value().blendModes[1] == XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND);
+        } else {
+            CHECK(quad.Value().blendModeCount == 0);
+            CHECK_FALSE(quad.Value().views.front().recommendedExtent.IsValid());
+            if (expected == Unsupported || expected == DependencyMissing)
+                CHECK(std::ranges::count(fixture.census.calls, "quad-views") == 0);
+        }
+        REQUIRE(fixture.owner.Close().HasValue());
+        CHECK(fixture.owner.DiscoverQuadViews(fixture.preflight.Attempt(), observed.Value()).HasError());
+    }
+
     TEST_CASE("OpenXR eye gaze support is a bounded cold census and malformed optional data leaves baseline available",
               "[unit][xr][native][gaze]") {
         using enum XRCapabilityState;
