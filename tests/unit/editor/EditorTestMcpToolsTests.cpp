@@ -71,16 +71,26 @@ namespace {
         CHECK_FALSE(store.Start({42, 1, 100}, now));
         store.Sample({1, 2, 3}, now);
         store.Sample({2, 3, 4}, now + 20ms);
-        CHECK(store.Read(*id, now + 20ms)->count == 1);
+        CHECK(store.Read(*id, now + 20ms)->artifact.count == 1);
         store.Sample({2, 3, 4}, now + 190ms);
-        CHECK(store.Read(*id, now + 190ms)->phase == EditorDebugCapturePhase::Ready);
-        CHECK(store.Read(*id, now + 190ms)->samples[1].elapsedMs == 190);
+        const auto ready = store.Read(*id, now + 190ms);
+        REQUIRE(ready);
+        CHECK(ready->artifact.phase == EditorDebugCapturePhase::Ready);
+        CHECK(ready->artifact.samples[1].elapsedMs == 190);
+        CHECK(ready->expiresAt == now + EditorDebugCaptureStorage::Lifetime);
+        CHECK_FALSE(ready->publication.expired());
+        store.RetireScene();
+        const auto retired = store.Read(*id, now + 190ms);
+        REQUIRE(retired);
+        CHECK(retired->artifact.phase == EditorDebugCapturePhase::SceneChanged);
+        CHECK(retired->artifact.count == 0);
+        CHECK(ready->publication.expired());
         CHECK_FALSE(store.Start({42, 1, 100}, now + 190ms));
         const auto second = store.Start({42, 1, 100}, now + 1s);
         REQUIRE(second);
         CHECK_FALSE(store.Read(*id, now + 1s));
         store.RetireScene();
-        CHECK(store.Read(*second, now + 2s)->phase == EditorDebugCapturePhase::SceneChanged);
+        CHECK(store.Read(*second, now + 2s)->artifact.phase == EditorDebugCapturePhase::SceneChanged);
         CHECK_FALSE(store.Read(*second, now + 31s));
     }
 
@@ -233,7 +243,8 @@ namespace {
 
     TEST_CASE("Debug capture requires exact approval and returns only numeric evidence", "[unit][editor][mcp][debug-capture]") {
         EditorDebugCaptureStorage store;
-        const auto now = EditorDebugCaptureStorage::Clock::time_point{};
+        const auto now = EditorDebugCaptureStorage::Clock::now();
+        CancellationSource lifetime;
         unsigned starts{};
         std::function<bool()> authorized;
         const auto endpoint = std::make_shared<const EditorDebugCaptureEndpoint>(
@@ -252,9 +263,11 @@ namespace {
                                            [&](std::uint64_t id) {
             return store.Read(id, now + 100ms);
         },
-                                       .cancel = [&](std::uint64_t id) {
+                                       .cancel =
+                                           [&](std::uint64_t id) {
             return store.Cancel(id, now + 100ms);
-        }});
+        },
+                                       .lifetime = lifetime.Token()});
         const EditorCommandMcpAdmission admission{"capture-client", "project-one", 3, {std::string{EditorDebugCaptureGrant}}};
         auto opened = EditorCommandMcpSession::Create({.debugCapture = endpoint}, admission, Test::Authorization());
         REQUIRE(opened.HasValue());
@@ -272,10 +285,19 @@ namespace {
         REQUIRE(read["status"] == "succeeded");
         CHECK(read["result"]["phase"] == "sampling");
         CHECK(read["result"]["samples"][0]["worldPosition"] == Json::array({1, 2, 3}));
-        const auto cancel = Command("cancel", "debug.cancel_capture", args);
-        Approve(session, cancel);
-        CHECK(Execute(session, cancel)["result"]["cancelled"] == true);
-        CHECK(Execute(session, Command("after", "debug.get_capture", args))["result"]["phase"] == "cancelled");
+        const auto queued = QueueAndPump(session, Command("queued", "debug.get_capture", args));
+        SECTION("cancelling the capture revokes queued samples") {
+            const auto cancel = Command("cancel", "debug.cancel_capture", args);
+            Approve(session, cancel);
+            CHECK(Execute(session, cancel)["result"]["cancelled"] == true);
+            const auto after = Execute(session, Command("after", "debug.get_capture", args));
+            CHECK(after["result"]["phase"] == "cancelled");
+            CHECK(after["result"]["samples"].empty());
+        }
+        SECTION("retiring the workspace revokes queued samples without another frame") {
+            lifetime.RequestCancellation();
+        }
+        CHECK(session.Client()->Call({.id = "withdrawn", .method = "operations/get", .params = queued}).HasError());
         REQUIRE(authorized);
         CHECK(authorized());
         CHECK(session.Close().HasValue());
@@ -301,7 +323,7 @@ namespace {
         },
             .read =
                 [](std::uint64_t) {
-            return std::optional<EditorDebugCaptureArtifact>{};
+            return std::optional<EditorDebugCaptureSnapshot>{};
         },
             .cancel =
                 [](std::uint64_t) {

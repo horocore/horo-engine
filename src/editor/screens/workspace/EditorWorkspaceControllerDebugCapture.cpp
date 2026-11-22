@@ -54,8 +54,8 @@ namespace Horo::Editor {
         },
                                             .read =
                                                 [this, lifetime](std::uint64_t id) {
-            if (lifetime.IsCancellationRequested())
-                return std::optional<EditorDebugCaptureArtifact>{};
+            if (lifetime.IsCancellationRequested() || !m_debugCaptureAuthorized || !m_debugCaptureAuthorized())
+                return std::optional<EditorDebugCaptureSnapshot>{};
             return m_debugCapture.Read(id, EditorDebugCaptureStorage::Clock::now());
         },
                                             .cancel =

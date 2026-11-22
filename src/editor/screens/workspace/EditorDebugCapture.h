@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <functional>
 #include <limits>
+#include <memory>
 #include <optional>
 #include <string>
 #include <thread>
@@ -45,6 +46,13 @@ namespace Horo::Editor {
         std::uint32_t count{};
     };
 
+    /** @brief Detached numeric evidence and its revocable delivery deadline. */
+    struct EditorDebugCaptureSnapshot final {
+        EditorDebugCaptureArtifact artifact;
+        std::weak_ptr<const void> publication;
+        std::chrono::steady_clock::time_point expiresAt;
+    };
+
     /** @brief One bounded ephemeral artifact. All methods belong to the editor owner thread. */
     class EditorDebugCaptureStorage final {
     public:
@@ -58,6 +66,7 @@ namespace Horo::Editor {
             if (!Valid(request) || (slot_ && slot_->phase == EditorDebugCapturePhase::Sampling) ||
                 (started_ && now - *started_ < StartSpacing) || id_ == std::numeric_limits<std::uint64_t>::max())
                 return std::nullopt;
+            publication_ = std::make_shared<const bool>(true);
             started_ = now;
             nextSample_ = now;
             slot_ = EditorDebugCaptureArtifact{.id = ++id_, .request = request, .phase = EditorDebugCapturePhase::Sampling};
@@ -90,14 +99,18 @@ namespace Horo::Editor {
 
         /** @brief Stops publication when the exact Play scene or entity changes. */
         void RetireScene() {
-            if (slot_ && slot_->phase == EditorDebugCapturePhase::Sampling)
+            if (slot_ && (slot_->phase == EditorDebugCapturePhase::Sampling || slot_->phase == EditorDebugCapturePhase::Ready)) {
                 slot_->phase = EditorDebugCapturePhase::SceneChanged;
+                WithdrawSamples();
+            }
         }
 
         /** @brief Returns a copied artifact or no evidence if it expired or belongs to another request. */
-        std::optional<EditorDebugCaptureArtifact> Read(std::uint64_t id, Clock::time_point now) {
+        std::optional<EditorDebugCaptureSnapshot> Read(std::uint64_t id, Clock::time_point now) {
             Expire(now);
-            return slot_ && slot_->id == id ? slot_ : std::nullopt;
+            if (!slot_ || slot_->id != id)
+                return std::nullopt;
+            return EditorDebugCaptureSnapshot{*slot_, publication_, *started_ + Lifetime};
         }
 
         /** @brief Cancels only the exact active request. */
@@ -106,20 +119,30 @@ namespace Horo::Editor {
             if (!slot_ || slot_->id != id || slot_->phase != EditorDebugCapturePhase::Sampling)
                 return false;
             slot_->phase = EditorDebugCapturePhase::Cancelled;
+            WithdrawSamples();
             return true;
         }
 
         /** @brief Withdraws all retained evidence before session teardown. */
         void Clear() noexcept {
+            publication_.reset();
             slot_.reset();
         }
 
     private:
         void Expire(const Clock::time_point now) {
             if (started_ && now - *started_ >= Lifetime)
-                slot_.reset();
+                Clear();
         }
 
+        /** @brief Revokes queued deliveries while preserving the terminal phase for direct observation. */
+        void WithdrawSamples() noexcept {
+            publication_.reset();
+            slot_->samples = {};
+            slot_->count = 0;
+        }
+
+        std::shared_ptr<const bool> publication_;
         std::uint64_t id_{};
         std::optional<Clock::time_point> started_;
         Clock::time_point nextSample_{};
@@ -144,7 +167,7 @@ namespace Horo::Editor {
         std::uint64_t authorizationRevision{};
         std::thread::id owner;
         std::function<Result<std::uint64_t>(const EditorDebugCaptureRequest &, std::function<bool()>)> start;
-        std::function<std::optional<EditorDebugCaptureArtifact>(std::uint64_t)> read;
+        std::function<std::optional<EditorDebugCaptureSnapshot>(std::uint64_t)> read;
         std::function<bool(std::uint64_t)> cancel;
         std::function<std::optional<EditorDebugImageSource>()> readImageSource;
         std::function<Result<std::uint64_t>(EditorDebugImageSource, EditorViewportImageRegion, std::function<bool()>)> startImage;

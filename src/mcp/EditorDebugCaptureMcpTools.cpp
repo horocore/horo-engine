@@ -267,10 +267,13 @@ namespace Horo::Editor {
                     return Output::Success({{"cancelled", kind_ == CaptureKind::Image ? endpoint.cancelImage(*id) : endpoint.cancel(*id)}});
                 if (kind_ == CaptureKind::Image)
                     return ReadImage(endpoint, *owner_, arguments.value("offset", std::size_t{0}), context);
-                const auto artifact = endpoint.read(*id);
-                if (!artifact)
+                const auto snapshot = endpoint.read(*id);
+                if (!snapshot)
                     return Output::Failure(MakeError(Mcp::McpErrors::OperationUnavailable));
-                return Output::Success(WriteArtifact(*artifact));
+                if (snapshot->artifact.count != 0 &&
+                    !context.BindResultLease({snapshot->publication, snapshot->expiresAt, endpoint.lifetime}))
+                    return Output::Failure(MakeError(Mcp::McpErrors::OperationUnavailable));
+                return Output::Success(WriteArtifact(snapshot->artifact));
             }
 
             Output Start(const EditorDebugCaptureEndpoint &endpoint, const Json &arguments, const Mcp::McpRequestContext &context) {
