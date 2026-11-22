@@ -2643,6 +2643,11 @@ feature and weight tensors with signed 64-bit accumulators. Its cooker checks
 the target's explicit interpreter support, fixed storage, exact work allowance,
 feature identities and registered output tasks. The cooked model has a
 canonical digest covering its schema, selected target and tensor contents.
+`LocalLearnedPolicy::EncodeCooked` emits those canonical bytes for a registered
+`core.local_learned_policy` file. The Decision Asset Cook host admits the model
+against the selected package's explicit interpreter, task declarations and
+budgets before publishing it through the ordinary asset transaction. Loading
+rechecks the expected digest and current target and task declarations.
 Inference submits only a proposal. The decision owner's one-shot request slot
 checks the pinned Scene, agent, provider, request and input revisions, model
 digest, deadline and current task declarations before returning a task to the

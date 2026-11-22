@@ -4,7 +4,10 @@
 #include "Horo/AI/AITaskScheduler.h"
 
 #include <algorithm>
+#include <bit>
+#include <iterator>
 #include <limits>
+#include <new>
 #include <string_view>
 #include <type_traits>
 #include <utility>
@@ -12,6 +15,31 @@
 namespace Horo::AI {
     namespace {
         constexpr std::uint32_t TensorSchemaV1 = 1;
+        constexpr std::string_view WireFormat{"horo.local-policy.int16-linear.v1"};
+        constexpr std::size_t WireHeaderBytes = WireFormat.size() + 3 * sizeof(std::uint64_t) + 3 * sizeof(std::uint32_t);
+
+        constexpr std::size_t WireSize(const std::size_t features, const std::size_t rows) noexcept {
+            return WireHeaderBytes + sizeof(std::uint64_t) * features +
+                   rows * (sizeof(std::uint64_t) + sizeof(std::int32_t) + sizeof(std::int16_t) * features);
+        }
+
+        /** @brief Reads only after its caller admits the exact fixed header or payload size. */
+        struct WireCursor final {
+            std::span<const std::uint8_t> remaining;
+
+            template <typename Integer> Integer Number() noexcept {
+                std::uint64_t raw{};
+                for (std::size_t offset = 0; offset < sizeof(Integer); ++offset)
+                    raw |= std::uint64_t{remaining[offset]} << (offset * 8U);
+                remaining = remaining.subspan(sizeof(Integer));
+                return std::bit_cast<Integer>(static_cast<std::make_unsigned_t<Integer>>(raw));
+            }
+
+            template <typename Identity> Identity Id() {
+                auto parsed = Identity::Create(Number<std::uint64_t>());
+                return parsed.HasValue() ? parsed.Value() : Identity{};
+            }
+        };
 
         template <typename Identity> bool ValidIdentities(const std::span<const Identity> ids) noexcept {
             for (std::size_t index = 0; index < ids.size(); ++index) {
@@ -35,12 +63,12 @@ namespace Horo::AI {
         }
 
         /** @brief Encodes signed values by their canonical little-endian unsigned representation. */
-        template <typename Integer> void HashNumber(Sha256Builder &digest, const Integer value) noexcept {
+        template <typename Write, typename Integer> void WriteNumber(const Write &write, const Integer value) {
             const auto raw = static_cast<std::make_unsigned_t<Integer>>(value);
             std::array<std::byte, sizeof(Integer)> bytes{};
             for (std::size_t index = 0; index < bytes.size(); ++index)
                 bytes[index] = std::byte((raw >> (8 * index)) & 0xffU);
-            (void)digest.Update(bytes);
+            write(bytes);
         }
     }  // namespace
 
@@ -61,6 +89,7 @@ namespace Horo::AI {
         result.rowCount_ = source.rows.size();
         if (target.maximumModelBytes < sizeof(LocalLearnedPolicy) || target.maximumWorkUnits < result.RequiredWork())
             return Model::Failure(MakeError(AIErrors::SchedulerBudgetExhausted));
+        result.model_ = source.model;
         result.target_ = target.id;
         result.blackboard_ = blackboard;
         result.tensorSchemaVersion_ = source.tensorSchemaVersion;
@@ -75,7 +104,7 @@ namespace Horo::AI {
             result.rows_[index].bias = row.bias;
             std::ranges::copy(row.weights, result.rows_[index].weights.begin());
         }
-        result.digest_ = result.Fingerprint(source.model);
+        result.digest_ = result.Fingerprint();
         return Model::Success(std::move(result));
     }
 
@@ -83,25 +112,90 @@ namespace Horo::AI {
         return featureCount_ + rowCount_ * (featureCount_ + 1);
     }
 
-    Sha256Digest LocalLearnedPolicy::Fingerprint(const LocalPolicyModelId model) const noexcept {
-        Sha256Builder digest;
-        constexpr std::string_view format{"horo.local-policy.int16-linear.v1"};
-        (void)digest.Update(std::as_bytes(std::span{format.data(), format.size()}));
-        HashNumber(digest, model.Value());
-        HashNumber(digest, target_.Value());
-        HashNumber(digest, blackboard_ ? blackboard_->Value() : std::uint64_t{});
-        HashNumber(digest, tensorSchemaVersion_);
-        HashNumber(digest, static_cast<std::uint32_t>(featureCount_));
-        HashNumber(digest, static_cast<std::uint32_t>(rowCount_));
+    template <typename Write> void LocalLearnedPolicy::WriteCanonical(const Write write) const {
+        write(std::as_bytes(std::span{WireFormat.data(), WireFormat.size()}));
+        WriteNumber(write, model_.Value());
+        WriteNumber(write, target_.Value());
+        WriteNumber(write, blackboard_ ? blackboard_->Value() : std::uint64_t{});
+        WriteNumber(write, tensorSchemaVersion_);
+        WriteNumber(write, static_cast<std::uint32_t>(featureCount_));
+        WriteNumber(write, static_cast<std::uint32_t>(rowCount_));
         for (const auto id : std::span{features_}.first(featureCount_))
-            HashNumber(digest, id.Value());
+            WriteNumber(write, id.Value());
         for (const auto &row : std::span{rows_}.first(rowCount_)) {
-            HashNumber(digest, row.task.Value());
-            HashNumber(digest, row.bias);
+            WriteNumber(write, row.task.Value());
+            WriteNumber(write, row.bias);
             for (const auto weight : std::span{row.weights}.first(featureCount_))
-                HashNumber(digest, weight);
+                WriteNumber(write, weight);
         }
+    }
+
+    Sha256Digest LocalLearnedPolicy::Fingerprint() const noexcept {
+        Sha256Builder digest;
+        WriteCanonical([&](const std::span<const std::byte> bytes) {
+            (void)digest.Update(bytes);
+        });
         return digest.Finalize();
+    }
+
+    Result<std::vector<std::uint8_t>> LocalLearnedPolicy::EncodeCooked() const {
+        using Encoded = Result<std::vector<std::uint8_t>>;
+        try {
+            std::vector<std::uint8_t> output;
+            output.reserve(WireSize(featureCount_, rowCount_));
+            WriteCanonical([&](const std::span<const std::byte> bytes) {
+                std::ranges::transform(bytes, std::back_inserter(output), [](const std::byte byte) {
+                    return std::to_integer<std::uint8_t>(byte);
+                });
+            });
+            return Encoded::Success(std::move(output));
+        } catch (const std::bad_alloc &) {
+            return Encoded::Failure(MakeError(AIErrors::DecisionAssetStorageUnavailable));
+        }
+    }
+
+    Result<LocalLearnedPolicy> LocalLearnedPolicy::DecodeCooked(const std::span<const std::uint8_t> bytes,
+                                                                const Sha256Digest &expectedDigest, const LocalPolicyCookTarget &target,
+                                                                const AiCapabilityDescriptorSet &tasks,
+                                                                const std::optional<BlackboardSchemaId> blackboard) {
+        using Model = Result<LocalLearnedPolicy>;
+        if (bytes.size() < WireHeaderBytes || bytes.size() > WireSize(MaximumFeatures, MaximumRows) ||
+            !std::ranges::equal(bytes.first(WireFormat.size()), WireFormat))
+            return Model::Failure(MakeError(AIErrors::DecisionAssetSchemaInvalid));
+        if (ComputeSha256(std::as_bytes(bytes)) != expectedDigest)
+            return Model::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
+
+        try {
+            WireCursor wire{bytes.subspan(WireFormat.size())};
+            const auto id = wire.Id<LocalPolicyModelId>();
+            const auto artifactTarget = wire.Id<LocalPolicyTargetId>();
+            const auto encodedSchema = wire.Number<std::uint64_t>();
+            const auto version = wire.Number<std::uint32_t>();
+            const auto features = wire.Number<std::uint32_t>();
+            const auto rows = wire.Number<std::uint32_t>();
+            if (features == 0 || features > MaximumFeatures || rows == 0 || rows > MaximumRows ||
+                bytes.size() != WireSize(features, rows) || encodedSchema != (blackboard ? blackboard->Value() : 0U))
+                return Model::Failure(MakeError(AIErrors::DecisionAssetSchemaInvalid));
+
+            std::array<LocalPolicyFeatureId, MaximumFeatures> fields{};
+            for (auto &field : std::span{fields}.first(features))
+                field = wire.Id<LocalPolicyFeatureId>();
+            std::array<std::array<std::int16_t, MaximumFeatures>, MaximumRows> weights{};
+            std::array<LocalPolicyRowSource, MaximumRows> sources{};
+            for (std::size_t index = 0; index < rows; ++index) {
+                const auto task = wire.Id<TaskId>();
+                const auto bias = wire.Number<std::int32_t>();
+                auto row = std::span{weights[index]}.first(features);
+                for (auto &value : row)
+                    value = wire.Number<std::int16_t>();
+                sources[index] = {task, bias, row};
+            }
+            const std::array targets{artifactTarget};
+            return Cook({id, version, targets, std::span{fields}.first(features), std::span{sources}.first(rows)}, target, tasks,
+                        blackboard);
+        } catch (const std::bad_alloc &) {
+            return Model::Failure(MakeError(AIErrors::DecisionAssetStorageUnavailable));
+        }
     }
 
     LocalPolicyProposal LocalLearnedPolicy::Infer(const LocalPolicyRequestIdentity &identity, const LocalPolicyTargetId target,

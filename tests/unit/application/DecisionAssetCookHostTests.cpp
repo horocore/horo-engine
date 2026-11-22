@@ -638,6 +638,73 @@ namespace {
         }
     };
 
+    TEST_CASE("Decision cook publishes a local policy only for its admitted package target", "[native][decision-cook][local-policy]") {
+        Fixture fixture;
+        const auto asset = Files::Id("00000000-0000-0000-0000-0000000000ca");
+        const auto task = MakeIdentity<TaskId>(5002);
+        AiCapabilityDescriptorRegistry descriptors;
+        REQUIRE(descriptors.Register({task}).HasValue());
+        const auto tasks = descriptors.Freeze();
+        const auto target = MakeIdentity<LocalPolicyTargetId>(7);
+        const LocalPolicyCookTarget profile{target, true, sizeof(LocalLearnedPolicy), 8};
+        const std::array targets{target};
+        const std::array features{MakeIdentity<LocalPolicyFeatureId>(1)};
+        const std::array<std::int16_t, 1> weights{-2};
+        const std::array rows{LocalPolicyRowSource{task, -4, weights}};
+        const auto model = LocalLearnedPolicy::Cook({MakeIdentity<LocalPolicyModelId>(1), 1, targets, features, rows}, profile, tasks);
+        REQUIRE(model.HasValue());
+        const auto bytes = model.Value().EncodeCooked();
+        REQUIRE(bytes.HasValue());
+        constexpr auto relative = "assets/local.horo_policy";
+        const auto source = fixture.source.path / relative;
+        Files::WriteFile(source, bytes.Value());
+        const auto sidecar = Files::SidecarJson(asset.ToString(), LocalPolicyAssetType);
+        const auto sidecarPath = std::string{relative} + ".horo";
+        Files::WriteFile(fixture.source.path / sidecarPath, {reinterpret_cast<const std::uint8_t *>(sidecar.data()), sidecar.size()});
+        std::vector<AssetRecord> records{
+            {asset, Files::Type(LocalPolicyAssetType), ProjectPath::Parse(relative).Value(), ProjectPath::Parse(sidecarPath).Value()}};
+        REQUIRE(fixture.registry.Publish(std::move(records)).status == AssetRegistryBuildStatus::Complete);
+        fixture.request.assets.registry = fixture.registry.Snapshot();
+        fixture.request.localPolicy = LocalPolicyAssetCookAdmission{fixture.request.assets.target, profile, tasks, std::nullopt};
+        fixture.Capture();
+
+        const auto cooked = fixture.Cook();
+        REQUIRE(cooked.HasValue());
+        CHECK(cooked.Value().cookedAssets == 1);
+        const auto artifacts = fixture.Read();
+        REQUIRE(artifacts.size() == 1);
+        CHECK(artifacts.front().id == asset);
+        CHECK(artifacts.front().type.Value() == LocalPolicyAssetType);
+        const auto loaded = LocalLearnedPolicy::DecodeCooked(artifacts.front().payload, model.Value().Digest(), profile, tasks);
+        REQUIRE(loaded.HasValue());
+        CHECK(loaded.Value().Digest() == model.Value().Digest());
+        const auto previous = fixture.Current().manifestDigest;
+        const auto recooked = fixture.Cook();
+        REQUIRE(recooked.HasValue());
+        CHECK(recooked.Value().cacheHits == 1);
+
+        const ErrorCodeDescriptor *expected = &AIErrors::CapabilityUnavailable;
+        SECTION("no model interpreter is configured") {
+            fixture.request.localPolicy.reset();
+        }
+        SECTION("the profile belongs to a different package target") {
+            fixture.request.localPolicy->packageTarget = Files::Target("another-target");
+        }
+        SECTION("the target interpreter is disabled") {
+            fixture.request.localPolicy->target.supportsInt16LinearV1 = false;
+        }
+        SECTION("the registered file is malformed") {
+            const std::array<std::uint8_t, 1> invalid{0};
+            Files::WriteFile(source, invalid);
+            fixture.Capture();
+            expected = &AIErrors::DecisionAssetSchemaInvalid;
+        }
+        const auto rejected = fixture.Cook();
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == expected->code.Value());
+        CHECK(fixture.Current().manifestDigest == previous);
+    }
+
     TEST_CASE("Decision cook publishes registered query artifacts for nested typed outputs", "[native][decision-cook][eqs]") {
         QueryOutputFixture query;
         auto &fixture = query.project;

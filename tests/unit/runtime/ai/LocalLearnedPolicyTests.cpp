@@ -74,6 +74,80 @@ namespace Horo::AI {
             CHECK(invalid.ErrorValue().code.Value() == expected->code.Value());
         }
 
+        TEST_CASE("Local policy artifacts round trip with exact typed inference", "[ai][local-policy]") {
+            const Fixture fixture;
+            const auto tasks = fixture.Tasks();
+            const auto schema = Id<BlackboardSchemaId>(12);
+            const auto cooked = LocalLearnedPolicy::Cook(fixture.source, fixture.cookTarget, tasks, schema);
+            REQUIRE(cooked.HasValue());
+            const auto bytes = cooked.Value().EncodeCooked();
+            REQUIRE(bytes.HasValue());
+            const auto digest = ComputeSha256(std::as_bytes(std::span{bytes.Value()}));
+            CHECK(digest == cooked.Value().Digest());
+            const auto decoded = LocalLearnedPolicy::DecodeCooked(bytes.Value(), digest, fixture.cookTarget, tasks, schema);
+            REQUIRE(decoded.HasValue());
+            const auto &model = decoded.Value();
+            CHECK(model.Digest() == digest);
+            const auto encodedAgain = model.EncodeCooked();
+            REQUIRE(encodedAgain.HasValue());
+            CHECK(encodedAgain.Value() == bytes.Value());
+            AiWorkBudget budget{model.RequiredWork()};
+            auto proposal = model.Infer(fixture.identity, fixture.target, digest, 1, fixture.inputs, 8, budget);
+            LocalPolicyRequestSlot slot{fixture.identity};
+            CHECK(slot.Consume(proposal, fixture.identity, model, tasks, 9).task == fixture.approach);
+            CHECK(budget.Remaining() == 0);
+        }
+
+        TEST_CASE("Local policy artifacts require current target task and byte admission", "[ai][local-policy]") {
+            Fixture fixture;
+            auto tasks = fixture.Tasks();
+            auto schema = Id<BlackboardSchemaId>(12);
+            const auto cooked = LocalLearnedPolicy::Cook(fixture.source, fixture.cookTarget, tasks, schema);
+            REQUIRE(cooked.HasValue());
+            auto artifact = cooked.Value().EncodeCooked();
+            REQUIRE(artifact.HasValue());
+            auto bytes = std::move(artifact).Value();
+            auto digest = cooked.Value().Digest();
+            const auto refreshDigest = [&] {
+                digest = ComputeSha256(std::as_bytes(std::span{bytes}));
+            };
+            const ErrorCodeDescriptor *expected = &AIErrors::DecisionAssetSchemaInvalid;
+            SECTION("a trailing byte is invalid even with a matching digest") {
+                bytes.push_back(0);
+                refreshDigest();
+            }
+            SECTION("truncated weights are invalid even with a matching digest") {
+                bytes.pop_back();
+                refreshDigest();
+            }
+            SECTION("an unknown header is invalid") {
+                bytes.front() = 0;
+                refreshDigest();
+            }
+            SECTION("corrupted weights fail independent digest verification") {
+                bytes.back() ^= 1;
+                expected = &AIErrors::DecisionAssetActivationInvalid;
+            }
+            SECTION("a different Blackboard schema is incompatible") {
+                schema = Id<BlackboardSchemaId>(13);
+            }
+            SECTION("a different target cannot load the artifact") {
+                fixture.cookTarget.id = Id<LocalPolicyTargetId>(2);
+                expected = &AIErrors::CapabilityUnavailable;
+            }
+            SECTION("a target with less memory fails admission again") {
+                fixture.cookTarget.maximumModelBytes = 1;
+                expected = &AIErrors::SchedulerBudgetExhausted;
+            }
+            SECTION("current task grants may invalidate an otherwise unchanged artifact") {
+                tasks = fixture.Tasks(false);
+                expected = &AIErrors::TaskContextInvalid;
+            }
+            const auto outcome = LocalLearnedPolicy::DecodeCooked(bytes, digest, fixture.cookTarget, tasks, schema);
+            REQUIRE(outcome.HasError());
+            CHECK(outcome.ErrorValue().code.Value() == expected->code.Value());
+        }
+
         TEST_CASE("Local policy inference owns the model and charges its exact integer work", "[ai][local-policy]") {
             Fixture fixture;
             const auto tasks = fixture.Tasks();

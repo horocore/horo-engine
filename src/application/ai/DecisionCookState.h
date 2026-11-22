@@ -49,6 +49,7 @@ namespace Horo::Application::DecisionCookDetail {
         bool authoringValidation{}; /**< Defer executable admission until affected roots and their queries are known. */
         std::vector<Prepared> prepared;
         Sha256Digest settings;
+        std::optional<LocalPolicyAssetCookAdmission> localPolicy;
     };
 
     [[nodiscard]] Result<void> Verify(const State &state, const CancellationToken &cancellation);

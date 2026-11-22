@@ -66,8 +66,10 @@ namespace Horo::Application::DecisionCookDetail {
         }
         const auto strategy = std::make_shared<Strategy>(state);
         for (const auto type : {DecisionBehaviorTreeSourceType, DecisionStateMachineSourceType, DecisionUtilitySourceType,
-                                AI::BlackboardSchemaAssetType, AI::EnvironmentQuerySourceAssetType}) {
+                                AI::BlackboardSchemaAssetType, AI::EnvironmentQuerySourceAssetType, AI::LocalPolicyAssetType}) {
             if (type == AI::EnvironmentQuerySourceAssetType && !state->querySchema)
+                continue;
+            if (type == AI::LocalPolicyAssetType && !state->localPolicy)
                 continue;
             auto parsed = Assets::AssetTypeId::Parse(type);
             if (parsed.HasError())

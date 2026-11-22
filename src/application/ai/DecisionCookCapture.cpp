@@ -164,6 +164,23 @@ namespace Horo::Application::DecisionCookDetail {
             return Result<void>::Success();
         }
 
+        Result<void> CaptureLocalPolicy(State &state, const Assets::AssetRecord &record) {
+            if (!state.localPolicy)
+                return Result<void>::Failure(MakeError(AI::AIErrors::CapabilityUnavailable));
+            const auto *file = state.files->Find(record.id);
+            if (!file || !SameRecord(record, file->record))
+                return Result<void>::Failure(MakeError(DecisionCookErrors::Stale));
+            if (file->bytes.size() > state.maximumPreparedBytes - state.preparedDependencyBytes)
+                return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetLimitExceeded));
+            const auto &admission = *state.localPolicy;
+            const auto model = AI::LocalLearnedPolicy::DecodeCooked(file->bytes, file->sourceDigest, admission.target, admission.tasks,
+                                                                    admission.blackboard);
+            if (model.HasError())
+                return Result<void>::Failure(model.ErrorValue());
+            state.preparedDependencyBytes += file->bytes.size();
+            state.prepared.push_back({record.id, record.type, file->sourceDigest, file->bytes, {}});
+            return Result<void>::Success();
+        }
     }  // namespace
 
     Result<void> Verify(const State &state, const CancellationToken &cancellation) {
@@ -180,6 +197,11 @@ namespace Horo::Application::DecisionCookDetail {
         for (const auto &record : registry.Records()) {
             if (cancellation.IsCancellationRequested())
                 return Result<void>::Failure(MakeError(DecisionCookErrors::Cancelled));
+            if (!state.authoringValidation && record.type.Value() == AI::LocalPolicyAssetType) {
+                if (auto captured = CaptureLocalPolicy(state, record); captured.HasError())
+                    return captured;
+                continue;
+            }
             if (state.querySchema && record.type.Value() == AI::EnvironmentQuerySourceAssetType) {
                 if (auto captured = CaptureQuery(state, record); captured.HasError())
                     return captured;
@@ -196,7 +218,7 @@ namespace Horo::Application::DecisionCookDetail {
             if (auto captured = CaptureRecord(state, record, cancellation); captured.HasError())
                 return captured;
         }
-        if (state.inputs.empty() && state.schemas.empty() && state.queries.empty())
+        if (state.inputs.empty() && state.schemas.empty() && state.queries.empty() && state.prepared.empty())
             return Result<void>::Failure(MakeError(DecisionCookErrors::Invalid));
         std::ranges::sort(state.inputs, {}, [](const auto &input) {
             return input.graph.asset;

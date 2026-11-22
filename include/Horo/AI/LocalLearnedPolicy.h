@@ -11,9 +11,13 @@
 #include <cstdint>
 #include <optional>
 #include <span>
+#include <string_view>
+#include <vector>
 
 namespace Horo::AI {
     class AiWorkBudget;
+
+    inline constexpr std::string_view LocalPolicyAssetType{"core.local_learned_policy"};
 
     using LocalPolicyModelId = AiStableIdentity<struct LocalPolicyModelIdentityTag>;
     using LocalPolicyFeatureId = AiStableIdentity<struct LocalPolicyFeatureIdentityTag>;
@@ -129,6 +133,15 @@ namespace Horo::AI {
                                                              const AiCapabilityDescriptorSet &tasks,
                                                              std::optional<BlackboardSchemaId> blackboard = {});
 
+        /** @brief Produces canonical target-specific bytes. The SHA-256 of the bytes is Digest(). */
+        [[nodiscard]] Result<std::vector<std::uint8_t>> EncodeCooked() const;
+        /** @brief Verifies the expected artifact and repeats target, budget, schema and task admission before loading. */
+        [[nodiscard]] static Result<LocalLearnedPolicy> DecodeCooked(std::span<const std::uint8_t> bytes,
+                                                                     const Sha256Digest &expectedDigest,
+                                                                     const LocalPolicyCookTarget &target,
+                                                                     const AiCapabilityDescriptorSet &tasks,
+                                                                     std::optional<BlackboardSchemaId> blackboard = {});
+
         [[nodiscard]] const Sha256Digest &Digest() const noexcept {
             return digest_;
         }
@@ -150,7 +163,9 @@ namespace Horo::AI {
         };
 
         LocalLearnedPolicy() = default;
-        [[nodiscard]] Sha256Digest Fingerprint(LocalPolicyModelId model) const noexcept;
+        template <typename Write> void WriteCanonical(Write write) const;
+        [[nodiscard]] Sha256Digest Fingerprint() const noexcept;
+        LocalPolicyModelId model_;
         LocalPolicyTargetId target_;
         std::optional<BlackboardSchemaId> blackboard_;
         std::uint32_t tensorSchemaVersion_{};

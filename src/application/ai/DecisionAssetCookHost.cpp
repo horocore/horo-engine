@@ -38,6 +38,8 @@ namespace Horo::Application {
             if (!request.assets.target.IsValid() || request.maximumPreparedBytes == 0 ||
                 request.maximumPreparedBytes > 64ULL * 1024ULL * 1024ULL || request.additionalCookers.size() > 128)
                 return Result<void>::Failure(MakeError(DecisionCookErrors::Invalid));
+            if (request.localPolicy && request.localPolicy->packageTarget != request.assets.target)
+                return Result<void>::Failure(MakeError(AI::AIErrors::CapabilityUnavailable));
             return request.assets.validateHostInputs();
         }
 
@@ -52,6 +54,7 @@ namespace Horo::Application {
             state->target = request.assets.target;
             state->maximumPreparedBytes = request.maximumPreparedBytes;
             state->querySchema = request.querySchema;
+            state->localPolicy = request.localPolicy;
             if (auto capture = DecisionCookDetail::Capture(*state, request.assets.registry, cancellation); capture.HasError())
                 return Result<std::shared_ptr<const DecisionCookDetail::State>>::Failure(capture.ErrorValue());
             if (auto prepared = DecisionCookDetail::PrepareRoots(*state, cancellation); prepared.HasError())
