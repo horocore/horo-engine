@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace Horo::Application::Internal {
     /** @copydoc OpenXRPlayHost::StartNativeLighting */
@@ -180,6 +181,8 @@ namespace Horo::Application::Internal {
         auto report = setup_;
         if (instanceLost_) {
             report.rendererReady = false;
+            if (report.test == Editor::EditorXrSetupTestState::Passed)
+                report.test = Editor::EditorXrSetupTestState::Failed;
             report.issue = Editor::EditorXrSetupIssue::Stale;
             return report;
         }
@@ -712,6 +715,7 @@ namespace Horo::Application::Internal {
             return Request::Failure(MakeError(XR::XRErrors::OperationUnavailable));
         if (lastSetupTest_ == std::numeric_limits<std::uint64_t>::max())
             return Request::Failure(MakeError(XR::XRErrors::CapacityExceeded));
+        setupRefreshRequested_ = false;
         queuedSetupTest_ = {++lastSetupTest_};
         setup_.test = Editor::EditorXrSetupTestState::Queued;
         setup_.issue = setupCleanupPending_ ? Editor::EditorXrSetupIssue::Cleanup : Editor::EditorXrSetupIssue::None;
@@ -726,10 +730,29 @@ namespace Horo::Application::Internal {
         setup_.test = Editor::EditorXrSetupTestState::Cancelled;
     }
 
+    void OpenXRPlayHost::RequestSetupRefresh() noexcept {
+        if (std::this_thread::get_id() == lane_ && !closing_ && setup_.test == Editor::EditorXrSetupTestState::Passed)
+            setupRefreshRequested_ = true;
+    }
+
     /** @copydoc OpenXRPlayHost::PumpSetupTest */
     void OpenXRPlayHost::PumpSetupTest() {
-        if (std::this_thread::get_id() != lane_ || !queuedSetupTest_.value)
+        if (std::this_thread::get_id() != lane_ || closing_)
             return;
+        if (!queuedSetupTest_.value) {
+            if (busy_ || !std::exchange(setupRefreshRequested_, false) || instanceLost_ || !setupPreflight_)
+                return;
+            const Operation operation{*this};
+            const auto current = composition_.session.ValidateDeviceQualification(
+                *setupPreflight_, composition_.frontend.Capabilities().support);
+            if (current.HasError()) {
+                setup_.test = Editor::EditorXrSetupTestState::Failed;
+                setup_.issue = SetupIssue(current.ErrorValue());
+                setupPreflight_.reset();
+                composition_.session.RevokePackagedPreflight();
+            }
+            return;
+        }
         queuedSetupTest_ = {};
         setup_.test = Editor::EditorXrSetupTestState::Failed;
         if (!SetupIdle()) {

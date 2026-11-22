@@ -182,6 +182,9 @@ namespace Horo::Editor {
     Result<void> XrSetupModal::OnOpen(EditorModalContext &) {
         gazeRejected_ = false;
         passthroughRejected_ = false;
+        rejected_ = false;
+        if (setup_)
+            setup_->RequestSetupRefresh();
         return Result<void>::Success();
     }
 
@@ -472,7 +475,7 @@ namespace Horo::Editor {
         if (report.requestedProfile)
             Ui::WrappedText(width, Text(ProfileKey(*report.requestedProfile)), Theme::Text(), fonts);
         Ui::WrappedText(width, Text(TestKey(report.test)), Theme::Text(), fonts);
-        const auto issue = rejected_ ? EditorXrSetupIssue::Unavailable : report.issue;
+        const auto issue = rejected_ && report.issue == EditorXrSetupIssue::None ? EditorXrSetupIssue::Unavailable : report.issue;
         Ui::WrappedText(width, Text(IssueKey(issue)), Theme::Muted(), fonts);
         DrawInspection(setup_ ? setup_->ReadInspection() : EditorXrInspectionSnapshot{});
         if (auto *preview = setup_ ? setup_->HapticPreview() : nullptr)

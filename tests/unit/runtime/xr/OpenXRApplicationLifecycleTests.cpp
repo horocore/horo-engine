@@ -770,6 +770,11 @@ namespace Horo::Tests::OpenXRApplication {
             const auto stale = fixture.play->ReadDeviceQualificationPreflight();
             REQUIRE(stale.HasError());
             CHECK(stale.ErrorValue().code.Value() == XR::XRErrors::CapabilityStale.code.Value());
+            fixture.play->RequestSetupRefresh();
+            fixture.play->PumpSetupTest();
+            CHECK(fixture.play->ReadSetup().test == Failed);
+            CHECK(fixture.play->ReadSetup().issue == Editor::EditorXrSetupIssue::Stale);
+            CHECK(fixture.script.native.liveSessions == 0);
         }
         SECTION("a failed replacement probe revokes the old result and retires the test session") {
             fixture.script.native.instanceDispatchAbsent = "xrWaitFrame";
@@ -790,6 +795,18 @@ namespace Horo::Tests::OpenXRApplication {
         SECTION("changing installed-host admission invalidates the prerequisite") {
             fixture.admission = false;
             CHECK(fixture.play->ReadDeviceQualificationPreflight().HasError());
+            unsigned admissionChecks = 0;
+            fixture.onCheckAdmission = [&] { ++admissionChecks; };
+            fixture.play->RequestSetupRefresh();
+            fixture.play->RequestSetupRefresh();
+            CHECK(fixture.play->ReadSetup().test == Passed);
+            CHECK(admissionChecks == 0);
+            fixture.play->PumpSetupTest();
+            CHECK(fixture.play->ReadSetup().test == Failed);
+            CHECK(fixture.play->ReadSetup().issue == Editor::EditorXrSetupIssue::Unavailable);
+            fixture.play->PumpSetupTest();
+            CHECK(admissionChecks == 1);
+            fixture.onCheckAdmission = {};
         }
 
         REQUIRE(RequireValue(fixture.ClosePlay()));

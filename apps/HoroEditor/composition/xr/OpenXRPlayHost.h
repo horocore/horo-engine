@@ -242,6 +242,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] Editor::EditorXrInspectionSnapshot ReadInspection() const noexcept override;
         [[nodiscard]] Result<Editor::EditorXrSetupTestId> RequestSetupTest() override;
         void CancelSetupTest(Editor::EditorXrSetupTestId request) noexcept override;
+        void RequestSetupRefresh() noexcept override;
         /** @brief Performs one queued cold setup test outside RuntimeHost frames. */
         void PumpSetupTest();
 
@@ -858,5 +859,6 @@ namespace Horo::Application::Internal {
         bool closing_{};
         bool setupCleanupPending_{};
         bool instanceLost_{}; /**< The startup-selected graphics device cannot be rebound to a different instance in place. */
+        bool setupRefreshRequested_{};
     };
 }  // namespace Horo::Application::Internal
