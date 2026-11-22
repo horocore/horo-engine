@@ -151,22 +151,9 @@ namespace Horo::Editor {
         const auto path = std::filesystem::u8path(target.source.Value());
         if (m_sourceOpenService.Classify(path).kind != SourceFileKind::NativeSource)
             return false;
-        OpenSourceFile({.path = path, .origin = SourceOpenOrigin::Command, .mode = SourceOpenMode::EmbeddedOnly});
-        if (!m_viewModel.contentBrowserOperationError.empty())
+        return PresentSourceCommand(target.source, target, [] {
             return false;
-        const auto active = m_viewModel.workspacePanelHost.ActiveDocument();
-        if (!active)
-            return false;
-        const auto source = m_sourceOpenService.Documents().Snapshot(*active);
-        if (source.HasError())
-            return false;
-        const auto selection = Language::ResolveLanguageLocation(source.Value(), target);
-        if (!selection)
-            return false;
-        m_viewModel.sourceLanguageFocus =
-            std::make_shared<const Language::LanguageSourceFocus>(Language::LanguageSourceFocus{source.Value(), *selection});
-        RefreshSourceDocumentProjection();
-        return true;
+        }).HasValue();
     }
 
     /** @copydoc EditorWorkspaceController::AcceptSourceLanguage */

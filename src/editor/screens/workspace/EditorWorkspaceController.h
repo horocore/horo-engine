@@ -76,6 +76,7 @@ namespace Horo::Application {
 }  // namespace Horo::Application
 
 namespace Horo::Editor {
+    struct EditorSourceCommandEndpoint;
     struct CapturedDecisionExternal;
     struct EnvironmentQueryPreviewPhysics;
 
@@ -191,6 +192,15 @@ namespace Horo::Editor {
                                   const Assets::AssetRegistrySnapshot &assetRegistry = {},
                                   const EditorWorkspaceDependencies &dependencies = {});
         ~EditorWorkspaceController();
+
+        /** @brief Binds a source presentation endpoint to the current editor workspace and authorization revision.
+         * @param project Host-issued portable project identity. @param authorizationRevision Exact active MCP trust revision.
+         * @return A borrowed lease suitable for the host's adapter composition.
+         */
+        [[nodiscard]] std::weak_ptr<const EditorSourceCommandEndpoint> BindSourcePresentation(std::string project,
+                                                                                              std::uint64_t authorizationRevision);
+        /** @brief Revokes current source commands before workspace or project retirement. */
+        void RevokeSourcePresentation() noexcept;
 
         /** @brief Refreshes source tools from the explicitly composed canonical world; no world is synthesized. */
         void RefreshWorldSourceProjection();
@@ -775,6 +785,7 @@ namespace Horo::Editor {
         Language::ClangdSettings m_clangdSettings;
         std::unique_ptr<Language::ProjectLanguageWorkspace> m_sourceLanguage;
         std::shared_ptr<Extensions::ScriptModuleHostServices> m_scriptLanguageHost;
+        std::shared_ptr<const EditorSourceCommandEndpoint> m_sourceCommandEndpoint;
         Extensions::ScriptCapabilityScope m_scriptLanguageProject{Extensions::ScriptCapabilityScopeKind::Project};
         std::uint64_t m_scriptLanguageApiRevision{};
         Language::HoroScriptSyntaxWorkspace m_scriptSyntax;
@@ -1305,6 +1316,9 @@ namespace Horo::Editor {
         void ApplySourceCompletion(const SourceCompletionIntent &intent);
         /** @brief Opens an in-project definition and publishes its exact selection. */
         [[nodiscard]] bool FocusSourceDefinition(const Language::LanguageLocation &target);
+        /** @brief Opens embedded source and publishes a validated optional text location on the editor lane. */
+        [[nodiscard]] Result<void> PresentSourceCommand(const SourceDocumentId &path, std::optional<Language::LanguageLocation> target,
+                                                        const std::function<bool()> &stop);
         /** @brief Refreshes changed canvas projections outside GUI draw work. */
         void RefreshUiCanvasProjection();
         /** @brief Routes revision-fenced hierarchy and persistence operations to the canonical canvas owner. */

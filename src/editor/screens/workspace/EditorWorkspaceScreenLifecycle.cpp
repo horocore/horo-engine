@@ -154,6 +154,7 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         sourceCommands_.EndSession();
         LOG_INFO("editor.workspace", "EditorWorkspaceScreen leaving.");
         if (controller_) {
+            controller_->RevokeSourcePresentation();
             static_cast<void>(controller_->ShutdownPrefabSettings(true));
             static_cast<void>(controller_->ShutdownCollisionSettings(true));
             controller_->SetPackageDecisionNodeSource({});

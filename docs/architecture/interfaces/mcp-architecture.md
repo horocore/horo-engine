@@ -662,6 +662,22 @@ and drains calls before releasing source/provider owners. Responses own their
 bytes and rows after publication. See the
 [composition and migration guide](../../guides/project-code-query-migration.md).
 
+## Editor source presentation
+
+An authenticated editor host can publish `editor.source.open` and
+`editor.source.navigate` against a borrowed active-workspace endpoint.
+Both use the `horo.editor.source.present` grant,
+run on the editor owner, and require exact single-use approval as
+presentation side effects. They accept portable project-relative text
+sources. Navigation addresses one-based lines and UTF-16 columns.
+
+The workspace validates the position against the current source snapshot
+before adding the tab. It uses the same document owner and byte-range
+projection as embedded language navigation. Already open dirty sources
+retain their current buffers. Cancellation, closed workspaces, and
+project or authorization replacement prevent the old registration from
+opening a source.
+
 ## Related Documents
 
 - [MCP Panel](../../../mock-studio/designs.md#architecture-interfaces-mcp-panel): React mock design for MCP sessions,

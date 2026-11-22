@@ -4445,6 +4445,14 @@ target_include_directories(HoroMcpProjectCodeQueryTests PRIVATE ${CMAKE_CURRENT_
 target_link_libraries(HoroMcpProjectCodeQueryTests PRIVATE HoroEngine::McpProjectCodeQuery HoroEngine::PlatformProjectReadFiles)
 horo_register_catch_test(HoroMcpProjectCodeQueryTests LABELS "unit;mcp;code-query;headless")
 
+if (TARGET HoroGui)
+    add_executable(HoroMcpEditorSourceTests unit/editor/EditorSourceMcpToolsTests.cpp)
+    target_compile_features(HoroMcpEditorSourceTests PRIVATE cxx_std_20)
+    target_include_directories(HoroMcpEditorSourceTests PRIVATE "${PROJECT_SOURCE_DIR}/src")
+    target_link_libraries(HoroMcpEditorSourceTests PRIVATE HoroEngine::Gui HoroEngine::EditorServices HoroMcpEditorSourceCommandsInternal)
+    horo_register_catch_test(HoroMcpEditorSourceTests LABELS "unit;editor;mcp;source")
+endif ()
+
 add_executable(HoroSourceDocumentCodeQueryTests unit/editor/SourceDocumentCodeQueryTests.cpp)
 target_compile_features(HoroSourceDocumentCodeQueryTests PRIVATE cxx_std_20)
 target_include_directories(HoroSourceDocumentCodeQueryTests PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/support)
