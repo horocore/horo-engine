@@ -3685,11 +3685,14 @@ policy above that ceiling before binding its sensing providers. A Scene within
 the ceiling keeps its authored per-tick budget.
 
 The optional `query.maximumWorkUnitsPerTick` caps the combined work issued to
-environment queries on each authoritative tick. The next tick starts after
-the first query occurrence that spent shared work. Dormant or waiting queries
-do not hold the leading budget position. Replay comparison binds both the
-effective budget and the version of this ordering rule. Replays recorded
-with the previous occurrence order require a matching older build.
+environment queries on each authoritative tick. Active queries are grouped by
+exact agent generation and each group shares one per-agent allowance. The next
+tick starts after the first group that spent shared work. Within each group,
+the order resumes after its first query that spent work, using the stable
+binding order even when other queries retire. Waiting queries do not take the
+leading budget position. Replay comparison binds the effective budget and the
+version of this ordering rule. Replays recorded with older rules require a
+matching build.
 
 The Scene owner may reuse successful blocking visibility batches during the
 same fixed tick. Reuse requires identical ordered local rays, effective Physics

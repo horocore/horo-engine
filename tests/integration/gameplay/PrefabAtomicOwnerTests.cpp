@@ -916,7 +916,7 @@ namespace Horo::Application::PrefabAtomicTest {
             REQUIRE(limited.HasValue());
             REQUIRE(smaller.HasValue());
             Sha256Builder replayProfile;
-            constexpr std::string_view scheduleContract{"horo.scene-query.budget-order.v2"};
+            constexpr std::string_view scheduleContract{"horo.scene-query.budget-order.v3"};
             (void)replayProfile.Update(std::as_bytes(std::span{scheduleContract.data(), scheduleContract.size()}));
             (void)replayProfile.Update(std::as_bytes(std::span{digest.bytes}));
             CHECK(defaults.Value()->ReplayProfile() == replayProfile.Finalize());
@@ -925,30 +925,49 @@ namespace Horo::Application::PrefabAtomicTest {
             CHECK(limited.Value()->ReplayProfile() != smaller.Value()->ReplayProfile());
         }
 
-        TEST_CASE("Scene EQS budget order skips dormant occurrences between competing queries", "[integration][ai][query]") {
-            std::array<std::size_t, 6> served{};
-            std::size_t cursor = 5;
+        TEST_CASE("Scene EQS rotates limited work across agents and their query occurrences", "[integration][ai][query]") {
+            using Internal::SceneQueryOccurrence;
+            const auto incarnation = AI::AiRuntimeIncarnation::Create(1).Value();
+            const AI::AgentHandle first{incarnation, {0, 1}};
+            const AI::AgentHandle waiting{incarnation, {1, 1}};
+            const AI::AgentHandle other{incarnation, {2, 1}};
+            const std::array rows{SceneQueryOccurrence{first, 1, 0}, SceneQueryOccurrence{first, 2, 1}, SceneQueryOccurrence{first, 3, 2},
+                                  SceneQueryOccurrence{waiting, 4, 3}, SceneQueryOccurrence{other, 5, 4}};
+            const auto order = [](const SceneQueryOccurrence &row) {
+                return row.order;
+            };
+            std::array<std::uint64_t, 3> occurrenceCursors{};
+            std::array<std::uint64_t, 6> served{};
+            AI::AgentHandle groupCursor;
             for (auto &winner : served) {
-                std::array<bool, 8> visited{};
-                bool available = true;
-                cursor = Internal::AdvanceSceneQueryBudgetOrder(visited.size(), cursor, [&](const std::size_t index) {
-                    CHECK_FALSE(visited[index]);
-                    visited[index] = true;
-                    if (!available || (index != 0 && index != 4))
-                        return false;
-                    winner = index;
-                    available = false;
-                    return true;
+                std::array<bool, rows.size()> visited{};
+                groupCursor = Internal::AdvanceSceneQueryGroups(rows, groupCursor, [&](auto owner, auto group) {
+                    auto &cursor = occurrenceCursors[owner.slot.index];
+                    const bool hadWork = winner != 0;
+                    cursor = Internal::AdvanceSceneQueryBudgetOrder(group, cursor, order, [&](const auto &row) {
+                        CHECK_FALSE(visited[row.index]);
+                        visited[row.index] = true;
+                        if (winner != 0 || owner == waiting)
+                            return false;
+                        winner = row.order;
+                        return true;
+                    });
+                    return !hadWork && winner != 0;
                 });
-                CHECK_FALSE(available);
                 CHECK(std::ranges::all_of(visited, std::identity{}));
             }
-            CHECK((served == std::array<std::size_t, 6>{0, 4, 0, 4, 0, 4}));
-            const auto noWork = [](std::size_t) {
-                return false;
+            CHECK((served == std::array<std::uint64_t, 6>{1, 5, 2, 5, 3, 5}));
+
+            const AI::AgentHandle replacement{incarnation, {0, 2}};
+            const std::array surviving{SceneQueryOccurrence{replacement, 6, 0}, SceneQueryOccurrence{other, 5, 4}};
+            const auto spend = [](auto, auto) {
+                return true;
             };
-            CHECK(Internal::AdvanceSceneQueryBudgetOrder(8, cursor, noWork) == cursor);
-            CHECK(Internal::AdvanceSceneQueryBudgetOrder(0, cursor, noWork) == 0);
+            CHECK(Internal::AdvanceSceneQueryGroups(surviving, first, spend) == replacement);
+            CHECK(Internal::AdvanceSceneQueryGroups({}, first, spend) == first);
+            CHECK(Internal::AdvanceSceneQueryGroups(rows, groupCursor, [](auto, auto) {
+                return false;
+            }) == groupCursor);
         }
 
         TEST_CASE("Scene EQS batches only exact current Physics visibility evidence", "[integration][ai][query][visibility-batching]") {

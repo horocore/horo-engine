@@ -8,29 +8,13 @@
 #include "Horo/AI/EnvironmentQueryNavigation.h"
 #include "Horo/AI/EnvironmentQueryPhysics.h"
 #include "SceneDecisionVisibilityBatch.h"
+#include "SceneQueryBudgetOrder.h"
 
 namespace Horo::Physics {
     class PhysicsWorld;
 }
 
 namespace Horo::Application::Internal {
-    /** @brief Visits each occurrence once and resumes after the first occurrence that spent shared work. */
-    template <typename Visitor> std::size_t AdvanceSceneQueryBudgetOrder(const std::size_t count, const std::size_t cursor, Visitor visit) {
-        if (count == 0)
-            return 0;
-        const auto start = cursor % count;
-        auto next = start;
-        bool spentWork = false;
-        for (std::size_t offset = 0; offset < count; ++offset) {
-            const auto index = (start + offset) % count;
-            if (visit(index) && !spentWork) {
-                next = (index + 1) % count;
-                spentWork = true;
-            }
-        }
-        return next;
-    }
-
     class ScenePhysicsHost;
 
     /** @brief Synchronous owner-thread projection of the host's committed Navigation authority. */
@@ -109,6 +93,12 @@ namespace Horo::Application::Internal {
             AI::AgentHandle owner;
             std::uint64_t tick{};
             std::size_t remaining{};
+            std::uint64_t lastConsumer{};
+        };
+
+        struct BoundQuery final {
+            std::weak_ptr<AI::DecisionQueryTask> task;
+            std::uint64_t order{};
         };
 
         /** @brief Captures the current Scene's exact query context and reserves one live execution. */
@@ -137,9 +127,12 @@ namespace Horo::Application::Internal {
         /** @brief Publishes at most one result per active query through the Scene-owned BlackboardSync lane. */
         [[nodiscard]] Result<void> PublishOutputs(TickScope &scope);
         void InspectOutput(const AI::DecisionQueryTask &task, const Runtime::RuntimeSceneView &scene);
-        /** @brief Issues bounded allowances in round-robin occurrence order without allocating. */
+        /** @brief Issues bounded allowances in agent and occurrence order without allocating. */
         void AdvanceQueries(std::uint64_t tick);
-        /** @brief Removes retired tasks without advancing past the next stable occurrence. */
+        /** @brief Advances one exact agent's group under its shared fixed-tick allowance. */
+        [[nodiscard]] bool AdvanceQueryGroup(AI::AgentHandle owner, std::span<const SceneQueryOccurrence> group, std::uint64_t tick,
+                                             AI::AiWorkBudget &global);
+        /** @brief Removes retired executor bindings. */
         void PruneExpiredTasks();
         /** @brief Allocates retention once per active Scene incarnation. */
         [[nodiscard]] Result<void> PrepareCache(const Runtime::RuntimeSceneView &scene);
@@ -148,7 +141,8 @@ namespace Horo::Application::Internal {
         std::shared_ptr<const AI::QuerySchemaRegistry> registry_;
         std::shared_ptr<const AI::GameplayQueryTestRegistry> gameplayTests_;
         std::optional<AI::QueryContextProviderRegistry> contexts_;
-        std::vector<std::weak_ptr<AI::DecisionQueryTask>> tasks_;
+        std::vector<BoundQuery> tasks_;
+        std::vector<SceneQueryOccurrence> activeOrder_;
         std::vector<AgentBudget> budgets_;
         std::size_t maximumActive_{};
         std::size_t workUnitsLimit_{};
@@ -157,7 +151,8 @@ namespace Horo::Application::Internal {
         Physics::PhysicsQueryEventCapability visibility_;
         Runtime::RuntimeSceneView visibilityScene_;
         bool bestEffort_{};
-        std::size_t cursor_{};
+        std::uint64_t nextQueryOrder_{1};
+        AI::AgentHandle lastGroupConsumer_;
         TickScope *scope_{};
         AI::AgentHandle replayAgent_;
         std::uint64_t replayTick_{};

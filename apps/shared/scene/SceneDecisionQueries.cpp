@@ -172,6 +172,8 @@ namespace Horo::Application::Internal {
                                         AI::UsesBuiltinPointNavigation(*plan->second.plan);
         if (!bestEffort_ && requiresBestEffort)
             return Executor::Failure(MakeError(AI::AIErrors::EnvironmentQueryStageUnsupported));
+        if (nextQueryOrder_ == 0)
+            return Executor::Failure(MakeError(AI::AIErrors::EnvironmentQueryLimitExceeded));
         if (tasks_.size() == AI::AiTaskSchedulerSettings::HardAgents) {
             PruneExpiredTasks();
             if (tasks_.size() == AI::AiTaskSchedulerSettings::HardAgents)
@@ -182,7 +184,11 @@ namespace Horo::Application::Internal {
             return Executor::Failure(task.ErrorValue());
         auto retained = std::shared_ptr<AI::DecisionQueryTask>{std::move(task).Value()};
         auto executor = std::make_unique<OwnedQueryExecutor>(retained);
-        tasks_.emplace_back(retained);
+        if (tasks_.size() == activeOrder_.capacity()) {
+            const auto capacity = std::max<std::size_t>(1, activeOrder_.capacity() * 2);
+            activeOrder_.reserve(std::min(capacity, AI::AiTaskSchedulerSettings::HardAgents));
+        }
+        tasks_.push_back({retained, nextQueryOrder_++});
         return Executor::Success(std::move(executor));
     }
 
@@ -370,7 +376,7 @@ namespace Horo::Application::Internal {
     /** @copydoc SceneDecisionQueries::PublishOutputs */
     Result<void> SceneDecisionQueries::PublishOutputs(TickScope &scope) {
         for (const auto &entry : tasks_) {
-            const auto task = entry.lock();
+            const auto task = entry.task.lock();
             if (!task || !task->ActiveAgent().IsValid())
                 continue;
             std::optional<AI::DecisionQueryPublication> publication;
@@ -457,7 +463,7 @@ namespace Horo::Application::Internal {
     /** @copydoc SceneDecisionQueries::ReplayProfile */
     Sha256Digest SceneDecisionQueries::ReplayProfile() const noexcept {
         Sha256Builder hash;
-        constexpr std::string_view scheduleContract{"horo.scene-query.budget-order.v2"};
+        constexpr std::string_view scheduleContract{"horo.scene-query.budget-order.v3"};
         (void)hash.Update(std::as_bytes(std::span{scheduleContract.data(), scheduleContract.size()}));
         for (const auto &entry : plans_)
             (void)hash.Update(std::as_bytes(std::span{entry.second.digest.bytes}));
@@ -472,33 +478,54 @@ namespace Horo::Application::Internal {
 
     /** @copydoc SceneDecisionQueries::AdvanceQueries */
     void SceneDecisionQueries::AdvanceQueries(std::uint64_t tick) {
+        activeOrder_.clear();
+        for (std::size_t index = 0; index < tasks_.size(); ++index) {
+            const auto &entry = tasks_[index];
+            if (const auto task = entry.task.lock()) {
+                const auto owner = task->ActiveAgent();
+                if (owner.IsValid())
+                    activeOrder_.push_back({owner, entry.order, index});
+            }
+        }
+        std::ranges::sort(activeOrder_);
         AI::AiWorkBudget global{workUnitsLimit_};
-        cursor_ = AdvanceSceneQueryBudgetOrder(tasks_.size(), cursor_, [&](const std::size_t index) {
-            const auto task = tasks_[index].lock();
-            if (!task)
-                return false;
-            const auto agent = task->ActiveAgent();
-            if (!agent.IsValid())
-                return false;
-            auto &budget = budgets_[agent.slot.index];
-            if (budget.owner != agent || budget.tick != tick)
-                budget = {agent, tick, AgentUnits};
-            AI::AiWorkBudget query{AgentUnits};
-            AI::AiWorkBudget agentWork{budget.remaining};
-            const auto before = global.Remaining();
-            task->AdvanceQuery(tick, {query, agentWork, global});
-            budget.remaining = agentWork.Remaining();
-            return global.Remaining() < before;
+        lastGroupConsumer_ = AdvanceSceneQueryGroups(activeOrder_, lastGroupConsumer_, [this, tick, &global](auto owner, auto group) {
+            return AdvanceQueryGroup(owner, group, tick, global);
         });
     }
 
+    /** @copydoc SceneDecisionQueries::AdvanceQueryGroup */
+    bool SceneDecisionQueries::AdvanceQueryGroup(AI::AgentHandle owner, std::span<const SceneQueryOccurrence> group, std::uint64_t tick,
+                                                 AI::AiWorkBudget &global) {
+        auto &budget = budgets_[owner.slot.index];
+        if (budget.owner != owner)
+            budget = {.owner = owner};
+        if (budget.tick != tick) {
+            budget.tick = tick;
+            budget.remaining = AgentUnits;
+        }
+        AI::AiWorkBudget agent{budget.remaining};
+        const auto beforeGroup = global.Remaining();
+        const auto occurrenceOrder = [](const SceneQueryOccurrence &row) {
+            return row.order;
+        };
+        budget.lastConsumer = AdvanceSceneQueryBudgetOrder(group, budget.lastConsumer, occurrenceOrder,
+                                                           [this, owner, tick, &agent, &global](const auto &row) {
+            const auto task = tasks_[row.index].task.lock();
+            if (!task || task->ActiveAgent() != owner)
+                return false;
+            AI::AiWorkBudget query{AgentUnits};
+            const auto before = global.Remaining();
+            task->AdvanceQuery(tick, {query, agent, global});
+            return global.Remaining() < before;
+        });
+        budget.remaining = agent.Remaining();
+        return global.Remaining() < beforeGroup;
+    }
+
     void SceneDecisionQueries::PruneExpiredTasks() {
-        const auto *start = tasks_.empty() ? nullptr : tasks_.data() + std::min(cursor_, tasks_.size());
-        std::erase_if(tasks_, [&](const auto &task) {
-            const bool retired = task.expired();
-            if (retired && &task < start)
-                --cursor_;
-            return retired;
+        std::erase_if(tasks_, [](const auto &entry) {
+            return entry.task.expired();
         });
     }
 
