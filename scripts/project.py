@@ -1158,7 +1158,7 @@ def deploy_device_identity(device: AdmittedAdbDevice, minimum_api: int, abis: fr
 
 
 def deploy_verified_install(device: AdmittedAdbDevice, application: str, user: str, digest_value: str) -> None:
-    """Fence launch against an absent, differently installed or unverifiable package."""
+    """Require the same installed package digest before launch and evidence admission."""
     reported = device.run("shell", "pm", "path", "--user", user, application)
     match = re.fullmatch(r"package:(/[A-Za-z0-9_./=~+@-]{1,1024}/base\.apk)", reported)
     if not match or any(part in (".", "..") for part in match.group(1).split("/")):
@@ -1692,11 +1692,10 @@ def android_deploy_main(argv=None) -> int:
                 report["cleanup"] = launch.rollback()
                 if report["cleanup"]["status"] not in ("stopped", "already_exited"):
                     raise AndroidDeployError("application_stop_unconfirmed")
-                report["status"] = "diagnostic_complete"
             elif not applicable:
                 raise AndroidDeployError("application_evidence_unavailable")
-            else:
-                report["status"] = "complete"
+            deploy_verified_install(device, application, user, artifact.apk_sha256)
+            report["status"] = "diagnostic_complete" if openxr else "complete"
             exit_code = 0
     except KeyboardInterrupt:
         report["error"] = "cancelled"

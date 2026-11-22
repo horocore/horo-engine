@@ -387,6 +387,28 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual(report["error"], "installed_artifact_stale")
         self.assertNotIn("start", {arg for cmd in commands for arg in cmd})
 
+    def test_rejects_package_replacement_after_capturing_diagnostics(self):
+        checksum = ("shell", "toybox", "sha256sum", PACKAGE)
+        admitted = f"{DIGEST}  {PACKAGE}"
+        replacement = f"{'b' * 64}  {PACKAGE}"
+        status, report, commands = self.execute({checksum: [admitted, replacement, replacement]})
+        self.assertEqual((status, report["status"], report["error"]), (1, "partial", "installed_artifact_stale"))
+        self.assertEqual(report["cleanup"], {"status": "unconfirmed", "reason": "installed_artifact_stale"})
+        self.assertIn(checksum, commands[commands.index(LOGCAT) + 1:])
+        self.assertFalse(any("force-stop" in cmd for cmd in commands))
+
+    def test_openxr_rechecks_the_package_after_stopping_the_probe(self):
+        name = project.OPENXR_DEVELOPMENT_PROFILE
+        checksum = ("shell", "toybox", "sha256sum", PACKAGE)
+        admitted = f"{DIGEST}  {PACKAGE}"
+        replacement = f"{'b' * 64}  {PACKAGE}"
+        status, report, commands = self.execute(
+            {LOGCAT: log_line(OPENXR), checksum: [admitted, admitted, replacement]}, OPENXR_OPTIONS, name)
+        self.assertEqual((status, report["status"], report["error"]), (1, "partial", "installed_artifact_stale"))
+        self.assertEqual(report["cleanup"], {"status": "stopped"})
+        self.assertEqual(report["qualification"]["physicalXrQualification"], "not_run")
+        self.assertEqual(commands[-1], checksum)
+
     def test_untrusted_package_path_is_never_passed_to_remote_shell(self):
         status, report, commands = self.execute({
             ("shell", "pm", "path", "--user", "10", APPLICATION): "package:/data/../app/base.apk"})
