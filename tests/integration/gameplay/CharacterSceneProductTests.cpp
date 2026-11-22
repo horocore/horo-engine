@@ -131,6 +131,7 @@ namespace Horo::Application::CharacterSceneProductTest {
             std::unique_ptr<Internal::NetworkProductHost> scheduled;
             Network::INetworkModeService *scheduledScene{};
             Network::INetworkModeService *scheduledPhysics{};
+            Network::INetworkModeService *scheduledClientScene{};
             bool stopped{};
             std::uint64_t tick{};
 
@@ -154,6 +155,9 @@ namespace Horo::Application::CharacterSceneProductTest {
                 resources = std::move(prepared).Value();
                 auto &project = *resources;
                 const auto nativePrefabs = gameplay.prefabPermission == Internal::GameplayPrefabPermission::Granted;
+                const auto path = role == Network::NetworkProjectRole::ListenServer
+                                      ? std::nullopt
+                                      : std::optional{Internal::HeadlessNavigationPathPolicy{fixture.pathFilter, 512}};
                 Internal::HeadlessSceneActivationInput input{.mode = options.physicsMode,
                                                              .settings = *project.settings,
                                                              .registry = project.registry,
@@ -161,17 +165,16 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                              .load = project.load,
                                                              .prefabLoads = nativePrefabs ? project.prefabLoads.get() : nullptr,
                                                              .navigation = project.navigation,
-                                                             .navigationPath =
-                                                                 Internal::HeadlessNavigationPathPolicy{fixture.pathFilter, 512},
+                                                             .navigationPath = path,
                                                              .navigationActors = std::move(actors)};
                 if (configure)
                     configure(input, project);
                 Network::NetworkModeFactories factories;
                 std::optional<Gameplay::GameplayReplicationAdmissionPolicy> admission;
 #if HORO_TEST_PHYSICS_NATIVE
-                const auto owners =
-                    role == Network::NetworkProjectRole::DedicatedServer ? std::make_shared<Network::ProductOwners>() : nullptr;
+                const auto owners = role == Network::NetworkProjectRole::Standalone ? nullptr : std::make_shared<Network::ProductOwners>();
                 if (owners) {
+                    owners->selectedMode = role;
                     admission.emplace();
                     admission->inventory.completeness = Network::NetworkReplicationInventoryCompleteness::Complete;
                     factories = Network::ProductFactories(owners);
@@ -216,20 +219,27 @@ namespace Horo::Application::CharacterSceneProductTest {
             Result<void> StartScheduled(Internal::NetworkProductComposition composed, Network::NetworkProjectRole role,
                                         const std::shared_ptr<Network::ProductOwners> &owners) {
                 using namespace Network;
-                const auto retain = [&](NetworkModeServiceKind kind, INetworkModeService *&destination) {
+                const auto retain = [&](NetworkModeServiceKind kind, INetworkModeService *&destination,
+                                        INetworkModeService **client = nullptr) {
                     auto &factory = composed.factories.services[static_cast<std::size_t>(kind)];
-                    factory = [create = std::move(factory), &destination](const NetworkModeServiceRequest &request) {
+                    factory = [create = std::move(factory), &destination, client](const NetworkModeServiceRequest &request) {
                         auto created = create(request);
-                        if (created.HasValue())
-                            destination = created.Value().get();
+                        if (created.HasValue()) {
+                            if (request.world != NetworkModeWorldKind::Client)
+                                destination = created.Value().get();
+                            else if (client)
+                                *client = created.Value().get();
+                        }
                         return created;
                     };
                 };
-                retain(NetworkModeServiceKind::Scene, scheduledScene);
+                retain(NetworkModeServiceKind::Scene, scheduledScene, &scheduledClientScene);
                 retain(NetworkModeServiceKind::Physics, scheduledPhysics);
+                const bool listen = role == NetworkProjectRole::ListenServer;
                 auto settings = DefaultNetworkProjectSettings(NetworkProjectSettingsId::Create(10).Value()).Value();
                 if (owners) {
-                    settings.supportedRoles = settings.supportedRoles | NetworkProjectRoleSet::DedicatedServer;
+                    settings.supportedRoles =
+                        settings.supportedRoles | (listen ? NetworkProjectRoleSet::ListenServer : NetworkProjectRoleSet::DedicatedServer);
                     settings.transport.requirement = NetworkProjectTransportRequirement::Required;
                     settings.transport.capabilities.requiredDelivery[static_cast<std::size_t>(DeliveryPolicy::ReliableOrdered)] = true;
                     settings.transport.capabilities.requiredChannels = 2;
@@ -241,7 +251,7 @@ namespace Horo::Application::CharacterSceneProductTest {
                     return Result<void>::Failure(project.ErrorValue());
                 const auto facts = ProductFacts(project.Value(), role, false);
                 const auto kind = owners ? NetworkModeWorldKind::AuthorityServer : NetworkModeWorldKind::Standalone;
-                const std::array worlds{NetworkModeWorld{kind, {31}}};
+                const std::array worlds{NetworkModeWorld{kind, {31}}, NetworkModeWorld{NetworkModeWorldKind::Client, {32}}};
                 auto host = Internal::NetworkProductHost::Create(clock,
                                                                  {project.Value(),
                                                                   facts.product,
@@ -250,8 +260,8 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                                   facts.requirements,
                                                                   facts.selection,
                                                                   6,
-                                                                  worlds,
-                                                                  {},
+                                                                  std::span{worlds}.first(listen ? 2 : 1),
+                                                                  {.localPlayer = listen},
                                                                   owners ? owners->sessions : nullptr,
                                                                   NetworkWorldCompositionPurpose::Gameplay,
                                                                   owners ? std::optional{owners->worldSetup} : std::nullopt,
@@ -263,10 +273,20 @@ namespace Horo::Application::CharacterSceneProductTest {
                 if (host.HasError())
                     return Result<void>::Failure(std::move(host).ErrorValue());
                 scheduled = std::move(host).Value();
+                if (listen)
+                    owners->binding->binding = owners->sessions->WorldBinding();
                 if (auto started = scheduled->Startup(); started.HasError())
                     return started;
                 if (auto firstFrame = scheduled->RunFrame(); firstFrame.HasError())
                     return firstFrame;
+                if (listen) {
+                    auto session = AdmittedSession();
+                    auto admitted = scheduled->AdmitClientSession(NetworkModeWorldKind::Client, session, Connection(), Session());
+                    if (admitted.HasError())
+                        return admitted;
+                    PublishProductClient(*scheduled, owners, session);
+                    REQUIRE(scheduled->Role(NetworkModeWorldKind::Client, worlds.back().scene).HasValue());
+                }
                 REQUIRE(scheduled->Role(kind, worlds.front().scene).HasValue());
                 return Result<void>::Success();
             }
@@ -1008,10 +1028,10 @@ namespace Horo::Application::CharacterSceneProductTest {
         REQUIRE(continuation.PublishTerminal(late).Value() == AI::AiTaskPublicationDisposition::Stale);
     }
 
-    TEST_CASE("Cooked AI fills the same deterministic tick allowance on both product authorities",
+    TEST_CASE("Cooked AI fills the same deterministic tick allowance on every product authority",
               "[ai][qualification][character][product][scale]") {
         using Role = Network::NetworkProjectRole;
-        const auto role = GENERATE(Role::Standalone, Role::DedicatedServer);
+        const auto role = GENERATE(Role::Standalone, Role::DedicatedServer, Role::ListenServer);
         NavigationProductFixture fixture;
         DecisionFixture::Fixture decision;
         decision.probe.succeedTick = 1;
@@ -1048,6 +1068,21 @@ namespace Horo::Application::CharacterSceneProductTest {
             const auto value = Internal::InspectHeadlessDecisionValue(product.SceneService(), agent, key.key);
             REQUIRE(value.HasValue());
             CHECK(value.Value() == key.defaultValue);
+        }
+        if (role == Role::ListenServer) {
+            const Network::NetworkModeWorld client{Network::NetworkModeWorldKind::Client, {32}};
+            REQUIRE(product.scheduledClientScene);
+            REQUIRE(Internal::InspectHeadlessScene(*product.scheduledClientScene));
+            const auto agent = DecisionFixture::MakeIdentity<AI::AgentId>(50);
+            const auto privateValue = Internal::InspectHeadlessDecisionValue(*product.scheduledClientScene, agent, key.key);
+            REQUIRE(privateValue.HasError());
+            CHECK(privateValue.ErrorValue().code.Value() == AI::AIErrors::RuntimeUnavailable.code.Value());
+            CHECK_FALSE(product.scheduled->AiHealth(client));
+            REQUIRE(product.scheduled->DisconnectClient(client.kind, Network::Session()).HasValue());
+            product.RunFrame();
+            CHECK(product.scheduled->Role(client.kind, client.scene).HasError());
+            CHECK(product.scheduled->AiHealth({Network::NetworkModeWorldKind::AuthorityServer, {31}}));
+            CHECK(decision.probe.starts == population);
         }
         product.Stop();
         CHECK(decision.probe.aborts == 0);
