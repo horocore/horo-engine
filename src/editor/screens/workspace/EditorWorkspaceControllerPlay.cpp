@@ -193,6 +193,8 @@ namespace Horo::Editor {
             return m_gameplayRegistry->AcquireDecisionAuthoringGeneration();
         }, .perception = [this] {
             return m_gameplayRegistry->AcquirePlayPerceptionGeneration();
+        }, .queryTests = [this] {
+            return m_gameplayRegistry->AcquirePlayQueryTests();
         }});
         m_viewModel.activeDocumentPanelId = "horo.game";
         SyncPanelHost(WorkspaceDockArea::Document, "horo.game");

@@ -40,6 +40,20 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                                     settings.AllowsDebug(AiProjectRuntimeKind::Development, AiProjectDebugOperation::ReplayCapture),
                                     settings.LocalPolicy()});
         }
+
+        /** @brief Resolves the selected native query schema or the built-in basis for projects without native tests. */
+        Result<Gameplay::GameplayQueryTests> CapturePlayQueryTests(const Editor::EditorPlayDecisionProviderSource &source) {
+            using Capture = Result<Gameplay::GameplayQueryTests>;
+            if (source.queryTests) {
+                auto registered = source.queryTests();
+                if (registered.HasError() || registered.Value().schema)
+                    return registered;
+            }
+            auto builtin = AI::CaptureBuiltinQuerySchema();
+            if (builtin.HasError())
+                return Capture::Failure(builtin.ErrorValue());
+            return Capture::Success({std::make_shared<const AI::QuerySchemaRegistry>(std::move(builtin).Value()), {}});
+        }
     }  // namespace
 
     /** @copydoc Editor::EditorPlaySceneHost::ReadDecisionProblem */
@@ -341,10 +355,10 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         if (limits.HasError())
             return Result<void>::Failure(limits.ErrorValue());
         const AI::DecisionCompilationEnvironment environment{.nodes = providers.Value()};
-        auto registered = AI::CaptureBuiltinQuerySchema();
+        auto registered = CapturePlayQueryTests(providerSource);
         if (registered.HasError())
             return Result<void>::Failure(registered.ErrorValue());
-        auto schema = std::make_shared<const AI::QuerySchemaRegistry>(std::move(registered).Value());
+        auto queryTests = std::move(registered).Value();
         CookedSceneQueryPlanCatalog queries;
         CookedSceneLocalPolicyCatalog models;
         const auto &localPolicy = settings.Value().localPolicy;
@@ -353,8 +367,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         if (bindings.HasError())
             return Result<void>::Failure(bindings.ErrorValue());
         auto selected = AdmitCookedSceneControllers(policy.aiControllers, cooked.Value(),
-                                                    {*resources_.assets_, environment, bindings.Value(), {}, schema}, limits.Value(),
-                                                    cancellation, &queries, &models);
+                                                    {*resources_.assets_, environment, bindings.Value(), {}, queryTests.schema},
+                                                    limits.Value(), cancellation, &queries, &models);
         if (selected.HasError())
             return Result<void>::Failure(selected.ErrorValue());
         policy.aiControllers = std::move(selected).Value();
@@ -382,8 +396,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         if (reactive)
             execution.timing = AI::AiCookedDecisionTiming::BestEffortReactive;
         if (!queries.empty()) {
-            auto driver = SceneDecisionQueries::Create(std::move(queries), std::move(schema), execution.scheduler,
-                                                       configured.queryWorkUnitsLimit, configured.queryCacheLimits);
+            auto driver =
+                SceneDecisionQueries::Create(std::move(queries), std::move(queryTests.schema), execution.scheduler,
+                                             configured.queryWorkUnitsLimit, configured.queryCacheLimits, std::move(queryTests.tests));
             if (driver.HasError())
                 return Result<void>::Failure(driver.ErrorValue());
             decisionQueries_ = std::move(driver).Value();

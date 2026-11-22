@@ -690,6 +690,13 @@ namespace Horo::Editor {
         return nativeModule_->AcquirePerceptionSenses();
     }
 
+    /** @copydoc ProjectGameplayRegistry::AcquirePlayQueryTests */
+    Result<Gameplay::GameplayQueryTests> ProjectGameplayRegistry::AcquirePlayQueryTests() const {
+        if (!nativeModule_)
+            return Result<Gameplay::GameplayQueryTests>::Success({});
+        return nativeModule_->AcquireGameplayQueryTests();
+    }
+
     /** @copydoc ProjectGameplayRegistry::DecisionUsageMetadata */
     const std::shared_ptr<const AI::DecisionBlackboardProviderMetadata> &ProjectGameplayRegistry::DecisionUsageMetadata() const noexcept {
         return decisionUsageMetadata_;

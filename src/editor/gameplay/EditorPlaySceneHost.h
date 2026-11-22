@@ -11,6 +11,7 @@
 #include "Horo/AI/EnvironmentQuerySchema.h"
 #include "Horo/Foundation/Sha256.h"
 #include "Horo/Gameplay/BehaviorRuntimeRestore.h"
+#include "Horo/Gameplay/GameModuleHost.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 
 #include <filesystem>
@@ -174,6 +175,7 @@ namespace Horo::Editor {
     struct EditorPlayDecisionProviderSource final {
         std::function<Result<std::shared_ptr<const AI::DecisionNodeGeneration>>()> decision;
         std::function<Result<std::shared_ptr<const AI::PerceptionSenseGeneration>>()> perception;
+        std::function<Result<Gameplay::GameplayQueryTests>()> queryTests;
     };
 
     class EditorPlaySceneHost {

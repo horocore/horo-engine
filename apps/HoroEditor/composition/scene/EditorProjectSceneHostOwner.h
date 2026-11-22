@@ -768,6 +768,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 animation_->Shutdown();
             if (ai_)
                 ai_->BeginShutdown();
+            decisionQueries_.reset();
         }
 
         Editor::IEditorPlayXrHost *selectedXrHost_{};

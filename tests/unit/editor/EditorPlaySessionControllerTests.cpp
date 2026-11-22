@@ -1656,6 +1656,10 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
     bool mixed = false;
     bool allowInspection = true;
     bool enablePerception = false;
+    bool nativeQuery = false;
+    SECTION("The selected game module filters cooked tactical points") {
+        nativeQuery = true;
+    }
     SECTION("Navigation reachability alone publishes the first reachable candidate") {}
     SECTION("Native Perception observes a peer while the same agent completes its Navigation query") {
         enablePerception = true;
@@ -1683,19 +1687,36 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
     auto schemaBytes = BlackboardSchemaCodec::Encode(*schema);
     REQUIRE(schemaBytes.HasValue());
 
-    auto lattice =
-        CreateBuiltinLatticeQuery(MakeIdentity<QueryId>(29), MakeIdentity<QueryStageId>(1), MakeIdentity<QueryResultSchemaId>(30),
-                                  "Editor Play path", {.stepMillimeters = 4'000, .outerSteps = 1, .innerSteps = 1}, 1);
-    REQUIRE(lattice.HasValue());
-    auto query = AddBuiltinPointNavigationTest(lattice.Value(), MakeIdentity<QueryStageId>(2));
+    const std::array points{Math::WorldCoordinate64::FromMillimeters(1500, 0, 500), Math::WorldCoordinate64::FromMillimeters(1500, 0, 1000),
+                            Math::WorldCoordinate64::FromMillimeters(1500, 0, 1500),
+                            Math::WorldCoordinate64::FromMillimeters(5000, 0, 1000)};
+    auto generator = nativeQuery ? CreateBuiltinAuthoredPointQuery(MakeIdentity<QueryId>(29), MakeIdentity<QueryStageId>(1),
+                                                                   MakeIdentity<QueryResultSchemaId>(30), "Editor Play tactics", points, 1)
+                                 : CreateBuiltinLatticeQuery(MakeIdentity<QueryId>(29), MakeIdentity<QueryStageId>(1),
+                                                             MakeIdentity<QueryResultSchemaId>(30), "Editor Play path",
+                                                             {.stepMillimeters = 4'000, .outerSteps = 1, .innerSteps = 1}, 1);
+    REQUIRE(generator.HasValue());
+    auto query = AddBuiltinPointNavigationTest(generator.Value(), MakeIdentity<QueryStageId>(2));
     REQUIRE(query.HasValue());
 #if HORO_TEST_PHYSICS_NATIVE
     if (collision)
         query = AddBuiltinPointVisibilityTest(query.Value(), MakeIdentity<QueryStageId>(3), collision->channel.Bytes());
     REQUIRE(query.HasValue());
 #endif
-    auto queries = CaptureBuiltinQuerySchema();
-    REQUIRE(queries.HasValue());
+    if (nativeQuery) {
+        QueryAssetSource source{.id = query.Value().Id(),
+                                .displayName = query.Value().DisplayName(),
+                                .result = query.Value().ResultSchema(),
+                                .stages = {query.Value().Stages().begin(), query.Value().Stages().end()}};
+        source.stages.push_back({.id = MakeIdentity<QueryStageId>(92),
+                                 .kind = QueryStageKind::Test,
+                                 .executionOrder = 20,
+                                 .test = MakeIdentity<QueryTestId>(90),
+                                 .descriptorVersion = {1, 1},
+                                 .properties = {{MakeIdentity<QueryPropertyId>(93), std::uint64_t{500}}}});
+        query = EnvironmentQueryAsset::Capture(source);
+        REQUIRE(query.HasValue());
+    }
     auto queryBytes = EnvironmentQuerySourceCodec::Encode(query.Value());
     REQUIRE(queryBytes.HasValue());
     const Gameplay::GameModuleLoadExpectation expected{"game.ai.tests", Gameplay::CurrentGameplayBuildFingerprint(),
@@ -1705,6 +1726,9 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
     REQUIRE_FALSE(image.Value().diagnostic);
     auto providers = image.Value().owner->AcquireDecisionNodes();
     REQUIRE(providers.HasValue());
+    auto queryTests = image.Value().owner->AcquireGameplayQueryTests();
+    REQUIRE(queryTests.HasValue());
+    REQUIRE(queryTests.Value().schema);
     auto task = Decisions::TreeNode(2, DecisionControlKind::Task);
     task.type = MakeIdentity<BehaviorTreeNodeTypeId>(102);
     task.requirements = {{.key = key,
@@ -1727,8 +1751,7 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
     std::vector assets{add(121, DecisionAssetType(DecisionPlanKind::BehaviorTree), "assets/path.horo_bt", graphBytes.Value()),
                        add(122, BlackboardSchemaAssetType, "assets/path.horo_bb", schemaBytes.Value()),
                        add(123, EnvironmentQuerySourceAssetType, "assets/path.horo_eqs", queryBytes.Value())};
-    CookEditorPlayDecisionAssets(fixture, assets, providers.Value(),
-                                 std::make_shared<const QuerySchemaRegistry>(std::move(queries).Value()));
+    CookEditorPlayDecisionAssets(fixture, assets, providers.Value(), queryTests.Value().schema);
     const auto committedQuery = Assets::DecodeCookedArtifact(assets.back().cookedEnvelope);
     REQUIRE(committedQuery.HasValue());
     const auto cookedDigest = committedQuery.Value().payloadDigest;
@@ -1841,6 +1864,10 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
         return Result<std::shared_ptr<const DecisionNodeGeneration>>::Success(providers.Value());
     }, .perception = [&] {
         return Result<std::shared_ptr<const PerceptionSenseGeneration>>::Success(senses);
+    }, .queryTests = [&] {
+        if (!nativeQuery)
+            return Result<Gameplay::GameplayQueryTests>::Success({});
+        return image.Value().owner->AcquireGameplayQueryTests();
     }});
     if (started.HasError())
         UNSCOPED_INFO(started.ErrorValue().code.Value() << ": " << started.ErrorValue().message);
@@ -1908,21 +1935,32 @@ TEST_CASE("Editor Play publishes cooked tactical path output through its admitte
         CHECK(stimulus.key.sense == senses->Contracts().front().sense.identity);
         CHECK(stimulus.sensed);
     }
-    const auto expectedPoint =
+    auto expectedPoint =
         mixed ? Math::WorldCoordinate64::FromMillimeters(1000, 0, 5000) : Math::WorldCoordinate64::FromMillimeters(5000, 0, 1000);
+    if (nativeQuery)
+        expectedPoint = points.front();
     CHECK(std::get<Math::WorldCoordinate64>(std::get<BlackboardScalarValue>(*winner)) == expectedPoint);
     if (allowInspection) {
         REQUIRE(terminal);
         CHECK_FALSE(terminal->stale);
         CHECK(terminal->query == query.Value().Id());
         REQUIRE(terminal->candidates.size() == 4);
-        const auto expectedStages = mixed ? 8u : 4u;
+        const auto expectedStages = mixed || nativeQuery ? 8u : 4u;
         REQUIRE(terminal->stages.size() == expectedStages);
         REQUIRE(terminal->winners.size() == 1);
         const auto index = terminal->winners.front().itemIndex;
         REQUIRE(index < terminal->candidates.size());
         CHECK(terminal->candidates[index].point == expectedPoint);
         CHECK(terminal->winners.front().status == QueryScoreStatus::Eligible);
+        if (nativeQuery) {
+            const auto rejected = std::ranges::find(terminal->candidates, std::optional{points[1]}, &QueryDebugCandidate::point);
+            REQUIRE(rejected != terminal->candidates.end());
+            const auto test = std::ranges::find_if(terminal->stages, [&](const QueryDebugStage &stage) {
+                return stage.candidateIndex == rejected->index && stage.score.stage == MakeIdentity<QueryStageId>(92);
+            });
+            REQUIRE(test != terminal->stages.end());
+            CHECK(test->score.status == QueryScoreStatus::Filtered);
+        }
         if (mixed) {
             const auto firstReachable = Math::WorldCoordinate64::FromMillimeters(5000, 0, 1000);
             const auto blocked = std::ranges::find(terminal->candidates, std::optional{firstReachable}, &QueryDebugCandidate::point);

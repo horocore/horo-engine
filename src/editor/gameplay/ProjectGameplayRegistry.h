@@ -153,6 +153,8 @@ namespace Horo::Editor {
         [[nodiscard]] Result<std::shared_ptr<const AI::DecisionNodeGeneration>> AcquireDecisionAuthoringGeneration() const;
         /** @brief Pins the selected current native module's independently admitted sense providers for Play. */
         [[nodiscard]] Result<std::shared_ptr<const AI::PerceptionSenseGeneration>> AcquirePlayPerceptionGeneration() const;
+        /** @brief Pins the active project module's native query schema and callbacks for cooked Play. */
+        [[nodiscard]] Result<Gameplay::GameplayQueryTests> AcquirePlayQueryTests() const;
 
         /** @brief Atomically updates package contributions to the detached authoring catalog at the owner's safe point.
          * @param source Read-only source bound to the exact live package activation. An empty source withdraws all package contributions.
