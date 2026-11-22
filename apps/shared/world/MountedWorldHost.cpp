@@ -2,6 +2,7 @@
 
 #include "Horo/Assets/AssetPayloadCache.h"
 #include "Horo/Assets/AssetProvider.h"
+#include "Horo/Assets/NavMeshAssetType.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Runtime/RuntimeDispatchEvidence.h"
 #include "Horo/Runtime/Scene/SceneCellPayloadCodec.h"
@@ -38,6 +39,11 @@ namespace Horo::Application::Internal {
                                                            {}};
 
     namespace {
+        struct MountedNavigationMembership final {
+            WS::StreamingCellId cell;
+            Navigation::NavigationCellTileSelection selection;
+        };
+
         constexpr std::uint32_t MaximumCells = 4096;
         constexpr std::size_t MaximumBytes = 256U * 1024U * 1024U;
         constexpr std::size_t MaximumCellBytes = 32U * 1024U * 1024U;
@@ -105,10 +111,34 @@ namespace Horo::Application::Internal {
                                                       partition, {1, {1}, 1, 0, enabled});
         }
 
+        /** @brief Retains verified membership only when its complete base envelope exists in the selected inventory. */
+        Result<void> CaptureNavigation(const Assets::AssetCookGenerationContents &contents, const WS::StreamingCellHeaderView &cell,
+                                       std::span<const std::byte> bytes, std::vector<MountedNavigationMembership> &out) {
+            const auto row =
+                std::ranges::find(cell.payloads, WS::StreamingCellProvider::NavigationMesh, &WS::StreamingCellPayloadHeader::provider);
+            if (row == cell.payloads.end())
+                return Result<void>::Success();
+            if (cell.compression != WS::StreamingCellCompression::None ||
+                row->requirement != WS::StreamingCellPayloadRequirement::Required ||
+                row->version != Navigation::NavigationCellTileSelection::WireVersion)
+                return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Unsupported));
+            auto selected = Navigation::DecodeNavigationCellTileSelection(bytes.subspan(static_cast<std::size_t>(row->offset),
+                                                                                        static_cast<std::size_t>(row->compressedSize)),
+                                                                          MaximumCellBytes);
+            if (selected.HasError())
+                return Result<void>::Failure(selected.ErrorValue());
+            const auto entry = std::ranges::find(contents.entries, selected.Value().definition, &Assets::AssetCookManifestEntry::assetId);
+            if (entry == contents.entries.end() || entry->assetType.Value() != Assets::NavMeshAssetTypeName ||
+                entry->artifactHash != selected.Value().cookedEnvelope)
+                return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+            out.emplace_back(cell.cell, std::move(selected).Value());
+            return Result<void>::Success();
+        }
+
         /** @brief Verifies actual cell bytes against every corresponding index row before publishing a provider. */
         Result<void> LoadCells(Assets::MemoryAssetProvider &provider, const Assets::AssetCookGenerationContents &contents,
                                const Assets::AssetCookTargetId &target, const WS::DecodedWorldIndex &index,
-                               const CancellationToken &cancellation) {
+                               const CancellationToken &cancellation, std::vector<MountedNavigationMembership> &navigation) {
             for (const auto &cell : index.descriptor.Cells()) {
                 if (cancellation.IsCancellationRequested())
                     return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Cancelled));
@@ -129,6 +159,9 @@ namespace Horo::Application::Internal {
                     return Result<void>::Failure(
                         MakeError(WS::WorldArtifactErrors::Invalid,
                                   "A World cell does not match the exact identity and integrity advertised by its index."));
+                if (auto admitted = CaptureNavigation(contents, actual, std::as_bytes(std::span{artifact.Value().payload}), navigation);
+                    admitted.HasError())
+                    return admitted;
                 provider.Insert(cell.package.chunkAsset, std::move(artifact).Value().payload);
             }
             return Result<void>::Success();
@@ -335,12 +368,19 @@ namespace Horo::Application::Internal {
             return scheduler.Release(reservation);
         }
 
-        /** @brief Admit the committed cell's single supported provider against its independent authored identity. */
-        Result<Runtime::RuntimeSceneCellPayload> DecodeCell(
-            const Assets::MemoryAssetProvider &provider, const WS::WorldPartitionDescriptor &partition,
-            const WS::WorldPartitionCellDescriptor &cell, const WS::CookedWorldCellManifestEntry &metadata,
-            const Runtime::SceneCellPayloadIdentity &identity, const CancellationToken &cancellation,
-            const std::size_t maximumEntities = 65536, const std::size_t maximumAssets = MaximumCells) {
+        struct CellDecodeOptions final {
+            std::size_t maximumEntities{65536};
+            std::size_t maximumAssets{MaximumCells};
+            bool hasNavigation{};
+        };
+
+        /** @brief Admit the committed cell's providers against its independent authored identity. */
+        Result<Runtime::RuntimeSceneCellPayload> DecodeCell(const Assets::MemoryAssetProvider &provider,
+                                                            const WS::WorldPartitionDescriptor &partition,
+                                                            const WS::WorldPartitionCellDescriptor &cell,
+                                                            const WS::CookedWorldCellManifestEntry &metadata,
+                                                            const Runtime::SceneCellPayloadIdentity &identity,
+                                                            const CancellationToken &cancellation, const CellDecodeOptions &options = {}) {
             using Output = Result<Runtime::RuntimeSceneCellPayload>;
             const auto bytes = provider.Load(cell.package.chunkAsset, cancellation);
             if (bytes.HasError())
@@ -350,16 +390,20 @@ namespace Horo::Application::Internal {
             if (inspected.HasError())
                 return Output::Failure(inspected.ErrorValue());
             const auto header = inspected.Value().Header();
-            if (header.compression != WS::StreamingCellCompression::None || header.payloads.size() != 1 ||
+            const auto expectedProviders = options.hasNavigation ? 2U : 1U;
+            if (header.compression != WS::StreamingCellCompression::None || header.payloads.size() != expectedProviders ||
                 header.payloads.front().provider != WS::StreamingCellProvider::CoreEcs ||
-                header.payloads.front().requirement != WS::StreamingCellPayloadRequirement::Required)
+                header.payloads.front().requirement != WS::StreamingCellPayloadRequirement::Required ||
+                (options.hasNavigation && header.payloads.back().provider != WS::StreamingCellProvider::NavigationMesh))
                 return Output::Failure(MakeError(Runtime::SceneCellPayloadErrors::Unsupported));
             const auto &core = header.payloads.front();
             const auto body = artifact.subspan(static_cast<std::size_t>(core.offset), static_cast<std::size_t>(core.compressedSize));
             if (!Runtime::MatchesSceneCellPayloadWireVersion(body, core.version))
                 return Output::Failure(MakeError(Runtime::SceneCellPayloadErrors::Unsupported));
             return Runtime::DecodeSceneCellPayload(partition, body, identity, {}, {},
-                                                   {MaximumCellBytes, MaximumCellBytes, {maximumEntities, maximumAssets, MaximumCellBytes}},
+                                                   {MaximumCellBytes,
+                                                    MaximumCellBytes,
+                                                    {options.maximumEntities, options.maximumAssets, MaximumCellBytes}},
                                                    cancellation);
         }
 
@@ -369,12 +413,17 @@ namespace Horo::Application::Internal {
         };
 
         /** @brief Transfer already verified immutable envelopes from the selected commit to the worker-visible inventory. */
-        std::vector<MountedCellAsset> CaptureCellAssets(Assets::AssetCookGenerationContents &contents) {
+        std::vector<MountedCellAsset> CaptureCellAssets(Assets::AssetCookGenerationContents &contents,
+                                                        std::span<const MountedNavigationMembership> navigation, bool includeCellAssets) {
             std::vector<MountedCellAsset> assets;
             for (std::size_t index = 0; index < contents.entries.size(); ++index) {
                 const auto &entry = contents.entries[index];
                 const auto type = entry.assetType.Value();
                 if (type == "world.index" || type == "world.dependencies" || type == "world.cell")
+                    continue;
+                if (!includeCellAssets && std::ranges::none_of(navigation, [&](const auto &row) {
+                    return row.selection.definition == entry.assetId;
+                }))
                     continue;
                 assets.emplace_back(entry.assetId, std::move(contents.artifacts[index]));
             }
@@ -792,6 +841,7 @@ namespace Horo::Application::Internal {
             const JobSystem &jobs;
             MountedWorldLiveLimits limits;
             Assets::AssetRegistrySnapshot assets;
+            MountedWorldNavigationPublication navigation;
             std::uint64_t lastFrame{};
             std::uint64_t nextIdentity{4}; /**< Distinct from the three cold-start operations. */
             std::optional<LiveDemand> demand;
@@ -821,13 +871,23 @@ namespace Horo::Application::Internal {
 
         Assets::AssetCookTargetId target;
         std::shared_ptr<const std::vector<MountedCellAsset>> committedAssets;
+        std::vector<MountedNavigationMembership> navigationCells;
         std::optional<LiveStreaming> live;
+
+        /** @brief Looks up admitted membership for this exact committed cell, if required. */
+        [[nodiscard]] const MountedNavigationMembership *NavigationCell(WS::StreamingCellId id) const noexcept {
+            const auto found = std::ranges::find(navigationCells, id, &MountedNavigationMembership::cell);
+            return found == navigationCells.end() ? nullptr : std::to_address(found);
+        }
 
         [[nodiscard]] Result<MountedWorldLiveCellState> StartLiveLoad(const Runtime::RuntimeSceneView &parent);
         [[nodiscard]] Result<MountedWorldLiveCellState> PollLiveLoad();
         [[nodiscard]] Result<MountedWorldLiveCellState> QueueLiveAttachment(const Runtime::RuntimeSceneView &parent);
         [[nodiscard]] Result<MountedWorldLiveCellState> PollLiveAttachment();
         [[nodiscard]] Result<MountedWorldLiveCellState> RetireLiveCell(const Runtime::RuntimeSceneView &parent, std::size_t index);
+        /** @brief Builds the exact aggregate command owner for an added or removed cell with Navigation content. */
+        [[nodiscard]] Result<std::shared_ptr<const Runtime::SceneGroupPublication>> PrepareNavigationChange(
+            const Runtime::RuntimeSceneView &parent, WS::StreamingCellId cell, bool creating) const;
         [[nodiscard]] Result<MountedWorldLiveCellState> RejectLive(const Error &error);
         /** @brief Reserves retirement of one exact Resident or Active cell until its resources have settled. */
         [[nodiscard]] Result<void> BeginLiveRetirement(const ActiveCell &cell);
@@ -889,11 +949,14 @@ namespace Horo::Application::Internal {
             return Output::Failure(dependencies.ErrorValue());
 
         auto state = std::make_unique<State>(scene);
-        if (auto loaded = LoadCells(*state->cells, inventory, selection.target, index.Value(), cancellation); loaded.HasError())
+        if (auto loaded = LoadCells(*state->cells, inventory, selection.target, index.Value(), cancellation, state->navigationCells);
+            loaded.HasError())
             return Output::Failure(loaded.ErrorValue());
         state->target = selection.target;
-        if (selection.liveCell && selection.liveCell->limits.maximumCellAssets != 0)
-            state->committedAssets = std::make_shared<const std::vector<MountedCellAsset>>(CaptureCellAssets(inventory));
+        const bool captureCellAssets = selection.liveCell && selection.liveCell->limits.maximumCellAssets != 0;
+        if (captureCellAssets || !state->navigationCells.empty())
+            state->committedAssets = std::make_shared<const std::vector<MountedCellAsset>>(
+                CaptureCellAssets(inventory, state->navigationCells, captureCellAssets));
         state->dependencies.emplace(std::move(dependencies).Value());
         state->integrity = std::move(index).Value().cells;
         const WS::StreamingRuntimeOwnerToken owner{index.Value().descriptor.Partition(), Identity<WS::PartitionEpoch>(generation),
@@ -1317,9 +1380,10 @@ namespace Horo::Application::Internal {
                                            [loaded, provider = std::shared_ptr<const Assets::MemoryAssetProvider>{cells},
                                             snapshot = partition.Value(), cell = *descriptor.Value(), metadata = *metadata, identity,
                                             assets = committedAssets, registry = live->assets, target = target, limits = live->limits,
-                                            maximumDependencies, sharedAssets](const CancellationToken &cancel) {
-            auto decoded = DecodeCell(*provider, *snapshot.Descriptor(), cell, metadata, identity, cancel, limits.maximumCellEntities,
-                                      maximumDependencies);
+                                            maximumDependencies, sharedAssets,
+                                            hasNavigation = NavigationCell(selected.cell) != nullptr](const CancellationToken &cancel) {
+            auto decoded = DecodeCell(*provider, *snapshot.Descriptor(), cell, metadata, identity, cancel,
+                                      {limits.maximumCellEntities, maximumDependencies, hasNavigation});
             if (decoded.HasError())
                 return Result<void>::Failure(decoded.ErrorValue());
             const auto inventory = assets ? std::span<const MountedCellAsset>{*assets} : std::span<const MountedCellAsset>{};
@@ -1367,6 +1431,44 @@ namespace Horo::Application::Internal {
         return Result<Stage>::Success(Stage::Prepared);
     }
 
+    /** @copydoc MountedWorld::State::PrepareNavigationChange */
+    Result<std::shared_ptr<const Runtime::SceneGroupPublication>> MountedWorld::State::PrepareNavigationChange(
+        const Runtime::RuntimeSceneView &parent, WS::StreamingCellId cell, bool creating) const {
+        using Output = Result<std::shared_ptr<const Runtime::SceneGroupPublication>>;
+        const auto *changed = NavigationCell(cell);
+        if (!changed)
+            return Output::Success({});
+        if (!live->navigation || !committedAssets)
+            return Output::Failure(MakeError(WS::WorldArtifactErrors::Unsupported));
+        try {
+            std::vector<MountedWorldNavigationCell> desired;
+            desired.reserve(live->residents.size() + (creating ? 1U : 0U));
+            const auto append = [&](const MountedNavigationMembership &row) {
+                const auto asset = std::ranges::lower_bound(*committedAssets, row.selection.definition, {}, &MountedCellAsset::id);
+                if (asset == committedAssets->end() || asset->id != row.selection.definition)
+                    return false;
+                desired.emplace_back(row.cell, row.selection, asset->envelope);
+                return true;
+            };
+            for (const auto &resident : live->residents) {
+                const auto id = resident.cell.fence.cell;
+                if (id == cell)
+                    continue;
+                const auto *retained = NavigationCell(id);
+                if (retained && !append(*retained))
+                    return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+            }
+            if (creating && !append(*changed))
+                return Output::Failure(MakeError(WS::WorldArtifactErrors::Stale));
+            auto owner = live->navigation(parent, desired);
+            if (owner.HasValue() && !owner.Value())
+                return Output::Failure(MakeError(WS::WorldArtifactErrors::Unsupported));
+            return owner;
+        } catch (const std::bad_alloc &) {
+            return Output::Failure(MakeError(WS::WorldArtifactErrors::CapacityExceeded));
+        }
+    }
+
     /** @copydoc MountedWorld::State::QueueLiveAttachment */
     Result<MountedWorldLiveCellState> MountedWorld::State::QueueLiveAttachment(const Runtime::RuntimeSceneView &parent) {
         using Stage = MountedWorldLiveCellState;
@@ -1378,6 +1480,9 @@ namespace Horo::Application::Internal {
             return RejectLive(MakeError(Runtime::SceneCellPayloadErrors::Stale));
         if (!live->prepared->value().assets.resources.empty() && parent.AssetRegistryRevision() != live->assets.Revision())
             return RejectLive(MakeError(Runtime::SceneCellPayloadErrors::Stale));
+        auto navigation = PrepareNavigationChange(parent, cell.fence.cell, true);
+        if (navigation.HasError())
+            return RejectLive(navigation.ErrorValue());
         const auto operation = IssueLiveOperation();
         if (operation.HasError())
             return RejectLive(operation.ErrorValue());
@@ -1403,7 +1508,8 @@ namespace Horo::Application::Internal {
                                                                      std::max<std::size_t>(1, live->limits.maximumResidentCells *
                                                                                                   live->limits.maximumCellAssets)},
                                                           .cancellation = demand.cancellation,
-                                                          .ownerCancellation = demand.lifetime.Token()};
+                                                          .ownerCancellation = demand.lifetime.Token(),
+                                                          .publication = std::move(navigation).Value()};
         const auto authority =
             std::make_shared<const InitialCellAuthority>(cell.identity, *residency, scheduler, activated.Value(),
                                                          MountedWorldStartup{demand.lifetime.Token(),
@@ -1473,6 +1579,9 @@ namespace Horo::Application::Internal {
         }
         if (!AttachedParent(cell) || parent.RuntimeId() != cell.address.parent)
             return Result<Stage>::Failure(MakeError(Runtime::SceneCellPayloadErrors::Stale));
+        auto navigation = PrepareNavigationChange(parent, cell.fence.cell, false);
+        if (navigation.HasError())
+            return Result<Stage>::Failure(navigation.ErrorValue());
         if (const auto retired = BeginLiveRetirement(cell); retired.HasError())
             return Result<Stage>::Failure(retired.ErrorValue());
         live->retiring = index;
@@ -1481,7 +1590,8 @@ namespace Horo::Application::Internal {
                                                           .fence = cell.fence,
                                                           .registry = parent.AssetRegistryRevision(),
                                                           .limits = {1, live->limits.maximumCellEntities, 1},
-                                                          .expectedRevision = cell.identity.revision};
+                                                          .expectedRevision = cell.identity.revision,
+                                                          .publication = std::move(navigation).Value()};
         auto authority = std::make_shared<const LiveCellRetirementAuthority>(cell.identity, *residency, scheduler, *live->reservation);
         auto queued = Runtime::QueueStreamedSceneRemoval(scene, resident.attachment, request, std::move(authority));
         if (queued.HasError())
@@ -1563,6 +1673,15 @@ namespace Horo::Application::Internal {
         return Result<void>::Success();
     }
 
+    /** @copydoc MountedWorld::BindLiveNavigation */
+    Result<void> MountedWorld::BindLiveNavigation(MountedWorldNavigationPublication publication) {
+        if (std::this_thread::get_id() != state_->ownerThread || !state_->live || !publication || state_->live->navigation ||
+            state_->live->demand || !state_->live->residents.empty())
+            return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Invalid));
+        state_->live->navigation = std::move(publication);
+        return Result<void>::Success();
+    }
+
     /** @copydoc MountedWorld::RequestLiveCell */
     Result<void> MountedWorld::RequestLiveCell(const CommittedWorldInitialCell &selected, const CancellationToken &cancellation) {
         if (std::this_thread::get_id() != state_->ownerThread || !state_->live || !selected.cell.IsValid() ||
@@ -1571,6 +1690,8 @@ namespace Horo::Application::Internal {
         if (cancellation.IsCancellationRequested())
             return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Cancelled));
         auto &live = *state_->live;
+        if (state_->NavigationCell(selected.cell) && !live.navigation)
+            return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Unsupported));
         if (live.demand || live.RetirementCandidate().has_value() || live.residents.size() == live.limits.maximumResidentCells)
             return Result<void>::Failure(MakeError(WS::WorldArtifactErrors::Invalid));
         if (std::ranges::any_of(live.residents, [&](const State::LiveResident &resident) {

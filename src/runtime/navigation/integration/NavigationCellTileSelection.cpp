@@ -32,7 +32,9 @@ namespace Horo::Navigation {
         /** @brief Preserves canonical UUID and digest bytes independently of native structure layout. */
         template <std::size_t N> std::array<std::uint8_t, N> ReadBytes(std::span<const std::byte> &bytes) noexcept {
             std::array<std::uint8_t, N> result{};
-            std::ranges::transform(bytes.first(N), result.begin(), std::to_integer<std::uint8_t>);
+            std::ranges::transform(bytes.first(N), result.begin(), [](std::byte value) {
+                return std::to_integer<std::uint8_t>(value);
+            });
             bytes = bytes.subspan(N);
             return result;
         }

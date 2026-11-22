@@ -1134,6 +1134,13 @@ the exact captured block and resolves every selected address in the verified bas
 artifact. The cell contains membership bytes and the base release retains the
 authoritative portable tile content and input provenance.
 
+The mounted World verifies the block against its admitted index and locates
+the matching base envelope before live work starts. A live demand with required
+NavigationMesh membership needs an explicitly bound navigation publication owner.
+The mount submits the complete proposed resident tile membership with the Scene
+attachment or removal. The host selects the provider and returns the owner for
+the same structural transaction. The mount never selects a backend.
+
 [ADR-107](../../adr/107-navigation-query-consistency-and-snapshot-ownership.md)
 requires a navigation query snapshot to record the exact PartitionEpoch,
 StreamingGeneration and tile generations it observed. Cell activation/replacement

@@ -121,7 +121,7 @@ add_library(HoroMountedWorldHostInternal STATIC shared/world/MountedWorldHost.cp
 target_compile_features(HoroMountedWorldHostInternal PUBLIC cxx_std_20)
 target_include_directories(HoroMountedWorldHostInternal PUBLIC "${HORO_MOUNTED_WORLD_HOST_HEADERS}")
 target_link_libraries(HoroMountedWorldHostInternal
-    PUBLIC HoroEngine::SceneRenderExtraction HoroEngine::WorldStreaming HoroEngine::RuntimeScene HoroEngine::Assets
+    PUBLIC HoroEngine::SceneRenderExtraction HoroEngine::WorldStreaming HoroEngine::RuntimeScene HoroEngine::Assets HoroEngine::NavigationCellContent
     PRIVATE HoroEngine::SceneCellPayload HoroScenePhysicsHost)
 
 set(HORO_PROJECT_NAVIGATION_SCENE_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/project_navigation_scene_headers")

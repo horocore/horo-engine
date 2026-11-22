@@ -5,6 +5,7 @@
  */
 #include "Horo/Assets/AssetCookOutput.h"
 #include "Horo/Math/WorldCoordinate64.h"
+#include "Horo/Navigation/NavigationCellTileSelection.h"
 #include "Horo/Runtime/Render/RenderOriginScene.h"
 #include "Horo/Runtime/Scene/PrimitiveMesh.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
@@ -14,6 +15,7 @@
 #include <chrono>
 #include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <span>
@@ -30,6 +32,18 @@ namespace Horo {
 }
 
 namespace Horo::Application::Internal {
+    /** @brief Borrowed exact membership and base envelope for one cell in a proposed live topology. */
+    struct MountedWorldNavigationCell final {
+        WorldStreaming::StreamingCellId cell;
+        const Navigation::NavigationCellTileSelection &selection;
+        std::span<const std::uint8_t> envelope;
+    };
+
+    /** @brief Prepares a command owner for the complete proposed resident NavMesh set on the Scene owner lane. */
+    using MountedWorldNavigationPublication =
+        std::function<Result<std::shared_ptr<const Runtime::SceneGroupPublication>>(const Runtime::RuntimeSceneView &,
+                                                                                    std::span<const MountedWorldNavigationCell>)>;
+
     /** @brief Explicit owner-lane cancellation and absolute deadline for one mounted cell activation. */
     struct MountedWorldStartup final {
         CancellationToken cancellation;
@@ -195,6 +209,9 @@ namespace Horo::Application::Internal {
          */
         [[nodiscard]] Result<void> BindLiveCell(const Runtime::RuntimeDispatchSource &dispatch, const JobSystem &jobs,
                                                 const MountedWorldLiveLimits &limits, Assets::AssetRegistrySnapshot assets = {});
+
+        /** @brief Binds the host-selected navigation owner before the first live demand. */
+        [[nodiscard]] Result<void> BindLiveNavigation(MountedWorldNavigationPublication publication);
 
         /** @brief Admit an exact selected cell as demand; the structural frame owns worker submission.
          * @param selected Exact validated mount cell, independent authored occurrence, definition and revision.

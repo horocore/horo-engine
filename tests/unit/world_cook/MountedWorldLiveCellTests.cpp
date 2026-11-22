@@ -26,6 +26,39 @@ namespace Horo::WorldCook {
         using namespace PublicationTestSupport;
         using Stage = MountedWorldLiveCellState;
 
+        /** @brief Observes the exact cell publication through the ordinary Scene owner protocol. */
+        struct ObservedCellNavigation final : S::SceneGroupPublication {
+            struct Candidate final : S::SceneStructuralCandidate {
+                Candidate(std::size_t &published, std::size_t desired) : published_(published), desired_(desired) {}
+
+                Result<void> ValidatePublication() const override {
+                    return Result<void>::Success();
+                }
+
+                void Publish() noexcept override {
+                    published_ = desired_;
+                }
+
+                Result<void> AfterPublication() override {
+                    return Result<void>::Success();
+                }
+
+                std::size_t &published_;
+                std::size_t desired_;
+            };
+
+            ObservedCellNavigation(std::size_t &published, std::size_t desired) : published_(published), desired_(desired) {}
+
+            Result<std::unique_ptr<S::SceneStructuralCandidate>> Prepare(const S::RuntimeSceneView &, std::span<const S::EntityRef>,
+                                                                         bool creating) const override {
+                CHECK(creating == (desired_ != 0));
+                return Result<std::unique_ptr<S::SceneStructuralCandidate>>::Success(std::make_unique<Candidate>(published_, desired_));
+            }
+
+            std::size_t &published_;
+            std::size_t desired_;
+        };
+
         /** @brief Runs the real mount and Scene cutoff in their ordinary owner order under scheduler-issued evidence. */
         class MountedCellDriver final : public S::RuntimeLifecycleParticipant {
         public:
@@ -779,5 +812,75 @@ namespace Horo::WorldCook {
         PrintFrameSamples("idle_frame", idle);
         PrintFrameSamples("attach_frame", attach);
         PrintFrameSamples("detach_frame", detach);
+    }
+
+    TEST_CASE("Mounted live cell submits verified Navigation membership with its Scene transaction",
+              "[world_cook][mounted_world][navigation]") {
+        Fixture fixture{true, false};
+        const auto tiles = CaptureNavigationCell(fixture);
+        const auto identity = fixture.inputs.front().expected;
+        fixture.navigationCells.push_back({identity.cell, tiles});
+        auto limits = Limits();
+        limits.cell.maximumPayloads = 2;
+        const auto published = fixture.Publish(limits);
+        REQUIRE(published.HasValue());
+        REQUIRE(published.Value().publication);
+        const CommittedWorldSelection selection{.targetRoot = fixture.directory.path,
+                                                .target = fixture.Release().target,
+                                                .manifest = published.Value().publication->manifestDigest,
+                                                .index = Asset(6),
+                                                .dependencies = Asset(7)};
+        S::RuntimeSceneService scene;
+        S::SceneDefinitionBuilder startup{{99}, {1}};
+        startup.Add({.object = {42}});
+        const HeadlessSceneLoadBoundary boundary{{}, std::chrono::steady_clock::now() + std::chrono::seconds(5)};
+        REQUIRE(PrepareHeadlessSceneAtLoadBoundary(scene, std::move(startup).Build().Value(), boundary).HasValue());
+        JobSystem jobs{JobSystemConfig{1, 4}};
+        const auto prepared = MountedWorld::Prepare(NativeDurableFileSystem{}, selection, 5, scene);
+        REQUIRE(prepared.HasValue());
+        auto &mount = *prepared.Value();
+        DeterministicClock clock;
+        auto host = S::RuntimeHost::Create(clock).Value();
+        auto driver = std::make_unique<MountedCellDriver>(mount, scene);
+        const auto &progress = *driver;
+        REQUIRE(host->AddParticipant(std::move(driver)).HasValue());
+        REQUIRE(mount.BindLiveCell(host->DispatchSource(), jobs, {20'000'000, 1'000'000, 4}).HasValue());
+        const CommittedWorldInitialCell request{identity.cell, {101}, identity.scene, identity.revision};
+        W::TestSupport::RequireError(mount.RequestLiveCell(request), W::WorldArtifactErrors::Unsupported);
+        std::size_t residentTiles{};
+        REQUIRE(mount
+                    .BindLiveNavigation([&](const S::RuntimeSceneView &view, std::span<const MountedWorldNavigationCell> desired) {
+            CHECK(view.Find({42}));
+            if (!desired.empty()) {
+                REQUIRE(desired.size() == 1);
+                CHECK(desired.front().cell == identity.cell);
+                CHECK(desired.front().selection.tiles == tiles.tiles);
+                CHECK(ComputeSha256(std::as_bytes(desired.front().envelope)) == tiles.cookedEnvelope);
+            }
+            return Result<std::shared_ptr<const S::SceneGroupPublication>>::Success(
+                std::make_shared<ObservedCellNavigation>(residentTiles, desired.size()));
+        }).HasValue());
+        REQUIRE(host->Startup().HasValue());
+        const auto until = [&](Stage expected) {
+            const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+            do {
+                clock.Advance(Duration::FromMilliseconds(17));
+                REQUIRE(host->RunFrame().HasValue());
+                REQUIRE(progress.last.HasValue());
+                if (progress.last.Value() == expected)
+                    return;
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            } while (std::chrono::steady_clock::now() < deadline);
+            FAIL("Live navigation cell did not settle");
+        };
+        REQUIRE(mount.RequestLiveCell(request).HasValue());
+        until(Stage::Active);
+        CHECK(residentTiles == 1);
+        CHECK(scene.ActiveScene()->Find({11}));
+        REQUIRE(mount.WithdrawLiveCell(request.occurrence).HasValue());
+        until(Stage::Idle);
+        CHECK(residentTiles == 0);
+        CHECK_FALSE(scene.ActiveScene()->Find({11}));
+        host->Shutdown();
     }
 }  // namespace Horo::WorldCook

@@ -176,4 +176,34 @@ namespace Horo::WorldCook::PublicationTestSupport {
         }
     };
 
+    /** @brief Publishes one actual portable empty tile, keeping the stable definition ID in the base chunk. */
+    inline Navigation::NavigationCellTileSelection CaptureNavigationCell(Fixture &fixture) {
+        namespace N = Navigation;
+        const auto source = W::CandidateTestSupport::Hash();
+        N::NavigationPreparedTile prepared{.tile = {.key = {IdentityFrom<N::NavigationAgentProfileId>(7),
+                                                            IdentityFrom<N::SurfaceId>(9),
+                                                            {-1, 0, 1}},
+                                                    .bounds = {{-8, -1, 0}, {0, 1, 8}},
+                                                    .tileSizeMeters = 8},
+                                           .geometry = {.radiusMeters = 0.5F,
+                                                        .heightMeters = 2,
+                                                        .maxSlopeDegrees = 45,
+                                                        .stepHeightMeters = 0.4F,
+                                                        .cellSizeMeters = 0.5F,
+                                                        .cellHeightMeters = 0.2F},
+                                           .borderSizeCells = 4,
+                                           .dependencyKey = source};
+        const auto tile = N::NavigationCookedTile::Create(prepared, {.key = prepared.tile.key.tile, .bounds = prepared.tile.bounds});
+        REQUIRE(tile.HasValue());
+        const auto payload = N::EncodeNavigationCookedTileSet({source, {tile.Value()}}, 4096);
+        REQUIRE(payload.HasValue());
+        auto encoded = A::EncodeCookedArtifact({Asset(8), T::Type("core.navmesh"), fixture.Release().target, source, source,
+                                                ComputeSha256(std::as_bytes(std::span{payload.Value()})), payload.Value()});
+        REQUIRE(encoded.HasValue());
+        fixture.baseArtifacts.front() = std::move(encoded).Value();
+        const auto digest = T::DigestOf(fixture.baseArtifacts.front());
+        std::get<BaseObjectBinding>(fixture.objects.back()).artifactHash = digest;
+        return {Asset(8), digest, {tile.Value()->Key()}};
+    }
+
 }  // namespace Horo::WorldCook::PublicationTestSupport
