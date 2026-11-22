@@ -88,7 +88,7 @@ namespace Horo::Application::Internal {
      * @return Exact visibility and readiness or the original stale-scope error.
      */
     [[nodiscard]] Result<MountedWorldCellReadiness> InspectEditorPlayMountedCell(const Editor::EditorPlaySceneHost &host,
-                                                                                   Runtime::SceneInstanceId occurrence);
+                                                                                 Runtime::SceneInstanceId occurrence);
 
     /** @brief Selects the native user-state root and real entropy explicitly at application startup; preserves original errors for Manager.
      */

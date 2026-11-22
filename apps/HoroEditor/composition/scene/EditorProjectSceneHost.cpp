@@ -213,7 +213,7 @@ namespace Horo::Application::Internal {
 
     /** @copydoc InspectEditorPlayMountedCell */
     Result<MountedWorldCellReadiness> InspectEditorPlayMountedCell(const Editor::EditorPlaySceneHost &host,
-                                                                     Runtime::SceneInstanceId occurrence) {
+                                                                   Runtime::SceneInstanceId occurrence) {
         const auto *selected = dynamic_cast<const ProjectPlaySceneHost *>(&host);
         if (!selected)
             return Result<MountedWorldCellReadiness>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));

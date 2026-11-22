@@ -19,6 +19,6 @@ namespace {
     static_assert(std::is_aggregate_v<GuiScreenHostComposition>);
     static_assert(std::is_constructible_v<GuiScreenHost, const EditorGuiContext &, GuiScreenHostComposition>);
     static_assert(!std::is_copy_constructible_v<GuiScreenHost> && !std::is_move_constructible_v<GuiScreenHost>);
-    static_assert(std::is_same_v<decltype(&GuiScreenHost::OnRuntimeSceneCutoff),
-                                 void (GuiScreenHost::*)(const Horo::Runtime::FrameContext &)>);
+    static_assert(
+        std::is_same_v<decltype(&GuiScreenHost::OnRuntimeSceneCutoff), void (GuiScreenHost::*)(const Horo::Runtime::FrameContext &)>);
 }  // namespace

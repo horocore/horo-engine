@@ -44,7 +44,7 @@ namespace Horo::WorldCook {
 
             Result<void> OnPhase(S::RuntimePhase phase, const S::FrameContext &frame) override {
                 return phase == S::RuntimePhase::CommitDeferredLifecycleChanges ? play_.OnRuntimeSceneCutoff(frame)
-                                                                              : Result<void>::Success();
+                                                                                : Result<void>::Success();
             }
 
             Result<void> OnFixedUpdate(const S::FixedStepContext &) override {
@@ -497,15 +497,15 @@ namespace Horo::WorldCook {
         JobSystem jobs{JobSystemConfig{1, 8}};
         std::unique_ptr<Editor::EditorPlaySceneHost> play;
         const auto runtime = S::RuntimeHost::Create(clock).Value();
-        policy.world.emplace(EditorPlayWorldSelection{
-            .projectRoot = project,
-            .committed = {.targetRoot = release.targetRoot,
-                          .target = release.target,
-                          .manifest = published.Value().publication->manifestDigest,
-                          .index = release.indexArtifact,
-                          .dependencies = release.dependencyArtifact,
-                          .liveCell = CommittedWorldLiveSelection{{20'000'000, 1'000'000, 16}, demand}},
-            .dispatch = runtime->DispatchSource()});
+        policy.world.emplace(
+            EditorPlayWorldSelection{.projectRoot = project,
+                                     .committed = {.targetRoot = release.targetRoot,
+                                                   .target = release.target,
+                                                   .manifest = published.Value().publication->manifestDigest,
+                                                   .index = release.indexArtifact,
+                                                   .dependencies = release.dependencyArtifact,
+                                                   .liveCell = CommittedWorldLiveSelection{{20'000'000, 1'000'000, 16}, demand}},
+                                     .dispatch = runtime->DispatchSource()});
         auto created = MakeEditorProjectSceneFactory(jobs, std::move(policy))(project, Editor::EditorFirstPlayScene, definition);
         if (created.HasError())
             UNSCOPED_INFO(created.ErrorValue().message);
@@ -595,8 +595,7 @@ namespace Horo::WorldCook {
             {world.inputs.front().expected.cell, {project.definitionId, entry->artifactHash, {tiles.Value().tiles.front()->Key()}}});
 
         CheckEditorLiveCell(world, project.project.project.dir.path, definition.Value(),
-                            {.cooked = cook, .playNavigationScene = project.project.sceneId},
-                            MountedWorldCellNavigationReadiness::Ready);
+                            {.cooked = cook, .playNavigationScene = project.project.sceneId}, MountedWorldCellNavigationReadiness::Ready);
     }
 #endif
 

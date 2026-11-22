@@ -929,10 +929,10 @@ namespace Horo::Editor {
         using namespace Application::Internal;
         constexpr auto Count = CommittedWorldCellArgumentCount + 3;
         if (options.playWorldLiveCell || arguments.size() - index <= Count)
-            return Result<void>::Failure(MakeError(
-                WorldStreaming::WorldArtifactErrors::Invalid,
-                "Use --play-world-live-cell <x> <y> <z> <lod> <layer> <occurrence> <definition> <revision> "
-                "<frame-ns> <unit-ns> <maximum-entities> once."));
+            return Result<void>::Failure(
+                MakeError(WorldStreaming::WorldArtifactErrors::Invalid,
+                          "Use --play-world-live-cell <x> <y> <z> <lod> <layer> <occurrence> <definition> <revision> "
+                          "<frame-ns> <unit-ns> <maximum-entities> once."));
         const auto selected = ParseCommittedWorldInitialCell(arguments.subspan(index + 1, CommittedWorldCellArgumentCount));
         if (selected.HasError())
             return Result<void>::Failure(selected.ErrorValue());
