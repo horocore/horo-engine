@@ -51,8 +51,8 @@ namespace Horo::XR::OpenXRInternal {
     Result<void> OpenXRNativeSession::Close() {
         if (controlThread_ != std::this_thread::get_id())
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible, "XR native owner requires its control thread"));
-        if (retirementCall_ || lightCall_ || passthroughCall_ || anchorCall_)
-            return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable, "Native retirement is already in progress"));
+        if (retirementCall_ || registeringProvider_ || lightCall_ || passthroughCall_ || anchorCall_)
+            return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable, "A native call or retirement is in progress"));
         const RetirementOperation operation{retirementCall_};
         if (discovery_)
             discovery_->phase = DiscoveryPhase::Retiring;
@@ -81,8 +81,8 @@ namespace Horo::XR::OpenXRInternal {
         using enum Horo::XR::OpenXRInternal::OpenXRNativeSession::DiscoveryPhase;
         if (controlThread_ != std::this_thread::get_id())
             return Result<void>::Failure(MakeError(XRErrors::OperationIncompatible));
-        if (retirementCall_ || lightCall_ || passthroughCall_ || anchorCall_ || !discovery_ || discovery_->phase == Retiring ||
-            discovery_->phase == Preparing || discovery_->phase == PreparingSession)
+        if (retirementCall_ || registeringProvider_ || lightCall_ || passthroughCall_ || anchorCall_ || !discovery_ ||
+            discovery_->phase == Retiring || discovery_->phase == Preparing || discovery_->phase == PreparingSession)
             return Result<void>::Failure(MakeError(XRErrors::OperationUnavailable));
         const RetirementOperation operation{retirementCall_};
         discovery_->phase = RetiringSession;

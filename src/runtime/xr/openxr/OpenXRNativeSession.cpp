@@ -299,6 +299,14 @@ namespace Horo::XR::OpenXRInternal {
             }
         }
 
+        /** @brief Adds the exact requested route and version evidence to a startup rejection. */
+        Error RequiredExtensionRejection(const std::string_view name, const NativeExtensionAdmission &admission) {
+            auto error = ExtensionRejection(admission.state);
+            error.message = std::format("{}: {} (discovered version {}, required version {})", name, error.message,
+                                        admission.discoveredVersion, admission.minimumVersion);
+            return error;
+        }
+
         /** @brief Preserves the feature-plan admission category at the native activation boundary. */
         Error FeaturePlanError(XRFeatureNegotiationStatus status) {
             switch (status) {
@@ -520,7 +528,7 @@ namespace Horo::XR::OpenXRInternal {
         names_.extensionCount = 0;
         const std::span publication{discoveredExtensions_.data(), discoveredExtensionCount_};
         if (DiscoveredVersion(publication, bindingName) == 0)
-            return Result<void>::Failure(ExtensionRejection(NativeExtensionState::Absent));
+            return Result<void>::Failure(RequiredExtensionRejection(bindingName, {NativeExtensionState::Absent, 0, 1}));
         admitted = EnableExtension(bindingName);
         if (admitted.HasError())
             return admitted;
@@ -543,7 +551,7 @@ namespace Horo::XR::OpenXRInternal {
         for (std::size_t index = 0; index < entries.size(); ++index) {
             const auto &request = requested[index];
             if (!ResolveDependencies(requested, entries, index, bindingName) && request.required)
-                return Result<void>::Failure(ExtensionRejection(entries[index].evidence.state));
+                return Result<void>::Failure(RequiredExtensionRejection(request.name, entries[index].evidence));
             auto &record = extensionEvidence_[extensionEvidenceCount_++];
             if (!CopyPolicyName(request.name, record.name))
                 return Result<void>::Failure(MakeError(XRErrors::OperationInvalid));
@@ -845,6 +853,8 @@ namespace Horo::XR::OpenXRInternal {
         using Outcome = Result<NativeFeatureProviderHandle>;
         if (controlThread_ != std::this_thread::get_id() || registeringProvider_)
             return Outcome::Failure(MakeError(XRErrors::OperationIncompatible));
+        if (auto current = ValidateXRSession(session, owner_); current.HasError())
+            return Outcome::Failure(std::move(current).ErrorValue());
         if (!ValidName(route.extension, XR_MAX_EXTENSION_NAME_SIZE))
             return Outcome::Failure(MakeError(XRErrors::OperationInvalid));
         const auto slot = ExtensionSlot(route.extension);

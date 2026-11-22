@@ -563,7 +563,10 @@ namespace Horo::Tests::OpenXR {
         SECTION("required request with a newer minimum version") {
             const std::array extensions{NativeExtensionRequest{.name = depth, .required = true, .minimumVersion = 2}};
             request.extensions = extensions;
-            RequireFailureIdentity(fixture.owner.Create(request), XRErrors::OperationIncompatible);
+            const auto failed = fixture.owner.Create(request);
+            RequireFailureIdentity(failed, XRErrors::OperationIncompatible);
+            CHECK(failed.ErrorValue().message.find(depth) != std::string::npos);
+            CHECK(failed.ErrorValue().message.find("discovered version 1, required version 2") != std::string::npos);
             CHECK(fixture.script.liveInstances == 0);
         }
         SECTION("the declared core route suppresses a duplicate advertised extension") {
@@ -663,6 +666,36 @@ namespace Horo::Tests::OpenXR {
         CHECK(fixture.owner.BorrowFeatureProvider(second.Value()).HasError());
         REQUIRE(fixture.owner.Close().HasValue());
         CHECK(fixture.owner.BorrowFeatureProvider(replacement.Value()).HasError());
+    }
+
+    TEST_CASE("OpenXR provider registration rejects stale sessions and protects its native owners", "[unit][xr][native]") {
+        Fixture fixture;
+        constexpr std::string_view extension = "XR_TEST_registration_fence";
+        const NativeFeatureProviderRoute route{extension, {}, "xrGetSystem"};
+        auto request = fixture.Request();
+        const std::array extensions{NativeExtensionRequest{.name = extension, .promotedToCore = request.preflight.LoaderApiVersion()}};
+        request.extensions = extensions;
+        REQUIRE(fixture.owner.Create(request).HasValue());
+
+        auto stale = request.candidate;
+        ++stale.slot.generation;
+        RequireFailureIdentity(fixture.owner.RegisterFeatureProvider(stale, {"XR_TEST_unavailable", "xrAbsent"}), XRErrors::IdentityStale);
+
+        std::size_t fenced{};
+        fixture.fence.onValidate = [&] {
+            ++fenced;
+            RequireFailureIdentity(fixture.owner.RetireSession(), XRErrors::OperationUnavailable);
+            RequireFailureIdentity(fixture.owner.Close(), XRErrors::OperationUnavailable);
+            CHECK(fixture.script.liveInstances == 1);
+            CHECK(fixture.script.liveSessions == 1);
+        };
+        const auto provider = fixture.owner.RegisterFeatureProvider(request.candidate, route);
+        fixture.fence.onValidate = {};
+        REQUIRE(provider.HasValue());
+        CHECK(fenced == 2);
+        CHECK(fixture.owner.BorrowFeatureProvider(provider.Value()).HasValue());
+        REQUIRE(fixture.owner.Close().HasValue());
+        CHECK(fixture.owner.BorrowFeatureProvider(provider.Value()).HasError());
     }
 
     TEST_CASE("OpenXR provider receipts reject a backend recreated at the same address", "[unit][xr][native]") {

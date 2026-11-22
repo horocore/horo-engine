@@ -486,8 +486,11 @@ session preparation. It retains the version evidence, callable and registration
 generation in fixed storage. A consumer holds a non-callable receipt and borrows
 the function only after verifying the exact owner, session and registration.
 Retiring or replacing that session revokes the receipt before destroying native
-objects. The editor uses this contract for the platform time conversion required
-by its projection profile. Optional hand tracking resolves its sampling dispatch
+objects. A provider registration in progress retains its native owners until
+resolution finishes. A required extension rejection identifies the route and
+the observed and required versions. The editor uses this contract for the
+platform time conversion required by its projection profile. Optional hand
+tracking resolves its sampling dispatch
 before the feature plan and publishes that same callable only on the matching
 activated native session. A color-only composition leaves native depth disabled
 even if the runtime advertises its extension, then applies the project feature
