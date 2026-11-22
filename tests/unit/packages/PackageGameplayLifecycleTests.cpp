@@ -1,5 +1,6 @@
 #include "../runtime/ai/BehaviorTreeRuntimeTestSupport.h"
 #include "ApprovedGameplayPackageHost.h"
+#include "DecisionGraphCompilerTestSupport.h"
 #include "GameplayModuleTestSupport.h"
 #include "Horo/AI/AIScenePerceptionSource.h"
 #include "Horo/AI/PerceptionSenseScene.h"
@@ -502,6 +503,73 @@ TEST_CASE("Verified package script nodes use actual declared bytes and inherit n
     nodes.reset();
     program.reset();
     CHECK(fixture.retirement->Close().HasValue());
+}
+
+TEST_CASE("Verified native and Lua package nodes use the same cooked decision execution contract", "[packages][decision-node]") {
+    using namespace AI::DecisionGraphTestSupport;
+    GameplayFixture fixture;
+    REQUIRE(fixture.Activate().HasValue());
+    const auto generation = fixture.base.service->Active()->generation;
+    auto acquired = fixture.gameplay->AcquireActiveDecisionNodes(*fixture.base.service);
+    REQUIRE(acquired.HasValue());
+    REQUIRE(acquired.Value().size() == 1);
+    auto native = std::move(acquired.Value().front().nodes);
+    REQUIRE(native);
+    REQUIRE(native->Contracts().size() == 1);
+    const auto nativeType = native->Contracts().front().descriptor.type;
+    const auto scriptType = AI::DecisionNodeTypeId::Create(202).Value();
+    auto script = fixture.gameplay->CompileDecisionNode(fixture.enabled.package, "game.tests", generation,
+                                                        Parse<PackagePath>("extensions/native/Node.horo_script"), scriptType,
+                                                        AI::DecisionProviderId::Create(702).Value(), 1);
+    REQUIRE(script.HasValue());
+    auto acquiredScript = script.Value()->Acquire();
+    REQUIRE(acquiredScript.HasValue());
+    const std::array providers{native, acquiredScript.Value()};
+    auto composed = AI::DecisionNodeGeneration::Compose(providers);
+    REQUIRE(composed.HasValue());
+
+    AI::DecisionGraphTestSupport::Fixture world;
+    auto environment = world.Environment();
+    environment.nodes = std::move(composed).Value();
+    const auto snapshot = world.blackboard->Snapshot().Value();
+    std::array<AI::DecisionStepTrace, 2> traces;
+    std::array<std::shared_ptr<const AI::CookedDecisionPlan>, 2> plans;
+    const std::array types{nativeType, scriptType};
+    for (std::size_t index = 0; index < types.size(); ++index) {
+        auto condition = TreeNode(2, AI::DecisionControlKind::Condition);
+        condition.kind = AI::BehaviorTreeNodeKind::Decorator;
+        condition.minimumChildren = 1;
+        condition.maximumChildren = 1;
+        condition.type = AI::BehaviorTreeNodeTypeId::Create(types[index].Value()).Value();
+        auto call = TreeNode(3, AI::DecisionControlKind::Subplan);
+        call.call = AI::DecisionSubplanCall{Graph(2), AI::DecisionPlanKind::StateMachine, {1, 1}};
+        const auto root = Tree(1, {TreeNode(1, AI::DecisionControlKind::Root), condition, call}, {Edge(1, 1, 2), Edge(2, 2, 3)});
+        const std::array sources{root, TerminalMachine(2)};
+        auto compiled = AI::DecisionGraphCompiler::Compile(Graph(1), sources, environment);
+        REQUIRE(compiled.HasValue());
+        for (const auto &diagnostic : compiled.Value().validation.Diagnostics())
+            UNSCOPED_INFO(diagnostic.message);
+        REQUIRE(compiled.Value().plan);
+        plans[index] = std::move(compiled.Value().plan);
+        auto graph = AI::DecisionGraphInstance::Create(plans[index], environment.nodes, world.RuntimeBinding());
+        REQUIRE(graph.HasValue());
+        const auto units = plans[index]->MaximumDecisionWorkUnits();
+        REQUIRE(units.has_value());
+        AI::AiWorkBudget budget{*units};
+        const auto stepped = graph.Value()->StepBudgetedWithTrace({1, world.binding, snapshot, {}}, budget, traces[index]);
+        REQUIRE(stepped.HasValue());
+        CHECK(stepped.Value() == std::optional{AI::AiTaskState::Succeeded});
+        CHECK(budget.Remaining() == 0);
+    }
+    CHECK_FALSE(traces.front().Records().empty());
+    CHECK(std::ranges::equal(traces.front().Records(), traces.back().Records()));
+    CHECK(traces.front().Header().planDigest != traces.back().Header().planDigest);
+
+    fixture.base.service->Shutdown();
+    for (const auto &plan : plans) {
+        CHECK_FALSE(plan->IsCurrent());
+        CHECK(AI::DecisionGraphInstance::Create(plan, environment.nodes, world.RuntimeBinding()).HasError());
+    }
 }
 
 TEST_CASE("Verified package script senses use declared bytes and retain their actual native parent", "[packages][sense-provider]") {
