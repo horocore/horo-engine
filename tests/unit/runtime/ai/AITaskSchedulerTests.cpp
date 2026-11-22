@@ -573,6 +573,49 @@ namespace Horo::AI {
             }
         }
 
+        TEST_CASE("AI population retirement drops a completed worker result before the replacement evaluates",
+                  "[unit][ai][scheduler][jobs][lifetime]") {
+            using namespace BehaviorTreeAsyncTestSupport;
+            StartedTask task;
+            const auto continuation = task.async->continuations[1];
+            const auto retired = continuation.Operation().agent;
+            const AgentHandle next{retired.incarnation, {retired.slot.index, retired.slot.generation + 1}};
+            JobSystem jobs({.workerCount = 1, .maxQueuedJobs = 4});
+            auto scheduler = AiTaskScheduler::Create(jobs, retired.incarnation, {.mode = AiSchedulingMode::BestEffort}).Value();
+            const auto image = std::make_shared<int>(1);
+            const auto old = std::make_shared<Probe>();
+            old->scheduler = scheduler.get();
+            old->continuation = continuation;
+            std::atomic<std::size_t> steps{};
+            old->worker.emplace(image, std::make_shared<Worker>(steps));
+            const auto identity = MakeIdentity<AgentId>(1);
+            REQUIRE(scheduler->Register(retired, identity, {}, image, old).HasValue());
+            REQUIRE(scheduler->EvaluateAtDecision(1).HasValue());
+            REQUIRE(scheduler->CommitAtIntentDispatch(1).HasValue());
+            jobs.Shutdown(ShutdownPolicy::Drain);
+            REQUIRE(steps == 2);
+
+            const auto replacement = std::make_shared<Probe>();
+            const std::array remove{retired};
+            const std::array add{AiScheduledDecisionRegistration{next, identity, {}, image, replacement}};
+            auto staged = scheduler->PreparePopulationChange(add, remove);
+            REQUIRE(staged.HasValue());
+            REQUIRE(staged.Value()->ValidatePublication().HasValue());
+            staged.Value()->Publish();
+            CHECK(old->cancelled == 0);
+            staged.Value()->FinishRetirements();
+            staged.Value()->FinishRetirements();
+            CHECK(old->cancelled == 1);
+
+            REQUIRE(scheduler->EvaluateAtDecision(2).HasValue());
+            REQUIRE(scheduler->CommitAtIntentDispatch(2).HasValue());
+            CHECK(replacement->evaluations == 1);
+            CHECK(task.fixture.Evaluate(*task.instance, 2) == AiTaskState::Running);
+            const auto terminal = task.instance->TaskResult(BehaviorTreeTestSupport::Id(1));
+            REQUIRE(terminal.HasValue());
+            CHECK_FALSE(terminal.Value());
+        }
+
         struct WorkerSignals final {
             std::binary_semaphore started{0};
             std::binary_semaphore release{0};

@@ -97,7 +97,7 @@ namespace Horo::AI {
         /** @brief Cancels all exact-agent records; running records retain capacity until terminal.
          * @param agent Exact agent generation. @param reason Valid cancellation origin. */
         void CancelAgent(AgentHandle agent, AiTaskCancellationReason reason) noexcept;
-        /** @brief Cancels optional work and suppresses its already completed or future mailbox publications.
+        /** @brief Cancels tracked work and suppresses publication of completed or future results.
          * @param agent Exact agent generation. Tracking slots remain reserved until workers report terminal.
          */
         void DiscardAgentWork(AgentHandle agent) noexcept;

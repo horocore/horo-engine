@@ -1,4 +1,5 @@
 #include "../../integration/network/NetworkModeHostTestSupport.h"
+#include "../runtime/ai/AITaskSchedulerTestSupport.h"
 #include "../runtime/ai/AiSceneTestSupport.h"
 #include "../runtime/physics/PhysicsSceneActivationTestSupport.h"
 #include "HeadlessSceneLoadBoundary.h"
@@ -509,6 +510,10 @@ namespace Horo::WorldCook {
         const auto originalPosition = originalSpatial->ListenerPosition(originalOwner.Value());
         REQUIRE(originalPosition.HasValue());
         CHECK(originalPosition.Value() == Math::WorldCoordinate64::FromMillimeters(-750, 0, 0));
+        const auto cellReadiness = mount->InspectLiveCell(request.occurrence);
+        REQUIRE(cellReadiness.HasValue());
+        CHECK(cellReadiness.Value().geometryVisible);
+        CHECK(cellReadiness.Value().navigation == MountedWorldCellNavigationReadiness::NotDeclared);
         const auto originalPolicy = originalSpatial->ReadPolicyAuthorization();
         REQUIRE(originalPolicy->IsCurrent());
         const auto originalLifetime = capability.CaptureAgentLifetime(original.Value());
@@ -533,11 +538,22 @@ namespace Horo::WorldCook {
         stage(Stage::Active);
         REQUIRE(attached());
         REQUIRE(siblingAttached());
+        REQUIRE(ai.ConfigureTaskSchedulerAtSafePoint(jobs).HasValue());
+        const auto scheduler = ai.TaskSchedulerAtSafePoint();
+        REQUIRE(scheduler.HasValue());
+        const auto image = std::make_shared<int>(1);
+        const auto oldDecision = std::make_shared<AI::SchedulerTestSupport::Probe>();
+        REQUIRE(ai.RegisterDecisionAtSafePoint(original.Value(), {}, image, oldDecision).HasValue());
+        REQUIRE(scheduler.Value()->EvaluateAtDecision(1).HasValue());
+        REQUIRE(oldDecision->intents == 1);
         REQUIRE(mount->WithdrawLiveCell(request.occurrence).HasValue());
         frame();
         stage(Stage::Retiring);
         REQUIRE_FALSE(attached());
         REQUIRE(siblingAttached());
+        REQUIRE(scheduler.Value()->CommitAtIntentDispatch(1).HasValue());
+        CHECK(oldDecision->cancelled == 1);
+        CHECK(oldDecision->committed == 0);
         CHECK(originalLifetime.Value().IsCancellationRequested());
         CHECK_FALSE(originalPolicy->IsCurrent());
         REQUIRE(spatial.Current());
@@ -579,6 +595,12 @@ namespace Horo::WorldCook {
         CHECK(capability.CompleteTask(replacement.Value(), originalTask.Value()).HasError());
         CHECK(capability.CompleteTask(original.Value(), originalTask.Value()).HasError());
         CHECK(originalLifetime.Value().IsCancellationRequested());
+        const auto newDecision = std::make_shared<AI::SchedulerTestSupport::Probe>();
+        REQUIRE(ai.RegisterDecisionAtSafePoint(replacement.Value(), {}, image, newDecision).HasValue());
+        REQUIRE(scheduler.Value()->EvaluateAtDecision(2).HasValue());
+        REQUIRE(scheduler.Value()->CommitAtIntentDispatch(2).HasValue());
+        CHECK(newDecision->committed == 1);
+        CHECK(oldDecision->cancelled == 1);
     }
 
     TEST_CASE("Standalone mounted CoreEcs demand starts in the product frame and withdraws through the same Scene owner",

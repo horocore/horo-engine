@@ -3187,7 +3187,20 @@ exact active agents with `RegisterDecisionAtSafePoint`, and calls
 `EvaluateAtDecision` in `AiDecisionEvaluate` and `CommitAtIntentDispatch` in
 `AiIntentDispatch`. Restore, scene replacement, disable, structural retirement
 and shutdown fence retained decisions and intents and cancel their workers.
+When a registration retires, the scheduler discards results waiting for its
+next owner pump, even if the worker finished before retirement. Worker tracking
+and image pins are retained until the job settles.
 The process JobSystem and worker-owned image pins must drain before code unload.
+
+An attached agent can suspend through the simulation relevance policy while
+retaining its registration. Detaching its cell or replacing the root Scene
+retires the registration and cancels its owned tasks and staged intents.
+Reattaching reconstructs the agent from the admitted Scene data with a fresh
+runtime handle, task generation, and perception source. Canonical state
+migration uses the explicit restore or decision reload path. World-cell
+reattachment does not transfer transient task handles or remembered sources.
+Perception registers against the current structural hierarchy. Navigation
+coverage is reported independently of the cell's geometry and sensing data.
 
 Structural callers can stage a complete scheduler population change at the owner
 safe point. Admission checks the population that would remain after exact

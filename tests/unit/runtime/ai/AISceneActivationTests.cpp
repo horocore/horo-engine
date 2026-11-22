@@ -161,6 +161,63 @@ namespace Horo::AI {
             ExpectError(runtime.Find(stale), AIErrors::HandleInvalid);
         }
 
+        TEST_CASE("Root Scene replacement cancels AI work and reconstructs the same authored agent",
+                  "[unit][ai][scene][activation][lifetime]") {
+            auto fixture = MakeFixture(111, 121, 47, 0);
+            Runtime::SceneDefinitionBuilder builder{{47}, {1}};
+            builder.Add({.object = {900}, .components = {.aiAgent = fixture.agent.agent, .aiController = fixture.agent.controller}});
+            const auto definition = std::move(builder).Build();
+            REQUIRE(definition.HasValue());
+
+            JobSystem jobs{{.workerCount = 1, .maxQueuedJobs = 4}};
+            auto runtime = std::move(AiSceneRuntime::Create()).Value();
+            Runtime::RuntimeSceneService scenes{{47}};
+            const auto descriptors = std::array{fixture.descriptor};
+            REQUIRE(scenes.AddActivationParticipant(std::make_unique<AiSceneActivationParticipant>(runtime, descriptors)).HasValue());
+            const CancellationToken cancellation;
+            REQUIRE(scenes.Startup(cancellation).HasValue());
+            const auto publish = [&](const std::uint64_t frame) {
+                REQUIRE(scenes.QueuePreparation(definition.Value()).HasValue());
+                const Runtime::FrameContext context{.frameNumber = frame, .cancellation = cancellation};
+                REQUIRE(scenes.OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, context).HasValue());
+                REQUIRE_FALSE(scenes.TakeOperationError());
+                REQUIRE(scenes.ActiveScene());
+            };
+
+            publish(1);
+            const auto oldScene = *scenes.ActiveScene();
+            const auto authoredAgent = fixture.agent.agent.agent;
+            const auto old = runtime.CapabilityAtSafePoint();
+            const auto agent = old.ResolveAgent(authoredAgent);
+            REQUIRE(agent.HasValue());
+            const auto lifetime = old.CaptureAgentLifetime(agent.Value());
+            REQUIRE(lifetime.HasValue());
+            const auto task = runtime.StartTaskAtSafePoint(agent.Value(), MakeIdentity<TaskId>(41));
+            REQUIRE(task.HasValue());
+            REQUIRE(runtime.ConfigureTaskSchedulerAtSafePoint(jobs).HasValue());
+            const auto executor = std::make_shared<SchedulerTestSupport::Probe>();
+            REQUIRE(runtime.RegisterDecisionAtSafePoint(agent.Value(), {}, std::make_shared<int>(1), executor).HasValue());
+            const auto scheduler = runtime.TaskSchedulerAtSafePoint();
+            REQUIRE(scheduler.HasValue());
+            REQUIRE(scheduler.Value()->EvaluateAtDecision(1).HasValue());
+            REQUIRE(executor->intents == 1);
+
+            publish(2);
+            CHECK_FALSE(oldScene.SameIncarnation(*scenes.ActiveScene()));
+            CHECK(lifetime.Value().IsCancellationRequested());
+            CHECK(executor->cancelled == 1);
+            CHECK(executor->committed == 0);
+            CHECK(old.ResolveAgent(authoredAgent).HasError());
+            const auto current = runtime.CapabilityAtSafePoint();
+            const auto replacement = current.ResolveAgent(authoredAgent);
+            REQUIRE(replacement.HasValue());
+            CHECK(replacement.Value().incarnation != agent.Value().incarnation);
+            CHECK_FALSE(runtime.Find(replacement.Value()).Value().hasRunningTask);
+            CHECK(current.CompleteTask(replacement.Value(), task.Value()).HasError());
+            scenes.Shutdown();
+            CHECK(executor->cancelled == 1);
+        }
+
         TEST_CASE("AI activation participant projects RuntimeScene entities into the generation-bound lifecycle",
                   "[unit][ai][scene][activation]") {
             auto fixture = MakeFixture(111, 121, 47, 0);

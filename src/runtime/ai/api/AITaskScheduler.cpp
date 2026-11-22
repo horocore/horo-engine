@@ -598,7 +598,8 @@ namespace Horo::AI {
             activeByHandle_.erase(HandlePosition(entry.agent));
         if (populationRevision_ != std::numeric_limits<std::uint64_t>::max())
             ++populationRevision_;
-        jobs_->CancelAgent(entry.agent, AiTaskCancellationReason::OwnerShutdown);
+        // A completed job can still be waiting for the owner pump when its registration retires.
+        jobs_->DiscardAgentWork(entry.agent);
         auto retired = std::move(entry);
         entry = {};
         return retired;
