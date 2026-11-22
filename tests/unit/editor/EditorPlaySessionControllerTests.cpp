@@ -1314,6 +1314,186 @@ TEST_CASE("Cooked Editor Play executes real Decision scheduling and exposes only
     lifecycle.Shutdown();
 }
 
+TEST_CASE("Editor Play applies the authored model from its committed Scene generation", "[editor][play][ai][product][local-policy]") {
+    using namespace Application::Internal;
+    using namespace AI;
+    namespace Decision = AI::DecisionGraphTestSupport;
+    namespace Cook = Application::PrefabCookTestSupport;
+    namespace Output = Assets::OutputTestSupport;
+    bool outOfRange{};
+    SECTION("valid integer prefers the learned task") {}
+    SECTION("out of range leaves the authored task in charge") {
+        outOfRange = true;
+    }
+    const std::int64_t featureValue = outOfRange ? 32768 : 12;
+    Cook::HostFixture project;
+    Decision::Fixture ai;
+    const auto feature = Decision::MakeIdentity<BlackboardKeyId>(102);
+    const auto score = Decision::MakeIdentity<BlackboardKeyId>(101);
+    const std::array keys{BlackboardKeyDescriptor{.key = score,
+                                                  .kind = BlackboardValueKind::Scalar,
+                                                  .defaultValue = BlackboardValue{BlackboardScalarValue{0.5}}},
+                          BlackboardKeyDescriptor{.key = feature,
+                                                  .kind = BlackboardValueKind::SignedInteger,
+                                                  .defaultValue = BlackboardValue{BlackboardScalarValue{featureValue}}}};
+    auto schema = BlackboardSchema::Capture({.identity = Decision::SchemaId(), .keys = keys});
+    REQUIRE(schema.HasValue());
+    ai.schema = std::make_shared<const BlackboardSchema>(std::move(schema).Value());
+    const auto schemaBytes = BlackboardSchemaCodec::Encode(*ai.schema);
+    REQUIRE(schemaBytes.HasValue());
+
+    const auto fallback = Decision::MakeIdentity<TaskId>(20);
+    const auto learned = Decision::MakeIdentity<TaskId>(21);
+    UtilityDecisionSource utility{.root = Decision::Node(1),
+                                  .requirements = {{.key = score, .kind = BlackboardValueKind::Scalar, .source = Decision::Location()}}};
+    const auto option = [&](const std::uint64_t node, const TaskId id, const double priority) {
+        return UtilityDecisionOption{.option = {Decision::Node(node), id, priority, 0, {{.key = score}}},
+                                     .provider = {.id = Decision::Node(node),
+                                                  .type = Decision::Type(501),
+                                                  .descriptorVersion = {1, 1},
+                                                  .source = Decision::Location()}};
+    };
+    utility.options = {option(2, fallback, 1), option(3, learned, 0.5)};
+    const DecisionGraphSource graph{Decision::Graph(1),    1,
+                                    ai.schema->Identity(), {1, 1},
+                                    Decision::Location(),  Decision::MakeIdentity<TaskId>(9000),
+                                    std::move(utility)};
+    const auto plan = ai.Compile(std::span{&graph, 1}, 1);
+    const auto graphBytes = DecisionPlanCodec::EncodeCooked(*plan);
+    const auto graphSource = DecisionPlanCodec::EncodeSource(std::span{&graph, 1}, graph.asset);
+    REQUIRE(graphBytes.HasValue());
+    REQUIRE(graphSource.HasValue());
+    const auto controller = Decision::MakeIdentity<ControllerTypeId>(3);
+    SceneSource::SceneSourceDocument source;
+    source.objects.push_back({.id = {7},
+                              .name = "Guard and camera",
+                              .components = {.camera = Runtime::CameraComponent{},
+                                             .aiAgent = AiAgentComponent{.agent = Decision::MakeIdentity<AgentId>(50)},
+                                             .aiController = AiControllerComponent{.controller = controller,
+                                                                                   .decisionAsset = graph.asset,
+                                                                                   .blackboardSchema = ai.schema->Identity(),
+                                                                                   .decisionKind = DecisionPlanKind::Utility}}});
+    const SceneSource::SceneSourceView view{source.objects, source.prefabInstances};
+    const auto definition = SceneSource::ConvertSceneSourceToRuntime(view, SceneCook::SceneDefinitionIdForAsset(project.sceneId), {1});
+    REQUIRE(definition.HasValue());
+    const auto scene = SceneCook::EncodeCookedSceneDefinition(definition.Value());
+    REQUIRE(scene.HasValue());
+
+    project.WriteProjectMetadata(R"({"schemaVersion":1,"localPolicy":{"packageTarget":"headless-null","interpreter":"int16-linear-v1",
+        "interpreterTarget":7,"maximumModelBytes":4096,"maximumWorkUnits":128,"blackboardSchema":100,"tasks":[21],
+        "controllers":[{"controller":3,"artifact":"00000000-0000-0000-0000-000000000042","featureKeys":[102]}]}})");
+    AiCapabilityDescriptorRegistry declarations;
+    REQUIRE(declarations.Register({learned, ai.schema->Identity()}).HasValue());
+    const auto interpreter = Decision::MakeIdentity<LocalPolicyTargetId>(7);
+    const std::array targets{interpreter};
+    const std::array features{Decision::MakeIdentity<LocalPolicyFeatureId>(1)};
+    const std::array<std::int16_t, 1> weights{1};
+    const std::array rows{LocalPolicyRowSource{learned, 0, weights}};
+    const auto model = LocalLearnedPolicy::Cook({Decision::MakeIdentity<LocalPolicyModelId>(1), 1, targets, features, rows},
+                                                {interpreter, true, 4096, 128}, declarations.Freeze(), ai.schema->Identity());
+    REQUIRE(model.HasValue());
+    const auto modelBytes = model.Value().EncodeCooked();
+    REQUIRE(modelBytes.HasValue());
+
+    const auto modelAsset = Output::Id("00000000-0000-0000-0000-000000000042");
+    const auto decisionAsset = Assets::AssetId::FromBytes({0x44});
+    const auto schemaAsset = Assets::AssetId::FromBytes({0x45});
+    const auto target = project.request.assets.target;
+    std::vector<Assets::AssetCookManifestEntry> manifest;
+    std::vector<std::vector<std::uint8_t>> artifacts;
+    const auto stage = [&](const Assets::AssetId asset, const std::string_view kind, const std::string_view path,
+                           const std::string_view authored, const std::vector<std::uint8_t> &payload) {
+        project.WriteText(path, authored);
+        project.WriteText(std::string{path} + ".horo", Cook::SidecarJson(asset.ToString(), kind));
+        const auto type = Cook::Type(kind);
+        auto envelope = Assets::EncodeCookedArtifact(
+            {.id = asset, .type = type, .target = target, .payloadDigest = Output::DigestOf(payload), .payload = payload});
+        REQUIRE(envelope.HasValue());
+        manifest.push_back({asset, type, asset.ToString() + ".cooked", Output::DigestOf(envelope.Value())});
+        artifacts.push_back(std::move(envelope).Value());
+    };
+    const auto bytes = [](const std::vector<std::uint8_t> &value) {
+        return std::string_view{reinterpret_cast<const char *>(value.data()), value.size()};
+    };
+    std::filesystem::rename(project.project.dir.path / "assets/level.scene", project.project.dir.path / "assets/level.horo");
+    std::filesystem::rename(project.project.dir.path / "assets/level.scene.horo", project.project.dir.path / "assets/level.horo.horo");
+    stage(modelAsset, LocalPolicyAssetType, "assets/guard.horo_policy", bytes(modelBytes.Value()), modelBytes.Value());
+    stage(project.sceneId, "core.scene", "assets/level.horo", SceneSource::EncodeSceneSource(view), scene.Value());
+    stage(decisionAsset, DecisionAssetType(DecisionPlanKind::Utility), "assets/guard.horo_utility", bytes(graphSource.Value()),
+          graphBytes.Value());
+    stage(schemaAsset, BlackboardSchemaAssetType, "assets/keys.horo_bb", bytes(schemaBytes.Value()), schemaBytes.Value());
+    const auto published = Output::PublishFixture(project.cooked.path, target, manifest, artifacts);
+    if (published.HasError())
+        UNSCOPED_INFO(published.ErrorValue().message);
+    REQUIRE(published.HasValue());
+
+    const auto projectFactory =
+        MakeEditorProjectSceneFactory(project.jobs, {.cooked = SceneCookSelection{project.cooked.path, target},
+                                                     .decisions = EditorPlayDecisionSelection{project.project.dir.path,
+                                                                                              project.sceneId,
+                                                                                              {{controller, decisionAsset}},
+                                                                                              {{ai.schema->Identity(), feature}},
+                                                                                              {},
+                                                                                              Duration::FromMilliseconds(10)}});
+    const Editor::EditorPlaySceneFactory factory = [&](const Runtime::SceneRuntimeId id, const Runtime::RuntimeSceneDefinition &view) {
+        return projectFactory(project.project.dir.path, id, view);
+    };
+    Gameplay::BehaviorRegistry behaviors;
+    Gameplay::ComponentRegistry components;
+    REQUIRE(behaviors.Freeze().HasValue());
+    REQUIRE(components.Freeze().HasValue());
+    Editor::EditorPlaySessionController play;
+    DeterministicClock clock;
+    auto scheduler = Runtime::FrameScheduler::Create(clock, {.fixedStep = Duration::FromMilliseconds(10)});
+    REQUIRE(scheduler.HasValue());
+    REQUIRE(play.BindRuntimeDispatch(scheduler.Value()->DispatchSource()).HasValue());
+    const auto started = play.Start({{1}, {1}, source.objects}, behaviors, components, factory, {},
+                                    Editor::EditorPlayViewSource::AuthoredCamera, nullptr, {}, nullptr, {.decision = [&] {
+        return Result<std::shared_ptr<const DecisionNodeGeneration>>::Success(ai.providers);
+    }});
+    if (started.HasError())
+        UNSCOPED_INFO(started.ErrorValue().message);
+    REQUIRE(started.HasValue());
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds{2};
+    while (play.State() == Editor::EditorPlaySessionState::Starting && std::chrono::steady_clock::now() < deadline) {
+        play.PresentationUpdate({0});
+        std::this_thread::yield();
+    }
+    if (play.LastError())
+        UNSCOPED_INFO(play.LastError()->message);
+    REQUIRE(play.State() == Editor::EditorPlaySessionState::Playing);
+    Runtime::RuntimeLifecycle lifecycle;
+    auto fixed = std::make_unique<PlayFixedParticipant>(play);
+    const auto *fixedOwner = fixed.get();
+    REQUIRE(lifecycle.AddParticipant(std::move(fixed)).HasValue());
+    const CancellationSource stop;
+    REQUIRE(lifecycle.Startup(stop.Token()).HasValue());
+    REQUIRE(scheduler.Value()->RunFrame(lifecycle, stop.Token(), false).HasValue());
+    for (const auto frame : {1, 2}) {
+        CAPTURE(frame);
+        clock.Advance(Duration::FromMilliseconds(10));
+        REQUIRE(scheduler.Value()->RunFrame(lifecycle, stop.Token(), false).HasValue());
+        CHECK_FALSE(fixedOwner->localFailure);
+    }
+    REQUIRE_FALSE(ai.probe.calls.empty());
+    CHECK(ai.probe.calls.front() == "start:" + std::to_string((outOfRange ? fallback : learned).Value()));
+    CHECK(ai.probe.starts == 1);
+    CHECK(ai.probe.resumes == 1);
+    CHECK_FALSE(play.ReadDecisionProblem());
+    REQUIRE(play.SceneView());
+    const auto entity = play.SceneView()->Find({7});
+    REQUIRE(entity);
+    play.RefreshAgentInspection(entity);
+    REQUIRE_FALSE(play.AgentInspectionHistory().empty());
+    const auto &latest = play.AgentInspectionHistory().back();
+    REQUIRE(latest.snapshot);
+    const auto observed = std::ranges::find(latest.snapshot->keys, feature, &AiInspectionBlackboardRow::key);
+    REQUIRE(observed != latest.snapshot->keys.end());
+    CHECK(observed->value == BlackboardValue{BlackboardScalarValue{featureValue}});
+    play.Stop();
+    lifecycle.Shutdown();
+}
+
 #if HORO_TEST_NAVIGATION_NATIVE
 TEST_CASE("Editor authoring EQS evaluates a committed NavMesh without starting Play", "[editor][navigation][product][eqs]") {
     using namespace Horo::Application::Internal;
