@@ -428,17 +428,16 @@ namespace Horo::XR {
             fixture.views[3].projection = {-0.4F, 0.3F, -0.2F, 0.2F};
             auto active = MultiviewOwner(fixture);
             active.capabilities.instancedTargetRouting = true;
-            const std::array origins{OriginSample(fixture, 0), OriginSample(fixture, 1),
-                                     OriginSample(fixture, 2), OriginSample(fixture, 3)};
+            const std::array origins{OriginSample(fixture, 0), OriginSample(fixture, 1), OriginSample(fixture, 2),
+                                     OriginSample(fixture, 3)};
             const auto extract = [&](const Render::MultiviewExecutionPolicy policy) {
                 const auto plan = fixture.Create(admission);
-                return XRMultiviewScene::Create(
-                    {.plan = plan,
-                     .referenceToWorld = origins,
-                     .publication = active.renderer,
-                     .policy = policy,
-                     .limits = {.maximumViews = 4}},
-                    active);
+                return XRMultiviewScene::Create({.plan = plan,
+                                                 .referenceToWorld = origins,
+                                                 .publication = active.renderer,
+                                                 .policy = policy,
+                                                 .limits = {.maximumViews = 4}},
+                                                active);
             };
 
             SECTION("Canonical layers admit indexed instancing") {
