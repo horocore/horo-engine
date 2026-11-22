@@ -463,7 +463,7 @@ horo_allow_target_dependencies(TARGET HoroEditor
         HoroScenePhysicsHost
         HoroAudioFrontendComposition HoroAudioImport HoroAudioSdl3 HoroAudioNull
         HoroPackageProjectHost
-        HoroXRRuntime HoroOpenXRProductHost HoroOpenXRApplicationHost HoroEditorOpenXRBootstrap
+        HoroXRApi HoroXRRuntime HoroSceneSourceModel HoroOpenXRProductHost HoroOpenXRApplicationHost HoroEditorOpenXRBootstrap
         HoroShaderBuild
         HoroGui
         HoroRuntimeConsole HoroEditorConsoleLaunchInternal HoroEditorRuntimeConsoleViewInternal

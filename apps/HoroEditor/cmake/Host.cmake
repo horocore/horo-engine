@@ -14,6 +14,7 @@ if(HORO_BUILD_EDITOR_GUI)
         HoroEditor/app/EditorLocalAgentPatch.cpp
         HoroEditor/app/EditorLocalAgentPatchCheckpoint.cpp
         HoroEditor/app/EditorLocalAgentContext.cpp
+        HoroEditor/app/ImmersiveAuthoringContext.cpp
         HoroEditor/app/EditorLocalAgentHistory.cpp
         HoroEditor/app/EditorWorkerShutdown.cpp
         HoroEditor/app/EditorAudioPreviewHost.cpp
@@ -36,6 +37,7 @@ if(HORO_BUILD_EDITOR_GUI)
 
     target_link_libraries(HoroEditor PRIVATE HoroEngine::PlatformProjectReadFiles HoroShaderHotReloadHostInternal HoroEngine::Assets)
     target_link_libraries(HoroEditor PRIVATE HoroEditorAgentTurnInternal HoroMcpEditorAgentToolsInternal HoroEditorAgentHistoryInternal HoroEngine::ModelProviderAdapters)
+    target_link_libraries(HoroEditor PRIVATE HoroEngine::XRApi HoroEngine::SceneSourceModel)
     target_link_libraries(HoroEditor PRIVATE HoroXRSimulatorPlayHost HoroEngine::VisualAccessibility)
     target_link_libraries(HoroEditor PRIVATE HoroXRSimulatorProjectArtifacts HoroEngine::PlatformProjectIo)
     include(HoroEditorGuiLiveReloadHost)
