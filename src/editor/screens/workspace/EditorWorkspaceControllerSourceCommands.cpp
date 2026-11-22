@@ -95,6 +95,9 @@ namespace Horo::Editor {
     void EditorWorkspaceController::RevokeWorkspaceCommands() noexcept {
         m_sourceCommandEndpoint.reset();
         m_inspectionCommandEndpoint.reset();
+        m_debugCaptureEndpoint.reset();
+        m_debugCapture.Clear();
+        m_debugCaptureEntity.reset();
         RevokeGameplayTestCommands();
         m_buildCommandEndpoint.reset();
         if (m_commandBuildSession) {

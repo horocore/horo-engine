@@ -96,6 +96,7 @@
     "workspace.mcp_commands.open_build": {"text": "Enable build commands"},
     "workspace.mcp_commands.open_tests": {"text": "Enable CTest commands"},
     "workspace.mcp_commands.open_inspection": {"text": "Enable read-only scene inspection"},
+    "workspace.mcp_commands.open_debug_capture": {"text": "Enable Play debug capture"},
     "workspace.mcp_commands.close": {"text": "Close command session"},
     "workspace.mcp_commands.arguments": {"text": "Arguments (JSON object)"},
     "workspace.mcp_commands.review": {"text": "Continue with command"},

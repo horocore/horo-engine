@@ -58,6 +58,7 @@ namespace {
         "workspace.global_dock.tab.assets",
         "workspace.global_dock.tab.console",
         "workspace.global_dock.tab.mcp",
+        "workspace.mcp_commands.open_debug_capture",
         "workspace.global_dock.tab.performance",
         "workspace.global_dock.tab.physics",
         "workspace.global_dock.tab.audio",

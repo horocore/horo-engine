@@ -381,6 +381,7 @@ namespace Horo::Editor {
         if (!std::isfinite(elapsedSeconds) || elapsedSeconds < 0.0F)
             return;
         m_playSession.PresentationUpdate(Gameplay::FrameDeltaTime{static_cast<double>(elapsedSeconds)});
+        UpdateDebugCapture();
         FinishStoppedGameplayRegistry();
         ResumePlaySceneReplacement();
         RefreshPlayStateProjection();

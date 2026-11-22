@@ -1,6 +1,7 @@
 #include "../../support/OwnedTestDirectory.h"
 #include "../mcp/McpAuthorizationTestSupport.h"
 #include "EditorCommandMcpSession.h"
+#include "EditorDebugCaptureMcpTools.h"
 #include "EditorInspectionMath.h"
 #include "EditorInspectionMcpTools.h"
 #include "EditorMcpWorkspaceHost.h"
@@ -55,6 +56,73 @@ namespace {
 
     McpRequest Command(std::string id, std::string tool, Json arguments = Json::object()) {
         return {.id = std::move(id), .method = "tools/call", .params = {{"name", std::move(tool)}, {"arguments", std::move(arguments)}}};
+    }
+
+    TEST_CASE("Debug capture storage bounds samples and expires exact artifacts", "[unit][editor][mcp][debug-capture]") {
+        EditorDebugCaptureStorage store;
+        const auto now = EditorDebugCaptureStorage::Clock::time_point{};
+        CHECK_FALSE(store.Start({42, 17, 100}, now));
+        const auto id = store.Start({42, 2, 100}, now);
+        REQUIRE(id);
+        CHECK_FALSE(store.Start({42, 1, 100}, now));
+        store.Sample({1, 2, 3}, now);
+        store.Sample({2, 3, 4}, now + 20ms);
+        CHECK(store.Read(*id, now + 20ms)->count == 1);
+        store.Sample({2, 3, 4}, now + 190ms);
+        CHECK(store.Read(*id, now + 190ms)->phase == EditorDebugCapturePhase::Ready);
+        CHECK(store.Read(*id, now + 190ms)->samples[1].elapsedMs == 190);
+        CHECK_FALSE(store.Start({42, 1, 100}, now + 190ms));
+        const auto second = store.Start({42, 1, 100}, now + 1s);
+        REQUIRE(second);
+        CHECK_FALSE(store.Read(*id, now + 1s));
+        store.RetireScene();
+        CHECK(store.Read(*second, now + 2s)->phase == EditorDebugCapturePhase::SceneChanged);
+        CHECK_FALSE(store.Read(*second, now + 31s));
+    }
+
+    TEST_CASE("Debug capture requires exact approval and returns only numeric evidence", "[unit][editor][mcp][debug-capture]") {
+        EditorDebugCaptureStorage store;
+        const auto now = EditorDebugCaptureStorage::Clock::time_point{};
+        unsigned starts{};
+        const auto endpoint = std::make_shared<const EditorDebugCaptureEndpoint>(
+            EditorDebugCaptureEndpoint{.project = "project-one",
+                                       .authorizationRevision = 3,
+                                       .owner = std::this_thread::get_id(),
+                                       .start =
+                                           [&](const EditorDebugCaptureRequest &request) {
+            ++starts;
+            const auto id = store.Start(request, now);
+            REQUIRE(id);
+            return Result<std::uint64_t>::Success(*id);
+        },
+                                       .read =
+                                           [&](std::uint64_t id) {
+            return store.Read(id, now + 100ms);
+        },
+                                       .cancel = [&](std::uint64_t id) {
+            return store.Cancel(id, now + 100ms);
+        }});
+        const EditorCommandMcpAdmission admission{"capture-client", "project-one", 3, {std::string{EditorDebugCaptureGrant}}};
+        auto opened = EditorCommandMcpSession::Create({.debugCapture = endpoint}, admission, Test::Authorization());
+        REQUIRE(opened.HasValue());
+        auto &session = *opened.Value();
+        const auto start = Command("start", "debug.capture_telemetry", {{"target", 42}, {"samples", 2}, {"intervalMs", 100}});
+        CHECK(session.Client()->Call(start).HasError());
+        CHECK(starts == 0);
+        Approve(session, start);
+        const auto started = Execute(session, start);
+        REQUIRE(started["status"] == "succeeded");
+        CHECK(starts == 1);
+        const auto args = started["result"];
+        store.Sample({1, 2, 3}, now);
+        const auto read = Execute(session, Command("read", "debug.get_capture", args));
+        REQUIRE(read["status"] == "succeeded");
+        CHECK(read["result"]["phase"] == "sampling");
+        CHECK(read["result"]["samples"][0]["worldPosition"] == Json::array({1, 2, 3}));
+        const auto cancel = Command("cancel", "debug.cancel_capture", args);
+        Approve(session, cancel);
+        CHECK(Execute(session, cancel)["result"]["cancelled"] == true);
+        CHECK(Execute(session, Command("after", "debug.get_capture", args))["result"]["phase"] == "cancelled");
     }
 
     TEST_CASE("Editor transform queries carry an exact numeric Scene fence across pages", "[unit][editor][mcp][inspection]") {

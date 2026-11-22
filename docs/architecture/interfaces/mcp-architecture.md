@@ -769,6 +769,15 @@ The approval view displays the exact immutable request before an effectful
 command can be queued. Hiding the panel withdraws an unanswered approval.
 Read-only status commands run with the selected session's observation grant.
 
+The Play debug capture pack admits `debug.capture_telemetry` after exact
+approval. Movement traces sample one visible authored object's committed Play
+transform up to 16 times at intervals of 100 to 1,000 milliseconds. Results
+contain elapsed time and world position. `debug.get_capture` reports progress
+and copied samples. `debug.cancel_capture` requires exact approval and stops
+the active trace. The workspace retains one trace for up to 30 seconds and
+stops sampling when the Play generation or target changes. Workspace retirement
+withdraws the artifact.
+
 ## Editor gameplay build commands
 
 The editor command pack offers `editor.build.start`, `editor.build.status`,

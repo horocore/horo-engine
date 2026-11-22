@@ -14,6 +14,7 @@ namespace Horo::Editor {
     struct EditorSourceCommandEndpoint;
     struct EditorTestCommandEndpoint;
     struct EditorInspectionCommandEndpoint;
+    struct EditorDebugCaptureEndpoint;
 
     /** @brief Borrowed application endpoints for the exact admitted workspace. Empty endpoints are omitted. */
     struct EditorWorkspaceCommandEndpoints {
@@ -21,6 +22,7 @@ namespace Horo::Editor {
         std::weak_ptr<const EditorBuildCommandEndpoint> build;
         std::weak_ptr<const EditorTestCommandEndpoint> test;
         std::weak_ptr<const EditorInspectionCommandEndpoint> inspection;
+        std::weak_ptr<const EditorDebugCaptureEndpoint> debugCapture;
     };
 
     /** @brief One committed workspace's owner callbacks. They expire when the workspace leaves. */

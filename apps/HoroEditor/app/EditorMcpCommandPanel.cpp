@@ -1,6 +1,7 @@
 #include "EditorMcpCommandPanel.h"
 
 #include "EditorBuildMcpTools.h"
+#include "EditorDebugCaptureMcpTools.h"
 #include "EditorInspectionMcpTools.h"
 #include "EditorMcpWorkspaceHost.h"
 #include "EditorSourceMcpTools.h"
@@ -29,6 +30,7 @@ namespace Horo::Editor {
             CommandPack{"open_build", {EditorBuildExecutionGrant, EditorBuildObservationGrant}},
             CommandPack{"open_tests", {EditorTestExecutionGrant, EditorTestObservationGrant}},
             CommandPack{"open_inspection", {EditorSceneInspectionGrant, {}}},
+            CommandPack{"open_debug_capture", {EditorDebugCaptureGrant, {}}},
         };
 
         /** @brief Keeps approved bytes independent of the editor input widgets. */

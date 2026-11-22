@@ -4472,6 +4472,7 @@ if (HORO_BUILD_EDITOR_GUI)
             editor/screens/workspace/EditorWorkspaceControllerSceneProjection.cpp
             editor/screens/workspace/EditorWorkspaceControllerCamera.cpp
             editor/screens/workspace/EditorWorkspaceControllerPlay.cpp
+            editor/screens/workspace/EditorWorkspaceControllerDebugCapture.cpp
             editor/screens/workspace/EditorWorkspaceControllerCommandRouting.cpp
             editor/screens/workspace/EditorWorkspaceControllerSourcePersistence.cpp
             editor/screens/workspace/EditorSourcePresentation.cpp
@@ -4787,7 +4788,7 @@ target_link_libraries(HoroMcpNavigationAdapters PUBLIC HoroEngine::McpRegistry H
 
 add_library(HoroMcpEditorCommandsInternal STATIC
     mcp/EditorCommandMcpSession.cpp mcp/EditorMcpWorkspaceHost.cpp mcp/EditorSourceMcpTools.cpp mcp/EditorOperationMcpTools.cpp
-    mcp/EditorInspectionMcpTools.cpp)
+    mcp/EditorInspectionMcpTools.cpp mcp/EditorDebugCaptureMcpTools.cpp)
 target_compile_features(HoroMcpEditorCommandsInternal PUBLIC cxx_std_20)
 set(_horo_mcp_editor_command_headers "${CMAKE_CURRENT_BINARY_DIR}/mcp_editor_command_headers")
 foreach(command IN ITEMS Source Build Test Inspection)
@@ -4797,6 +4798,8 @@ foreach(command IN ITEMS Source Build Test Inspection)
         "${_horo_mcp_editor_command_headers}/Editor${command}CommandEndpoint.h" COPYONLY)
 endforeach ()
 configure_file(mcp/EditorCommandMcpSession.h "${_horo_mcp_editor_command_headers}/EditorCommandMcpSession.h" COPYONLY)
+configure_file(mcp/EditorDebugCaptureMcpTools.h "${_horo_mcp_editor_command_headers}/EditorDebugCaptureMcpTools.h" COPYONLY)
+configure_file(editor/screens/workspace/EditorDebugCapture.h "${_horo_mcp_editor_command_headers}/EditorDebugCapture.h" COPYONLY)
 configure_file(mcp/EditorMcpWorkspaceHost.h "${_horo_mcp_editor_command_headers}/EditorMcpWorkspaceHost.h" COPYONLY)
 configure_file(editor/screens/workspace/EditorWorkspaceCommandAccess.h
     "${_horo_mcp_editor_command_headers}/EditorWorkspaceCommandAccess.h" COPYONLY)

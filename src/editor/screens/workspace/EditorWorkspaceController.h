@@ -1,5 +1,6 @@
 #pragma once
 
+#include "EditorDebugCapture.h"
 #include "EditorWorkspaceHostServices.h"
 #include "EnvironmentQueryPreviewNavigation.h"
 #include "Horo/AI/EnvironmentQueryContexts.h"
@@ -236,6 +237,9 @@ namespace Horo::Editor {
         /** @brief Binds numeric inspection to this exact committed editor workspace. */
         [[nodiscard]] std::weak_ptr<const EditorInspectionCommandEndpoint> BindSceneInspection(std::string project,
                                                                                                std::uint64_t authorizationRevision);
+        /** @brief Binds approved debug capture to this exact committed editor workspace. */
+        [[nodiscard]] std::weak_ptr<const EditorDebugCaptureEndpoint> BindDebugCapture(std::string project,
+                                                                                       std::uint64_t authorizationRevision);
 
         /** @brief Refreshes source tools from the explicitly composed canonical world; no world is synthesized. */
         void RefreshWorldSourceProjection();
@@ -828,6 +832,16 @@ namespace Horo::Editor {
         std::shared_ptr<Extensions::ScriptModuleHostServices> m_scriptLanguageHost;
         std::shared_ptr<const EditorSourceCommandEndpoint> m_sourceCommandEndpoint;
         std::shared_ptr<const EditorInspectionCommandEndpoint> m_inspectionCommandEndpoint;
+        std::shared_ptr<const EditorDebugCaptureEndpoint> m_debugCaptureEndpoint;
+        EditorDebugCaptureStorage m_debugCapture;
+        Runtime::SceneRuntimeId m_debugCaptureScene;
+        std::optional<Runtime::EntityRef> m_debugCaptureEntity;
+        SceneObjectId m_debugCaptureObject;
+
+        /** @brief Admits one capture in an existing active Play scene. */
+        [[nodiscard]] Result<std::uint64_t> StartDebugCapture(const EditorDebugCaptureRequest &request);
+        /** @brief Samples the committed Play transformation on the editor owner lane. */
+        void UpdateDebugCapture();
         /** @brief Reads a numeric page without changing authored state, selection, or presentation. */
         [[nodiscard]] Result<TransformInspectionPage> InspectLocalTransforms(const ObjectInspectionRequest &request) const;
         /** @brief Reads the world bounds of exact authored objects, using only a matching published geometry snapshot. */

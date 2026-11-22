@@ -295,10 +295,9 @@ namespace Horo::Editor::WorkspaceScreenDetail {
             if (lifetime.expired())
                 return EditorWorkspaceCommandEndpoints{};
             return EditorWorkspaceCommandEndpoints{
-                workspace->BindSourcePresentation(project, trustRevision),
-                workspace->BindGameplayBuildCommands(project, trustRevision),
-                workspace->BindGameplayTestCommands(project, trustRevision),
-                workspace->BindSceneInspection(project, trustRevision),
+                workspace->BindSourcePresentation(project, trustRevision),   workspace->BindGameplayBuildCommands(project, trustRevision),
+                workspace->BindGameplayTestCommands(project, trustRevision), workspace->BindSceneInspection(project, trustRevision),
+                workspace->BindDebugCapture(project, trustRevision),
             };
         },
             .revoke =
