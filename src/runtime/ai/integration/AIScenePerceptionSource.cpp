@@ -68,23 +68,37 @@ namespace Horo::AI {
                    view.Get({view.RuntimeId(), {source.slot, source.generation}}).HasValue();
         }
 
-        /** @brief Suspends sensing for one recipient when its native provider fails in a current Scene window. */
+        /** @brief Quarantines only the failed listener and withdraws its observations in the same sensing window. */
         [[nodiscard]] Result<void> PollRecipient(const Runtime::RuntimeSceneView &scene, const PerceptionSpatialBroadphase &spatial,
                                                  const PerceptionSenseGeneration &generation, Detail::SceneAgentPerception &sensing,
                                                  const std::uint64_t tick, AiWorkBudget &global) {
             AiWorkBudget budget{sensing.workUnits};
+            std::optional<Error> firstFault;
+            bool hasActiveListener{};
             for (auto &sense : sensing.senses) {
-                auto polled = Detail::PollSceneSense(scene, spatial, *sense.instance, sense.query, tick, sensing.memory, {budget, global});
+                auto &instance = *sense.instance;
+                const auto &binding = instance.Binding();
+                if (instance.IsQuarantined()) {
+                    sensing.memory.ForgetListener(binding.listenerType);
+                    continue;
+                }
+                auto polled = Detail::PollSceneSense(scene, spatial, instance, sense.query, tick, sensing.memory, {budget, global});
                 if (polled.HasError())
                     return Result<void>::Failure(std::move(polled).ErrorValue());
                 auto fault = std::move(polled).Value().providerFailure;
-                if (!fault)
+                if (!fault) {
+                    hasActiveListener = true;
                     continue;
-                if (!generation.CanAdmit() || sense.instance->Binding().cancellation.IsCancellationRequested())
+                }
+                if (!generation.CanAdmit() || binding.cancellation.IsCancellationRequested())
                     return Result<void>::Failure(std::move(*fault));
-                sensing.suspension = std::move(fault);
-                break;
+                instance.QuarantineAtSensePoll();
+                sensing.memory.ForgetListener(binding.listenerType);
+                if (!firstFault)
+                    firstFault = std::move(fault);
             }
+            if (!hasActiveListener)
+                sensing.suspension = firstFault ? std::move(*firstFault) : MakeError(AIErrors::RuntimeUnavailable);
             return Result<void>::Success();
         }
 
@@ -481,8 +495,7 @@ namespace Horo::AI {
                 state->perceptionPollFailure = MakeError(AIErrors::PerceptionSpatialStale);
                 return Result<void>::Failure(*state->perceptionPollFailure);
             }
-            if (previous && !agent.sensing->suspension &&
-                std::ranges::any_of(scheduler->PerceptionWatches(handle, plan), [&](const auto listener) {
+            if (previous && std::ranges::any_of(scheduler->PerceptionWatches(handle, plan), [&](const auto listener) {
                 return agent.sensing->memory.DecisionFactsChanged(*previous, listener);
             }))
                 static_cast<void>(scheduler->Wake(handle, {.perception = true}));

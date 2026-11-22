@@ -3192,7 +3192,7 @@ capability admission reject unavailable services or full request storage with
 typed errors. An admitted query retires on cancellation or stale inputs and
 keeps provider failures on the requesting task. Cooperative scheduler yields
 use the next admitted slice. A failed callback follows the owning node's
-terminal or fallback policy. Native sensing suspends the failed recipient for
+terminal or fallback policy. Native sensing suspends the failed listener for
 its activation lifetime. A rejected query output remains on the owning task
 through its next decision evaluation. These failures leave unrelated Scene
 owners and their budgets active.
@@ -3331,7 +3331,7 @@ following variable-rate presentation bridge.
 1. **`PerceptionSensePoll`**:
    - Gathers bounded spatial candidates and admitted Gameplay hearing, damage, touch/proximity and team deliveries into staged per-agent stimulus buffers. Team topology and relay selection remain Gameplay-owned.
    - Operates as a read-only pass over current spatial/Physics evidence and captured Gameplay event batches; Audio-renderer queues do not authorize hearing or team observations.
-   - A native sense provider fault in a current Scene suspends that recipient's sensing until its activation is replaced. Other recipients continue within their own budgets. Queries of the suspended recipient return the original fault so callers can select a fallback. Scene or policy failures still fail the poll.
+   - A native provider fault in a current Scene suspends its exact listener instance until activation is replaced. The sensing owner withdraws that listener's observations and publishes the corresponding decision wake. Healthy listeners and other recipients continue within their budgets. Queries return the original provider fault when the recipient has no healthy listener. Scene or policy failures still fail the poll.
    - Invariant: Does NOT mutate agent blackboard state, behavior tree node states, or world transforms.
 2. **`BlackboardSync`**:
    - Ingests staged stimulus buffers into each agent's `BlackboardState`.

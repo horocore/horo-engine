@@ -406,23 +406,64 @@ namespace Horo::AI {
             runtime.BeginShutdown();
         }
 
+        struct WakeSenseControl final {
+            bool sees{true};
+            bool fails{};
+            std::uint32_t evaluations{};
+        };
+
         class WakeSense final : public IPerceptionSenseProvider {
         public:
-            explicit WakeSense(const bool &sees) : sees_(sees) {}
+            explicit WakeSense(WakeSenseControl &control) : control_(control) {}
 
             Result<std::size_t> Evaluate(const PerceptionSenseInput &input, std::span<PerceptionSenseSample> output,
                                          AiWorkBudget &budget) override {
+                ++control_.evaluations;
+                if (control_.fails)
+                    return Result<std::size_t>::Failure(MakeError(AIErrors::PerceptionProviderFailed));
                 for (std::size_t index = 0; index < input.candidates.size(); ++index) {
                     if (!budget.Consume())
                         return Result<std::size_t>::Failure(MakeError(AIErrors::SchedulerBudgetExhausted));
-                    output[index] = {static_cast<std::uint32_t>(index), sees_};
+                    output[index] = {static_cast<std::uint32_t>(index), control_.sees};
                 }
                 return Result<std::size_t>::Success(input.candidates.size());
             }
 
         private:
-            const bool &sees_;
+            WakeSenseControl &control_;
         };
+
+        /** @brief Registers a deterministic provider whose native control can be faulted on the owner lane. */
+        PerceptionSenseRegistration RegisterWakeSense(const SenseTypeId sense, const StimulusTypeId stimulus,
+                                                      const PerceptionCapabilitySet capabilities, WakeSenseControl &control) {
+            const PerceptionDescriptorOrigin origin{PerceptionDescriptorSourceKind::Native, MakeIdentity<PerceptionProviderId>(22), 1};
+            return {{{sense, origin, "reactive sight", capabilities}, {stimulus, origin, "visible actor", 1, {}}, sizeof(WakeSense), 2, 2},
+                    {&control, [](void *value) -> IPerceptionSenseProvider * {
+                return new WakeSense{*static_cast<WakeSenseControl *>(value)};
+            }, [](void *, IPerceptionSenseProvider *provider) noexcept {
+                delete provider;
+            }}};
+        }
+
+        /** @brief Captures both listener routes independently against the actual provider registrations. */
+        PerceptionDescriptorRegistry WakeSenseRegistry(const std::array<PerceptionSenseRegistration, 2> &registrations,
+                                                       const std::array<PerceptionListenerTypeId, 2> &ids,
+                                                       const PerceptionCapabilitySet capabilities) {
+            const std::array senses{registrations[0].contract.sense, registrations[1].contract.sense};
+            const std::array stimuli{registrations[0].contract.stimulus, registrations[1].contract.stimulus};
+            std::array<PerceptionListenerDescriptor, 2> listeners{};
+            for (std::size_t index = 0; index < listeners.size(); ++index) {
+                listeners[index].identity = ids[index];
+                listeners[index].origin = senses[index].origin;
+                listeners[index].displayName = "reactive listener";
+                listeners[index].sense = senses[index].identity;
+                listeners[index].stimuli[0] = {stimuli[index].identity, 1, 1};
+                listeners[index].stimulusCount = 1;
+            }
+            auto registry = PerceptionDescriptorRegistry::Capture({senses, stimuli, listeners}, capabilities);
+            REQUIRE(registry.HasValue());
+            return std::move(registry).Value();
+        }
 
         TEST_CASE("Native perception wakes only declared cooked dependencies when decision facts change",
                   "[unit][ai][scene][decision_reservation][scheduler]") {
@@ -433,30 +474,24 @@ namespace Horo::AI {
             const auto plan = fixture.Compile(std::span{&source, 1}, 11);
             auto authored = SceneFixture(fixture, *plan);
             authored.descriptor.cookedPlan = plan;
-            bool sees = true;
+            WakeSenseControl primary;
+            WakeSenseControl secondary;
             const PerceptionSenseTestSupport::InputFixture native;
             const auto listener = native.binding.listenerType;
+            const auto otherListener = MakeIdentity<PerceptionListenerTypeId>(41);
             authored.agent.controller->requiredCapabilities =
                 authored.agent.controller->requiredCapabilities.Union(AiCapabilitySet::Of(AiCapability::Perception));
             const auto sense = MakeIdentity<SenseTypeId>(20);
-            const PerceptionDescriptorOrigin origin{PerceptionDescriptorSourceKind::Native, MakeIdentity<PerceptionProviderId>(22), 1};
-            const PerceptionSenseRegistration registration{{{sense, origin, "reactive sight", native.capabilities},
-                                                            {MakeIdentity<StimulusTypeId>(21), origin, "visible actor", 1, {}},
-                                                            sizeof(WakeSense),
-                                                            2,
-                                                            2},
-                                                           {&sees, [](void *value) -> IPerceptionSenseProvider * {
-                return new WakeSense{*static_cast<const bool *>(value)};
-            }, [](void *, IPerceptionSenseProvider *provider) noexcept {
-                delete provider;
-            }}};
-            auto generation = PerceptionSenseGeneration::Capture(std::span{&registration, 1}, std::make_shared<std::atomic_bool>(true));
+            const auto otherSense = MakeIdentity<SenseTypeId>(21);
+            const std::array registrations{RegisterWakeSense(sense, MakeIdentity<StimulusTypeId>(21), native.capabilities, primary),
+                                           RegisterWakeSense(otherSense, MakeIdentity<StimulusTypeId>(22), native.capabilities, secondary)};
+            auto generation = PerceptionSenseGeneration::Capture(registrations, std::make_shared<std::atomic_bool>(true));
             REQUIRE(generation.HasValue());
             authored.descriptor.perceptionEndpoints = std::make_shared<const AiControllerPerceptionEndpoints>(
                 AiControllerPerceptionEndpoints{.registry = std::make_shared<const PerceptionDescriptorRegistry>(
-                                                    native.Registry(registration.contract)),
-                                                .listeners = {listener},
-                                                .sources = {sense},
+                                                    WakeSenseRegistry(registrations, {listener, otherListener}, native.capabilities)),
+                                                .listeners = {listener, otherListener},
+                                                .sources = {sense, otherSense},
                                                 .decisionWatches = {{Node(2), listener}}});
 
             Runtime::SceneDefinitionBuilder builder{Runtime::SceneDefinitionId{1}, Runtime::SceneDefinitionRevision{1}};
@@ -520,15 +555,44 @@ namespace Horo::AI {
             };
             CHECK(evaluate(1) == 2);
             CHECK(evaluate(2) == 0);
-            sees = false;
+            primary.sees = false;
             CHECK(evaluate(3) == 1);
             CHECK(fixture.probe.resumes == 1);
             CHECK(fixture.probe.lastResumeReason == AiTaskResumeReason::Event);
             CHECK(evaluate(4) == 0);
             SECTION("removing the watch leaves later observations idle") {
                 REQUIRE(runtime.SetCookedPerceptionWatchesAtSafePoint(agent, {}).HasValue());
-                sees = true;
+                primary.sees = true;
                 CHECK(evaluate(5) == 0);
+            }
+            SECTION("typed provider failure withdraws only its lane and wakes the watching decision") {
+                const auto recipient = *view.Find(Runtime::SceneObjectId{1});
+                primary.sees = true;
+                REQUIRE(evaluate(5) == 1);
+                const auto before = runtime.ReadPerceptionAtSafePoint(view, recipient);
+                REQUIRE(before.HasValue());
+                REQUIRE(before.Value().count == 2);
+
+                primary.fails = true;
+                CHECK(evaluate(6) == 1);
+                const auto retained = runtime.ReadPerceptionAtSafePoint(view, recipient);
+                REQUIRE(retained.HasValue());
+                REQUIRE(retained.Value().count == 1);
+                CHECK(retained.Value().entries[0].key.listener == otherListener);
+                const auto inspection = runtime.CaptureAgentInspectionAtSafePoint(view, agent, {});
+                REQUIRE(inspection.HasValue());
+                REQUIRE(inspection.Value().senseProviders.size() == 2);
+                CHECK_FALSE(inspection.Value().senseProviders[0].available);
+                CHECK(inspection.Value().senseProviders[1].available);
+
+                const auto failedPolls = primary.evaluations;
+                const auto activePolls = secondary.evaluations;
+                CHECK(evaluate(7) == 0);
+                CHECK(primary.evaluations == failedPolls);
+                CHECK(secondary.evaluations == activePolls + 2);
+                secondary.fails = true;
+                CHECK(evaluate(8) == 0);
+                TestSupport::ExpectError(runtime.ReadPerceptionAtSafePoint(view, recipient), AIErrors::PerceptionProviderFailed);
             }
             SECTION("the structural publication of a retired source wakes the surviving watcher") {
                 auto structural = runtime.MakeStructuralParticipant(std::span{&authored.descriptor, 1});

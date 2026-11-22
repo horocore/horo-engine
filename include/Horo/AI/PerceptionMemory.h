@@ -159,6 +159,9 @@ namespace Horo::AI {
          */
         void ForgetRetiredSources(std::span<const PerceptionSourceRef> retired) noexcept;
 
+        /** @brief Withdraws all observations owned by one retired listener route on the simulation owner. */
+        void ForgetListener(PerceptionListenerTypeId listener) noexcept;
+
         /**
          * @brief Returns an exact stimulus only after aging and checking subject and provenance residency.
          * @param key Stimulus to find.

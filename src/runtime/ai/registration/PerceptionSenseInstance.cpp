@@ -200,6 +200,13 @@ namespace Horo::AI {
         return generation_->CanAdmit() && !failed_ && !evaluating_ && !binding_.cancellation.IsCancellationRequested();
     }
 
+    /** @copydoc PerceptionSenseInstance::QuarantineAtSensePoll */
+    void PerceptionSenseInstance::QuarantineAtSensePoll() noexcept {
+        if (std::this_thread::get_id() != generation_->owner_ || evaluating_)
+            std::terminate();
+        failed_ = true;
+    }
+
     /** @copydoc PerceptionSenseInstance::Binding */
     const PerceptionSenseBinding &PerceptionSenseInstance::Binding() const noexcept {
         return binding_;

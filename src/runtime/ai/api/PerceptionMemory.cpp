@@ -186,6 +186,16 @@ namespace Horo::AI {
         std::ranges::fill(removed, PerceivedStimulus{});
     }
 
+    /** @copydoc AIPerceptionMemory::ForgetListener */
+    void AIPerceptionMemory::ForgetListener(const PerceptionListenerTypeId listener) noexcept {
+        const auto active = std::span{entries_}.first(count_);
+        const auto removed = std::ranges::remove_if(active, [listener](const PerceivedStimulus &stimulus) {
+            return stimulus.key.listener == listener;
+        });
+        count_ -= static_cast<std::size_t>(removed.size());
+        std::ranges::fill(removed, PerceivedStimulus{});
+    }
+
     /** @brief Removes stale weak references before exposing decision-visible memory. */
     void AIPerceptionMemory::PruneDead(const PerceptionSourceLiveness liveness) {
         for (std::size_t index = 0; index < count_;) {

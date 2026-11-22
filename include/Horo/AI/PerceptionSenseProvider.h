@@ -184,6 +184,16 @@ namespace Horo::AI {
          */
         [[nodiscard]] bool CanEvaluate() const noexcept;
 
+        /** @brief Disables this instance after an owner-observed fault without invoking provider code.
+         * @pre Called by the sensing owner outside the provider callback on the generation's owner lane.
+         */
+        void QuarantineAtSensePoll() noexcept;
+
+        /** @brief Reports a locally stopped instance independently of generation revocation. Read on the owner lane. */
+        [[nodiscard]] bool IsQuarantined() const noexcept {
+            return failed_;
+        }
+
         /** @brief Reads the captured exact agent/listener lifetime. @return Borrowed immutable binding while this instance lives. */
         [[nodiscard]] const PerceptionSenseBinding &Binding() const noexcept;
         /** @brief Reads captured policy and identities. @return Borrowed immutable contract while this instance lives. */

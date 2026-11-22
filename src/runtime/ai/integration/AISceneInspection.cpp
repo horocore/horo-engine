@@ -71,7 +71,7 @@ namespace Horo::AI {
                 const auto &contract = instance.Contract();
                 result.senseProviders.push_back({contract.sense.identity, contract.sense.origin,
                                                  contract.sense.requiredCapabilities.Union(contract.stimulus.requiredCapabilities),
-                                                 !sensing.suspension && instance.CanEvaluate()});
+                                                 instance.CanEvaluate()});
             }
         }
     }  // namespace

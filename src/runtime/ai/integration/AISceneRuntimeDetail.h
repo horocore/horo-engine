@@ -19,7 +19,7 @@ namespace Horo::AI::Detail {
         AIPerceptionMemory memory;
         std::vector<ScenePerceptionSense> senses;
         std::size_t workUnits{};
-        std::optional<Error> suspension; /**< First provider fault for this recipient's lifetime. */
+        std::optional<Error> suspension; /**< Original provider fault once no listener remains active. */
     };
 
     /** @brief Separates a provider fault from a failure of the Scene's sensing window. */
