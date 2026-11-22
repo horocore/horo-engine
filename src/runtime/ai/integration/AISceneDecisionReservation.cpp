@@ -10,6 +10,24 @@
 
 namespace Horo::AI {
     namespace {
+        /** @brief Keeps nested provider callbacks from replacing the decision being prepared or retired. */
+        class DecisionReplacementGuard final {
+        public:
+            explicit DecisionReplacementGuard(bool &replacing) noexcept : replacing_(replacing) {
+                replacing_ = true;
+            }
+
+            ~DecisionReplacementGuard() {
+                replacing_ = false;
+            }
+
+            DecisionReplacementGuard(const DecisionReplacementGuard &) = delete;
+            DecisionReplacementGuard &operator=(const DecisionReplacementGuard &) = delete;
+
+        private:
+            bool &replacing_;
+        };
+
         /** @brief Resolves only an active exact agent after the caller has checked the real owner lane. */
         Result<Detail::AgentRuntimeState *> DecisionAgent(Detail::AiSceneRuntimeState &state, const AgentHandle agent) {
             auto *slot = Detail::FindAgent(state, agent);
@@ -540,6 +558,8 @@ namespace Horo::AI {
             return owner;
         const auto state = active_;
         auto *scheduler = state->scheduler.get();
+        if (state->replacingDecision)
+            return Outcome::Failure(MakeError(AIErrors::SchedulerPhaseInvalid, "A cooked decision replacement is already in progress."));
         if (!decisionExecution_ || !scheduler)
             return Outcome::Failure(MakeError(AIErrors::RuntimeUnavailable));
         const auto selected = DecisionAgent(*state, agent);
@@ -562,6 +582,7 @@ namespace Horo::AI {
         const auto &newRoot = replacement->Graphs()[replacement->Occurrences().front().plan];
         if (oldRoot.execution.index() != newRoot.execution.index())
             return Outcome::Failure(MakeError(AIErrors::DecisionAssetActivationInvalid));
+        const DecisionReplacementGuard replacing{state->replacingDecision};
         const auto schema = newRoot.bindings->BlackboardSchema();
         if (schema != slot.schema) {
             if (!migration || !schema)

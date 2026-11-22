@@ -2838,7 +2838,8 @@ when another active task or sensing owner still depends on the old scope or
 when the Blackboard contains read-authorized derived values. A successful
 schema change revokes old snapshots, write batches and task reservations.
 Restarts reserve a fresh task interval and retire the previous nodes with
-`PlanReplaced`. The replacement first evaluates on the next tick.
+`PlanReplaced`. The Scene owner rejects nested replacement during provider
+construction and retirement. The replacement first evaluates on the next tick.
 
 Scene-owned graph composition acquires its exclusive physical task range through
 `AiSceneRuntime::ReserveDecisionTaskSlotsAtSafePoint`. Compiler occurrence offsets

@@ -730,11 +730,21 @@ namespace Horo::AI {
             CHECK(old.probe.lastResumeReason == AiTaskResumeReason::FixedTick);
             REQUIRE(scheduler->CommitAtIntentDispatch(2).HasValue());
 
+            std::optional<Result<void>> nestedReplacement;
+            next.probe.onCreate = [&nestedReplacement, &runtime, agent, &previous, &replacement] {
+                if (!nestedReplacement) {
+                    nestedReplacement = Result<void>::Success();
+                    nestedReplacement = runtime.ReplaceCookedDecisionAtSafePoint(agent, previous, replacement);
+                }
+            };
             bool evaluationDuringAbortRejected{};
-            old.probe.onAbort = [&] {
+            old.probe.onAbort = [&evaluationDuringAbortRejected, scheduler] {
                 evaluationDuringAbortRejected = scheduler->EvaluateAtDecision(3).HasError();
             };
             REQUIRE(runtime.ReplaceCookedDecisionAtSafePoint(agent, previous, replacement).HasValue());
+            REQUIRE(nestedReplacement);
+            TestSupport::ExpectError(*nestedReplacement, AIErrors::SchedulerPhaseInvalid);
+            CHECK(next.probe.factories == 1);
             CHECK(evaluationDuringAbortRejected);
             REQUIRE(old.probe.abortReasons.size() == 1);
             CHECK(old.probe.abortReasons.front() == AiTaskCancellationReason::PlanReplaced);

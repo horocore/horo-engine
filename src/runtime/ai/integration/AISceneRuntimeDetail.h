@@ -127,6 +127,7 @@ namespace Horo::AI::Detail {
         const PerceptionSpatialBroadphase *perceptionSpatial{}; /**< Exact publisher borrowed for the same activation lifetime. */
         std::uint64_t lastPerceptionTick{};
         std::optional<Error> perceptionPollFailure; /**< Same-tick retries cannot replay native callbacks. */
+        bool replacingDecision{};                   /**< Owner-lane fence across replacement provider callbacks. */
         bool closed{};
     };
 
