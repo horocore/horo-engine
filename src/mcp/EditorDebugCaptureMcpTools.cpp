@@ -17,7 +17,8 @@ namespace Horo::Editor {
         enum class Action {
             Start,
             Read,
-            Cancel
+            Cancel,
+            ReadSource
         };
         enum class CaptureKind {
             Telemetry,
@@ -37,9 +38,9 @@ namespace Horo::Editor {
         };
 
         auto RetainedAuthority(const Mcp::McpRequestContext &context) {
-            return [principal = std::weak_ptr<const Mcp::McpAuthority>{context.authority}] {
+            return [principal = std::weak_ptr<const Mcp::McpAuthority>{context.authority}, cancellation = context.cancellation] {
                 const auto active = principal.lock();
-                return active && !active->IsStopRequested();
+                return active && !cancellation.IsCancellationRequested() && !active->IsStopRequested();
             };
         }
 
@@ -110,7 +111,7 @@ namespace Horo::Editor {
             return parsed.ec == std::errc{} && parsed.ptr == end && id != 0 ? std::optional{id} : std::nullopt;
         }
 
-        Json ImageInteger(std::size_t minimum, std::size_t maximum) {
+        Json ImageInteger(std::uint64_t minimum, std::uint64_t maximum) {
             return {{"type", "integer"}, {"minimum", minimum}, {"maximum", maximum}};
         }
 
@@ -118,6 +119,46 @@ namespace Horo::Editor {
             const auto coordinate = ImageInteger(0, std::numeric_limits<std::uint32_t>::max());
             const auto dimension = ImageInteger(1, EditorViewportImageRegion::MaximumDimension);
             return {{"x", coordinate}, {"y", coordinate}, {"width", dimension}, {"height", dimension}};
+        }
+
+        /** @brief Exact source and physical dimensions included in pixel capture approval. */
+        Json ImageSourceSchema() {
+            const auto revision = ImageInteger(0, std::numeric_limits<std::uint64_t>::max());
+            const auto extent = ImageInteger(1, std::numeric_limits<std::uint32_t>::max());
+            return ObjectSchema({{"sceneEpoch", revision},
+                                 {"sceneRevision", revision},
+                                 {"viewportRevision", revision},
+                                 {"projectionRevision", revision},
+                                 {"width", extent},
+                                 {"height", extent}},
+                                {"sceneEpoch", "sceneRevision", "viewportRevision", "projectionRevision", "width", "height"});
+        }
+
+        Json ImageStartSchema() {
+            auto properties = ImageRegionProperties();
+            properties["source"] = ImageSourceSchema();
+            return ObjectSchema(std::move(properties), {"source", "x", "y", "width", "height"});
+        }
+
+        EditorDebugImageSource DecodeImageSource(const Json &value) {
+            return {value.at("sceneEpoch").get<std::uint64_t>(),
+                    value.at("sceneRevision").get<std::uint64_t>(),
+                    value.at("viewportRevision").get<std::uint64_t>(),
+                    value.at("projectionRevision").get<std::uint64_t>(),
+                    value.at("width").get<std::uint32_t>(),
+                    value.at("height").get<std::uint32_t>()};
+        }
+
+        Output ReadImageSource(const EditorDebugCaptureEndpoint &endpoint) {
+            const auto source = endpoint.readImageSource();
+            if (!source)
+                return Output::Failure(MakeError(Mcp::McpErrors::OperationUnavailable));
+            return Output::Success({{"sceneEpoch", source->sceneEpoch},
+                                    {"sceneRevision", source->sceneRevision},
+                                    {"viewportRevision", source->viewportRevision},
+                                    {"projectionRevision", source->projectionRevision},
+                                    {"width", source->width},
+                                    {"height", source->height}});
         }
 
         constexpr auto MaximumImageBytes =
@@ -212,6 +253,8 @@ namespace Horo::Editor {
                     return Output::Failure(MakeError(Mcp::McpErrors::RequestCancelled));
                 if (action_ == Action::Start)
                     return Start(*endpoint, arguments, context);
+                if (action_ == Action::ReadSource)
+                    return ReadImageSource(*endpoint);
                 return AccessCapture(*endpoint, arguments, context);
             }
 
@@ -239,9 +282,10 @@ namespace Horo::Editor {
                                               RetainedAuthority(context));
                     region = {arguments.at("x").get<std::uint32_t>(), arguments.at("y").get<std::uint32_t>(),
                               arguments.at("width").get<std::uint32_t>(), arguments.at("height").get<std::uint32_t>()};
-                    if (!region.Fits(std::numeric_limits<std::uint32_t>::max(), std::numeric_limits<std::uint32_t>::max()))
+                    const auto source = DecodeImageSource(arguments.at("source"));
+                    if (!region.Fits(source.width, source.height) || endpoint.readImageSource() != source)
                         return Result<std::uint64_t>::Failure(MakeError(Mcp::McpErrors::OperationUnavailable));
-                    return endpoint.startImage(region, RetainedAuthority(context));
+                    return endpoint.startImage(source, region, RetainedAuthority(context));
                 }();
                 if (result.HasError())
                     return Output::Failure(result.ErrorValue());
@@ -263,7 +307,8 @@ namespace Horo::Editor {
                          .description = std::move(description),
                          .inputSchema = std::move(input),
                          .outputSchema = std::move(output),
-                         .effect = action == Action::Read ? Mcp::McpToolEffect::Query : Mcp::McpToolEffect::PresentationSideEffect,
+                         .effect = action == Action::Read || action == Action::ReadSource ? Mcp::McpToolEffect::Query
+                                                                                          : Mcp::McpToolEffect::PresentationSideEffect,
                          .requiredCapabilities = {std::string{EditorDebugCaptureGrant}},
                          .bounds = {.maximumInputBytes = 512, .maximumResultBytes = 8192, .maximumDepth = 6, .maximumNodes = 256}},
                     .adapter = std::make_shared<CaptureTool>(action, kind, endpoint, owner),
@@ -293,11 +338,14 @@ namespace Horo::Editor {
                      ArtifactSchema(), bound, owner),
             Register(Action::Cancel, "debug.cancel_capture", "Cancel the exact active debug capture.", id, cancelled, bound, owner),
         };
-        if (bound->startImage && bound->readImage && bound->cancelImage) {
+        if (bound->readImageSource && bound->startImage && bound->readImage && bound->cancelImage) {
             const auto image = std::make_shared<CaptureOwner>();
-            registrations.push_back(Register(Action::Start, "viewport.capture_image", "Capture a bounded crop of the authored viewport.",
-                                             ObjectSchema(ImageRegionProperties(), {"x", "y", "width", "height"}), id, bound, image,
-                                             CaptureKind::Image));
+            registrations.push_back(
+                Register(Action::ReadSource, "viewport.image_source", "Read the authored viewport capture revision and pixel extent.",
+                         ObjectSchema(Json::object(), Json::array()), ImageSourceSchema(), bound, image, CaptureKind::Image));
+            registrations.push_back(Register(Action::Start, "viewport.capture_image",
+                                             "Capture a bounded crop from the exact observed authored viewport.", ImageStartSchema(), id,
+                                             bound, image, CaptureKind::Image));
             registrations.push_back(
                 Register(Action::Read, "debug.get_image", "Read status or up to 2048 RGBA8 bytes at a byte offset.",
                          ObjectSchema({{"captureId", CaptureIdSchema()}, {"offset", ImageInteger(0, MaximumImageBytes - 1)}},

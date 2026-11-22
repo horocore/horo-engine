@@ -290,6 +290,7 @@ namespace {
         auto publication = std::make_shared<const bool>(true);
         auto expiresAt = std::chrono::steady_clock::now() + 30s;
         std::function<bool()> authorized;
+        EditorDebugImageSource source{6, 19, 2, 3, 640, 480};
         const auto endpoint = std::make_shared<const EditorDebugCaptureEndpoint>(EditorDebugCaptureEndpoint{
             .project = "project-one",
             .authorizationRevision = 3,
@@ -306,8 +307,13 @@ namespace {
                 [](std::uint64_t) {
             return false;
         },
+            .readImageSource =
+                [&] {
+            return std::optional{source};
+        },
             .startImage =
-                [&](EditorViewportImageRegion requested, std::function<bool()> active) {
+                [&](EditorDebugImageSource expected, EditorViewportImageRegion requested, std::function<bool()> active) {
+            CHECK(expected == source);
             CHECK(requested == region);
             authorized = std::move(active);
             return Result<std::uint64_t>::Success(12);
@@ -328,7 +334,20 @@ namespace {
         auto opened = EditorCommandMcpSession::Create({.debugCapture = endpoint}, admission, Test::Authorization());
         REQUIRE(opened.HasValue());
         auto &session = *opened.Value();
-        const auto start = Command("start-image", "viewport.capture_image", {{"x", 1}, {"y", 2}, {"width", 256}, {"height", 3}});
+        const auto readSource = [&] {
+            const auto result = Execute(session, Command("image-source", "viewport.image_source", Json::object()));
+            REQUIRE(result["status"] == "succeeded");
+            return result["result"];
+        };
+        Json crop{{"source", readSource()}, {"x", 1}, {"y", 2}, {"width", 256}, {"height", 3}};
+        const auto stale = Command("stale-image", "viewport.capture_image", crop);
+        Approve(session, stale);
+        ++source.viewportRevision;
+        CHECK(Execute(session, stale)["status"] == "failed");
+        CHECK_FALSE(authorized);
+
+        crop["source"] = readSource();
+        const auto start = Command("start-image", "viewport.capture_image", crop);
         CHECK(session.Client()->Call(start).HasError());
         Approve(session, start);
         const auto started = Execute(session, start);

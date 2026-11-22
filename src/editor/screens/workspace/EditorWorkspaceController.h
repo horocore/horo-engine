@@ -865,6 +865,7 @@ namespace Horo::Editor {
         std::shared_ptr<const EditorSourceCommandEndpoint> m_sourceCommandEndpoint;
         std::shared_ptr<const EditorInspectionCommandEndpoint> m_inspectionCommandEndpoint;
         std::shared_ptr<const EditorDebugCaptureEndpoint> m_debugCaptureEndpoint;
+        CancellationSource m_debugCaptureLifetime;
         EditorDebugCaptureStorage m_debugCapture;
         std::function<bool()> m_debugCaptureAuthorized;
         Runtime::SceneRuntimeId m_debugCaptureScene;
@@ -873,11 +874,11 @@ namespace Horo::Editor {
 
         /** @brief Admits one capture in an existing active Play scene. */
         [[nodiscard]] Result<std::uint64_t> StartDebugCapture(const EditorDebugCaptureRequest &request, std::function<bool()> authorized);
-        /** @brief Captures pixels only while the approved authored scene remains the viewport source. */
-        [[nodiscard]] Result<std::uint64_t> StartDebugImage(IEditorViewportRenderer &viewport, EditorViewportImageRegion region,
-                                                            std::function<bool()> authorized);
-        /** @brief Checks that the exact authored Scene still owns the viewport. */
-        [[nodiscard]] bool IsCurrentDebugImageSource(InspectionSceneRevision revision, Runtime::SceneRuntimeId runtime) const;
+        /** @brief Captures pixels only while the exact approved authored viewport remains current. */
+        [[nodiscard]] Result<std::uint64_t> StartDebugImage(IEditorViewportRenderer &viewport, EditorDebugImageSource expected,
+                                                            EditorViewportImageRegion region, std::function<bool()> authorized);
+        /** @brief Observes revision and extent evidence for one complete authored viewport. */
+        [[nodiscard]] std::optional<EditorDebugImageSource> ReadDebugImageSource(const IEditorViewportRenderer &viewport) const;
         /** @brief Samples the committed Play transformation on the editor owner lane. */
         void UpdateDebugCapture();
         /** @brief Reads a numeric page without changing authored state, selection, or presentation. */

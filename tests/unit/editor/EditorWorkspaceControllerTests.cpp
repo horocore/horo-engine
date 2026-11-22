@@ -10,6 +10,7 @@
 #include "OwnedTestDirectory.h"
 #include "ProjectReplicationTestSupport.h"
 #include "editor/document/SceneDocumentPersistence.h"
+#include "editor/renderer/EditorViewportRenderer.h"
 #include "editor/screens/workspace/EditorInspectionCommandEndpoint.h"
 #include "editor/screens/workspace/EditorWorkspaceController.h"
 #include "editor/screens/workspace/GameplayBehaviorRequestValidation.h"
@@ -37,6 +38,54 @@ namespace {
     namespace Math = Math;
     using TestWorkspaceController = HoroEditorWorkspaceControllerPolicyTests::FocusedWorkspaceController;
     using namespace HoroEditorWorkspaceControllerFilesystemTests;
+
+    /** @brief Records owner admission while leaving native readback to renderer-specific tests. */
+    class CaptureViewport final : public IEditorViewportRenderer {
+    public:
+        Result<std::uint64_t> RequestImageCapture(EditorViewportImageRegion region, std::function<bool()> valid) override {
+            submitted = region;
+            current = std::move(valid);
+            ++requests;
+            return Result<std::uint64_t>::Success(requests);
+        }
+
+        Result<void> ExecutePreparedFrame(Render::RenderFrameScope &, std::span<const Render::RenderPassDescriptor>) override {
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportNotInitialized));
+        }
+
+        Result<void> ExecuteStaticMeshPass(const Render::StaticMeshPassDescriptor &) override {
+            return Result<void>::Failure(MakeError(RendererErrors::ViewportNotInitialized));
+        }
+
+        void RequestExtent(EditorViewportExtent value) noexcept override {
+            extent = value;
+        }
+
+        void RequestGrid(const EditorViewportGridOptions &) noexcept override {}
+
+        void RequestLightVisualizer(const EditorViewportLightVisualizerOptions &) noexcept override {}
+
+        EditorViewportExtent RequestedExtent() const noexcept override {
+            return extent;
+        }
+
+        Math::ClipDepthRange ClipDepthRange() const noexcept override {
+            return Math::ClipDepthRange::ZeroToOne;
+        }
+
+        EditorViewportTextureView TextureView() const noexcept override {
+            return {};
+        }
+
+        bool IsReady() const noexcept override {
+            return extent.IsValid();
+        }
+
+        EditorViewportExtent extent{640, 480};
+        EditorViewportImageRegion submitted;
+        std::function<bool()> current;
+        std::uint64_t requests{};
+    };
 
     /** @brief Reports a typed failure for a live clone entity through the workspace's normal Play host port. */
     class DecisionNavigationTestHost final : public EditorPlaySceneHost {
@@ -491,6 +540,53 @@ namespace {
         controller.ProcessCommand(SceneCommand(EditorWorkspaceViewCommand::UndoScene));
         CHECK(controller.ViewModel().objects.front().name == object.name);
         CHECK(controller.ViewModel().objects.back().components.light->enabled);
+    }
+
+    TEST_CASE("Viewport image admission binds the authored source through owner and extent changes", "[unit][editor][debug-capture]") {
+        TestWorkspaceController controller;
+        CaptureViewport viewport;
+        auto &workspace = controller.Controller();
+        const auto endpoint = workspace.BindDebugCapture("test-project", 1, &viewport).lock();
+        REQUIRE(endpoint);
+        const auto source = endpoint->readImageSource();
+        REQUIRE(source);
+        constexpr EditorViewportImageRegion region{2, 3, 24, 16};
+        const auto allowed = [] {
+            return true;
+        };
+        REQUIRE(endpoint->startImage(*source, region, allowed).HasValue());
+        CHECK(viewport.submitted == region);
+        REQUIRE(viewport.current);
+        REQUIRE(viewport.current());
+
+        SECTION("camera navigation invalidates the previous approved pixels") {
+            EditorWorkspaceViewCommandData navigate;
+            navigate.command = EditorWorkspaceViewCommand::NavigateViewport;
+            navigate.viewportNavigationPayload = EditorViewportNavigationDelta{.yawRadians = 0.2F};
+            controller.ProcessCommand(navigate);
+            REQUIRE(endpoint->readImageSource());
+            CHECK(endpoint->readImageSource() != source);
+        }
+        SECTION("resizing leaves the prior approval stale even when its crop still fits") {
+            viewport.RequestExtent({800, 600});
+            REQUIRE(endpoint->readImageSource());
+            CHECK(endpoint->readImageSource()->width == 800);
+        }
+        SECTION("an authored Scene edit changes the observed projection") {
+            EditorWorkspaceViewCommandData create;
+            create.command = EditorWorkspaceViewCommand::CreatePrimitive;
+            create.primitivePayload = Runtime::PrimitiveId{"primitive.mesh.box"};
+            controller.ProcessCommand(create);
+            REQUIRE(endpoint->readImageSource());
+            CHECK(endpoint->readImageSource()->sceneRevision != source->sceneRevision);
+        }
+        SECTION("workspace retirement invalidates even an endpoint retained by a caller") {
+            workspace.RevokeWorkspaceCommands();
+            CHECK_FALSE(endpoint->readImageSource());
+        }
+        CHECK_FALSE(viewport.current());
+        CHECK(endpoint->startImage(*source, region, allowed).HasError());
+        CHECK(viewport.requests == 1);
     }
 
     TEST_CASE("Viewport Navigation Updates Only The Editor Camera Authority", "[unit][editor]") {

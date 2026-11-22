@@ -97,6 +97,7 @@ namespace Horo::Editor {
             m_agentSceneReview->lifetime.RequestCancellation();
         m_sourceCommandEndpoint.reset();
         m_inspectionCommandEndpoint.reset();
+        m_debugCaptureLifetime.RequestCancellation();
         m_debugCaptureEndpoint.reset();
         m_debugCapture.Clear();
         m_debugCaptureAuthorized = {};

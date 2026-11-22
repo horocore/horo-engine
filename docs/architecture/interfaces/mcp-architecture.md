@@ -799,6 +799,13 @@ a lost delivery, request the same byte offset again while the capture is live.
 images. Workspace retirement, a source change, or loss of authority
 withdraws the image.
 
+Call `viewport.image_source` with an empty argument object before requesting a
+crop. Pass its result as the `source` field of `viewport.capture_image` along
+with the existing crop coordinates. The approval binds the Scene, viewport
+camera, projection publication, and physical extent. A change before dispatch
+requires a fresh observation and approval. A change during readback withdraws
+the pending capture and its pixels.
+
 ## Editor gameplay build commands
 
 The editor command pack offers `editor.build.start`, `editor.build.status`,

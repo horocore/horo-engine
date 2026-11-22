@@ -24,6 +24,9 @@ namespace Horo::Editor {
     std::weak_ptr<const EditorDebugCaptureEndpoint> EditorWorkspaceController::BindDebugCapture(std::string project,
                                                                                                 std::uint64_t authorizationRevision,
                                                                                                 IEditorViewportRenderer *viewport) {
+        m_debugCaptureLifetime.RequestCancellation();
+        m_debugCaptureLifetime = CancellationSource{};
+        const auto lifetime = m_debugCaptureLifetime.Token();
         m_debugCapture.Clear();
         m_debugCaptureAuthorized = {};
         m_debugCaptureEntity.reset();
@@ -31,25 +34,40 @@ namespace Horo::Editor {
                                             .authorizationRevision = authorizationRevision,
                                             .owner = std::this_thread::get_id(),
                                             .start =
-                                                [this](const EditorDebugCaptureRequest &request, std::function<bool()> authorized) {
+                                                [this, lifetime](const EditorDebugCaptureRequest &request,
+                                                                 std::function<bool()> authorized) {
+            if (lifetime.IsCancellationRequested())
+                return Result<std::uint64_t>::Failure(MakeError(CaptureUnavailable));
             return StartDebugCapture(request, std::move(authorized));
         },
                                             .read =
-                                                [this](std::uint64_t id) {
+                                                [this, lifetime](std::uint64_t id) {
+            if (lifetime.IsCancellationRequested())
+                return std::optional<EditorDebugCaptureArtifact>{};
             return m_debugCapture.Read(id, EditorDebugCaptureStorage::Clock::now());
         },
-                                            .cancel = [this](std::uint64_t id) {
-            return m_debugCapture.Cancel(id, EditorDebugCaptureStorage::Clock::now());
+                                            .cancel = [this, lifetime](std::uint64_t id) {
+            return !lifetime.IsCancellationRequested() && m_debugCapture.Cancel(id, EditorDebugCaptureStorage::Clock::now());
         }};
         if (viewport) {
-            endpoint.startImage = [this, viewport](EditorViewportImageRegion region, std::function<bool()> authorized) {
-                return StartDebugImage(*viewport, region, std::move(authorized));
+            endpoint.readImageSource = [this, viewport, lifetime] {
+                if (lifetime.IsCancellationRequested())
+                    return std::optional<EditorDebugImageSource>{};
+                return ReadDebugImageSource(*viewport);
             };
-            endpoint.readImage = [viewport](std::uint64_t id) {
+            endpoint.startImage = [this, viewport, lifetime](EditorDebugImageSource source, EditorViewportImageRegion region,
+                                                             std::function<bool()> authorized) {
+                if (lifetime.IsCancellationRequested())
+                    return Result<std::uint64_t>::Failure(MakeError(ImageUnavailable));
+                return StartDebugImage(*viewport, source, region, std::move(authorized));
+            };
+            endpoint.readImage = [viewport, lifetime](std::uint64_t id) {
+                if (lifetime.IsCancellationRequested())
+                    return std::optional<EditorViewportImageSnapshot>{};
                 return viewport->ReadImageCapture(id);
             };
-            endpoint.cancelImage = [viewport](std::uint64_t id) {
-                return viewport->CancelImageCapture(id);
+            endpoint.cancelImage = [viewport, lifetime](std::uint64_t id) {
+                return !lifetime.IsCancellationRequested() && viewport->CancelImageCapture(id);
             };
         }
         m_debugCaptureEndpoint = std::make_shared<const EditorDebugCaptureEndpoint>(std::move(endpoint));
@@ -57,29 +75,29 @@ namespace Horo::Editor {
     }
 
     /** @copydoc EditorWorkspaceController::StartDebugImage */
-    Result<std::uint64_t> EditorWorkspaceController::StartDebugImage(IEditorViewportRenderer &viewport, EditorViewportImageRegion region,
-                                                                     std::function<bool()> authorized) {
-        const auto expected = InspectSceneRevision();
-        const auto active = m_runtimeScene.ActiveScene();
-        if (!expected.HasValue() || !active || !HasCurrentInspectionGeometry(*active))
+    Result<std::uint64_t> EditorWorkspaceController::StartDebugImage(IEditorViewportRenderer &viewport, EditorDebugImageSource expected,
+                                                                     EditorViewportImageRegion region, std::function<bool()> authorized) {
+        if (!region.Fits(expected.width, expected.height))
             return Result<std::uint64_t>::Failure(MakeError(ImageUnavailable));
-        auto valid = [this, lease = std::weak_ptr{m_debugCaptureEndpoint}, scene = expected.Value(), runtime = active->RuntimeId(),
-                      authorized = std::move(authorized)] {
-            return !lease.expired() && authorized && authorized() && IsCurrentDebugImageSource(scene, runtime);
+        auto valid = [this, &viewport, lifetime = m_debugCaptureLifetime.Token(), expected, authorized = std::move(authorized)] {
+            return !lifetime.IsCancellationRequested() && authorized && authorized() && ReadDebugImageSource(viewport) == expected;
         };
         if (!valid())
             return Result<std::uint64_t>::Failure(MakeError(ImageUnavailable));
         return viewport.RequestImageCapture(region, std::move(valid));
     }
 
-    /** @copydoc EditorWorkspaceController::IsCurrentDebugImageSource */
-    bool EditorWorkspaceController::IsCurrentDebugImageSource(InspectionSceneRevision revision, Runtime::SceneRuntimeId runtime) const {
+    /** @copydoc EditorWorkspaceController::ReadDebugImageSource */
+    std::optional<EditorDebugImageSource> EditorWorkspaceController::ReadDebugImageSource(const IEditorViewportRenderer &viewport) const {
         if (m_playSession.State() != EditorPlaySessionState::Idle || m_cameraPreview || m_activeTerrainDocument)
-            return false;
-        const auto current = InspectSceneRevision();
+            return std::nullopt;
+        const auto scene = InspectSceneRevision();
         const auto active = m_runtimeScene.ActiveScene();
-        return current.HasValue() && current.Value() == revision && active && active->RuntimeId() == runtime &&
-               HasCurrentInspectionGeometry(*active);
+        const auto extent = viewport.RequestedExtent();
+        if (!scene.HasValue() || !active || !HasCurrentInspectionGeometry(*active) || !extent.IsValid())
+            return std::nullopt;
+        return EditorDebugImageSource{scene.Value().epoch,     scene.Value().revision, m_viewport.Current().revision.value,
+                                      m_viewportSceneRevision, extent.width,           extent.height};
     }
 
     /** @copydoc EditorWorkspaceController::StartDebugCapture */

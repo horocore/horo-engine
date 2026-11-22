@@ -125,6 +125,18 @@ namespace Horo::Editor {
         std::optional<EditorDebugCaptureArtifact> slot_;
     };
 
+    /** @brief Non-native identity and pixel extent of the authored viewport observed before capture approval. */
+    struct EditorDebugImageSource final {
+        std::uint64_t sceneEpoch{};
+        std::uint64_t sceneRevision{};
+        std::uint64_t viewportRevision{};
+        std::uint64_t projectionRevision{};
+        std::uint32_t width{};
+        std::uint32_t height{};
+
+        [[nodiscard]] constexpr bool operator==(const EditorDebugImageSource &) const noexcept = default;
+    };
+
     /** @brief Workspace owner callbacks for approved debug capture and authenticated observation. */
     struct EditorDebugCaptureEndpoint {
         std::string project;
@@ -133,7 +145,8 @@ namespace Horo::Editor {
         std::function<Result<std::uint64_t>(const EditorDebugCaptureRequest &, std::function<bool()>)> start;
         std::function<std::optional<EditorDebugCaptureArtifact>(std::uint64_t)> read;
         std::function<bool(std::uint64_t)> cancel;
-        std::function<Result<std::uint64_t>(EditorViewportImageRegion, std::function<bool()>)> startImage;
+        std::function<std::optional<EditorDebugImageSource>()> readImageSource;
+        std::function<Result<std::uint64_t>(EditorDebugImageSource, EditorViewportImageRegion, std::function<bool()>)> startImage;
         std::function<std::optional<EditorViewportImageSnapshot>(std::uint64_t)> readImage;
         std::function<bool(std::uint64_t)> cancelImage;
     };
