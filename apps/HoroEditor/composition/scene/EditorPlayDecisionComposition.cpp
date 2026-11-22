@@ -17,6 +17,7 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             std::size_t queryWorkUnitsLimit{AI::AiTaskSchedulerSettings::HardWorkUnits};
             std::optional<AI::QueryResultCacheLimits> queryCacheLimits;
             bool queryInspectionGranted{};
+            std::optional<ProjectLocalPolicySettings> localPolicy;
         };
 
         /** @brief Resolves the selected project's policy before any provider admission. */
@@ -36,7 +37,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                                         settings.AllowsDebug(AiProjectRuntimeKind::Development, AiProjectDebugOperation::LiveMutation),
                                     settings.PerceptionWorkUnitsLimit(), settings.HasAuthoredSchedulerMode(),
                                     settings.QueryWorkUnitsLimit(), settings.QueryCacheLimits(),
-                                    settings.AllowsDebug(AiProjectRuntimeKind::Development, AiProjectDebugOperation::ReplayCapture)});
+                                    settings.AllowsDebug(AiProjectRuntimeKind::Development, AiProjectDebugOperation::ReplayCapture),
+                                    settings.LocalPolicy()});
         }
     }  // namespace
 
@@ -345,9 +347,14 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         auto schema = std::make_shared<const AI::QuerySchemaRegistry>(std::move(registered).Value());
         CookedSceneQueryPlanCatalog queries;
         CookedSceneLocalPolicyCatalog models;
+        const auto &localPolicy = settings.Value().localPolicy;
+        const auto bindings =
+            ConfigureSceneLocalPolicies(policy.decisions->controllers, localPolicy ? &*localPolicy : nullptr, policy.cooked->target);
+        if (bindings.HasError())
+            return Result<void>::Failure(bindings.ErrorValue());
         auto selected = AdmitCookedSceneControllers(policy.aiControllers, cooked.Value(),
-                                                    {*resources_.assets_, environment, policy.decisions->controllers, {}, schema},
-                                                    limits.Value(), cancellation, &queries, &models);
+                                                    {*resources_.assets_, environment, bindings.Value(), {}, schema}, limits.Value(),
+                                                    cancellation, &queries, &models);
         if (selected.HasError())
             return Result<void>::Failure(selected.ErrorValue());
         policy.aiControllers = std::move(selected).Value();
@@ -367,8 +374,10 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             return Result<void>::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid,
                                                    "Editor Decision Play scheduler mode must match the authored Perception watches."));
         AI::AiSceneCookedDecisionExecution execution{*decisionJobs_, configured.scheduler, {}, {}};
-        if (!models.empty())
+        if (!models.empty()) {
             execution.localPolicies = std::make_shared<const CookedSceneLocalPolicyCatalog>(models);
+            execution.agent.workUnitsPerTick = configured.scheduler.workUnitsPerTick;
+        }
         execution.scheduler.mode = mode;
         if (reactive)
             execution.timing = AI::AiCookedDecisionTiming::BestEffortReactive;

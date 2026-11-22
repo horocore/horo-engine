@@ -1,5 +1,6 @@
 #include "CliHostErrorTranslation.h"
 
+#include "Horo/AI/AIErrors.h"
 #include "Horo/Animation/AnimationCookedAssets.h"
 #include "Horo/Animation/AnimationErrors.h"
 #include "Horo/Application/PlatformServicesProjectCook.h"
@@ -391,11 +392,21 @@ namespace Horo::Application::Internal {
                                                      .descriptors = {descriptors.begin(), descriptors.end()}};
             constexpr std::array host{Entry{&PrefabSceneCookErrors::Invalid, Validation}, Entry{&PrefabSceneCookErrors::Stale, Validation},
                                       Entry{&PrefabSceneCookErrors::Cancelled, Cancelled}};
+            constexpr std::array ai{
+                Entry{&AI::AIErrors::CapabilityUnavailable, Capability},
+                Entry{&AI::AIErrors::DecisionAssetActivationInvalid, Validation},
+                Entry{&AI::AIErrors::DecisionAssetSchemaInvalid, Validation},
+                Entry{&AI::AIErrors::DecisionAssetLimitExceeded, Validation},
+                Entry{&AI::AIErrors::DecisionAssetStorageUnavailable, Operation},
+                Entry{&AI::AIErrors::SchedulerPolicyInvalid, Validation},
+                Entry{&AI::AIErrors::SchedulerBudgetExhausted, Validation},
+                Entry{&AI::AIErrors::TaskContextInvalid, Validation},
+            };
             return AddDomain(modules, mappings, "horo.prefab", std::move(prefabDomain), Validation,
                              {{Prefab::PrefabErrors::Cancelled.code.Value(), Cancelled},
                               {Prefab::PrefabErrors::MigrationRequired.code.Value(), Capability},
                               {Prefab::PrefabErrors::DependencyUnavailable.code.Value(), Capability}}) &&
-                   AddEntries(modules, mappings, "horo.host.prefab_cook", host);
+                   AddEntries(modules, mappings, "horo.host.prefab_cook", host) && AddEntries(modules, mappings, "horo.ai", ai);
         }
 
         /** @brief Registers closed producer scopes; every resulting mapping is an exact domain/code pair. */

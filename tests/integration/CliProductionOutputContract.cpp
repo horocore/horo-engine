@@ -1,4 +1,5 @@
 #include "CliOutputContractFixture.h"
+#include "Horo/AI/LocalLearnedPolicy.h"
 #include "Horo/Application/PlatformServicesProjectCook.h"
 #include "Horo/Application/PlatformServicesProjectSources.h"
 #include "Horo/Assets/AssetCookOutput.h"
@@ -657,6 +658,62 @@ namespace {
                 "malformed prefab replaced the previously committed generation");
     }
 
+    void LocalPolicyCookCases(ProcessFixture &process) {
+        using namespace Horo;
+        using namespace Horo::AI;
+        TemporaryDirectory directory;
+        const auto root = std::filesystem::canonical(directory.Path());
+        const auto write = [&](const std::string_view path, const std::string_view data) {
+            PlatformProtocol::Fixture::WriteAt(root, path, data);
+        };
+        constexpr std::string_view modelId = "00000000-0000-0000-0000-000000000042";
+        auto project = Json::parse(PlatformProtocol::Fixture::Initial().projectSource);
+        auto profile = Json::parse(R"({"schemaVersion":1,"localPolicy":{"packageTarget":"headless-null","interpreter":"int16-linear-v1",
+            "interpreterTarget":7,"maximumModelBytes":4096,"maximumWorkUnits":128,"tasks":[20],
+            "controllers":[{"controller":3,"artifact":"00000000-0000-0000-0000-000000000042","featureKeys":[18]}]}})");
+        project["settings"]["ai"] = profile;
+        write(".horo/project.json", project.dump());
+        const auto task = TaskId::Create(20).Value();
+        AiCapabilityDescriptorRegistry declarations;
+        Require(declarations.Register({task}).HasValue(), "local policy task registration failed");
+        const auto tasks = declarations.Freeze();
+        const auto target = LocalPolicyTargetId::Create(7).Value();
+        const std::array targets{target};
+        const std::array features{LocalPolicyFeatureId::Create(1).Value()};
+        const std::array<std::int16_t, 1> weights{1};
+        const std::array rows{LocalPolicyRowSource{task, 0, weights}};
+        const LocalPolicyCookTarget hardware{target, true, 4096, 128};
+        const auto model = LocalLearnedPolicy::Cook({LocalPolicyModelId::Create(1).Value(), 1, targets, features, rows}, hardware, tasks);
+        Require(model.HasValue(), "local policy fixture model failed");
+        const auto encoded = model.Value().EncodeCooked();
+        Require(encoded.HasValue(), "local policy fixture encoding failed");
+        write("Assets/guard.horo_policy", {reinterpret_cast<const char *>(encoded.Value().data()), encoded.Value().size()});
+        write("Assets/guard.horo_policy.horo",
+              Json{{"schemaVersion", 1}, {"assetId", modelId}, {"assetType", LocalPolicyAssetType}}.dump());
+        const std::vector<std::string> command{"prefab",   "cook",          "--project", Utf8Path(root),
+                                               "--target", "headless-null", "--output",  "json"};
+        const auto cooked = Json::parse(process.Run(command, 0));
+        Require(cooked.at("result").at("artifacts") == 1, "prefab CLI did not publish the authored model");
+        const auto cookedRoot = root / ".horo/cooked/prefab/headless-null";
+        NativeDurableFileSystem files;
+        const auto active = Assets::ResolveCurrentCookGeneration(files, cookedRoot);
+        Require(active.HasValue(), "local policy cook did not commit a generation");
+        const auto contents = Assets::ReadCookGenerationContents(files, active.Value(), 1024U * 1024U);
+        Require(contents.HasValue() && contents.Value().artifacts.size() == 1, "local policy model artifact was lost");
+        const auto artifact = Assets::DecodeCookedArtifact(contents.Value().artifacts.front());
+        Require(artifact.HasValue() && artifact.Value().type.Value() == LocalPolicyAssetType &&
+                    artifact.Value().payloadDigest == model.Value().Digest(),
+                "local policy artifact changed its committed type or payload");
+
+        project["settings"]["ai"]["localPolicy"]["packageTarget"] = "other-target";
+        write(".horo/project.json", project.dump());
+        const auto failure = Json::parse(process.Run(command, 4));
+        Require(failure.at("status") == "failed", "prefab CLI accepted a model profile for another target");
+        const auto retained = Assets::ResolveCurrentCookGeneration(files, cookedRoot);
+        Require(retained.HasValue() && retained.Value().manifestDigest == active.Value().manifestDigest,
+                "target rejection replaced the previous generation");
+    }
+
     /** @brief Exercises the shipped read-only planner against the real generated migration chain. */
     void PrefabMigrationPlanCases(ProcessFixture &process) {
         using namespace Horo::Application;
@@ -786,6 +843,7 @@ int main(const int argc, char **argv) {
         JsonLinesCases(process);
         PlatformServicesCases(process);
         PrefabCookCases(process);
+        LocalPolicyCookCases(process);
         PrefabMigrationPlanCases(process);
         RejectedBundleCases(process);
         return 0;

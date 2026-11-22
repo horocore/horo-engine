@@ -91,7 +91,7 @@ add_library(HoroCookedDecisionSceneAdmissionInternal STATIC shared/scene/CookedD
 target_compile_features(HoroCookedDecisionSceneAdmissionInternal PUBLIC cxx_std_20)
 target_include_directories(HoroCookedDecisionSceneAdmissionInternal PUBLIC "${HORO_SCENE_DECISION_HEADERS}")
 target_link_libraries(HoroCookedDecisionSceneAdmissionInternal PUBLIC HoroEngine::AISceneIntegration HoroEngine::PrefabRuntime
-    PRIVATE HoroScenePhysicsHost HoroEngine::SceneRuntimeConversion)
+    PRIVATE HoroScenePhysicsHost HoroEngine::SceneRuntimeConversion HoroEngine::ProjectSettings)
 
 # Project Perception admission and position capture are shared by both application hosts.
 set(HORO_PROJECT_SCENE_PERCEPTION_HEADERS "${CMAKE_CURRENT_BINARY_DIR}/project_scene_perception_headers")

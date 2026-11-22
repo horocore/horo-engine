@@ -83,15 +83,34 @@ namespace Horo::Assets {
                 return static_cast<char>(std::tolower(value));
             });
             using namespace std::string_view_literals;
-            constexpr std::array extensions{".fbx"sv,          ".obj"sv,           ".gltf"sv,
-                                            ".glb"sv,          ".png"sv,           ".jpg"sv,
-                                            ".tga"sv,          ".exr"sv,           ".hdr"sv,
-                                            ".horomat"sv,      ".vert"sv,          ".frag"sv,
-                                            ".comp"sv,         ".hlsl"sv,          ".horoshadergraph"sv,
-                                            ".horo"sv,         ".prefab"sv,        ".horoasset"sv,
-                                            ".uistyle"sv,      ".terrainlayers"sv, ".foliagetype"sv,
-                                            ".horo_bb"sv,      ".horo_bt"sv,       ".horo_sm"sv,
-                                            ".horo_utility"sv, ".horo_eqs"sv,      kUiCanvasSourceExtension};
+            constexpr std::array extensions{".fbx"sv,
+                                            ".obj"sv,
+                                            ".gltf"sv,
+                                            ".glb"sv,
+                                            ".png"sv,
+                                            ".jpg"sv,
+                                            ".tga"sv,
+                                            ".exr"sv,
+                                            ".hdr"sv,
+                                            ".horomat"sv,
+                                            ".vert"sv,
+                                            ".frag"sv,
+                                            ".comp"sv,
+                                            ".hlsl"sv,
+                                            ".horoshadergraph"sv,
+                                            ".horo"sv,
+                                            ".prefab"sv,
+                                            ".horoasset"sv,
+                                            ".uistyle"sv,
+                                            ".terrainlayers"sv,
+                                            ".foliagetype"sv,
+                                            ".horo_bb"sv,
+                                            ".horo_bt"sv,
+                                            ".horo_sm"sv,
+                                            ".horo_utility"sv,
+                                            ".horo_eqs"sv,
+                                            ".horo_policy"sv,
+                                            kUiCanvasSourceExtension};
             return std::ranges::find(extensions, extension) != extensions.end() || extension == ".wav" || extension == ".ogg";
         }
 

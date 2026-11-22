@@ -15,6 +15,10 @@
 #include "MountedWorldHost.h"
 #include "ProjectScenePerception.h"
 
+namespace Horo::Application {
+    struct ProjectLocalPolicySettings;
+}
+
 namespace Horo::Application::Internal {
     enum class HeadlessNavigationMode : std::uint8_t {
         Disabled,
@@ -64,6 +68,7 @@ namespace Horo::Application::Internal {
         std::size_t perceptionWorkUnitsLimit{AI::AiTaskSchedulerSettings::HardWorkUnits};
         std::size_t queryWorkUnitsLimit{AI::AiTaskSchedulerSettings::HardWorkUnits};
         std::optional<AI::QueryResultCacheLimits> queryCacheLimits;
+        std::shared_ptr<const ProjectLocalPolicySettings> localPolicy;
         bool developmentReplayAllowed{true}; /**< Legacy projects retain the explicit development CLI workflow. */
         std::shared_ptr<const Runtime::RuntimeSceneDefinition> definition;
         Assets::AssetId sceneAsset; /**< Exact selected cooked Scene identity, including the full UUID. */

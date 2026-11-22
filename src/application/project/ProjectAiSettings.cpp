@@ -134,6 +134,94 @@ namespace Horo::Application {
             constexpr std::array<std::string_view, 2> keys{"liveMutation", "replayCapture"};
             return HasOnly(*debug, keys) && ReadFlag(*debug, "liveMutation", mutation) && ReadFlag(*debug, "replayCapture", capture);
         }
+
+        template <typename Identity> Identity ReadIdentity(const Json &value) {
+            if (!value.is_number_unsigned())
+                return {};
+            const auto id = Identity::Create(value.get<std::uint64_t>());
+            return id.HasValue() ? id.Value() : Identity{};
+        }
+
+        bool ReadModelTarget(const Json &object, ProjectLocalPolicySettings &policy) {
+            if (!object.contains("packageTarget") || !object["packageTarget"].is_string() || !object.contains("interpreter") ||
+                object["interpreter"] != "int16-linear-v1" || !object.contains("interpreterTarget"))
+                return false;
+            const auto target = AssetCookTargetId::Parse(object["packageTarget"].get_ref<const std::string &>());
+            if (target.HasError())
+                return false;
+            policy.packageTarget = target.Value();
+            policy.target.id = ReadIdentity<AI::LocalPolicyTargetId>(object["interpreterTarget"]);
+            policy.target.supportsInt16LinearV1 = true;
+            return policy.target.id.IsValid() && ReadUnsigned(object, "maximumModelBytes", policy.target.maximumModelBytes) &&
+                   ReadUnsigned(object, "maximumWorkUnits", policy.target.maximumWorkUnits) &&
+                   policy.target.maximumModelBytes >= sizeof(AI::LocalLearnedPolicy) &&
+                   policy.target.maximumModelBytes <= 4U * 1024U * 1024U && policy.target.maximumWorkUnits > 0 &&
+                   policy.target.maximumWorkUnits <= Scheduler::HardWorkUnits;
+        }
+
+        bool ReadModelTasks(const Json &object, ProjectLocalPolicySettings &policy) {
+            if (const auto schema = object.find("blackboardSchema"); schema != object.end()) {
+                const auto id = ReadIdentity<AI::BlackboardSchemaId>(*schema);
+                if (!id.IsValid())
+                    return false;
+                policy.blackboard = id;
+            }
+            const auto tasks = object.find("tasks");
+            if (tasks == object.end() || !tasks->is_array() || tasks->empty() || tasks->size() > AI::MaximumAiCapabilityTasks)
+                return false;
+            AI::AiCapabilityDescriptorRegistry registry;
+            for (const auto &entry : *tasks) {
+                if (registry.Register({ReadIdentity<AI::TaskId>(entry), policy.blackboard}).HasError())
+                    return false;
+            }
+            policy.tasks = registry.Freeze();
+            return policy.tasks.Tasks().size() == tasks->size();
+        }
+
+        bool ReadModelController(const Json &object, ProjectLocalPolicyController &binding) {
+            constexpr std::array<std::string_view, 3> keys{"controller", "artifact", "featureKeys"};
+            if (!HasOnly(object, keys) || object.size() != keys.size() || !object["artifact"].is_string())
+                return false;
+            binding.controller = ReadIdentity<AI::ControllerTypeId>(object["controller"]);
+            const auto artifact = Assets::AssetId::Parse(object["artifact"].get_ref<const std::string &>());
+            const auto &features = object["featureKeys"];
+            if (!binding.controller.IsValid() || artifact.HasError() || !artifact.Value().IsValid() || !features.is_array() ||
+                features.empty() || features.size() > AI::LocalLearnedPolicy::MaximumFeatures)
+                return false;
+            binding.artifact = artifact.Value();
+            for (const auto &entry : features) {
+                const auto key = ReadIdentity<AI::BlackboardKeyId>(entry);
+                if (!key.IsValid())
+                    return false;
+                binding.featureKeys.push_back(key);
+            }
+            return true;
+        }
+
+        bool ReadLocalPolicy(const Json &root, std::optional<ProjectLocalPolicySettings> &output) {
+            const auto object = root.find("localPolicy");
+            if (object == root.end())
+                return true;
+            constexpr std::array<std::string_view, 8>
+                keys{"packageTarget",    "interpreter", "interpreterTarget", "maximumModelBytes", "maximumWorkUnits",
+                     "blackboardSchema", "tasks",       "controllers"};
+            if (!HasOnly(*object, keys))
+                return false;
+            auto &policy = output.emplace();
+            const auto controllers = object->find("controllers");
+            if (controllers == object->end() || !controllers->is_array() || controllers->empty() ||
+                controllers->size() > AI::MaximumAiCapabilityTasks || !ReadModelTarget(*object, policy) || !ReadModelTasks(*object, policy))
+                return false;
+            for (const auto &entry : *controllers) {
+                ProjectLocalPolicyController binding;
+                if (!ReadModelController(entry, binding) ||
+                    std::ranges::find(policy.controllers, binding.controller, &ProjectLocalPolicyController::controller) !=
+                        policy.controllers.end())
+                    return false;
+                policy.controllers.push_back(std::move(binding));
+            }
+            return true;
+        }
     }  // namespace
 
     /** @copydoc ProjectAiSettings::AllowsDebug */
@@ -155,7 +243,7 @@ namespace Horo::Application {
         if (!source.aiSettingsSource)
             return Settings::Success(std::nullopt);
         const auto root = Json::parse(*source.aiSettingsSource, nullptr, false);
-        constexpr std::array<std::string_view, 5> keys{"schemaVersion", "scheduler", "perception", "query", "development"};
+        constexpr std::array<std::string_view, 6> keys{"schemaVersion", "scheduler", "perception", "query", "development", "localPolicy"};
         std::uint32_t version{};
         if (!HasOnly(root, keys) || !ReadUnsigned(root, "schemaVersion", version) || version != 1)
             return Settings::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project AI settings schema."));
@@ -175,8 +263,11 @@ namespace Horo::Application {
         bool mutation{}, capture{};
         if (!ReadDevelopment(root, mutation, capture))
             return Settings::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project AI development permissions."));
+        std::optional<ProjectLocalPolicySettings> localPolicy;
+        if (!ReadLocalPolicy(root, localPolicy))
+            return Settings::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid, "Invalid project AI local policy."));
         const bool authoredMode = policy != root.end() && policy->contains("mode");
-        return Settings::Success(
-            ProjectAiSettings{std::move(scheduler), perceptionLimit, queryLimit, queryCache, mutation, capture, authoredMode});
+        return Settings::Success(ProjectAiSettings{std::move(scheduler), perceptionLimit, queryLimit, queryCache, mutation, capture,
+                                                   authoredMode, std::move(localPolicy)});
     }
 }  // namespace Horo::Application

@@ -5,6 +5,7 @@
 #include "Horo/AI/DecisionPlanCodec.h"
 #include "Horo/AI/LocalLearnedPolicy.h"
 #include "Horo/Assets/AssetId.h"
+#include "Horo/Foundation/AssetCookTargetId.h"
 #include "Horo/Prefab/PrefabLimits.h"
 
 #include <map>
@@ -16,6 +17,10 @@ namespace Horo::AI {
 
 namespace Horo::Runtime {
     class RuntimeSceneDefinition;
+}
+
+namespace Horo::Application {
+    struct ProjectLocalPolicySettings;
 }
 
 namespace Horo::Application::Internal {
@@ -47,6 +52,10 @@ namespace Horo::Application::Internal {
         std::optional<Assets::AssetId> prefab;
         std::shared_ptr<const CookedSceneLocalPolicySelection> localPolicy;
     };
+
+    /** @brief Applies authored model selections only to the host's explicitly selected Scene controllers. */
+    [[nodiscard]] Result<std::vector<CookedDecisionSceneBinding>> ConfigureSceneLocalPolicies(
+        std::span<const CookedDecisionSceneBinding> bindings, const ProjectLocalPolicySettings *policy, const AssetCookTargetId &target);
 
     /** @brief Borrowed verified asset generation and exact inert provider contract used for synchronous admission. */
     struct CookedDecisionSceneAdmissionInput final {

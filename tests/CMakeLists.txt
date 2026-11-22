@@ -7398,7 +7398,7 @@ add_executable(HoroCliProductionOutputContract integration/CliProductionOutputCo
 target_compile_features(HoroCliProductionOutputContract PRIVATE cxx_std_20)
 target_link_libraries(HoroCliProductionOutputContract PRIVATE HoroEngine::Platform nlohmann_json::nlohmann_json miniz)
 target_link_libraries(HoroCliProductionOutputContract PRIVATE HoroEngine::PlatformServicesAuthoring)
-target_link_libraries(HoroCliProductionOutputContract PRIVATE HoroEngine::ProjectMutationGuard HoroEngine::PrefabCookHost HoroEngine::SceneSource)
+target_link_libraries(HoroCliProductionOutputContract PRIVATE HoroEngine::ProjectMutationGuard HoroEngine::PrefabCookHost HoroEngine::SceneSource HoroEngine::AI)
 add_dependencies(HoroCliProductionOutputContract horo-engine)
 add_test(NAME HoroCliProductionOutputContract COMMAND HoroCliProductionOutputContract "$<TARGET_FILE:horo-engine>")
 set_tests_properties(HoroCliProductionOutputContract PROPERTIES LABELS "cli;integration;headless;sonar-coverage;ci-windows" TIMEOUT 120)

@@ -116,6 +116,59 @@ namespace {
         CHECK_FALSE(resolved.Value()->QueryCacheLimits());
     }
 
+    TEST_CASE("Project AI admits only typed local-policy targets and controller bindings", "[unit][application][source-profile][ai]") {
+        auto document = RegisteredSource();
+        auto &ai = document["settings"]["ai"];
+        ai = Json::parse(R"({"schemaVersion":1,"localPolicy":{"packageTarget":"headless-null","interpreter":"int16-linear-v1",
+            "interpreterTarget":7,"maximumModelBytes":4096,"maximumWorkUnits":128,"blackboardSchema":11,"tasks":[20,21],
+            "controllers":[{"controller":3,"artifact":"00000000-0000-0000-0000-000000000042","featureKeys":[18,12]}]}})");
+        const auto resolve = [&] {
+            const auto source = DecodeProjectSourceDocument(document.dump());
+            REQUIRE(source.HasValue());
+            return ResolveProjectAiSettings(source.Value());
+        };
+        const auto captured = resolve();
+        REQUIRE(captured.HasValue());
+        REQUIRE(captured.Value());
+        REQUIRE(captured.Value()->LocalPolicy());
+        const auto &policy = *captured.Value()->LocalPolicy();
+        CHECK(policy.packageTarget.Value() == "headless-null");
+        CHECK(policy.target.id.Value() == 7);
+        CHECK(policy.target.maximumWorkUnits == 128);
+        REQUIRE(policy.blackboard);
+        CHECK(policy.blackboard->Value() == 11);
+        REQUIRE(policy.tasks.Tasks().size() == 2);
+        REQUIRE(policy.controllers.size() == 1);
+        CHECK(policy.controllers.front().controller.Value() == 3);
+        REQUIRE(policy.controllers.front().featureKeys.size() == 2);
+        CHECK(policy.controllers.front().featureKeys[0].Value() == 18);
+        CHECK(policy.controllers.front().featureKeys[1].Value() == 12);
+
+        auto &local = ai["localPolicy"];
+        SECTION("unknown interpreter") {
+            local["interpreter"] = "unsupported";
+        }
+        SECTION("missing memory budget") {
+            local.erase("maximumModelBytes");
+        }
+        SECTION("zero typed key") {
+            local["controllers"][0]["featureKeys"] = Json::array({0});
+        }
+        SECTION("duplicate controller") {
+            auto duplicate = local["controllers"].front();
+            local["controllers"].push_back(std::move(duplicate));
+        }
+        SECTION("duplicate task") {
+            local["tasks"].push_back(20);
+        }
+        SECTION("invalid package target") {
+            local["packageTarget"] = "../other";
+        }
+        const auto rejected = resolve();
+        REQUIRE(rejected.HasError());
+        CHECK(rejected.ErrorValue().code.Value() == AI::AIErrors::SchedulerPolicyInvalid.code.Value());
+    }
+
     TEST_CASE("Project AI rejects invalid canonical settings before activation", "[unit][application][source-profile][ai]") {
         const std::array invalid{
             R"({"schemaVersion":2})",

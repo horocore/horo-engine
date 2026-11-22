@@ -324,6 +324,8 @@ namespace Horo::Application::Internal {
                 return Execution::Failure(MakeError(AI::AIErrors::SchedulerPolicyInvalid,
                                                     "Headless AI scheduler mode must match the authored Perception watches."));
             AI::AiSceneCookedDecisionExecution execution{resources.jobs, resources.decisionScheduler, {}};
+            if (resources.localPolicy)
+                execution.agent.workUnitsPerTick = resources.decisionScheduler.workUnitsPerTick;
             if (reactive) {
                 execution.scheduler.mode = AI::AiSchedulingMode::BestEffort;
                 execution.timing = AI::AiCookedDecisionTiming::BestEffortReactive;
@@ -349,9 +351,15 @@ namespace Horo::Application::Internal {
             auto querySchema = AI::CaptureBuiltinQuerySchema();
             if (querySchema.HasError())
                 return Result<void>::Failure(querySchema.ErrorValue());
+            const auto target = AssetCookTargetId::Parse(launch.sceneInput.cookTarget);
+            if (target.HasError())
+                return Result<void>::Failure(target.ErrorValue());
+            auto bindings = ConfigureSceneLocalPolicies(launch.cookedDecisionBindings, resources.localPolicy.get(), target.Value());
+            if (bindings.HasError())
+                return Result<void>::Failure(bindings.ErrorValue());
             input.cookedDecisions = std::make_shared<const HeadlessCookedDecisionInput>(
                 HeadlessCookedDecisionInput{.committed = *resources.committed,
-                                            .bindings = launch.cookedDecisionBindings,
+                                            .bindings = std::move(bindings).Value(),
                                             .execution = std::move(execution).Value(),
                                             .provider = HeadlessDecisionProvider::SelectedNativeGameplay,
                                             .querySchema = std::make_shared<const AI::QuerySchemaRegistry>(std::move(querySchema).Value()),

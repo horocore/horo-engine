@@ -4,6 +4,7 @@
 #include "Horo/AI/AIErrors.h"
 #include "Horo/AI/AISceneActivation.h"
 #include "Horo/AI/EnvironmentQuerySourceCodec.h"
+#include "Horo/Application/ProjectAiSettings.h"
 #include "Horo/Foundation/JobSystem.h"
 #include "Horo/Prefab/CookedPrefab.h"
 #include "Horo/Prefab/PrefabErrors.h"
@@ -412,6 +413,30 @@ namespace Horo::Application::Internal {
             return Result<Catalog>::Success(std::move(admitted));
         }
     }  // namespace
+
+    Result<std::vector<CookedDecisionSceneBinding>> ConfigureSceneLocalPolicies(const std::span<const CookedDecisionSceneBinding> bindings,
+                                                                                const ProjectLocalPolicySettings *policy,
+                                                                                const AssetCookTargetId &target) {
+        using Configured = Result<std::vector<CookedDecisionSceneBinding>>;
+        try {
+            std::vector<CookedDecisionSceneBinding> result{bindings.begin(), bindings.end()};
+            if (!policy)
+                return Configured::Success(std::move(result));
+            for (auto &binding : result) {
+                const auto selected = std::ranges::find(policy->controllers, binding.controller, &ProjectLocalPolicyController::controller);
+                if (selected == policy->controllers.end())
+                    continue;
+                if (target != policy->packageTarget || binding.localPolicy)
+                    return Configured::Failure(MakeError(AI::AIErrors::DecisionAssetActivationInvalid));
+                binding.localPolicy = std::make_shared<const CookedSceneLocalPolicySelection>(
+                    CookedSceneLocalPolicySelection{selected->artifact, policy->target, policy->tasks, policy->blackboard,
+                                                    selected->featureKeys});
+            }
+            return Configured::Success(std::move(result));
+        } catch (const std::bad_alloc &) {
+            return Configured::Failure(MakeError(AI::AIErrors::AgentCapacityExceeded));
+        }
+    }
 
     /** @copydoc AdmitCookedSceneControllers */
     Result<Catalog> AdmitCookedSceneControllers(const std::span<const AI::AiControllerDescriptor> catalog,

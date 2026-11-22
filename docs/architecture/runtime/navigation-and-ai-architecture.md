@@ -2672,6 +2672,39 @@ leave selection with Utility scoring. The scheduler admits the combined bound
 for feature reads, inference, Utility scoring and the selected task before
 executing the slice.
 
+Projects opt in using `settings.ai.localPolicy` in `.horo/project.json`.
+The profile declares the cook package target, the `int16-linear-v1`
+interpreter, the model's interpreter target ID, the model memory and work
+limits, and the task IDs the model may propose. An optional
+`blackboardSchema` binds the models and tasks to a specific schema. Each
+controller entry names its registered model asset UUID and the signed-integer
+Blackboard keys in tensor order. The following profile targets a headless cook.
+
+```json
+{
+  "packageTarget": "headless-null",
+  "interpreter": "int16-linear-v1",
+  "interpreterTarget": 7,
+  "maximumModelBytes": 4096,
+  "maximumWorkUnits": 128,
+  "blackboardSchema": 11,
+  "tasks": [20, 21],
+  "controllers": [
+    {
+      "controller": 3,
+      "artifact": "00000000-0000-0000-0000-000000000042",
+      "featureKeys": [18, 12]
+    }
+  ]
+}
+```
+
+`prefab cook` verifies registered `.horo_policy` files with
+`core.local_learned_policy` sidecars against that profile.
+Headless and Editor Play apply its bindings to the controllers explicitly
+selected for the committed Scene. The Scene scheduler must allow the full
+combined per-tick work.
+
 ### Runtime Task & Lifecycle Alignment
 
 Implementation status on 2 October 2026: `HoroEngine::AI` provides the

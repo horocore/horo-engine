@@ -3,6 +3,7 @@
 #include "HeadlessMeshCooker.h"
 #include "Horo/Application/DecisionAssetCookHost.h"
 #include "Horo/Application/PrefabSceneCookHost.h"
+#include "Horo/Application/ProjectAiSettings.h"
 #include "Horo/Application/ProjectAssetRegistrySource.h"
 #include "Horo/Editor/ProjectMutation.h"
 #include "Horo/Platform/NativeProjectIoOwners.h"
@@ -56,6 +57,31 @@ namespace Horo::Application::Internal {
             return Result<void>::Success();
         }
 
+        Result<void> RegisterLocalPolicy(Assets::CookerCatalog &catalog, const NativePrefabCookInvocation &invocation,
+                                         const std::optional<ProjectAiSettings> &ai, const Assets::AssetRegistrySnapshot &registry) {
+            const auto *authored = ai && ai->LocalPolicy() ? &*ai->LocalPolicy() : nullptr;
+            if (!authored && !invocation.localPolicy)
+                return Result<void>::Success();
+            if (authored && invocation.localPolicy)
+                return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Invalid));
+            if (authored) {
+                for (const auto &binding : authored->controllers) {
+                    const auto *record = registry.Find(binding.artifact);
+                    if (!record || record->type.Value() != AI::LocalPolicyAssetType)
+                        return Result<void>::Failure(MakeError(AI::AIErrors::DecisionAssetActivationInvalid));
+                }
+            }
+            const auto admission =
+                authored ? LocalPolicyAssetCookAdmission{authored->packageTarget, authored->target, authored->tasks, authored->blackboard}
+                         : *invocation.localPolicy;
+            if (admission.packageTarget != invocation.target)
+                return Result<void>::Failure(MakeError(AI::AIErrors::CapabilityUnavailable));
+            auto contribution = MakeLocalPolicyAssetCooker(admission);
+            if (contribution.HasError())
+                return Result<void>::Failure(std::move(contribution).ErrorValue());
+            return catalog.Register(std::move(contribution).Value());
+        }
+
     }  // namespace
 
     /** @copydoc CookNativePrefabProject */
@@ -77,6 +103,12 @@ namespace Horo::Application::Internal {
             (admitted.status != ProjectCompatibilityStatus::Current &&
              admitted.status != ProjectCompatibilityStatus::CompatibleReleaseLine))
             return CookResult::Failure(admitted.diagnostic.value_or(MakeError(PrefabSceneCookErrors::Invalid)));
+        const auto source = LoadProjectSourceDocument(invocation.project);
+        if (source.HasError())
+            return CookResult::Failure(source.ErrorValue());
+        const auto ai = ResolveProjectAiSettings(source.Value());
+        if (ai.HasError())
+            return CookResult::Failure(ai.ErrorValue());
 
         const auto cache = (fs::path{".horo/cache/prefab"} / invocation.target.Value()).generic_string();
         const auto publication = (fs::path{".horo/cooked/prefab"} / invocation.target.Value()).generic_string();
@@ -99,15 +131,9 @@ namespace Horo::Application::Internal {
         Assets::CookerCatalog catalog;
         if (auto registered = Assets::RegisterHeadlessMeshCooker(catalog); registered.HasError())
             return CookResult::Failure(std::move(registered).ErrorValue());
-        if (invocation.localPolicy) {
-            if (invocation.localPolicy->packageTarget != invocation.target)
-                return CookResult::Failure(MakeError(AI::AIErrors::CapabilityUnavailable));
-            auto contribution = MakeLocalPolicyAssetCooker(*invocation.localPolicy);
-            if (contribution.HasError())
-                return CookResult::Failure(std::move(contribution).ErrorValue());
-            if (auto registered = catalog.Register(std::move(contribution).Value()); registered.HasError())
-                return CookResult::Failure(std::move(registered).ErrorValue());
-        }
+        const auto expected = registry.Snapshot();
+        if (auto registered = RegisterLocalPolicy(catalog, invocation, ai.Value(), expected); registered.HasError())
+            return CookResult::Failure(std::move(registered).ErrorValue());
         auto published = catalog.Publish();
         if (published.HasError())
             return CookResult::Failure(std::move(published).ErrorValue());
@@ -118,7 +144,6 @@ namespace Horo::Application::Internal {
         Editor::ProjectMutationCoordinator mutations{projectMutations};
         const Editor::ProjectMigrationTransactionService migrations{projectMutations, clock, mutations, jobs};
         PrefabSceneCookHost host{jobs, std::move(published).Value(), registry, compatibility, mutations, migrations};
-        const auto expected = registry.Snapshot();
         const PrefabSceneCookRequest request{.assets = {.sourceRoot = invocation.project,
                                                         .cacheFiles = io.Value().cache,
                                                         .cookedRoot = invocation.project / publication,
@@ -129,7 +154,12 @@ namespace Horo::Application::Internal {
                                                         .publicationFiles = io.Value().publication,
                                                         .newPublicationOperationId = NewOperation,
                                                         .validateHostInputs =
-                                                            [&registrySource, &expected] {
+                                                            [&registrySource, &expected, &invocation, &source] {
+            const auto current = LoadProjectSourceDocument(invocation.project);
+            if (current.HasError())
+                return Result<void>::Failure(current.ErrorValue());
+            if (current.Value().aiSettingsSource != source.Value().aiSettingsSource)
+                return Result<void>::Failure(MakeError(PrefabSceneCookErrors::Stale));
             return CheckInventory(*registrySource.Value(), expected);
         },
                                                         .progress = invocation.progress},

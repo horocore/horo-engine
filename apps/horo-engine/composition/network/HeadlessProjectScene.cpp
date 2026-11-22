@@ -122,10 +122,14 @@ namespace Horo::Application::Internal {
                 return Result<void>::Failure(target.ErrorValue());
             SceneAssetRetention retain;
             if (launch.simulationAssets) {
-                retain = [&](const CommittedSceneAssets &committed) {
+                auto selected = *launch.simulationAssets;
+                if (resources.localPolicy && resources.localPolicy->packageTarget == target.Value())
+                    for (const auto &binding : resources.localPolicy->controllers)
+                        selected.decisions.push_back(binding.artifact);
+                retain = [&, selected = std::move(selected)](const CommittedSceneAssets &committed) {
                     if (auto definition = CaptureProductDefinition(launch, resources, &committed); definition.HasError())
                         return Result<std::vector<Assets::AssetId>>::Failure(definition.ErrorValue());
-                    return SelectHeadlessSimulationAssets(committed, *resources.definition, resources.sceneAsset, *launch.simulationAssets,
+                    return SelectHeadlessSimulationAssets(committed, *resources.definition, resources.sceneAsset, selected,
                                                           resources.prefabPolicy, resources.load.cancellation);
                 };
             }
@@ -191,6 +195,8 @@ namespace Horo::Application::Internal {
                 resources.perceptionWorkUnitsLimit = policy->PerceptionWorkUnitsLimit();
                 resources.queryWorkUnitsLimit = policy->QueryWorkUnitsLimit();
                 resources.queryCacheLimits = policy->QueryCacheLimits();
+                if (policy->LocalPolicy())
+                    resources.localPolicy = std::make_shared<const ProjectLocalPolicySettings>(*policy->LocalPolicy());
                 resources.developmentReplayAllowed =
                     policy->AllowsDebug(AiProjectRuntimeKind::Development, AiProjectDebugOperation::ReplayCapture);
             }

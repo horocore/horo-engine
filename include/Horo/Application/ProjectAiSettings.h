@@ -5,7 +5,10 @@
  */
 #include "Horo/AI/AITaskScheduler.h"
 #include "Horo/AI/EnvironmentQuerySchema.h"
+#include "Horo/AI/LocalLearnedPolicy.h"
 #include "Horo/Application/ProjectSourceDocument.h"
+#include "Horo/Assets/AssetId.h"
+#include "Horo/Foundation/AssetCookTargetId.h"
 
 namespace Horo::Application {
     /** @brief Execution profile supplied by the application composition owner. */
@@ -18,6 +21,21 @@ namespace Horo::Application {
     enum class AiProjectDebugOperation : std::uint8_t {
         LiveMutation,
         ReplayCapture
+    };
+
+    struct ProjectLocalPolicyController final {
+        AI::ControllerTypeId controller;
+        Assets::AssetId artifact;
+        std::vector<AI::BlackboardKeyId> featureKeys;
+    };
+
+    /** @brief One explicitly authored Int16LinearV1 package target and its local model bindings. */
+    struct ProjectLocalPolicySettings final {
+        AssetCookTargetId packageTarget;
+        AI::LocalPolicyCookTarget target;
+        AI::AiCapabilityDescriptorSet tasks;
+        std::optional<AI::BlackboardSchemaId> blackboard;
+        std::vector<ProjectLocalPolicyController> controllers;
     };
 
     /** @brief Validated authoritative project settings with no renderer or local visualization inputs. */
@@ -48,6 +66,10 @@ namespace Horo::Application {
             return queryCacheLimits_;
         }
 
+        [[nodiscard]] const std::optional<ProjectLocalPolicySettings> &LocalPolicy() const noexcept {
+            return localPolicy_;
+        }
+
         /** @brief Checks the authored operation permission for a host-selected execution profile.
          * @param profile Exact execution profile supplied by the host.
          * @param operation Explicit operation requested by the application.
@@ -60,10 +82,10 @@ namespace Horo::Application {
 
         ProjectAiSettings(AI::AiTaskSchedulerSettings scheduler, std::size_t perceptionWorkUnitsLimit, std::size_t queryWorkUnitsLimit,
                           std::optional<AI::QueryResultCacheLimits> queryCacheLimits, bool mutation, bool capture,
-                          bool authoredSchedulerMode)
+                          bool authoredSchedulerMode, std::optional<ProjectLocalPolicySettings> localPolicy)
             : scheduler_(std::move(scheduler)), perceptionWorkUnitsLimit_(perceptionWorkUnitsLimit),
               queryWorkUnitsLimit_(queryWorkUnitsLimit), queryCacheLimits_(queryCacheLimits), mutation_(mutation), capture_(capture),
-              authoredSchedulerMode_(authoredSchedulerMode) {}
+              authoredSchedulerMode_(authoredSchedulerMode), localPolicy_(std::move(localPolicy)) {}
 
         AI::AiTaskSchedulerSettings scheduler_;
         std::size_t perceptionWorkUnitsLimit_;
@@ -72,6 +94,7 @@ namespace Horo::Application {
         bool mutation_{};
         bool capture_{};
         bool authoredSchedulerMode_{};
+        std::optional<ProjectLocalPolicySettings> localPolicy_;
     };
 
     /** @brief Resolves versioned settings.ai from the canonical project source without creating a Scene.
