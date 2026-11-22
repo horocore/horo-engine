@@ -275,6 +275,33 @@ namespace Horo::Security::Tests {
         };
     }  // namespace
 
+    TEST_CASE("Durable credential enrollment avoids existing references and redacts backend errors", "[Security][Credential]") {
+        auto backend = std::make_shared<MemoryCredentialBackend>();
+        auto entropy = std::make_shared<DeterministicRandom>();
+        PersistentCredentialStore store{backend, entropy};
+        const auto first = store.Enroll(Secret("first value"));
+        REQUIRE(first.HasValue());
+        entropy->next = 1U;
+        const auto second = store.Enroll(Secret("second value"));
+        REQUIRE(second.HasValue());
+        CHECK(second.Value() != first.Value());
+        CHECK(SecretText(store.Resolve(first.Value(), 1).Value()) == "first value");
+        CHECK(SecretText(store.Resolve(second.Value(), 1).Value()) == "second value");
+
+        backend->resolutionError = MakeError(SecurityErrors::CredentialBackendUnavailable, "backend private detail");
+        const auto failed = store.Enroll(Secret("third value"));
+        REQUIRE(failed.HasError());
+        CHECK(failed.ErrorValue().message.find("backend private detail") == std::string::npos);
+        CHECK(backend->values.size() == 2);
+        const auto unresolved = store.Resolve(first.Value(), 2);
+        REQUIRE(unresolved.HasError());
+        CHECK(unresolved.ErrorValue().message.find("backend private detail") == std::string::npos);
+        backend->resolutionError.reset();
+        REQUIRE(store.Revoke(first.Value()).HasValue());
+        CHECK(store.Resolve(first.Value(), 3).HasError());
+        CHECK(SecretText(store.Resolve(second.Value(), 3).Value()) == "second value");
+    }
+
     TEST_CASE("Configuration credentials resolve only through the operation provider", "[Security][Configuration]") {
         const Horo::Tests::OwnedTestDirectory directory{"configuration-credential-redaction"};
 

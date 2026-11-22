@@ -297,6 +297,12 @@ rejects storage when the logon session disallows machine-local persistence.
 Platforms without a native backend expose an unavailable result at host
 composition.
 
+The session vault revokes its owned entries on teardown and applies monotonic
+session expiry. A host that asks the user to retain a credential enrolls it
+through the persistent store instead. The host saves only the returned opaque
+reference after successful enrollment. The store resolves that same reference
+after restart and revokes it by removing the exact native entry.
+
 ## Network Access
 
 Network clients declare destination policy, protocol, timeout, size limits, and

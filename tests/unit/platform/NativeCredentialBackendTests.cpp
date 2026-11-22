@@ -1,3 +1,4 @@
+#include "Horo/Platform/ExternalProcess.h"
 #include "Horo/Platform/NativeCredentialBackend.h"
 #include "Horo/Platform/SecureRandom.h"
 #include "Horo/Security/SecurityErrors.h"
@@ -5,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <catch2/catch_test_macros.hpp>
+#include <optional>
 
 TEST_CASE("Native credential backend preserves and removes only the exact reference", "[platform][credentials]") {
     using namespace Horo;
@@ -48,3 +50,56 @@ TEST_CASE("Native credential backend preserves and removes only the exact refere
     CHECK_FALSE(backend);
 #endif
 }
+
+#if defined(_WIN32)
+TEST_CASE("Persistent credential reference can be reopened in a fresh process", "[platform][credentials]") {
+    using namespace Horo;
+    const auto backend = Platform::CreateNativeCredentialBackend();
+    REQUIRE(backend);
+    if (!backend->Available())
+        SKIP("This Windows logon does not permit machine-local user credentials.");
+
+    struct Cleanup {
+        const std::shared_ptr<Security::CredentialBackend> backend;
+        std::optional<CredentialReference> reference;
+
+        ~Cleanup() {
+            if (reference)
+                static_cast<void>(backend->Remove(*reference));
+        }
+    } cleanup{backend};
+
+    constexpr std::array secret{std::byte{9}, std::byte{0}, std::byte{4}};
+    {
+        Security::PersistentCredentialStore store{backend, Platform::CreateNativeSecureRandomSource()};
+        auto enrolled = store.Enroll(Security::SecureBytes{secret});
+        REQUIRE(enrolled.HasValue());
+        cleanup.reference.emplace(std::move(enrolled).Value());
+    }
+    const auto restored = CredentialReference::Parse(std::string{cleanup.reference->Value()});
+    REQUIRE(restored.HasValue());
+    Security::PersistentCredentialStore reopened{Platform::CreateNativeCredentialBackend(), {}};
+    const auto bytes = reopened.Resolve(restored.Value(), 0);
+    REQUIRE(bytes.HasValue());
+    CHECK(std::ranges::equal(bytes.Value().View(), secret));
+
+    NativeExternalProcessRunner runner;
+    const ExternalProcessRequest probe{.executable = HORO_PROCESS_TEST_CHILD,
+                                       .arguments = {"verify-credential-fixture", std::string{restored.Value().Value()}},
+                                       .timeout = std::chrono::seconds{5}};
+    const auto openedByChild = runner.Run(probe, {});
+    REQUIRE(openedByChild.HasValue());
+    CHECK(openedByChild.Value().reason == ProcessTerminationReason::Exited);
+    CHECK(openedByChild.Value().exitCode == 0);
+
+    REQUIRE(reopened.Revoke(restored.Value()).HasValue());
+    CHECK(reopened.Revoke(restored.Value()).HasValue());
+    const auto revoked = reopened.Resolve(restored.Value(), 0);
+    REQUIRE(revoked.HasError());
+    CHECK(revoked.ErrorValue().code.Value() == SecurityErrors::CredentialNotFound.code.Value());
+    const auto rejectedByChild = runner.Run(probe, {});
+    REQUIRE(rejectedByChild.HasValue());
+    CHECK(rejectedByChild.Value().reason == ProcessTerminationReason::Exited);
+    CHECK(rejectedByChild.Value().exitCode == 4);
+}
+#endif

@@ -105,6 +105,46 @@ namespace Horo::Security {
         std::unordered_map<std::string, Record> records_;
     };
 
+    /** @brief Host-owned enrollment and lookup for credentials that survive a process restart.
+     * @details The platform backend is the source of truth for retained values. The host persists
+     * only returned references and supplies platform backends known to persist locally. Hosts
+     * serialize access when their injected backend or entropy provider requires it.
+     */
+    class PersistentCredentialStore final : public CredentialProvider {
+    public:
+        /** @brief Compose a durable store without reading or changing existing credentials.
+         * @param backend Platform-secure persistent backend, or null if unavailable.
+         * @param random Secure operating-system entropy used for new references.
+         */
+        PersistentCredentialStore(std::shared_ptr<CredentialBackend> backend, std::shared_ptr<SecureRandomSource> random);
+
+        /** @brief Reports whether the host can currently access the durable backend. @return Backend availability. */
+        [[nodiscard]] bool Available() const noexcept;
+
+        /** @brief Enroll a new credential without overwriting an existing reference.
+         * @param secret Move-only credential material.
+         * @return Opaque reference to persist only after enrollment succeeds, or a sanitized failure.
+         */
+        [[nodiscard]] Result<CredentialReference> Enroll(SecureBytes secret);
+
+        /** @brief Resolve only the exact enrolled reference from the backend.
+         * @param reference Persisted identity selected by the host.
+         * @param nowMillis Monotonic observation time. Durable credentials do not use session expiry.
+         * @return Move-only credential material or a sanitized failure.
+         */
+        [[nodiscard]] Result<SecureBytes> Resolve(const CredentialReference &reference, std::uint64_t nowMillis) override;
+
+        /** @brief Remove exactly the enrolled identity. Already absent entries count as revoked.
+         * @param reference The identity to revoke.
+         * @return Success or a sanitized backend failure.
+         */
+        [[nodiscard]] Result<void> Revoke(const CredentialReference &reference);
+
+    private:
+        std::shared_ptr<CredentialBackend> backend_;
+        std::shared_ptr<SecureRandomSource> random_;
+    };
+
     /**
      * @brief Resolves a snapshot reference through an explicitly composed provider inside a consuming operation.
      * @param snapshot Immutable configuration captured by the operation.

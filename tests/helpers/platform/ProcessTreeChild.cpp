@@ -1,5 +1,7 @@
 #include "Horo/Foundation/Platform.h"
+#include "Horo/Platform/NativeCredentialBackend.h"
 
+#include <algorithm>
 #include <array>
 #include <chrono>
 #include <csignal>
@@ -109,6 +111,17 @@ int main(const int argc, char **argv) {
     if (argc < 2)
         return 2;
     const std::string mode{argv[1]};
+#if defined(_WIN32)
+    if (mode == "verify-credential-fixture" && argc == 3) {
+        constexpr std::array fixture{std::byte{9}, std::byte{0}, std::byte{4}};
+        const auto reference = Horo::CredentialReference::Parse(argv[2]);
+        if (reference.HasError())
+            return 4;
+        Horo::Security::PersistentCredentialStore store{Horo::Platform::CreateNativeCredentialBackend(), {}};
+        const auto secret = store.Resolve(reference.Value(), 0);
+        return secret.HasValue() && std::ranges::equal(secret.Value().View(), fixture) ? 0 : 4;
+    }
+#endif
     if (mode == "exit-failure")
         return 17;
     if (mode == "adopt-probe-lease" && argc == 3) {
