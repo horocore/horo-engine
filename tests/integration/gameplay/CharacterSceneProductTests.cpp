@@ -547,8 +547,6 @@ namespace Horo::Application::CharacterSceneProductTest {
         REQUIRE(schema.HasValue());
         const auto blackboardSchema = std::make_shared<const BlackboardSchema>(std::move(schema).Value());
 
-        auto registry = CaptureBuiltinQuerySchema();
-        REQUIRE(registry.HasValue());
         auto generator = CreateBuiltinLatticeQuery(MakeIdentity<QueryId>(1), MakeIdentity<QueryStageId>(1),
                                                    MakeIdentity<QueryResultSchemaId>(1), "Tactical path",
                                                    {.stepMillimeters = scoreCost ? 500u : 4'000u,
@@ -586,52 +584,6 @@ namespace Horo::Application::CharacterSceneProductTest {
         if (visibility && scenario != Scenario::VisibilityFirst)
             query = AddBuiltinPointVisibilityTest(query.Value(), MakeIdentity<QueryStageId>(7), character->channel.Bytes());
         REQUIRE(query.HasValue());
-        std::shared_ptr<const GameplayQueryTestRegistry> gameplayTests;
-        if (gameplayTest) {
-            const auto allowed = std::make_shared<const Math::WorldCoordinate64>(Math::WorldCoordinate64::FromMillimeters(1500, 0, 500));
-            const auto cutoff = MakeIdentity<QueryPropertyId>(93);
-            const QueryTestDescriptor descriptor{.id = MakeIdentity<QueryTestId>(90),
-                                                 .origin = {QueryDescriptorSourceKind::Native, MakeIdentity<QueryProviderId>(91), 1},
-                                                 .inputItemType = query.Value().ResultSchema().itemType,
-                                                 .inputItemVersion = {1, 1},
-                                                 .properties = {{cutoff, QueryPropertyKind::Unsigned64, true}}};
-            registry = CaptureBuiltinQuerySchema({}, std::span{&descriptor, 1});
-            REQUIRE(registry.HasValue());
-            const GameplayQueryPointBinding binding{.test = descriptor.id,
-                                                    .origin = descriptor.origin,
-                                                    .requiredFilter = true,
-                                                    .workUnits = 1,
-                                                    .state = allowed.get(),
-                                                    .evaluate = [](const void *state, const GameplayQueryPointInput &input,
-                                                                   AiWorkBudget &budget) noexcept {
-                if (!budget.Consume(1) || input.properties.size() != 1)
-                    return QueryTestSample{.stage = input.stage, .availability = QueryTestAvailability::Failed};
-                const auto limit = std::get_if<std::uint64_t>(&input.properties.front().value);
-                const auto point = input.point.Millimeters();
-                const auto allowed = static_cast<const Math::WorldCoordinate64 *>(state)->Millimeters();
-                return QueryTestSample{.stage = input.stage,
-                                       .filter = limit && point[0] == allowed[0] && point[2] >= 0 &&
-                                                 static_cast<std::uint64_t>(point[2]) <= *limit};
-            }};
-            auto captured = GameplayQueryTestRegistry::Capture(registry.Value(), std::span{&binding, 1}, allowed);
-            REQUIRE(captured.HasValue());
-            gameplayTests = std::make_shared<const GameplayQueryTestRegistry>(std::move(captured).Value());
-            QueryAssetSource source{.id = query.Value().Id(),
-                                    .displayName = query.Value().DisplayName(),
-                                    .result = query.Value().ResultSchema(),
-                                    .stages = {query.Value().Stages().begin(), query.Value().Stages().end()}};
-            source.stages.push_back({.id = MakeIdentity<QueryStageId>(92),
-                                     .kind = QueryStageKind::Test,
-                                     .executionOrder = 20,
-                                     .test = descriptor.id,
-                                     .descriptorVersion = {1, 1},
-                                     .properties = {{cutoff, std::uint64_t{500}}}});
-            query = EnvironmentQueryAsset::Capture(source);
-            REQUIRE(query.HasValue());
-        }
-        auto queryBytes = EnvironmentQueryCookedCodec::Encode(query.Value(), registry.Value());
-        REQUIRE(queryBytes.HasValue());
-
         Internal::GameplayWorldSelection gameplay;
         gameplay.moduleId = "game.ai.tests";
         gameplay.nativeArtifact = HORO_TEST_AI_MODULE_PATH;
@@ -643,6 +595,30 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                                              gameplay.descriptorRevision});
         REQUIRE(image.HasValue());
         auto cookImage = std::move(image).Value();
+
+        auto capturedTests = cookImage->AcquireGameplayQueryTests();
+        REQUIRE(capturedTests.HasValue());
+        auto nativeTests = std::move(capturedTests).Value();
+        REQUIRE(nativeTests.schema);
+        REQUIRE(nativeTests.tests);
+        REQUIRE(nativeTests.tests->IsCurrent());
+        CHECK_FALSE(nativeTests.tests->CanEvaluate());
+        if (gameplayTest) {
+            QueryAssetSource source{.id = query.Value().Id(),
+                                    .displayName = query.Value().DisplayName(),
+                                    .result = query.Value().ResultSchema(),
+                                    .stages = {query.Value().Stages().begin(), query.Value().Stages().end()}};
+            source.stages.push_back({.id = MakeIdentity<QueryStageId>(92),
+                                     .kind = QueryStageKind::Test,
+                                     .executionOrder = 20,
+                                     .test = MakeIdentity<QueryTestId>(90),
+                                     .descriptorVersion = {1, 1},
+                                     .properties = {{MakeIdentity<QueryPropertyId>(93), std::uint64_t{500}}}});
+            query = EnvironmentQueryAsset::Capture(source);
+            REQUIRE(query.HasValue());
+        }
+        auto queryBytes = EnvironmentQueryCookedCodec::Encode(query.Value(), *nativeTests.schema);
+        REQUIRE(queryBytes.HasValue());
 
         auto task = DecisionFixture::TreeNode(2, DecisionControlKind::Task);
         task.type = MakeIdentity<BehaviorTreeNodeTypeId>(102);
@@ -664,6 +640,8 @@ namespace Horo::Application::CharacterSceneProductTest {
         REQUIRE(compiled.Value().plan);
         auto graphBytes = DecisionPlanCodec::EncodeCooked(*compiled.Value().plan);
         cookImage.reset();
+        CHECK_FALSE(nativeTests.tests->IsCurrent());
+        nativeTests.tests.reset();
         if (graphBytes.HasError())
             UNSCOPED_INFO(graphBytes.ErrorValue().code.Value() << ": " << graphBytes.ErrorValue().message);
         REQUIRE(graphBytes.HasValue());
@@ -717,10 +695,7 @@ namespace Horo::Application::CharacterSceneProductTest {
                                                       .execution = AiSceneCookedDecisionExecution{project.jobs,
                                                                                                   {.mode = AiSchedulingMode::BestEffort},
                                                                                                   {}},
-                                                      .provider = Internal::HeadlessDecisionProvider::SelectedNativeGameplay,
-                                                      .querySchema =
-                                                          std::make_shared<const QuerySchemaRegistry>(std::move(registry).Value()),
-                                                      .gameplayQueryTests = gameplayTests});
+                                                      .provider = Internal::HeadlessDecisionProvider::SelectedNativeGameplay});
         });
         if (started.HasError())
             UNSCOPED_INFO(started.ErrorValue().code.Value() << ": " << started.ErrorValue().message);

@@ -27,6 +27,48 @@ namespace Horo::Gameplay {
     }  // namespace
 
     namespace {
+        struct NativeQueryDeclarations final {
+            std::shared_ptr<const AI::QuerySchemaRegistry> schema;
+            std::vector<AI::GameplayQueryPointBinding> bindings;
+        };
+
+        [[nodiscard]] Result<NativeQueryDeclarations> ReadNativeQueryTests(const Platform::DynamicLibrary &library,
+                                                                           const std::filesystem::path &path) {
+            using Output = Result<NativeQueryDeclarations>;
+            const auto symbol = library.GetSymbol(AI::GetNativeGameplayQueryTestsSymbol);
+            if (!symbol)
+                return Output::Success({});
+            if (!library.OwnsSymbolAtPath(symbol, path))
+                return Output::Failure(MakeError(GameplayErrors::InvalidGeneratedDescriptorBundle));
+            const auto getTests = Resolve<AI::GetNativeGameplayQueryTests>(library, AI::GetNativeGameplayQueryTestsSymbol);
+            std::size_t count{};
+            const auto *tests = getTests(count);
+            if (!tests || count == 0 || count > AI::EnvironmentQuerySchemaLimits::Tests)
+                return Output::Failure(MakeError(GameplayErrors::InvalidGeneratedDescriptorBundle));
+
+            std::vector<AI::QueryTestDescriptor> descriptors;
+            std::vector<AI::GameplayQueryPointBinding> bindings;
+            descriptors.reserve(count);
+            bindings.reserve(count);
+            for (const auto &test : std::span{tests, count}) {
+                if (test.descriptor.id != test.binding.test || test.descriptor.origin.kind != AI::QueryDescriptorSourceKind::Native ||
+                    test.descriptor.properties.size() > AI::EnvironmentQuerySchemaLimits::DescriptorProperties ||
+                    test.descriptor.contexts.size() > AI::EnvironmentQuerySchemaLimits::DescriptorContexts ||
+                    (test.descriptor.contextChoice &&
+                     test.descriptor.contextChoice->options.size() > AI::EnvironmentQuerySchemaLimits::DescriptorContexts))
+                    return Output::Failure(MakeError(GameplayErrors::InvalidGeneratedDescriptorBundle));
+                descriptors.push_back(test.descriptor);
+                bindings.push_back(test.binding);
+            }
+            auto schema = AI::CaptureBuiltinQuerySchema({}, descriptors);
+            if (schema.HasError())
+                return Output::Failure(schema.ErrorValue());
+            auto owned = std::make_shared<const AI::QuerySchemaRegistry>(std::move(schema).Value());
+            if (const auto validation = AI::GameplayQueryTestRegistry::Capture(*owned, bindings, owned); validation.HasError())
+                return Output::Failure(validation.ErrorValue());
+            return Output::Success({std::move(owned), std::move(bindings)});
+        }
+
         struct ValidatedModuleExports {
             const GameModuleDescriptor *descriptor{};
             const GeneratedGameplayDescriptorBundle *bundle{};
@@ -135,6 +177,8 @@ namespace Horo::Gameplay {
             return Result<void>::Failure(image.ErrorValue());
         if (auto validated = ReadValidatedExports(*image.Value(), expectation); validated.HasError())
             return Result<void>::Failure(validated.ErrorValue());
+        if (auto tests = ReadNativeQueryTests(*image.Value(), libraryPath); tests.HasError())
+            return Result<void>::Failure(tests.ErrorValue());
         return Result<void>::Success();
     }
 
@@ -202,6 +246,11 @@ namespace Horo::Gameplay {
         const auto exports = ReadValidatedExports(*impl->codeImage->library, expectation);
         if (exports.HasError())
             return Output::Failure(exports.ErrorValue());
+        auto tests = ReadNativeQueryTests(*impl->codeImage->library, libraryPath);
+        if (tests.HasError())
+            return Output::Failure(tests.ErrorValue());
+        impl->querySchema = std::move(tests.Value().schema);
+        impl->queryBindings = std::move(tests.Value().bindings);
         const auto &validated = exports.Value();
         impl->moduleId = validated.descriptor->moduleId;
         impl->buildFingerprint = validated.descriptor->buildFingerprint;

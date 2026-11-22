@@ -539,7 +539,7 @@ namespace Horo::AI {
                 const auto *point = std::get_if<Math::WorldCoordinate64>(&item);
                 if (stage != stage_ || !point)
                     return OwnerFailure<QueryTestSample>(AIErrors::EnvironmentQuerySchemaInvalid);
-                if (!IsCurrent(inputs))
+                if (!IsCurrent(inputs) || !registry_->CanEvaluate())
                     return OwnerFailure<QueryTestSample>(AIErrors::EnvironmentQueryContextStale);
                 return Result<QueryTestSample>::Success(
                     binding_->evaluate(binding_->state, {*inputs.contexts, stage, *point, properties_}, budget));
@@ -1181,10 +1181,15 @@ namespace Horo::AI {
         return GenerateQueryLattice(contexts, lattice->center, *lattice, output);
     }
 
+    QueryItemTypeId BuiltinQueryPointItemType() noexcept {
+        return QueryItemTypeId::Create(PointItem).Value();
+    }
+
     Result<GameplayQueryTestRegistry> GameplayQueryTestRegistry::Capture(const QuerySchemaRegistry &schema,
                                                                          const std::span<const GameplayQueryPointBinding> bindings,
                                                                          std::shared_ptr<const void> generation,
-                                                                         CancellationToken retirement) {
+                                                                         CancellationToken retirement,
+                                                                         NativeGameplayQueryAdmission native) {
         using Registry = Result<GameplayQueryTestRegistry>;
         if (bindings.size() > EnvironmentQuerySchemaLimits::Tests)
             return Registry::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
@@ -1193,6 +1198,7 @@ namespace Horo::AI {
         GameplayQueryTestRegistry captured;
         captured.generation_ = std::move(generation);
         captured.retirement_ = std::move(retirement);
+        captured.native_ = std::move(native);
         captured.bindings_.reserve(bindings.size());
         for (const auto &binding : bindings) {
             const auto *descriptor = schema.Find(binding.test);
@@ -1211,12 +1217,21 @@ namespace Horo::AI {
     }
 
     bool GameplayQueryTestRegistry::IsCurrent() const noexcept {
-        return generation_ && !retirement_.IsCancellationRequested();
+        return generation_ && !retirement_.IsCancellationRequested() &&
+               (!native_.current || native_.current->load(std::memory_order_acquire));
+    }
+
+    bool GameplayQueryTestRegistry::CanEvaluate() const noexcept {
+        return IsCurrent() && (!native_.active || native_.active->load(std::memory_order_acquire));
     }
 
     const GameplayQueryPointBinding *GameplayQueryTestRegistry::Find(const QueryTestId test) const noexcept {
         const auto found = std::ranges::lower_bound(bindings_, test, {}, &GameplayQueryPointBinding::test);
         return found != bindings_.end() && found->test == test ? &*found : nullptr;
+    }
+
+    bool GameplayQueryTestRegistry::Contains(const QueryTestId test) const noexcept {
+        return Find(test) != nullptr;
     }
 
     bool GameplayQueryTestRegistry::UsesTests(const EnvironmentQueryPlan &plan) const noexcept {

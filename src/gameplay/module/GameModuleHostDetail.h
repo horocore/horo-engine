@@ -1,5 +1,6 @@
 #pragma once
 #include "../runtime/GameplayPersistenceBindingInternal.h"
+#include "Horo/AI/EnvironmentQueryGameplay.h"
 #include "Horo/Gameplay/BehaviorRegistry.h"
 #include "Horo/Gameplay/ComponentRegistry.h"
 #include "Horo/Gameplay/GameAssetTypeRegistry.h"
@@ -116,6 +117,8 @@ namespace Horo::Gameplay {
         mutable std::weak_ptr<const AI::DecisionNodeGeneration> decisionGeneration; /**< Owner-thread exact capture cache. */
         std::atomic_bool decisionFactoryAdmission{};                                /**< Opens only after successful module activation. */
         std::vector<AI::PerceptionSenseRegistration> perceptionSenses;
+        std::shared_ptr<const AI::QuerySchemaRegistry> querySchema;
+        std::vector<AI::GameplayQueryPointBinding> queryBindings;
         std::filesystem::path loadedArtifactPath;
         std::atomic_bool runtimeLeaseAdmission{true};
         std::thread::id ownerThread{std::this_thread::get_id()};

@@ -244,7 +244,7 @@ namespace Horo::Application::Internal {
         }
         if (gameplayTests_) {
             for (const auto &stage : plan.Stages().subspan(1)) {
-                if (!gameplayTests_->Find(stage.test))
+                if (!gameplayTests_->Contains(stage.test))
                     continue;
                 auto gameplay =
                     AI::PrepareGameplayPointTest(plan, stage.id, *registry_, scope_->scene, inputs, settings, gameplayTests_, generator);

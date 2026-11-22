@@ -18,6 +18,28 @@ namespace Horo::Gameplay {
         return AI::PerceptionSenseGeneration::Capture(impl_->perceptionSenses, std::move(admission));
     }
 
+    /** @copydoc LoadedGameModule::AcquireGameplayQueryTests */
+    Result<GameplayQueryTests> LoadedGameModule::AcquireGameplayQueryTests() const {
+        using Output = Result<GameplayQueryTests>;
+        if (std::this_thread::get_id() != impl_->ownerThread || !impl_->runtimeLeaseAdmission.load(std::memory_order_acquire))
+            return Output::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+        if (!impl_->querySchema)
+            return Output::Success({});
+        AI::NativeGameplayQueryAdmission admission{.current = {impl_, &impl_->runtimeLeaseAdmission},
+                                                   .active = {impl_, &impl_->decisionFactoryAdmission}};
+        auto captured = AI::GameplayQueryTestRegistry::Capture(*impl_->querySchema, impl_->queryBindings, impl_, {}, std::move(admission));
+        if (captured.HasError())
+            return Output::Failure(captured.ErrorValue());
+        return Output::Success({impl_->querySchema, std::make_shared<const AI::GameplayQueryTestRegistry>(std::move(captured).Value())});
+    }
+
+    /** @copydoc PreparedGameModuleImage::AcquireGameplayQueryTests */
+    Result<GameplayQueryTests> PreparedGameModuleImage::AcquireGameplayQueryTests() const {
+        if (!owner_)
+            return Result<GameplayQueryTests>::Failure(MakeError(AI::AIErrors::RuntimeUnavailable));
+        return owner_->AcquireGameplayQueryTests();
+    }
+
     /** @copydoc LoadedGameModule::AcquireDecisionNodes */
     Result<std::shared_ptr<const AI::DecisionNodeGeneration>> LoadedGameModule::AcquireDecisionNodes() const {
         using Generation = Result<std::shared_ptr<const AI::DecisionNodeGeneration>>;

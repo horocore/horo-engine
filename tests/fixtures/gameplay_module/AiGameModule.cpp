@@ -1,8 +1,10 @@
+#include "Horo/AI/EnvironmentQueryGameplay.h"
 #include "Horo/Gameplay/GameplayAiContext.h"
 #include "Horo/Gameplay/NativeBehavior.h"
 #include "Horo/Gameplay/NativeDecisionNode.h"
 #include "Horo/Gameplay/NativePerceptionSense.h"
 
+#include <array>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -222,6 +224,39 @@ namespace {
     };
 }  // namespace
 HORO_AI_SENSE(FixturePerceptionSense, "102")
+
+namespace {
+    Horo::AI::QueryTestSample FilterTacticalPoint(const void *, const Horo::AI::GameplayQueryPointInput &input,
+                                                  Horo::AI::AiWorkBudget &budget) noexcept {
+        using namespace Horo::AI;
+        if (!budget.Consume(1) || input.properties.size() != 1)
+            return {.stage = input.stage, .availability = QueryTestAvailability::Failed};
+        const auto limit = std::get_if<std::uint64_t>(&input.properties.front().value);
+        const auto point = input.point.Millimeters();
+        return {.stage = input.stage,
+                .filter = limit && point[0] == 1500 && point[2] >= 0 && static_cast<std::uint64_t>(point[2]) <= *limit};
+    }
+}  // namespace
+
+/** @brief Supplies the native cooked tactical fixture's point filter and authored property contract. */
+extern "C" HORO_GAME_EXPORT const Horo::AI::NativeGameplayQueryTestRegistration *GetHoroGameplayQueryTestsV1(std::size_t &count) noexcept {
+    using namespace Horo::AI;
+    static const auto identity = QueryTestId::Create(90).Value();
+    static const QueryDescriptorOrigin origin{QueryDescriptorSourceKind::Native, QueryProviderId::Create(91).Value(), 1};
+    static const std::array tests{NativeGameplayQueryTestRegistration{.descriptor = {.id = identity,
+                                                                                     .origin = origin,
+                                                                                     .inputItemType = BuiltinQueryPointItemType(),
+                                                                                     .inputItemVersion = {1, 1},
+                                                                                     .properties = {{QueryPropertyId::Create(93).Value(),
+                                                                                                     QueryPropertyKind::Unsigned64, true}}},
+                                                                      .binding = {.test = identity,
+                                                                                  .origin = origin,
+                                                                                  .requiredFilter = true,
+                                                                                  .workUnits = 1,
+                                                                                  .evaluate = FilterTacticalPoint}}};
+    count = tests.size();
+    return tests.data();
+}
 
 /** @brief Installs caller-owned test counters before descriptor capture or native provider invocation. */
 extern "C" HORO_GAME_EXPORT void HoroTestObservePerceptionSenseLifecycle(std::uint32_t *counters, const bool failMetadata) noexcept {

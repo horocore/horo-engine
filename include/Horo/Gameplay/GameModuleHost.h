@@ -19,7 +19,18 @@
 #include <utility>
 #include <vector>
 
+namespace Horo::AI {
+    class GameplayQueryTestRegistry;
+    class QuerySchemaRegistry;
+}  // namespace Horo::AI
+
 namespace Horo::Gameplay {
+    /** @brief Schema metadata and revocable test bindings captured from the same native image. */
+    struct GameplayQueryTests final {
+        std::shared_ptr<const AI::QuerySchemaRegistry> schema;
+        std::shared_ptr<const AI::GameplayQueryTestRegistry> tests;
+    };
+
     class BehaviorRegistry;
     class ComponentRegistry;
     class GameAssetTypeRegistry;
@@ -100,6 +111,8 @@ namespace Horo::Gameplay {
          * @details Final release belongs to the module owner thread. Retained leases prevent native finalization and reload.
          */
         [[nodiscard]] Result<std::shared_ptr<const AI::PerceptionSenseGeneration>> AcquirePerceptionSenses() const;
+        /** @brief Captures native EQS declarations on the owner thread. An image without an export yields an empty capture. */
+        [[nodiscard]] Result<GameplayQueryTests> AcquireGameplayQueryTests() const;
         /** @brief Returns the artifact path actually loaded by the platform library loader. */
         [[nodiscard]] const std::filesystem::path &LoadedArtifactPath() const noexcept;
         /** @brief Returns the verified bytes of the recorded native artifact, when explicitly captured. */
@@ -220,6 +233,8 @@ namespace Horo::Gameplay {
          * @return Owned contract metadata or typed unavailable/storage failure. This supplies no callable provider authority.
          */
         [[nodiscard]] Result<std::vector<AI::PerceptionSenseContract>> DescribePerceptionSenses() const;
+        /** @brief Exposes inert native EQS declarations to the cook and activation paths. Callbacks open only after activation. */
+        [[nodiscard]] Result<GameplayQueryTests> AcquireGameplayQueryTests() const;
 
     private:
         friend class GameModuleHost;

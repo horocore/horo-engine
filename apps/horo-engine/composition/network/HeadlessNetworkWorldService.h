@@ -332,6 +332,8 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
         void RetireAi() const noexcept {
             if (record_ && record_->ai)
                 record_->ai->BeginShutdown();
+            if (record_)
+                record_->decisionQueries.reset();
         }
 
         void RetireGameplay() noexcept {
@@ -508,17 +510,17 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             std::span<const AI::AiControllerDescriptor> catalog = input.aiControllers;
             if (input.cookedDecisions) {
                 HeadlessQueryPlanCatalog queries;
-                auto prepared = PrepareCookedControllers(catalog, *input.cookedDecisions, queries);
+                auto selection = *input.cookedDecisions;
+                auto prepared = PrepareCookedControllers(catalog, selection, queries);
                 if (prepared.HasError())
                     return Result<void>::Failure(prepared.ErrorValue());
                 record_->admittedControllers = std::move(prepared).Value();
                 catalog = record_->admittedControllers;
                 if (OwnsCookedDecisionExecution() && !queries.empty()) {
-                    auto driver =
-                        SceneDecisionQueries::Create(std::move(queries), input.cookedDecisions->querySchema,
-                                                     ConfiguredDecisionExecution().scheduler, input.cookedDecisions->queryWorkUnitsLimit,
-                                                     input.decisionReplay ? std::nullopt : input.cookedDecisions->queryCacheLimits,
-                                                     input.cookedDecisions->gameplayQueryTests);
+                    auto driver = SceneDecisionQueries::Create(std::move(queries), selection.querySchema,
+                                                               ConfiguredDecisionExecution().scheduler, selection.queryWorkUnitsLimit,
+                                                               input.decisionReplay ? std::nullopt : selection.queryCacheLimits,
+                                                               selection.gameplayQueryTests);
                     if (driver.HasError())
                         return Result<void>::Failure(driver.ErrorValue());
                     record_->decisionQueries = std::move(driver).Value();
@@ -638,7 +640,7 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
 
         /** @brief Captures exact native provider metadata before any platform scope or game callback is exposed. */
         Result<std::vector<AI::AiControllerDescriptor>> PrepareCookedControllers(std::span<const AI::AiControllerDescriptor> catalog,
-                                                                                 const HeadlessCookedDecisionInput &selection,
+                                                                                 HeadlessCookedDecisionInput &selection,
                                                                                  HeadlessQueryPlanCatalog &queries) const {
             auto limits = Prefab::PrefabLimitProfile::Create(owners_->configured->prefabPolicy);
             if (limits.HasError())
@@ -658,9 +660,20 @@ namespace Horo::Application::Internal::HeadlessNetworkDetail {
             auto nodes = record_->preparedGameplay->AcquireDecisionNodes();
             if (nodes.HasError())
                 return Result<std::vector<AI::AiControllerDescriptor>>::Failure(nodes.ErrorValue());
-            auto configured = selection;
-            configured.environment.nodes = std::move(nodes).Value();
-            return AdmitHeadlessCookedControllers(catalog, *owners_->definition, configured, limits.Value(), record_->sceneCancellation,
+            selection.environment.nodes = std::move(nodes).Value();
+            auto tests = record_->preparedGameplay->AcquireGameplayQueryTests();
+            if (tests.HasError())
+                return Result<std::vector<AI::AiControllerDescriptor>>::Failure(tests.ErrorValue());
+            auto captured = std::move(tests).Value();
+            if (captured.schema) {
+                if (selection.gameplayQueryTests)
+                    return Result<std::vector<AI::AiControllerDescriptor>>::Failure(
+                        MakeError(AI::AIErrors::EnvironmentQueryIdentityConflict,
+                                  "Select either captured EQS tests or native image tests."));
+                selection.querySchema = std::move(captured.schema);
+                selection.gameplayQueryTests = std::move(captured.tests);
+            }
+            return AdmitHeadlessCookedControllers(catalog, *owners_->definition, selection, limits.Value(), record_->sceneCancellation,
                                                   &queries, &record_->localPolicies);
         }
 
