@@ -18,6 +18,12 @@ verifiable source in `packages.json` or `packages.lock`.
 Bootstrap, CI, CLI, MCP, and editor project-open flows use the same
 `PackageRestore` operation.
 
+Update staging uses the same restore verification with an explicit lock and
+project root. The completed operation yields an immutable record of the verified
+graph, the admitted root, and the digest of the exact candidate lock bytes.
+Staging leaves the active graph alone. The update transaction consumes the
+record after rechecking current project authority and approval.
+
 ## Restore Use Case
 
 `project restore` is separate from package install. Restore reconstructs the
