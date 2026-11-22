@@ -1243,6 +1243,14 @@ class AndroidLogClock:
 
 
 @dataclass(frozen=True)
+class AndroidDiagnosticWindow:
+    """Keep the clock fence and the minimum accepted diagnostic timestamp distinct."""
+
+    start: AndroidLogClock
+    evidence_after: int
+
+
+@dataclass(frozen=True)
 class DeployedProcess:
     pid: int
     uid: int
@@ -1399,11 +1407,11 @@ def read_deployed_process_log(device: AdmittedAdbDevice, process: DeployedProces
     return raw, end.nanoseconds
 
 
-def deploy_diagnostics(device: AdmittedAdbDevice, application: str, process: DeployedProcess, start: AndroidLogClock,
+def deploy_diagnostics(device: AdmittedAdbDevice, application: str, process: DeployedProcess, window: AndroidDiagnosticWindow,
                        categories: tuple[str, ...]) -> dict:
     """Collect bounded markers from the exact process captured by this launch."""
-    raw, through = read_deployed_process_log(device, process, start)
-    facts = package_log_evidence(raw, process, start.nanoseconds, through, categories)
+    raw, through = read_deployed_process_log(device, process, window.start)
+    facts = package_log_evidence(raw, process, window.evidence_after, through, categories)
     if facts["crashObserved"] and device.process_id(application) is None:
         return facts
     if deployed_process(device, application, process.uid) != process:
@@ -1412,7 +1420,7 @@ def deploy_diagnostics(device: AdmittedAdbDevice, application: str, process: Dep
 
 
 def await_deploy_diagnostics(device: AdmittedAdbDevice, application: str, process: DeployedProcess,
-                             start: AndroidLogClock, profile: dict) -> tuple[dict, bool]:
+                             window: AndroidDiagnosticWindow, profile: dict) -> tuple[dict, bool]:
     """Wait for actual evidence from the selected profile on the verified ADB transport and process."""
     openxr = "openxrProfile" in profile
     if openxr:
@@ -1424,7 +1432,7 @@ def await_deploy_diagnostics(device: AdmittedAdbDevice, application: str, proces
     categories = (*required, *PLATFORM_STATE_LINES) if profile["renderer"] == "vulkan-android" else required
     facts = {"crashObserved": False}
     while time.monotonic() < device.deadline:
-        observed = deploy_diagnostics(device, application, process, start, categories)
+        observed = deploy_diagnostics(device, application, process, window, categories)
         for category in PLATFORM_STATE_LINES:
             if (state := observed.get(category)) and state["revision"] <= facts.get(category, {}).get("revision", 0):
                 observed.pop(category)
@@ -1461,7 +1469,7 @@ class AndroidPackageLaunch:
     recovery: AndroidLaunchRecovery | None = None
     retired_crash: bool = False
 
-    def start(self) -> tuple[DeployedProcess, AndroidLogClock]:
+    def start(self) -> tuple[DeployedProcess, AndroidDiagnosticWindow]:
         uid = deployed_uid(self.device, self.application, self.user)
         if self.device.process_id(self.application) is not None:
             raise AndroidDeployError("application_already_running")
@@ -1485,16 +1493,18 @@ class AndroidPackageLaunch:
                 self.recovery = None
             raise AndroidDeployError("launch_unconfirmed")
         try:
-            self.process = self.recover_process(self.device, uid)
+            self.process, receipt_time = self.recover_process(self.device, uid)
         except AndroidDeployError as error:
             if (self.capture_retired_openxr and states == ["COLD"] and error.code == "application_process_unavailable"
                     and self.device.process_id(self.application) is None and self.confirm_retired_crash()):
                 self.retired_crash = True
                 raise AndroidDeployError("application_crashed") from None
             raise
-        return self.process, start
+        # OpenXR probes only after Activity resume; their facts must follow the first-Activity receipt.
+        evidence_after = receipt_time if self.capture_retired_openxr else start.nanoseconds
+        return self.process, AndroidDiagnosticWindow(start, evidence_after)
 
-    def recover_process(self, device: AdmittedAdbDevice, uid: int) -> DeployedProcess:
+    def recover_process(self, device: AdmittedAdbDevice, uid: int) -> tuple[DeployedProcess, int]:
         """Prove that this operation started a first Activity in the live package process."""
         recovery = self.recovery
         if recovery is None or recovery.uid != uid:
@@ -1502,13 +1512,14 @@ class AndroidPackageLaunch:
         process = deployed_process(device, self.application, uid)
         log, through = read_deployed_process_log(device, process, recovery.started)
         marker = f"{DEPLOY_LAUNCH_MARKER}{recovery.nonce} startTicks={process.start_ticks}"
-        matches = sum(priority == "I" and tag == "HoroPackageQualification" and message == marker
-                      for _, priority, tag, message in process_log_entries(log, process, recovery.started.nanoseconds, through))
-        if matches != 1:
+        timestamps = [logged for logged, priority, tag, message
+                      in process_log_entries(log, process, recovery.started.nanoseconds, through)
+                      if priority == "I" and tag == "HoroPackageQualification" and message == marker]
+        if len(timestamps) != 1:
             raise AndroidDeployError("launch_process_unattributed")
         if deployed_process(device, self.application, uid) != process:
             raise AndroidDeployError("application_process_changed")
-        return process
+        return process, timestamps[0]
 
     def confirm_retired_crash(self) -> bool:
         """Read exact app receipts for a cold OpenXR Activity that exited before PID admission."""
@@ -1719,9 +1730,9 @@ def android_deploy_main(argv=None) -> int:
             deploy_verified_install(device, application, user, artifact.apk_sha256)
             report["stage"] = "launch"
             launch = AndroidPackageLaunch(device, application, user, artifact.apk_sha256, capture_retired_openxr=openxr)
-            process, launch_time = launch.start()
+            process, window = launch.start()
             report["stage"] = "diagnostics"
-            observed, applicable = await_deploy_diagnostics(device, application, process, launch_time, profile)
+            observed, applicable = await_deploy_diagnostics(device, application, process, window, profile)
             report["observed"] = observed
             if observed["crashObserved"]:
                 raise AndroidDeployError("application_crashed")

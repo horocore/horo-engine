@@ -42,6 +42,7 @@ LOGCAT = ("logcat", "--pid=123", "-v", "time,epoch,nsec,uid", "-t", "200", "-s",
           "HoroPackageQualification:I", "AndroidRuntime:E")
 QUALIFICATION_LOGCAT = ("logcat", "-v", "time,epoch,nsec,uid", "-t", "200", "-s", "HoroPackageQualification:I")
 START = "1795000000.100000000"
+LAUNCH_TIME = "1795000000.104000000"
 LOG_TIME = "1795000000.105000000"
 END = "1795000000.110000000"
 
@@ -114,7 +115,7 @@ class AndroidDeployTests(unittest.TestCase):
                 return 1, ""
             if args == LOGCAT and awaiting_receipt:
                 awaiting_receipt = False
-                return 0, log_line(LAUNCH_MARKER) if launch_receipt is None else launch_receipt
+                return 0, log_line(LAUNCH_MARKER, stamp=LAUNCH_TIME) if launch_receipt is None else launch_receipt
             response = replies[args]
             if isinstance(response, list):
                 response = response.pop(0)
@@ -309,6 +310,19 @@ class AndroidDeployTests(unittest.TestCase):
         self.assertEqual(report["artifact"]["expectedApkSha256"], expected)
         self.assertEqual(report["artifact"]["apkSha256"], DIGEST)
         self.assertEqual(commands, [])
+
+    def test_openxr_requires_diagnostics_strictly_after_the_attributed_launch_receipt(self):
+        stale = OPENXR.replace("runtimePatch=63", "runtimePatch=62")
+        invalid_window = log_line(stale, stamp="1795000000.103000000") + log_line(stale, stamp=LAUNCH_TIME)
+        status, report, commands = self.execute(
+            {LOGCAT: [invalid_window, invalid_window + log_line(OPENXR)]}, OPENXR_OPTIONS, project.OPENXR_DEVELOPMENT_PROFILE)
+        self.assertEqual((status, report["status"]), (0, "diagnostic_complete"))
+        self.assertEqual(commands.count(LOGCAT), 3)
+        self.assertEqual(report["observed"]["openxr"]["runtimeVersion"], {"major": 1, "minor": 1, "patch": 63})
+        self.assertEqual(report["cleanup"], {"status": "stopped"})
+        exported = json.dumps(report)
+        for private in (LAUNCH_TIME, LAUNCH_NONCE, "startTicks"):
+            self.assertNotIn(private, exported)
 
     def test_openxr_checks_numeric_runtime_version_and_retires_a_mismatch(self):
         name = project.OPENXR_DEVELOPMENT_PROFILE
