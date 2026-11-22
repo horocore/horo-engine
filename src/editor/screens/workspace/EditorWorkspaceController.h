@@ -677,6 +677,9 @@ namespace Horo::Editor {
         [[nodiscard]] Result<void> SynchronizeRuntimeScenePreview(std::optional<EditorViewportCrossFadeCapacity> capacity);
         /** @brief Advances gameplay presentation callbacks without changing authoring state. */
         void UpdatePlayPresentation(float elapsedSeconds);
+
+        /** @brief Forwards the active Play session's authenticated structural cutoff. */
+        void UpdatePlaySceneCutoff(const Runtime::FrameContext &context);
         /** @brief Advances one play-mode fixed tick with already-routed semantic actions. */
         void UpdatePlayFixed(std::span<const Gameplay::GameplayInputAction> input, double fixedDeltaSeconds);
         [[nodiscard]] Result<void> BindPlayRuntimeDispatch(const Runtime::RuntimeDispatchSource &source);

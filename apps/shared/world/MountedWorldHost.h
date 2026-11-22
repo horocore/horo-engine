@@ -118,7 +118,7 @@ namespace Horo::Application::Internal {
         [[nodiscard]] bool IsValid() const noexcept;
     };
 
-    /** @brief Opts a standalone mount into live CoreEcs work with an optional first demand in ordinary frames. */
+    /** @brief Opts a mount into live CoreEcs work with an optional first demand in ordinary frames. */
     struct CommittedWorldLiveSelection final {
         MountedWorldLiveLimits limits;
         std::optional<CommittedWorldInitialCell> firstDemand;
@@ -149,6 +149,8 @@ namespace Horo::Application::Internal {
     [[nodiscard]] Result<CommittedWorldSelection> ParseCommittedWorldSelection(std::span<char *const> arguments);
     /** @brief Parses the shared explicit cell tuple and independently pinned Scene occurrence, definition and revision. */
     [[nodiscard]] Result<CommittedWorldInitialCell> ParseCommittedWorldInitialCell(std::span<char *const> arguments);
+    /** @brief Parses the three explicit frame, unit, and entity limits used by live mount launch options. */
+    [[nodiscard]] Result<MountedWorldLiveLimits> ParseMountedWorldLiveLimits(std::span<char *const> arguments);
 
     /** @brief Retains generation-fenced renderer output and the actual immutable procedural resources it references. */
     class MountedWorldRenderPacket final {

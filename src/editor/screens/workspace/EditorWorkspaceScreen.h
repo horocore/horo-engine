@@ -180,6 +180,9 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         void OnFixedUpdate(const std::uint64_t simulationTick, const double fixedDeltaSeconds) override;
         [[nodiscard]] Result<void> BindRuntimeDispatch(const Runtime::RuntimeDispatchSource &source) override;
         [[nodiscard]] Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context) override;
+
+        /** @copydoc GuiScreen::OnRuntimeSceneCutoff */
+        void OnRuntimeSceneCutoff(const Runtime::FrameContext &context) override;
         [[nodiscard]] Result<void> PrepareRuntimeFixedCommit(const Runtime::FixedStepContext &context) override;
         void CommitRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept override;
         void AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept override;

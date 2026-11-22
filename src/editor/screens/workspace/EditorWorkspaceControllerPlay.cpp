@@ -392,6 +392,11 @@ namespace Horo::Editor {
         ExtractPlayViewportScene();
     }
 
+    /** @copydoc EditorWorkspaceController::UpdatePlaySceneCutoff */
+    void EditorWorkspaceController::UpdatePlaySceneCutoff(const Runtime::FrameContext &context) {
+        m_playSession.OnRuntimeSceneCutoff(context);
+    }
+
     void EditorWorkspaceController::UpdatePlayFixed(const std::span<const Gameplay::GameplayInputAction> input,
                                                     const double fixedDeltaSeconds) {
         if (!std::isfinite(fixedDeltaSeconds) || fixedDeltaSeconds <= 0.0)

@@ -251,6 +251,12 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             return Result<void>::Failure(navigation.ErrorValue());
         navigation_ = std::move(navigation).Value();
         navigationSelection_ = captured.Value();
-        return RegisterProjectSceneNavigation(*scenes_, *navigation_, navigationSelection_);
+        const bool streamCoverage = mountedWorld_ && mountedWorld_->HasLiveNavigationContent();
+        if (auto registered = RegisterProjectSceneNavigation(*scenes_, *navigation_, navigationSelection_, streamCoverage);
+            registered.HasError())
+            return registered;
+        if (streamCoverage)
+            return BindMountedWorldNavigation(*mountedWorld_, *navigation_, navigationSelection_);
+        return Result<void>::Success();
     }
 }  // namespace Horo::Application::Internal::EditorProjectSceneDetail

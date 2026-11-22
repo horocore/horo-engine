@@ -207,6 +207,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         /** @brief Borrows this published Scene owner's canonical mounted origin lease. */
         [[nodiscard]] std::optional<WorldStreaming::OriginFrameLease> WorldOrigin() const;
 
+        /** @brief Reads the current live mount's readiness for one exact occurrence. */
+        [[nodiscard]] Result<MountedWorldCellReadiness> InspectWorldCell(Runtime::SceneInstanceId occurrence) const;
+
         /** @brief Activates selected World geometry before ordinary Play becomes externally visible. */
         [[nodiscard]] Result<void> CompleteWorldStartup(const Runtime::FrameContext &frame);
 
@@ -261,6 +264,8 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                 return captured;
             if (const auto prepared = PrepareNativeOwners(root, policy); prepared.HasError())
                 return prepared;
+            if (const auto mounted = PrepareLiveWorld(jobs, policy); mounted.HasError())
+                return mounted;
             if (const auto animation = PrepareAnimation(policy); animation.HasError())
                 return animation;
             if (const auto navigation = PrepareNavigation(root, jobs, policy, definition); navigation.HasError())
@@ -548,6 +553,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
             return saves_.FinishSavePhase(frame);
         }
 
+        /** @copydoc Editor::EditorPlaySceneHost::OnRuntimeSceneCutoff */
+        [[nodiscard]] Result<void> OnRuntimeSceneCutoff(const Runtime::FrameContext &frame) override;
+
         /** @copydoc Editor::EditorPlaySceneHost::BeginPresentationUpdate */
         Result<void> BeginPresentationUpdate() override {
             if (!saves_.save_)
@@ -751,6 +759,9 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
          */
         [[nodiscard]] Result<void> QueueMountedWorldStartup(const Runtime::RuntimeSceneDefinition &definition,
                                                             const CancellationToken &cancellation);
+
+        /** @brief Prepares the live mount before Navigation selects its initial coverage policy. */
+        [[nodiscard]] Result<void> PrepareLiveWorld(JobSystem &jobs, const EditorProjectScenePolicy &policy);
 
         /** @brief Stops actual Scene participants before native retirement can be observed. */
         void ShutdownSceneOwners() noexcept {

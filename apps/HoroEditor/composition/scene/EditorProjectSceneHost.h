@@ -29,6 +29,7 @@ namespace Horo::Application::Internal {
         std::filesystem::path projectRoot;
         CommittedWorldSelection committed;
         std::optional<EditorMountedWorldViewportSelection> viewport;
+        Runtime::RuntimeDispatchSource dispatch; /**< Required for live cell work. */
     };
 
     /** @brief One explicitly disclosed Blackboard key in the selected cooked Play Scene. */
@@ -80,6 +81,14 @@ namespace Horo::Application::Internal {
      * @return Revocable generation lease or absence before publication and after shutdown.
      */
     [[nodiscard]] std::optional<WorldStreaming::OriginFrameLease> ObserveEditorPlayMountedWorld(const Editor::EditorPlaySceneHost &host);
+
+    /** @brief Reads independent geometry and Navigation readiness for an exact live Play occurrence.
+     * @param host Active Editor Play Scene owner.
+     * @param occurrence Explicit streamed Scene occurrence.
+     * @return Exact visibility and readiness or the original stale-scope error.
+     */
+    [[nodiscard]] Result<MountedWorldCellReadiness> InspectEditorPlayMountedCell(const Editor::EditorPlaySceneHost &host,
+                                                                                   Runtime::SceneInstanceId occurrence);
 
     /** @brief Selects the native user-state root and real entropy explicitly at application startup; preserves original errors for Manager.
      */

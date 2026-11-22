@@ -240,6 +240,12 @@ namespace Horo::Editor::WorkspaceScreenDetail {
         return Result<void>::Success();
     }
 
+    /** @copydoc EditorWorkspaceScreen::OnRuntimeSceneCutoff */
+    void EditorWorkspaceScreen::OnRuntimeSceneCutoff(const Runtime::FrameContext &context) {
+        if (controller_)
+            controller_->UpdatePlaySceneCutoff(context);
+    }
+
     Result<void> EditorWorkspaceScreen::PrepareRuntimeFixedCommit(const Runtime::FixedStepContext &context) {
         if (controller_)
             controller_->PreparePlayFixedCommit(context);

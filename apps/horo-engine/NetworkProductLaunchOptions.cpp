@@ -357,14 +357,11 @@ namespace Horo::Application::Internal {
             auto selected = ParseCommittedWorldInitialCell(arguments.subspan(index + 1, CommittedWorldCellArgumentCount));
             if (selected.HasError())
                 return Output::Failure(selected.ErrorValue());
-            const auto limitsBegin = index + 1 + CommittedWorldCellArgumentCount;
-            MountedWorldLiveLimits limits;
-            if (!ReadNumber(arguments[limitsBegin], limits.maximumFrameNanoseconds) ||
-                !ReadNumber(arguments[limitsBegin + 1], limits.maximumUnitNanoseconds) ||
-                !ReadNumber(arguments[limitsBegin + 2], limits.maximumCellEntities) || !limits.IsValid())
+            const auto limits = ParseMountedWorldLiveLimits(arguments.subspan(index + 1 + CommittedWorldCellArgumentCount, 3));
+            if (limits.HasError())
                 return Output::Failure(MakeError(Net::NetworkErrors::NetworkModeInvalid, "Invalid live World frame or entity limits."));
             index += 1 + count;
-            return Output::Success({limits, std::move(selected).Value()});
+            return Output::Success({limits.Value(), std::move(selected).Value()});
         }
 
         /** @brief Reads the one project-relative policy path without resolving an executable or source file. */

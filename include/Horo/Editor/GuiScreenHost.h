@@ -216,6 +216,11 @@ namespace Horo::Editor {
 
         /** @brief Reserves the active screen for one genuine scheduler fixed attempt. */
         [[nodiscard]] Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context);
+
+        /** @brief Forwards an authenticated deferred lifecycle cutoff to the active screen.
+         * @param context Current frame issued by the bound runtime.
+         */
+        void OnRuntimeSceneCutoff(const Runtime::FrameContext &context);
         /** @brief Prepares that same screen while its dispatch is still uncommitted. */
         [[nodiscard]] Result<void> PrepareRuntimeFixedCommit(const Runtime::FixedStepContext &context);
         /** @brief Publishes after the actual scheduler commitment; defers all navigation and destruction. */

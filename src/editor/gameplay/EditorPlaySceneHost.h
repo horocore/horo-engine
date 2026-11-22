@@ -338,6 +338,15 @@ namespace Horo::Editor {
             return Scenes().OnPhase(Runtime::RuntimePhase::CommitDeferredLifecycleChanges, frame);
         }
 
+        /** @brief Advances producers that require scheduler-issued structural dispatch evidence.
+         * @param frame Real scheduler cutoff, distinct from local Play preparation polling.
+         * @return Success for hosts with no runtime-bound producers or the original cutoff failure.
+         */
+        [[nodiscard]] virtual Result<void> OnRuntimeSceneCutoff(const Runtime::FrameContext &frame) {
+            static_cast<void>(frame);
+            return Result<void>::Success();
+        }
+
         /** @brief Advances capability tick admission before behavior fixed callbacks without simulating or blocking.
          * @param delta Actual host fixed quantum. @return Admission failure or success for a host without prefabs. */
         [[nodiscard]] virtual Result<void> BeginFixedUpdate(Gameplay::FixedDeltaTime) {

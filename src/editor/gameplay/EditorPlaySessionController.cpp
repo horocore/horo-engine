@@ -651,6 +651,15 @@ namespace Horo::Editor {
         PollModuleScripts();
     }
 
+    /** @copydoc EditorPlaySessionController::OnRuntimeSceneCutoff */
+    void EditorPlaySessionController::OnRuntimeSceneCutoff(const Runtime::FrameContext &context) {
+        if (fixedAttempt_ || stopPending_ || !sceneHost_ ||
+            (state_ != EditorPlaySessionState::Playing && state_ != EditorPlaySessionState::Paused))
+            return;
+        if (const auto advanced = sceneHost_->OnRuntimeSceneCutoff(context); advanced.HasError())
+            Fail(advanced.ErrorValue());
+    }
+
     /** @brief Reads immutable actual load state; pending restore advances only the existing Scene lifecycle, not project callbacks. */
     bool EditorPlaySessionController::SaveLoading() noexcept {
         const auto *save = SaveSession();

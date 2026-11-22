@@ -741,6 +741,20 @@ namespace Horo::Application::Internal {
         return Output::Success(source);
     }
 
+    /** @copydoc ParseMountedWorldLiveLimits */
+    Result<MountedWorldLiveLimits> ParseMountedWorldLiveLimits(const std::span<char *const> arguments) {
+        using Output = Result<MountedWorldLiveLimits>;
+        const auto parse = [](const std::string_view value, auto &limit) {
+            const auto parsed = std::from_chars(value.data(), value.data() + value.size(), limit);
+            return parsed.ec == std::errc{} && parsed.ptr == value.data() + value.size();
+        };
+        MountedWorldLiveLimits limits;
+        if (arguments.size() != 3 || !parse(arguments[0], limits.maximumFrameNanoseconds) ||
+            !parse(arguments[1], limits.maximumUnitNanoseconds) || !parse(arguments[2], limits.maximumCellEntities) || !limits.IsValid())
+            return Output::Failure(MakeError(WS::WorldArtifactErrors::Invalid, "Invalid live World frame or entity limits."));
+        return Output::Success(limits);
+    }
+
     struct MountedWorld::State final {
         explicit State(Runtime::RuntimeSceneService &scene) : scene(scene) {}
 

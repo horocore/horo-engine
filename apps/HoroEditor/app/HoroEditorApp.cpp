@@ -370,6 +370,7 @@ namespace Horo::Editor {
             std::optional<Application::Internal::CommittedWorldSelection> playWorld;
             std::optional<Error> playWorldError;
             std::optional<Application::Internal::CommittedWorldInitialCell> playWorldCell;
+            std::optional<Application::Internal::CommittedWorldLiveSelection> playWorldLiveCell;
             Runtime::SceneObjectId playWorldCamera;
             std::vector<Runtime::SceneObjectId> playWorldMeshes;
             bool playNavigationSceneValid{true};
@@ -923,6 +924,26 @@ namespace Horo::Editor {
         return Result<void>::Success();
     }
 
+    /** @brief Reads one explicitly bounded live cell demand independently of the mount option order. */
+    static Result<void> ReadEditorPlayWorldLiveCell(std::span<char *> arguments, std::size_t &index, EditorGuiOptions &options) {
+        using namespace Application::Internal;
+        constexpr auto Count = CommittedWorldCellArgumentCount + 3;
+        if (options.playWorldLiveCell || arguments.size() - index <= Count)
+            return Result<void>::Failure(MakeError(
+                WorldStreaming::WorldArtifactErrors::Invalid,
+                "Use --play-world-live-cell <x> <y> <z> <lod> <layer> <occurrence> <definition> <revision> "
+                "<frame-ns> <unit-ns> <maximum-entities> once."));
+        const auto selected = ParseCommittedWorldInitialCell(arguments.subspan(index + 1, CommittedWorldCellArgumentCount));
+        if (selected.HasError())
+            return Result<void>::Failure(selected.ErrorValue());
+        const auto limits = ParseMountedWorldLiveLimits(arguments.subspan(index + 1 + CommittedWorldCellArgumentCount, 3));
+        if (limits.HasError())
+            return Result<void>::Failure(limits.ErrorValue());
+        options.playWorldLiveCell = CommittedWorldLiveSelection{limits.Value(), selected.Value()};
+        index += Count;
+        return Result<void>::Success();
+    }
+
     /** @brief Parses one exact durable controller-to-Decision activation selection. */
     [[nodiscard]] static bool ReadEditorPlayDecision(std::span<char *> args, std::size_t &index, EditorGuiOptions &options) {
         if (args.size() - index <= 2 || options.playDecisionBindings.size() == AI::MaximumAiSceneAgents)
@@ -1011,6 +1032,13 @@ namespace Horo::Editor {
             }
             if (argument == "--play-world-cell") {
                 if (auto cell = ReadEditorPlayWorldCell(args, index, opts); cell.HasError()) {
+                    opts.playWorldError = cell.ErrorValue();
+                    break;
+                }
+                continue;
+            }
+            if (argument == "--play-world-live-cell") {
+                if (auto cell = ReadEditorPlayWorldLiveCell(args, index, opts); cell.HasError()) {
                     opts.playWorldError = cell.ErrorValue();
                     break;
                 }
@@ -2320,6 +2348,7 @@ namespace Horo::Editor {
                     case Runtime::RuntimePhase::Presentation:
                         return PresentFrame();
                     case Runtime::RuntimePhase::CommitDeferredLifecycleChanges:
+                        screenHost_->OnRuntimeSceneCutoff(context);
                         return Result<void>::Success();
                     case Runtime::RuntimePhase::EndFrame:
                         return EndRuntimeFrame(context);
@@ -4235,6 +4264,8 @@ namespace Horo::Editor {
             std::shared_ptr<Application::Internal::EditorMountedWorldViewport> mountedViewport;
             if (p.options.playWorld) {
                 playPolicy.world.emplace(Application::Internal::EditorPlayWorldSelection{previewProjectRoot, *p.options.playWorld});
+                playPolicy.world->dispatch = createdRuntime.Value()->DispatchSource();
+                playPolicy.world->committed.liveCell = p.options.playWorldLiveCell;
                 if (p.options.playWorldCell) {
                     mountedViewport = std::make_shared<Application::Internal::EditorMountedWorldViewport>();
                     playPolicy.world->committed.initialCell = p.options.playWorldCell;
@@ -4566,10 +4597,15 @@ namespace Horo::Editor {
 
     /** @brief Validates explicit application Physics selection before project/native frontend creation. */
     [[nodiscard]] static bool ValidateEditorPhysicsOptions(const EditorGuiOptions &options) {
-        if (options.playWorldError || (options.playWorld && options.projectRoot.empty()) || (options.playWorldCell && !options.playWorld)) {
+        if (options.playWorldError || (options.playWorld && options.projectRoot.empty()) ||
+            ((options.playWorldCell || options.playWorldLiveCell) && !options.playWorld)) {
             LOG_CRITICAL("editor.runtime", "%s",
                          options.playWorldError ? options.playWorldError->message.c_str()
                                                 : "Mounted World Play requires --project and --play-world-mount.");
+            return false;
+        }
+        if (options.playWorldLiveCell && options.playWorldCell) {
+            LOG_CRITICAL("editor.runtime", "Choose either --play-world-live-cell or --play-world-cell.");
             return false;
         }
         if (!options.playNavigationSceneValid ||

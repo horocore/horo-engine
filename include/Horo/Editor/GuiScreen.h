@@ -14,6 +14,7 @@
 #include <vector>
 
 namespace Horo::Runtime {
+    struct FrameContext;
     struct FixedStepContext;
     class RuntimeDispatchSource;
 }  // namespace Horo::Runtime
@@ -177,6 +178,13 @@ namespace Horo::Editor {
 
         /** @brief Receives the actual scheduler callback; the default preserves legacy numeric screen updates. */
         [[nodiscard]] virtual Result<void> OnRuntimeFixedUpdate(const Runtime::FixedStepContext &context);
+
+        /** @brief Advances screen-owned structural work at the host's deferred lifecycle cutoff.
+         * @param context Current frame with live scheduler evidence for that cutoff.
+         */
+        virtual void OnRuntimeSceneCutoff(const Runtime::FrameContext &context) {
+            static_cast<void>(context);
+        }
 
         /** @brief Binds the actual host issuer after successful entry; ordinary non-runtime screens retain no capability. */
         [[nodiscard]] virtual Result<void> BindRuntimeDispatch(const Runtime::RuntimeDispatchSource &) {

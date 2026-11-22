@@ -134,6 +134,9 @@ namespace Horo::Editor {
         void AbortRuntimeFixedUpdate(const Runtime::FixedStepContext &context) noexcept;
         /** @brief Runs presentation callbacks for an active session. */
         void PresentationUpdate(Gameplay::FrameDeltaTime delta);
+
+        /** @brief Advances runtime-bound structural work while Play owns the active Scene. */
+        void OnRuntimeSceneCutoff(const Runtime::FrameContext &context);
         /**
          * @brief Recreates behavior instances against a validated registry without replacing runtime scene state.
          * @param candidate New complete registry whose module/program owners remain alive after success.

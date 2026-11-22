@@ -3,16 +3,22 @@
 #include "HeadlessSceneLoadBoundary.h"
 #include "Horo/Assets/AssetProvider.h"
 #include "Horo/Foundation/JobSystem.h"
+#include "Horo/Runtime/RuntimeHost.h"
 #include "Horo/Runtime/Scene/RuntimeScene.h"
 #include "Horo/WorldCook/WorldCookPublication.h"
 #include "Horo/WorldStreaming/WorldArtifactErrors.h"
 #include "MountedWorldHost.h"
 #include "WorldCookPublicationTestSupport.h"
+#if HORO_TEST_NAVIGATION_NATIVE
+#include "navigation/ProjectSceneNavigationFixture.h"
+#endif
 
+#include <algorithm>
 #include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <fstream>
 #include <functional>
+#include <thread>
 
 namespace Horo::WorldCook {
     namespace {
@@ -22,6 +28,32 @@ namespace Horo::WorldCook {
         namespace T = A::OutputTestSupport;
         using W::TestSupport::Asset;
         using W::TestSupport::IdentityFrom;
+
+        /** @brief Forwards the actual runtime structural cutoff to the product Play owner. */
+        class EditorWorldCutoff final : public S::RuntimeLifecycleParticipant {
+        public:
+            explicit EditorWorldCutoff(Editor::EditorPlaySceneHost &play) : play_(play) {}
+
+            Result<void> Startup(const CancellationToken &) override {
+                return Result<void>::Success();
+            }
+
+            void Shutdown() noexcept override {
+                play_.Shutdown();
+            }
+
+            Result<void> OnPhase(S::RuntimePhase phase, const S::FrameContext &frame) override {
+                return phase == S::RuntimePhase::CommitDeferredLifecycleChanges ? play_.OnRuntimeSceneCutoff(frame)
+                                                                              : Result<void>::Success();
+            }
+
+            Result<void> OnFixedUpdate(const S::FixedStepContext &) override {
+                return Result<void>::Success();
+            }
+
+        private:
+            Editor::EditorPlaySceneHost &play_;
+        };
 
         /** @brief Observes the actual private candidate without publishing any test-owned geometry. */
         class StartupGeometryObserver final : public S::SceneActivationParticipant {
@@ -443,6 +475,130 @@ namespace Horo::WorldCook {
             CHECK(worldFrame.OriginScene().HasError());
         }
     }
+
+    /** @brief Runs the product Play factory through cold preparation and authentic live frames. */
+    static void CheckEditorLiveCell(Fixture &world, const std::filesystem::path &project, const S::RuntimeSceneDefinition &definition,
+                                    Application::Internal::EditorProjectScenePolicy policy,
+                                    Application::Internal::MountedWorldCellNavigationReadiness navigation) {
+        using namespace Application::Internal;
+        auto limits = Limits();
+        limits.cell.maximumPayloads = 2;  // CoreECS plus an optional NavigationMesh membership block.
+        const auto published = world.Publish(limits);
+        if (published.HasError())
+            UNSCOPED_INFO(published.ErrorValue().message);
+        REQUIRE(published.HasValue());
+        for (const auto &finding : published.Value().validation->findings)
+            UNSCOPED_INFO(finding.cause.message);
+        REQUIRE(published.Value().publication);
+        const auto release = world.Release();
+        const auto selected = world.inputs.front().expected;
+        const CommittedWorldInitialCell demand{selected.cell, {900}, selected.scene, selected.revision};
+        DeterministicClock clock;
+        JobSystem jobs{JobSystemConfig{1, 8}};
+        std::unique_ptr<Editor::EditorPlaySceneHost> play;
+        const auto runtime = S::RuntimeHost::Create(clock).Value();
+        policy.world.emplace(EditorPlayWorldSelection{
+            .projectRoot = project,
+            .committed = {.targetRoot = release.targetRoot,
+                          .target = release.target,
+                          .manifest = published.Value().publication->manifestDigest,
+                          .index = release.indexArtifact,
+                          .dependencies = release.dependencyArtifact,
+                          .liveCell = CommittedWorldLiveSelection{{20'000'000, 1'000'000, 16}, demand}},
+            .dispatch = runtime->DispatchSource()});
+        auto created = MakeEditorProjectSceneFactory(jobs, std::move(policy))(project, Editor::EditorFirstPlayScene, definition);
+        if (created.HasError())
+            UNSCOPED_INFO(created.ErrorValue().message);
+        REQUIRE(created.HasValue());
+        play = std::move(created).Value();
+        const CancellationToken cancellation;
+        REQUIRE(play->Scenes().Startup(cancellation).HasValue());
+        REQUIRE(play->QueueInitialScene(definition, nullptr, cancellation).HasValue());
+        const auto startupDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        for (std::uint64_t frame = 1; !play->Scenes().ActiveScene() && std::chrono::steady_clock::now() < startupDeadline; ++frame) {
+            REQUIRE(play->CommitSceneChanges({.frameNumber = frame, .cancellation = cancellation}).HasValue());
+            if (const auto failure = play->Scenes().TakeOperationError()) {
+                FAIL(failure->message);
+            }
+            if (!play->Scenes().ActiveScene())
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        }
+        REQUIRE(play->Scenes().ActiveScene());
+        W::TestSupport::RequireError(play->OnRuntimeSceneCutoff({.frameNumber = 2, .cancellation = cancellation}),
+                                     W::WorldArtifactErrors::Stale);
+        W::TestSupport::RequireError(InspectEditorPlayMountedCell(*play, demand.occurrence), W::WorldArtifactErrors::Stale);
+        REQUIRE(runtime->AddParticipant(std::make_unique<EditorWorldCutoff>(*play)).HasValue());
+        REQUIRE(runtime->Startup().HasValue());
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        do {
+            clock.Advance(Duration::FromMilliseconds(17));
+            const auto frame = runtime->RunFrame();
+            if (frame.HasError())
+                UNSCOPED_INFO(frame.ErrorValue().message);
+            REQUIRE(frame.HasValue());
+            const auto readiness = InspectEditorPlayMountedCell(*play, demand.occurrence);
+            if (readiness.HasValue() && readiness.Value().geometryVisible)
+                break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        } while (std::chrono::steady_clock::now() < deadline);
+        const auto readiness = InspectEditorPlayMountedCell(*play, demand.occurrence);
+        REQUIRE(readiness.HasValue());
+        CHECK(readiness.Value().geometryVisible);
+        CHECK(readiness.Value().navigation == navigation);
+        CHECK(play->Scenes().ActiveScene()->Find(world.entities.front().object));
+        runtime->Shutdown();
+        W::TestSupport::RequireError(InspectEditorPlayMountedCell(*play, demand.occurrence), W::WorldArtifactErrors::Stale);
+    }
+
+    TEST_CASE("Editor Play publishes live mounted cells only at the real runtime structural cutoff",
+              "[world_cook][native][mounted_world][editor_play][live_cell]") {
+        Fixture world{false, false};
+        T::TempDir project;
+        REQUIRE(std::filesystem::create_directory(project.path / "assets"));
+        const auto definition = S::SceneDefinitionBuilder{{200}, {1}}.Build();
+        REQUIRE(definition.HasValue());
+        CheckEditorLiveCell(world, project.path, definition.Value(), {},
+                            Application::Internal::MountedWorldCellNavigationReadiness::NotDeclared);
+    }
+
+#if HORO_TEST_NAVIGATION_NATIVE
+    TEST_CASE("Editor Play admits verified mounted Detour coverage with its visible cell",
+              "[world_cook][native][mounted_world][editor_play][live_cell][navigation]") {
+        using namespace Application::Internal;
+        using Application::CharacterSceneProductTest::NavigationProductFixture;
+        NavigationProductFixture project;
+        project.Publish(NavigationProductFixture::Input::Valid);
+        const SceneCookSelection cook{project.project.cooked.path, project.project.request.assets.target};
+        const auto assets = CommittedSceneAssets::Capture(project.project.files, cook, project.project.registry.Snapshot());
+        REQUIRE(assets.HasValue());
+        const auto definition = assets.Value()->DecodeScene(project.project.sceneId);
+        REQUIRE(definition.HasValue());
+        const auto *navigation = assets.Value()->Find(project.definitionId);
+        REQUIRE(navigation);
+        const auto tiles = Navigation::DecodeNavigationCookedTileSet(navigation->payload, 1024U * 1024U);
+        REQUIRE(tiles.HasValue());
+        REQUIRE(tiles.Value().tiles.size() == 1);
+
+        const auto generation = A::ResolveCurrentCookGeneration(project.project.files, cook.targetRoot);
+        REQUIRE(generation.HasValue());
+        auto contents = A::ReadCookGenerationContents(project.project.files, generation.Value(), 1024U * 1024U);
+        REQUIRE(contents.HasValue());
+        const auto &entries = contents.Value().entries;
+        const auto entry = std::ranges::find(entries, project.definitionId, &A::AssetCookManifestEntry::assetId);
+        REQUIRE(entry != entries.end());
+
+        Fixture world{true, false};
+        world.packages = Fixture::Packages(true, project.definitionId);
+        world.objects.back() = BaseObjectBinding{Endpoint(3), project.definitionId, entry->artifactHash};
+        world.baseArtifacts.front() = std::move(contents.Value().artifacts[static_cast<std::size_t>(entry - entries.begin())]);
+        world.navigationCells.push_back(
+            {world.inputs.front().expected.cell, {project.definitionId, entry->artifactHash, {tiles.Value().tiles.front()->Key()}}});
+
+        CheckEditorLiveCell(world, project.project.project.dir.path, definition.Value(),
+                            {.cooked = cook, .playNavigationScene = project.project.sceneId},
+                            MountedWorldCellNavigationReadiness::Ready);
+    }
+#endif
 
     TEST_CASE("Editor Play mounts an explicit committed World for one project and revokes its origin on Stop",
               "[world_cook][native][mounted_world][editor_play]") {

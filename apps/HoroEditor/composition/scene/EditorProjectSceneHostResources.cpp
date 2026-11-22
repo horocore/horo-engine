@@ -10,12 +10,13 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
                                                           const Runtime::RuntimeSceneDefinition *definition) {
         if (!policy.world)
             return Result<void>::Success();
-        if (!definition || policy.playNavigationScene ||
-            (policy.xrHost && (policy.xrHost->ViewSource() != Editor::EditorPlayViewSource::SelectedXr || !policy.world->viewport)))
+        const bool live = policy.world->committed.liveCell.has_value();
+        const bool startsCell = policy.world->committed.initialCell.has_value();
+        if (!definition || (policy.playNavigationScene && !live) || (live && startsCell) ||
+            (policy.xrHost && (live || policy.xrHost->ViewSource() != Editor::EditorPlayViewSource::SelectedXr || !policy.world->viewport)))
             return Result<void>::Failure(
                 MakeError(WorldStreaming::WorldArtifactErrors::Unsupported,
                           "Mounted World Play requires a supported Scene composition and an explicit cell selection for native XR."));
-        const bool startsCell = policy.world->committed.initialCell.has_value();
         const auto &viewport = policy.world->viewport;
         if (startsCell != viewport.has_value() ||
             (viewport && (!viewport->camera.IsValid() || viewport->meshes.empty() || !viewport->publication || !viewport->issueView)))
@@ -28,6 +29,45 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
         worldSelection_ = policy.world->committed;
         worldViewport_ = viewport;
         return Result<void>::Success();
+    }
+
+    /** @copydoc ProjectPlaySceneHost::PrepareLiveWorld */
+    Result<void> ProjectPlaySceneHost::PrepareLiveWorld(JobSystem &jobs, const EditorProjectScenePolicy &policy) {
+        if (!worldSelection_ || !worldSelection_->liveCell)
+            return Result<void>::Success();
+        auto mount = MountedWorld::Prepare(NativeDurableFileSystem{}, *worldSelection_, identity_.value, *scenes_);
+        if (mount.HasError())
+            return Result<void>::Failure(mount.ErrorValue());
+        if (const auto bound = mount.Value()->BindLiveCell(policy.world->dispatch, jobs, worldSelection_->liveCell->limits,
+                                                           resources_.registry_.Snapshot());
+            bound.HasError())
+            return bound;
+        mountedWorld_ = std::move(mount).Value();
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ProjectPlaySceneHost::OnRuntimeSceneCutoff */
+    Result<void> ProjectPlaySceneHost::OnRuntimeSceneCutoff(const Runtime::FrameContext &frame) {
+        if (!mountedWorld_ || !worldSelection_->liveCell || !scenes_->ActiveScene())
+            return Result<void>::Success();
+        const auto advanced = mountedWorld_->AdvanceLiveCell(frame.dispatchEvidence);
+        if (advanced.HasError()) {
+            if (advanced.ErrorValue().code.Value() == WorldStreaming::WorldArtifactErrors::Cancelled.code.Value())
+                return Result<void>::Success();
+            return Result<void>::Failure(advanced.ErrorValue());
+        }
+        if (const auto committed = CommitSceneChanges(frame); committed.HasError())
+            return committed;
+        if (auto failure = scenes_->TakeOperationError())
+            return Result<void>::Failure(std::move(*failure));
+        return Result<void>::Success();
+    }
+
+    /** @copydoc ProjectPlaySceneHost::InspectWorldCell */
+    Result<MountedWorldCellReadiness> ProjectPlaySceneHost::InspectWorldCell(Runtime::SceneInstanceId occurrence) const {
+        if (std::this_thread::get_id() != ownerLane_ || sceneClosed_ || !mountedWorld_ || !scenes_->ActiveScene())
+            return Result<MountedWorldCellReadiness>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+        return mountedWorld_->InspectLiveCell(occurrence);
     }
 
     /** @copydoc ProjectPlaySceneHost::WorldOrigin */
@@ -118,6 +158,12 @@ namespace Horo::Application::Internal::EditorProjectSceneDetail {
     /** @copydoc ProjectPlaySceneHost::QueueMountedWorldStartup */
     Result<void> ProjectPlaySceneHost::QueueMountedWorldStartup(const Runtime::RuntimeSceneDefinition &definition,
                                                                 const CancellationToken &cancellation) {
+        if (const auto &live = worldSelection_->liveCell) {
+            if (live->firstDemand)
+                if (auto requested = mountedWorld_->RequestLiveCell(*live->firstDemand, cancellation); requested.HasError())
+                    return requested;
+            return Editor::EditorPlaySceneHost::QueueInitialScene(definition, nullptr, cancellation);
+        }
         if (worldViewport_ && !viewportPrimitives_)
             return Result<void>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Unsupported,
                                                    "Mounted World Play needs the active viewport's primitive-resource owner."));

@@ -2309,5 +2309,16 @@ must all have canonical anchors. Preparation publishes one exact viewport packet
 for the mounted origin and the frontend-issued view. The editor graph uses this
 packet for mesh preparation and its existing static-mesh pass. It withdraws that
 pass on Scene or origin retirement and does not use the local-transform viewport
-extractor for a selected World cell. Navigation, XR and Save still require
-their owning World composition.
+extractor for a selected World cell.
+
+Desktop Play can instead use
+`--play-world-live-cell <x> <y> <z> <lod> <layer> <occurrence> <definition>
+<revision> <frame-ns> <unit-ns> <maximum-entities>`. The Play owner decodes the
+cell on the existing workers and advances its publication only at the runtime's
+deferred lifecycle cutoff. Select the exact committed Scene with
+`--play-navigation-scene` and its cook with `--cooked-root` and `--cook-target`
+to bind Navigation. Navigation starts without tile coverage for a mount with
+declared cells. The structural commit publishes each cell and its admitted tile
+coverage together, while the Play owner reports geometry visibility and
+Navigation readiness independently. This live mode streams CoreECS content in
+desktop Play. Mounted viewport, XR and Save have their own composition.

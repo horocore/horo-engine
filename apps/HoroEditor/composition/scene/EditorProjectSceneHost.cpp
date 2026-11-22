@@ -9,6 +9,7 @@
 #include "Horo/Physics/PhysicsErrors.h"
 #include "Horo/Prefab/PrefabSpawnService.h"
 #include "Horo/Scene/PrefabComponentProjection.h"
+#include "Horo/WorldStreaming/WorldArtifactErrors.h"
 #include "PhysicsStateHostLifecycle.h"
 #include "RuntimeUiPaintProjectSources.h"
 #include "ScenePhysicsHost.h"
@@ -208,6 +209,15 @@ namespace Horo::Application::Internal {
     std::optional<WorldStreaming::OriginFrameLease> ObserveEditorPlayMountedWorld(const Editor::EditorPlaySceneHost &host) {
         const auto *selected = dynamic_cast<const ProjectPlaySceneHost *>(&host);
         return selected ? selected->WorldOrigin() : std::nullopt;
+    }
+
+    /** @copydoc InspectEditorPlayMountedCell */
+    Result<MountedWorldCellReadiness> InspectEditorPlayMountedCell(const Editor::EditorPlaySceneHost &host,
+                                                                     Runtime::SceneInstanceId occurrence) {
+        const auto *selected = dynamic_cast<const ProjectPlaySceneHost *>(&host);
+        if (!selected)
+            return Result<MountedWorldCellReadiness>::Failure(MakeError(WorldStreaming::WorldArtifactErrors::Stale));
+        return selected->InspectWorldCell(occurrence);
     }
 
     /** @copydoc MakeEditorProjectSceneFactory */

@@ -117,13 +117,13 @@ namespace Horo::WorldCook::PublicationTestSupport {
                     S::SceneCellCookInput{{right, std::span{entities}.last(1)}, right}};
         }
 
-        static A::AssetChunkPlan Packages(const bool nonspatial = false) {
+        static A::AssetChunkPlan Packages(const bool nonspatial = false, const A::AssetId base = Asset(8)) {
             auto id = A::AssetChunkId::Parse("base");
             REQUIRE(id.HasValue());
             std::array definitions{
                 A::AssetChunkDefinition{std::move(id).Value(), A::AssetChunkKind::Base, {Asset(4), Asset(5), Asset(6), Asset(7)}}};
             if (nonspatial)
-                definitions.front().assets.push_back(Asset(8));
+                definitions.front().assets.push_back(base);
             auto result = A::AssetChunkPlan::Create(definitions);
             REQUIRE(result.HasValue());
             return std::move(result).Value();
