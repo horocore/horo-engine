@@ -89,7 +89,8 @@ namespace Horo::Application::Internal {
         }
 
         bool HasLiveProvider(const AI::EnvironmentQueryPlan &plan) noexcept {
-            return AI::UsesBuiltinPerceptionQuery(plan) || AI::UsesBuiltinPointVisibility(plan) || AI::UsesBuiltinPointNavigation(plan);
+            return AI::UsesBuiltinPerceptionQuery(plan) || AI::UsesBuiltinPointVisibility(plan) || AI::UsesBuiltinPointNavigation(plan) ||
+                   AI::UsesBuiltinNavigationSurface(plan);
         }
     }  // namespace
 
@@ -203,6 +204,9 @@ namespace Horo::Application::Internal {
         if (AI::UsesBuiltinPointNavigation(*plan.plan))
             return AI::AdmitBuiltinPointNavigationQuery(*plan.plan, *registry_, scope_->scene, owner.Value(), std::move(inputs), settings,
                                                         *this);
+        if (AI::UsesBuiltinNavigationSurface(*plan.plan))
+            return AI::AdmitBuiltinNavigationSurfaceQuery(*plan.plan, *registry_, scope_->scene, owner.Value(), std::move(inputs), settings,
+                                                          *this);
         if (!perception)
             return AI::AdmitBuiltinPointQuery(*plan.plan, *registry_, scope_->scene, std::move(inputs), settings, {cache_, plan.digest});
 
@@ -428,7 +432,7 @@ namespace Horo::Application::Internal {
     /** @copydoc SceneDecisionQueries::UsesNavigation */
     bool SceneDecisionQueries::UsesNavigation() const noexcept {
         return std::ranges::any_of(plans_, [](const auto &entry) {
-            return AI::UsesBuiltinPointNavigation(*entry.second.plan);
+            return AI::UsesBuiltinPointNavigation(*entry.second.plan) || AI::UsesBuiltinNavigationSurface(*entry.second.plan);
         });
     }
 

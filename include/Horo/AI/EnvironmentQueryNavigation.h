@@ -100,6 +100,11 @@ namespace Horo::AI {
                                                                                        Runtime::EntityRef querier) const noexcept = 0;
     };
 
+    /** @brief Admits a cooked Navigation surface query with optional local point tests. */
+    [[nodiscard]] Result<std::unique_ptr<QueryExecution>> AdmitBuiltinNavigationSurfaceQuery(
+        const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
+        Runtime::EntityRef querier, QueryExecutionInputs inputs, QueryExecutionSettings settings, const IQueryNavigationOwner &owner);
+
     /** @brief Admits the native path test through the existing asynchronous Navigation coordinator. */
     [[nodiscard]] Result<std::unique_ptr<QueryExecution>> AdmitBuiltinPointNavigationQuery(
         const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,

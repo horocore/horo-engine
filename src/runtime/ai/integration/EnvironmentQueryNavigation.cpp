@@ -72,6 +72,30 @@ namespace Horo::AI {
                     static_cast<float>(static_cast<double>(axes[2]) / 1000.0)};
         }
 
+        /** @brief Bounded sampling bound to one live cooked Navigation publication and exact Scene querier. */
+        class BoundQueryNavigationSurface final : public IBuiltinPointGenerator {
+        public:
+            [[nodiscard]] static Result<BoundQueryNavigationSurface> Capture(const IQueryNavigationOwner &owner,
+                                                                             const Runtime::RuntimeSceneView &scene,
+                                                                             Runtime::EntityRef querier, Math::WorldCoordinate64 center,
+                                                                             QueryNavigationSurfaceSettings settings);
+            [[nodiscard]] bool IsCurrent(const Runtime::RuntimeSceneView &scene) const noexcept override;
+            [[nodiscard]] std::size_t WorkUnits() const noexcept;
+            [[nodiscard]] std::uint64_t Revision() const noexcept;
+            [[nodiscard]] Result<QueryGenerationResult> Generate(const Runtime::RuntimeSceneView &scene, const QueryExecutionInputs &inputs,
+                                                                 const QueryGeneratorOutput &output) const override;
+
+        private:
+            [[nodiscard]] std::optional<QueryNavigationAccess> CurrentAccess(const Runtime::RuntimeSceneView &scene) const noexcept;
+            const IQueryNavigationOwner *owner_{};
+            Runtime::EntityRef querier_;
+            Navigation::NavigationWorldActivationDescriptor activation_;
+            Navigation::NavigationOutcomeProvenance root_;
+            Navigation::NavigationPathCaller caller_;
+            Navigation::NavigationSamplePositionRequest request_;
+            std::uint64_t capabilityRevision_{};
+        };
+
         class PointNavigationSource final : public IQueryExecutionSource {
         public:
             PointNavigationSource(BuiltinPointNavigationPlan plan, Runtime::RuntimeSceneView scene, Runtime::EntityRef querier,
@@ -193,6 +217,133 @@ namespace Horo::AI {
                 ++result.invalidCoordinateCount;
         }
         return Generation::Success(result);
+    }
+
+    Result<BoundQueryNavigationSurface> BoundQueryNavigationSurface::Capture(const IQueryNavigationOwner &owner,
+                                                                             const Runtime::RuntimeSceneView &scene,
+                                                                             const Runtime::EntityRef querier,
+                                                                             const Math::WorldCoordinate64 center,
+                                                                             const QueryNavigationSurfaceSettings settings) {
+        using Bound = Result<BoundQueryNavigationSurface>;
+        const auto access = owner.ReadQueryNavigation(scene, querier);
+        if (!access || !Navigation::ValidateNavigationOutcomeProvenance(access->publication.source))
+            return Bound::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
+        const auto &publication = access->publication;
+        const auto lease = access->world.Acquire(publication.source.world);
+        if (lease.HasError())
+            return Bound::Failure(lease.ErrorValue());
+        if (lease.Value().Descriptor() != publication.activation || publication.source.topology != publication.activation.topology)
+            return Bound::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
+
+        const auto capabilities = lease.Value().Backend().Capabilities();
+        constexpr auto kind = Navigation::NavigationQueryKind::SamplePosition;
+        const auto quality = access->requirement.quality;
+        const auto qualityIndex = static_cast<std::size_t>(quality);
+        if (qualityIndex >= static_cast<std::size_t>(Navigation::NavigationQualityLevel::Count) ||
+            capabilities.querySupport[static_cast<std::size_t>(kind)][qualityIndex] != Navigation::NavigationSupport::Available)
+            return Bound::Failure(MakeError(Navigation::NavigationErrors::OperationUnsupported));
+
+        auto limits = capabilities.queryLimits[static_cast<std::size_t>(kind)][qualityIndex];
+        const float radius = static_cast<float>(settings.radiusMillimeters) / 1000.0F;
+        if (radius <= 0 || radius > limits.maximumSearchDistanceMeters || settings.maximumCandidates == 0 ||
+            settings.maximumCandidates > limits.maximumResultPoints)
+            return Bound::Failure(MakeError(Navigation::NavigationErrors::QueryLimitExceeded));
+        limits.maximumResultPoints = settings.maximumCandidates;
+
+        BoundQueryNavigationSurface surface;
+        surface.owner_ = &owner;
+        surface.querier_ = querier;
+        surface.activation_ = publication.activation;
+        surface.root_ = publication.source;
+        surface.caller_ = access->caller;
+        surface.capabilityRevision_ = capabilities.revision;
+        // Both product hosts use the cooked static Navigation frame measured from global zero.
+        surface.request_ = {publication.source.world,
+                            publication.source.topology,
+                            StaticNavigationPoint(center),
+                            radius,
+                            {kind, quality, limits}};
+        return Bound::Success(std::move(surface));
+    }
+
+    std::optional<QueryNavigationAccess> BoundQueryNavigationSurface::CurrentAccess(const Runtime::RuntimeSceneView &scene) const noexcept {
+        const auto access = owner_->ReadQueryNavigation(scene, querier_);
+        if (!access || access->publication.activation != activation_ || !SameRoot(access->publication.source, root_) ||
+            access->caller != caller_ || access->requirement.quality != request_.requirement.quality)
+            return std::nullopt;
+        return access;
+    }
+
+    bool BoundQueryNavigationSurface::IsCurrent(const Runtime::RuntimeSceneView &scene) const noexcept {
+        return CurrentAccess(scene).has_value();
+    }
+
+    std::size_t BoundQueryNavigationSurface::WorkUnits() const noexcept {
+        const auto &limits = request_.requirement.limits;
+        return std::size_t{limits.maximumNodeExpansions} + limits.maximumResultPoints;
+    }
+
+    std::uint64_t BoundQueryNavigationSurface::Revision() const noexcept {
+        return root_.snapshot.Value();
+    }
+
+    Result<QueryGenerationResult> BoundQueryNavigationSurface::Generate(const Runtime::RuntimeSceneView &scene,
+                                                                        const QueryExecutionInputs &inputs,
+                                                                        const QueryGeneratorOutput &output) const {
+        using Generation = Result<QueryGenerationResult>;
+        if (!output.IsValid() || output.maximumItems != request_.requirement.limits.maximumResultPoints)
+            return Generation::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+        const auto access = CurrentAccess(scene);
+        if (!access || output.provenance.revision != Revision())
+            return Generation::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
+        const auto lease = access->world.Acquire(request_.world);
+        if (lease.HasError())
+            return Generation::Failure(lease.ErrorValue());
+        if (lease.Value().Descriptor() != activation_ || lease.Value().Backend().Capabilities().revision != capabilityRevision_)
+            return Generation::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
+        const auto samples = lease.Value().Backend().SamplePosition(request_, inputs.ownerCancellation);
+        const auto current = CurrentAccess(scene);
+        if (!current || lease.Value().IsRevoked() || inputs.ownerCancellation.IsCancellationRequested())
+            return Generation::Failure(MakeError(Navigation::NavigationErrors::StaleSnapshot));
+        if (samples.HasError()) {
+            if (samples.ErrorValue().code.Value() == Navigation::NavigationErrors::NoNavigationData.code.Value())
+                return Generation::Success({.provenance = output.provenance});
+            return Generation::Failure(samples.ErrorValue());
+        }
+        auto completed = root_;
+        completed.completionTick = access->publication.tick;
+        return GenerateQueryNavigationSurface({samples.Value(), completed, {}}, current->publication, output);
+    }
+
+    Result<std::unique_ptr<QueryExecution>> AdmitBuiltinNavigationSurfaceQuery(const EnvironmentQueryPlan &plan,
+                                                                               const QuerySchemaRegistry &registry,
+                                                                               const Runtime::RuntimeSceneView &scene,
+                                                                               const Runtime::EntityRef querier,
+                                                                               QueryExecutionInputs inputs, QueryExecutionSettings settings,
+                                                                               const IQueryNavigationOwner &owner) {
+        using Admission = Result<std::unique_ptr<QueryExecution>>;
+        if (!inputs.contexts || inputs.contexts->Query() != plan.Id() || !inputs.contexts->MatchesScene(scene) ||
+            inputs.ownerCancellation.IsCancellationRequested())
+            return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextStale));
+        const auto policy = ReadBuiltinNavigationSurface(plan, registry);
+        if (policy.HasError())
+            return Admission::Failure(policy.ErrorValue());
+        if (policy.Value().maximumCandidates > settings.maximumCandidates)
+            return Admission::Failure(MakeError(AIErrors::EnvironmentQueryLimitExceeded));
+        const auto *context = inputs.contexts->Find(BuiltinQueryContextId(BuiltinQueryContext::QuerierLocation));
+        const auto *center = context ? std::get_if<Math::WorldCoordinate64>(&context->value) : nullptr;
+        if (!center)
+            return Admission::Failure(MakeError(AIErrors::EnvironmentQueryContextMissing));
+        auto surface = BoundQueryNavigationSurface::Capture(owner, scene, querier, *center, policy.Value());
+        if (surface.HasError())
+            return Admission::Failure(surface.ErrorValue());
+        const auto &stage = plan.Stages().front();
+        const QueryGeneratorProvenance provenance{stage.id, stage.generator, registry.Find(stage.generator)->origin.provider,
+                                                  surface.Value().Revision()};
+        settings.generatorWorkUnits = surface.Value().WorkUnits();
+        settings.maximumCandidates = policy.Value().maximumCandidates;
+        return AdmitBoundBuiltinPointQuery(plan, registry, scene, std::move(inputs), settings, provenance,
+                                           std::make_unique<BoundQueryNavigationSurface>(std::move(surface).Value()));
     }
 
     /** @copydoc QueryNavigationProbe::QueryNavigationProbe */

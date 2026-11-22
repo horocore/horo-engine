@@ -365,6 +365,22 @@ namespace Horo::AI {
         bool scoringReserved_{};
     };
 
+    /** @brief Owner-provided point generator with a pinned source publication and bounded execution. */
+    class IBuiltinPointGenerator {
+    public:
+        virtual ~IBuiltinPointGenerator() = default;
+        [[nodiscard]] virtual bool IsCurrent(const Runtime::RuntimeSceneView &scene) const noexcept = 0;
+        [[nodiscard]] virtual Result<QueryGenerationResult> Generate(const Runtime::RuntimeSceneView &scene,
+                                                                     const QueryExecutionInputs &inputs,
+                                                                     const QueryGeneratorOutput &output) const = 0;
+    };
+
+    /** @brief Runs an owner-provided point generator with native distance tests and stable ranking. */
+    [[nodiscard]] Result<std::unique_ptr<QueryExecution>> AdmitBoundBuiltinPointQuery(
+        const EnvironmentQueryPlan &plan, const QuerySchemaRegistry &registry, const Runtime::RuntimeSceneView &scene,
+        QueryExecutionInputs inputs, QueryExecutionSettings settings, QueryGeneratorProvenance provenance,
+        std::unique_ptr<const IBuiltinPointGenerator> generator);
+
     /** @brief Admits a saved native lattice query to simulation-owner execution.
      * @param plan Compiled native lattice and distance stages. @param registry Exact registry used to compile the plan.
      * @param scene Current owner view that captured the submitted locations. @param inputs Exact owner and frozen locations.
