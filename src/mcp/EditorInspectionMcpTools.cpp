@@ -3,7 +3,7 @@
 #include "Horo/Foundation/Utf8.h"
 #include "Horo/Mcp/McpErrors.h"
 
-#include <cmath>
+#include <limits>
 #include <type_traits>
 
 namespace Horo::Editor {
@@ -11,6 +11,7 @@ namespace Horo::Editor {
         using Json = nlohmann::json;
         using JsonResult = Result<Json>;
         constexpr auto MaximumObjects = ObjectInspectionRequest::MaximumObjects;
+        constexpr auto SmallestGridStep = std::numeric_limits<double>::denorm_min();
 
         /** @brief Describes the numeric Scene fence carried across pages. */
         Json SceneSchema() {
@@ -47,7 +48,7 @@ namespace Horo::Editor {
         /** @brief Requires an explicit numeric grid spacing. */
         Json GridInputSchema() {
             auto result = InputSchema();
-            result["properties"]["gridStep"] = {{"type", "number"}, {"minimum", 0}};
+            result["properties"]["gridStep"] = {{"type", "number"}, {"minimum", SmallestGridStep}};
             result["required"].push_back("gridStep");
             return result;
         }
@@ -147,7 +148,7 @@ namespace Horo::Editor {
             return PageSchema({{"type", "object"},
                                {"properties",
                                 {{"object", {{"type", "integer"}, {"minimum", 1}}},
-                                 {"gridStep", {{"type", "number"}, {"minimum", 0}}},
+                                 {"gridStep", {{"type", "number"}, {"minimum", SmallestGridStep}}},
                                  {"position", VectorSchema(3)},
                                  {"snappedPosition", VectorSchema(3)},
                                  {"offset", VectorSchema(3)}}},
@@ -244,8 +245,6 @@ namespace Horo::Editor {
                     return JsonResult::Failure(MakeError(Mcp::McpErrors::RequestCancelled));
                 const auto request = ReadRequest(arguments);
                 if (request.offset && !request.expected)
-                    return JsonResult::Failure(MakeError(Mcp::McpErrors::ToolInputInvalid));
-                if (request.gridStep && (!std::isfinite(*request.gridStep) || *request.gridStep <= 0))
                     return JsonResult::Failure(MakeError(Mcp::McpErrors::ToolInputInvalid));
                 const auto page = (endpoint.get()->*Read)(request);
                 if (page.HasError())
