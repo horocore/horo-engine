@@ -4388,7 +4388,7 @@ namespace Horo::Editor {
                         std::make_shared<EditorCloudModelProfileStore>(ResolveEditorSettingsPath().parent_path() / "cloud_model.profile",
                                                                        std::move(credentials));
                 }
-                localAgent = MakeEditorLocalAgentPanel(p.background.jobs, durableFiles, std::move(profiles));
+                localAgent = MakeEditorLocalAgentPanel(p.background.jobs, durableFiles, std::move(profiles), &externalProcesses);
             }
             if (localAgent.panel)
                 workspacePanelRegistry.RegisterPanel(localAgent.panel);

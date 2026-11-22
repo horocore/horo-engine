@@ -6,6 +6,7 @@
 namespace Horo {
     class JobSystem;
     class DurableFileSystem;
+    class IExternalProcessRunner;
 }  // namespace Horo
 
 namespace Horo::Editor {
@@ -21,7 +22,9 @@ namespace Horo::Editor {
     /** @brief Creates the opt-in model panel without performing I/O.
      * @param jobs Existing editor worker owner. @param files Borrowed durable project filesystem.
      * @param cloudProfiles Optional host-owned user-profile and credential authority.
+     * @param processes Optional host process authority for an isolated C++ diagnostic preview. Outlives the panel.
      * @return Workspace panel and runtime pump that must remain on the editor lane. */
     [[nodiscard]] EditorLocalAgentPanelHost MakeEditorLocalAgentPanel(const JobSystem &jobs, DurableFileSystem &files,
-                                                                      std::shared_ptr<EditorCloudModelProfileStore> cloudProfiles = {});
+                                                                      std::shared_ptr<EditorCloudModelProfileStore> cloudProfiles = {},
+                                                                      IExternalProcessRunner *processes = nullptr);
 }  // namespace Horo::Editor

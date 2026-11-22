@@ -4,6 +4,8 @@
 
 #include "ProjectLanguageWorkspace.h"
 
+#include <stop_token>
+
 namespace Horo::Editor::Language {
     inline constexpr auto ClangdProviderId = "clangd";
 
@@ -27,4 +29,23 @@ namespace Horo::Editor::Language {
      */
     [[nodiscard]] Result<ProjectLanguageProvider> PrepareClangdProvider(const SourceFileOpenService &sources,
                                                                         const ClangdSettings &settings);
+
+    /** @brief Immutable inputs for a one-file diagnostic preview in a separate language session. */
+    struct ClangdPreviewSource final {
+        const std::filesystem::path &projectRoot;
+        const SourceDocumentId &path;
+        const SourceDocumentSnapshot &base; /**< Inert for a new file, current for an edit or rename. */
+        std::string_view text;
+    };
+
+    /** @brief Checks detached proposal bytes with the host's Clangd and compilation database.
+     * @param runner Native process authority retained by the worker.
+     * @param settings Trusted Clangd discovery choices. Background indexing is disabled for previews.
+     * @param source Exact proposed file and current base evidence.
+     * @param stop Cooperative worker retirement.
+     * @return A versioned diagnostic result projected onto the proposed bytes, or a typed failure.
+     * @details Call off the editor lane. No preview is saved and the active language session is untouched.
+     */
+    [[nodiscard]] Result<LanguageDiagnostics> CheckClangdPreview(IExternalProcessRunner &runner, ClangdSettings settings,
+                                                                 const ClangdPreviewSource &source, std::stop_token stop);
 }  // namespace Horo::Editor::Language

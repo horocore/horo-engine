@@ -9,12 +9,15 @@
 #include <cstdlib>
 #include <new>
 #include <ranges>
+#include <thread>
 
 namespace Horo::Editor::Language {
     namespace {
         constexpr auto CompileCommandsName = "compile_commands.json";
         constexpr std::uintmax_t MaximumCompileCommandsBytes = 64 * 1024 * 1024;
         constexpr std::size_t MaximumSearchDirectories = 128;
+        constexpr std::size_t MaximumPreviewBytes = 256 * 1024;
+        constexpr auto PreviewDeadline = std::chrono::seconds{5};
         const ErrorDomainId Domain{"editor.language.clangd"};
         const ErrorCodeDescriptor ExecutableUnavailable{Domain,
                                                         ErrorCode{"clangd_executable_unavailable"},
@@ -32,6 +35,46 @@ namespace Horo::Editor::Language {
                                                            ErrorSeverity::Warning,
                                                            "Clangd configuration could not be prepared.",
                                                            {}};
+        const ErrorCodeDescriptor PreviewTimedOut{Domain,
+                                                  ErrorCode{"clangd_preview_timed_out"},
+                                                  ErrorSeverity::Warning,
+                                                  "Clangd did not publish preview diagnostics before the deadline.",
+                                                  {}};
+
+        /** @brief Stages a detached draft or edits only the isolated source owner's buffer. */
+        Result<SourceDocumentSnapshot> OpenPreview(SourceFileOpenService &sources, const ClangdPreviewSource &preview) {
+            using Output = Result<SourceDocumentSnapshot>;
+            if (!preview.base.Revision() || preview.path != preview.base.Identity().key.source)
+                return sources.StageNew(preview.path, std::string{preview.text});
+            auto opened = sources.Open({.path = std::filesystem::u8path(preview.path.Value()), .mode = SourceOpenMode::EmbeddedOnly});
+            if (opened.HasError())
+                return Output::Failure(std::move(opened).ErrorValue());
+            const auto &base = opened.Value().sourceSnapshot;
+            if (!base || base->Identity().key.source != preview.path || base->DiskBase() != preview.base.DiskBase())
+                return Output::Failure(MakeError(SourceDocumentErrors::Stale));
+            return sources.Documents().Edit(base->Identity().instance,
+                                            {base->Revision(), 0, base->Text().size(), std::string{preview.text}});
+        }
+
+        /** @brief Accepts only diagnostics correlated by the isolated connection to the detached revision. */
+        Result<LanguageDiagnostics> AwaitPreview(ProjectLanguageWorkspace &workspace, const SourceDocumentSnapshot &detached,
+                                                 const SourceDocumentSnapshot &base, std::stop_token stop) {
+            using Output = Result<LanguageDiagnostics>;
+            using Clock = ProjectLanguageWorkspace::Clock;
+            const auto deadline = Clock::now() + PreviewDeadline;
+            for (auto now = Clock::now(); now < deadline; now = Clock::now()) {
+                if (stop.stop_requested() || (base.Revision() && !base.IsCurrent()))
+                    return Output::Failure(MakeError(SourceDocumentErrors::Cancelled));
+                for (auto &result : workspace.Poll(std::span{&detached, 1}, now))
+                    if (auto *diagnostics = std::get_if<LanguageDiagnostics>(&result.payload);
+                        diagnostics && result.context.source.SharesStateWith(detached))
+                        return Output::Success(std::move(*diagnostics));
+                if (const auto *error = workspace.ProviderError(ClangdProviderId))
+                    return Output::Failure(*error);
+                std::this_thread::sleep_for(std::chrono::milliseconds{5});
+            }
+            return Output::Failure(MakeError(PreviewTimedOut));
+        }
 
         /** @brief Checks one candidate without searching relative current-directory entries. */
         std::filesystem::path Executable(const std::filesystem::path &candidate) {
@@ -177,5 +220,27 @@ namespace Horo::Editor::Language {
         } catch (const std::bad_alloc &) {
             return Output::Failure(MakeError(ConfigurationUnavailable));
         }
+    }
+
+    /** @copydoc CheckClangdPreview */
+    Result<LanguageDiagnostics> CheckClangdPreview(IExternalProcessRunner &runner, ClangdSettings settings,
+                                                   const ClangdPreviewSource &source, std::stop_token stop) {
+        using Output = Result<LanguageDiagnostics>;
+        if (stop.stop_requested() || (source.base.Revision() && !source.base.IsCurrent()))
+            return Output::Failure(MakeError(SourceDocumentErrors::Cancelled));
+        if (source.text.size() > MaximumPreviewBytes)
+            return Output::Failure(MakeError(SourceDocumentErrors::TooLarge));
+        SourceFileOpenService sources{source.projectRoot};
+        auto detached = OpenPreview(sources, source);
+        if (detached.HasError())
+            return Output::Failure(std::move(detached).ErrorValue());
+        settings.backgroundIndex = false;
+        const auto provider = PrepareClangdProvider(sources, settings);
+        if (provider.HasError())
+            return Output::Failure(provider.ErrorValue());
+        auto workspace = ProjectLanguageWorkspace::Create(runner, sources, std::span{&provider.Value(), 1});
+        if (workspace.HasError())
+            return Output::Failure(std::move(workspace).ErrorValue());
+        return AwaitPreview(*workspace.Value(), detached.Value(), source.base, stop);
     }
 }  // namespace Horo::Editor::Language

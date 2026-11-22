@@ -15,6 +15,7 @@
 #include "Horo/Editor/WorkspaceMcpControls.h"
 #include "Horo/Platform/SecureRandom.h"
 #include "Horo/Security/CredentialStore.h"
+#include "editor/language/ClangdProvider.h"
 #include "editor/language/HoroScriptSyntax.h"
 #include "editor/source_editor/SourceSyntax.h"
 
@@ -68,13 +69,13 @@ namespace Horo::Editor {
         };
 
         /** @brief One read-only result for an exact immutable proposal plan and file. */
-        struct PatchSyntax final {
+        struct PatchDiagnostics final {
             std::weak_ptr<const Proposals::WorkspaceEditPlan> plan;
             std::size_t file{};
             Result<Language::LanguageDiagnostics> diagnostics;
         };
 
-        using PatchWorker = AgentBackgroundTurn<std::variant<Result<void>, PatchLoad, PatchPreview, PatchSyntax>>;
+        using PatchWorker = AgentBackgroundTurn<std::variant<Result<void>, PatchLoad, PatchPreview, PatchDiagnostics>>;
 
         /** @brief Resolves the localized operation label from the admitted file kind. */
         const char *PatchFileLabel(const EditorPatchFileKind kind) {
@@ -253,9 +254,9 @@ namespace Horo::Editor {
         class LocalAgentPanel final : public IWorkspacePanel {
         public:
             LocalAgentPanel(const JobSystem &jobs, DurableFileSystem &files, std::shared_ptr<BackgroundTurn> background,
-                            std::shared_ptr<EditorCloudModelProfileStore> cloudProfiles)
+                            std::shared_ptr<EditorCloudModelProfileStore> cloudProfiles, IExternalProcessRunner *processes)
                 : IWorkspacePanel("workspace.local_agent"), cloudProfiles_(std::move(cloudProfiles)), background_(std::move(background)),
-                  history_(jobs, files), files_(files) {}
+                  history_(jobs, files), files_(files), processes_(processes) {}
 
             ~LocalAgentPanel() override {
                 RevokeContext();
@@ -445,7 +446,7 @@ namespace Horo::Editor {
                 sourceApplyQueued_ = false;
                 patchSource_ = {};
                 patchReview_.reset();
-                patchSyntax_.clear();
+                patchDiagnostics_.clear();
                 patchDestination_.clear();
                 patchCheckpoint_.Abandon();
                 captureSceneSelection_ = {};
@@ -1309,44 +1310,67 @@ namespace Horo::Editor {
                     Ui::WrappedText(width, LocalizedText(locale, "source_patch_create_excerpt"), Theme::Muted(), fonts);
             }
 
-            /** @brief Runs the existing parser on immutable proposal bytes off the draw lane. */
-            void StartPatchSyntax(const std::shared_ptr<const Proposals::WorkspaceEditPlan> &plan, std::size_t file) {
-                if (!patchCheckpoint_.Start(PatchWorker::Operation{[plan, file](const std::stop_token stop) -> PatchWorker::Reply {
+            /** @brief Runs the selected language provider on immutable proposal bytes off the draw lane. */
+            void StartPatchDiagnostics(const std::shared_ptr<const Proposals::WorkspaceEditPlan> &plan, std::size_t file,
+                                       SourceDocumentId path, bool script) {
+                const auto started = patchCheckpoint_.Start(
+                    PatchWorker::Operation{[plan, file, path = std::move(path), script, root = buildRoot_,
+                                            processes = processes_](const std::stop_token stop) -> PatchWorker::Reply {
                     using Check = Result<Language::LanguageDiagnostics>;
                     if (stop.stop_requested())
-                        return PatchSyntax{plan, file, Check::Failure(MakeError(Proposals::Errors::StaleBase))};
+                        return PatchDiagnostics{plan, file, Check::Failure(MakeError(Proposals::Errors::StaleBase))};
                     const auto &preview = std::get<Proposals::FilePreview>(plan->entries[file]);
-                    return PatchSyntax{plan, file, Language::CheckHoroScriptSyntaxText(*preview.after)};
-                }}))
-                    status_ = "source_patch_syntax_unavailable";
+                    if (script)
+                        return PatchDiagnostics{plan, file, Language::CheckHoroScriptSyntaxText(*preview.after)};
+                    return PatchDiagnostics{plan, file,
+                                            Language::CheckClangdPreview(*processes, Language::CaptureClangdHostSettings(),
+                                                                         {root, path, preview.before, *preview.after}, stop)};
+                }});
+                if (!started)
+                    status_ = script ? "source_patch_syntax_unavailable" : "source_patch_cpp_unavailable";
             }
 
-            /** @brief Offers detached syntax validation only for the exact proposed HoroScript file. */
-            void DrawPatchSyntax(const EditorLocalAgentPatchReview &review, std::size_t index, const ILocalizationService &locale,
-                                 const Theme::Fonts &fonts) {
-                const auto &file = review.files[index];
-                const auto &destination = file.destination ? *file.destination : file.path;
-                const auto *preview = std::get_if<Proposals::FilePreview>(&review.plan->entries[index]);
-                if (!preview || !preview->after || ClassifySourceLanguage(destination.Value()) != SourceLanguage::HoroScript)
-                    return;
-                if (Button(locale, "source_patch_check_syntax", !patchCheckpoint_.Busy()))
-                    StartPatchSyntax(review.plan, index);
-                const auto observed = std::ranges::find_if(patchSyntax_, [&review, index](const PatchSyntax &candidate) {
-                    return candidate.file == index && candidate.plan.lock() == review.plan;
-                });
-                if (observed == patchSyntax_.end())
-                    return;
-                const auto &result = observed->diagnostics;
+            /** @brief Presents bounded findings without forwarding provider output to the model or history. */
+            void DrawPatchFindings(const Result<Language::LanguageDiagnostics> &result, const bool script,
+                                   const ILocalizationService &locale, const Theme::Fonts &fonts) const {
                 const auto width = ImGui::GetContentRegionAvail().x;
                 if (result.HasError()) {
-                    Ui::WrappedText(width, LocalizedText(locale, "source_patch_syntax_unavailable"), Theme::ConsoleWarning(), fonts);
+                    const auto *label = script ? "source_patch_syntax_unavailable" : "source_patch_cpp_unavailable";
+                    Ui::WrappedText(width, LocalizedText(locale, label), Theme::ConsoleWarning(), fonts);
                     return;
                 }
                 const auto &items = result.Value().items;
-                const auto *label = items.empty() ? "source_patch_syntax_clean" : "source_patch_syntax_invalid";
+                const auto *clean = script ? "source_patch_syntax_clean" : "source_patch_cpp_clean";
+                const auto *findings = script ? "source_patch_syntax_invalid" : "source_patch_cpp_findings";
+                const auto *label = items.empty() ? clean : findings;
                 Ui::WrappedText(width, LocalizedText(locale, label), items.empty() ? Theme::Muted() : Theme::ConsoleWarning(), fonts);
-                for (const auto &item : items)
+                constexpr std::size_t MaximumPresentedDiagnostics = 8;
+                for (const auto &item : std::span{items}.first(std::min(items.size(), MaximumPresentedDiagnostics)))
                     Ui::WrappedText(width, item.message, Theme::Muted(), fonts);
+                if (items.size() > MaximumPresentedDiagnostics)
+                    Ui::WrappedText(width, LocalizedText(locale, "source_patch_diagnostics_truncated"), Theme::Muted(), fonts);
+            }
+
+            /** @brief Offers a detached language check for the exact proposed file. */
+            void DrawPatchDiagnostics(const EditorLocalAgentPatchReview &review, std::size_t index, const ILocalizationService &locale,
+                                      const Theme::Fonts &fonts) {
+                const auto &file = review.files[index];
+                const auto &destination = file.destination ? *file.destination : file.path;
+                const auto *preview = std::get_if<Proposals::FilePreview>(&review.plan->entries[index]);
+                if (!preview || !preview->after)
+                    return;
+                const auto language = ClassifySourceLanguage(destination.Value());
+                const bool script = language == SourceLanguage::HoroScript;
+                if (!script && (language != SourceLanguage::Cpp || !processes_ || buildRoot_.empty()))
+                    return;
+                const auto *action = script ? "source_patch_check_syntax" : "source_patch_check_cpp";
+                if (Button(locale, action, !patchCheckpoint_.Busy()))
+                    StartPatchDiagnostics(review.plan, index, destination, script);
+                const auto observed = std::ranges::find_if(patchDiagnostics_, [&review, index](const PatchDiagnostics &candidate) {
+                    return candidate.file == index && candidate.plan.lock() == review.plan;
+                });
+                if (observed != patchDiagnostics_.end())
+                    DrawPatchFindings(observed->diagnostics, script, locale, fonts);
             }
 
             /** @brief Draws one file's review state and stages its operation when available. */
@@ -1366,7 +1390,7 @@ namespace Horo::Editor {
                 else if (Button(locale, "source_patch_review", canOpen))
                     status_ = requestSourceReview_(review.proposal, *review.plan, index, command) ? nullptr : "source_patch_unavailable";
                 if (canOpen)
-                    DrawPatchSyntax(review, index, locale, fonts);
+                    DrawPatchDiagnostics(review, index, locale, fonts);
                 DrawUnitDecisions(review, {index}, state, conflict != nullptr, locale);
                 DrawHunkReview(review, index, conflict != nullptr, locale, fonts);
             }
@@ -1530,13 +1554,13 @@ namespace Horo::Editor {
             }
 
             /** @brief Drops results from superseded review plans before showing any provider text. */
-            void AdoptPatchCheckpoint(PatchSyntax &result) {
+            void AdoptPatchCheckpoint(PatchDiagnostics &result) {
                 if (!patchReview_ || result.plan.lock() != patchReview_->plan)
                     return;
-                std::erase_if(patchSyntax_, [this, &result](const PatchSyntax &previous) {
+                std::erase_if(patchDiagnostics_, [this, &result](const PatchDiagnostics &previous) {
                     return previous.file == result.file || previous.plan.lock() != patchReview_->plan;
                 });
-                patchSyntax_.emplace_back(std::move(result));
+                patchDiagnostics_.emplace_back(std::move(result));
             }
 
             /** @brief Requires an attached project and an idle review lane for explicit checkpoint actions. */
@@ -1820,7 +1844,7 @@ namespace Horo::Editor {
             bool sourceApplyQueued_{};
             EditorLocalAgentPatchSource patchSource_;
             std::optional<EditorLocalAgentPatchReview> patchReview_;
-            std::vector<PatchSyntax> patchSyntax_;
+            std::vector<PatchDiagnostics> patchDiagnostics_;
             std::string patchDestination_;
             std::shared_ptr<const Platform::IProjectReadFiles> projectFiles_;
             std::string projectReadIdentity_;
@@ -1855,15 +1879,17 @@ namespace Horo::Editor {
             std::size_t sourcePage_{};
             std::vector<SourceDocumentSnapshot> selectedOpenFiles_;
             DurableFileSystem &files_;
+            IExternalProcessRunner *processes_{};
             PatchWorker patchCheckpoint_; /**< Joins before panel teardown while the host's file service is alive. */
         };
     }  // namespace
 
     /** @copydoc MakeEditorLocalAgentPanel */
     EditorLocalAgentPanelHost MakeEditorLocalAgentPanel(const JobSystem &jobs, DurableFileSystem &files,
-                                                        std::shared_ptr<EditorCloudModelProfileStore> cloudProfiles) {
+                                                        std::shared_ptr<EditorCloudModelProfileStore> cloudProfiles,
+                                                        IExternalProcessRunner *processes) {
         auto background = std::make_shared<BackgroundTurn>();
-        auto panel = std::make_shared<LocalAgentPanel>(jobs, files, background, std::move(cloudProfiles));
+        auto panel = std::make_shared<LocalAgentPanel>(jobs, files, background, std::move(cloudProfiles), processes);
         return {panel, [background = std::move(background), owner = std::weak_ptr{panel}] {
             if (const auto current = owner.lock()) {
                 current->Poll();

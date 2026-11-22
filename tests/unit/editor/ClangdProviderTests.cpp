@@ -8,6 +8,7 @@
 #include <array>
 #include <catch2/catch_test_macros.hpp>
 #include <cstdlib>
+#include <fstream>
 #include <nlohmann/json.hpp>
 #include <thread>
 
@@ -113,6 +114,55 @@ namespace {
         CHECK(discovered.ErrorValue().code.Value() == "clangd_compile_commands_unavailable");
         settings.compileCommands = trustedTools.directory / "compile_commands.json";
         CHECK(PrepareClangdProvider(sources, settings).HasValue());
+    }
+
+    TEST_CASE("Isolated Clangd diagnostics use proposed C++ bytes and leave the live buffer and disk intact", "[integration][clangd]") {
+        const auto *installed = std::getenv("HORO_TEST_CLANGD");
+        if (!installed)
+            SKIP("Set HORO_TEST_CLANGD to the installed host executable.");
+        TestSupport::SourceProject project;
+        constexpr std::string_view original = "int saved = 3;\n";
+        constexpr std::string_view proposed = "int preview = missing_proposal_value;\n";
+        project.Put(original, "game.cpp");
+        const auto cpp = Utf8(project.directory / "game.cpp");
+        const auto draftCpp = Utf8(project.directory / "draft.cpp");
+        const auto commands = nlohmann::json::array(
+            {{{"directory", Utf8(project.directory)}, {"file", cpp}, {"arguments", {"clang++", "-std=c++20", cpp}}},
+             {{"directory", Utf8(project.directory)}, {"file", draftCpp}, {"arguments", {"clang++", "-std=c++20", draftCpp}}}});
+        project.Put(commands.dump(), "compile_commands.json");
+        SourceFileOpenService owner{project.directory};
+        const auto opened = owner.Open({.path = "game.cpp", .mode = SourceOpenMode::EmbeddedOnly});
+        REQUIRE(opened.HasValue());
+        REQUIRE(opened.Value().sourceSnapshot);
+        const auto originalSnapshot = *opened.Value().sourceSnapshot;
+        const auto edited = owner.Documents().Edit(originalSnapshot.Identity().instance, {originalSnapshot.Revision(), 12, 1, "7"});
+        REQUIRE(edited.HasValue());
+        const auto live = edited.Value();
+        REQUIRE(live.Dirty());
+        auto path = live.Identity().key.source;
+        auto source = live;
+
+        SECTION("Existing dirty source") {}
+        SECTION("New file") {
+            path = SourceDocumentId::Parse("draft.cpp").Value();
+            source = {};
+        }
+        SECTION("Renamed file") {
+            path = SourceDocumentId::Parse("draft.cpp").Value();
+        }
+
+        NativeExternalProcessRunner runner;
+        const ClangdSettings settings{.executable = std::filesystem::u8path(installed)};
+        const auto result = CheckClangdPreview(runner, settings, {project.directory, path, source, proposed}, {});
+        REQUIRE(result.HasValue());
+        CHECK(std::ranges::any_of(result.Value().items, [](const LanguageDiagnostic &item) {
+            return item.severity == LanguageSeverity::Error && item.message.find("missing_proposal_value") != std::string::npos;
+        }));
+        CHECK(owner.Documents().Snapshot(live.Identity().instance).Value().SharesStateWith(live));
+        CHECK(live.Text() == "int saved = 7;\n");
+        std::ifstream onDisk{project.directory / "game.cpp", std::ios::binary};
+        CHECK(std::string(std::istreambuf_iterator<char>{onDisk}, {}) == original);
+        CHECK_FALSE(std::filesystem::exists(project.directory / "draft.cpp"));
     }
 
     TEST_CASE("Installed Clangd publishes diagnostics, navigates symbols and completes project C++", "[integration][clangd]") {

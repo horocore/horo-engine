@@ -1145,6 +1145,11 @@ application. The bounded Lua parser runs on a worker against the immutable
 preview, without opening the script's libraries or executing it. The result is
 visible only for that exact proposal plan and current file base. The check
 leaves the review decisions and workspace files untouched.
+For C++ files, the same review can ask the host's configured Clangd to check
+the proposed bytes against the project's compilation database. A separate
+language process owns the one-file preview, with a deadline and indexing
+disabled. The result describes that file's compilation context and stays within
+the review. It does not replace the open editor buffer's language publication.
 
 The workspace can also capture up to sixteen selected IDs from the current
 ordinary Scene for a separate local-model review. The capture identifies the
