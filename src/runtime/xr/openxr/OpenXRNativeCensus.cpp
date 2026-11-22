@@ -240,7 +240,7 @@ namespace Horo::XR::OpenXRInternal {
 
         /** @brief Captures exactly four valid native extents in the specified OpenXR role order. */
         Result<std::array<NativeQuadView, 4>> ReadQuadGeometry(const NativeDiscoveryBorrow &owner,
-                                                             const XrSystemGraphicsProperties limits) {
+                                                               const XrSystemGraphicsProperties limits) {
             using Outcome = Result<std::array<NativeQuadView, 4>>;
             constexpr auto config = XR_VIEW_CONFIGURATION_TYPE_PRIMARY_STEREO_WITH_FOVEATED_INSET;
             const auto enumerate = Resolve<PFN_xrEnumerateViewConfigurationViews>(owner, "xrEnumerateViewConfigurationViews");
@@ -249,12 +249,13 @@ namespace Horo::XR::OpenXRInternal {
             std::array<XrViewConfigurationView, 4> views{};
             for (auto &view : views)
                 view.type = XR_TYPE_VIEW_CONFIGURATION_VIEW;
-            const auto count = Enumerate(enumerate.Value(), "xrEnumerateViewConfigurationViews", views, owner.instance, owner.system, config);
+            const auto count =
+                Enumerate(enumerate.Value(), "xrEnumerateViewConfigurationViews", views, owner.instance, owner.system, config);
             if (count.HasError())
                 return Outcome::Failure(count.ErrorValue());
             if (count.Value() != views.size() || !std::ranges::all_of(views, [&limits](const auto &view) {
-                    return ValidView(view, limits);
-                }))
+                return ValidView(view, limits);
+            }))
                 return Outcome::Failure(MakeError(XRErrors::OperationInvalid));
 
             constexpr std::array roles{XRViewRole::PrimaryLeft, XRViewRole::PrimaryRight, XRViewRole::FoveatedInsetLeft,
@@ -294,9 +295,9 @@ namespace Horo::XR::OpenXRInternal {
                 return {QuadEnumerationFailure(modes.ErrorValue())};
             const auto publishedModes = std::span{result.blendModes}.first(modes.Value());
             if (!Unique(result.blendModes, modes.Value()) || !std::ranges::all_of(publishedModes, [](const auto mode) {
-                    return mode == XR_ENVIRONMENT_BLEND_MODE_OPAQUE || mode == XR_ENVIRONMENT_BLEND_MODE_ADDITIVE ||
-                           mode == XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND;
-                }))
+                return mode == XR_ENVIRONMENT_BLEND_MODE_OPAQUE || mode == XR_ENVIRONMENT_BLEND_MODE_ADDITIVE ||
+                       mode == XR_ENVIRONMENT_BLEND_MODE_ALPHA_BLEND;
+            }))
                 return {Incompatible};
 
             result.views = geometry.Value();
@@ -449,7 +450,7 @@ namespace Horo::XR::OpenXRInternal {
 
     /** @copydoc OpenXRNativeSession::DiscoverQuadViews */
     Result<NativeQuadViewCensus> OpenXRNativeSession::DiscoverQuadViews(const XRLoaderPreflightAttempt attempt,
-                                                                      const NativeSystemCensus &observed) const {
+                                                                        const NativeSystemCensus &observed) const {
         using Outcome = Result<NativeQuadViewCensus>;
         const auto owner = BorrowDiscovery(attempt);
         if (owner.HasError())

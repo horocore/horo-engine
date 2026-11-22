@@ -264,7 +264,7 @@ namespace Horo::XR::OpenXRInternal {
 
         /** @brief Reads optional quad configuration geometry for the exact current discovery attempt. */
         [[nodiscard]] Result<NativeQuadViewCensus> DiscoverQuadViews(XRLoaderPreflightAttempt attempt,
-                                                                   const NativeSystemCensus &observed) const;
+                                                                     const NativeSystemCensus &observed) const;
         /** @brief Creates an unpublished native session so real session-dependent facts can be enumerated.
          * @param request Exact discovery/preflight/attempt with independently validated selected graphics binding; no Horo session identity
          * exists yet.
