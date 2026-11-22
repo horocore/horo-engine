@@ -159,12 +159,14 @@ and topology generations are checked before native work; malformed topology, all
 failure, cancellation, and stale requests remain typed Horo failures. The descriptor is
 an activation seam, not the durable NavMesh artifact schema owned by NAV-002.7.
 
-The cooked Detour factory admits a selected canonical closure containing one
-nonempty tile in an exact scope, surface, and agent profile. It checks the
+The cooked Detour factory admits a bounded canonical tile closure in one exact
+scope, surface, and agent profile. It checks the
 encoded build geometry against the immutable definition and copies the authored
 area/filter registry. Admission validates that native grid quantization and
-shared-edge neighbors can preserve the cooked data. Multiple tiles, off-mesh
-links, and unrepresentable topology receive typed errors. The host still
+shared-edge neighbors can preserve the cooked data. Exact opposed perimeter
+edges between adjacent tiles in the same layer are joined. Other tile boundaries
+remain disconnected, and ambiguous edges, off-mesh links, and unrepresentable
+topology receive typed errors. The host still
 selects the provider and supplies the complete admitted closure and resource
 limits.
 

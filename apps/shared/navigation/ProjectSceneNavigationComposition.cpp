@@ -77,9 +77,8 @@ namespace Horo::Application::Internal {
             if (surfaces.size() != 1 || !surfaces.front().partition)
                 return Prepared::Failure(MakeError(Nav::NavigationErrors::OperationUnsupported));
             const auto &partition = *surfaces.front().partition;
-            if (partition.tiles.size() != 1 || !partition.tiles.front())
-                return Prepared::Failure(MakeError(Nav::NavigationErrors::OperationUnsupported,
-                                                   "The selected Detour provider requires one tile for the admitted surface."));
+            if (partition.tiles.size() > selection.policy.Capacities().maximumResidentTiles)
+                return Prepared::Failure(MakeError(Nav::NavigationErrors::CapacityExceeded));
             const auto &geometry = partition.descriptor.geometry;
             const float horizontal = std::max(geometry.radiusMeters, geometry.cellSizeMeters);
             const auto providerBudget = std::min(budget, Nav::RecastDetourProviderHardLimits::OwnedBytes);

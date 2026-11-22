@@ -2809,6 +2809,7 @@ target_link_libraries(HoroNavigationRecastDetour PUBLIC HoroEngine::NavigationAp
 if(HORO_BUILD_NAVIGATION_RECAST_DETOUR)
     target_sources(HoroNavigationRecastDetour PRIVATE
             runtime/navigation/backends/recast_detour/RecastDetourProvider.cpp
+            runtime/navigation/backends/recast_detour/RecastDetourCookedTileJoin.cpp
             runtime/navigation/backends/recast_detour/RecastDetourProviderEndpoint.cpp
             runtime/navigation/backends/recast_detour/RecastDetourProviderInternal.h
             runtime/navigation/backends/recast_detour/RecastDetourProviderQueries.cpp

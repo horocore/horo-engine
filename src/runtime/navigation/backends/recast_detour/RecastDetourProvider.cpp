@@ -3,6 +3,7 @@
 #include "Horo/Navigation/NavigationDefinition.h"
 #include "Horo/Navigation/NavigationErrors.h"
 #include "Horo/Navigation/NavigationTileDescriptor.h"
+#include "RecastDetourCookedTileJoin.h"
 #include "runtime/navigation/backends/recast_detour/RecastDetourProviderInternal.h"
 #include "runtime/navigation/backends/recast_detour/RecastDetourProviderValidation.h"
 
@@ -526,6 +527,59 @@ namespace Horo::Navigation {
                     .areas = info.definition.Registry().Areas(),
                     .filters = info.definition.Registry().Filters()};
         }
+
+        /** @brief Validates materializable neutral tile shape against the admitted build geometry. */
+        [[nodiscard]] Result<NavigationCookedTileDescriptor> AdmitCookedTile(const NavigationAgentBuildGeometry &authored,
+                                                                             const NavigationCookedTile &tile) {
+            using Descriptor = Result<NavigationCookedTileDescriptor>;
+            auto descriptor = ProjectNavigationCookedTileDescriptor(tile);
+            if (descriptor.HasError())
+                return descriptor;
+            if (BuildGeometryFields(descriptor.Value().geometry) != BuildGeometryFields(authored))
+                return Failure<NavigationCookedTileDescriptor>(NavigationErrors::StaleSnapshot);
+            const auto &cooked = tile.Topology();
+            if (!cooked.offMeshLinks.empty() || std::ranges::any_of(cooked.polygons, [](const auto &polygon) {
+                return polygon.vertexIndices.count > MaximumVerticesPerPolygon || polygon.adjacencies.count != polygon.vertexIndices.count;
+            }))
+                return Descriptor::Failure(MakeError(NavigationErrors::OperationUnsupported,
+                                                     "Cooked polygons require one adjacency per supported edge and no off-mesh links."));
+            return descriptor;
+        }
+
+        /** @brief Materializes one prevalidated neutral graph, charging temporary translation against the same ceiling. */
+        [[nodiscard]] PreparedBackend MaterializeCookedTopology(const RecastDetourCookedProviderCreateInfo &info,
+                                                                const NavigationAgentBuildGeometry &geometry,
+                                                                const NavigationTileBuildResult &cooked, std::size_t joinBytes) {
+            if (cooked.polygons.empty())
+                return UnsupportedCookedShape("The selected cooked tile closure has no traversable polygons.");
+            if (cooked.vertices.size() > RecastDetourProviderHardLimits::Vertices ||
+                cooked.polygons.size() > RecastDetourProviderHardLimits::Polygons ||
+                cooked.polygons.size() >= (info.maximumOwnedBytes - joinBytes) / sizeof(GroundedNavigationPolygon))
+                return Failure<RecastDetourPreparedQueryBackend>(NavigationErrors::CapacityExceeded);
+            try {
+                std::vector<GroundedNavigationPolygon> polygons;
+                polygons.reserve(cooked.polygons.size());
+                for (const auto &polygon : cooked.polygons) {
+                    GroundedNavigationPolygon grounded{.vertexCount = static_cast<std::uint8_t>(polygon.vertexIndices.count),
+                                                       .area = polygon.area,
+                                                       .surface = info.surface.surface};
+                    const auto indices =
+                        std::span{cooked.polygonVertexIndices}.subspan(polygon.vertexIndices.first, polygon.vertexIndices.count);
+                    std::ranges::copy(indices, grounded.vertexIndices.begin());
+                    polygons.push_back(grounded);
+                }
+                auto create = CookedCreateInfo(info, geometry, cooked, polygons);
+                create.maximumOwnedBytes -= joinBytes;
+                auto prepared = CreateQueryBackend(create, &cooked);
+                if (prepared.HasError())
+                    return prepared;
+                auto backend = std::move(prepared).Value();
+                backend.reservedBytes += std::span{polygons}.size_bytes() + joinBytes;
+                return PreparedBackend::Success(std::move(backend));
+            } catch (const std::bad_alloc &) {
+                return Failure<RecastDetourPreparedQueryBackend>(NavigationErrors::CapacityExceeded);
+            }
+        }
     }  // namespace
 
     /** @copydoc CreateRecastDetourNavigationQueryBackend */
@@ -535,12 +589,11 @@ namespace Horo::Navigation {
 
     /** @copydoc PrepareRecastDetourCookedNavigationQueryBackend */
     PreparedBackend PrepareRecastDetourCookedNavigationQueryBackend(const RecastDetourCookedProviderCreateInfo &info) {
-        if (info.tiles.size() != 1)
-            return UnsupportedCookedShape("The cooked Detour provider requires one selected tile.");
+        if (info.tiles.empty() || info.tiles.size() > NavMeshArtifactLimits::MaximumTiles)
+            return UnsupportedCookedShape("The cooked Detour provider requires a nonempty bounded tile closure.");
         if (!info.tiles.front())
             return Failure<RecastDetourPreparedQueryBackend>(NavigationErrors::NavMeshArtifactInvalid);
-        const auto &tile = *info.tiles.front();
-        const auto &key = tile.Key();
+        const auto &key = info.tiles.front()->Key();
         if (!info.profile.IsValid() || !info.surface.surface.IsValid() || key.profile != info.profile ||
             key.surface != info.surface.surface || key.scope != info.surface.scope)
             return Failure<RecastDetourPreparedQueryBackend>(NavigationErrors::StaleSnapshot);
@@ -548,41 +601,27 @@ namespace Horo::Navigation {
         const auto authored = std::ranges::find(profiles, info.profile, &NavigationAgentProfileDescriptor::id);
         if (authored == profiles.end())
             return Failure<RecastDetourPreparedQueryBackend>(NavigationErrors::AgentDescriptorInvalid);
-        const auto descriptor = ProjectNavigationCookedTileDescriptor(tile);
-        if (descriptor.HasError())
-            return PreparedBackend::Failure(descriptor.ErrorValue());
-        if (BuildGeometryFields(descriptor.Value().geometry) != BuildGeometryFields(authored->buildGeometry))
-            return Failure<RecastDetourPreparedQueryBackend>(NavigationErrors::StaleSnapshot);
-        const auto &cooked = tile.Topology();
-        if (cooked.IsEmpty() || !cooked.offMeshLinks.empty())
-            return UnsupportedCookedShape("Empty cooked geometry and off-mesh links cannot be represented by the flat provider.");
-        if (cooked.vertices.size() > RecastDetourProviderHardLimits::Vertices ||
-            cooked.polygons.size() > RecastDetourProviderHardLimits::Polygons ||
-            cooked.polygons.size() >= info.maximumOwnedBytes / sizeof(GroundedNavigationPolygon))
-            return Failure<RecastDetourPreparedQueryBackend>(NavigationErrors::CapacityExceeded);
-        try {
-            std::vector<GroundedNavigationPolygon> polygons;
-            polygons.reserve(cooked.polygons.size());
-            for (const auto &polygon : cooked.polygons) {
-                if (polygon.vertexIndices.count > MaximumVerticesPerPolygon || polygon.adjacencies.count != polygon.vertexIndices.count)
-                    return UnsupportedCookedShape("Cooked polygons require one adjacency per supported edge.");
-                GroundedNavigationPolygon grounded{.vertexCount = static_cast<std::uint8_t>(polygon.vertexIndices.count),
-                                                   .area = polygon.area,
-                                                   .surface = key.surface};
-                const auto indices =
-                    std::span{cooked.polygonVertexIndices}.subspan(polygon.vertexIndices.first, polygon.vertexIndices.count);
-                std::ranges::copy(indices, grounded.vertexIndices.begin());
-                polygons.push_back(grounded);
-            }
-            auto prepared = CreateQueryBackend(CookedCreateInfo(info, descriptor.Value().geometry, cooked, polygons), &cooked);
-            if (prepared.HasError())
-                return prepared;
-            auto backend = std::move(prepared).Value();
-            backend.reservedBytes += std::span{polygons}.size_bytes();
-            return PreparedBackend::Success(std::move(backend));
-        } catch (const std::bad_alloc &) {
-            return Failure<RecastDetourPreparedQueryBackend>(NavigationErrors::CapacityExceeded);
+        const NavigationCookedTile *previous{};
+        float tileSize{};
+        for (const auto &tile : info.tiles) {
+            if (!tile)
+                return Failure<RecastDetourPreparedQueryBackend>(NavigationErrors::NavMeshArtifactInvalid);
+            if (tile->Key().profile != key.profile || tile->Key().surface != key.surface || tile->Key().scope != key.scope)
+                return UnsupportedCookedShape("Multiple authored partitions cannot share one Detour provider.");
+            const auto descriptor = AdmitCookedTile(authored->buildGeometry, *tile);
+            if (descriptor.HasError())
+                return PreparedBackend::Failure(descriptor.ErrorValue());
+            if (previous && (tile->Key() <= previous->Key() || descriptor.Value().tileSizeMeters != tileSize))
+                return Failure<RecastDetourPreparedQueryBackend>(NavigationErrors::NavMeshArtifactInvalid);
+            tileSize = descriptor.Value().tileSizeMeters;
+            previous = tile.get();
         }
+        if (info.tiles.size() == 1)
+            return MaterializeCookedTopology(info, authored->buildGeometry, info.tiles.front()->Topology(), 0);
+        const auto joined = Detail::JoinRecastDetourCookedTiles(info.tiles, info.maximumOwnedBytes);
+        if (joined.HasError())
+            return PreparedBackend::Failure(joined.ErrorValue());
+        return MaterializeCookedTopology(info, authored->buildGeometry, joined.Value().topology, joined.Value().reservedBytes);
     }
 
     /** @copydoc CreateRecastDetourCookedNavigationQueryBackend */

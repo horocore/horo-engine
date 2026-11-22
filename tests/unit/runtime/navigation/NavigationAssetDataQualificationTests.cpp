@@ -11,6 +11,33 @@ namespace Horo::Navigation {
         using TestSupport::RequireError;
         namespace Probe = Tests::AllocationProbe;
 
+        /** @brief Cooks a tile through the real native builder and portable validation. */
+        [[nodiscard]] std::shared_ptr<const NavigationCookedTile> CookTile(const INavigationMeshBuilder &builder,
+                                                                           const NavigationBakeInputSnapshot &captured,
+                                                                           const NavigationBakeTile &tile,
+                                                                           const NavigationTileBakeCompatibility &compatibility,
+                                                                           void (*editTopology)(NavigationTileBuildResult &) = nullptr) {
+            const auto prepared = PrepareNavigationBakeTile(captured, tile, compatibility);
+            REQUIRE(prepared.HasValue());
+            const auto &input = prepared.Value();
+            auto output = builder.BuildTile({.key = tile.key.tile,
+                                             .bounds = tile.bounds,
+                                             .tileSizeMeters = tile.tileSizeMeters,
+                                             .buildGeometry = input.geometry,
+                                             .triangles = input.triangles,
+                                             .modifiers = input.modifiers,
+                                             .borderSizeCells = input.borderSizeCells},
+                                            {});
+            REQUIRE(output.HasValue());
+            REQUIRE_FALSE(output.Value().IsEmpty());
+            auto topology = std::move(output).Value();
+            if (editTopology)
+                editTopology(topology);
+            auto cooked = NavigationCookedTile::Create(input, std::move(topology));
+            REQUIRE(cooked.HasValue());
+            return std::move(cooked).Value();
+        }
+
         /** @brief Produce the portable closure from decoded authored policy and captured collision using the actual pinned native builder.
          */
         [[nodiscard]] NavigationCookedTileSet CookCorpus(const NavigationDataQualificationCorpus &corpus,
@@ -26,25 +53,7 @@ namespace Horo::Navigation {
                 const NavigationBakeTile tile{.key = {.profile = profile.id, .surface = Id<SurfaceId>(1)},
                                               .bounds = {{0, -1, 0}, {8, 3, 8}},
                                               .tileSizeMeters = 8};
-                const auto prepared = PrepareNavigationBakeTile(captured, tile, corpus.collision.compatibility);
-                REQUIRE(prepared.HasValue());
-                const auto &input = prepared.Value();
-                auto output = builder.Value()->BuildTile({.key = tile.key.tile,
-                                                          .bounds = tile.bounds,
-                                                          .tileSizeMeters = tile.tileSizeMeters,
-                                                          .buildGeometry = input.geometry,
-                                                          .triangles = input.triangles,
-                                                          .modifiers = input.modifiers,
-                                                          .borderSizeCells = input.borderSizeCells},
-                                                         {});
-                REQUIRE(output.HasValue());
-                REQUIRE_FALSE(output.Value().IsEmpty());
-                auto topology = std::move(output).Value();
-                if (editTopology)
-                    editTopology(topology);
-                auto cooked = NavigationCookedTile::Create(input, std::move(topology));
-                REQUIRE(cooked.HasValue());
-                set.tiles.push_back(std::move(cooked).Value());
+                set.tiles.push_back(CookTile(*builder.Value(), captured, tile, corpus.collision.compatibility, editTopology));
             }
             return set;
         }
@@ -145,6 +154,63 @@ namespace Horo::Navigation {
                     .capabilityRevision = 12};
         }
     }  // namespace
+
+    TEST_CASE("Cooked Detour paths cross an admitted tile boundary and lose coverage when the neighbor is removed",
+              "[unit][navigation][data_qualification][native][cooked-provider][streamed]") {
+        const NavigationDataQualificationCorpus corpus;
+        const auto definition = DecodeNavigationDefinitionRecord(corpus.Record()).Value();
+        const auto captured = corpus.Capture(definition);
+        const auto builder = CreateRecastDetourNavigationMeshBuilder();
+        REQUIRE(builder.HasValue());
+        NavigationBakeTile tile{.key = {.profile = definition.Profiles().front().id, .surface = Id<SurfaceId>(1)},
+                                .bounds = {{0, -1, 0}, {8, 3, 8}},
+                                .tileSizeMeters = 8};
+        const auto left = CookTile(*builder.Value(), captured, tile, corpus.collision.compatibility);
+        tile.key.tile.x = 1;
+        tile.bounds = {{8, -1, 0}, {16, 3, 8}};
+        const auto right = CookTile(*builder.Value(), captured, tile, corpus.collision.compatibility);
+        const std::array tiles{left, right};
+        const LoadedNavMeshPartition partition{.surface = tile.key.surface,
+                                               .profile = tile.key.profile,
+                                               .tiles = {tiles.begin(), tiles.end()}};
+        auto info = CookedProviderInfo(partition, definition, Id<NavigationWorldId>(8), Id<NavigationGeneration>(9));
+        NavigationPathRequest request{.world = info.world,
+                                      .topology = info.topology,
+                                      .start = {4, 0, 4},
+                                      .destination = {12, 0, 4},
+                                      .filter = definition.Registry().Filters().front().id,
+                                      .requirement = {NavigationQueryKind::Path, NavigationQualityLevel::Balanced, {64, 16, 80}}};
+        const auto resident = PrepareRecastDetourCookedNavigationQueryBackend(info);
+        CAPTURE((resident.HasError() ? resident.ErrorValue().message : "admitted"));
+        REQUIRE(resident.HasValue());
+        const auto path = resident.Value().backend->FindPath(request, {});
+        REQUIRE(path.HasValue());
+        CHECK(path.Value().status == NavigationPathStatus::Reachable);
+
+        info.maximumOwnedBytes = resident.Value().reservedBytes - 1;
+        RequireError(PrepareRecastDetourCookedNavigationQueryBackend(info), NavigationErrors::CapacityExceeded);
+        info.maximumOwnedBytes = resident.Value().reservedBytes;
+        const auto exact = PrepareRecastDetourCookedNavigationQueryBackend(info);
+        REQUIRE(exact.HasValue());
+        CHECK(exact.Value().reservedBytes == info.maximumOwnedBytes);
+
+        tile.key.tile.layer = 1;
+        const std::array separateLayers{left, CookTile(*builder.Value(), captured, tile, corpus.collision.compatibility)};
+        info.tiles = separateLayers;
+        const auto separate = PrepareRecastDetourCookedNavigationQueryBackend(info);
+        REQUIRE(separate.HasValue());
+        const auto disconnected = separate.Value().backend->FindPath(request, {});
+        REQUIRE(disconnected.HasValue());
+        CHECK(disconnected.Value().status != NavigationPathStatus::Reachable);
+
+        info.topology = Id<NavigationGeneration>(10);
+        info.tiles = std::span{tiles}.first<1>();
+        const auto reduced = PrepareRecastDetourCookedNavigationQueryBackend(info);
+        REQUIRE(reduced.HasValue());
+        request.topology = info.topology;
+        const auto missing = reduced.Value().backend->FindPath(request, {});
+        CHECK_FALSE((missing.HasValue() && missing.Value().status == NavigationPathStatus::Reachable));
+    }
 
     TEST_CASE("Cooked native query factory uses exact authored navigation geometry and filters",
               "[unit][navigation][data_qualification][native][cooked-provider]") {

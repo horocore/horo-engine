@@ -71,14 +71,14 @@ namespace Horo::Navigation {
     [[nodiscard]] Result<std::unique_ptr<INavigationQueryBackend>> CreateRecastDetourNavigationQueryBackend(
         const RecastDetourProviderCreateInfo &info);
 
-    /** @brief Exact admitted inputs for the native provider's single-tile grounded materialization. */
+    /** @brief Exact admitted inputs for a bounded grounded tile closure in one authored partition. */
     struct RecastDetourCookedProviderCreateInfo final {
         NavigationWorldId world;
         NavigationGeneration topology;
         NavigationBakeSurfaceKey surface;                                   /**< Exact scope and surface from host admission. */
         NavigationAgentProfileId profile;                                   /**< Exact authored profile served by this provider. */
         const NavigationDefinition &definition;                             /**< Validated authority for geometry, areas, and filters. */
-        std::span<const std::shared_ptr<const NavigationCookedTile>> tiles; /**< Complete selected runtime closure. */
+        std::span<const std::shared_ptr<const NavigationCookedTile>> tiles; /**< Complete selected runtime closure in key order. */
         Math::Vec3 nearestPointHalfExtents;
         NavigationQueryLimits queryLimits;
         std::uint32_t maximumConcurrentQueries{};
@@ -102,8 +102,8 @@ namespace Horo::Navigation {
 
     /** @brief Creates a Detour query owner from an exact supported portable NavMesh closure.
      * @param info Exact already-admitted closure and native resource limits, borrowed during this call only.
-     * @return Owned provider, or a typed error before publication. Multiple tiles, empty geometry, links, or adjacency
-     * the flat native provider cannot preserve are explicitly refused. No source, provider, policy or scope fallback. */
+     * @return Owned provider, or a typed error before publication. Cross-tile links require exact opposed grid edges.
+     * Empty coverage, off-mesh links, incompatible geometry and unrepresentable connectivity return typed failures. */
     [[nodiscard]] Result<std::unique_ptr<INavigationQueryBackend>> CreateRecastDetourCookedNavigationQueryBackend(
         const RecastDetourCookedProviderCreateInfo &info);
 
