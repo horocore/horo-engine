@@ -74,6 +74,20 @@ namespace Horo::Editor {
                 return &card.path;
             return card.destination ? &*card.destination : nullptr;
         }
+
+        /** @brief Verifies the selected destination appears in the proposal before observing its filesystem evidence. */
+        Result<void> ObserveSelectedPatchDestination(const std::span<const EditorPatchFileCard> cards,
+                                                     const EditorPatchDestination &destination,
+                                                     std::vector<Proposals::SourcePathObservation> &observations) {
+            const bool matches = std::ranges::any_of(cards, [&destination](const auto &card) {
+                const auto *path = DestinationPath(card);
+                return path && *path == destination.path;
+            });
+            if (!matches)
+                return Result<void>::Failure(MakeError(Proposals::Errors::PolicyDenied));
+            ObserveEditorPatchDestinations(cards, destination.root, destination.files, observations, destination.stop);
+            return Result<void>::Success();
+        }
     }  // namespace
 
     /** @copydoc DescribeEditorPatchFiles */
@@ -154,13 +168,9 @@ namespace Horo::Editor {
             return ReviewResult::Failure(proposal.ErrorValue());
         auto cards = DescribeEditorPatchFiles(proposal.Value());
         if (destination) {
-            const bool matches = std::ranges::any_of(cards, [&](const auto &card) {
-                const auto *path = DestinationPath(card);
-                return path && *path == destination->path;
-            });
-            if (!matches)
-                return ReviewResult::Failure(MakeError(Errors::PolicyDenied));
-            ObserveEditorPatchDestinations(cards, destination->root, destination->files, observations, destination->stop);
+            const auto observed = ObserveSelectedPatchDestination(cards, *destination, observations);
+            if (observed.HasError())
+                return ReviewResult::Failure(observed.ErrorValue());
         }
         auto plan = PlanWorkspaceEdits(proposal.Value(), policy.Value(), observations);
         if (plan.HasError())
